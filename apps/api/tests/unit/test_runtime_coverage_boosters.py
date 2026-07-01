@@ -626,12 +626,29 @@ async def test_agent_tool_runtime_fail_fast_on_invalid_operation_call(monkeypatc
     runtime.llm.call = AsyncMock(return_value="llm raw")
     runtime.tools.execute = AsyncMock(return_value=(ToolResult.fail("Operation 'list_docs' not found"), []))
 
-    parsed = SimpleNamespace(
-        has_tool_calls=True,
-        tool_calls=[ToolCall(id="1", tool_name="list_docs", arguments={})],
-        text="",
+    parsed_responses = iter(
+        [
+            SimpleNamespace(
+                has_tool_calls=True,
+                tool_calls=[ToolCall(id="1", tool_name="list_docs", arguments={})],
+                text="",
+            ),
+            SimpleNamespace(
+                has_tool_calls=False,
+                tool_calls=[],
+                text="answer without tools",
+            ),
+            SimpleNamespace(
+                has_tool_calls=False,
+                tool_calls=[],
+                text="answer without tools",
+            ),
+        ]
     )
-    monkeypatch.setattr("app.agents.runtime.agent.parse_llm_response", lambda *_args, **_kwargs: parsed)
+    monkeypatch.setattr(
+        "app.agents.runtime.agent.parse_llm_response",
+        lambda *_args, **_kwargs: next(parsed_responses),
+    )
 
     exec_request = SimpleNamespace(
         agent=SimpleNamespace(slug="ops", logging_level=None),
@@ -652,16 +669,95 @@ async def test_agent_tool_runtime_fail_fast_on_invalid_operation_call(monkeypatc
         )
     ]
 
-    assert any(e.type == RuntimeEventType.ERROR for e in events)
-    assert any("unavailable operation" in str(e.data.get("error", "")).lower() for e in events if e.type == RuntimeEventType.ERROR)
+    retry_events = [e for e in events if e.type == RuntimeEventType.PROTOCOL_RETRY]
+    assert retry_events
+    assert retry_events[0].data.get("reason") == "invalid_operation_slug"
+    assert "list_docs" in (retry_events[0].data.get("invalid_operation_slugs") or [])
     error_events = [e for e in events if e.type == RuntimeEventType.ERROR]
     assert error_events
-    assert error_events[0].data.get("error_code") == RuntimeErrorCode.OPERATION_UNAVAILABLE.value
-    assert error_events[0].data.get("retryable") is False
+    assert error_events[-1].data.get("error_code") == RuntimeErrorCode.AGENT_REQUIRED_OPERATION_CALL_MISSING.value
     assert run_session.finished is not None
     assert run_session.finished[0] == "failed"
-    assert runtime.llm.call.await_count == 1
+    assert runtime.llm.call.await_count == 3
     assert runtime.tools.execute.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_runtime_uses_lifecycle_agent_run_id_override(monkeypatch):
+    runtime = AgentToolRuntime(llm_client=AsyncMock())
+    captured: dict[str, object] = {}
+    run_session = _FakeRunSession()
+
+    def _make_session(**kwargs):
+        captured.update(kwargs)
+        return run_session
+
+    runtime._create_run_session = _make_session  # noqa: SLF001
+    runtime.logging_resolver.resolve_logging_level = AsyncMock(return_value=SimpleNamespace(value="brief"))
+    runtime.prompt_assembler.assemble = lambda *_args, **_kwargs: SimpleNamespace(system_prompt="sys")
+    runtime.config_resolver.resolve = AsyncMock(
+        return_value=(
+            SimpleNamespace(
+                max_steps=1,
+                max_tool_calls_total=5,
+                max_wall_time_ms=10_000,
+                tool_timeout_ms=1_000,
+                max_retries=0,
+            ),
+            SimpleNamespace(model="test-model", temperature=0.0, max_tokens=256),
+            {},
+        )
+    )
+    runtime.llm.call = AsyncMock(return_value="llm raw")
+
+    async def _no_synth(*_args, **_kwargs):
+        if False:
+            yield None
+        return
+
+    runtime._synthesize_answer = _no_synth  # noqa: SLF001
+
+    parsed = SimpleNamespace(has_tool_calls=False, tool_calls=[], text="done")
+    monkeypatch.setattr("app.agents.runtime.agent.parse_llm_response", lambda *_args, **_kwargs: parsed)
+
+    exec_request = SimpleNamespace(
+        agent=SimpleNamespace(slug="ops", logging_level=None),
+        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search", scope="collection")],
+        resolved_data_instances=[],
+        run_id=uuid4(),
+        partial_mode_warning=None,
+    )
+    lifecycle_agent_run_id = uuid4()
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
+    ctx.extra["lifecycle_agent_run_id"] = str(lifecycle_agent_run_id)
+
+    _ = [
+        e
+        async for e in runtime.execute(
+            exec_request=exec_request,
+            messages=[{"role": "user", "content": "find docs"}],
+            ctx=ctx,
+            model=None,
+            enable_logging=True,
+        )
+    ]
+
+    assert captured["run_id_override"] == lifecycle_agent_run_id
+
+
+def test_agent_tool_runtime_allows_collection_info_shorthand_when_collection_slug_disambiguates():
+    operation = SimpleNamespace(
+        operation_slug="instance.local-template-tools.collection.info",
+        operation="collection.info",
+        scope="collection",
+        collection_slug="template",
+    )
+
+    assert AgentToolRuntime._is_allowed_operation_call(
+        "collection.info",
+        {"collection_slug": "template"},
+        [operation],
+    ) is True
 
 
 @pytest.mark.asyncio

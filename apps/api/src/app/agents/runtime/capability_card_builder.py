@@ -76,6 +76,10 @@ class CapabilityCardBuilder:
         lines.append(
             f"- {self._label(labels, 'collections_info_rule', 'Перед работой с любой коллекцией сначала вызови `collection.info` для этой коллекции.')}"
         )
+        lines.append(
+            "- `template`, `reglament` и другие значения ниже — это slug коллекций, а не префиксы инструментов. "
+            "Не придумывай имена вроде `template.info` или `reglament.search`."
+        )
         shown = 0
         max_items = self._budget(budgets, "max_collections_in_card", MAX_COLLECTIONS_IN_CARD)
         for item in items:

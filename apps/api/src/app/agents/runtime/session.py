@@ -31,6 +31,7 @@ class RunSession:
         context_snapshot: Optional[Dict[str, Any]] = None,
         enable_logging: bool = True,
         trace_logger: Optional["ExecutionTraceLogger"] = None,
+        run_id_override: Optional[UUID] = None,
     ) -> None:
         self.run_store = run_store
         self.tenant_id = tenant_id
@@ -42,6 +43,7 @@ class RunSession:
         self.enable_logging = enable_logging
         self.run_id: Optional[UUID] = None
         self.trace_logger = trace_logger or self._build_trace_logger(run_store)
+        self.run_id_override = run_id_override
         self._should_log = enable_logging and run_store is not None
 
     @staticmethod
@@ -62,6 +64,7 @@ class RunSession:
                 user_id=self.user_id,
                 chat_id=self.chat_id,
                 context_snapshot=self.context_snapshot,
+                run_id_override=self.run_id_override,
             )
             return self.run_id
         except Exception as e:

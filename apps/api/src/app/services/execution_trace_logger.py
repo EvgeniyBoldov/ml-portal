@@ -129,6 +129,7 @@ class ExecutionTraceLogger:
         chat_id: Optional[str] = None,
         message_id: Optional[str] = None,
         context_snapshot: Optional[Dict[str, Any]] = None,
+        run_id_override: Optional[uuid.UUID] = None,
     ) -> uuid.UUID:
         """Start a run using the existing RunStore."""
         snapshot = self._merge_context_snapshot(context_snapshot)
@@ -140,6 +141,7 @@ class ExecutionTraceLogger:
             chat_id=chat_id,
             message_id=message_id,
             context_snapshot=snapshot,
+            run_id_override=run_id_override,
         )
 
     async def log_step(

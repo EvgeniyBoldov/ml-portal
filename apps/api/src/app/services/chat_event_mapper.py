@@ -52,6 +52,13 @@ class ChatEventMapper:
                 "tool": event.data.get("tool"),
                 "call_id": event.data.get("call_id"),
                 "arguments": event.data.get("arguments"),
+                "parent_entity_type": event.data.get("parent_entity_type"),
+                "parent_entity_id": event.data.get("parent_entity_id"),
+                "agent_slug": event.data.get("agent_slug"),
+                "agent_run_id": event.data.get("agent_run_id"),
+                "llm_call_id": event.data.get("llm_call_id"),
+                "actor_type": event.data.get("actor_type"),
+                "actor_entity_id": event.data.get("actor_entity_id"),
                 "orchestration_envelope": env,
             }
 
@@ -62,6 +69,16 @@ class ChatEventMapper:
                 "call_id": event.data.get("call_id"),
                 "success": event.data.get("success"),
                 "data": event.data.get("data"),
+                "error_code": event.data.get("error_code"),
+                "retryable": event.data.get("retryable"),
+                "safe_message": event.data.get("safe_message"),
+                "parent_entity_type": event.data.get("parent_entity_type"),
+                "parent_entity_id": event.data.get("parent_entity_id"),
+                "agent_slug": event.data.get("agent_slug"),
+                "agent_run_id": event.data.get("agent_run_id"),
+                "llm_call_id": event.data.get("llm_call_id"),
+                "actor_type": event.data.get("actor_type"),
+                "actor_entity_id": event.data.get("actor_entity_id"),
                 "orchestration_envelope": env,
             }
 

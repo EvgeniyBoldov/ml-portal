@@ -14,6 +14,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
+from uuid import UUID
 
 MAX_OPERATION_RESULT_PREVIEW_CHARS = 4096
 
@@ -174,6 +175,13 @@ class AgentToolRuntime(BaseRuntime):
         )
 
         system_prompt = prompt_bundle.system_prompt
+        run_id_override: Optional[UUID] = None
+        raw_run_id_override = ctx.extra.get("lifecycle_agent_run_id")
+        if raw_run_id_override is not None:
+            try:
+                run_id_override = UUID(str(raw_run_id_override))
+            except (TypeError, ValueError):
+                logger.warning("Ignoring invalid lifecycle_agent_run_id: %r", raw_run_id_override)
 
         # Logging
         resolved_logging_level = await self.logging_resolver.resolve_logging_level(
@@ -195,6 +203,7 @@ class AgentToolRuntime(BaseRuntime):
                 },
             ),
             enable_logging=enable_logging,
+            run_id_override=run_id_override,
         )
         await run_session.start()
         agent_event_ctx = {
@@ -540,28 +549,42 @@ class AgentToolRuntime(BaseRuntime):
                 invalid_operation_slugs = [
                     call.tool_name
                     for call in parsed.tool_calls
-                    if not self._is_allowed_operation_call(call.tool_name, available_operations)
+                    if not self._is_allowed_operation_call(
+                        call.tool_name,
+                        call.arguments,
+                        available_operations,
+                    )
                 ]
                 if fail_fast_invalid_calls and invalid_operation_slugs:
-                    fail_message = (
-                        "Agent requested unavailable operation(s): "
-                        + ", ".join(invalid_operation_slugs[:5])
+                    retry_message = self._invalid_operation_retry_instruction(
+                        invalid_operation_slugs=invalid_operation_slugs,
+                        available_operations=available_operations,
                     )
-                    yield RuntimeEvent.error(
-                        fail_message,
-                        recoverable=False,
-                        error_code=RuntimeErrorCode.OPERATION_UNAVAILABLE,
-                        retryable=False,
-                    )
+                    llm_messages.append({"role": "assistant", "content": raw_response})
+                    llm_messages.append({"role": "user", "content": retry_message})
                     await run_session.log_step(
-                        "invalid_operation_call_fail_fast",
+                        "protocol_retry",
                         {
                             "step": step + 1,
+                            "reason": "invalid_operation_slug",
                             "invalid_operation_slugs": invalid_operation_slugs[:10],
+                            "available_operations": serialize_published_operations(available_operations),
                         },
                     )
-                    await run_session.finish("failed", fail_message)
-                    return
+                    loop_state.retry_count += 1
+                    if isinstance(runtime_budget, RunBudgetLedger):
+                        runtime_budget.record_retry(owner_id=budget_owner_id)
+                    if native_tool_calling:
+                        loop_state.force_tool_choice = True
+                    yield RuntimeEvent(
+                        RuntimeEventType.PROTOCOL_RETRY,
+                        {
+                            "reason": "invalid_operation_slug",
+                            "invalid_operation_slugs": invalid_operation_slugs[:10],
+                            "available_operations": serialize_published_operations(available_operations),
+                        },
+                    )
+                    continue
                 operation_calls_total_ref = [loop_state.tool_calls_total]
                 for operation_call in parsed.tool_calls:
                     # Log intent before executing each tool
@@ -987,9 +1010,17 @@ class AgentToolRuntime(BaseRuntime):
         operation_results_for_context.append((operation_call, result_text))
 
     @staticmethod
-    def _is_allowed_operation_call(operation_slug: str, available_operations: List[Any]) -> bool:
+    def _is_allowed_operation_call(
+        operation_slug: str,
+        arguments: Dict[str, Any],
+        available_operations: List[Any],
+    ) -> bool:
         from app.agents.runtime.tools import OperationExecutionFacade
-        operation, _ = OperationExecutionFacade._find_operation(operation_slug, {}, available_operations)
+        operation, _ = OperationExecutionFacade._find_operation(
+            operation_slug,
+            arguments if isinstance(arguments, dict) else {},
+            available_operations,
+        )
         return operation is not None
 
     @staticmethod
@@ -1012,6 +1043,38 @@ class AgentToolRuntime(BaseRuntime):
         if isinstance(policy_text, str) and policy_text.strip():
             return policy_text.strip()
         return DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION
+
+    @staticmethod
+    def _invalid_operation_retry_instruction(
+        *,
+        invalid_operation_slugs: List[str],
+        available_operations: List[Any],
+    ) -> str:
+        allowed_names: List[str] = []
+        seen: set[str] = set()
+        for op in available_operations:
+            names = [
+                str(getattr(op, "operation_slug", "") or "").strip(),
+                str(getattr(op, "operation", "") or "").strip(),
+            ]
+            for name in names:
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                allowed_names.append(name)
+
+        invalid_preview = ", ".join(invalid_operation_slugs[:5]) or "unknown"
+        allowed_preview = ", ".join(allowed_names[:12]) or "none"
+        return (
+            "Предыдущий tool_call использовал недоступные имена инструментов: "
+            f"{invalid_preview}. "
+            "Не придумывай namespace по slug или типу коллекции. "
+            "Если нужен доступ к коллекции `template`, первый вызов должен быть "
+            "`collection.info` с аргументом `collection_slug=\"template\"`. "
+            "Используй только имена из разрешенного списка текущего run: "
+            f"{allowed_preview}. "
+            "Верни только корректный `tool_call`."
+        )
 
     @staticmethod
     def _intent_message(

@@ -11,7 +11,18 @@ class TestChatEventMapper:
         mapper = ChatEventMapper()
         event = SimpleNamespace(
             type=RuntimeEventType.TOOL_CALL,
-            data={"tool": "rag.search", "call_id": "1", "arguments": {"q": "hi"}},
+            data={
+                "tool": "rag.search",
+                "call_id": "1",
+                "arguments": {"q": "hi"},
+                "parent_entity_type": "agent_run",
+                "parent_entity_id": "agent-1",
+                "agent_slug": "ops",
+                "agent_run_id": "agent-1",
+                "llm_call_id": "llm-1",
+                "actor_type": "agent",
+                "actor_entity_id": "agent-1",
+            },
         )
 
         result = mapper.map_runtime_event(event)
@@ -21,6 +32,54 @@ class TestChatEventMapper:
             "tool": "rag.search",
             "call_id": "1",
             "arguments": {"q": "hi"},
+            "parent_entity_type": "agent_run",
+            "parent_entity_id": "agent-1",
+            "agent_slug": "ops",
+            "agent_run_id": "agent-1",
+            "llm_call_id": "llm-1",
+            "actor_type": "agent",
+            "actor_entity_id": "agent-1",
+            "orchestration_envelope": None,
+        }
+
+    def test_maps_tool_result_event_with_runtime_linkage(self):
+        mapper = ChatEventMapper()
+        event = SimpleNamespace(
+            type=RuntimeEventType.TOOL_RESULT,
+            data={
+                "tool": "collection.info",
+                "call_id": "c1",
+                "success": False,
+                "data": {"safe_message": "bad args"},
+                "error_code": "operation_invalid_args",
+                "retryable": True,
+                "safe_message": "$.dimensions must be array",
+                "parent_entity_type": "agent_run",
+                "parent_entity_id": "agent-2",
+                "agent_slug": "net.enginer",
+                "agent_run_id": "agent-2",
+                "llm_call_id": "llm-2",
+            },
+        )
+
+        result = mapper.map_runtime_event(event)
+
+        assert result == {
+            "type": "tool_result",
+            "tool": "collection.info",
+            "call_id": "c1",
+            "success": False,
+            "data": {"safe_message": "bad args"},
+            "error_code": "operation_invalid_args",
+            "retryable": True,
+            "safe_message": "$.dimensions must be array",
+            "parent_entity_type": "agent_run",
+            "parent_entity_id": "agent-2",
+            "agent_slug": "net.enginer",
+            "agent_run_id": "agent-2",
+            "llm_call_id": "llm-2",
+            "actor_type": None,
+            "actor_entity_id": None,
             "orchestration_envelope": None,
         }
 

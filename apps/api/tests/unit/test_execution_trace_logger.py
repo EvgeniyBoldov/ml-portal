@@ -124,6 +124,20 @@ async def test_start_run_redacts_context_snapshot(logger, run_store):
 
 
 @pytest.mark.asyncio
+async def test_start_run_forwards_run_id_override(logger, run_store):
+    run_id_override = uuid4()
+
+    await logger.start_run(
+        tenant_id=str(uuid4()),
+        agent_slug="assistant",
+        run_id_override=run_id_override,
+    )
+
+    run_store.start_run.assert_awaited_once()
+    assert run_store.start_run.call_args.kwargs["run_id_override"] == run_id_override
+
+
+@pytest.mark.asyncio
 async def test_log_routing_decision_persists_and_mirrors_run_step(logger, run_store, routing_repo):
     run_id = uuid4()
     missing = MissingRequirements(

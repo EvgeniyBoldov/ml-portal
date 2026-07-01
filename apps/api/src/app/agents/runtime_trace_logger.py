@@ -69,6 +69,7 @@ class RuntimeTraceLogger:
         logging_level: str = "brief",
         context_snapshot: Optional[Dict[str, Any]] = None,
         enable_logging: bool = True,
+        run_id_override: Optional[UUID] = None,
     ) -> Any:
         from app.agents.runtime.session import RunSession
 
@@ -85,6 +86,7 @@ class RuntimeTraceLogger:
             context_snapshot=snapshot,
             enable_logging=enable_logging,
             trace_logger=self.trace,
+            run_id_override=run_id_override,
         )
 
     async def log_error(

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
+from uuid import UUID
 
 from app.agents.runtime.llm import LLMAdapter
 from app.agents.runtime.agent_prompt_renderer import AgentPromptRenderer
@@ -81,6 +82,7 @@ class BaseRuntime(ABC):
         logging_level: str = "brief",
         context_snapshot: Optional[Dict[str, Any]] = None,
         enable_logging: bool = True,
+        run_id_override: Optional[UUID] = None,
     ):
         """Factory method for creating a RunSession."""
         return self.trace_logger.make_run_session(
@@ -90,6 +92,7 @@ class BaseRuntime(ABC):
             logging_level=logging_level,
             context_snapshot=context_snapshot,
             enable_logging=enable_logging,
+            run_id_override=run_id_override,
         )
 
     @staticmethod

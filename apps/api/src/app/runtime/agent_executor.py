@@ -179,6 +179,8 @@ class AgentExecutor:
         deps.execution_graph = sub_request.execution_graph
         deps.resolved_operations = list(sub_request.resolved_operations or [])
         ctx.set_runtime_deps(deps)
+        if lifecycle_agent_run_id:
+            ctx.extra["lifecycle_agent_run_id"] = lifecycle_agent_run_id
         ctx.extra["runtime_tool_ledger"] = state.tool_ledger
         ctx.extra["runtime_tool_reuse_enabled"] = bool(
             (platform_config or {}).get("runtime_tool_reuse_enabled", True),
