@@ -50,7 +50,7 @@ Default intent:
 
 1. Assistant returns fenced file blocks.
 2. Backend extracts supported file blocks.
-3. Generated files are persisted as chat attachments.
+3. Generated files are persisted as downloadable artifacts; when chat context exists, they may also be linked as chat attachments.
 4. Assistant message stores generated attachment metadata.
 5. UI renders downloadable file cards/links.
 
@@ -80,6 +80,11 @@ Deprecation note:
 - direct object-storage links in message metadata (`url`, presigned S3/MinIO URLs) are deprecated;
 - canonical metadata fields are `file_id` and `download_url`;
 - legacy `url` values are supported only as a backward-compatibility fallback for previously persisted messages.
+
+Detached artifact rule:
+- `file.generate` and `template.fill` can create downloadable artifacts without an active chat.
+- When chat context exists, the same artifact may be linked to that chat for UX continuity.
+- Chat-scoped listing remains chat-scoped; detached artifacts are delivered by `file_id` or `storage_uri`.
 
 ## Runtime rule
 

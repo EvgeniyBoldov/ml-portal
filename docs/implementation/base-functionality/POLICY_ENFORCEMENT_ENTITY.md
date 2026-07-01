@@ -52,7 +52,7 @@ Policy enforcement layer is not responsible for:
 ## Required Inputs
 
 Minimum required policy inputs:
-- action intent (`agent_call|operation_call|...`),
+- action intent (`agent_call|tool_call|...`),
 - operation metadata (`side_effects`, `risk_level`, confirmation flags),
 - platform gates (global forbid/confirmation settings),
 - execution limits (steps/time/retries),

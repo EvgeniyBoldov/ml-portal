@@ -1,6 +1,4 @@
-"""
-OperationExecutor — выполнение operation calls с таймаутами, валидацией и логированием.
-"""
+"""Runtime tool execution with validation, timeouts, and confirmation gates."""
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +19,7 @@ _JSONSCHEMA_FORCE_DISABLE = os.getenv("RUNTIME_DISABLE_JSONSCHEMA", "").strip().
 }
 _JSONSCHEMA_AVAILABLE = (_jsonschema is not None) and not _JSONSCHEMA_FORCE_DISABLE
 
-from app.agents.context import OperationCall, ToolContext, ToolResult
+from app.agents.context import ToolCall, ToolContext, ToolResult
 from app.agents.contracts import ResolvedOperation
 from app.agents.runtime.confirmation import (
     ConfirmationService,
@@ -47,7 +45,7 @@ class ConfirmationRequiredError(RuntimeError):
 
 
 class OperationExecutionFacade:
-    """Execute operation calls with validation, timeouts, and source extraction."""
+    """Execute tool calls with validation, timeouts, and source extraction."""
     def __init__(
         self,
         confirmation_service: Optional[ConfirmationService] = None,
@@ -58,7 +56,7 @@ class OperationExecutionFacade:
 
     async def execute(
         self,
-        operation_call: OperationCall,
+        operation_call: ToolCall,
         ctx: ToolContext,
         operations: List[ResolvedOperation],
         timeout_s: Optional[int] = None,
@@ -71,14 +69,16 @@ class OperationExecutionFacade:
         Tool logs (from ToolLogger) are automatically extracted from
         result.metadata["logs"] and available for RunStore persistence.
         """
+        original_operation_slug = operation_call.tool_name
         operation, resolved_slug_error = self._find_operation(
-            operation_call.operation_slug,
+            operation_call.tool_name,
+            operation_call.arguments,
             operations,
         )
 
         if not operation:
-            logger.error(f"Operation not found: {operation_call.operation_slug}")
-            message = resolved_slug_error or f"Operation '{operation_call.operation_slug}' not found"
+            logger.error(f"Tool not found: {operation_call.tool_name}")
+            message = resolved_slug_error or f"Tool '{operation_call.tool_name}' not found"
             code = (
                 RuntimeErrorCode.OPERATION_AMBIGUOUS
                 if resolved_slug_error and "ambiguous" in resolved_slug_error.lower()
@@ -91,23 +91,37 @@ class OperationExecutionFacade:
             )
             return ToolResult.fail(message, **err.to_metadata()), []
 
-        if operation.operation_slug != operation_call.operation_slug:
+        if operation.operation_slug != operation_call.tool_name:
             logger.info(
-                "Resolved shorthand operation '%s' -> '%s'",
-                operation_call.operation_slug,
+                "Resolved shorthand tool '%s' -> '%s'",
+                operation_call.tool_name,
                 operation.operation_slug,
             )
-            operation_call = OperationCall(
+            operation_call = ToolCall(
                 id=operation_call.id,
-                operation_slug=operation.operation_slug,
+                tool_name=operation.operation_slug,
                 arguments=operation_call.arguments,
+            )
+
+        if (
+            original_operation_slug == "collection.info"
+            and isinstance(operation_call.arguments, dict)
+            and any(key in operation_call.arguments for key in ("collection_slug", "collection_id"))
+        ):
+            stripped_arguments = dict(operation_call.arguments)
+            stripped_arguments.pop("collection_slug", None)
+            stripped_arguments.pop("collection_id", None)
+            operation_call = ToolCall(
+                id=operation_call.id,
+                tool_name=operation_call.tool_name,
+                arguments=stripped_arguments,
             )
 
         normalized_arguments = self._normalize_args(operation, operation_call.arguments)
         if normalized_arguments is not operation_call.arguments:
-            operation_call = OperationCall(
+            operation_call = ToolCall(
                 id=operation_call.id,
-                operation_slug=operation_call.operation_slug,
+                tool_name=operation_call.tool_name,
                 arguments=normalized_arguments,
             )
 
@@ -130,20 +144,20 @@ class OperationExecutionFacade:
         )
 
         reused = self._reuse_policy.maybe_reuse(
-            operation_slug=operation_call.operation_slug,
+            operation_slug=operation_call.tool_name,
             arguments=operation_call.arguments,
             ctx=ctx,
         )
         if reused is not None:
             result, sources = reused
             logger.info(
-                "Reused tool result for operation '%s' from in-turn ledger",
-                operation_call.operation_slug,
+                "Reused tool result for tool '%s' from in-turn ledger",
+                operation_call.tool_name,
             )
             return result, sources
 
         try:
-            logger.info(f"Executing operation: {operation_call.operation_slug}")
+            logger.info(f"Executing tool: {operation_call.tool_name}")
             executor = ctx.get_runtime_deps().operation_executor
             if not executor:
                 err = OperationExecutionError(
@@ -171,7 +185,7 @@ class OperationExecutionFacade:
                 )
                 if warning_count:
                     logger.warning(
-                        f"Operation '{operation_call.operation_slug}' produced "
+                        f"Tool '{operation_call.tool_name}' produced "
                         f"{warning_count} warnings/errors",
                     )
 
@@ -179,7 +193,7 @@ class OperationExecutionFacade:
 
         except asyncio.TimeoutError:
             logger.error(
-                f"Operation {operation_call.operation_slug} timed out after {timeout_s}s",
+                f"Tool {operation_call.tool_name} timed out after {timeout_s}s",
             )
             err = OperationExecutionError(
                 code=RuntimeErrorCode.OPERATION_TIMEOUT,
@@ -190,7 +204,7 @@ class OperationExecutionFacade:
 
         except Exception as e:
             logger.error(
-                f"Operation {operation_call.operation_slug} execution failed: {e}",
+                f"Tool {operation_call.tool_name} execution failed: {e}",
                 exc_info=True,
             )
             err = OperationExecutionError(
@@ -204,7 +218,7 @@ class OperationExecutionFacade:
         self,
         *,
         operation: ResolvedOperation,
-        operation_call: OperationCall,
+        operation_call: ToolCall,
         ctx: ToolContext,
     ) -> None:
         if not bool(operation.requires_confirmation):
@@ -270,6 +284,7 @@ class OperationExecutionFacade:
     @staticmethod
     def _find_operation(
         operation_slug: str,
+        arguments: Dict[str, Any],
         operations: List[ResolvedOperation],
     ) -> Tuple[Optional[ResolvedOperation], Optional[str]]:
         for operation in operations:
@@ -283,19 +298,30 @@ class OperationExecutionFacade:
         if len(shorthand_matches) == 1:
             return shorthand_matches[0], None
         if len(shorthand_matches) > 1:
+            collection_slug = ""
+            if isinstance(arguments, dict):
+                collection_slug = str(arguments.get("collection_slug") or "").strip()
+            if operation_slug == "collection.info" and collection_slug:
+                scoped_matches = [
+                    operation
+                    for operation in shorthand_matches
+                    if str(getattr(operation, "collection_slug", "") or "").strip() == collection_slug
+                ]
+                if len(scoped_matches) == 1:
+                    return scoped_matches[0], None
             candidates = ", ".join(
                 operation.operation_slug for operation in shorthand_matches[:10]
             )
             return None, (
-                f"Operation '{operation_slug}' is ambiguous. "
-                f"Use exact invoke name. Matching operations: {candidates}"
+                f"Tool '{operation_slug}' is ambiguous. "
+                f"Use exact invoke name. Matching tools: {candidates}"
             )
         candidates = ", ".join(
             operation.operation_slug for operation in operations[:10]
         )
         if candidates:
             return None, (
-                f"Operation '{operation_slug}' is unavailable. "
+                f"Tool '{operation_slug}' is unavailable. "
                 f"Use exact invoke name from the prompt. Available examples: {candidates}"
             )
         return None, None
@@ -561,13 +587,13 @@ class OperationExecutionFacade:
         return "\n\n".join(parts) or "No data retrieved."
 
     @staticmethod
-    def make_summary(operation_slug: str, result: ToolResult) -> str:
-        """Build short summary from operation result for Observation."""
+    def make_summary(tool_name: str, result: ToolResult) -> str:
+        """Build short summary from tool result for Observation."""
         if not result.success:
-            return f"{operation_slug} failed: {result.error or 'unknown'}"
+            return f"{tool_name} failed: {result.error or 'unknown'}"
 
         data = result.data or {}
-        parts = [f"{operation_slug} OK"]
+        parts = [f"{tool_name} OK"]
 
         if "count" in data:
             parts.append(f"count={data['count']}")
@@ -583,7 +609,4 @@ class OperationExecutionFacade:
 
         return ". ".join(parts)
 
-
-# Backward-compatible aliases.
-OperationExecutor = OperationExecutionFacade
 ToolExecutor = OperationExecutionFacade

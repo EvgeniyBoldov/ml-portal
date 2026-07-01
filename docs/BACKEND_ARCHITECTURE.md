@@ -18,7 +18,7 @@ Response contracts for orchestration roles (Planner, Fact Extractor, Summary Com
 
 ## Runtime
 
-Runtime использует MCP-compatible operation descriptor как контракт capabilities/discovery.
+Runtime использует MCP-compatible tool descriptor как контракт capabilities/discovery.
 
 ### Runtime Memory
 

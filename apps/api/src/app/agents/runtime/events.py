@@ -15,8 +15,8 @@ class RuntimeEventType(str, Enum):
     STATUS = "status"
     THINKING = "thinking"
     BUDGET_SNAPSHOT = "budget_snapshot"
-    OPERATION_CALL = "operation_call"
-    OPERATION_RESULT = "operation_result"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
     LLM_TURN = "llm_turn"
     DELTA = "delta"
     FINAL = "final"
@@ -47,9 +47,9 @@ class RuntimeEvent:
         return cls(RuntimeEventType.THINKING, {"step": step})
 
     @classmethod
-    def operation_call(
+    def tool_call(
         cls,
-        operation_slug: str,
+        tool_name: str,
         call_id: str,
         arguments: dict,
         *,
@@ -62,7 +62,7 @@ class RuntimeEvent:
         actor_entity_id: Optional[str] = None,
     ) -> RuntimeEvent:
         payload: Dict[str, Any] = {
-            "operation": operation_slug,
+            "tool": tool_name,
             "call_id": call_id,
             "arguments": arguments,
         }
@@ -80,12 +80,12 @@ class RuntimeEvent:
             payload["actor_type"] = actor_type
         if actor_entity_id is not None:
             payload["actor_entity_id"] = actor_entity_id
-        return cls(RuntimeEventType.OPERATION_CALL, payload)
+        return cls(RuntimeEventType.TOOL_CALL, payload)
 
     @classmethod
-    def operation_result(
+    def tool_result(
         cls,
-        operation_slug: str,
+        tool_name: str,
         call_id: str,
         success: bool,
         data: Any,
@@ -107,7 +107,7 @@ class RuntimeEvent:
         truncated: Optional[bool] = None,
     ) -> RuntimeEvent:
         payload: Dict[str, Any] = {
-            "operation": operation_slug,
+            "tool": tool_name,
             "call_id": call_id,
             "success": success,
             "data": data,
@@ -144,7 +144,7 @@ class RuntimeEvent:
             payload["actor_type"] = actor_type
         if actor_entity_id is not None:
             payload["actor_entity_id"] = actor_entity_id
-        return cls(RuntimeEventType.OPERATION_RESULT, payload)
+        return cls(RuntimeEventType.TOOL_RESULT, payload)
 
     @classmethod
     def llm_turn(cls, **payload: Any) -> RuntimeEvent:

@@ -118,7 +118,7 @@ class ChatAttachmentService:
     async def create_generated_attachment(
         self,
         *,
-        chat_id: str,
+        chat_id: Optional[str],
         owner_id: str,
         filename: str,
         content: bytes,
@@ -128,17 +128,26 @@ class ChatAttachmentService:
         extension = safe_name.rsplit(".", 1)[-1].strip().lower() if "." in safe_name else "txt"
         attachment_id = uuid.uuid4()
         checksum = calculate_file_checksum(content)
-        key = (
-            f"chats/{chat_id}/generated/{attachment_id}/"
-            f"{checksum}_{safe_name}"
-        )
+        if chat_id:
+            key = (
+                f"chats/{chat_id}/generated/{attachment_id}/"
+                f"{checksum}_{safe_name}"
+            )
+        else:
+            key = (
+                f"artifacts/generated/{owner_id}/{attachment_id}/"
+                f"{checksum}_{safe_name}"
+            )
         bucket = self.settings.S3_BUCKET_CHAT_UPLOADS
         await self._ensure_bucket(bucket)
+        metadata = {"owner_id": owner_id, "checksum": checksum, "generated": "true"}
+        if chat_id:
+            metadata["chat_id"] = chat_id
         uploaded = await s3_manager.upload_fileobj(
             bucket=bucket,
             key=key,
             file_obj=io.BytesIO(content),
-            metadata={"chat_id": chat_id, "owner_id": owner_id, "checksum": checksum, "generated": "true"},
+            metadata=metadata,
         )
         if not uploaded:
             raise RuntimeError(f"Failed to upload generated file to s3://{bucket}/{key}")
@@ -339,7 +348,7 @@ class ChatAttachmentService:
         self,
         *,
         attachment_id: uuid.UUID,
-        chat_id: str,
+        chat_id: Optional[str],
         owner_id: str,
         file_name: str,
         file_ext: str,
@@ -352,7 +361,7 @@ class ChatAttachmentService:
     ) -> ChatAttachment:
         row = ChatAttachment(
             id=attachment_id,
-            chat_id=uuid.UUID(chat_id),
+            chat_id=uuid.UUID(chat_id) if chat_id else None,
             owner_id=uuid.UUID(owner_id),
             file_name=file_name,
             file_ext=file_ext,

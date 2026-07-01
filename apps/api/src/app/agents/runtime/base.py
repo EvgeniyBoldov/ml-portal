@@ -16,7 +16,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
 
-from app.agents.runtime.events import RuntimeEvent
 from app.agents.runtime.llm import LLMAdapter
 from app.agents.runtime.agent_prompt_renderer import AgentPromptRenderer
 from app.agents.execution_config_resolver import ExecutionConfigResolver
@@ -26,6 +25,7 @@ from app.agents.runtime_trace_logger import RuntimeTraceLogger
 from app.agents.runtime.prompt_assembler import PromptAssembler
 from app.agents.runtime.tools import OperationExecutionFacade
 from app.core.logging import get_logger
+from app.runtime.events import RuntimeEvent
 
 if TYPE_CHECKING:
     from app.agents.context import ToolContext

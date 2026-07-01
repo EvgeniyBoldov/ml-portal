@@ -66,20 +66,20 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
             ChatSSEEventType.AGENT_SELECTED,
             AgentSelectedPayload(agent=event.get("agent"), auto=event.get("auto", False)),
         )
-    if et in {"tool_call", "operation_call"}:
+    if et == "tool_call":
         return format_chat_sse(
             ChatSSEEventType.TOOL_CALL,
             ToolCallPayload(
-                tool=event.get("tool") or event.get("operation"),
+                tool=event.get("tool"),
                 call_id=event.get("call_id"),
                 arguments=event.get("arguments"),
             ),
         )
-    if et in {"tool_result", "operation_result"}:
+    if et == "tool_result":
         return format_chat_sse(
             ChatSSEEventType.TOOL_RESULT,
             ToolResultPayload(
-                tool=event.get("tool") or event.get("operation"),
+                tool=event.get("tool"),
                 call_id=event.get("call_id"),
                 success=event.get("success"),
                 data=event.get("data"),

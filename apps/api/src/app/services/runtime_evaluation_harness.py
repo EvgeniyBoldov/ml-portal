@@ -252,6 +252,15 @@ def _extract_operation_from_mapping(payload: Dict[str, Any], seen: Set[str]) -> 
                 nested_slug = value.get("operation_slug") or value.get("canonical_op_slug")
                 if isinstance(nested_slug, str) and nested_slug.strip():
                     seen.add(nested_slug.strip())
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        for value in tools:
+            if isinstance(value, str) and value.strip():
+                seen.add(value.strip())
+            elif isinstance(value, dict):
+                nested_slug = value.get("invoke_as") or value.get("tool_name")
+                if isinstance(nested_slug, str) and nested_slug.strip():
+                    seen.add(nested_slug.strip())
 
 
 def _score_tool_choice(case: RuntimeEvaluationCase, seen_operations: Set[str], notes: List[str]) -> float:

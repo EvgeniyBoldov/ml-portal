@@ -1,16 +1,16 @@
 """
-AgentExecutor — adapter that runs a sub-agent via the existing AgentToolRuntime
+AgentExecutor — runs a sub-agent via the canonical tool runtime
 and feeds its outcome back into RuntimeTurnState.
 
 Design:
     * Pipeline → AgentExecutor.execute(step, runtime_state, ...)
     * AgentExecutor builds a sub-ExecutionRequest via ExecutionPreflight (the
       sub-agent has its own policy/version/operations).
-    * AgentToolRuntime runs the operation-call loop and emits legacy runtime
-      events. We translate those to v3 events.
+    * AgentToolRuntime runs the tool-call loop and emits canonical runtime
+      events directly.
     * Sub-agent DELTAs and FINAL are captured into an AgentResult; they are
       NOT forwarded to the user — Synthesizer owns the final stream.
-    * OPERATION_CALL / OPERATION_RESULT / STATUS pass through for observability.
+    * TOOL_CALL / TOOL_RESULT / STATUS pass through for observability.
     * ERROR events pass through and the agent_result is marked success=False.
 """
 from __future__ import annotations
@@ -27,10 +27,6 @@ from app.agents.context import ToolContext
 from app.agents.execution_preflight import ExecutionMode, ExecutionPreflight
 from app.agents.operation_executor import DirectOperationExecutor
 from app.agents.runtime.agent import AgentToolRuntime
-from app.agents.runtime.events import (
-    RuntimeEvent as LegacyEvent,
-    RuntimeEventType as LegacyEventType,
-)
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.contracts import AgentAnswerStatus, NeedSpec, NextStep
@@ -55,18 +51,6 @@ logger = get_logger(__name__)
 MAX_SUB_AGENT_MESSAGES = 6
 MAX_SUB_AGENT_MESSAGE_CHARS = 600
 MAX_OPERATION_RESULT_PREVIEW_CHARS = 4096  # Limit payload size in SSE
-
-
-# Legacy -> v3 event-type mapping. Types absent from this map are dropped.
-_PASS_THROUGH = {
-    LegacyEventType.STATUS: RuntimeEventType.STATUS,
-    LegacyEventType.BUDGET_SNAPSHOT: RuntimeEventType.BUDGET_SNAPSHOT,
-    LegacyEventType.OPERATION_CALL: RuntimeEventType.OPERATION_CALL,
-    LegacyEventType.OPERATION_RESULT: RuntimeEventType.OPERATION_RESULT,
-    LegacyEventType.LLM_TURN: RuntimeEventType.LLM_TURN,
-    LegacyEventType.CONFIRMATION_REQUIRED: RuntimeEventType.CONFIRMATION_REQUIRED,
-    LegacyEventType.ERROR: RuntimeEventType.ERROR,
-}
 
 
 class AgentExecutor:
@@ -225,7 +209,7 @@ class AgentExecutor:
         # 2. Compose the sub-agent's LLM messages. Goal + explicit agent_input.
         sub_messages = self._build_sub_messages(messages, step, state.goal)
 
-        # 3. Run legacy AgentToolRuntime and translate events.
+        # 3. Run sub-agent tool loop and forward canonical runtime events.
         buffered_answer: List[str] = []
         sub_sources: List[dict] = []
         attachments: List[Dict[str, Any]] = []
@@ -236,50 +220,45 @@ class AgentExecutor:
         success = True
 
         try:
-            async for legacy in self._tool_runtime.execute(
+            async for runtime_event in self._tool_runtime.execute(
                 exec_request=sub_request,
                 messages=sub_messages,
                 ctx=ctx,
                 model=model,
                 enable_logging=True,
             ):
-                translated = self._translate(
-                    legacy,
-                    lifecycle_agent_run_id=lifecycle_agent_run_id or str(legacy.data.get("agent_run_id") or ""),
-                )
-                if translated is not None:
-                    yield translated
+                yield runtime_event
 
-                if legacy.type == LegacyEventType.OPERATION_CALL:
-                    state.record_operation_call(
-                        operation=str(legacy.data.get("operation") or ""),
-                        call_id=str(legacy.data.get("call_id") or ""),
-                        arguments=dict(legacy.data.get("arguments") or {}),
+                if runtime_event.type == RuntimeEventType.TOOL_CALL:
+                    state.record_tool_call(
+                        tool=str(runtime_event.data.get("tool") or ""),
+                        call_id=str(runtime_event.data.get("call_id") or ""),
+                        arguments=dict(runtime_event.data.get("arguments") or {}),
                         agent_slug=agent_slug,
                         phase_id=step.phase_id,
                     )
-                elif legacy.type == LegacyEventType.OPERATION_RESULT:
-                    result_payload = self._unwrap_operation_result_payload(legacy.data)
-                    state.record_operation_result(
-                        call_id=str(legacy.data.get("call_id") or ""),
-                        success=bool(legacy.data.get("success")),
+                elif runtime_event.type == RuntimeEventType.TOOL_RESULT:
+                    result_payload = runtime_event.data.get("data")
+                    state.record_tool_result(
+                        call_id=str(runtime_event.data.get("call_id") or ""),
+                        success=bool(runtime_event.data.get("success")),
                         data=result_payload,
                     )
-                    if bool(legacy.data.get("reused")):
+                    if bool(runtime_event.data.get("reused")):
                         state.used_tool_calls = max(0, state.used_tool_calls - 1)
 
-                    for src in legacy.data.get("sources") or []:
+                    for src in runtime_event.data.get("sources") or []:
                         if isinstance(src, dict):
                             sub_sources.append(dict(src))
 
                     # Collect downloadable attachments for downstream synthesis
-                    operation_name = str(legacy.data.get("operation") or "")
+                    operation_name = str(runtime_event.data.get("tool") or "")
                     if operation_name in (
                         "file.generate",
                         "file_generate",
                         "collection.template.fill",
                         "instance.local-template-tools.collection.template.fill",
-                    ) and bool(legacy.data.get("success")):
+                    ) and bool(runtime_event.data.get("success")):
                         if isinstance(result_payload, dict):
                             file_id = result_payload.get("file_id")
                             if file_id:
@@ -293,23 +272,23 @@ class AgentExecutor:
                                     "size_bytes": result_payload.get("size_bytes"),
                                 })
 
-                if legacy.type == LegacyEventType.DELTA:
-                    buffered_answer.append(str(legacy.data.get("content", "")))
-                elif legacy.type == LegacyEventType.FINAL:
-                    final_content = str(legacy.data.get("content", "") or "")
-                    for src in legacy.data.get("sources") or []:
+                if runtime_event.type == RuntimeEventType.DELTA:
+                    buffered_answer.append(str(runtime_event.data.get("content", "")))
+                elif runtime_event.type == RuntimeEventType.FINAL:
+                    final_content = str(runtime_event.data.get("content", "") or "")
+                    for src in runtime_event.data.get("sources") or []:
                         if isinstance(src, dict):
                             sub_sources.append(src)
-                elif legacy.type == LegacyEventType.ERROR:
+                elif runtime_event.type == RuntimeEventType.ERROR:
                     success = False
-                    final_error = str(legacy.data.get("error", "") or "sub_agent_error")
-                    raw_code = legacy.data.get("error_code")
+                    final_error = str(runtime_event.data.get("error", "") or "sub_agent_error")
+                    raw_code = runtime_event.data.get("error_code")
                     if raw_code is not None:
                         final_error_code = str(raw_code)
-                    if "retryable" in legacy.data:
-                        final_retryable = bool(legacy.data.get("retryable"))
-                    elif "recoverable" in legacy.data:
-                        final_retryable = bool(legacy.data.get("recoverable"))
+                    if "retryable" in runtime_event.data:
+                        final_retryable = bool(runtime_event.data.get("retryable"))
+                    elif "recoverable" in runtime_event.data:
+                        final_retryable = bool(runtime_event.data.get("recoverable"))
         except Exception as exc:
             # NOTE(4.8): exc_info может содержать sensitive данные.
             # RuntimeRedactor применяется на уровне logging handler в проде.
@@ -417,104 +396,6 @@ class AgentExecutor:
             sources_section.items = sources_section.items[-50:]
 
     # ---------------------------------------------------------------- helpers --
-
-    @staticmethod
-    def _translate(
-        legacy: LegacyEvent,
-        *,
-        lifecycle_agent_run_id: Optional[str] = None,
-    ) -> Optional[RuntimeEvent]:
-        """Map legacy runtime events to v3. DELTA/FINAL are suppressed;
-        unknown types drop silently."""
-        mapped = _PASS_THROUGH.get(legacy.type)
-        if mapped is not None:
-            data = dict(legacy.data)
-            normalized_agent_run_id = lifecycle_agent_run_id or str(data.get("agent_run_id") or data.get("parent_entity_id") or "")
-            # Hard contract: all sub-agent scoped events must share one agent_run_id
-            # and parent linkage so frontend trace can deterministically nest LLM/tool
-            # under the exact agent invocation container.
-            previous_parent = data.get("parent_entity_id")
-            previous_agent_run = data.get("agent_run_id")
-            if previous_parent is not None and normalized_agent_run_id and str(previous_parent) != normalized_agent_run_id:
-                data["upstream_parent_entity_id"] = previous_parent
-            if previous_agent_run is not None and normalized_agent_run_id and str(previous_agent_run) != normalized_agent_run_id:
-                data["upstream_agent_run_id"] = previous_agent_run
-            if normalized_agent_run_id:
-                data["agent_run_id"] = normalized_agent_run_id
-                data["parent_entity_type"] = "agent_run"
-                data["parent_entity_id"] = normalized_agent_run_id
-
-            # Normalize legacy agent budget payload to the new per-entity schema
-            # so frontend tree can bind spend to the lifecycle agent entity.
-            if legacy.type == LegacyEventType.BUDGET_SNAPSHOT:
-                snapshot = data.get("snapshot")
-                own: Dict[str, int] = {}
-                limits: Dict[str, int] = {}
-                if isinstance(snapshot, dict):
-                    metric_map = {
-                        "planner_iterations": "planner_steps",
-                        "agent_steps": "agent_steps",
-                        "tool_calls": "tool_calls",
-                        "tokens_in": "tokens_in",
-                        "tokens_out": "tokens_out",
-                        "tokens_total": "tokens_total",
-                        "retries": "retries",
-                        "wall_time_ms": "wall_time_ms",
-                    }
-                    for legacy_name, target_name in metric_map.items():
-                        metric_obj = snapshot.get(legacy_name)
-                        if not isinstance(metric_obj, dict):
-                            continue
-                        used = metric_obj.get("used")
-                        limit = metric_obj.get("limit")
-                        if isinstance(used, (int, float)):
-                            own[target_name] = int(used)
-                        if isinstance(limit, (int, float)):
-                            limits[target_name] = int(limit)
-
-                data = {
-                    "entity_type": "agent_run",
-                    "entity_id": normalized_agent_run_id or str(data.get("entity_id") or data.get("owner_id") or ""),
-                    "parent_entity_type": "agent_run",
-                    "parent_entity_id": normalized_agent_run_id or str(data.get("parent_entity_id") or ""),
-                    "agent_run_id": normalized_agent_run_id or str(data.get("agent_run_id") or ""),
-                    "reason": data.get("reason"),
-                    "delta": data.get("delta") if isinstance(data.get("delta"), dict) else {},
-                    "own": own,
-                    "limits": limits or None,
-                    "at_ms": data.get("at_ms"),
-                }
-
-            # Limit OPERATION_RESULT payload size to prevent SSE leakage of large data
-            if legacy.type == LegacyEventType.OPERATION_RESULT and "data" in data:
-                payload = data["data"]
-                if isinstance(payload, str) and len(payload) > MAX_OPERATION_RESULT_PREVIEW_CHARS:
-                    data["data"] = payload[:MAX_OPERATION_RESULT_PREVIEW_CHARS] + "... [truncated]"
-                    data["truncated"] = True
-                elif isinstance(payload, (list, dict)):
-                    try:
-                        raw_str = __import__("json").dumps(payload, ensure_ascii=False, default=str)
-                    except Exception:
-                        raw_str = str(payload)
-                    if len(raw_str) > MAX_OPERATION_RESULT_PREVIEW_CHARS:
-                        data["data"] = raw_str[:MAX_OPERATION_RESULT_PREVIEW_CHARS] + "... [truncated]"
-                        data["truncated"] = True
-            return RuntimeEvent(mapped, data)
-        # DELTA, FINAL, PLANNER_ACTION, POLICY_DECISION, WAITING_INPUT, STOP:
-        # these are handled at pipeline level; don't leak.
-        return None
-
-    @staticmethod
-    def _unwrap_operation_result_payload(data: Dict[str, Any]) -> Any:
-        """Return the actual tool payload from legacy operation_result envelopes."""
-        result_payload = data.get("result")
-        if isinstance(result_payload, dict):
-            nested = result_payload.get("data")
-            if nested is not None:
-                return nested
-            return result_payload
-        direct_data = data.get("data")
-        return direct_data
 
     @staticmethod
     def _build_sub_messages(

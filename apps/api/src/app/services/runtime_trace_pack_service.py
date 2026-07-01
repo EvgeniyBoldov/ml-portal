@@ -21,8 +21,6 @@ class RuntimeTracePackService:
         "llm_turn",
         "llm_request",
         "llm_response",
-        "operation_call",
-        "operation_result",
         "tool_call",
         "tool_result",
         "final",
@@ -225,7 +223,7 @@ class RuntimeTracePackService:
             data = getattr(step, "data", None) or {}
             if not isinstance(data, dict):
                 continue
-            for key in ("operation", "operation_slug", "canonical_op_slug", "tool_slug"):
+            for key in ("tool", "operation", "operation_slug", "canonical_op_slug", "tool_slug"):
                 value = data.get(key)
                 if isinstance(value, str) and value.strip():
                     operations.add(value.strip())
@@ -237,7 +235,7 @@ class RuntimeTracePackService:
                     if isinstance(item, str) and item.strip():
                         operations.add(item.strip())
                     elif isinstance(item, dict):
-                        nested = item.get("operation_slug") or item.get("canonical_op_slug")
+                        nested = item.get("tool") or item.get("operation_slug") or item.get("canonical_op_slug")
                         if isinstance(nested, str) and nested.strip():
                             operations.add(nested.strip())
         return operations
@@ -267,7 +265,7 @@ class RuntimeTracePackService:
         entries: List[Dict[str, Any]] = []
         for step in steps:
             step_type = str(getattr(step, "step_type", "") or "")
-            if step_type not in {"operation_call", "operation_result", "tool_call", "tool_result"}:
+            if step_type not in {"tool_call", "tool_result"}:
                 continue
             data = getattr(step, "data", None) or {}
             if not isinstance(data, dict):
@@ -276,7 +274,7 @@ class RuntimeTracePackService:
                 {
                     "step_number": getattr(step, "step_number", None),
                     "step_type": step_type,
-                    "operation_slug": data.get("operation_slug") or data.get("canonical_op_slug") or data.get("operation"),
+                    "operation_slug": data.get("tool") or data.get("operation_slug") or data.get("canonical_op_slug") or data.get("operation"),
                     "tool_slug": data.get("tool_slug"),
                     "agent_slug": data.get("agent_slug"),
                     "agent_run_id": data.get("agent_run_id"),

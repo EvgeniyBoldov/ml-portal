@@ -5,9 +5,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.context import OperationCall, RuntimeDependencies, ToolContext
+from app.agents.context import RuntimeDependencies, ToolCall, ToolContext
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
-from app.agents.runtime.tools import OperationExecutor
+from app.agents.runtime.tools import ToolExecutor
 from app.runtime.memory.tool_ledger import ToolLedger
 
 
@@ -41,9 +41,9 @@ def _operation() -> ResolvedOperation:
 @pytest.mark.asyncio
 async def test_operation_executor_reuses_from_tool_ledger():
     operation = _operation()
-    call = OperationCall(
+    call = ToolCall(
         id="call-2",
-        operation_slug="collection.sql.execute",
+        tool_name="collection.sql.execute",
         arguments={"query": "select 1"},
     )
     ledger = ToolLedger()
@@ -63,7 +63,7 @@ async def test_operation_executor_reuses_from_tool_ledger():
     ctx.extra["runtime_tool_ledger"] = ledger
     ctx.extra["runtime_tool_reuse_enabled"] = True
 
-    executor = OperationExecutor()
+    executor = ToolExecutor()
     result, sources = await executor.execute(
         operation_call=call,
         ctx=ctx,
@@ -76,4 +76,3 @@ async def test_operation_executor_reuses_from_tool_ledger():
     assert result.data == {"rows": [{"v": 1}]}
     assert sources == []
     deps.operation_executor.execute.assert_not_called()
-

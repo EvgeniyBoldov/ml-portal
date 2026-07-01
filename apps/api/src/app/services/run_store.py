@@ -46,8 +46,6 @@ _BRIEF_KEEP_TRUNCATED = {
     "final_response:content": 1000,
     "llm_request:system_prompt": 200,
     "llm_response:content": 500,
-    "operation_call:arguments": 500,
-    "operation_result:result": 500,
     "tool_call:arguments": 500,
     "tool_result:result": 500,
 }
@@ -172,8 +170,6 @@ class RunStore:
             "intent": set(),  # Always keep full intent descriptions
             "llm_request": {"messages", "system_prompt"},
             "llm_response": {"content", "raw_response"},
-            "operation_call": {"arguments", "input"},
-            "operation_result": {"result", "output", "tool_logs"},
             "tool_call": {"arguments", "input"},
             "tool_result": {"result", "output", "tool_logs"},
             "user_request": {"content"},
@@ -398,13 +394,13 @@ class RunStore:
 
         # Normalize input/output aliases for downstream UI
         if self._is_full(run_id):
-            if step_type in {"tool_call", "operation_call"}:
+            if step_type == "tool_call":
                 if "input" not in stored_data:
                     if "arguments" in safe_data:
                         stored_data["input"] = _truncate(safe_data["arguments"])
                     elif "parameters" in safe_data:
                         stored_data["input"] = _truncate(safe_data["parameters"])
-            if step_type in {"tool_result", "operation_result"}:
+            if step_type == "tool_result":
                 if "output" not in stored_data:
                     if "result" in safe_data:
                         stored_data["output"] = _truncate(safe_data["result"])
@@ -414,7 +410,7 @@ class RunStore:
                     stored_data["result"] = stored_data["output"]
         
         # Add human-readable previews
-        if step_type in {"tool_call", "operation_call"} and "arguments" in safe_data:
+        if step_type == "tool_call" and "arguments" in safe_data:
             try:
                 args = safe_data["arguments"]
                 if isinstance(args, str):
@@ -426,7 +422,7 @@ class RunStore:
             except Exception:
                 pass
                 
-        if step_type in {"tool_result", "operation_result"} and "result" in safe_data:
+        if step_type == "tool_result" and "result" in safe_data:
             try:
                 res = safe_data["result"]
                 if isinstance(res, str):
@@ -494,11 +490,11 @@ class RunStore:
                         func.count(),
                     ).where(
                         AgentRunStep.run_id == run_id,
-                        AgentRunStep.step_type.in_(["tool_call", "operation_call", "llm_turn"]),
+                        AgentRunStep.step_type.in_(["tool_call", "llm_turn"]),
                     ).group_by(AgentRunStep.step_type)
                 )
                 counts_map = {str(step_type): int(cnt) for step_type, cnt in counts.fetchall()}
-                run.total_tool_calls = int(max(counts_map.get("tool_call", 0), counts_map.get("operation_call", 0)))
+                run.total_tool_calls = int(counts_map.get("tool_call", 0))
                 run.total_llm_calls = int(counts_map.get("llm_turn", 0))
 
                 token_agg = await s.execute(

@@ -47,10 +47,10 @@ class LLMAdapter:
                 messages=messages, model=model, params=params,
             )
         except Exception as e:
-            fallback = self._coerce_tool_choice_error_to_operation_call(e)
+            fallback = self._coerce_tool_choice_error_to_tool_call(e)
             if fallback is not None:
                 logger.warning(
-                    "LLM returned tool_use_failed/tool_choice mismatch; coercing failed_generation to operation_call block",
+                    "LLM returned tool_use_failed/tool_choice mismatch; coercing failed_generation to tool_call block",
                 )
                 return fallback
             logger.error(f"LLM call failed: {e}", exc_info=True)
@@ -130,13 +130,13 @@ class LLMAdapter:
         return str(chunk) if chunk else ""
 
     @staticmethod
-    def _coerce_tool_choice_error_to_operation_call(exc: Exception) -> Optional[str]:
-        """Convert provider tool-choice mismatch into textual operation_call protocol.
+    def _coerce_tool_choice_error_to_tool_call(exc: Exception) -> Optional[str]:
+        """Convert provider tool-choice mismatch into textual tool_call protocol.
 
         Some OpenAI-compatible providers (e.g. Groq) return HTTP 400 with
         error.code=tool_use_failed and a failed_generation payload when
         tool_choice=none but the model tried to call a tool anyway.
-        Salvage the call by converting it to a textual operation_call block.
+        Salvage the call by converting it to a textual tool_call block.
         """
         # Path 1: openai SDK — structured body dict, no string parsing needed
         body = getattr(exc, "body", None)
@@ -157,8 +157,8 @@ class LLMAdapter:
                     arguments = payload.get("arguments") or {}
                     if not isinstance(arguments, dict):
                         arguments = {}
-                    call = {"operation": op_name, "arguments": arguments}
-                    return "```operation_call\n" + json.dumps(call, ensure_ascii=False, indent=2) + "\n```"
+                    call = {"tool": op_name, "arguments": arguments}
+                    return "```tool_call\n" + json.dumps(call, ensure_ascii=False, indent=2) + "\n```"
 
         # Path 2: non-openai providers — plain string heuristic
         text = str(exc or "")
@@ -177,8 +177,8 @@ class LLMAdapter:
         if not isinstance(arguments, dict):
             arguments = {}
 
-        call = {"operation": op_name, "arguments": arguments}
-        return "```operation_call\n" + json.dumps(call, ensure_ascii=False, indent=2) + "\n```"
+        call = {"tool": op_name, "arguments": arguments}
+        return "```tool_call\n" + json.dumps(call, ensure_ascii=False, indent=2) + "\n```"
 
     @staticmethod
     def _extract_failed_generation_json(text: str) -> Optional[Dict[str, Any]]:

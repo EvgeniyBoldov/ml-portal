@@ -40,7 +40,7 @@ _FULL_STEP_TYPES = frozenset({
     "user_request", "routing_complete", "triage_complete",
     "error", "final", "final_content", "done",
     # Detailed types
-    "status", "operation_call", "operation_result", "tool_call", "tool_result",
+    "status", "tool_call", "tool_result",
     "delta", "planner_action", "planner_fact",
     "confirmation_required", "waiting_input", "stop",
     "agent_selected", "agent_tool_loop_started",

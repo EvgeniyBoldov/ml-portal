@@ -223,7 +223,8 @@ async def test_collection_info_builder_uses_runtime_resolved_operations():
 
     assert payload["collection"]["usage_rules"] == "Find template, inspect schema, then fill."
     assert payload["readiness"]["status"] == "ready"
-    assert payload["operations"][0]["canonical_name"] == "collection.template.fill"
+    assert payload["tools"][0]["tool_name"] == "collection.template.fill"
+    assert payload["tools"][0]["invoke_as"] == "instance.local-template-tools.collection.template.fill"
     assert payload["contracts"]["workflow"]
     assert payload["runtime_enrichment"]["status"] == "ready"
     assert payload["runtime_enrichment"]["data"]["row_count"] == 3
@@ -235,7 +236,7 @@ async def test_collection_info_builder_uses_runtime_resolved_operations():
 
 
 @pytest.mark.asyncio
-async def test_collection_info_builder_keeps_remote_stub():
+async def test_collection_info_builder_builds_remote_api_metadata_enrichment():
     builder = build_default_collection_info_response_builder()
     collection = SimpleNamespace(
         id="col-2",
@@ -245,7 +246,7 @@ async def test_collection_info_builder_keeps_remote_stub():
         status="active",
         schema_status="fresh",
         table_name=None,
-        last_sync_at=None,
+        last_sync_at=SimpleNamespace(isoformat=lambda: "2026-06-30T10:00:00+00:00"),
         current_version=SimpleNamespace(
             data_description="Remote objects",
             usage_purpose="Inspect remote inventory",
@@ -254,6 +255,15 @@ async def test_collection_info_builder_keeps_remote_stub():
         is_local=False,
         entity_type=None,
         vector_fields=[],
+        table_schema={
+            "entities": [
+                {"entity_type": "device", "aliases": ["devices"], "examples": ["sw01"]},
+                {"entity_type": "site", "aliases": ["sites"], "examples": ["dc1"]},
+            ]
+        },
+        source_contract={"entities": [{"entity_type": "rack"}]},
+        get_filterable_fields=lambda: [{"name": "name"}, {"name": "site"}],
+        get_sortable_fields=lambda: [{"name": "name"}],
         get_business_fields=lambda: [],
     )
 
@@ -270,5 +280,12 @@ async def test_collection_info_builder_keeps_remote_stub():
         },
     )
 
-    assert payload["runtime_enrichment"]["status"] == "stub"
-    assert "Remote runtime enrichment" in payload["runtime_enrichment"]["message"]
+    assert payload["runtime_enrichment"]["status"] == "ready"
+    assert payload["runtime_enrichment"]["type"] == "api"
+    assert payload["runtime_enrichment"]["mode"] == "metadata_only"
+    assert payload["runtime_enrichment"]["data"]["entity_count"] == 3
+    assert payload["runtime_enrichment"]["data"]["filterable_fields"] == ["name", "site"]
+    assert payload["runtime_enrichment"]["data"]["sortable_fields"] == ["name"]
+    assert payload["runtime_enrichment"]["data"]["observed_values_available"] is False
+    assert payload["runtime_enrichment"]["data"]["freshness"]["last_sync_at"] == "2026-06-30T10:00:00+00:00"
+    assert "stored remote API discovery metadata" in payload["runtime_enrichment"]["message"]

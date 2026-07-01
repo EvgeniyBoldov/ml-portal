@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from app.agents.context import OperationCall, ToolContext, ToolResult
+from app.agents.context import ToolCall, ToolContext, ToolResult
 from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget
 from app.agents.registry import ToolRegistry
 from app.agents.runtime_graph import OperationExecutionBinding, RuntimeExecutionGraph
@@ -49,16 +49,16 @@ class DirectOperationExecutor:
             getattr(settings, "MCP_ALLOW_RAW_CREDENTIAL_FALLBACK", False)
         )
 
-    async def execute(self, operation_call: OperationCall, ctx: ToolContext) -> ToolResult:
-        binding, target = self._resolve_target_binding(operation_call.operation_slug, ctx)
+    async def execute(self, operation_call: ToolCall, ctx: ToolContext) -> ToolResult:
+        binding, target = self._resolve_target_binding(operation_call.tool_name, ctx)
         if not target:
-            return ToolResult.fail(f"Execution target not found for '{operation_call.operation_slug}'")
+            return ToolResult.fail(f"Execution target not found for '{operation_call.tool_name}'")
 
         if target.provider_type == "local":
             handler_slug = target.handler_slug
             if not handler_slug:
                 return ToolResult.fail(
-                    f"Local handler missing for '{operation_call.operation_slug}'"
+                    f"Local handler missing for '{operation_call.tool_name}'"
                 )
             try:
                 merged_args = self._merge_local_args(target, operation_call.arguments, ctx, binding=binding)

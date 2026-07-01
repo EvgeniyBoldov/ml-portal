@@ -66,7 +66,7 @@ class SandboxStepEnrichmentService:
         redacted = self._redactor.redact(dict(step_data or {}))
         clipped = self._clip_value(redacted, max_chars=max_chars)
 
-        if step_type in {"operation_result", "tool_result"}:
+        if step_type == "tool_result":
             for key in _HEAVY_RESULT_KEYS:
                 value = clipped.get(key)
                 if value is None:

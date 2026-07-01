@@ -35,8 +35,8 @@ def test_trace_pack_collects_operations_prompts_and_tool_io():
                 "reason": "init",
             }),
             _step(0, "llm_request", {"model": "gpt-test", "system_prompt": "You are...", "messages": [{"role": "user", "content": "token=abc"}]}),
-            _step(1, "operation_call", {"operation_slug": "collection.document.search", "input": {"query": "vpn", "api_key": "secret"}}),
-            _step(2, "operation_result", {"operation_slug": "collection.document.search", "output": {"hits": 3}}),
+            _step(1, "tool_call", {"tool": "collection.document.search", "input": {"query": "vpn", "api_key": "secret"}}),
+            _step(2, "tool_result", {"tool": "collection.document.search", "output": {"hits": 3}}),
             _step(3, "final_response", {"content": "done"}),
         ],
     )
@@ -63,7 +63,7 @@ def test_trace_pack_collects_run_and_step_errors():
         context_snapshot={},
         error="run failed",
         steps=[
-            _step(0, "operation_call", {"operation_slug": "sql.execute_sql"}),
+            _step(0, "tool_call", {"tool": "sql.execute_sql"}),
             _step(1, "error", {"stage": "runtime"}, error="step failed"),
         ],
     )

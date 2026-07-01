@@ -15,7 +15,7 @@ This plan intentionally does not preserve the old raw step-list UI as a first-cl
   - Done when: both production and sandbox run APIs can return the same semantic trace structure with source raw events attached.
 
 - [ ] Normalize raw runtime events into semantic events before rendering.
-  - Task: map `user_request`, `budget_policy`, `llm_call`, `protocol_retry`, `operation_call`, `operation_result`, `budget_consumed`, `final_response`, `planner_step`, `status`, `error`, and future events into stable semantic categories.
+  - Task: map `user_request`, `budget_policy`, `llm_call`, `protocol_retry`, `operation_call`/`tool_call`, `operation_result`/`tool_result`, `budget_consumed`, `final_response`, `planner_step`, `status`, `error`, and future events into stable semantic categories.
   - Done when: UI components no longer branch directly on raw `step_type` except in the raw payload viewer.
 
 - [ ] Keep rendering separate from normalization.
@@ -60,7 +60,7 @@ This plan intentionally does not preserve the old raw step-list UI as a first-cl
   - Task: resolve common UUIDs into labels for agent, tenant, user, chat, branch, snapshot, collection, operation, model, and tool where available.
   - Done when: semantic payloads avoid UUID-only surfaces for common runtime entities.
 
-- [ ] Parse operation arguments/results into structured artifacts.
+- [ ] Parse tool arguments/results into structured artifacts.
   - Task: convert JSON string arguments/results into objects when valid, keep raw text when invalid.
   - Done when: operation cards can show `collection_slug=reglament` as parameters instead of escaped JSON strings.
 
@@ -75,8 +75,8 @@ This plan intentionally does not preserve the old raw step-list UI as a first-cl
 ### Step 3. Runtime Logging Contract Cleanup
 
 - [ ] Remove legacy event vocabulary from new logging paths.
-  - Task: standardize runtime logs on `operation_call` and `operation_result`; do not add new `tool_call/tool_result` writes.
-  - Done when: new runtime writes use canonical operation vocabulary and tests assert it.
+  - Task: standardize runtime logs on one canonical tool vocabulary in new code paths while keeping compatibility reads for older `operation_call`/`operation_result` data.
+  - Done when: new runtime writes do not introduce duplicate vocabularies and tests assert the canonical shape.
 
 - [ ] Add semantic hints at write time.
   - Task: include `phase`, `iteration`, `operation_slug`, `operation_label`, `agent_slug`, `model`, `reason`, and refs in emitted step payloads when known.
@@ -119,7 +119,7 @@ This plan intentionally does not preserve the old raw step-list UI as a first-cl
   - Done when: the user can visually follow cause and effect across the run.
 
 - [ ] Add per-iteration cards.
-  - Task: each iteration shows LLM call, decision/retry, operation calls/results, and consumed budget.
+  - Task: each iteration shows LLM call, decision/retry, tool calls/results, and consumed budget.
   - Done when: repeated loops are understandable without reading chronological raw events.
 
 - [ ] Add budget diagnostics.
@@ -163,7 +163,7 @@ This plan intentionally does not preserve the old raw step-list UI as a first-cl
   - Done when: each fixture produces expected phases, iterations, categories, titles, refs, and budget values.
 
 - [ ] Add backend unit tests for sandbox trace builder.
-  - Task: cover `planner_step`, `status`, `operation_call`, `operation_result`, `delta`, `final`, `waiting_input`, and error flow.
+  - Task: cover `planner_step`, `status`, `operation_call`/`tool_call`, `operation_result`/`tool_result`, `delta`, `final`, `waiting_input`, and error flow.
   - Done when: sandbox trace output matches the same semantic contract.
 
 - [x] Add frontend unit tests for shared trace helpers.
@@ -207,13 +207,13 @@ This plan intentionally does not preserve the old raw step-list UI as a first-cl
   - Done when: UI inference is limited to display formatting.
 
 - [ ] Do not preserve legacy type names as the target vocabulary.
-  - Task: standardize on canonical operation/runtime vocabulary and support old names only through normalization.
-  - Done when: new code does not introduce new `tool_*` assumptions for runtime operation execution.
+  - Task: standardize on canonical tool/runtime vocabulary and support old names only through normalization.
+  - Done when: new code does not introduce competing runtime vocabularies.
 
 ## 4. Release Criteria
 
 - [ ] Real stored agent run with `protocol_retry` renders as a readable iteration with retry reason and available operations summary.
-- [ ] Real stored operation call/result renders operation slug, normalized params, result preview, status, and raw artifact.
+- [ ] Real stored tool call/result renders tool slug, normalized params, result preview, status, and raw artifact.
 - [ ] Budget policy and budget consumed render as budget diagnostics, not raw JSON.
 - [ ] Stale `running` runs no longer appear as healthy active execution.
 - [ ] Sandbox run renders the same semantic flow while preserving branch and snapshot context.

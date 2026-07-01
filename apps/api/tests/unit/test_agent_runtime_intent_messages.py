@@ -23,10 +23,9 @@ def test_intent_message_uses_platform_override():
 
 def test_intent_message_sandbox_override_has_priority_and_formats():
     msg = AgentToolRuntime._intent_message(
-        key="operation_call",
-        platform_config={"intent_messages": {"operation_call": "Platform {operation_slug}"}},
-        sandbox_overrides={"intent_messages": {"operation_call": "Sandbox op {operation_slug}"}},
-        operation_slug="collection.search",
+        key="tool_call",
+        platform_config={"intent_messages": {"tool_call": "Platform {tool_name}"}},
+        sandbox_overrides={"intent_messages": {"tool_call": "Sandbox op {tool_name}"}},
+        tool_name="collection.search",
     )
     assert msg == "Sandbox op collection.search"
-

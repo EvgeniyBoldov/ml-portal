@@ -10,15 +10,15 @@ class TestChatEventMapper:
     def test_maps_tool_call_event(self):
         mapper = ChatEventMapper()
         event = SimpleNamespace(
-            type=RuntimeEventType.OPERATION_CALL,
-            data={"operation": "rag.search", "call_id": "1", "arguments": {"q": "hi"}},
+            type=RuntimeEventType.TOOL_CALL,
+            data={"tool": "rag.search", "call_id": "1", "arguments": {"q": "hi"}},
         )
 
         result = mapper.map_runtime_event(event)
 
         assert result == {
-            "type": "operation_call",
-            "operation": "rag.search",
+            "type": "tool_call",
+            "tool": "rag.search",
             "call_id": "1",
             "arguments": {"q": "hi"},
             "orchestration_envelope": None,

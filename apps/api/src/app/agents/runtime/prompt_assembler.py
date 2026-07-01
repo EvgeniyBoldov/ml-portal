@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
-from app.agents.protocol import build_operations_prompt
+from app.agents.protocol import build_tools_prompt
 from app.agents.runtime.prompt_contract import build_prompt_input_schema, build_prompt_operation_description
 from app.agents.runtime.agent_prompt_renderer import AgentPromptRenderer
 from app.agents.runtime.capability_card_builder import CapabilityCardBuilder
@@ -40,6 +40,28 @@ class OperationPromptRenderer:
                 "name": op.operation_slug,
                 "description": description,
                 "parameters": _compact_json_schema(build_prompt_input_schema(op)),
+            },
+        }
+
+    @staticmethod
+    def render_public_collection_info_schema(op: "ResolvedOperation") -> Dict[str, Any]:
+        description = (
+            "Collection Info | inspect one available collection by slug before any other collection-bound action | "
+            "required args: collection_slug: string | "
+            "returns schema, readiness, available tools/contracts, and runtime enrichment hints."
+        )
+        return {
+            "type": "function",
+            "function": {
+                "name": "collection.info",
+                "description": description[: OperationPromptRenderer.MAX_DESCRIPTION_CHARS].rstrip(),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "collection_slug": {"type": "string"},
+                    },
+                    "required": ["collection_slug"],
+                },
             },
         }
 
@@ -126,7 +148,7 @@ class PromptAssembler:
             sandbox_overrides=sandbox_overrides,
         )
         operations_prompt = (
-            build_operations_prompt(
+            build_tools_prompt(
                 operation_schemas,
                 mandatory_rules_text=operations_rules_override,
                 prompt_labels=prompt_labels,
@@ -241,10 +263,21 @@ class PromptAssembler:
     ) -> List[Dict[str, Any]]:
         if not resolved_operations:
             return []
-        return [
-            self.operation_renderer.render_schema(op)
-            for op in filter_prompt_visible_operations(resolved_operations)
-        ]
+        schemas: List[Dict[str, Any]] = []
+        collection_info_added = False
+        for op in filter_prompt_visible_operations(resolved_operations):
+            canonical_name = (
+                _text(getattr(getattr(op, "published", None), "canonical_name", None))
+                or _text(getattr(op, "operation", None))
+            )
+            if canonical_name == "collection.info":
+                if collection_info_added:
+                    continue
+                schemas.append(self.operation_renderer.render_public_collection_info_schema(op))
+                collection_info_added = True
+                continue
+            schemas.append(self.operation_renderer.render_schema(op))
+        return schemas
 
     @staticmethod
     def _extract_sandbox_notes(sandbox_overrides: Optional[Dict[str, Any]]) -> List[str]:

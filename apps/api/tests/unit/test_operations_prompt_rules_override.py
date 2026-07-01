@@ -34,7 +34,7 @@ def test_build_operations_prompt_includes_collection_selection_guidance():
     assert "Сначала сопоставь задачу с нужной коллекцией" in prompt
     assert "сначала вызови `collection.info`" in prompt.lower()
     assert "которые вернулись в результате `collection.info`" in prompt
-    assert "точное имя из `function.name`" in prompt or "Каноническое короткое имя тоже допустимо" in prompt
+    assert "имя инструмента ровно в том виде" in prompt
 
 
 def test_prompt_assembler_separates_collection_and_system_sections():
@@ -155,8 +155,8 @@ def test_operation_prompt_renderer_keeps_prompt_minimal_and_collection_aware():
     assert "collection_slug" not in schema["function"]["parameters"].get("required", [])
 
 
-def test_operation_prompt_renderer_hides_collection_slug_for_bound_collection_info():
-    schema = OperationPromptRenderer.render_schema(
+def test_operation_prompt_renderer_publishes_public_collection_info_schema():
+    schema = OperationPromptRenderer.render_public_collection_info_schema(
         type(
             "Op",
             (),
@@ -192,10 +192,10 @@ def test_operation_prompt_renderer_hides_collection_slug_for_bound_collection_in
         )()
     )
 
-    assert "collection_slug" not in schema["function"]["parameters"].get("properties", {})
-    assert "collection_slug" not in schema["function"]["parameters"].get("required", [])
-    assert schema["function"]["parameters"] == {"type": "object"}
-    assert "arguments: none" in schema["function"]["description"]
+    assert schema["function"]["name"] == "collection.info"
+    assert schema["function"]["parameters"]["properties"]["collection_slug"]["type"] == "string"
+    assert schema["function"]["parameters"]["required"] == ["collection_slug"]
+    assert "inspect one available collection by slug" in schema["function"]["description"]
 
 
 def test_operation_prompt_renderer_hides_collection_id_for_bound_template_operation():
@@ -279,7 +279,7 @@ def test_prompt_assembler_operation_schemas_keep_only_collection_info_and_system
     schemas = assembler.assemble_operation_schemas(operations)
 
     names = [item["function"]["name"] for item in schemas]
-    assert "instance.template.collection.info" in names
+    assert "collection.info" in names
     assert "file.read" in names
     assert "instance.template.collection.template.search" not in names
 

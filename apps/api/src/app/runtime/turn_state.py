@@ -205,17 +205,17 @@ class RuntimeTurnState(BaseModel):
                 return False
         return True
 
-    def record_operation_call(
+    def record_tool_call(
         self,
         *,
-        operation: str,
+        tool: str,
         call_id: str,
         arguments: Dict[str, Any],
         agent_slug: Optional[str],
         phase_id: Optional[str],
     ) -> None:
         self.tool_ledger.register_call(
-            operation=operation,
+            operation=tool,
             call_id=call_id,
             arguments=arguments,
             iteration=self.iter_count,
@@ -224,7 +224,7 @@ class RuntimeTurnState(BaseModel):
         )
         self.used_tool_calls += 1
 
-    def record_operation_result(
+    def record_tool_result(
         self,
         *,
         call_id: str,

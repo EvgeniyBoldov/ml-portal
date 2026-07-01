@@ -62,9 +62,7 @@ class RuntimeTraceBuilder:
         "llm_response": "llm",
         "system_llm_trace": "llm",
         # operations
-        "operation_call": "operation",
         "tool_call": "operation",
-        "operation_result": "operation",
         "tool_result": "operation",
         # outputs / status
         "final": "final",
@@ -104,10 +102,8 @@ class RuntimeTraceBuilder:
         "llm_request": "LLM запрос",
         "llm_response": "LLM ответ",
         "system_llm_trace": "System LLM trace",
-        "operation_call": "Вызов операции",
-        "tool_call": "Вызов операции",
-        "operation_result": "Результат операции",
-        "tool_result": "Результат операции",
+        "tool_call": "Вызов инструмента",
+        "tool_result": "Результат инструмента",
         "final": "Финальный ответ",
         "error": "Ошибка",
         "status": "Статус",
@@ -145,14 +141,14 @@ class RuntimeTraceBuilder:
         phase = self._phase(category)
         inputs = (
             {"arguments": data.get("arguments") or data.get("parameters") or data.get("input") or data.get("payload")}
-            if raw_type in {"operation_call", "tool_call"}
+            if raw_type == "tool_call"
             else {"content": data.get("content") or data.get("request")}
             if raw_type == "user_request"
             else None
         )
         outputs = (
             {"result": data.get("result") or data.get("output") or data.get("data")}
-            if raw_type in {"operation_result", "tool_result"}
+            if raw_type == "tool_result"
             else {"content": data.get("content") or data.get("answer") or data.get("response")}
             if raw_type in {"llm_turn", "llm_response", "final_response", "final"}
             else None
@@ -218,7 +214,7 @@ class RuntimeTraceBuilder:
             return "error"
         if raw_type in {"protocol_retry", "confirmation_required"}:
             return "warn"
-        if raw_type in {"operation_result", "tool_result"} and data.get("success") is False:
+        if raw_type == "tool_result" and data.get("success") is False:
             return "error"
         if raw_type in {"final", "final_response"}:
             return "ok"
@@ -259,12 +255,12 @@ class RuntimeTraceBuilder:
                 return question
             if kind == "thinking":
                 return str(data.get("selected_action_summary") or data.get("selection_rationale") or "Thinking")
-        if raw_type in {"operation_call", "tool_call"}:
-            return str(data.get("operation_slug") or data.get("tool") or data.get("operation") or "Operation call")
-        if raw_type in {"operation_result", "tool_result"}:
+        if raw_type == "tool_call":
+            return str(data.get("tool") or data.get("operation_slug") or "Tool call")
+        if raw_type == "tool_result":
             status = "success" if data.get("success") is True else "failed" if data.get("success") is False else "result"
-            op = data.get("operation_slug") or data.get("tool") or data.get("operation") or "Operation"
-            return f"{op} {status}"
+            tool_name = data.get("tool") or data.get("operation_slug") or "Tool"
+            return f"{tool_name} {status}"
         if raw_type in {"llm_call", "llm_response", "llm_turn"}:
             if isinstance(data.get("parsed_response"), dict):
                 selected = str(data["parsed_response"].get("selected_action_summary") or "").strip()

@@ -179,40 +179,12 @@ class ToolContext:
             deps = RuntimeDependencies(**normalized)
         else:
             deps = RuntimeDependencies()
-
-        # Backward-compatible hydration from legacy extra keys.
-        deps.session_factory = deps.session_factory or self.extra.get("session_factory")
-        deps.operation_executor = deps.operation_executor or self.extra.get("operation_executor")
-        deps.execution_graph = deps.execution_graph or self.extra.get("execution_graph")
-        if not deps.resolved_operations:
-            resolved_operations = self.extra.get("resolved_operations")
-            if isinstance(resolved_operations, list):
-                deps.resolved_operations = resolved_operations
-        deps.sandbox_overrides = deps.sandbox_overrides or dict(self.extra.get("sandbox_overrides") or {})
-        if deps.helper_summary is None:
-            helper_summary = self.extra.get("helper_summary")
-            deps.helper_summary = helper_summary if isinstance(helper_summary, dict) else None
-        if deps.execution_outline is None:
-            execution_outline = self.extra.get("execution_outline")
-            deps.execution_outline = execution_outline if isinstance(execution_outline, dict) else None
-        deps.runtime_trace_logger = deps.runtime_trace_logger or self.extra.get("runtime_trace_logger")
         self.set_runtime_deps(deps)
         return deps
 
     def set_runtime_deps(self, deps: RuntimeDependencies) -> None:
         self.extra["runtime_deps"] = deps
-        # Keep legacy aliases for compatibility until full cleanup.
-        self.extra["session_factory"] = deps.session_factory
-        self.extra["operation_executor"] = deps.operation_executor
-        self.extra["execution_graph"] = deps.execution_graph
-        self.extra["resolved_operations"] = list(deps.resolved_operations or [])
         self.extra["sandbox_overrides"] = deps.sandbox_overrides
-        if deps.helper_summary is not None:
-            self.extra["helper_summary"] = deps.helper_summary
-        if deps.execution_outline is not None:
-            self.extra["execution_outline"] = deps.execution_outline
-        if deps.runtime_trace_logger is not None:
-            self.extra["runtime_trace_logger"] = deps.runtime_trace_logger
 
     def with_runtime_deps(self, **kwargs: Any) -> ToolContext:
         deps = self.get_runtime_deps()
@@ -273,18 +245,20 @@ class ToolResult:
 
 
 @dataclass
-class OperationCall:
-    """
-    Запрос на вызов operation от LLM.
-    """
+class ToolCall:
+    """Structured tool invocation requested by the model."""
+
     id: str
-    operation_slug: str
+    tool_name: str
     arguments: Dict[str, Any]
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> OperationCall:
+    def from_dict(cls, data: Dict[str, Any]) -> "ToolCall":
+        tool_name = data.get("tool")
+        if not tool_name:
+            raise KeyError("tool")
         return cls(
             id=data.get("id", str(uuid.uuid4())),
-            operation_slug=data["operation"],
-            arguments=data.get("arguments", {})
+            tool_name=str(tool_name),
+            arguments=data.get("arguments", {}),
         )

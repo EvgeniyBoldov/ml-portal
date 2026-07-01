@@ -53,9 +53,9 @@ class RuntimeEventType(str, Enum):
     INTENT = "intent"
     BUDGET_SNAPSHOT = "budget_snapshot"
     LLM_TURN = "llm_turn"
-    # Operation (tool) execution, emitted by AgentToolRuntime
-    OPERATION_CALL = "operation_call"
-    OPERATION_RESULT = "operation_result"
+    # Tool execution
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
     # Streaming answer
     DELTA = "delta"
     FINAL = "final"
@@ -192,7 +192,6 @@ class RuntimeEvent:
         parent_entity_type: Optional[str] = None,
         parent_entity_id: Optional[str] = None,
         role: Optional[str] = None,
-        # legacy compatibility
         owner_scope: Optional[str] = None,
         owner_id: Optional[str] = None,
         snapshot: Optional[Dict[str, Any]] = None,
@@ -235,10 +234,10 @@ class RuntimeEvent:
         return cls(RuntimeEventType.LLM_TURN, dict(payload))
 
     @classmethod
-    def operation_call(
+    def tool_call(
         cls,
         *,
-        operation: str,
+        tool: str,
         call_id: str,
         arguments: Dict[str, Any],
         parent_entity_type: Optional[str] = None,
@@ -249,7 +248,7 @@ class RuntimeEvent:
         actor_type: Optional[str] = None,
         actor_entity_id: Optional[str] = None,
     ) -> "RuntimeEvent":
-        payload: Dict[str, Any] = {"operation": operation, "call_id": call_id, "arguments": arguments}
+        payload: Dict[str, Any] = {"tool": tool, "call_id": call_id, "arguments": arguments}
         if parent_entity_type is not None:
             payload["parent_entity_type"] = parent_entity_type
         if parent_entity_id is not None:
@@ -264,13 +263,13 @@ class RuntimeEvent:
             payload["actor_type"] = actor_type
         if actor_entity_id is not None:
             payload["actor_entity_id"] = actor_entity_id
-        return cls(RuntimeEventType.OPERATION_CALL, payload)
+        return cls(RuntimeEventType.TOOL_CALL, payload)
 
     @classmethod
-    def operation_result(
+    def tool_result(
         cls,
         *,
-        operation: str,
+        tool: str,
         call_id: str,
         success: bool,
         data: Any,
@@ -286,9 +285,12 @@ class RuntimeEvent:
         llm_call_id: Optional[str] = None,
         actor_type: Optional[str] = None,
         actor_entity_id: Optional[str] = None,
+        reused: Optional[bool] = None,
+        reused_from_call_id: Optional[str] = None,
+        truncated: Optional[bool] = None,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {
-            "operation": operation,
+            "tool": tool,
             "call_id": call_id,
             "success": success,
             "data": data,
@@ -319,7 +321,13 @@ class RuntimeEvent:
             payload["actor_type"] = actor_type
         if actor_entity_id is not None:
             payload["actor_entity_id"] = actor_entity_id
-        return cls(RuntimeEventType.OPERATION_RESULT, payload)
+        if reused is not None:
+            payload["reused"] = bool(reused)
+        if reused_from_call_id is not None:
+            payload["reused_from_call_id"] = reused_from_call_id
+        if truncated is not None:
+            payload["truncated"] = bool(truncated)
+        return cls(RuntimeEventType.TOOL_RESULT, payload)
 
     @classmethod
     def delta(cls, content: str) -> "RuntimeEvent":

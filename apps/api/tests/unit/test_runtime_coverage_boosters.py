@@ -13,9 +13,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.runtime.events import RuntimeEventType as LegacyEventType
 from app.agents.execution_preflight import ExecutionMode
-from app.agents.context import OperationCall, ToolContext, ToolResult
+from app.agents.context import ToolCall, ToolContext, ToolResult
 from app.agents.runtime.agent import AgentToolRuntime
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.contracts import ExecutionMode as RuntimeExecutionMode, NextStep, NextStepKind
@@ -172,16 +171,16 @@ def test_validator_clarify_and_ask_user_require_question():
     ) == "clarify step missing question"
 
 
-def test_validator_direct_answer_requires_final_answer():
+def test_validator_final_requires_final_answer():
     mem = _memory()
     assert validate_next_step(
-        NextStep(kind=NextStepKind.DIRECT_ANSWER, rationale="r", final_answer=""),
+        NextStep(kind=NextStepKind.FINAL, rationale="r", final_answer=""),
         allowed_agents=[],
         runtime_state=ensure_runtime_turn_state(mem),
-    ) == "direct_answer step missing final_answer"
+    ) == "final step missing final_answer"
     # happy
     assert validate_next_step(
-        NextStep(kind=NextStepKind.DIRECT_ANSWER, rationale="r", final_answer="hi"),
+        NextStep(kind=NextStepKind.FINAL, rationale="r", final_answer="hi"),
         allowed_agents=[],
         runtime_state=ensure_runtime_turn_state(mem),
     ) is None
@@ -269,18 +268,6 @@ def test_validator_blocks_repeated_pending_question_from_iteration_results():
 
 
 def test_agent_executor_helper_paths():
-    legacy_status = SimpleNamespace(type=LegacyEventType.STATUS, data={"stage": "x"})
-    translated = AgentExecutor._translate(legacy_status)  # noqa: SLF001
-    assert translated is not None
-    assert translated.type == RuntimeEventType.STATUS
-
-    legacy_thinking = SimpleNamespace(type=LegacyEventType.THINKING, data={"step": 2})
-    translated_thinking = AgentExecutor._translate(legacy_thinking)  # noqa: SLF001
-    assert translated_thinking is None
-
-    legacy_final = SimpleNamespace(type=LegacyEventType.FINAL, data={"content": "x"})
-    assert AgentExecutor._translate(legacy_final) is None  # noqa: SLF001
-
     outer = [{"role": "system", "content": "x"}, {"role": "user", "content": "old"}]
     step = NextStep(kind=NextStepKind.CALL_AGENT, rationale="r", agent_slug="ops", agent_input={"query": "new"})
     messages = AgentExecutor._build_sub_messages(outer, step, _memory())  # noqa: SLF001
@@ -308,6 +295,7 @@ async def test_agent_executor_fast_fallback_when_no_operations():
             mode=ExecutionMode.PARTIAL,
             execution_graph={},
             resolved_operations=[],
+            resolved_data_instances=[],
             rbac_audit=None,
             agent_slug="ops",
             agent_version=None,
@@ -467,23 +455,23 @@ def test_planning_stage_remove_agent_by_slug():
     assert agents == [{"slug": "net", "description": "net"}]
 
 
-def test_llm_adapter_coerces_tool_choice_mismatch_into_operation_call_block():
+def test_llm_adapter_coerces_tool_choice_mismatch_into_tool_call_block():
     err = RuntimeError(
         "Error code: 400 - {'error': {'message': 'Tool choice is none, but model called a tool', "
         "'type': 'invalid_request_error', 'code': 'tool_use_failed', "
         "'failed_generation': '{\"name\": \"collection.info\", "
         "\"arguments\": {\"collection_slug\": \"ticket_network\", \"limit_per_dimension\": 10}}'}}"
     )
-    block = LLMAdapter._coerce_tool_choice_error_to_operation_call(err)  # noqa: SLF001
+    block = LLMAdapter._coerce_tool_choice_error_to_tool_call(err)  # noqa: SLF001
     assert block is not None
-    assert "```operation_call" in block
-    assert '"operation": "collection.info"' in block
+    assert "```tool_call" in block
+    assert '"tool": "collection.info"' in block
     assert '"collection_slug": "ticket_network"' in block
 
 
 def test_llm_adapter_does_not_coerce_regular_errors():
     err = RuntimeError("Error code: 500 - Internal server error")
-    block = LLMAdapter._coerce_tool_choice_error_to_operation_call(err)  # noqa: SLF001
+    block = LLMAdapter._coerce_tool_choice_error_to_tool_call(err)  # noqa: SLF001
     assert block is None
 
 
@@ -538,13 +526,13 @@ async def test_planner_retry_and_fallback_paths():
 
 
 @pytest.mark.asyncio
-async def test_planner_emits_direct_answer_kind_when_llm_returns_one():
-    """New kind wiring: planner's LLM → DIRECT_ANSWER NextStep."""
+async def test_planner_emits_final_kind_when_llm_returns_one():
+    """Current wiring: planner's LLM final payload -> FINAL NextStep."""
     planner = Planner(session=AsyncMock(), llm_client=AsyncMock())
     planner.llm.invoke = AsyncMock(
         return_value=SimpleNamespace(
             value=PlannerLLMOutput(
-                kind="direct_answer",
+                kind="final",
                 rationale="small-talk",
                 final_answer="Привет! Чем могу помочь?",
             ),
@@ -560,7 +548,7 @@ async def test_planner_emits_direct_answer_kind_when_llm_returns_one():
         runtime_state=ensure_runtime_turn_state(mem_direct),
         available_agents=[],
     )
-    assert step.kind == NextStepKind.DIRECT_ANSWER
+    assert step.kind == NextStepKind.FINAL
     assert step.final_answer == "Привет! Чем могу помочь?"
 
 
@@ -639,15 +627,16 @@ async def test_agent_tool_runtime_fail_fast_on_invalid_operation_call(monkeypatc
     runtime.tools.execute = AsyncMock(return_value=(ToolResult.fail("Operation 'list_docs' not found"), []))
 
     parsed = SimpleNamespace(
-        has_operation_calls=True,
-        operation_calls=[OperationCall(id="1", operation_slug="list_docs", arguments={})],
+        has_tool_calls=True,
+        tool_calls=[ToolCall(id="1", tool_name="list_docs", arguments={})],
         text="",
     )
     monkeypatch.setattr("app.agents.runtime.agent.parse_llm_response", lambda *_args, **_kwargs: parsed)
 
     exec_request = SimpleNamespace(
         agent=SimpleNamespace(slug="ops", logging_level=None),
-        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search")],
+        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search", scope="collection")],
+        resolved_data_instances=[],
         run_id=uuid4(),
         partial_mode_warning=None,
     )
@@ -663,9 +652,9 @@ async def test_agent_tool_runtime_fail_fast_on_invalid_operation_call(monkeypatc
         )
     ]
 
-    assert any(e.type == LegacyEventType.ERROR for e in events)
-    assert any("unavailable operation" in str(e.data.get("error", "")).lower() for e in events if e.type == LegacyEventType.ERROR)
-    error_events = [e for e in events if e.type == LegacyEventType.ERROR]
+    assert any(e.type == RuntimeEventType.ERROR for e in events)
+    assert any("unavailable operation" in str(e.data.get("error", "")).lower() for e in events if e.type == RuntimeEventType.ERROR)
+    error_events = [e for e in events if e.type == RuntimeEventType.ERROR]
     assert error_events
     assert error_events[0].data.get("error_code") == RuntimeErrorCode.OPERATION_UNAVAILABLE.value
     assert error_events[0].data.get("retryable") is False
@@ -698,15 +687,16 @@ async def test_agent_tool_runtime_early_stop_when_skipping_required_operation_ca
     runtime.llm.call = AsyncMock(return_value="llm raw")
 
     parsed = SimpleNamespace(
-        has_operation_calls=False,
-        operation_calls=[],
+        has_tool_calls=False,
+        tool_calls=[],
         text="answer without tools",
     )
     monkeypatch.setattr("app.agents.runtime.agent.parse_llm_response", lambda *_args, **_kwargs: parsed)
 
     exec_request = SimpleNamespace(
         agent=SimpleNamespace(slug="ops", logging_level=None),
-        resolved_operations=[SimpleNamespace(operation_slug="docs.search")],
+        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search", scope="collection")],
+        resolved_data_instances=[],
         run_id=uuid4(),
         partial_mode_warning=None,
     )
@@ -722,8 +712,8 @@ async def test_agent_tool_runtime_early_stop_when_skipping_required_operation_ca
         )
     ]
 
-    assert any(e.type == LegacyEventType.ERROR for e in events)
-    assert any("skipped required operation calls" in str(e.data.get("error", "")).lower() for e in events if e.type == LegacyEventType.ERROR)
+    assert any(e.type == RuntimeEventType.ERROR for e in events)
+    assert any("skipped required operation calls" in str(e.data.get("error", "")).lower() for e in events if e.type == RuntimeEventType.ERROR)
     assert run_session.finished is not None
     assert run_session.finished[0] == "failed"
     assert runtime.llm.call.await_count == 2
@@ -753,10 +743,10 @@ async def test_agent_tool_runtime_respects_shared_budget_tool_call_limit(monkeyp
     runtime.tools.execute = AsyncMock(return_value=(ToolResult.ok({"ok": True}), []))
 
     parsed = SimpleNamespace(
-        has_operation_calls=True,
-        operation_calls=[
-            OperationCall(id="1", operation_slug="docs.search", arguments={"q": "a"}),
-            OperationCall(id="2", operation_slug="docs.search", arguments={"q": "b"}),
+        has_tool_calls=True,
+        tool_calls=[
+            ToolCall(id="1", tool_name="docs.search", arguments={"q": "a"}),
+            ToolCall(id="2", tool_name="docs.search", arguments={"q": "b"}),
         ],
         text="",
     )
@@ -764,7 +754,8 @@ async def test_agent_tool_runtime_respects_shared_budget_tool_call_limit(monkeyp
 
     exec_request = SimpleNamespace(
         agent=SimpleNamespace(slug="ops", logging_level=None),
-        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search")],
+        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search", scope="collection")],
+        resolved_data_instances=[],
         run_id=uuid4(),
         partial_mode_warning=None,
     )
@@ -796,8 +787,8 @@ async def test_agent_tool_runtime_respects_shared_budget_tool_call_limit(monkeyp
         )
     ]
 
-    assert any(e.type == LegacyEventType.ERROR for e in events)
-    err = [e for e in events if e.type == LegacyEventType.ERROR][-1]
+    assert any(e.type == RuntimeEventType.ERROR for e in events)
+    err = [e for e in events if e.type == RuntimeEventType.ERROR][-1]
     assert err.data.get("error_code") == RuntimeErrorCode.AGENT_MAX_TOOL_CALLS_EXCEEDED.value
 
 
@@ -831,10 +822,10 @@ async def test_agent_tool_runtime_reused_call_does_not_consume_shared_budget(mon
     runtime._synthesize_answer = _no_synth  # noqa: SLF001
 
     parsed = SimpleNamespace(
-        has_operation_calls=True,
-        operation_calls=[
-            OperationCall(id="1", operation_slug="docs.search", arguments={"q": "dup"}),
-            OperationCall(id="2", operation_slug="docs.search", arguments={"q": "dup"}),
+        has_tool_calls=True,
+        tool_calls=[
+            ToolCall(id="1", tool_name="docs.search", arguments={"q": "dup"}),
+            ToolCall(id="2", tool_name="docs.search", arguments={"q": "dup"}),
         ],
         text="",
     )
@@ -857,7 +848,8 @@ async def test_agent_tool_runtime_reused_call_does_not_consume_shared_budget(mon
 
     exec_request = SimpleNamespace(
         agent=SimpleNamespace(slug="ops", logging_level=None),
-        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search")],
+        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search", scope="collection")],
+        resolved_data_instances=[],
         run_id=uuid4(),
         partial_mode_warning=None,
     )
@@ -891,11 +883,11 @@ async def test_agent_tool_runtime_reused_call_does_not_consume_shared_budget(mon
         )
     ]
 
-    assert not [e for e in events if e.type == LegacyEventType.ERROR]
-    op_results = [e for e in events if e.type == LegacyEventType.OPERATION_RESULT]
+    assert not [e for e in events if e.type == RuntimeEventType.ERROR]
+    op_results = [e for e in events if e.type == RuntimeEventType.TOOL_RESULT]
     assert len(op_results) == 2
     assert bool(op_results[-1].data.get("reused")) is True
-    assert any(e.type == LegacyEventType.BUDGET_SNAPSHOT for e in events)
+    assert any(e.type == RuntimeEventType.BUDGET_SNAPSHOT for e in events)
 
 
 @pytest.mark.asyncio
@@ -931,15 +923,16 @@ async def test_agent_tool_runtime_emits_operation_result_envelope(monkeypatch):
     )
 
     parsed = SimpleNamespace(
-        has_operation_calls=True,
-        operation_calls=[OperationCall(id="1", operation_slug="docs.search", arguments={})],
+        has_tool_calls=True,
+        tool_calls=[ToolCall(id="1", tool_name="docs.search", arguments={})],
         text="",
     )
     monkeypatch.setattr("app.agents.runtime.agent.parse_llm_response", lambda *_args, **_kwargs: parsed)
 
     exec_request = SimpleNamespace(
         agent=SimpleNamespace(slug="ops", logging_level=None),
-        resolved_operations=[SimpleNamespace(operation_slug="docs.search")],
+        resolved_operations=[SimpleNamespace(operation_slug="docs.search", operation="docs.search", scope="collection")],
+        resolved_data_instances=[],
         run_id=uuid4(),
         partial_mode_warning=None,
     )
@@ -955,7 +948,7 @@ async def test_agent_tool_runtime_emits_operation_result_envelope(monkeypatch):
         )
     ]
 
-    op_results = [e for e in events if e.type == LegacyEventType.OPERATION_RESULT]
+    op_results = [e for e in events if e.type == RuntimeEventType.TOOL_RESULT]
     assert op_results
     payload = op_results[0].data
     assert payload.get("error_code") == RuntimeErrorCode.OPERATION_UNAVAILABLE.value

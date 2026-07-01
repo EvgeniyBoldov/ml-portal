@@ -1,5 +1,5 @@
 {
   "agent_start": "Запускаю выполнение агента",
   "final_answer": "Формирую финальный ответ",
-  "operation_call": "Выполняю операцию: {operation_slug}"
+  "operation_call": "Вызываю инструмент: {operation_slug}"
 }

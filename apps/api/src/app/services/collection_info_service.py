@@ -156,7 +156,7 @@ class CollectionInfoOperationResolver:
         leaf = canonical.split(".")[-1].replace("_", " ").strip()
         return leaf.title() if leaf else canonical
 
-    def build_operations_payload(
+    def build_tools_payload(
         self,
         *,
         collection: Collection,
@@ -172,17 +172,17 @@ class CollectionInfoOperationResolver:
                 summary = published
             payload.append(
                 {
-                    "operation_slug": summary.operation_slug,
-                    "canonical_name": summary.canonical_name,
+                    "tool_name": summary.canonical_name,
+                    "invoke_as": summary.operation_slug,
                     "title": summary.title,
                     "description": summary.description,
                     "result_kind": summary.result_kind,
-                    "input_schema_summary": list(summary.input_schema_summary or []),
+                    "arguments": list(summary.input_schema_summary or []),
                     "risk_level": summary.risk_level,
                     "side_effects": bool(summary.side_effects),
                 }
             )
-        payload.sort(key=lambda item: str(item.get("canonical_name") or item.get("operation_slug") or ""))
+        payload.sort(key=lambda item: str(item.get("tool_name") or item.get("invoke_as") or ""))
         return payload
 
     def build_contracts_payload(
@@ -343,11 +343,111 @@ class RemoteCollectionInfoEnricher:
         operations: Sequence[ResolvedOperation],
     ) -> Dict[str, Any]:
         _ = session
+        collection_type = str(collection.collection_type or "").strip().lower()
+        if collection_type == CollectionType.SQL.value:
+            return self._build_sql_enrichment(collection=collection, operations=operations)
+        if collection_type == CollectionType.API.value:
+            return self._build_api_enrichment(collection=collection, operations=operations)
         return {
-            "status": "stub",
-            "type": str(collection.collection_type or "").strip(),
-            "message": "Remote runtime enrichment is not implemented yet for this collection type.",
+            "status": "degraded",
+            "type": collection_type,
+            "message": "Remote runtime enrichment is not available for this collection type.",
             "data": {},
+            "available_operation_count": len(operations),
+        }
+
+    def _build_sql_enrichment(
+        self,
+        *,
+        collection: Collection,
+        operations: Sequence[ResolvedOperation],
+    ) -> Dict[str, Any]:
+        tables = _extract_remote_sql_tables(
+            collection.table_schema if isinstance(collection.table_schema, dict) else {},
+            collection.source_contract if isinstance(collection.source_contract, dict) else {},
+        )
+        filterable_fields = sorted(
+            {
+                str(field.get("name") or "").strip()
+                for field in collection.get_filterable_fields()
+                if str(field.get("name") or "").strip()
+            }
+        )
+        sortable_fields = sorted(
+            {
+                str(field.get("name") or "").strip()
+                for field in collection.get_sortable_fields()
+                if str(field.get("name") or "").strip()
+            }
+        )
+        schema_names = sorted(
+            {
+                str(item.get("schema_name") or "public").strip() or "public"
+                for item in tables
+                if str(item.get("table_name") or "").strip()
+            }
+        )
+        return {
+            "status": "ready",
+            "type": CollectionType.SQL.value,
+            "mode": "metadata_only",
+            "message": "Built from stored remote SQL discovery metadata; live distinct/top-value profiling is not available for remote SQL yet.",
+            "data": {
+                "schema_count": len(schema_names),
+                "schemas": schema_names,
+                "table_count": len(tables),
+                "tables": tables,
+                "filterable_fields": filterable_fields,
+                "sortable_fields": sortable_fields,
+                "observed_values_available": False,
+                "freshness": {
+                    "last_sync_at": collection.last_sync_at.isoformat() if collection.last_sync_at else None,
+                    "schema_status": getattr(collection, "schema_status", None),
+                },
+            },
+            "available_operation_count": len(operations),
+        }
+
+    def _build_api_enrichment(
+        self,
+        *,
+        collection: Collection,
+        operations: Sequence[ResolvedOperation],
+    ) -> Dict[str, Any]:
+        entities = _extract_api_entities(
+            collection.table_schema if isinstance(collection.table_schema, dict) else {},
+            collection.source_contract if isinstance(collection.source_contract, dict) else {},
+        )
+        filterable_fields = sorted(
+            {
+                str(field.get("name") or "").strip()
+                for field in collection.get_filterable_fields()
+                if str(field.get("name") or "").strip()
+            }
+        )
+        sortable_fields = sorted(
+            {
+                str(field.get("name") or "").strip()
+                for field in collection.get_sortable_fields()
+                if str(field.get("name") or "").strip()
+            }
+        )
+        return {
+            "status": "ready",
+            "type": CollectionType.API.value,
+            "mode": "metadata_only",
+            "message": "Built from stored remote API discovery metadata; live observed values depend on provider-specific enrichment that is not available yet.",
+            "data": {
+                "entity_count": len(entities),
+                "entities": entities,
+                "filterable_fields": filterable_fields,
+                "sortable_fields": sortable_fields,
+                "observed_values_available": False,
+                "freshness": {
+                    "last_sync_at": collection.last_sync_at.isoformat() if collection.last_sync_at else None,
+                    "schema_status": getattr(collection, "schema_status", None),
+                },
+            },
             "available_operation_count": len(operations),
         }
 
@@ -390,31 +490,20 @@ class CollectionInfoResponseBuilder:
         session: Any,
         collection: Collection,
         operations: Sequence[ResolvedOperation],
-        legacy_payload: Dict[str, Any],
+        inspection_payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         collection_payload = self.metadata_loader.build_collection_payload(collection)
         return {
             "collection": collection_payload,
             "readiness": self.metadata_loader.build_readiness_payload(collection=collection, operations=operations),
-            "operations": self.operation_resolver.build_operations_payload(collection=collection, operations=operations),
+            "tools": self.operation_resolver.build_tools_payload(collection=collection, operations=operations),
             "contracts": self.operation_resolver.build_contracts_payload(collection=collection, operations=operations),
-            "schema": legacy_payload.get("schema") or {},
+            "schema": inspection_payload.get("schema") or {},
             "runtime_enrichment": await self.enrichment_provider.build_runtime_enrichment(
                 session=session,
                 collection=collection,
                 operations=operations,
             ),
-            "legacy": {
-                "filter_hints": legacy_payload.get("filter_hints") or {},
-                "stats": legacy_payload.get("stats") or {},
-                "dimensions": legacy_payload.get("dimensions") or {},
-                "remote_catalog": legacy_payload.get("remote_catalog") or {},
-            },
-            # Transitional top-level compatibility keys.
-            "filter_hints": legacy_payload.get("filter_hints") or {},
-            "stats": legacy_payload.get("stats") or {},
-            "dimensions": legacy_payload.get("dimensions") or {},
-            "remote_catalog": legacy_payload.get("remote_catalog") or {},
         }
 
 
@@ -431,6 +520,127 @@ def build_default_collection_info_response_builder() -> CollectionInfoResponseBu
 
 def _is_safe_identifier(value: str) -> bool:
     return bool(value and _IDENTIFIER_PATTERN.match(value))
+
+
+def _extract_remote_sql_tables(table_schema: dict | None, source_contract: dict | None) -> list[dict]:
+    result: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _push(schema_name: str | None, table_name: str | None, columns=None) -> None:
+        table = str(table_name or "").strip()
+        if not table:
+            return
+        schema = str(schema_name or "").strip() or "public"
+        key = (schema, table)
+        if key in seen:
+            return
+        seen.add(key)
+        result.append(
+            {
+                "schema_name": schema,
+                "table_name": table,
+                "columns_count": len(columns) if isinstance(columns, list) else None,
+            }
+        )
+
+    for source in (table_schema, source_contract):
+        if not isinstance(source, dict):
+            continue
+        tables = source.get("tables")
+        if isinstance(tables, list):
+            for item in tables:
+                if isinstance(item, str):
+                    _push(None, item)
+                elif isinstance(item, dict):
+                    _push(item.get("schema"), item.get("name") or item.get("table"), item.get("columns"))
+        schemas = source.get("schemas")
+        if isinstance(schemas, list):
+            for schema_obj in schemas:
+                if not isinstance(schema_obj, dict):
+                    continue
+                schema_name = schema_obj.get("schema") or schema_obj.get("name")
+                schema_tables = schema_obj.get("tables")
+                if isinstance(schema_tables, list):
+                    for item in schema_tables:
+                        if isinstance(item, str):
+                            _push(schema_name, item)
+                        elif isinstance(item, dict):
+                            _push(schema_name, item.get("name") or item.get("table"), item.get("columns"))
+        elif isinstance(schemas, dict):
+            for schema_name, schema_tables in schemas.items():
+                if isinstance(schema_tables, list):
+                    for item in schema_tables:
+                        if isinstance(item, str):
+                            _push(schema_name, item)
+                        elif isinstance(item, dict):
+                            _push(schema_name, item.get("name") or item.get("table"), item.get("columns"))
+    result.sort(key=lambda item: (str(item.get("schema_name") or ""), str(item.get("table_name") or "")))
+    return result
+
+
+def _extract_api_entities(table_schema: dict | None, source_contract: dict | None) -> list[dict]:
+    result: list[dict] = []
+    seen: set[str] = set()
+
+    def _norm_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            values = value
+        elif isinstance(value, str):
+            values = [value]
+        else:
+            values = []
+        normalized: list[str] = []
+        for item in values:
+            text = str(item or "").strip()
+            if text and text not in normalized:
+                normalized.append(text)
+        return normalized
+
+    def _push(entity_type: str | None, aliases=None, examples=None) -> None:
+        entity = str(entity_type or "").strip()
+        if not entity:
+            return
+        key = entity.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        result.append(
+            {
+                "entity_type": entity,
+                "aliases": _norm_list(aliases),
+                "examples": _norm_list(examples),
+            }
+        )
+
+    for source in (table_schema, source_contract):
+        if not isinstance(source, dict):
+            continue
+        entities = source.get("entities")
+        if isinstance(entities, list):
+            for item in entities:
+                if isinstance(item, str):
+                    _push(item)
+                elif isinstance(item, dict):
+                    _push(item.get("entity_type") or item.get("name") or item.get("type"), item.get("aliases"), item.get("examples"))
+
+        objects = source.get("objects")
+        if isinstance(objects, list):
+            for item in objects:
+                if isinstance(item, str):
+                    _push(item)
+                elif isinstance(item, dict):
+                    _push(item.get("entity_type") or item.get("name") or item.get("type"), item.get("aliases"), item.get("examples"))
+
+        object_types = source.get("object_types")
+        if isinstance(object_types, list):
+            for item in object_types:
+                if isinstance(item, str):
+                    _push(item)
+                elif isinstance(item, dict):
+                    _push(item.get("entity_type") or item.get("name") or item.get("type"), item.get("aliases"), item.get("examples"))
+
+    result.sort(key=lambda item: str(item.get("entity_type") or "").lower())
+    return result
 
 
 def _iter_profiled_fields(collection: Collection) -> List[Dict[str, Any]]:

@@ -1,63 +1,68 @@
 """
-Протокол для operation-calls в тексте LLM ответа.
+Tool-call protocol for model responses.
 
-Используем JSON-блоки в тексте вместо OpenAI function calling,
-чтобы не зависеть от конкретного провайдера LLM.
+The runtime accepts only the canonical tool-first shape:
 
-Формат:
-```operation_call
+```tool_call
 {
-    "operation": "instance.docs.collection.document.search",
+    "tool": "instance.docs.collection.document.search",
     "arguments": {
         "query": "как настроить nginx"
     }
 }
 ```
-
-LLM может вызвать несколько operations в одном ответе.
 """
 from __future__ import annotations
+
 import json
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from app.agents.context import OperationCall
+from app.agents.context import ToolCall
 from app.agents.json_utils import extract_balanced_json
-from app.agents.runtime.prompt_contract import build_prompt_input_schema, build_prompt_operation_description
+from app.agents.runtime.prompt_contract import (
+    build_prompt_input_schema,
+    build_prompt_operation_description,
+)
 from app.services.platform_settings_defaults import PLATFORM_OPERATION_RULES_TEXT
 
 if TYPE_CHECKING:
     from app.agents.contracts import ResolvedOperation
 
 
-OPERATION_CALL_PATTERN = re.compile(
-    r'```operation_call\s*\n(.*?)\n```',
-    re.DOTALL
+TOOL_CALL_PATTERN = re.compile(r"```tool_call\s*\n(.*?)\n```", re.DOTALL)
+TOOL_CALL_JSON_BLOCK = re.compile(
+    r'```(?:json)?\s*\n(\{[^`]*?"tool"\s*:[^`]*?\})\s*\n```',
+    re.DOTALL,
 )
 
-# Fallback: ```json\n{"operation": ...}\n```
-OPERATION_CALL_JSON_BLOCK = re.compile(
-    r'```(?:json)?\s*\n(\{[^`]*?"operation"\s*:[^`]*?\})\s*\n```',
-    re.DOTALL
-)
+TOOL_RESULT_TEMPLATE = """```tool_result
+{result}
+```"""
 
-def _find_operation_json_objects(content: str) -> List[str]:
-    """
-    Find all JSON objects containing an "operation" key in the text.
-    Uses balanced-brace extraction for robustness with multiline JSON.
-    """
-    results = []
+
+def _extract_tool_name(data: Dict[str, Any]) -> Optional[str]:
+    value = data.get("tool")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _find_tool_json_objects(content: str) -> List[str]:
+    """Find JSON objects containing a `tool` key using balanced braces."""
+
+    results: List[str] = []
     idx = 0
     while idx < len(content):
-        brace = content.find('{', idx)
+        brace = content.find("{", idx)
         if brace < 0:
             break
         candidate = extract_balanced_json(content, brace)
         if candidate:
             try:
                 data = json.loads(candidate)
-                if isinstance(data, dict) and "operation" in data:
+                if isinstance(data, dict) and _extract_tool_name(data):
                     results.append(candidate)
             except (json.JSONDecodeError, ValueError):
                 pass
@@ -66,155 +71,139 @@ def _find_operation_json_objects(content: str) -> List[str]:
             idx = brace + 1
     return results
 
-TOOL_RESULT_TEMPLATE = """```tool_result
-{result}
-```"""
-
 
 @dataclass
 class ParsedResponse:
-    """
-    Результат парсинга ответа LLM.
-    """
+    """Parsed model response with extracted tool calls."""
+
     text: str
-    operation_calls: List[OperationCall]
-    has_operation_calls: bool
-    
+    tool_calls: List[ToolCall]
+    has_tool_calls: bool
+
     @property
     def is_final(self) -> bool:
-        """Ответ финальный (без operation calls)"""
-        return not self.has_operation_calls
+        return not self.has_tool_calls
 
 
 def parse_llm_response(content: str, *, strict: bool = False) -> ParsedResponse:
-    """
-    Парсит ответ LLM и извлекает operation_calls.
-    
-    Supports multiple formats:
-    1. ```operation_call\n{...}\n```  (canonical)
-    2. ```json\n{"operation": ...}\n```
-    3. Any JSON object with "operation" key (balanced braces)
-    
-    Args:
-        content: Текст ответа LLM
-        
-    Returns:
-        ParsedResponse с текстом и списком operation_calls
-    """
-    operation_calls: List[OperationCall] = []
-    seen_operations: set = set()  # Will store (operation_slug, args_json) tuples
+    """Parse a text model response and extract canonical tool calls."""
+
+    tool_calls: List[ToolCall] = []
+    seen_tools: set[tuple[str, str]] = set()
     text = content
-    
-    # 1. Try canonical ```operation_call ... ```
-    matches = OPERATION_CALL_PATTERN.findall(content)
+
+    matches = TOOL_CALL_PATTERN.findall(content)
     for match in matches:
         try:
             data = json.loads(match.strip())
-            if "operation" in data:
-                args_json = json.dumps(data.get("arguments", {}), sort_keys=True)
-                op_key = (data["operation"], args_json)
-                if op_key not in seen_operations:
-                    operation_calls.append(OperationCall.from_dict(data))
-                    seen_operations.add(op_key)
+            tool_name = _extract_tool_name(data)
+            if not tool_name:
+                continue
+            args_json = json.dumps(data.get("arguments", {}), sort_keys=True)
+            tool_key = (tool_name, args_json)
+            if tool_key in seen_tools:
+                continue
+            tool_calls.append(ToolCall.from_dict(data))
+            seen_tools.add(tool_key)
         except json.JSONDecodeError:
             continue
-    if operation_calls:
-        text = OPERATION_CALL_PATTERN.sub('', text).strip()
-        return ParsedResponse(text=text, operation_calls=operation_calls, has_operation_calls=True)
-    
-    # 2. Try ```json ... ```
-    matches = OPERATION_CALL_JSON_BLOCK.findall(content)
+    if tool_calls:
+        text = TOOL_CALL_PATTERN.sub("", text).strip()
+        return ParsedResponse(text=text, tool_calls=tool_calls, has_tool_calls=True)
+
+    matches = TOOL_CALL_JSON_BLOCK.findall(content)
     for match in matches:
         try:
             data = json.loads(match.strip())
-            if "operation" in data:
-                args_json = json.dumps(data.get("arguments", {}), sort_keys=True)
-                op_key = (data["operation"], args_json)
-                if op_key not in seen_operations:
-                    operation_calls.append(OperationCall.from_dict(data))
-                    seen_operations.add(op_key)
+            tool_name = _extract_tool_name(data)
+            if not tool_name:
+                continue
+            args_json = json.dumps(data.get("arguments", {}), sort_keys=True)
+            tool_key = (tool_name, args_json)
+            if tool_key in seen_tools:
+                continue
+            tool_calls.append(ToolCall.from_dict(data))
+            seen_tools.add(tool_key)
         except json.JSONDecodeError:
             continue
-    if operation_calls:
-        text = OPERATION_CALL_JSON_BLOCK.sub('', text).strip()
-        return ParsedResponse(text=text, operation_calls=operation_calls, has_operation_calls=True)
-    
-    # 3. Fallback: find any JSON with "operation" key using balanced braces
+    if tool_calls:
+        text = TOOL_CALL_JSON_BLOCK.sub("", text).strip()
+        return ParsedResponse(text=text, tool_calls=tool_calls, has_tool_calls=True)
+
     if not strict:
-        json_strs = _find_operation_json_objects(content)
-        for js in json_strs:
+        for js in _find_tool_json_objects(content):
             try:
                 data = json.loads(js)
+                tool_name = _extract_tool_name(data)
+                if not tool_name:
+                    continue
                 args_json = json.dumps(data.get("arguments", {}), sort_keys=True)
-                op_key = (data["operation"], args_json)
-                if op_key not in seen_operations:
-                    operation_calls.append(OperationCall.from_dict(data))
-                    seen_operations.add(op_key)
-                    text = text.replace(js, '', 1)
+                tool_key = (tool_name, args_json)
+                if tool_key in seen_tools:
+                    continue
+                tool_calls.append(ToolCall.from_dict(data))
+                seen_tools.add(tool_key)
+                text = text.replace(js, "", 1)
             except (json.JSONDecodeError, KeyError):
                 continue
-    
-    if operation_calls:
+
+    if tool_calls:
         text = text.strip()
-    
+
     return ParsedResponse(
         text=text,
-        operation_calls=operation_calls,
-        has_operation_calls=len(operation_calls) > 0
+        tool_calls=tool_calls,
+        has_tool_calls=len(tool_calls) > 0,
     )
 
 
-def format_operation_result(operation_call: OperationCall, result_content: str) -> str:
-    """
-    Форматирует результат выполнения tool для добавления в контекст LLM.
-    """
+def format_tool_result(tool_call: ToolCall, result_content: str) -> str:
     result_data = {
-        "operation": operation_call.operation_slug,
-        "call_id": operation_call.id,
-        "result": result_content
+        "tool": tool_call.tool_name,
+        "call_id": tool_call.id,
+        "result": result_content,
     }
     return TOOL_RESULT_TEMPLATE.format(
-        result=json.dumps(result_data, ensure_ascii=False, indent=2)
+        result=json.dumps(result_data, ensure_ascii=False, indent=2),
     )
 
 
-def build_operations_prompt(
-    operation_schemas: List[dict],
+def build_tools_prompt(
+    tool_schemas: List[dict],
     *,
     mandatory_rules_text: Optional[str] = None,
     prompt_labels: Optional[Dict[str, Any]] = None,
     prompt_budgets: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """
-    Генерирует инструкцию для LLM о доступных operations.
-    
-    Args:
-        operation_schemas: Список схем operations
-        
-    Returns:
-        Текст инструкции для добавления в system prompt
-    """
-    if not operation_schemas:
+    """Build the model-facing tool contract block."""
+
+    if not tool_schemas:
         return ""
-    
-    operations_json = json.dumps(operation_schemas, ensure_ascii=False, indent=2)
+
+    tools_json = json.dumps(tool_schemas, ensure_ascii=False, indent=2)
     labels = prompt_labels if isinstance(prompt_labels, dict) else {}
     budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
-    heading = _prompt_label(labels, "operations_heading", "Доступные операции")
+    heading = _prompt_label(labels, "operations_heading", "Доступные инструменты")
     rules_heading = _prompt_label(labels, "mandatory_rules_heading", "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА")
-    call_heading = _prompt_label(labels, "operation_call_heading", "Чтобы вызвать операцию, ответь блоком operation_call:")
-    list_heading = _prompt_label(labels, "operation_list_heading", "Список операций:")
+    call_heading = _prompt_label(
+        labels,
+        "operation_call_heading",
+        "Чтобы вызвать инструмент, ответь блоком tool_call:",
+    )
+    list_heading = _prompt_label(labels, "operation_list_heading", "Список инструментов:")
 
     rules_max_chars = _prompt_budget(budgets, "operations_rules_max_chars")
-    if rules_max_chars is not None and isinstance(mandatory_rules_text, str) and len(mandatory_rules_text) > rules_max_chars:
+    if (
+        rules_max_chars is not None
+        and isinstance(mandatory_rules_text, str)
+        and len(mandatory_rules_text) > rules_max_chars
+    ):
         mandatory_rules_text = mandatory_rules_text[:rules_max_chars].rstrip()
-    
+
     rules_block = (
         mandatory_rules_text.strip()
         if isinstance(mandatory_rules_text, str) and mandatory_rules_text.strip()
-        else (
-            PLATFORM_OPERATION_RULES_TEXT.replace("ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА", rules_heading, 1)
-        )
+        else PLATFORM_OPERATION_RULES_TEXT.replace("ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА", rules_heading, 1)
     )
 
     return f"""
@@ -222,28 +211,28 @@ def build_operations_prompt(
 
 {rules_block}
 
-    Правила выбора операций:
+    Правила выбора инструментов:
 - Сначала сопоставь задачу с нужной коллекцией или системной возможностью из capability card выше.
 - Перед работой с любой коллекцией сначала вызови `collection.info` для этой коллекции.
-- Другие collection-bound операции не придумывай по памяти: используй только те exact call names и аргументы, которые вернулись в результате `collection.info`.
+- Другие collection-bound действия не придумывай по памяти: используй только те имена и аргументы, которые вернулись в результате `collection.info`.
 - Для collection-bound операций не передавай и не меняй `collection_slug`/`collection_id`, если операция явно не требует это в своей схеме.
-- В поле `operation` можно передавать точное имя из `function.name`. Каноническое короткое имя тоже допустимо, но только если оно однозначно среди доступных операций текущего run.
+- В поле `tool` используй имя инструмента ровно в том виде, как оно указано в списке ниже.
 
 {call_heading}
 
-```operation_call
+```tool_call
 {{
-    "operation": "operation_name",
+    "tool": "tool_name",
     "arguments": {{
         "arg1": "value1"
     }}
 }}
 ```
 
-Можно вызывать несколько операций в одном ответе. Используй точное имя операции из списка ниже.
+Можно вызывать несколько инструментов в одном ответе. Используй имя из списка ниже без переименования и домыслов.
 
 {list_heading}
-{operations_json}
+{tools_json}
 """
 
 
@@ -274,91 +263,55 @@ def _prompt_budget(budgets: Dict[str, Any], key: str) -> Optional[int]:
     return None
 
 
-def build_operation_results_message(results: List[Tuple[OperationCall, str]]) -> str:
-    """
-    Форматирует результаты нескольких operation calls в одно сообщение.
-    
-    Args:
-        results: Список пар (OperationCall, result_content)
-        
-    Returns:
-        Текст сообщения с результатами
-    """
+def build_tool_results_message(results: List[Tuple[ToolCall, str]]) -> str:
     parts = []
-    for operation_call, result_content in results:
-        parts.append(format_operation_result(operation_call, result_content))
-    
+    for tool_call, result_content in results:
+        parts.append(format_tool_result(tool_call, result_content))
     return "\n\n".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# Native function calling (OpenAI tool_calls API)
-# ---------------------------------------------------------------------------
-
-_UNSUPPORTED_SCHEMA_KEYS = frozenset({
-    "$ref", "$defs", "definitions", "allOf", "anyOf", "oneOf", "$schema", "$id",
-})
+_UNSUPPORTED_SCHEMA_KEYS = frozenset(
+    {"$ref", "$defs", "definitions", "allOf", "anyOf", "oneOf", "$schema", "$id"},
+)
 
 
 def _sanitize_tool_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Strip JSON Schema keys that OpenAI-compatible providers reject.
-
-    OpenAI function calling supports a flat subset of JSON Schema. Keys like
-    ``$ref``, ``allOf``, ``$defs`` etc. cause provider-level validation errors.
-    We do a shallow strip — nested ``properties`` values are left intact because
-    providers generally accept simple nested objects.
-    """
     return {k: v for k, v in schema.items() if k not in _UNSUPPORTED_SCHEMA_KEYS}
 
 
-def build_tools_payload(
-    operations: "List[ResolvedOperation]",
-) -> List[Dict[str, Any]]:
-    """Convert ResolvedOperation list → OpenAI-compatible tools array.
+def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str, Any]]:
+    """Convert resolved executable tools to OpenAI-compatible tool declarations."""
 
-    Each tool gets:
-    - ``name``: operation_slug (the identifier the model will echo back).
-    - ``description``: human-readable purpose fed to the model.
-    - ``parameters``: sanitized input_schema (unsupported keys stripped).
-
-    The model will return tool_calls[].function.{name, arguments} which
-    ``parse_native_tool_calls`` then converts to OperationCall objects.
-    """
     tools: List[Dict[str, Any]] = []
     for op in operations:
         raw = build_prompt_input_schema(op)
         schema = _sanitize_tool_schema(raw)
         schema.setdefault("type", "object")
         schema.setdefault("properties", {})
-        tool: Dict[str, Any] = {
-            "type": "function",
-            "function": {
-                "name": op.operation_slug,
-                "description": build_prompt_operation_description(
-                    op,
-                    summary=getattr(op, "published", None),
-                    max_chars=512,
-                ),
-                "parameters": schema,
-            },
-        }
-        tools.append(tool)
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": op.operation_slug,
+                    "description": build_prompt_operation_description(
+                        op,
+                        summary=getattr(op, "published", None),
+                        max_chars=512,
+                    ),
+                    "parameters": schema,
+                },
+            }
+        )
     return tools
 
 
 def parse_native_tool_calls(
     response: Any,
     *,
-    seen_operations: Optional[set] = None,
-) -> Optional["ParsedResponse"]:
-    """Parse OpenAI-style tool_calls from a raw LLM response dict.
+    seen_tools: Optional[set[tuple[str, str]]] = None,
+) -> Optional[ParsedResponse]:
+    """Parse OpenAI-style tool_calls from a raw model response."""
 
-    Returns ``None`` when the response contains no tool_calls (caller should
-    fall back to text-based ``parse_llm_response``).
-
-    Deduplicates by operation_slug using the same ``seen_operations`` set as
-    the text parser so the two paths can be combined without double-calls.
-    """
     if not isinstance(response, dict):
         return None
 
@@ -367,16 +320,16 @@ def parse_native_tool_calls(
         return None
 
     message = (choices[0].get("message") or {}) if choices else {}
-    tool_calls = message.get("tool_calls") or []
-    if not tool_calls:
+    raw_tool_calls = message.get("tool_calls") or []
+    if not raw_tool_calls:
         return None
 
-    if seen_operations is None:
-        seen_operations = set()
+    if seen_tools is None:
+        seen_tools = set()
 
-    operation_calls: List[OperationCall] = []
-    for tc in tool_calls:
-        fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+    tool_calls: List[ToolCall] = []
+    for item in raw_tool_calls:
+        fn = (item.get("function") or {}) if isinstance(item, dict) else {}
         name = str(fn.get("name") or "").strip()
         if not name:
             continue
@@ -389,47 +342,40 @@ def parse_native_tool_calls(
         if not isinstance(raw_args, dict):
             raw_args = {}
         args_json = json.dumps(raw_args, sort_keys=True)
-        op_key = (name, args_json)
-        if op_key in seen_operations:
+        tool_key = (name, args_json)
+        if tool_key in seen_tools:
             continue
-        operation_calls.append(
-            OperationCall.from_dict({"operation": name, "arguments": raw_args})
-        )
-        seen_operations.add(op_key)
+        tool_calls.append(ToolCall.from_dict({"tool": name, "arguments": raw_args}))
+        seen_tools.add(tool_key)
 
-    if not operation_calls:
+    if not tool_calls:
         return None
 
     text = str(message.get("content") or "").strip()
-    return ParsedResponse(text=text, operation_calls=operation_calls, has_operation_calls=True)
+    return ParsedResponse(text=text, tool_calls=tool_calls, has_tool_calls=True)
 
 
 def build_tool_result_messages(
-    results: List[Tuple[OperationCall, str]],
+    results: List[Tuple[ToolCall, str]],
     tool_calls_raw: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Build OpenAI-style tool result messages for native tool calling path.
+    """Build OpenAI-style `role=tool` messages for native tool calling."""
 
-    Returns a list of ``{"role": "tool", "tool_call_id": ..., "content": ...}``
-    messages that follow the assistant message that contained tool_calls.
-    Falls back to ``call_id`` from OperationCall when the raw tool_calls list
-    does not have a matching entry.
-    """
     id_map: Dict[str, str] = {}
-    for tc in tool_calls_raw:
-        if isinstance(tc, dict):
-            fn_name = (tc.get("function") or {}).get("name") or ""
-            tc_id = str(tc.get("id") or "")
-            if fn_name and tc_id:
-                id_map[fn_name] = tc_id
+    for item in tool_calls_raw:
+        if isinstance(item, dict):
+            fn_name = (item.get("function") or {}).get("name") or ""
+            tool_call_id = str(item.get("id") or "")
+            if fn_name and tool_call_id:
+                id_map[fn_name] = tool_call_id
 
     messages: List[Dict[str, Any]] = []
-    for operation_call, result_content in results:
-        tc_id = id_map.get(operation_call.operation_slug) or operation_call.id
+    for tool_call, result_content in results:
+        tool_call_id = id_map.get(tool_call.tool_name) or tool_call.id
         messages.append(
             {
                 "role": "tool",
-                "tool_call_id": tc_id,
+                "tool_call_id": tool_call_id,
                 "content": result_content,
             }
         )

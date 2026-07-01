@@ -1,12 +1,12 @@
 """
-AgentToolRuntime — автономный агент с operation-call loop.
+AgentToolRuntime — автономный агент с tool-call loop.
 
 Flow:
-1. Build system prompt = agent prompt + collection blocks + operation instructions
+1. Build system prompt = agent prompt + collection blocks + tool instructions
 2. Non-streaming LLM call
-3. Parse operation_calls from response (protocol.py)
-4. If operation_calls → execute each → add results to context → goto 2
-5. If no operation_calls → streaming synthesis with operation data → final
+3. Parse tool_calls from response (protocol.py)
+4. If tool_calls → execute each → add results to context → goto 2
+5. If no tool_calls → streaming synthesis with tool data → final
 """
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ MAX_OPERATION_RESULT_PREVIEW_CHARS = 4096
 @dataclass
 class AgentLoopState:
     """Mutable state for one agent execution loop."""
-    operation_outputs: List[Dict[str, Any]] = field(default_factory=list)
+    tool_outputs: List[Dict[str, Any]] = field(default_factory=list)
     sources: List[dict] = field(default_factory=list)
-    operation_calls_total: int = 0
+    tool_calls_total: int = 0
     steps_without_successful_tool_result: int = 0
     retry_count: int = 0
     tokens_in: int = 0
@@ -34,15 +34,14 @@ class AgentLoopState:
 
 
 from app.agents.protocol import (
-    build_operation_results_message,
     build_tool_result_messages,
+    build_tool_results_message,
     build_tools_payload,
     parse_llm_response,
     parse_native_tool_calls,
 )
 from app.agents.runtime.tools import ConfirmationRequiredError
 from app.agents.runtime.base import BaseRuntime
-from app.agents.runtime.events import RuntimeEvent, RuntimeEventType
 from app.agents.runtime.published_capabilities import (
     serialize_published_collections,
     serialize_published_operations,
@@ -51,8 +50,9 @@ from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.agents.runtime.prompt_assembler import filter_prompt_visible_operations
 from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
-from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.budgets import RunBudgetLedger
+from app.runtime.context_snapshot import compact_snapshot
+from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
 from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
@@ -104,9 +104,9 @@ def _build_budget_snapshot_payload(
                 "remaining": max(0, policy.max_steps - step),
             },
             "tool_calls": {
-                "used": loop_state.operation_calls_total,
+                "used": loop_state.tool_calls_total,
                 "limit": policy.max_tool_calls_total,
-                "remaining": max(0, policy.max_tool_calls_total - loop_state.operation_calls_total),
+                "remaining": max(0, policy.max_tool_calls_total - loop_state.tool_calls_total),
             },
             "retries": {
                 "used": loop_state.retry_count,
@@ -435,8 +435,8 @@ class AgentToolRuntime(BaseRuntime):
                 if parsed is None:
                     parsed = parse_llm_response(raw_response, strict=strict_protocol)
 
-                if not parsed.has_operation_calls:
-                    if available_operations and not loop_state.operation_outputs:
+                if not parsed.has_tool_calls:
+                    if available_operations and not loop_state.tool_outputs:
                         loop_state.steps_without_successful_tool_result += 1
                         if loop_state.steps_without_successful_tool_result >= max_steps_without_success:
                             limit_message = (
@@ -488,7 +488,7 @@ class AgentToolRuntime(BaseRuntime):
                             "protocol_retry",
                             {
                                 "step": step + 1,
-                                "reason": "no_operation_call_before_answer",
+                                "reason": "no_tool_call_before_answer",
                                 "available_operations": serialize_published_operations(available_operations),
                             },
                         )
@@ -504,19 +504,19 @@ class AgentToolRuntime(BaseRuntime):
                             platform_config=platform_config,
                             sandbox_overrides=sandbox_ov,
                         ),
-                        {"step": step + 1, "operation_calls_total": len(loop_state.operation_outputs)}
+                        {"step": step + 1, "tool_calls_total": len(loop_state.tool_outputs)}
                     )
                     final_answer_content: List[str] = []
-                    async for ev in self._handle_no_operation_calls(
+                    async for ev in self._handle_no_tool_calls(
                         exec_request, messages, llm_messages,
-                        parsed, loop_state.operation_outputs, loop_state.sources, gen, run_session, sandbox_ov,
+                        parsed, loop_state.tool_outputs, loop_state.sources, gen, run_session, sandbox_ov,
                     ):
                         if ev.type == RuntimeEventType.FINAL and isinstance(ev.data, dict):
                             final_answer_content.append(str(ev.data.get("content", "") or ""))
                         yield ev
                     await run_session.log_step("final_response", {
                         "step": step + 1,
-                        "operation_calls_total": len(loop_state.operation_outputs),
+                        "tool_calls_total": len(loop_state.tool_outputs),
                         "content": final_answer_content[0] if final_answer_content else "",
                     })
                     if isinstance(runtime_budget, RunBudgetLedger):
@@ -533,14 +533,14 @@ class AgentToolRuntime(BaseRuntime):
                     await run_session.finish("completed")
                     return
 
-                # Execute each operation call
+                # Execute each tool call
                 operation_results_for_context: List[tuple] = []
                 successful_operation_results = 0
                 non_retryable_operation_failures: List[Dict[str, str]] = []
                 invalid_operation_slugs = [
-                    call.operation_slug
-                    for call in parsed.operation_calls
-                    if not self._is_allowed_operation_call(call.operation_slug, available_operations)
+                    call.tool_name
+                    for call in parsed.tool_calls
+                    if not self._is_allowed_operation_call(call.tool_name, available_operations)
                 ]
                 if fail_fast_invalid_calls and invalid_operation_slugs:
                     fail_message = (
@@ -562,20 +562,20 @@ class AgentToolRuntime(BaseRuntime):
                     )
                     await run_session.finish("failed", fail_message)
                     return
-                operation_calls_total_ref = [loop_state.operation_calls_total]
-                for operation_call in parsed.operation_calls:
-                    # Log intent before executing each operation
+                operation_calls_total_ref = [loop_state.tool_calls_total]
+                for operation_call in parsed.tool_calls:
+                    # Log intent before executing each tool
                     await ctx.log_intent(
                         self._intent_message(
-                            key="operation_call",
+                            key="tool_call",
                             platform_config=platform_config,
                             sandbox_overrides=sandbox_ov,
-                            operation_slug=operation_call.operation_slug,
+                            tool_name=operation_call.tool_name,
                         ),
                         {"arguments": operation_call.arguments}
                     )
                     
-                    prev_outputs = len(loop_state.operation_outputs)
+                    prev_outputs = len(loop_state.tool_outputs)
                     async for ev in self._execute_single_operation_call(
                         operation_call=operation_call,
                         agent_slug=agent.slug,
@@ -586,7 +586,7 @@ class AgentToolRuntime(BaseRuntime):
                         policy=policy,
                         runtime_budget=runtime_budget,
                         run_session=run_session,
-                        all_operation_outputs=loop_state.operation_outputs,
+                        all_operation_outputs=loop_state.tool_outputs,
                         all_sources=loop_state.sources,
                         operation_results_for_context=operation_results_for_context,
                         operation_calls_total_ref=operation_calls_total_ref,
@@ -597,9 +597,9 @@ class AgentToolRuntime(BaseRuntime):
                             RuntimeEventType.CONFIRMATION_REQUIRED,
                         ):
                             return
-                    loop_state.operation_calls_total = operation_calls_total_ref[0]
+                    loop_state.tool_calls_total = operation_calls_total_ref[0]
 
-                    new_entry = loop_state.operation_outputs[prev_outputs] if len(loop_state.operation_outputs) > prev_outputs else None
+                    new_entry = loop_state.tool_outputs[prev_outputs] if len(loop_state.tool_outputs) > prev_outputs else None
                     if new_entry is not None:
                         if new_entry.get("success"):
                             successful_operation_results += 1
@@ -617,7 +617,7 @@ class AgentToolRuntime(BaseRuntime):
                                     {
                                         "error_code": ec,
                                         "error": str(new_entry.get("error") or ""),
-                                        "operation_slug": operation_call.operation_slug,
+                                        "tool_name": operation_call.tool_name,
                                     }
                                 )
 
@@ -635,7 +635,7 @@ class AgentToolRuntime(BaseRuntime):
                     fail_message = (
                         "Agent operation execution failed with non-retryable errors: "
                         + "; ".join(
-                            f"{item['operation_slug']}[{item['error_code']}]"
+                            f"{item['tool_name']}[{item['error_code']}]"
                             for item in non_retryable_operation_failures[:3]
                         )
                     )
@@ -694,14 +694,14 @@ class AgentToolRuntime(BaseRuntime):
                     for tool_msg in build_tool_result_messages(operation_results_for_context, raw_tool_calls):
                         llm_messages.append(tool_msg)
                 else:
-                    results_message = build_operation_results_message(operation_results_for_context)
+                    results_message = build_tool_results_message(operation_results_for_context)
                     llm_messages.append({"role": "assistant", "content": raw_response})
                     llm_messages.append({"role": "user", "content": results_message})
 
                 logger.info(
                     f"Agent operation loop step={step + 1}: "
-                    f"{len(parsed.operation_calls)} operation calls executed, "
-                    f"total_outputs={len(loop_state.operation_outputs)}",
+                    f"{len(parsed.tool_calls)} tool calls executed, "
+                    f"total_outputs={len(loop_state.tool_outputs)}",
                 )
                 if isinstance(runtime_budget, RunBudgetLedger):
                     loop_budget_snapshot = _build_budget_snapshot_payload(
@@ -716,17 +716,17 @@ class AgentToolRuntime(BaseRuntime):
                     yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, loop_budget_snapshot)
 
             # Max steps reached — synthesize with whatever we have
-            if loop_state.operation_outputs:
+            if loop_state.tool_outputs:
                 synth_final_content: List[str] = []
                 async for ev in self._synthesize_answer(
-                    exec_request, messages, loop_state.operation_outputs, loop_state.sources, gen, run_session,
+                    exec_request, messages, loop_state.tool_outputs, loop_state.sources, gen, run_session,
                 ):
                     if ev.type == RuntimeEventType.FINAL and isinstance(ev.data, dict):
                         synth_final_content.append(str(ev.data.get("content", "") or ""))
                     yield ev
                 await run_session.log_step("final_response", {
                     "step": step + 1,
-                    "operation_calls_total": len(loop_state.operation_outputs),
+                    "tool_calls_total": len(loop_state.tool_outputs),
                     "content": synth_final_content[0] if synth_final_content else "",
                 })
             else:
@@ -747,7 +747,7 @@ class AgentToolRuntime(BaseRuntime):
                 )
                 await run_session.log_step("budget_snapshot", final_budget_snapshot)
                 yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, final_budget_snapshot)
-            await run_session.finish("completed" if loop_state.operation_outputs else "failed")
+            await run_session.finish("completed" if loop_state.tool_outputs else "failed")
 
         except Exception as e:
             logger.error(f"Agent operation loop failed: {e}", exc_info=True)
@@ -851,10 +851,10 @@ class AgentToolRuntime(BaseRuntime):
             await run_session.finish("failed", limit_message)
             return
 
-        yield RuntimeEvent.operation_call(
-            operation_call.operation_slug,
-            operation_call.id,
-            operation_call.arguments,
+        yield RuntimeEvent.tool_call(
+            tool=operation_call.tool_name,
+            call_id=operation_call.id,
+            arguments=operation_call.arguments,
             agent_slug=agent_slug,
             agent_run_id=agent_run_id,
             llm_call_id=llm_call_id,
@@ -863,8 +863,8 @@ class AgentToolRuntime(BaseRuntime):
             actor_type="agent",
             actor_entity_id=agent_run_id,
         )
-        await run_session.log_step("operation_call", {
-            "operation_slug": operation_call.operation_slug,
+        await run_session.log_step("tool_call", {
+            "tool": operation_call.tool_name,
             "call_id": operation_call.id,
             "arguments": operation_call.arguments,
             "input": operation_call.arguments,
@@ -907,7 +907,7 @@ class AgentToolRuntime(BaseRuntime):
             except ValueError:
                 typed_error_code = None
         envelope = OperationResultEnvelope(
-            operation_slug=operation_call.operation_slug,
+            operation_slug=operation_call.tool_name,
             call_id=operation_call.id,
             success=result.success,
             error_code=typed_error_code,
@@ -929,11 +929,11 @@ class AgentToolRuntime(BaseRuntime):
             if len(raw_str) > MAX_OPERATION_RESULT_PREVIEW_CHARS:
                 sse_data = raw_str[:MAX_OPERATION_RESULT_PREVIEW_CHARS]
                 sse_truncated = True
-        operation_result_payload = RuntimeEvent.operation_result(
-            operation_call.operation_slug,
-            operation_call.id,
-            result.success,
-            sse_data,
+        operation_result_payload = RuntimeEvent.tool_result(
+            tool=operation_call.tool_name,
+            call_id=operation_call.id,
+            success=result.success,
+            data=sse_data,
             sources=sources if sources else None,
             agent_slug=agent_slug,
             agent_run_id=agent_run_id,
@@ -951,8 +951,8 @@ class AgentToolRuntime(BaseRuntime):
             truncated=sse_truncated if sse_truncated else None,
         )
         yield operation_result_payload
-        await run_session.log_step("operation_result", {
-            "operation_slug": operation_call.operation_slug,
+        await run_session.log_step("tool_result", {
+            "tool": operation_call.tool_name,
             "call_id": operation_call.id,
             "success": result.success,
             "reused": bool(result.metadata.get("reused")),
@@ -977,7 +977,7 @@ class AgentToolRuntime(BaseRuntime):
 
         raw_output = result.data or {}
         all_operation_outputs.append({
-            "operation": operation_call.operation_slug, "success": result.success,
+            "tool": operation_call.tool_name, "success": result.success,
             "data": raw_output, "error": result.error,
             "error_code": raw_error_code,
             "retryable": result.metadata.get("retryable"),
@@ -989,7 +989,7 @@ class AgentToolRuntime(BaseRuntime):
     @staticmethod
     def _is_allowed_operation_call(operation_slug: str, available_operations: List[Any]) -> bool:
         from app.agents.runtime.tools import OperationExecutionFacade
-        operation, _ = OperationExecutionFacade._find_operation(operation_slug, available_operations)
+        operation, _ = OperationExecutionFacade._find_operation(operation_slug, {}, available_operations)
         return operation is not None
 
     @staticmethod
@@ -1019,7 +1019,7 @@ class AgentToolRuntime(BaseRuntime):
         key: str,
         platform_config: Optional[Dict[str, Any]],
         sandbox_overrides: Optional[Dict[str, Any]],
-        operation_slug: Optional[str] = None,
+        tool_name: Optional[str] = None,
     ) -> str:
         templates = dict(DEFAULT_INTENT_MESSAGES)
 
@@ -1038,11 +1038,11 @@ class AgentToolRuntime(BaseRuntime):
 
         template = templates.get(key) or DEFAULT_INTENT_MESSAGES.get(key, key)
         try:
-            return template.format(operation_slug=operation_slug or "")
+            return template.format(operation_slug=tool_name or "", tool_name=tool_name or "")
         except Exception:
             return template
 
-    async def _handle_no_operation_calls(
+    async def _handle_no_tool_calls(
         self,
         exec_request: ExecutionRequest,
         original_messages: List[Dict[str, Any]],
@@ -1054,7 +1054,7 @@ class AgentToolRuntime(BaseRuntime):
         run_session: Any,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
-        """Handle case when agent decides not to call operations."""
+        """Handle case when agent decides not to call tools."""
         if all_operation_outputs:
             async for ev in self._synthesize_answer(
                 exec_request, original_messages,

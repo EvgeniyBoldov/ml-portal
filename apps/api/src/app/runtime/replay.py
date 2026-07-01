@@ -93,7 +93,7 @@ class RuntimeReplayRunner:
             risk_level = str(item.get("risk_level") or "").strip().lower()
             side_effects = bool(item.get("side_effects", False))
             if risk_level in {"write", "destructive"} or side_effects:
-                return str(item.get("operation_slug") or item.get("tool_slug") or "unknown_operation")
+                return str(item.get("tool") or item.get("operation_slug") or item.get("tool_slug") or "unknown_tool")
         return None
 
     @staticmethod
@@ -103,17 +103,17 @@ class RuntimeReplayRunner:
             if not isinstance(item, dict):
                 continue
             step_type = str(item.get("step_type") or "").strip()
-            op = str(item.get("operation_slug") or item.get("tool_slug") or "").strip()
-            if not op:
+            tool_name = str(item.get("tool") or item.get("operation_slug") or item.get("tool_slug") or "").strip()
+            if not tool_name:
                 continue
-            if step_type in {"operation_call", "tool_call"}:
-                open_calls.add(op)
+            if step_type == "tool_call":
+                open_calls.add(tool_name)
                 continue
-            if step_type in {"operation_result", "tool_result"}:
+            if step_type == "tool_result":
                 output = item.get("output")
                 if output is None:
-                    return op
-                open_calls.discard(op)
+                    return tool_name
+                open_calls.discard(tool_name)
         if open_calls:
             return sorted(open_calls)[0]
         return None

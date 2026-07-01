@@ -9,12 +9,12 @@ import uuid
 
 import pytest
 
-from app.agents.context import OperationCall, RuntimeDependencies, ToolContext, ToolResult
+from app.agents.context import RuntimeDependencies, ToolCall, ToolContext, ToolResult
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
 from app.agents.builtins.collection_text_search import CollectionTextSearchTool
 from app.agents.operation_executor import DirectOperationExecutor
 from app.agents.runtime import tools as runtime_tools
-from app.agents.runtime.tools import OperationExecutor
+from app.agents.runtime.tools import ToolExecutor
 from app.agents.runtime_graph import (
     OperationExecutionBinding,
     OperationRuntimeContext,
@@ -107,12 +107,12 @@ async def test_operation_executor_rejects_nested_type_mismatch():
             "additionalProperties": False,
         }
     )
-    call = OperationCall(
+    call = ToolCall(
         id="c-1",
-        operation_slug=operation.operation_slug,
+        tool_name=operation.operation_slug,
         arguments={"filters": {"limit": "10"}},
     )
-    result, _ = await OperationExecutor().execute(call, _ctx(), [operation])
+    result, _ = await ToolExecutor().execute(call, _ctx(), [operation])
 
     assert result.success is False
     assert result.metadata.get("error_code") == RuntimeErrorCode.OPERATION_INVALID_ARGS.value
@@ -132,12 +132,12 @@ async def test_operation_executor_rejects_additional_properties_and_enum():
             "additionalProperties": False,
         }
     )
-    call = OperationCall(
+    call = ToolCall(
         id="c-2",
-        operation_slug=operation.operation_slug,
+        tool_name=operation.operation_slug,
         arguments={"mode": "unsafe", "extra": 1},
     )
-    result, _ = await OperationExecutor().execute(call, _ctx(), [operation])
+    result, _ = await ToolExecutor().execute(call, _ctx(), [operation])
 
     assert result.success is False
     assert result.metadata.get("error_code") == RuntimeErrorCode.OPERATION_INVALID_ARGS.value
@@ -148,12 +148,12 @@ async def test_operation_executor_rejects_additional_properties_and_enum():
 
 @pytest.mark.asyncio
 async def test_operation_executor_marks_missing_operation_as_non_retryable():
-    call = OperationCall(
+    call = ToolCall(
         id="c-3",
-        operation_slug="unknown.op",
+        tool_name="unknown.op",
         arguments={},
     )
-    result, _ = await OperationExecutor().execute(call, _ctx(), [])
+    result, _ = await ToolExecutor().execute(call, _ctx(), [])
 
     assert result.success is False
     assert result.metadata.get("error_code") == RuntimeErrorCode.OPERATION_UNAVAILABLE.value
@@ -179,13 +179,13 @@ async def test_operation_executor_builtin_validation_contract_without_jsonschema
             "additionalProperties": False,
         }
     )
-    call = OperationCall(
+    call = ToolCall(
         id="c-fallback",
-        operation_slug=operation.operation_slug,
+        tool_name=operation.operation_slug,
         arguments={"filters": {"limit": "10"}},
     )
     monkeypatch.setattr(runtime_tools, "_JSONSCHEMA_AVAILABLE", False, raising=True)
-    result, _ = await OperationExecutor().execute(call, _ctx(), [operation])
+    result, _ = await ToolExecutor().execute(call, _ctx(), [operation])
 
     assert result.success is False
     assert result.metadata.get("error_code") == RuntimeErrorCode.OPERATION_INVALID_ARGS.value
@@ -205,9 +205,9 @@ async def test_operation_executor_requires_exact_invoke_name():
             "additionalProperties": False,
         }
     )
-    call = OperationCall(
+    call = ToolCall(
         id="c-alias",
-        operation_slug="collection.doc_search",
+        tool_name="collection.doc_search",
         arguments={"collection_slug": "docs", "query": "nginx"},
     )
     executor_impl = AsyncMock(return_value=ToolResult.ok({"hits": [], "total": 0}))
@@ -215,7 +215,7 @@ async def test_operation_executor_requires_exact_invoke_name():
     deps = RuntimeDependencies(operation_executor=SimpleNamespace(execute=executor_impl))
     ctx.set_runtime_deps(deps)
 
-    result, _ = await OperationExecutor().execute(call, ctx, [operation])
+    result, _ = await ToolExecutor().execute(call, ctx, [operation])
 
     assert result.success is False
     assert executor_impl.await_count == 0
@@ -239,16 +239,101 @@ async def test_operation_executor_accepts_unique_canonical_shorthand():
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
     deps = RuntimeDependencies(operation_executor=SimpleNamespace(execute=executor_impl))
     ctx.set_runtime_deps(deps)
-    call = OperationCall(
+    call = ToolCall(
         id="c-short",
-        operation_slug="collection.document.search",
+        tool_name="collection.document.search",
         arguments={"query": "nginx"},
     )
 
-    result, _ = await OperationExecutor().execute(call, ctx, [operation])
+    result, _ = await ToolExecutor().execute(call, ctx, [operation])
 
     assert result.success is True
     assert executor_impl.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_operation_executor_resolves_collection_info_by_collection_slug():
+    target_template = ProviderExecutionTarget(
+        operation_slug="instance.template.collection.info",
+        provider_type="local",
+        provider_instance_id=str(uuid4()),
+        provider_instance_slug="template-runtime",
+        provider_url=None,
+        data_instance_id=str(uuid4()),
+        data_instance_slug="template",
+        handler_slug="collection.info",
+        timeout_s=20,
+    )
+    target_reglament = ProviderExecutionTarget(
+        operation_slug="instance.reglament.collection.info",
+        provider_type="local",
+        provider_instance_id=str(uuid4()),
+        provider_instance_slug="document-runtime",
+        provider_url=None,
+        data_instance_id=str(uuid4()),
+        data_instance_slug="reglament",
+        handler_slug="collection.info",
+        timeout_s=20,
+    )
+    template_operation = ResolvedOperation(
+        operation_slug="instance.template.collection.info",
+        operation="collection.info",
+        name="Collection Info",
+        description="Inspect collection info",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "collection_slug": {"type": "string"},
+            },
+            "required": ["collection_slug"],
+            "additionalProperties": False,
+        },
+        data_instance_id=target_template.data_instance_id,
+        data_instance_slug=target_template.data_instance_slug,
+        collection_slug="template",
+        provider_instance_id=target_template.provider_instance_id,
+        provider_instance_slug=target_template.provider_instance_slug,
+        source="local",
+        target=target_template,
+    )
+    reglament_operation = ResolvedOperation(
+        operation_slug="instance.reglament.collection.info",
+        operation="collection.info",
+        name="Collection Info",
+        description="Inspect collection info",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "collection_slug": {"type": "string"},
+            },
+            "required": ["collection_slug"],
+            "additionalProperties": False,
+        },
+        data_instance_id=target_reglament.data_instance_id,
+        data_instance_slug=target_reglament.data_instance_slug,
+        collection_slug="reglament",
+        provider_instance_id=target_reglament.provider_instance_id,
+        provider_instance_slug=target_reglament.provider_instance_slug,
+        source="local",
+        target=target_reglament,
+    )
+    executor_impl = AsyncMock(return_value=ToolResult.ok({"ok": True}))
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
+    deps = RuntimeDependencies(operation_executor=SimpleNamespace(execute=executor_impl))
+    ctx.set_runtime_deps(deps)
+    call = ToolCall(
+        id="c-info",
+        tool_name="collection.info",
+        arguments={"collection_slug": "template"},
+    )
+
+    result, _ = await ToolExecutor().execute(call, ctx, [template_operation, reglament_operation])
+
+    assert result.success is True
+    executor_impl.assert_awaited_once()
+    forwarded_call = executor_impl.await_args.args[0]
+    assert forwarded_call.tool_name == "instance.template.collection.info"
+    assert forwarded_call.arguments == {}
 
 
 @pytest.mark.asyncio
@@ -291,13 +376,13 @@ async def test_operation_executor_uses_prompt_schema_for_hidden_binding_fields()
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
     deps = RuntimeDependencies(operation_executor=executor_impl, execution_graph=graph)
     ctx.set_runtime_deps(deps)
-    call = OperationCall(
+    call = ToolCall(
         id="c-hidden",
-        operation_slug=operation.operation_slug,
+        tool_name=operation.operation_slug,
         arguments={"query": "nginx"},
     )
 
-    result, _ = await OperationExecutor().execute(call, ctx, [operation])
+    result, _ = await ToolExecutor().execute(call, ctx, [operation])
 
     assert result.metadata.get("error_code") != RuntimeErrorCode.OPERATION_INVALID_ARGS.value
 
@@ -343,13 +428,13 @@ async def test_operation_executor_strips_null_optional_args_before_validation():
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
     deps = RuntimeDependencies(operation_executor=SimpleNamespace(execute=executor_impl))
     ctx.set_runtime_deps(deps)
-    call = OperationCall(
+    call = ToolCall(
         id="c-null",
-        operation_slug="instance.template.collection.info",
+        tool_name="instance.template.collection.info",
         arguments={"filters": {"status": None}},
     )
 
-    result, _ = await OperationExecutor().execute(call, ctx, [operation])
+    result, _ = await ToolExecutor().execute(call, ctx, [operation])
 
     assert result.success is True
     executor_impl.assert_awaited_once()

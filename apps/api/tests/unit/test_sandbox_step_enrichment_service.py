@@ -16,7 +16,7 @@ def test_sanitize_step_payload_redacts_and_truncates_heavy_result():
     }
 
     out = svc.sanitize_step_payload(
-        step_type="operation_result",
+        step_type="tool_result",
         step_data=payload,
         max_chars=200,
     )

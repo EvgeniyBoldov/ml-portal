@@ -48,6 +48,11 @@ Allowed step kinds:
 
 Transport-only events such as `run_paused`, pause-related `stop`, `done`, and deltas are not business trace steps. They may exist on transport streams, but they must not become first-class persisted trace nodes.
 
+Compatibility note:
+- newer tool-first surfaces may emit `tool_call` / `tool_result` aliases,
+- persisted trace and inspector layers should normalize them to the same semantic `operation` step family,
+- do not introduce a third vocabulary in new code paths.
+
 ## Parenting Rules
 
 - Every step must either provide `parent_entity_id` explicitly or satisfy a deterministic documented fallback.

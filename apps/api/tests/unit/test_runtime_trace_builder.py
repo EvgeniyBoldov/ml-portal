@@ -23,8 +23,8 @@ def test_runtime_trace_builder_groups_by_iteration_and_maps_categories():
             ),
             TraceStep(
                 id="3",
-                raw_type="operation_result",
-                data={"step": 1, "success": False, "operation_slug": "search"},
+                raw_type="tool_result",
+                data={"step": 1, "success": False, "tool": "search"},
                 step_number=2,
                 created_at=datetime.now(UTC),
             ),

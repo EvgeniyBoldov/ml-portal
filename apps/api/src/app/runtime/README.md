@@ -54,9 +54,9 @@ Notes:
 - Replay: `replay.py` (trace-pack validation and deterministic replay checks).
 
 Runtime-config keys currently used by orchestrator/agent flows:
-- `required_operation_retry_instruction` — text injected on protocol retry when agent skipped required operation call.
-- `operations_rules_text` — full override of "mandatory operation rules" block appended to operation prompt.
-- `intent_messages` — map of runtime intent templates (`agent_start`, `final_answer`, `operation_call`).
+- `required_operation_retry_instruction` — text injected on protocol retry when agent skipped required tool call.
+- `operations_rules_text` — full override of "mandatory operation rules" block appended to tool prompt.
+- `intent_messages` — map of runtime intent templates (`agent_start`, `final_answer`, `tool_call`).
 - `runtime.synth_chunk_size` — default chunk size for synthesizer delta streaming in short-circuit/fallback paths.
 
 ## Collection Readiness
@@ -83,7 +83,7 @@ LLM-facing agent prompts use a collection-centered structure:
   - no per-collection operation contracts in the initial prompt
   - the model must call `collection.info` first before using that collection
 - `Системные операции`
-- machine-oriented `operation_call` JSON contract for:
+- machine-oriented `tool_call` JSON contract for:
   - system operations
   - `collection.info` bindings only
 
@@ -112,7 +112,7 @@ By default replay blocks destructive/write operations.
   `run_start/run_end`, `orchestrator_*`, `planner_iteration_*`,
   `agent_*`, `synthesis_*`.
 - `agent_run_steps` (chat/agent runs) persist execution-relevant steps
-  (`planner_decision`, `llm_turn`, `operation_*`, `budget_snapshot`, `final`, `error`)
+  (`planner_decision`, `llm_turn`, `tool_*`, `budget_snapshot`, `final`, `error`)
   and do **not** require lifecycle duplication there.
 - `sandbox_run_steps` persist the full event stream (including lifecycle events),
   which is used by sandbox inspector and deep replay/debug flows.
@@ -141,7 +141,7 @@ CI gates:
 ## TODO
 
 - Remove legacy operation transport from agent-facing LLM flow:
-  stop exposing operation-shaped contracts to models, move to tool-first prompting/protocol,
+  stop exposing operation-shaped contracts to models, keep tool-first prompting/protocol,
   and keep operation resolution as an internal runtime concern only.
 - Add `QueryRewriter` stage (behind a feature flag) before planner input assembly.
 - Persist both `original_query` and `rewritten_query` in runtime trace.

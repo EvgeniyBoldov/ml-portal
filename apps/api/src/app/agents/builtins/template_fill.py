@@ -2,7 +2,7 @@
 collection.template.fill — Fill a template with values and return a generated file.
 
 Supports Excel, Word, and plain text templates via placeholder substitution.
-The filled result is stored as a chat attachment and its canonical storage_uri is returned.
+The filled result is stored as a downloadable artifact and its canonical storage_uri is returned.
 """
 from __future__ import annotations
 
@@ -283,11 +283,11 @@ class TemplateFillTool(VersionedTool):
                     missing = []
 
                 # Store generated attachment
-                chat_id = str(ctx.chat_id or "")
+                chat_id = str(ctx.chat_id) if ctx.chat_id else None
                 owner_id = str(ctx.user_id or "")
-                if not chat_id or not owner_id:
+                if not owner_id:
                     return ToolResult.fail(
-                        "Tool context missing chat_id or user_id; cannot store generated file",
+                        "Tool context missing user_id; cannot store generated file",
                         logs=log.entries_dict(),
                     )
 

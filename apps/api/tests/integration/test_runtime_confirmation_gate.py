@@ -6,10 +6,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.context import OperationCall, RuntimeDependencies, ToolContext, ToolResult
+from app.agents.context import RuntimeDependencies, ToolCall, ToolContext, ToolResult
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
 from app.agents.runtime.confirmation import ConfirmationService, build_operation_fingerprint
-from app.agents.runtime.tools import ConfirmationRequiredError, OperationExecutor
+from app.agents.runtime.tools import ConfirmationRequiredError, ToolExecutor
 
 
 def _operation(*, requires_confirmation: bool = True) -> ResolvedOperation:
@@ -67,10 +67,10 @@ def _sandbox_context(*, confirmed_fingerprints: list[str]):
 
 @pytest.mark.asyncio
 async def test_confirmation_gate_blocks_without_token_and_allows_with_token_then_rejects_foreign():
-    executor = OperationExecutor()
+    executor = ToolExecutor()
     operation = _operation()
     args = {"id": "dev-1"}
-    call = OperationCall(id="call-1", operation_slug=operation.operation_slug, arguments=args)
+    call = ToolCall(id="call-1", tool_name=operation.operation_slug, arguments=args)
 
     # No token -> blocked and provider executor must not be called.
     ctx, runtime_executor = _context(confirmation_tokens=[])
@@ -108,10 +108,10 @@ async def test_confirmation_gate_blocks_without_token_and_allows_with_token_then
 
 @pytest.mark.asyncio
 async def test_confirmation_gate_blocks_in_sandbox_without_preapproval_and_allows_with_fingerprint():
-    executor = OperationExecutor()
+    executor = ToolExecutor()
     operation = _operation()
     args = {"id": "dev-2"}
-    call = OperationCall(id="call-2", operation_slug=operation.operation_slug, arguments=args)
+    call = ToolCall(id="call-2", tool_name=operation.operation_slug, arguments=args)
     fingerprint = build_operation_fingerprint(
         tool_slug=operation.operation_slug,
         operation=operation.operation,

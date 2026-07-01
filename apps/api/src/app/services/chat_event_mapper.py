@@ -46,19 +46,19 @@ class ChatEventMapper:
                 "orchestration_envelope": env,
             }
 
-        if event.type == RuntimeEventType.OPERATION_CALL:
+        if event.type == RuntimeEventType.TOOL_CALL:
             return {
-                "type": "operation_call",
-                "operation": event.data.get("operation"),
+                "type": "tool_call",
+                "tool": event.data.get("tool"),
                 "call_id": event.data.get("call_id"),
                 "arguments": event.data.get("arguments"),
                 "orchestration_envelope": env,
             }
 
-        if event.type == RuntimeEventType.OPERATION_RESULT:
+        if event.type == RuntimeEventType.TOOL_RESULT:
             return {
-                "type": "operation_result",
-                "operation": event.data.get("operation"),
+                "type": "tool_result",
+                "tool": event.data.get("tool"),
                 "call_id": event.data.get("call_id"),
                 "success": event.data.get("success"),
                 "data": event.data.get("data"),

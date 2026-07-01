@@ -25,7 +25,7 @@ from app.agents.context import ToolContext
 class _PlannerDirect:
     async def next_step(self, **kwargs: Any) -> NextStep:
         return NextStep(
-            kind=NextStepKind.DIRECT_ANSWER,
+            kind=NextStepKind.FINAL,
             rationale="direct",
             final_answer="42",
         )
@@ -220,8 +220,8 @@ class TestRuntimeEventConstructors:
         assert ev.data["status"] == "completed"
 
     def test_operation_call_carries_parent(self) -> None:
-        ev = RuntimeEvent.operation_call(
-            operation="search",
+        ev = RuntimeEvent.tool_call(
+            tool="search",
             call_id="c1",
             arguments={"q": "x"},
             parent_entity_type="agent_run",
@@ -236,8 +236,8 @@ class TestRuntimeEventConstructors:
         assert ev.data["llm_call_id"] == "llm-1"
 
     def test_operation_result_carries_parent(self) -> None:
-        ev = RuntimeEvent.operation_result(
-            operation="search",
+        ev = RuntimeEvent.tool_result(
+            tool="search",
             call_id="c1",
             success=True,
             data={},

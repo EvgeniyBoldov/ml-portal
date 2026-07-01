@@ -34,11 +34,11 @@ _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
         "collection": {"type": "object"},
+        "readiness": {"type": "object"},
+        "tools": {"type": "array"},
+        "contracts": {"type": "object"},
         "schema": {"type": "object"},
-        "filter_hints": {"type": "object"},
-        "stats": {"type": "object"},
-        "dimensions": {"type": "object"},
-        "remote_catalog": {"type": "object"},
+        "runtime_enrichment": {"type": "object"},
     },
 }
 
@@ -187,7 +187,7 @@ class CollectionInfoTool(VersionedTool):
                     "last_sync_at": collection.last_sync_at.isoformat() if collection.last_sync_at else None,
                 }
 
-                legacy_payload = {
+                inspection_payload = {
                     "schema": schema_payload,
                     "filter_hints": filter_hints_payload,
                     "stats": stats_payload,
@@ -205,7 +205,7 @@ class CollectionInfoTool(VersionedTool):
                     session=session,
                     collection=collection,
                     operations=resolved_operations,
-                    legacy_payload=legacy_payload,
+                    inspection_payload=inspection_payload,
                 )
 
                 return ToolResult.ok(

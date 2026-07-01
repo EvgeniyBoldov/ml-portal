@@ -2,7 +2,7 @@
 
 ## Контекст
 
-Текущая визуализация Run ([`AgentRunPage.tsx`](../../apps/web/src/domains/admin/pages/AgentRunPage.tsx)) отображает агентский запуск как плоский список "итераций" с raw-шагами (`user_request`, `budget_policy`, `llm_request`, `operation_call`, `operation_result`, ...). Это отражает бэкенд-логгер, но **не отражает ментальную модель AI-инженера**, который дебажит запуск.
+Текущая визуализация Run ([`AgentRunPage.tsx`](../../apps/web/src/domains/admin/pages/AgentRunPage.tsx)) отображает агентский запуск как плоский список "итераций" с raw-шагами (`user_request`, `budget_policy`, `llm_request`, `operation_call`/`tool_call`, `operation_result`/`tool_result`, ...). Это отражает бэкенд-логгер, но **не отражает ментальную модель AI-инженера**, который дебажит запуск.
 
 ## Цель
 
@@ -60,7 +60,7 @@ Timeline действий агента. Каждая **запись** = одно
 **Источник данных:** `llm_request` + соседний `llm_response` (matching по iteration + порядку)
 
 #### 2.2 Tool Call Entry
-Объединяет `operation_call` + `operation_result` (+ `protocol_retry` если были) в одну карточку.
+Объединяет `operation_call`/`tool_call` + `operation_result`/`tool_result` (+ `protocol_retry` если были) в одну карточку.
 
 **Header (краткая форма):**
 - Badge: `TOOL`
@@ -74,7 +74,7 @@ Timeline действий агента. Каждая **запись** = одно
 - **Output**: result / error
 - **Retries** (если есть): список попыток с ошибками
 
-**Источник данных:** `operation_call` + `operation_result`/`tool_result` + `protocol_retry` события в одной iteration
+**Источник данных:** `operation_call`/`tool_call` + `operation_result`/`tool_result` + `protocol_retry` события в одной iteration
 
 #### 2.3 Decision Entry
 Routing / policy_decision события.
@@ -96,7 +96,7 @@ Runtime errors, не относящиеся к операциям.
 
 **Вычисление:** frontend aggregator считает running state:
 - При `llm_call` → steps++, tokens += response.tokens
-- При `operation_call` → tool_calls++
+- При `operation_call` / `tool_call` → tool_calls++
 - При `protocol_retry` → retries++
 
 **Компонент:** `BudgetBadge`

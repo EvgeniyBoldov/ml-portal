@@ -15,10 +15,10 @@ class ChatAttachment(Base):
     __tablename__ = "chat_attachments"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    chat_id: Mapped[uuid.UUID] = mapped_column(
+    chat_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("chats.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     owner_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

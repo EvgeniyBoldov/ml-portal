@@ -1,5 +1,5 @@
 """
-File Generate Tool — saves a generated file to chat storage and returns canonical artifact info.
+File Generate Tool — saves a generated file and returns canonical artifact info.
 
 The agent (not the orchestrator) owns content creation. This tool is a thin
 write-through to ChatAttachmentService: it persists the agent-generated body
@@ -65,7 +65,7 @@ _OUTPUT_SCHEMA_V1 = {
 @register_tool
 class FileGenerateTool(VersionedTool):
     """
-    Persist a generated file to chat storage.
+    Persist a generated file.
 
     Use this when the user explicitly asks for a downloadable artifact
     (report, export, plan, etc.). The agent must produce the full content
@@ -131,21 +131,15 @@ class FileGenerateTool(VersionedTool):
                 logs=log.entries_dict(),
             )
 
-        chat_id = ctx.chat_id
         user_id = ctx.user_id
-        if not chat_id:
-            log.error("No chat_id in tool context")
-            return ToolResult.fail(
-                "File generation requires a chat context. Cannot generate outside of a chat.",
-                logs=log.entries_dict(),
-            )
+        chat_id = ctx.chat_id
 
         log.info(
             "Generating file",
             filename=filename,
             format=fmt,
             size_bytes=len(encoded),
-            chat_id=str(chat_id),
+            chat_id=str(chat_id) if chat_id else None,
         )
 
         try:
@@ -153,7 +147,7 @@ class FileGenerateTool(VersionedTool):
             async with session_factory() as session:
                 service = ChatAttachmentService(session)
                 attachment = await service.create_generated_attachment(
-                    chat_id=str(chat_id),
+                    chat_id=str(chat_id) if chat_id else None,
                     owner_id=str(user_id),
                     filename=filename,
                     content=encoded,

@@ -34,8 +34,8 @@ def test_runtime_diagnostics_summary_includes_eval_and_memory_sections():
                     "response_length": 8,
                 },
             ),
-            _step(1, "operation_call", {"operation_slug": "collection.document.search", "input": {"query": "doc"}}),
-            _step(2, "operation_result", {"operation_slug": "collection.document.search", "output": {"hits": 1}}),
+            _step(1, "tool_call", {"tool": "collection.document.search", "input": {"query": "doc"}}),
+            _step(2, "tool_result", {"tool": "collection.document.search", "output": {"hits": 1}}),
             _step(
                 3,
                 "status",
