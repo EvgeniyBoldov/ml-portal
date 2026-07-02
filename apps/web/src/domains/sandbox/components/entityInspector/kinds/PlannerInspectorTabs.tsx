@@ -1,7 +1,7 @@
 import { InspectorFieldGroup, InspectorFieldRow, InspectorTabs } from '@/shared/ui/Inspector';
 import { isPlannerData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { BudgetsTab, RawTab, SnapshotBadgeField, SnapshotTextField, SnapshotValueField, getEntityContextSnapshot } from '../shared';
+import { BudgetsTab, EntityErrorsTab, RawTab, SnapshotBadgeField, SnapshotTextField, SnapshotValueField, getEntityContextSnapshot, getEntityErrors } from '../shared';
 
 const PLANNER_ACTION_LABELS: Record<string, string> = {
   call_agent: 'Вызвать агента',
@@ -86,10 +86,12 @@ function PlannerDecisionTab({ entity, steps }: { entity: TraceEntity; steps: Run
 }
 
 export function PlannerInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
+  const hasErrors = getEntityErrors(entity).length > 0;
   const tabs = [
     { key: 'intent', label: 'Намерение' },
     { key: 'decision', label: 'Решение' },
     { key: 'budgets', label: 'Бюджет' },
+    ...(hasErrors ? [{ key: 'errors', label: 'Ошибки' }] : []),
     { key: 'raw', label: 'RAW' },
   ];
 
@@ -97,6 +99,7 @@ export function PlannerInspectorTabs({ entity, steps }: { entity: TraceEntity; s
     if (tab === 'intent') return <PlannerIntentTab entity={entity} steps={steps} />;
     if (tab === 'decision') return <PlannerDecisionTab entity={entity} steps={steps} />;
     if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
+    if (tab === 'errors') return <EntityErrorsTab entity={entity} />;
     return <RawTab value={entity.data} entity={entity} steps={steps} />;
   }} />;
 }

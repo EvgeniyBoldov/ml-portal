@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
 from uuid import UUID
@@ -53,6 +54,7 @@ from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
 from app.runtime.budgets import RunBudgetLedger
 from app.runtime.context_snapshot import compact_snapshot
+from app.runtime.error_payloads import build_debug_payload
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
@@ -303,6 +305,9 @@ class AgentToolRuntime(BaseRuntime):
                         recoverable=False,
                         error_code=RuntimeErrorCode.AGENT_WALL_TIME_EXCEEDED,
                         retryable=False,
+                        user_message="Wall time limit exceeded",
+                        operator_message="Wall time limit exceeded",
+                        source="runtime",
                     )
                     await run_session.finish("failed", "Wall time limit exceeded")
                     return
@@ -314,6 +319,9 @@ class AgentToolRuntime(BaseRuntime):
                             recoverable=False,
                             error_code=RuntimeErrorCode.AGENT_NO_SUCCESSFUL_OPERATION_RESULT,
                             retryable=False,
+                            user_message="Agent step budget exhausted",
+                            operator_message="Agent step budget exhausted",
+                            source="runtime",
                         )
                         await run_session.finish("failed", "Agent step budget exhausted")
                         return
@@ -344,6 +352,9 @@ class AgentToolRuntime(BaseRuntime):
                         recoverable=False,
                         error_code=exc.code,
                         retryable=False,
+                        user_message=str(exc),
+                        operator_message=str(exc),
+                        source="llm",
                     )
                     await run_session.finish("failed", str(exc))
                     return
@@ -456,6 +467,9 @@ class AgentToolRuntime(BaseRuntime):
                                 recoverable=False,
                                 error_code=RuntimeErrorCode.AGENT_REQUIRED_OPERATION_CALL_MISSING,
                                 retryable=False,
+                                user_message=limit_message,
+                                operator_message=limit_message,
+                                source="runtime",
                             )
                             await run_session.log_step("budget_snapshot", _build_budget_snapshot_payload(
                                 owner_id=budget_owner_id,
@@ -474,6 +488,9 @@ class AgentToolRuntime(BaseRuntime):
                                 recoverable=False,
                                 error_code=RuntimeErrorCode.AGENT_REQUIRED_OPERATION_CALL_MISSING,
                                 retryable=False,
+                                user_message="Agent failed to call required operations before answering",
+                                operator_message="Agent failed to call required operations before answering",
+                                source="runtime",
                             )
                             await run_session.finish(
                                 "failed",
@@ -668,6 +685,9 @@ class AgentToolRuntime(BaseRuntime):
                         error_code=primary.get("error_code")
                         or RuntimeErrorCode.AGENT_NON_RETRYABLE_OPERATION_FAILURE,
                         retryable=False,
+                        user_message=fail_message,
+                        operator_message=fail_message,
+                        source="runtime",
                     )
                     await run_session.log_step(
                         "invalid_operation_call_fail_fast",
@@ -688,6 +708,9 @@ class AgentToolRuntime(BaseRuntime):
                         recoverable=False,
                         error_code=RuntimeErrorCode.AGENT_NO_SUCCESSFUL_OPERATION_RESULT,
                         retryable=False,
+                        user_message=fail_message,
+                        operator_message=fail_message,
+                        source="runtime",
                     )
                     await run_session.log_step("budget_snapshot", _build_budget_snapshot_payload(
                         owner_id=budget_owner_id,
@@ -758,6 +781,9 @@ class AgentToolRuntime(BaseRuntime):
                     recoverable=True,
                     error_code=RuntimeErrorCode.AGENT_NO_SUCCESSFUL_OPERATION_RESULT,
                     retryable=True,
+                    user_message=f"Maximum agent steps ({policy.max_steps}) reached without result",
+                    operator_message=f"Maximum agent steps ({policy.max_steps}) reached without result",
+                    source="runtime",
                 )
             if isinstance(runtime_budget, RunBudgetLedger):
                 final_budget_snapshot = _build_budget_snapshot_payload(
@@ -779,6 +805,10 @@ class AgentToolRuntime(BaseRuntime):
                 recoverable=False,
                 error_code=RuntimeErrorCode.AGENT_RUNTIME_EXCEPTION,
                 retryable=False,
+                user_message=str(e),
+                operator_message=str(e),
+                source="runtime",
+                debug=build_debug_payload(exc=e, traceback_text=traceback.format_exc()),
             )
             await run_session.finish("failed", str(e))
 
@@ -825,6 +855,9 @@ class AgentToolRuntime(BaseRuntime):
                 recoverable=False,
                 error_code=RuntimeErrorCode.AGENT_MAX_TOOL_CALLS_EXCEEDED,
                 retryable=False,
+                user_message=limit_message,
+                operator_message=limit_message,
+                source="runtime",
             )
             await run_session.log_step("budget_snapshot", {
                 "owner_scope": "agent",
@@ -854,6 +887,9 @@ class AgentToolRuntime(BaseRuntime):
                 recoverable=False,
                 error_code=RuntimeErrorCode.AGENT_MAX_TOOL_CALLS_EXCEEDED,
                 retryable=False,
+                user_message=limit_message,
+                operator_message=limit_message,
+                source="runtime",
             )
             await run_session.log_step("budget_snapshot", {
                 "owner_scope": "agent",
@@ -970,6 +1006,10 @@ class AgentToolRuntime(BaseRuntime):
             error_code=raw_error_code,
             retryable=result.metadata.get("retryable"),
             safe_message=None if result.success else str(result.error or ""),
+            user_message=result.metadata.get("user_message"),
+            operator_message=result.metadata.get("operator_message"),
+            source=result.metadata.get("source"),
+            debug=result.metadata.get("debug"),
             envelope=envelope.to_metadata(),
             truncated=sse_truncated if sse_truncated else None,
         )
@@ -985,6 +1025,10 @@ class AgentToolRuntime(BaseRuntime):
             "data": result.data if result.success else None,
             "error": None if result.success else str(result.error or ""),
             "safe_message": None if result.success else str(result.error or ""),
+            "user_message": result.metadata.get("user_message"),
+            "operator_message": result.metadata.get("operator_message"),
+            "source": result.metadata.get("source"),
+            "debug": result.metadata.get("debug"),
             "error_code": raw_error_code,
             "retryable": result.metadata.get("retryable"),
             "result_envelope": envelope.to_metadata(),

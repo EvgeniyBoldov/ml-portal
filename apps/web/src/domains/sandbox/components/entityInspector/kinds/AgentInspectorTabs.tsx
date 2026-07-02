@@ -8,11 +8,13 @@ import {
 import type { RunStep } from '../../../hooks/useSandboxRun';
 import {
   BudgetsTab,
+  EntityErrorsTab,
   InfoTab,
   RawTab,
   SnapshotJsonField,
   SnapshotTextField,
   SnapshotValueField,
+  getEntityErrors,
   getEntityInputsSnapshot,
   getEntityMetaSnapshot,
   getEntityRbacSnapshot,
@@ -127,11 +129,12 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
       raw_tail: typeof record.raw_tail === 'string' ? record.raw_tail : '',
     };
   })();
+  const hasErrors = getEntityErrors(entity).length > 0;
   const tabs = isFactsComponent
-    ? [{ key: 'info', label: 'Параметры' }, { key: 'facts', label: 'Факты' }, { key: 'prompt', label: 'Промпт' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }]
+    ? [{ key: 'info', label: 'Параметры' }, { key: 'facts', label: 'Факты' }, { key: 'prompt', label: 'Промпт' }, { key: 'budgets', label: 'Бюджет' }, ...(hasErrors ? [{ key: 'errors', label: 'Ошибки' }] : []), { key: 'raw', label: 'RAW' }]
     : isSummaryComponent
-      ? [{ key: 'info', label: 'Параметры' }, { key: 'result', label: 'Результат' }, { key: 'prompt', label: 'Промпт' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }]
-      : [{ key: 'info', label: 'Параметры' }, { key: 'task', label: 'Задание' }, { key: 'prompt', label: 'Промпт' }, { key: 'tools', label: 'Инструменты' }, { key: 'rbac', label: 'RBAC' }, { key: 'budgets', label: 'Бюджет' }, { key: 'raw', label: 'RAW' }];
+      ? [{ key: 'info', label: 'Параметры' }, { key: 'result', label: 'Результат' }, { key: 'prompt', label: 'Промпт' }, { key: 'budgets', label: 'Бюджет' }, ...(hasErrors ? [{ key: 'errors', label: 'Ошибки' }] : []), { key: 'raw', label: 'RAW' }]
+      : [{ key: 'info', label: 'Параметры' }, { key: 'task', label: 'Задание' }, { key: 'prompt', label: 'Промпт' }, { key: 'tools', label: 'Инструменты' }, { key: 'rbac', label: 'RBAC' }, { key: 'budgets', label: 'Бюджет' }, ...(hasErrors ? [{ key: 'errors', label: 'Ошибки' }] : []), { key: 'raw', label: 'RAW' }];
 
   const stepAvailableOperations = steps.flatMap((step) => {
     const stepData = (step.data ?? {}) as Record<string, unknown>;
@@ -307,6 +310,7 @@ export function AgentInspectorTabs({ entity, steps }: { entity: TraceEntity; ste
       );
     }
     if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
+    if (tab === 'errors') return <EntityErrorsTab entity={entity} />;
     if (tab === 'rbac') {
       if (!rbac) {
         return <InspectorNotice tone="neutral" title="RBAC Snapshot" message="Снимок RBAC для агента не найден" />;

@@ -137,6 +137,9 @@ class PlannerStepDispatcher:
                     RuntimeEvent.error(
                         f"Aborted: {step.rationale}",
                         recoverable=False,
+                        user_message=f"Aborted: {step.rationale}",
+                        operator_message=str(step.rationale or "planner_aborted"),
+                        source="runtime",
                         parent_entity_type="planner_iteration",
                         parent_entity_id=planner_iteration_id,
                     ),

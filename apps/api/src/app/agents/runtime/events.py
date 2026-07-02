@@ -103,6 +103,10 @@ class RuntimeEvent:
         error_code: Optional[RuntimeErrorCode | str] = None,
         retryable: Optional[bool] = None,
         safe_message: Optional[str] = None,
+        user_message: Optional[str] = None,
+        operator_message: Optional[str] = None,
+        source: Optional[str] = None,
+        debug: Optional[Dict[str, Any]] = None,
         envelope: Optional[Dict[str, Any]] = None,
         truncated: Optional[bool] = None,
     ) -> RuntimeEvent:
@@ -126,6 +130,14 @@ class RuntimeEvent:
             payload["retryable"] = bool(retryable)
         if safe_message is not None:
             payload["safe_message"] = safe_message
+        if user_message is not None:
+            payload["user_message"] = user_message
+        if operator_message is not None:
+            payload["operator_message"] = operator_message
+        if source is not None:
+            payload["source"] = source
+        if debug is not None:
+            payload["debug"] = dict(debug)
         if envelope is not None:
             payload["result"] = dict(envelope)
         if truncated:

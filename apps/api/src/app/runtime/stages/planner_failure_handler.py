@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import traceback
 from typing import Optional
 
 from app.runtime.contracts import PipelineStopReason
 from app.runtime.envelope import PhasedEvent
+from app.runtime.error_payloads import build_debug_payload
 from app.runtime.events import OrchestrationPhase, RuntimeEvent
 from app.runtime.llm.limits import LLMLimitExceededError
 
@@ -37,6 +39,10 @@ class PlannerFailureHandler:
                     f"Planner failed: {exc}",
                     recoverable=False,
                     error_code=error_code,
+                    user_message=f"Planner failed: {exc}",
+                    operator_message=str(exc),
+                    source="runtime",
+                    debug=build_debug_payload(exc=exc, traceback_text=traceback.format_exc()),
                     parent_entity_type="planner_iteration",
                     parent_entity_id=planner_iteration_id,
                 ),

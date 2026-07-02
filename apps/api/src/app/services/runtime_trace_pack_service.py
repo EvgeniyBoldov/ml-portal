@@ -282,9 +282,13 @@ class RuntimeTracePackService:
                     "output": data.get("output", data.get("result", data.get("data"))),
                     "risk_level": data.get("risk_level"),
                     "side_effects": data.get("side_effects"),
+                    "source": data.get("source"),
                     "error_code": data.get("error_code"),
                     "retryable": data.get("retryable"),
                     "safe_message": data.get("safe_message"),
+                    "user_message": data.get("user_message"),
+                    "operator_message": data.get("operator_message"),
+                    "debug": data.get("debug"),
                     "error": getattr(step, "error", None) or data.get("error"),
                 }
             )
@@ -306,10 +310,22 @@ class RuntimeTracePackService:
                     "step_number": getattr(step, "step_number", None),
                     "step_type": getattr(step, "step_type", None),
                     "message": str(step_error),
+                    "user_message": (getattr(step, "data", None) or {}).get("user_message")
+                    if isinstance(getattr(step, "data", None), dict)
+                    else None,
+                    "operator_message": (getattr(step, "data", None) or {}).get("operator_message")
+                    if isinstance(getattr(step, "data", None), dict)
+                    else None,
+                    "source": (getattr(step, "data", None) or {}).get("source")
+                    if isinstance(getattr(step, "data", None), dict)
+                    else None,
                     "error_code": (getattr(step, "data", None) or {}).get("error_code")
                     if isinstance(getattr(step, "data", None), dict)
                     else None,
                     "retryable": (getattr(step, "data", None) or {}).get("retryable")
+                    if isinstance(getattr(step, "data", None), dict)
+                    else None,
+                    "debug": (getattr(step, "data", None) or {}).get("debug")
                     if isinstance(getattr(step, "data", None), dict)
                     else None,
                 }

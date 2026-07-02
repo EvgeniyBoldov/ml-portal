@@ -1,7 +1,7 @@
 import React from 'react';
 import Badge from '@/shared/ui/Badge';
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorTextBlock } from '@/shared/ui/Inspector';
-import type { BudgetMetric, EntityLimits, EntityUsed, TraceContextSnapshot, TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import type { BudgetMetric, EntityLimits, EntityUsed, ErrorData, TraceContextSnapshot, TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import { getTraceEntityKindLabel } from '@/domains/runtimeTrace/tracePresentation';
 import { BudgetTable, SpendSummary } from '@/domains/runtimeTrace/budget';
 import type { RunStep } from '../../hooks/useSandboxRun';
@@ -137,6 +137,39 @@ export function SnapshotJsonField({
     <InspectorFieldRow label={label}>
       <InspectorJsonBlock value={value ?? '—'} />
     </InspectorFieldRow>
+  );
+}
+
+export function getEntityErrors(entity: TraceEntity): ErrorData[] {
+  const data = entity.data as unknown as Record<string, unknown> & { errors?: unknown };
+  if (!Array.isArray(data.errors)) return [];
+  return data.errors.filter((item): item is ErrorData => !!item && typeof item === 'object' && (item as ErrorData).kind === 'error');
+}
+
+export function EntityErrorsTab({ entity }: { entity: TraceEntity }) {
+  const errors = getEntityErrors(entity);
+  if (errors.length === 0) {
+    return (
+      <InspectorFieldGroup>
+        <SnapshotValueField label="Ошибки" value="—" />
+      </InspectorFieldGroup>
+    );
+  }
+  return (
+    <InspectorFieldGroup>
+      <SnapshotValueField label="Ошибок" value={String(errors.length)} />
+      {errors.map((error, index) => (
+        <InspectorFieldGroup key={`${entity.id}:error:${index}`}>
+          <SnapshotValueField label="Источник" value={error.sourceLabel ?? '—'} />
+          <SnapshotValueField label="Код" value={error.code ?? '—'} />
+          <SnapshotTextField label="Сообщение" text={error.userMessage ?? '—'} />
+          <SnapshotTextField label="Техническая ошибка" text={error.operatorMessage ?? '—'} />
+          <SnapshotValueField label="Тип исключения" value={error.debug?.exceptionType ?? '—'} />
+          <SnapshotTextField label="Traceback" text={error.debug?.stack ?? '—'} />
+          <SnapshotJsonField label="Контекст" value={error.debug?.context ?? null} />
+        </InspectorFieldGroup>
+      ))}
+    </InspectorFieldGroup>
   );
 }
 

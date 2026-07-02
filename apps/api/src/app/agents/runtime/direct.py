@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import time
+import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 
@@ -20,6 +21,7 @@ from app.agents.runtime.events import RuntimeEvent
 from app.core.db import get_session_factory
 from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
+from app.runtime.error_payloads import build_debug_payload
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
 from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService
 
@@ -107,6 +109,9 @@ class DirectRuntime(BaseRuntime):
                 recoverable=False,
                 error_code=exc.code,
                 retryable=False,
+                user_message=str(exc),
+                operator_message=str(exc),
+                source="llm",
             )
             await run_session.finish("failed", str(exc))
             return
@@ -185,5 +190,12 @@ class DirectRuntime(BaseRuntime):
 
         except Exception as e:
             logger.error(f"Direct streaming failed: {e}", exc_info=True)
-            yield RuntimeEvent.error(str(e), recoverable=False)
+            yield RuntimeEvent.error(
+                str(e),
+                recoverable=False,
+                user_message=str(e),
+                operator_message=str(e),
+                source="llm",
+                debug=build_debug_payload(exc=e, traceback_text=traceback.format_exc()),
+            )
             await run_session.finish("failed", str(e))

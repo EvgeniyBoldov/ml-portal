@@ -106,6 +106,13 @@ export interface LLMData {
   tokensIn?: number;
   tokensOut?: number;
   tokensTotal?: number;
+  errors?: ErrorData[];
+}
+
+export interface ErrorDebugInfo {
+  stack?: string;
+  context?: Record<string, unknown>;
+  exceptionType?: string;
 }
 
 export interface ToolData {
@@ -125,6 +132,7 @@ export interface ToolData {
     errorCode?: string;
     retryable?: boolean;
     envelope?: Record<string, unknown>;
+    debug?: ErrorDebugInfo;
   };
   retries?: Array<{
     attempt: number;
@@ -135,6 +143,7 @@ export interface ToolData {
     allowed?: string[];
     denied?: string[];
   };
+  errors?: ErrorData[];
 }
 
 export interface PublishedOperationSnapshot {
@@ -225,6 +234,7 @@ export interface AgentData {
   availableCollections?: PublishedCollectionSnapshot[];
   deniedTools?: string[]; // Future (after backend Stage 1)
   partialModeWarning?: string;
+  errors?: ErrorData[];
 }
 
 export interface DialogItem {
@@ -285,6 +295,7 @@ export interface PlannerData {
     chosenAgentSlug?: string;
     agentInput?: Record<string, unknown>;
   };
+  errors?: ErrorData[];
 }
 
 export interface OrchestratorData {
@@ -293,11 +304,13 @@ export interface OrchestratorData {
   role?: 'planner' | 'synthesizer' | 'memory' | 'fact_extractor' | 'summary_compactor' | 'summary' | string;
   intent?: string;
   contextSnapshot?: TraceContextSnapshot;
+  errors?: ErrorData[];
 }
 
 export interface PhaseData {
   kind: 'phase';
   phaseRole: 'active' | 'memory';
+  errors?: ErrorData[];
 }
 
 export interface RunData {
@@ -318,6 +331,7 @@ export interface RunData {
     reason: string;
     timestamp?: string;
   }>;
+  errors?: ErrorData[];
 }
 
 export interface ErrorData {
@@ -327,10 +341,7 @@ export interface ErrorData {
   operatorMessage?: string;
   source?: 'tool' | 'runtime' | 'llm' | 'policy' | 'unknown';
   sourceLabel?: string;
-  debug?: {
-    stack?: string;
-    context?: Record<string, unknown>;
-  };
+  debug?: ErrorDebugInfo;
 }
 
 export interface UnknownData {

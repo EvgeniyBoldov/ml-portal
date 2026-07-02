@@ -43,6 +43,9 @@ class PlannerBudgetGuard:
                     RuntimeEvent.error(
                         f"Planner budget exceeded: {exc.metric}",
                         recoverable=False,
+                        user_message=f"Planner budget exceeded: {exc.metric}",
+                        operator_message=str(exc),
+                        source="runtime",
                         parent_entity_type="orchestrator",
                         parent_entity_id=orchestrator_id,
                     ),
@@ -121,6 +124,9 @@ class PlannerBudgetGuard:
                     RuntimeEvent.error(
                         f"Planner budget exceeded: {exc.metric}",
                         recoverable=False,
+                        user_message=f"Planner budget exceeded: {exc.metric}",
+                        operator_message=str(exc),
+                        source="runtime",
                         parent_entity_type="orchestrator",
                         parent_entity_id=orchestrator_id,
                     ),

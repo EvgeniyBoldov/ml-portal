@@ -1,7 +1,7 @@
 import { InspectorTabs, InspectorFieldGroup } from '@/shared/ui/Inspector';
 import { isOrchestratorData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { BudgetsTab, InfoTab, RawTab, SnapshotTextField, SnapshotValueField, SpendTab, getEntityContextSnapshot, getPromptSnapshot } from '../shared';
+import { BudgetsTab, EntityErrorsTab, InfoTab, RawTab, SnapshotTextField, SnapshotValueField, SpendTab, getEntityContextSnapshot, getEntityErrors, getPromptSnapshot } from '../shared';
 
 export function OrchestratorInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isOrchestratorData(entity.data) ? entity.data : null;
@@ -11,10 +11,12 @@ export function OrchestratorInspectorTabs({ entity, steps }: { entity: TraceEnti
   const snapshotRbac = snapshot?.rbac;
   const isPhase = entity.kind === 'phase' && entity.data.kind === 'phase';
   const promptSnapshot = getPromptSnapshot(entity, steps) ?? '—';
+  const hasErrors = getEntityErrors(entity).length > 0;
   const tabs = isPhase
     ? [
       { key: 'info', label: 'Инфо' },
       { key: 'spend', label: 'Расход' },
+      ...(hasErrors ? [{ key: 'errors', label: 'Ошибки' }] : []),
       { key: 'raw', label: 'RAW' },
     ]
     : [
@@ -22,6 +24,7 @@ export function OrchestratorInspectorTabs({ entity, steps }: { entity: TraceEnti
       { key: 'prompt', label: 'Промпт' },
       ...(snapshotRbac ? [{ key: 'rbac', label: 'RBAC' }] : []),
       { key: 'budgets', label: 'Бюджет' },
+      ...(hasErrors ? [{ key: 'errors', label: 'Ошибки' }] : []),
       { key: 'raw', label: 'RAW' },
     ];
 
@@ -50,6 +53,7 @@ export function OrchestratorInspectorTabs({ entity, steps }: { entity: TraceEnti
           );
         }
         if (tab === 'spend') return <SpendTab entity={entity} />;
+        if (tab === 'errors') return <EntityErrorsTab entity={entity} />;
         if (tab === 'rbac') {
           return (
             <InspectorFieldGroup>

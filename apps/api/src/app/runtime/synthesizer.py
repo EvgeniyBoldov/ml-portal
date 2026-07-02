@@ -298,6 +298,9 @@ class Synthesizer:
                     stream_event.message,
                     recoverable=stream_event.recoverable,
                     error_code=stream_event.code,
+                    user_message=stream_event.message,
+                    operator_message=stream_event.message,
+                    source="llm",
                     parent_entity_type="synthesis_run",
                     parent_entity_id=synthesis_run_id,
                 )

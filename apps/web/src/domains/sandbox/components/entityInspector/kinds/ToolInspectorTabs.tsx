@@ -67,6 +67,9 @@ export function ToolInspectorTabs({ entity, steps }: { entity: TraceEntity; step
           <SnapshotTextField label="Техническая ошибка" text={data?.result?.operatorMessage ?? '—'} />
           <SnapshotValueField label="Код" value={data?.result?.errorCode ?? '—'} />
           <SnapshotValueField label="Повторяемо" value={data?.result?.retryable === undefined ? '—' : (data.result.retryable ? 'Да' : 'Нет')} />
+          <SnapshotValueField label="Тип исключения" value={data?.result?.debug?.exceptionType ?? '—'} />
+          <SnapshotTextField label="Traceback" text={data?.result?.debug?.stack ?? '—'} />
+          <SnapshotJsonField label="Контекст" value={data?.result?.debug?.context ?? null} />
           <SnapshotJsonField label="Envelope" value={data?.result?.envelope ?? null} />
           <InspectorFieldRow label="Ретраи">{data?.retries && data.retries.length > 0 ? String(data.retries.length) : '—'}</InspectorFieldRow>
           {data?.retries && data.retries.length > 0 ? (

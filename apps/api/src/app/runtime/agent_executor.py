@@ -31,6 +31,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.contracts import AgentAnswerStatus, NeedSpec, NextStep
 from app.runtime.context_snapshot import compact_snapshot
+from app.runtime.error_payloads import build_debug_payload
 from app.agents.runtime.published_capabilities import (
     serialize_published_collections,
     serialize_published_operations,
@@ -90,7 +91,13 @@ class AgentExecutor:
     ) -> AsyncGenerator[RuntimeEvent, None]:
         agent_slug = step.agent_slug
         if not agent_slug:
-            yield RuntimeEvent.error("AgentExecutor invoked without agent_slug")
+            yield RuntimeEvent.error(
+                "AgentExecutor invoked without agent_slug",
+                recoverable=False,
+                user_message="AgentExecutor invoked without agent_slug",
+                operator_message="AgentExecutor invoked without agent_slug",
+                source="runtime",
+            )
             return
         state = runtime_state
 
@@ -300,7 +307,16 @@ class AgentExecutor:
             final_error = str(exc)
             final_error_code = RuntimeErrorCode.AGENT_RUNTIME_EXCEPTION.value
             final_retryable = True
-            yield RuntimeEvent.error(f"Sub-agent {agent_slug} failed: {exc}", recoverable=True)
+            yield RuntimeEvent.error(
+                f"Sub-agent {agent_slug} failed: {exc}",
+                recoverable=True,
+                error_code=RuntimeErrorCode.AGENT_RUNTIME_EXCEPTION,
+                retryable=True,
+                user_message=f"Sub-agent {agent_slug} failed: {exc}",
+                operator_message=str(exc),
+                source="runtime",
+                debug=build_debug_payload(exc=exc),
+            )
 
         # 4. Summarize into AgentResult and enrich memory.
         raw_summary = final_content or "".join(buffered_answer)

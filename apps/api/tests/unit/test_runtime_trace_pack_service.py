@@ -76,6 +76,42 @@ def test_trace_pack_collects_run_and_step_errors():
     assert any(item["scope"] == "step" for item in pack["errors"])
 
 
+def test_trace_pack_collects_error_debug_payload():
+    run = SimpleNamespace(
+        id=uuid4(),
+        agent_slug="test-agent",
+        status="failed",
+        logging_level="full",
+        context_snapshot={},
+        error=None,
+        steps=[
+            _step(
+                1,
+                "tool_result",
+                {
+                    "tool": "collection.document.search",
+                    "error_code": "operation_timeout",
+                    "user_message": "Execution timed out after 30 seconds",
+                    "operator_message": "Execution timed out after 30 seconds",
+                    "source": "tool",
+                    "debug": {
+                        "exception_type": "TimeoutError",
+                        "traceback": "traceback text",
+                        "context": {"tool": "collection.document.search"},
+                    },
+                },
+                error="Execution timed out after 30 seconds",
+            ),
+        ],
+    )
+
+    pack = RuntimeTracePackService().build_trace_pack(run)
+
+    assert pack["tool_io"][0]["debug"]["exception_type"] == "TimeoutError"
+    assert pack["errors"][0]["source"] == "tool"
+    assert pack["errors"][0]["debug"]["traceback"] == "traceback text"
+
+
 def test_trace_pack_planner_io_filters_non_planner_llm():
     run = SimpleNamespace(
         id=uuid4(),

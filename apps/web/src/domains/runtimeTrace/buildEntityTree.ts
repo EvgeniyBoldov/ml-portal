@@ -90,6 +90,13 @@ function indexEntitiesById(root: TraceEntity): Map<string, TraceEntity> {
   return map;
 }
 
+function appendErrorToEntity(entity: TraceEntity, error: ReturnType<typeof buildErrorData>): void {
+  if (entity.data.kind === 'error' || entity.data.kind === 'unknown') return;
+  const carrier = entity.data as EntityData & { errors?: ReturnType<typeof buildErrorData>[] };
+  const current = carrier.errors ?? [];
+  carrier.errors = [...current, error];
+}
+
 // ------------------------------------------------------------------
 // Pass 1 helpers: lifecycle entity skeleton builder
 // ------------------------------------------------------------------
@@ -717,6 +724,7 @@ function _buildEntityTree3Pass(
       const callId = String(raw.call_id ?? '');
       const pending = callId ? pendingPairs.get(callId) : undefined;
       const pairEvents: SemanticEvent[] = pending ? [...pending.events, event] : [event];
+      const toolData = buildToolData(pairEvents);
 
       const toolEntity: TraceEntity = {
         id: hashIds(pairEvents.map(e => e.id)),
@@ -734,8 +742,19 @@ function _buildEntityTree3Pass(
           .map(extractBudgetDelta)
           .filter((v): v is BudgetDelta => !!v)
           .reduce((acc, curr) => sumBudgetDeltas(acc, curr), {} as BudgetDelta),
-        data: buildToolData(pairEvents),
+        data: toolData,
       };
+      if (toolData.result && toolData.result.success === false) {
+        appendErrorToEntity(toolEntity, {
+          kind: 'error',
+          code: toolData.result.errorCode,
+          userMessage: toolData.result.safeMessage ?? toolData.result.error,
+          operatorMessage: toolData.result.operatorMessage,
+          source: 'tool',
+          sourceLabel: 'Ошибка инструмента',
+          debug: toolData.result.debug,
+        });
+      }
       resolvedParent.children.push(toolEntity);
       entityById.set(toolEntity.id, toolEntity);
       if (callId) pendingPairs.delete(callId);
@@ -798,6 +817,7 @@ function _buildEntityTree3Pass(
 
     // --- error ---
     if (rawType === 'error') {
+      const errorData = buildErrorData(event);
       const errorEntity: TraceEntity = {
         id: hashIds([event.id]),
         kind: 'error',
@@ -809,10 +829,11 @@ function _buildEntityTree3Pass(
         startedAt: event.started_at,
         durationMs: event.duration_ms,
         sourceEventIds: [event.id],
-        data: buildErrorData(event),
+        data: errorData,
       };
       resolvedParent.children.push(errorEntity);
       entityById.set(errorEntity.id, errorEntity);
+      appendErrorToEntity(resolvedParent, errorData);
       // propagate error status up
       let p: TraceEntity | undefined = resolvedParent;
       while (p) {
@@ -1438,6 +1459,7 @@ export function buildEntityTree(
       const pending = callId ? pendingPairs.get(callId) : undefined;
 
       const pairEvents: SemanticEvent[] = pending ? [...pending.events, event] : [event];
+      const toolData = buildToolData(pairEvents);
 
       const toolEntity: TraceEntity = {
         id: hashIds(pairEvents.map(e => e.id)),
@@ -1455,13 +1477,24 @@ export function buildEntityTree(
           .map(extractBudgetDelta)
           .filter((v): v is BudgetDelta => !!v)
           .reduce((acc, curr) => sumBudgetDeltas(acc, curr), {} as BudgetDelta),
-        data: buildToolData(pairEvents),
+        data: toolData,
       };
+      if (toolData.result && toolData.result.success === false) {
+        appendErrorToEntity(toolEntity, {
+          kind: 'error',
+          code: toolData.result.errorCode,
+          userMessage: toolData.result.safeMessage ?? toolData.result.error,
+          operatorMessage: toolData.result.operatorMessage,
+          source: 'tool',
+          sourceLabel: 'Ошибка инструмента',
+          debug: toolData.result.debug,
+        });
+      }
 
       // Attach to agent by explicit agent_run_id when available, fallback to current context.
-      const toolData = toolEntity.data;
-      const explicitAgentRunId = toolData.kind === 'tool' ? toolData.calledByAgentRunId : undefined;
-      const explicitAgentSlug = toolData.kind === 'tool' ? toolData.calledByAgentSlug : undefined;
+      const boundToolData = toolEntity.data;
+      const explicitAgentRunId = boundToolData.kind === 'tool' ? boundToolData.calledByAgentRunId : undefined;
+      const explicitAgentSlug = boundToolData.kind === 'tool' ? boundToolData.calledByAgentSlug : undefined;
       const explicitAgent = explicitAgentRunId ? assembler.getAgentByRunId(explicitAgentRunId) : undefined;
       if (explicitAgent) {
         toolEntity.parentId = explicitAgent.id;
@@ -1542,6 +1575,7 @@ export function buildEntityTree(
 
     // --- Handle error events ---
     if (rawType === 'error') {
+      const errorData = buildErrorData(event);
       const errorEntity: TraceEntity = {
         id: hashIds([event.id]),
         kind: 'error',
@@ -1553,13 +1587,14 @@ export function buildEntityTree(
         startedAt: event.started_at,
         durationMs: event.duration_ms,
         sourceEventIds: [event.id],
-        data: buildErrorData(event),
+        data: errorData,
       };
 
       const parent = resolveParentForEvent(event);
       errorEntity.parentId = parent.id;
       errorEntity.depth = parent.depth + 1;
       parent.children.push(errorEntity);
+      appendErrorToEntity(parent, errorData);
 
       // Propagate error status up the stack
       for (let j = stack.length - 1; j >= 0; j--) {

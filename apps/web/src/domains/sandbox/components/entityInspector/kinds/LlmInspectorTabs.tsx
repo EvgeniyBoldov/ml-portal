@@ -1,7 +1,7 @@
 import { InspectorFieldGroup, InspectorTabs } from '@/shared/ui/Inspector';
 import { isLLMData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { BudgetsTab, InfoTab, RawTab, SnapshotJsonField, SnapshotValueField } from '../shared';
+import { BudgetsTab, EntityErrorsTab, InfoTab, RawTab, SnapshotJsonField, SnapshotValueField, getEntityErrors } from '../shared';
 
 export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
   const data = isLLMData(entity.data) ? entity.data : null;
@@ -55,11 +55,13 @@ export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
 
   const requestPayload = pick(requestPayloadRaw, requestKeys);
   const responsePayload = pick(responsePayloadRaw, responseKeys);
+  const hasErrors = getEntityErrors(entity).length > 0;
   const tabs = [
     { key: 'info', label: 'Инфо' },
     { key: 'request', label: 'Реквест' },
     { key: 'response', label: 'Респонс' },
     { key: 'budgets', label: 'Бюджет' },
+    ...(hasErrors ? [{ key: 'errors', label: 'Ошибки' }] : []),
     { key: 'raw', label: 'RAW' },
   ];
 
@@ -98,6 +100,7 @@ export function LlmInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
       );
     }
     if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
+    if (tab === 'errors') return <EntityErrorsTab entity={entity} />;
     return <RawTab value={entity.data} entity={entity} steps={steps} />;
   }} />;
 }

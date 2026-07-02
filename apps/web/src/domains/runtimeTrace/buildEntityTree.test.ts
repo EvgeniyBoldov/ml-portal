@@ -193,6 +193,63 @@ describe('buildEntityTree', () => {
         expect(['warn', 'error']).toContain(agent.status);
       }
     });
+
+    it('aggregates scoped error into responsible entity data', () => {
+      const tree = buildEntityTree(events);
+      const agent = flattenEntityTree(tree).find(e => e.kind === 'agent');
+      expect(agent).toBeDefined();
+      if (agent && 'errors' in agent.data) {
+        const errors = (agent.data as { errors?: Array<{ code?: string }> }).errors ?? [];
+        expect(errors).toHaveLength(1);
+        expect(errors[0].code).toBe('LLM_TIMEOUT');
+      }
+    });
+  });
+
+  describe('tool failure debug payload', () => {
+    const events: SemanticEvent[] = [
+      makeEvent({ id: 'e1', raw_type: 'user_request', category: 'input' }),
+      makeEvent({
+        id: 'e2',
+        raw_type: 'operation_call',
+        category: 'operation',
+        raw: { id: 'e2', raw_type: 'operation_call', raw: { operation_slug: 'collection.document.search', call_id: 'c1', arguments: { query: 'vpn' } } },
+      }),
+      makeEvent({
+        id: 'e3',
+        raw_type: 'operation_result',
+        category: 'operation',
+        status: 'error',
+        raw: {
+          id: 'e3',
+          raw_type: 'operation_result',
+          raw: {
+            call_id: 'c1',
+            success: false,
+            user_message: 'Execution timed out after 30 seconds',
+            operator_message: 'Execution timed out after 30 seconds',
+            error_code: 'operation_timeout',
+            source: 'tool',
+            debug: {
+              exception_type: 'TimeoutError',
+              traceback: 'traceback text',
+              context: { tool: 'collection.document.search' },
+            },
+          },
+        },
+      }),
+    ];
+
+    it('stores tool failure debug info in tool entity errors tab payload', () => {
+      const tree = buildEntityTree(events);
+      const tool = flattenEntityTree(tree).find(e => e.kind === 'tool');
+      expect(tool).toBeDefined();
+      if (tool?.data.kind === 'tool') {
+        expect(tool.data.result?.debug?.exceptionType).toBe('TimeoutError');
+        expect(tool.data.result?.debug?.stack).toBe('traceback text');
+        expect(tool.data.errors?.[0]?.source).toBe('tool');
+      }
+    });
   });
 
   describe('3-pass: lifecycle events from Stage 1 backend', () => {

@@ -29,6 +29,7 @@ from app.agents.runtime.confirmation import (
 from app.agents.runtime.prompt_contract import build_prompt_input_schema
 from app.agents.runtime.tool_reuse_policy import ToolCallReusePolicy
 from app.core.logging import get_logger
+from app.runtime.error_payloads import build_debug_payload, build_error_metadata
 from app.runtime.operation_errors import (
     OperationExecutionError,
     OperationValidationError,
@@ -132,9 +133,18 @@ class OperationExecutionFacade:
                 validation_error.message,
                 validation_error.field_path or "root",
             )
+            user_message = validation_error.to_user_message()
             return ToolResult.fail(
-                validation_error.to_user_message(),
-                **validation_error.to_metadata(),
+                user_message,
+                **{
+                    **validation_error.to_metadata(),
+                    "user_message": user_message,
+                    "operator_message": validation_error.message,
+                    "source": "tool",
+                    "debug": build_debug_payload(
+                        context={"field_path": validation_error.field_path} if validation_error.field_path else None,
+                    ),
+                },
             ), []
 
         self._ensure_confirmation_if_required(
@@ -165,7 +175,19 @@ class OperationExecutionFacade:
                     message="Operation executor is not configured",
                     retryable=False,
                 )
-                return ToolResult.fail(err.message, **err.to_metadata()), []
+                return ToolResult.fail(
+                    err.message,
+                    **build_error_metadata(
+                        error_code=err.code.value,
+                        retryable=err.retryable,
+                        user_message=err.message,
+                        operator_message=err.message,
+                        source="tool",
+                        debug=build_debug_payload(
+                            context={"tool": operation_call.tool_name, "reason": "executor_missing"},
+                        ),
+                    ),
+                ), []
 
             if timeout_s is not None:
                 result = await asyncio.wait_for(
@@ -200,7 +222,19 @@ class OperationExecutionFacade:
                 message=f"Execution timed out after {timeout_s} seconds",
                 retryable=True,
             )
-            return ToolResult.fail(err.message, **err.to_metadata()), []
+            return ToolResult.fail(
+                err.message,
+                **build_error_metadata(
+                    error_code=err.code.value,
+                    retryable=err.retryable,
+                    user_message=err.message,
+                    operator_message=err.message,
+                    source="tool",
+                    debug=build_debug_payload(
+                        context={"tool": operation_call.tool_name, "timeout_seconds": timeout_s},
+                    ),
+                ),
+            ), []
 
         except Exception as e:
             logger.error(
@@ -212,7 +246,20 @@ class OperationExecutionFacade:
                 message=str(e),
                 retryable=True,
             )
-            return ToolResult.fail(err.message, **err.to_metadata()), []
+            return ToolResult.fail(
+                err.message,
+                **build_error_metadata(
+                    error_code=err.code.value,
+                    retryable=err.retryable,
+                    user_message=err.message,
+                    operator_message=str(e),
+                    source="tool",
+                    debug=build_debug_payload(
+                        exc=e,
+                        context={"tool": operation_call.tool_name},
+                    ),
+                ),
+            ), []
 
     def _ensure_confirmation_if_required(
         self,

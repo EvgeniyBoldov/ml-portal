@@ -1,5 +1,6 @@
 import type {
   AgentData,
+  ErrorDebugInfo,
   ErrorData,
   DialogData,
   DialogItem,
@@ -65,6 +66,11 @@ function inferLlmRole(
 }
 
 function inferErrorSource(raw: Record<string, unknown>): { source: NonNullable<ErrorData['source']>; sourceLabel: string } {
+  const explicit = String(raw.source ?? '').trim().toLowerCase();
+  if (explicit === 'tool') return { source: 'tool', sourceLabel: 'Ошибка инструмента' };
+  if (explicit === 'llm') return { source: 'llm', sourceLabel: 'Ошибка LLM' };
+  if (explicit === 'policy') return { source: 'policy', sourceLabel: 'Ошибка политики' };
+  if (explicit === 'runtime') return { source: 'runtime', sourceLabel: 'Ошибка рантайма' };
   const code = String(raw.error_code ?? '').trim().toLowerCase();
   const phase = String((raw._envelope as Record<string, unknown> | undefined)?.phase ?? '').trim().toLowerCase();
   if (code.startsWith('tool_') || code.includes('operation')) {
@@ -80,6 +86,26 @@ function inferErrorSource(raw: Record<string, unknown>): { source: NonNullable<E
     return { source: 'runtime', sourceLabel: 'Ошибка рантайма' };
   }
   return { source: 'unknown', sourceLabel: 'Неизвестный источник' };
+}
+
+function normalizeDebugInfo(value: unknown): ErrorDebugInfo | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const stack = typeof record.stack === 'string'
+    ? record.stack
+    : typeof record.traceback === 'string'
+      ? record.traceback
+      : undefined;
+  const context = record.context && typeof record.context === 'object' && !Array.isArray(record.context)
+    ? record.context as Record<string, unknown>
+    : undefined;
+  const exceptionType = typeof record.exception_type === 'string'
+    ? record.exception_type
+    : typeof record.exceptionType === 'string'
+      ? record.exceptionType
+      : undefined;
+  if (!stack && !context && !exceptionType) return undefined;
+  return { stack, context, exceptionType };
 }
 
 function normalizePublishedOperation(value: unknown): PublishedOperationSnapshot | null {
@@ -223,9 +249,11 @@ export function buildToolData(events: SemanticEvent[]): ToolData {
   ) as Record<string, unknown> | undefined;
   const errorMessage = !success
     ? String(
-        resultOutputs.error
+        resultOutputs.user_message
+        ?? resultOutputs.error
         ?? resultOutputs.safe_message
         ?? resultOutputs.message
+        ?? rawResult.user_message
         ?? rawResult.error
         ?? rawResult.safe_message
         ?? rawResult.message
@@ -239,7 +267,8 @@ export function buildToolData(events: SemanticEvent[]): ToolData {
     : undefined;
   const operatorMessage = !success
     ? (
-        typeof rawResult.error === 'string' ? rawResult.error
+        typeof rawResult.operator_message === 'string' ? rawResult.operator_message
+        : typeof rawResult.error === 'string' ? rawResult.error
         : typeof rawResult.message === 'string' ? rawResult.message
         : typeof fallbackFailure === 'string' ? fallbackFailure
         : undefined
@@ -264,6 +293,7 @@ export function buildToolData(events: SemanticEvent[]): ToolData {
       errorCode: typeof errorCodeRaw === 'string' ? errorCodeRaw : undefined,
       retryable: typeof retryableRaw === 'boolean' ? retryableRaw : undefined,
       envelope,
+      debug: normalizeDebugInfo(resultOutputs.debug ?? rawResult.debug),
     },
     retries: retries.length > 0 ? retries.map((r, i) => ({
       attempt: i + 1,
@@ -426,7 +456,7 @@ export function buildErrorData(event: SemanticEvent): ErrorData {
     operatorMessage: typeof raw.operator_message === 'string' ? raw.operator_message : undefined,
     source: sourceMeta.source,
     sourceLabel: sourceMeta.sourceLabel,
-    debug: raw.debug as ErrorData['debug'] ?? undefined,
+    debug: normalizeDebugInfo(raw.debug),
   };
 }
 

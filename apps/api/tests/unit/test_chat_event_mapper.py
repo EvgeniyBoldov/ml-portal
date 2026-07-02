@@ -59,6 +59,8 @@ class TestChatEventMapper:
                 "agent_slug": "net.enginer",
                 "agent_run_id": "agent-2",
                 "llm_call_id": "llm-2",
+                "operator_message": "validation stack",
+                "debug": {"traceback": "stack"},
             },
         )
 
@@ -82,6 +84,8 @@ class TestChatEventMapper:
             "actor_entity_id": None,
             "orchestration_envelope": None,
         }
+        assert "operator_message" not in result
+        assert "debug" not in result
 
     def test_returns_none_for_unhandled_event(self):
         mapper = ChatEventMapper()
@@ -121,6 +125,8 @@ class TestChatEventMapper:
                 "error": "Sub-agent net.enginer failed: traceback ...",
                 "error_code": "operation_unavailable",
                 "retryable": False,
+                "operator_message": "internal detail",
+                "debug": {"traceback": "stack"},
             },
         )
         result = mapper.map_runtime_event(event)
@@ -130,6 +136,8 @@ class TestChatEventMapper:
         assert result["recoverable"] is False
         assert result["error"] == "Во время выполнения запроса возникли проблемы. Сообщите ран-администратору."
         assert result["details"]["retryable"] is False
+        assert "operator_message" not in result
+        assert "debug" not in result
 
     def test_llm_mapping_uses_whitelist_only(self):
         mapper = ChatEventMapper()

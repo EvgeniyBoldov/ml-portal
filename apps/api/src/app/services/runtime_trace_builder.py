@@ -147,7 +147,17 @@ class RuntimeTraceBuilder:
             else None
         )
         outputs = (
-            {"result": data.get("result") or data.get("output") or data.get("data")}
+            {
+                "result": data.get("result") or data.get("output") or data.get("data"),
+                "error": data.get("error"),
+                "safe_message": data.get("safe_message"),
+                "user_message": data.get("user_message"),
+                "operator_message": data.get("operator_message"),
+                "error_code": data.get("error_code"),
+                "retryable": data.get("retryable"),
+                "source": data.get("source"),
+                "debug": data.get("debug"),
+            }
             if raw_type == "tool_result"
             else {"content": data.get("content") or data.get("answer") or data.get("response")}
             if raw_type in {"llm_turn", "llm_response", "final_response", "final"}

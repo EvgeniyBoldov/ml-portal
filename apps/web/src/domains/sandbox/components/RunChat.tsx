@@ -65,6 +65,50 @@ function toRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'string' || value.trim().length === 0) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractClarifyQuestion(step: RunStep): string | null {
+  const data = toRecord(step.data);
+  const directQuestion = typeof data.question === 'string' ? data.question.trim() : '';
+  if (directQuestion) return directQuestion;
+
+  if (step.type === 'question_answer') {
+    const answeredQuestion = typeof data.question === 'string' ? data.question.trim() : '';
+    return answeredQuestion || null;
+  }
+
+  if (step.type === 'planner_decision') {
+    const plannerQuestion = typeof data.question === 'string' ? data.question.trim() : '';
+    if (plannerQuestion) return plannerQuestion;
+  }
+
+  if (step.type === 'llm_turn' || step.type === 'llm_response' || step.type === 'llm_call') {
+    const content = typeof data.content === 'string'
+      ? data.content
+      : typeof data.response === 'string'
+        ? data.response
+        : typeof data.text === 'string'
+          ? data.text
+          : '';
+    const parsed = parseJsonObject(content);
+    const kind = typeof parsed?.kind === 'string' ? parsed.kind.trim().toLowerCase() : '';
+    const question = typeof parsed?.question === 'string' ? parsed.question.trim() : '';
+    if ((kind === 'clarify' || kind === 'ask_user') && question) return question;
+  }
+
+  return null;
+}
+
 function fmtDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1).replace('.', ',')} s`;
 }
@@ -588,10 +632,8 @@ export default function RunChat({
   const latestClarifyQuestion = useMemo(() => {
     for (let i = activeRun.steps.length - 1; i >= 0; i--) {
       const step = activeRun.steps[i];
-      if (step.type === 'waiting_input') {
-        const q = step.data.question;
-        if (typeof q === 'string' && q.trim().length > 0) return q;
-      }
+      const extractedQuestion = extractClarifyQuestion(step);
+      if (extractedQuestion) return extractedQuestion;
       if (step.type === 'stop') {
         const q = step.data.question ?? step.data.message;
         if (typeof q === 'string' && q.trim().length > 0) return q;

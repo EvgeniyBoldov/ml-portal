@@ -1,7 +1,7 @@
 import { InspectorTabs } from '@/shared/ui/Inspector';
 import { isRunData, type TraceEntity } from '@/domains/runtimeTrace/entityTypes';
 import type { RunStep } from '../../../hooks/useSandboxRun';
-import { BudgetsTab, InfoTab, RawTab, SnapshotTextField, SnapshotValueField, getEntityContextSnapshot } from '../shared';
+import { BudgetsTab, EntityErrorsTab, InfoTab, RawTab, SnapshotTextField, SnapshotValueField, getEntityContextSnapshot, getEntityErrors } from '../shared';
 import { InspectorFieldGroup } from '@/shared/ui/Inspector';
 
 export function RunInspectorTabs({ entity, steps }: { entity: TraceEntity; steps: RunStep[] }) {
@@ -9,10 +9,12 @@ export function RunInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
   const snapshot = getEntityContextSnapshot(entity);
   const snapshotInputs = snapshot?.inputs;
   const snapshotMeta = snapshot?.meta;
+  const hasErrors = getEntityErrors(entity).length > 0;
   const tabs = [
     { key: 'params', label: 'Параметры' },
     { key: 'response', label: 'Результат' },
     { key: 'budgets', label: 'Бюджет' },
+    ...(hasErrors ? [{ key: 'errors', label: 'Ошибки' }] : []),
     { key: 'raw', label: 'RAW' },
   ];
 
@@ -38,6 +40,7 @@ export function RunInspectorTabs({ entity, steps }: { entity: TraceEntity; steps
         );
       }
       if (tab === 'budgets') return <BudgetsTab entity={entity} steps={steps} />;
+      if (tab === 'errors') return <EntityErrorsTab entity={entity} />;
       return <RawTab value={entity.data} entity={entity} steps={steps} />;
     }} />
   );
