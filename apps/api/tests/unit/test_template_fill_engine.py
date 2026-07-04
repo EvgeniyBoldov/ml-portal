@@ -53,7 +53,7 @@ def test_fill_text_nested_and_typed_scalar():
         ScalarField(key="author.tel", label="Author tel", type=FieldType.NUMBER, required=True),
     ])
     engine = TemplateFillEngine(contract)
-    template = b"Phone: {{author.tel:int(10)}}"
+    template = b"Phone: {{author.tel(type=int,min=10)}}"
     result = engine.fill(template, {"author": {"tel": 12345}}, "test.txt")
     assert result.success is True
     assert b"12345" in result.content

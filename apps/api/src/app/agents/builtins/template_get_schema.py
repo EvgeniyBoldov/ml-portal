@@ -1,8 +1,8 @@
 """
-collection.template.get_schema — Retrieve the fillable schema for a template row.
+collection.template.get_schema — retrieve the fill-ready schema for a template row.
 
-Given a collection and row_id, returns the template_schema JSON blob,
-which describes the fillable structure (fields, placeholders, expected types).
+Given a collection and row_id, returns the schema that the values payload must
+match when filling the selected template.
 """
 from __future__ import annotations
 
@@ -43,20 +43,22 @@ _OUTPUT_SCHEMA_V1 = {
         "template_version": {"type": "string"},
         "template_schema": {"type": "object"},
         "description": {"type": "string"},
+        "contract_version": {"type": "string"},
+        "field_count": {"type": "integer"},
     },
 }
 
 
 @register_tool
 class TemplateGetSchemaTool(VersionedTool):
-    """Get the fillable schema for a template."""
+    """Get the fill-ready schema contract for a template row."""
 
     tool_slug: ClassVar[str] = "collection.template.get_schema"
     domains: ClassVar[list] = ["collection.template"]
     name: ClassVar[str] = "Get Template Schema"
     description: ClassVar[str] = (
-        "Retrieve the fillable schema for a template row. "
-        "Returns the template_schema JSON blob that describes fields, placeholders, and expected types."
+        "Retrieve the fill-ready schema for a template row. "
+        "Returns the exact values contract that the fill input must match, including field names, nesting, and expected types."
     )
 
     @tool_version(
@@ -112,20 +114,12 @@ class TemplateGetSchemaTool(VersionedTool):
                 contract = TemplateContract.from_jsonb(raw_schema)
                 
                 if not contract.fields:
-                    return ToolResult.ok(
-                        data={
-                            "row_id": str(row["id"]),
-                            "title": row.get("title") or "",
-                            "source": row.get("source") or "",
-                            "template_version": row.get("template_version") or "",
-                            "template_schema": {},
-                            "description": row.get("description") or "",
-                        },
-                        message="Template row exists but has no schema defined yet. Use collection.template.fill with placeholder values.",
+                    return ToolResult.fail(
+                        "Template schema is not available for this row yet.",
                         logs=log.entries_dict(),
                     )
 
-                # Provide both raw contract and fill-ready schema
+                # Return the fill-ready schema derived from the stored contract.
                 return ToolResult.ok(
                     data={
                         "row_id": str(row["id"]),

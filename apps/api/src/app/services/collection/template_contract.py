@@ -233,24 +233,19 @@ class TemplateContract(BaseModel):
                 )
 
             elif isinstance(field, TableField):
-                col_props: Dict[str, Any] = {}
-                col_required: List[str] = []
+                item_schema: Dict[str, Any] = {"type": "object", "properties": {}}
                 for col in field.columns:
                     cp: Dict[str, Any] = {"type": col.type.value}
                     if col.description:
                         cp["description"] = col.description
                     if col.example is not None:
                         cp["example"] = col.example
-                    col_props[col.key] = cp
-                    if col.required:
-                        col_required.append(col.key)
-
-                item_schema: Dict[str, Any] = {
-                    "type": "object",
-                    "properties": col_props,
-                }
-                if col_required:
-                    item_schema["required"] = col_required
+                    self._assign_nested_schema_property(
+                        item_schema,
+                        col.key.split("."),
+                        cp,
+                        required=col.required,
+                    )
 
                 table_prop: Dict[str, Any] = {
                     "type": "array",
@@ -332,14 +327,15 @@ class TemplateContract(BaseModel):
                         if not isinstance(row, dict):
                             errors.append(f"Table '{field.key}' row[{i}] must be an object")
                             continue
-                        for ck in row:
+                        row_flat = self._flatten_nested_value(row)
+                        for ck in row_flat:
                             if ck not in col_keys:
                                 warnings.append(
                                     f"Table '{field.key}' row[{i}] has unknown column '{ck}'"
                                 )
                         if enforce_required:
                             for ck in req_cols:
-                                rv = row.get(ck)
+                                rv = row_flat.get(ck)
                                 if rv is None or (isinstance(rv, str) and not rv.strip()):
                                     errors.append(
                                         f"Table '{field.key}' row[{i}] missing required column '{ck}'"
@@ -410,6 +406,16 @@ class TemplateContract(BaseModel):
                 return None
             current = current.get(segment)
         return current
+
+    def _flatten_nested_value(self, values: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+        flattened: Dict[str, Any] = {}
+        for key, value in values.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, dict):
+                flattened.update(self._flatten_nested_value(value, path))
+            else:
+                flattened[path] = value
+        return flattened
 
     def _collect_input_paths(self, values: Dict[str, Any], prefix: str = "") -> List[str]:
         paths: List[str] = []

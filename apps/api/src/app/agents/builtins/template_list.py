@@ -1,8 +1,7 @@
 """
-collection.template.list — List templates in a template collection.
+collection.template.list — list template rows available in a template collection.
 
-Returns metadata for each template row: title, version, source, description,
-and identifiers needed for get_schema/fill.
+Returns metadata that identifies each template row and its original stored file.
 """
 from __future__ import annotations
 
@@ -71,7 +70,7 @@ class TemplateListTool(VersionedTool):
     name: ClassVar[str] = "List Templates"
     description: ClassVar[str] = (
         "List templates in a template collection. Returns metadata for each template: "
-        "title, version, source, description, row_id, and canonical storage_uri needed for file.read/file.analyze."
+        "title, version, source, description, row_id, and canonical storage_uri of the original template file."
     )
 
     @tool_version(

@@ -44,13 +44,16 @@ _VERSION_RE = re.compile(
 @dataclass
 class TokenOccurrence:
     """A single ``{{token}}`` occurrence in the source."""
-    token: str           # raw key inside braces, e.g. "items.qty"
-    table_prefix: Optional[str]   # "items" if dotted, else None
-    column_key: Optional[str]     # "qty" if dotted, else None
-    location: Dict[str, Any]      # format-specific position info
+    token: str
+    table_prefix: Optional[str]
+    column_key: Optional[str]
+    location: Dict[str, Any]
     placeholder: Optional[str] = None
     hint_type: Optional[str] = None
     hint_args: Optional[str] = None
+    segments: List[Dict[str, Any]] = field(default_factory=list)
+    repeat_root: Optional[str] = None
+    params: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -147,8 +150,8 @@ class TemplateLayoutParser:
                         parsed = _parse_placeholder_expr(m.group(1))
                         if not parsed:
                             continue
-                        key, hint_type, hint_args = parsed
-                        table_prefix, col_key = _split_dotted(key)
+                        key, hint_type, hint_args, spec = parsed
+                        table_prefix, col_key = _resolve_repeat_path(spec)
                         tokens.append(TokenOccurrence(
                             token=key,
                             table_prefix=table_prefix,
@@ -163,6 +166,9 @@ class TemplateLayoutParser:
                             placeholder=m.group(0),
                             hint_type=hint_type,
                             hint_args=hint_args,
+                            segments=spec["segments"],
+                            repeat_root=spec["repeat_root"],
+                            params=spec["params"],
                         ))
 
             if first_texts == [] and text_lines:
@@ -210,7 +216,6 @@ class TemplateLayoutParser:
         # --- Marker detection ---
         prefix_to_rows: Dict[str, List[int]] = {}
         prefix_signatures: Dict[str, List[Tuple[str, ...]]] = {}
-        prefix_brackets: Dict[str, bool] = {}
         for r in sorted_rows:
             row_vals = row_map[r]
             prefixes_in_row: Dict[str, List[str]] = {}
@@ -219,25 +224,15 @@ class TemplateLayoutParser:
                     parsed = _parse_placeholder_expr(m.group(1))
                     if not parsed:
                         continue
-                    key, _, _ = parsed
-                    tp, _ = _split_dotted(key)
+                    key, _, _, spec = parsed
+                    tp = spec["repeat_root"]
                     if tp:
-                        prefixes_in_row.setdefault(tp, []).append(f"{{{{{key}}}}}")
+                        prefixes_in_row.setdefault(tp, []).append(m.group(0))
             for tp, toks in prefixes_in_row.items():
                 prefix_to_rows.setdefault(tp, []).append(r)
                 prefix_signatures.setdefault(tp, []).append(tuple(dict.fromkeys(toks)))
-                if any("[" in value or "]" in value for value in row_vals.values()):
-                    prefix_brackets[tp] = True
 
         for prefix, marker_rows in prefix_to_rows.items():
-            row_signatures = prefix_signatures.get(prefix, [])
-            repeated_signature = len({sig for sig in row_signatures if sig}) < len(row_signatures)
-            if not _is_table_prefix(
-                prefix,
-                repeated_signature=repeated_signature,
-                bracketed=prefix_brackets.get(prefix, False),
-            ):
-                continue
             marker_row = marker_rows[0]
             # Collect all loop_tokens from that row
             loop_tokens: List[str] = []
@@ -249,10 +244,10 @@ class TemplateLayoutParser:
                     parsed = _parse_placeholder_expr(m.group(1))
                     if not parsed:
                         continue
-                    key, _, _ = parsed
-                    tp, _ = _split_dotted(key)
+                    key, _, _, spec = parsed
+                    tp = spec["repeat_root"]
                     if tp == prefix:
-                        tok = f"{{{{{key}}}}}"
+                        tok = m.group(0)
                         if tok not in loop_tokens:
                             loop_tokens.append(tok)
             # Check for optional row above as header
@@ -381,8 +376,8 @@ class TemplateLayoutParser:
                 parsed = _parse_placeholder_expr(m.group(1))
                 if not parsed:
                     continue
-                key, hint_type, hint_args = parsed
-                table_prefix, col_key = _split_dotted(key)
+                key, hint_type, hint_args, spec = parsed
+                table_prefix, col_key = _resolve_repeat_path(spec)
                 tokens.append(TokenOccurrence(
                     token=key,
                     table_prefix=table_prefix,
@@ -395,6 +390,9 @@ class TemplateLayoutParser:
                     placeholder=m.group(0),
                     hint_type=hint_type,
                     hint_args=hint_args,
+                    segments=spec["segments"],
+                    repeat_root=spec["repeat_root"],
+                    params=spec["params"],
                 ))
 
         # Tables
@@ -416,9 +414,9 @@ class TemplateLayoutParser:
                         parsed = _parse_placeholder_expr(m.group(1))
                         if not parsed:
                             continue
-                        key, hint_type, hint_args = parsed
-                        table_prefix, col_key = _split_dotted(key)
-                        tok = f"{{{{{key}}}}}"
+                        key, hint_type, hint_args, spec = parsed
+                        table_prefix, col_key = _resolve_repeat_path(spec)
+                        tok = m.group(0)
                         if tok not in region_tokens:
                             region_tokens.append(tok)
                         tokens.append(TokenOccurrence(
@@ -435,6 +433,9 @@ class TemplateLayoutParser:
                             placeholder=m.group(0),
                             hint_type=hint_type,
                             hint_args=hint_args,
+                            segments=spec["segments"],
+                            repeat_root=spec["repeat_root"],
+                            params=spec["params"],
                         ))
                         if table_prefix:
                             prefix_counts[table_prefix] = prefix_counts.get(table_prefix, 0) + 1
@@ -452,15 +453,12 @@ class TemplateLayoutParser:
             rows_count = len(table.rows)
             cols_count = len(table.columns)
             # Find dominant prefix (most column tokens)
-            dominant_prefix = None
-            if prefix_counts:
-                candidate = max(prefix_counts, key=lambda k: prefix_counts[k])
-                signatures = prefix_row_signatures.get(candidate, [])
-                repeated_signature = len({sig for sig in signatures if sig}) < len(signatures)
-                bracketed = any("[" in cell.text or "]" in cell.text for row in table.rows for cell in row.cells)
-                if _is_table_prefix(candidate, repeated_signature=repeated_signature, bracketed=bracketed):
-                    dominant_prefix = candidate
-            loop_toks = [t for t in region_tokens if dominant_prefix and dominant_prefix + "." in t] if dominant_prefix else []
+            dominant_prefix = max(prefix_counts, key=lambda k: prefix_counts[k]) if prefix_counts else None
+            loop_toks = [
+                t.placeholder or f"{{{{{t.token}}}}}"
+                for t in tokens
+                if dominant_prefix and t.repeat_root == dominant_prefix
+            ] if dominant_prefix else []
 
             table_regions.append(TableRegion(
                 region_id=f"docx:table:{t_idx}",
@@ -534,8 +532,8 @@ class TemplateLayoutParser:
                 parsed = _parse_placeholder_expr(m.group(1))
                 if not parsed:
                     continue
-                key, hint_type, hint_args = parsed
-                table_prefix, col_key = _split_dotted(key)
+                key, hint_type, hint_args, spec = parsed
+                table_prefix, col_key = _resolve_repeat_path(spec)
                 tokens.append(TokenOccurrence(
                     token=key,
                     table_prefix=table_prefix,
@@ -548,6 +546,9 @@ class TemplateLayoutParser:
                     placeholder=m.group(0),
                     hint_type=hint_type,
                     hint_args=hint_args,
+                    segments=spec["segments"],
+                    repeat_root=spec["repeat_root"],
+                    params=spec["params"],
                 ))
 
         # Table regions from fence blocks
@@ -555,7 +556,7 @@ class TemplateLayoutParser:
         for fb in fence_blocks:
             if fb.close_position is not None:
                 region_tokens = [
-                    f"{{{{{t.token}}}}}"
+                    t.placeholder or f"{{{{{t.token}}}}}"
                     for t in tokens
                     if t.table_prefix == fb.key
                 ]
@@ -574,31 +575,27 @@ class TemplateLayoutParser:
 
         # Also add structural regions for dotted keys without fences when the
         # template explicitly signals a repeating block.
-        fenced_prefixes = {fb.key for fb in fence_blocks}
         prefix_tokens: Dict[str, List[str]] = {}
         prefix_line_signatures: Dict[str, List[Tuple[str, ...]]] = {}
-        prefix_brackets: Dict[str, bool] = {}
         for line in text_lines:
             line_prefixes: Dict[str, List[str]] = {}
             for m in _TOKEN_RE.finditer(line):
                 parsed = _parse_placeholder_expr(m.group(1))
                 if not parsed:
                     continue
-                key, _, _ = parsed
-                tp, _ = _split_dotted(key)
+                key, _, _, spec = parsed
+                tp = spec["repeat_root"]
                 if tp:
-                    line_prefixes.setdefault(tp, []).append(f"{{{{{key}}}}}")
-                    if "[" in line or "]" in line:
-                        prefix_brackets[tp] = True
+                    line_prefixes.setdefault(tp, []).append(m.group(0))
             for prefix, toks in line_prefixes.items():
                 prefix_line_signatures.setdefault(prefix, []).append(tuple(dict.fromkeys(toks)))
         for t in tokens:
-            if t.table_prefix and t.table_prefix not in fenced_prefixes:
-                prefix_tokens.setdefault(t.table_prefix, []).append(f"{{{{{t.token}}}}}")
+            if t.table_prefix:
+                prefix_tokens.setdefault(t.table_prefix, []).append(t.placeholder or f"{{{{{t.token}}}}}")
         for prefix, toks in prefix_tokens.items():
             signatures = prefix_line_signatures.get(prefix, [])
             repeated_signature = len({sig for sig in signatures if sig}) < len(signatures)
-            if _is_table_prefix(prefix, repeated_signature=repeated_signature, bracketed=prefix_brackets.get(prefix, False)):
+            if repeated_signature or any(fb.key == prefix for fb in fence_blocks):
                 table_regions.append(TableRegion(
                     region_id=f"text:marker:{prefix}",
                     location={"type": "inline", "key": prefix},
@@ -642,6 +639,18 @@ def _split_dotted(key: str) -> Tuple[Optional[str], Optional[str]]:
         parts = key.split(".", 1)
         return parts[0], parts[1]
     return None, None
+
+
+def _resolve_repeat_path(spec: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    repeat_root = spec.get("repeat_root")
+    if not repeat_root:
+        return None, None
+    path = str(spec.get("path") or "")
+    if not path:
+        return None, None
+    if "." in path:
+        return repeat_root, path.split(".", 1)[1]
+    return repeat_root, None
 
 
 def _extract_title_version(texts: List[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -688,19 +697,144 @@ def _aggregate_keys(
     return scalars, prefixes
 
 
-def _parse_placeholder_expr(expr: str) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
+def _parse_placeholder_expr(expr: str) -> Optional[Tuple[str, Optional[str], Optional[str], Dict[str, Any]]]:
     raw = expr.strip()
     if not raw or raw.startswith("#") or raw.startswith("/"):
         return None
-    match = re.fullmatch(r"([A-Za-z0-9_.\-]+)(?::([A-Za-z]+)(?:\(([^)]*)\))?)?", raw)
-    if not match:
+    spec = _parse_contract_expr(raw)
+    if spec is None:
         return None
-    key = match.group(1)
-    hint_type = match.group(2).lower() if match.group(2) else None
-    hint_args = match.group(3).strip() if match.group(3) else None
-    return key, hint_type, hint_args
+    key = spec["path"]
+    params = spec["params"]
+    hint_type = None
+    hint_args = None
+    if "type" in params:
+        hint_type = str(params["type"]).strip().lower() or None
+        if "min" in params or "max" in params:
+            extras = []
+            if "min" in params:
+                extras.append(f"min={params['min']}")
+            if "max" in params:
+                extras.append(f"max={params['max']}")
+            hint_args = ", ".join(extras) if extras else None
+    return key, hint_type, hint_args, spec
 
 
-def _is_table_prefix(prefix: str, *, repeated_signature: bool, bracketed: bool) -> bool:
-    first_octet = prefix.split(".", 1)[0].strip().lower()
-    return first_octet in {"table", "items"} or repeated_signature or bracketed
+def _parse_contract_expr(expr: str) -> Optional[Dict[str, Any]]:
+    parts = _split_path_segments(expr)
+    if not parts:
+        return None
+
+    segments: List[Dict[str, Any]] = []
+    path_parts: List[str] = []
+    repeat_root = None
+    merged_params: Dict[str, Any] = {}
+
+    for idx, part in enumerate(parts):
+        segment = part.strip()
+        if not segment:
+            return None
+        repeat = segment.endswith("[]")
+        if repeat:
+            segment = segment[:-2].rstrip()
+
+        params: Dict[str, Any] = {}
+        if "(" in segment:
+            head, tail = segment.split("(", 1)
+            if not tail.endswith(")"):
+                return None
+            segment = head.strip()
+            params = _parse_params(tail[:-1])
+            merged_params.update(params)
+        if not segment or not re.fullmatch(r"[A-Za-z0-9_\-]+", segment):
+            return None
+        path_parts.append(segment)
+        segments.append({"key": segment, "params": params, "repeat": repeat})
+        if repeat and repeat_root is None:
+            repeat_root = segment
+
+    path = ".".join(path_parts)
+    return {
+        "path": path,
+        "segments": segments,
+        "repeat_root": repeat_root,
+        "params": merged_params,
+    }
+
+
+def _split_path_segments(expr: str) -> List[str]:
+    parts: List[str] = []
+    current: List[str] = []
+    depth = 0
+    for ch in expr:
+        if ch == "." and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        current.append(ch)
+    if current:
+        parts.append("".join(current))
+    return parts
+
+
+def _parse_params(raw: str) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    if not raw.strip():
+        return params
+    for chunk in _split_args(raw):
+        if not chunk:
+            continue
+        if "=" not in chunk:
+            params[chunk.strip()] = True
+            continue
+        key, value = chunk.split("=", 1)
+        params[key.strip()] = _coerce_param_value(value.strip())
+    return params
+
+
+def _split_args(raw: str) -> List[str]:
+    parts: List[str] = []
+    current: List[str] = []
+    depth = 0
+    quote: Optional[str] = None
+    for ch in raw:
+        if quote:
+            current.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            current.append(ch)
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    if current:
+        parts.append("".join(current).strip())
+    return parts
+
+
+def _coerce_param_value(raw: str) -> Any:
+    import ast
+
+    text = raw.strip()
+    if not text:
+        return ""
+    try:
+        return ast.literal_eval(text)
+    except Exception:
+        lowered = text.lower()
+        if lowered in {"true", "false"}:
+            return lowered == "true"
+        return text.strip("'\"")

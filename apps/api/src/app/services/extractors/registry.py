@@ -102,9 +102,10 @@ def _register_builtins(registry: type) -> None:
     """Register all built-in extractors."""
     from app.services.extractors.text import TextExtractor
     from app.services.extractors.pdf import PdfExtractor
+    from app.services.extractors.doc import DocExtractor
     from app.services.extractors.docx import DocxExtractor
     from app.services.extractors.csv_ext import CsvExtractor
     from app.services.extractors.xlsx import XlsxExtractor
 
-    for cls in [TextExtractor, PdfExtractor, DocxExtractor, CsvExtractor, XlsxExtractor]:
+    for cls in [TextExtractor, PdfExtractor, DocExtractor, DocxExtractor, CsvExtractor, XlsxExtractor]:
         registry.register(cls())

@@ -1,14 +1,15 @@
 """
-collection.template.fill — Fill a template with values and return a generated file.
+collection.template.fill — fill a template row and produce the final file artifact.
 
-Supports Excel, Word, and plain text templates via placeholder substitution.
-The filled result is stored as a downloadable artifact and its canonical storage_uri is returned.
+Supports Excel, Word, and plain text templates via contract-aware filling.
+The result is a stored downloadable file artifact and should be treated as the
+final output of the fill operation.
 """
 from __future__ import annotations
 
 import io
 import re
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict
 
 from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
@@ -41,7 +42,7 @@ _INPUT_SCHEMA_V1 = {
         },
         "values": {
             "type": "object",
-            "description": "Key-value map of placeholders to fill",
+            "description": "Values payload for the selected template row. Keys, nesting, and types must match the stored fill schema.",
         },
     },
     "required": ["collection_id", "row_id", "values"],
@@ -53,7 +54,8 @@ _OUTPUT_SCHEMA_V1 = {
         "file_id": {"type": "string"},
         "storage_uri": {"type": "string"},
         "download_url": {"type": "string"},
-        "filename": {"type": "string"},
+        "file_name": {"type": "string"},
+        "content_type": {"type": "string"},
         "size_bytes": {"type": "integer"},
         "format": {"type": "string"},
         "filled_placeholders": {"type": "integer"},
@@ -129,7 +131,7 @@ def _substitute_placeholders(text: str, values: Dict[str, str]) -> tuple[str, se
         parsed = _parse_placeholder_expr(match.group(1))
         if not parsed:
             return match.group(0)
-        key, _, _ = parsed
+        key, _, _, _ = parsed
         if key in values:
             keys_used.add(key)
             return str(values[key])
@@ -137,32 +139,18 @@ def _substitute_placeholders(text: str, values: Dict[str, str]) -> tuple[str, se
 
     result = _PLACEHOLDER_RE.sub(replacer, text)
     return result, keys_used
-
-
-def _flatten_values(values: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
-    flattened: Dict[str, Any] = {}
-    for key, value in values.items():
-        path = f"{prefix}.{key}" if prefix else str(key)
-        if isinstance(value, dict):
-            flattened.update(_flatten_values(value, path))
-        else:
-            flattened[path] = value
-    return flattened
-
-
 @register_tool
 class TemplateFillTool(VersionedTool):
-    """Fill a template with values and return a generated file."""
+    """Fill a template row and return the final generated file artifact."""
 
     tool_slug: ClassVar[str] = "collection.template.fill"
     domains: ClassVar[list] = ["collection.template"]
     name: ClassVar[str] = "Fill Template"
     description: ClassVar[str] = (
-        "Fill a template (Excel, Word, or text) with provided values. "
-        "Placeholders like {{field_name}} are replaced. "
-        "This operation creates the final downloadable file and returns file_id, storage_uri, and download_url. "
-        "Call collection.template.get_schema before fill and use the exact field keys from that schema. "
-        "Do not call file.generate after a successful fill."
+        "Fill a template row with provided values and create the final downloadable file artifact. "
+        "Returns the resulting file reference as file_id, storage_uri, and download_url. "
+        "Use the returned download_url or file_id as the user-facing result. "
+        "The values object must match the stored fill schema for the selected template row."
     )
 
     @tool_version(
@@ -252,35 +240,22 @@ class TemplateFillTool(VersionedTool):
                 raw_schema = row.get("template_schema") or {}
                 contract = TemplateContract.from_jsonb(raw_schema)
 
-                if contract.fields:
-                    # Contract-aware filling with validation (preferred path)
-                    engine = TemplateFillEngine(contract)
-                    result = engine.fill(content, values, filename)
-                    if not result.success:
-                        return ToolResult.fail(
-                            f"Failed to fill template: {result.error}",
-                            logs=log.entries_dict(),
-                        )
-                    filled_bytes = result.content
-                    filled_keys = set(result.filled_scalars + result.filled_tables)
-                    missing = list(set(result.missing_scalars + result.missing_tables))
-                else:
-                    # Backward-compat fallback: template has no analyzed schema yet.
-                    # Perform naive {{key}} substitution from provided values.
-                    log.warning("No contract schema; using naive placeholder substitution")
-                    str_values = {
-                        k: str(v)
-                        for k, v in _flatten_values(values).items()
-                        if not isinstance(v, (dict, list))
-                    }
-                    if fmt == "excel":
-                        filled_bytes = _fill_excel(content, str_values)
-                    elif fmt == "word":
-                        filled_bytes = _fill_word(content, str_values)
-                    else:
-                        filled_bytes = _fill_text(content, str_values)
-                    filled_keys = set(str_values.keys())
-                    missing = []
+                if not contract.fields:
+                    return ToolResult.fail(
+                        "Template schema is not ready for this row. Fill is available only after schema analysis completes.",
+                        logs=log.entries_dict(),
+                    )
+
+                engine = TemplateFillEngine(contract)
+                result = engine.fill(content, values, filename)
+                if not result.success:
+                    return ToolResult.fail(
+                        f"Failed to fill template: {result.error}",
+                        logs=log.entries_dict(),
+                    )
+                filled_bytes = result.content
+                filled_keys = set(result.filled_scalars + result.filled_tables)
+                missing = list(set(result.missing_scalars + result.missing_tables))
 
                 # Store generated attachment
                 chat_id = str(ctx.chat_id) if ctx.chat_id else None
@@ -309,7 +284,8 @@ class TemplateFillTool(VersionedTool):
                         "file_id": file_id,
                         "storage_uri": attachment.get("storage_uri"),
                         "download_url": f"/api/v1/files/{file_id}/download",
-                        "filename": safe_filename,
+                        "file_name": safe_filename,
+                        "content_type": file_meta.get("content_type") or "application/octet-stream",
                         "size_bytes": len(filled_bytes),
                         "format": fmt,
                         "filled_placeholders": len(filled_keys),
@@ -317,8 +293,7 @@ class TemplateFillTool(VersionedTool):
                     },
                     message=(
                         f"Final downloadable file created from template '{filename}' "
-                        f"({fmt}, {len(filled_keys)} placeholders). "
-                        f"Return download_url or file_id to the user; do not call file.generate."
+                        f"({fmt}, {len(filled_keys)} placeholders)."
                     ),
                     logs=log.entries_dict(),
                 )

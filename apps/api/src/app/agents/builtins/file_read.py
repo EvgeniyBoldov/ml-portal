@@ -63,8 +63,8 @@ class FileReadTool(VersionedTool):
     name: ClassVar[str] = "Read File"
     description: ClassVar[str] = (
         "Read a file by its canonical storage_uri (s3://bucket/key). "
-        "Returns text content for text files, or base64 for binary files. "
-        "Use the exact storage_uri returned by upstream tools."
+        "Returns text content for text-readable files, best-effort extracted text for DOC/DOCX files, "
+        "or base64-encoded content for other binary files."
     )
 
     @tool_version(
@@ -117,9 +117,9 @@ class FileReadTool(VersionedTool):
                 size_bytes = len(payload)
                 if size_bytes > _MAX_READ_BYTES:
                     log.error(
-                    "File too large",
-                    size_bytes=size_bytes,
-                    max_bytes=_MAX_READ_BYTES,
+                        "File too large",
+                        size_bytes=size_bytes,
+                        max_bytes=_MAX_READ_BYTES,
                     )
                     return ToolResult.fail(
                         f"File size ({size_bytes} bytes) exceeds read limit of {_MAX_READ_BYTES} bytes. "
@@ -127,22 +127,31 @@ class FileReadTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
+                file_name = resolved.file_name or storage_uri.split("/")[-1]
                 ext = ""
-                if resolved.file_name and "." in resolved.file_name:
-                    ext = resolved.file_name.rsplit(".", 1)[-1].strip().lower()
-                is_text = ext in _TEXT_EXTENSIONS
+                if file_name and "." in file_name:
+                    ext = file_name.rsplit(".", 1)[-1].strip().lower()
 
-                if is_text:
-                    try:
-                        content = payload.decode("utf-8")
+                content = ""
+                encoding = "base64"
+                if ext in _TEXT_EXTENSIONS or ext in {"doc", "docx"}:
+                    from app.services.document_text_reader import read_text_from_bytes
+
+                    text_result = read_text_from_bytes(payload, file_name)
+                    if text_result and text_result.text.strip():
+                        content = text_result.text
                         encoding = "text"
-                    except UnicodeDecodeError:
+                        if text_result.warnings:
+                            log.warning(
+                                "Text extraction warnings",
+                                file_id=resolved.file_id,
+                                storage_uri=storage_uri,
+                                warnings=text_result.warnings,
+                            )
+                    else:
                         content = base64.b64encode(payload).decode("ascii")
-                        encoding = "base64"
-                        is_text = False
-                else:
+                if not content:
                     content = base64.b64encode(payload).decode("ascii")
-                    encoding = "base64"
 
                 log.info(
                     "File read OK",
@@ -156,13 +165,13 @@ class FileReadTool(VersionedTool):
                     data={
                         "file_id": resolved.file_id,
                         "storage_uri": storage_uri,
-                        "file_name": resolved.file_name,
+                        "file_name": resolved.file_name or file_name,
                         "content_type": resolved.content_type or "application/octet-stream",
                         "size_bytes": size_bytes,
                         "content": content,
                         "encoding": encoding,
                     },
-                    message=f"File '{resolved.file_name}' read successfully ({encoding}, {size_bytes} bytes).",
+                    message=f"File '{resolved.file_name or file_name}' read successfully ({encoding}, {size_bytes} bytes).",
                     logs=log.entries_dict(),
                 )
         except Exception as exc:

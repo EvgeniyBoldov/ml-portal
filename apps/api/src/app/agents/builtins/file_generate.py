@@ -5,11 +5,12 @@ The agent (not the orchestrator) owns content creation. This tool is a thin
 write-through to ChatAttachmentService: it persists the agent-generated body
 to S3 / MinIO and returns a stable download URL.
 
-Supported formats: csv, json, txt, md.
+Supported formats: csv, json, txt, md, docx.
 Excel support is TODO — it requires binary generation (e.g. openpyxl/xlsxwriter).
 """
 from __future__ import annotations
 
+from io import BytesIO
 from typing import Any, ClassVar, Dict
 
 from app.agents.context import ToolContext, ToolResult
@@ -18,12 +19,13 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_SUPPORTED_FORMATS = {"csv", "json", "txt", "md"}
+_SUPPORTED_FORMATS = {"csv", "json", "txt", "md", "docx"}
 _CONTENT_TYPES = {
     "csv": "text/csv",
     "json": "application/json",
     "txt": "text/plain",
     "md": "text/markdown",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
 # Limit to prevent accidental abuse (2 MB text ≈ huge)
@@ -42,7 +44,7 @@ _INPUT_SCHEMA_V1 = {
         },
         "format": {
             "type": "string",
-            "description": "File format: csv, json, txt, or md.",
+            "description": "File format: csv, json, txt, md, or docx.",
             "enum": list(_SUPPORTED_FORMATS),
         },
     },
@@ -76,8 +78,8 @@ class FileGenerateTool(VersionedTool):
     domains: ClassVar[list] = ["system"]
     name: ClassVar[str] = "Generate File"
     description: ClassVar[str] = (
-        "Save a generated file (csv, json, txt, md) to chat storage and return its canonical storage_uri and download link. "
-        "The agent must provide the fully formatted file body."
+        "Create a new downloadable file from the provided content and store it in chat storage. "
+        "Returns file_id, storage_uri, download_url, and file metadata for the newly created artifact."
     )
 
     @tool_version(
@@ -108,17 +110,56 @@ class FileGenerateTool(VersionedTool):
             log.error("Unsupported format", requested=fmt, supported=list(_SUPPORTED_FORMATS))
             return ToolResult.fail(
                 f"Unsupported format '{fmt}'. Supported: {', '.join(sorted(_SUPPORTED_FORMATS))}. "
-                "Excel (.xlsx) support is planned but not yet implemented.",
+                "Excel (.xlsx) and legacy Word (.doc) support are not implemented here.",
                 logs=log.entries_dict(),
             )
 
+        output_filename = filename
+        if fmt == "docx":
+            lowered = output_filename.lower()
+            if lowered.endswith(".docx"):
+                pass
+            elif lowered.endswith(".doc"):
+                output_filename = output_filename[:-4] + ".docx"
+            elif "." not in output_filename:
+                output_filename = f"{output_filename}.docx"
+            else:
+                output_filename = f"{output_filename}.docx"
+        elif fmt in {"csv", "json", "txt", "md"} and "." not in output_filename:
+            output_filename = f"{output_filename}.{fmt}"
+
         # Derive content_type from format or filename
         content_type = _CONTENT_TYPES.get(fmt)
-        if not content_type and "." in filename:
-            ext = filename.rsplit(".", 1)[-1].strip().lower()
+        if not content_type and "." in output_filename:
+            ext = output_filename.rsplit(".", 1)[-1].strip().lower()
             content_type = _CONTENT_TYPES.get(ext)
 
-        encoded = content.encode("utf-8")
+        if fmt == "docx":
+            try:
+                from docx import Document  # type: ignore
+            except ImportError as exc:
+                log.error("python-docx is required for docx generation", error=str(exc))
+                return ToolResult.fail(
+                    "DOCX generation requires python-docx to be installed in the runtime.",
+                    logs=log.entries_dict(),
+                )
+
+            doc = Document()
+            normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
+            blocks = [block.strip() for block in normalized.split("\n\n") if block.strip()]
+            if not blocks and normalized:
+                blocks = [normalized]
+            for block in blocks:
+                lines = [line.rstrip() for line in block.splitlines() if line.strip()]
+                if not lines:
+                    continue
+                doc.add_paragraph("\n".join(lines))
+
+            buf = BytesIO()
+            doc.save(buf)
+            encoded = buf.getvalue()
+        else:
+            encoded = content.encode("utf-8")
         if len(encoded) > _MAX_FILE_BYTES:
             log.error(
                 "File too large",
@@ -136,7 +177,7 @@ class FileGenerateTool(VersionedTool):
 
         log.info(
             "Generating file",
-            filename=filename,
+            filename=output_filename,
             format=fmt,
             size_bytes=len(encoded),
             chat_id=str(chat_id) if chat_id else None,
@@ -149,7 +190,7 @@ class FileGenerateTool(VersionedTool):
                 attachment = await service.create_generated_attachment(
                     chat_id=str(chat_id) if chat_id else None,
                     owner_id=str(user_id),
-                    filename=filename,
+                    filename=output_filename,
                     content=encoded,
                     content_type=content_type,
                 )
@@ -169,7 +210,7 @@ class FileGenerateTool(VersionedTool):
                         "content_type": content_type,
                         "size_bytes": attachment.get("size_bytes"),
                     },
-                    message=f"File '{filename}' generated successfully.",
+                    message=f"File '{output_filename}' generated successfully.",
                     logs=log.entries_dict(),
                 )
         except Exception as exc:

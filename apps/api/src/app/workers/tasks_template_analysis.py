@@ -163,22 +163,14 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
             )
             await session.commit()
 
-            # Load contract (either existing or parse new)
+            # Description is a downstream stage: it consumes the parsed contract.
             raw_schema = row.get("template_schema") or {}
             contract = TemplateContract.from_jsonb(raw_schema)
+            if not contract.fields:
+                raise ValueError("Template schema is not ready; run schema analysis before description")
 
             resolved_title = row.get("title")
             resolved_version = row.get("template_version")
-
-            if not contract.fields:
-                # Need to parse and build schema first
-                payload, filename = await _load_template_file(row)
-                parser = TemplateLayoutParser()
-                layout = parser.parse(payload, filename)
-                schema_builder = TemplateSchemaBuilder(llm=None)
-                contract = await schema_builder.build(layout, title=layout.title)
-                resolved_title = resolved_title or layout.title or filename
-                resolved_version = resolved_version or layout.version
 
             # Build description from contract (S3)
             desc_builder = TemplateDescriptionBuilder(llm=None)  # Can be configured with LLM

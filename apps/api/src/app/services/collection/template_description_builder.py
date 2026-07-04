@@ -1,4 +1,4 @@
-"""S3 TemplateDescriptionBuilder — LLM semantic description from contract."""
+"""TemplateDescriptionBuilder — semantic description from template contract."""
 from __future__ import annotations
 import json, logging
 from typing import Any, Dict, List, Optional
@@ -14,7 +14,7 @@ Keep under 200 words."""
 
 
 class TemplateDescriptionBuilder:
-    """Build semantic description from contract using LLM with deterministic fallback."""
+    """Build semantic description from contract using LLM or deterministic summary."""
 
     def __init__(self, llm: Optional[Any] = None):
         self.llm = llm
@@ -25,7 +25,7 @@ class TemplateDescriptionBuilder:
         title: Optional[str] = None,
         version: Optional[str] = None,
     ) -> str:
-        """Generate description from contract, fallback to deterministic if LLM fails."""
+        """Generate description from contract."""
         desc = await self._llm_build(contract, title, version)
         if desc is None:
             desc = self._deterministic_build(contract, title, version)

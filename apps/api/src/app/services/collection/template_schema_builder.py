@@ -175,7 +175,7 @@ class TemplateSchemaBuilder:
             description = self._hint_description(token)
             fields.append(ScalarField(
                 key=key,
-                label=self._label_for_key(key),
+                label=self._label_for_token(key, token),
                 description=description,
                 type=field_type,
                 required=False,
@@ -189,6 +189,7 @@ class TemplateSchemaBuilder:
         for prefix in layout.table_prefixes:
             region = prefix_to_region.get(prefix)
             columns = []
+            first_token = self._first_token(layout, region.loop_tokens[0].strip("{}") if region and region.loop_tokens else prefix)
             if region and region.loop_tokens:
                 for tok in region.loop_tokens:
                     clean = tok.strip("{}")
@@ -196,7 +197,7 @@ class TemplateSchemaBuilder:
                     token = self._first_token(layout, clean)
                     columns.append(TableColumn(
                         key=col_key,
-                        label=self._label_for_key(col_key),
+                        label=self._label_for_token(col_key, token, default_key=col_key),
                         description=self._hint_description(token),
                         type=self._infer_field_type(token),
                         required=False,
@@ -235,7 +236,7 @@ class TemplateSchemaBuilder:
                 )
             fields.append(TableField(
                 key=prefix,
-                label=self._label_for_key(prefix),
+                label=self._label_for_token(prefix, first_token, default_key=prefix),
                 orientation=Orientation.VERTICAL,
                 required=False,
                 min_rows=0,
@@ -321,16 +322,39 @@ class TemplateSchemaBuilder:
         return FieldType.STRING
 
     def _hint_description(self, token: Optional[TokenOccurrence]) -> Optional[str]:
-        if not token or not token.hint_type:
+        if not token:
             return None
-        hint = token.hint_type
-        if token.hint_args:
-            hint = f"{hint}({token.hint_args})"
-        return f"Template hint: {hint}"
+        hints: list[str] = []
+        if token.hint_type:
+            hint = token.hint_type
+            if token.hint_args:
+                hint = f"{hint}({token.hint_args})"
+            hints.append(hint)
+        if token.params:
+            parts = []
+            for key in ("description", "min", "max", "required"):
+                if key in token.params:
+                    parts.append(f"{key}={token.params[key]}")
+            if parts:
+                hints.append(", ".join(parts))
+        if not hints:
+            return None
+        return f"Template hint: {'; '.join(hints)}"
 
-    def _label_for_key(self, key: str) -> str:
-        tail = key.split(".")[-1]
-        return tail.replace("_", " ").capitalize()
+    def _label_for_token(
+        self,
+        key: str,
+        token: Optional[TokenOccurrence],
+        *,
+        default_key: Optional[str] = None,
+    ) -> str:
+        label = None
+        if token and token.params:
+            label = token.params.get("name") or token.params.get("label")
+        if not label:
+            tail = (default_key or key).split(".")[-1]
+            label = tail.replace("_", " ").capitalize()
+        return str(label)
 
     def _region_label(self, region: TableRegion, counter: int) -> str:
         if region.loop_prefix:

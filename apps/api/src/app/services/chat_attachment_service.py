@@ -324,14 +324,15 @@ class ChatAttachmentService:
         return "\n".join(lines)
 
     async def _load_text_content(self, row: ChatAttachment, *, max_chars: int) -> Optional[str]:
-        text_extensions = {"txt", "md", "csv", "tsv", "json", "yaml", "yml", "log", "sql", "xml", "html"}
-        ext = (row.file_ext or "").strip().lower()
-        if ext not in text_extensions:
-            return None
         payload = await s3_manager.get_object(row.storage_bucket, row.storage_key)
         if not payload:
             return None
-        decoded = payload.decode("utf-8", errors="replace")
+        from app.services.document_text_reader import read_text_from_bytes
+
+        result = read_text_from_bytes(payload, row.file_name or "")
+        if result is None or not result.text:
+            return None
+        decoded = result.text
         if len(decoded) <= max_chars:
             return decoded
         return f"{decoded[:max_chars]}\n...[truncated]"

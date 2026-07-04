@@ -138,6 +138,30 @@ class LLMAdapter:
         tool_choice=none but the model tried to call a tool anyway.
         Salvage the call by converting it to a textual tool_call block.
         """
+        def _build_tool_call(payload: Dict[str, Any]) -> Optional[str]:
+            if not isinstance(payload, dict):
+                return None
+
+            # Some providers wrap the real tool call as:
+            # {"name": "tool_call", "arguments": {"tool": "...", "arguments": {...}}}
+            name = str(payload.get("name") or "").strip()
+            arguments = payload.get("arguments") or {}
+            if name == "tool_call" and isinstance(arguments, dict):
+                nested_tool = str(arguments.get("tool") or "").strip()
+                nested_arguments = arguments.get("arguments") or {}
+                if nested_tool:
+                    if not isinstance(nested_arguments, dict):
+                        nested_arguments = {}
+                    call = {"tool": nested_tool, "arguments": nested_arguments}
+                    return "```tool_call\n" + json.dumps(call, ensure_ascii=False, indent=2) + "\n```"
+
+            if not name:
+                return None
+            if not isinstance(arguments, dict):
+                arguments = {}
+            call = {"tool": name, "arguments": arguments}
+            return "```tool_call\n" + json.dumps(call, ensure_ascii=False, indent=2) + "\n```"
+
         # Path 1: openai SDK — structured body dict, no string parsing needed
         body = getattr(exc, "body", None)
         if isinstance(body, dict):
@@ -151,14 +175,10 @@ class LLMAdapter:
                     try:
                         payload = json.loads(raw)
                     except Exception:
-                        pass
-                if isinstance(payload, dict) and payload.get("name"):
-                    op_name = str(payload["name"]).strip()
-                    arguments = payload.get("arguments") or {}
-                    if not isinstance(arguments, dict):
-                        arguments = {}
-                    call = {"tool": op_name, "arguments": arguments}
-                    return "```tool_call\n" + json.dumps(call, ensure_ascii=False, indent=2) + "\n```"
+                        payload = LLMAdapter._extract_failed_generation_json(raw)
+                fallback = _build_tool_call(payload) if isinstance(payload, dict) else None
+                if fallback is not None:
+                    return fallback
 
         # Path 2: non-openai providers — plain string heuristic
         text = str(exc or "")
@@ -169,16 +189,7 @@ class LLMAdapter:
         payload = LLMAdapter._extract_failed_generation_json(text)
         if payload is None:
             return None
-
-        op_name = str(payload.get("name") or "").strip()
-        if not op_name:
-            return None
-        arguments = payload.get("arguments")
-        if not isinstance(arguments, dict):
-            arguments = {}
-
-        call = {"tool": op_name, "arguments": arguments}
-        return "```tool_call\n" + json.dumps(call, ensure_ascii=False, indent=2) + "\n```"
+        return _build_tool_call(payload)
 
     @staticmethod
     def _extract_failed_generation_json(text: str) -> Optional[Dict[str, Any]]:

@@ -93,11 +93,14 @@ class TemplateFillEngine:
         filled_tables = []
         missing_tables = []
 
-        scalar_map = {field.key: values.get(field.key) for field in self.contract.scalar_fields()}
+        scalar_map = {
+            field.key: _lookup_nested_value(values, field.key)
+            for field in self.contract.scalar_fields()
+        }
         text, used_keys = _substitute_placeholders(text, scalar_map)
         filled_scalars.extend(sorted(used_keys))
         for field in self.contract.scalar_fields():
-            if field.key not in used_keys and values.get(field.key) is None:
+            if field.key not in used_keys and _lookup_nested_value(values, field.key) in (None, ""):
                 missing_scalars.append(field.key)
 
         # Simple table handling for text (no row expansion, just markers)
@@ -163,7 +166,10 @@ class TemplateFillEngine:
         missing_scalars = []
         missing_tables = []
 
-        scalar_map = {field.key: values.get(field.key) for field in self.contract.scalar_fields()}
+        scalar_map = {
+            field.key: _lookup_nested_value(values, field.key)
+            for field in self.contract.scalar_fields()
+        }
         used_scalar_keys: set[str] = set()
         for sheet_name in wb.sheetnames:
             sheet = wb[sheet_name]
@@ -176,7 +182,7 @@ class TemplateFillEngine:
                             used_scalar_keys.update(keys)
         filled_scalars.extend(sorted(used_scalar_keys))
         for field in self.contract.scalar_fields():
-            if field.key not in used_scalar_keys and values.get(field.key) is None:
+            if field.key not in used_scalar_keys and _lookup_nested_value(values, field.key) in (None, ""):
                 missing_scalars.append(field.key)
 
         # Fill tables
@@ -354,7 +360,7 @@ class TemplateFillEngine:
                     if col.key in col_indices:
                         idx = col_indices[col.key]
                         if idx < len(new_row):
-                            new_row[idx].value = row_data.get(col.key, "")
+                            new_row[idx].value = _lookup_nested_value(row_data, col.key)
 
             return True
 
@@ -377,7 +383,10 @@ class TemplateFillEngine:
         missing_scalars = []
         missing_tables = []
 
-        scalar_map = {field.key: values.get(field.key) for field in self.contract.scalar_fields()}
+        scalar_map = {
+            field.key: _lookup_nested_value(values, field.key)
+            for field in self.contract.scalar_fields()
+        }
         used_scalar_keys: set[str] = set()
         for para in doc.paragraphs:
             if para.text:
@@ -398,7 +407,7 @@ class TemplateFillEngine:
                             used_scalar_keys.update(keys)
         filled_scalars.extend(sorted(used_scalar_keys))
         for field in self.contract.scalar_fields():
-            if field.key not in used_scalar_keys and values.get(field.key) is None:
+            if field.key not in used_scalar_keys and _lookup_nested_value(values, field.key) in (None, ""):
                 missing_scalars.append(field.key)
 
         # Fill tables (marker-loop only for docx)
@@ -487,9 +496,9 @@ def _substitute_placeholders(text: str, values: Dict[str, Any]) -> Tuple[str, se
         parsed = _parse_placeholder_expr(match.group(1))
         if not parsed:
             return match.group(0)
-        key, _, _ = parsed
-        value = values.get(key)
-        if value is None:
+        key, _, _, _ = parsed
+        value = _lookup_nested_value(values, key)
+        if value in (None, ""):
             return match.group(0)
         used_keys.add(key)
         return str(value)
@@ -498,7 +507,32 @@ def _substitute_placeholders(text: str, values: Dict[str, Any]) -> Tuple[str, se
 
 
 def _table_row_values(prefix: str, row_data: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        f"{prefix}.{key}": value
-        for key, value in (row_data or {}).items()
-    }
+    flattened: Dict[str, Any] = {}
+
+    def _walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                next_path = f"{path}.{key}" if path else str(key)
+                _walk(value, next_path)
+            return
+        flattened[path] = node
+
+    _walk(row_data or {}, "")
+    if prefix:
+        return {
+            f"{prefix}.{key}": value
+            for key, value in flattened.items()
+            if key
+        }
+    return flattened
+
+
+def _lookup_nested_value(values: Dict[str, Any], key: str) -> Any:
+    if key in values:
+        return values.get(key)
+    current: Any = values
+    for segment in key.split("."):
+        if not isinstance(current, dict) or segment not in current:
+            return ""
+        current = current.get(segment)
+    return current

@@ -1,6 +1,9 @@
 """
 TemplateAnalyzeService — parse uploaded templates (Excel, Word, text) to extract
-structure: placeholders, tables, headers, title, version, and a draft fill schema.
+structural evidence: placeholders, tables, headers, title, version, and a draft fill schema.
+
+Semantic description is a downstream stage and should be built from the contract,
+not treated as a fallback inside raw parsing.
 """
 from __future__ import annotations
 

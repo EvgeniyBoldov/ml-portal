@@ -1,14 +1,8 @@
 """
-File Analyze Tool — inspect the structure of a spreadsheet (Excel or CSV).
+File Analyze Tool — inspect the structure of a spreadsheet file.
 
-The agent uses this BEFORE filling a template to learn:
-- Sheet names (for Excel)
-- Column headers
-- Data types per column
-- Sample rows
-- Row counts
-
-This helps the agent understand what fields the template expects.
+Returns sheet names, column headers, inferred data types, sample rows, and row
+counts for Excel or CSV files.
 """
 from __future__ import annotations
 
@@ -228,18 +222,16 @@ class FileAnalyzeTool(VersionedTool):
     """
     Inspect the structure of a spreadsheet (Excel or CSV).
 
-    Use this BEFORE filling a template to learn what sheets, columns, and data
-    types the file contains. Returns sample rows so the agent knows the expected
-    format.
+    Returns sheet names, columns, inferred data types, sample rows, and row
+    counts for an existing spreadsheet file.
     """
 
     tool_slug: ClassVar[str] = "file.analyze"
     domains: ClassVar[list] = ["system"]
     name: ClassVar[str] = "Analyze Spreadsheet"
     description: ClassVar[str] = (
-        "Inspect spreadsheet structure (Excel/CSV): sheets, column headers, data types, sample rows, row counts. "
-        "Use BEFORE filling a template to learn what fields it expects. "
-        "Accepts canonical storage_uri in the form s3://bucket/key."
+        "Inspect an existing spreadsheet file (Excel/CSV) and return its structural summary: "
+        "sheets, column headers, inferred data types, sample rows, row counts, and CSV encoding when applicable."
     )
 
     @tool_version(
