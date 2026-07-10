@@ -1,9 +1,9 @@
 """TemplateDescriptionBuilder — semantic description from template contract."""
 from __future__ import annotations
 import json, logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from app.services.collection.template_contract import (
-    TemplateContract, ScalarField, TableField, FieldKind, FieldSource,
+    TemplateContract,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,20 +59,14 @@ class TemplateDescriptionBuilder:
         title: Optional[str],
         version: Optional[str],
     ) -> str:
+        runtime_schema = contract.to_prompt_schema()
         lines = [f"Title: {title or 'N/A'}"]
         if version:
             lines.append(f"Version: {version}")
         lines.append(f"Format: {contract.format.value if contract.format else 'unknown'}")
         lines.append("")
-        lines.append(f"Fields ({len(contract.fields)}):")
-        for f in contract.fields:
-            if isinstance(f, ScalarField):
-                req = "required" if f.required else "optional"
-                lines.append(f"  - {f.key} ({f.type.value}, {req}): {f.label}")
-            elif isinstance(f, TableField):
-                req = "required" if f.required else "optional"
-                cols = ", ".join(c.key for c in f.columns)
-                lines.append(f"  - {f.key} (table, {req}): {f.label} — columns: {cols}")
+        lines.append("Runtime schema:")
+        lines.append(json.dumps(runtime_schema, ensure_ascii=False, indent=2))
         return "\n".join(lines)
 
     def _deterministic_build(

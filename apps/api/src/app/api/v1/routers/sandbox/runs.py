@@ -37,6 +37,7 @@ from app.schemas.sandbox import (
     SandboxRunStepResponse,
 )
 from app.services.chat_attachment_service import ChatAttachmentService
+from app.services.chat_visibility import make_sandbox_upload_chat_name
 from app.services.sandbox_service import SandboxService
 from app.services.sandbox_step_enrichment_service import SandboxStepEnrichmentService
 from app.services.run_store import RunStore
@@ -51,9 +52,6 @@ from .helpers import check_session_owner, tenant_uuid, user_uuid
 logger = get_logger(__name__)
 
 router = APIRouter()
-SANDBOX_UPLOAD_CHAT_PREFIX = "__sandbox_uploads__:"
-
-
 def _is_pause_transport_step(evt_type: str, evt_data: dict) -> bool:
     reason = str(evt_data.get("reason") or "").strip().lower()
     if evt_type == "run_paused":
@@ -71,7 +69,7 @@ async def _ensure_sandbox_upload_chat(
     owner_id: uuid.UUID,
     session_id: uuid.UUID,
 ) -> uuid.UUID:
-    name = f"{SANDBOX_UPLOAD_CHAT_PREFIX}{session_id}"
+    name = make_sandbox_upload_chat_name(session_id)
     row = await db.scalar(
         select(Chats).where(
             and_(
@@ -250,11 +248,15 @@ async def run_sandbox(
         owner_id=u_uuid,
         session_id=session_id,
     )
-    attachment_meta: list[dict] = []
+    attachment_service = ChatAttachmentService(db)
+    scoped_attachment_rows = await attachment_service.list_owned_attachments_for_chat(
+        chat_id=str(sandbox_chat_id),
+        owner_id=str(u_uuid),
+    )
+    attachment_meta: list[dict] = attachment_service.to_meta(scoped_attachment_rows)
     attachment_prompt_context = ""
 
     if data.attachment_ids:
-        attachment_service = ChatAttachmentService(db)
         try:
             rows = await attachment_service.get_owned_attachments_any_chat(
                 owner_id=str(u_uuid),
@@ -262,8 +264,14 @@ async def run_sandbox(
             )
         except ChatAttachmentNotFoundError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        attachment_meta = attachment_service.to_meta(rows)
-        attachment_prompt_context = await attachment_service.build_prompt_context(attachments=rows)
+        attachment_meta = attachment_service.dedupe_meta(
+            attachment_meta + attachment_service.to_meta(rows)
+        )
+
+    if scoped_attachment_rows:
+        attachment_prompt_context = await attachment_service.build_prompt_context(
+            attachments=scoped_attachment_rows
+        )
 
     # Resolve overrides
     sandbox_resolver = RuntimeSandboxResolver()

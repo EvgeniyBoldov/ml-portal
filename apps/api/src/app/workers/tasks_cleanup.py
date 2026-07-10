@@ -20,6 +20,8 @@ from app.models.collection import Collection
 from app.models.agent import Agent
 from app.models.rbac import RbacRule
 from app.services.lifecycle_admin_service import LifecycleAdminService
+from app.services.chat_attachment_service import ChatAttachmentService
+from app.services.sandbox_service import SandboxService
 from app.workers.session_factory import get_worker_session
 
 logger = get_logger(__name__)
@@ -28,6 +30,7 @@ logger = get_logger(__name__)
 AUDIT_LOG_RETENTION_DAYS = 7
 AGENT_RUN_RETENTION_DAYS = 7
 DEFAULT_LIFECYCLE_RETENTION_DAYS = 14
+DETACHED_CHAT_ATTACHMENT_RETENTION_HOURS = 24
 
 
 LIFECYCLE_MODELS = (
@@ -126,9 +129,14 @@ def cleanup_expired_sandbox_sessions(self):
         async with get_worker_session() as session:
             cutoff_date = datetime.now(timezone.utc)
             result = await session.execute(
-                delete(SandboxSession).where(SandboxSession.expires_at < cutoff_date)
+                select(SandboxSession.id).where(SandboxSession.expires_at < cutoff_date)
             )
-            deleted_count = result.rowcount
+            session_ids = list(result.scalars().all())
+            deleted_count = 0
+            svc = SandboxService(session)
+            for session_id in session_ids:
+                if await svc.delete_session(session_id):
+                    deleted_count += 1
             await session.commit()
             logger.info(
                 "Deleted %s expired sandbox sessions (expires_at < %s)",
@@ -141,6 +149,39 @@ def cleanup_expired_sandbox_sessions(self):
         return asyncio.run(_cleanup())
     except Exception as e:
         logger.error(f"Failed to cleanup expired sandbox sessions: {e}", exc_info=True)
+        raise self.retry(exc=e)
+
+
+@shared_task(
+    name="app.workers.tasks_cleanup.cleanup_expired_detached_chat_attachments",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def cleanup_expired_detached_chat_attachments(self):
+    """
+    Delete detached chat attachments (chat_id is null) older than retention period.
+    """
+    import asyncio
+
+    async def _cleanup():
+        async with get_worker_session() as session:
+            older_than = datetime.now(timezone.utc) - timedelta(hours=DETACHED_CHAT_ATTACHMENT_RETENTION_HOURS)
+            deleted_count = await ChatAttachmentService(session).cleanup_expired_detached_attachments(
+                older_than=older_than,
+            )
+            await session.commit()
+            logger.info(
+                "Deleted %s detached chat attachments older than %s",
+                deleted_count,
+                older_than.isoformat(),
+            )
+            return deleted_count
+
+    try:
+        return asyncio.run(_cleanup())
+    except Exception as e:
+        logger.error(f"Failed to cleanup detached chat attachments: {e}", exc_info=True)
         raise self.retry(exc=e)
 
 
@@ -254,6 +295,11 @@ def run_all_cleanup():
         results["sandbox_sessions"] = cleanup_expired_sandbox_sessions.delay().get(timeout=300)
     except Exception as e:
         results["sandbox_sessions"] = f"error: {e}"
+
+    try:
+        results["detached_chat_attachments"] = cleanup_expired_detached_chat_attachments.delay().get(timeout=300)
+    except Exception as e:
+        results["detached_chat_attachments"] = f"error: {e}"
 
     try:
         results["deprecated_entities"] = cleanup_deprecated_entities.delay().get(timeout=300)

@@ -12,9 +12,11 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from celery import Task
+from sqlalchemy import text as sa_text
 
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
@@ -27,6 +29,116 @@ DEFAULT_CHUNK_SIZE = 1200
 DEFAULT_CHUNK_OVERLAP = 150
 MIN_CHUNK_SIZE = 200
 MAX_CHUNK_SIZE = 4000
+
+
+def _serialize_template_nodes(nodes: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "node_key": node.node_key,
+            "status": node.status,
+            "error_short": node.error_short,
+            "metrics_json": node.metrics_json,
+            "started_at": getattr(node, "started_at", None).isoformat() if getattr(node, "started_at", None) else None,
+            "finished_at": getattr(node, "finished_at", None).isoformat() if getattr(node, "finished_at", None) else None,
+        }
+        for node in nodes
+    ]
+
+
+async def _publish_template_vector_status(
+    *,
+    session: Any,
+    collection: Any,
+    row_id: str,
+) -> None:
+    from app.core.config import get_settings
+    from app.repositories.template_analysis_status_repo import AsyncTemplateAnalysisStatusRepository
+    from app.services.collection.row_service import CollectionRowService
+    from app.services.collection.template_status_stream import (
+        TemplateStatusPublisher,
+        build_template_row_runtime_payload,
+        build_template_status_graph,
+    )
+    import redis.asyncio as aioredis
+
+    if str(collection.collection_type or "").strip().lower() != "template":
+        return
+
+    settings = get_settings()
+    if not settings.REDIS_URL:
+        return
+
+    row_service = CollectionRowService(session)
+    row = await row_service.get_row_by_id(collection, uuid.UUID(str(row_id)))
+    if not row:
+        return
+
+    raw_result = await session.execute(
+        sa_text(
+            f"SELECT id::text AS id, _vector_status, _vector_error, _vector_chunk_count "
+            f"FROM {collection.table_name} WHERE id::text = :row_id"
+        ),
+        {"row_id": str(row_id)},
+    )
+    raw_meta = raw_result.mappings().first() or {}
+    status_repo = AsyncTemplateAnalysisStatusRepository(session)
+    nodes = await status_repo.get_nodes_by_row_id(uuid.UUID(str(row_id)))
+    serialized_nodes = _serialize_template_nodes(nodes)
+    payload = build_template_row_runtime_payload(
+        {
+            **row,
+            **dict(raw_meta),
+            "has_vector_search": bool(collection.has_vector_search),
+        },
+        collection_id=str(collection.id),
+        analysis_nodes=serialized_nodes,
+    )
+
+    redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        publisher = TemplateStatusPublisher(redis_client)
+        await publisher.publish_snapshot(
+            row_id=uuid.UUID(str(row_id)),
+            payload=build_template_status_graph(
+                payload,
+                collection_id=str(collection.id),
+                analysis_nodes=serialized_nodes,
+            ),
+        )
+        await publisher.publish_collection_snapshot(
+            collection_id=collection.id,
+            row_id=uuid.UUID(str(row_id)),
+            payload=payload,
+        )
+    finally:
+        await redis_client.aclose()
+
+
+async def _upsert_template_retrieval_node(
+    *,
+    session: Any,
+    collection_id: str,
+    row_id: str,
+    node_key: str,
+    status: str,
+    error_short: str | None = None,
+    metrics_json: dict[str, Any] | None = None,
+    started_at: Any = None,
+    finished_at: Any = None,
+) -> None:
+    from app.repositories.template_analysis_status_repo import AsyncTemplateAnalysisStatusRepository
+
+    repo = AsyncTemplateAnalysisStatusRepository(session)
+    await repo.upsert_node(
+        collection_id=uuid.UUID(str(collection_id)),
+        row_id=uuid.UUID(str(row_id)),
+        node_key=node_key,
+        status=status,
+        error_short=error_short,
+        metrics_json=metrics_json,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
 
 
 def _build_point_id(collection_id: str, row_id: str, field_name: str, chunk_idx: int) -> str:
@@ -116,8 +228,6 @@ def vectorize_collection_rows(
     """
 
     async def _execute() -> Dict[str, Any]:
-        from sqlalchemy import text as sa_text
-
         from app.adapters.embeddings import EmbeddingServiceFactory
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.services.collection_service import CollectionService
@@ -269,6 +379,33 @@ def vectorize_collection_rows(
                 for prow in pending_rows:
                     rid = prow["id"]
                     try:
+                        if str(collection.collection_type or "").strip().lower() == "template":
+                            await _upsert_template_retrieval_node(
+                                session=session,
+                                collection_id=collection_id,
+                                row_id=rid,
+                                node_key="vectorization",
+                                status="processing",
+                                started_at=datetime.now(timezone.utc),
+                                metrics_json={
+                                    "model_alias": scoped_collections[0][0] if scoped_collections else None,
+                                    "chunks_prepared": 0,
+                                },
+                            )
+                            await _upsert_template_retrieval_node(
+                                session=session,
+                                collection_id=collection_id,
+                                row_id=rid,
+                                node_key="indexing",
+                                status="pending",
+                            )
+                            await session.flush()
+                            await _publish_template_vector_status(
+                                session=session,
+                                collection=collection,
+                                row_id=rid,
+                            )
+
                         field_chunks: dict[str, list[str]] = {}
                         for fname in vector_field_names:
                             text_val = prow.get(fname)
@@ -313,6 +450,48 @@ def vectorize_collection_rows(
                                         "collection_id": collection_id,
                                     })
 
+                            if str(collection.collection_type or "").strip().lower() == "template":
+                                await _upsert_template_retrieval_node(
+                                    session=session,
+                                    collection_id=collection_id,
+                                    row_id=rid,
+                                    node_key="indexing",
+                                    status="processing",
+                                    started_at=datetime.now(timezone.utc),
+                                    metrics_json={
+                                        "model_alias": model_alias,
+                                        "chunks_prepared": len(points_vectors),
+                                    },
+                                )
+                                await _upsert_template_retrieval_node(
+                                    session=session,
+                                    collection_id=collection_id,
+                                    row_id=rid,
+                                    node_key="vectorization",
+                                    status="completed",
+                                    finished_at=datetime.now(timezone.utc),
+                                    metrics_json={
+                                        "model_alias": model_alias,
+                                        "chunks_prepared": len(points_vectors),
+                                        "chunk_count": len(points_vectors),
+                                    },
+                                )
+                                logger.info(
+                                    "template_vectorization_completed",
+                                    extra={
+                                        "collection_id": collection_id,
+                                        "row_id": rid,
+                                        "model_alias": model_alias,
+                                        "chunks_prepared": len(points_vectors),
+                                    },
+                                )
+                                await session.flush()
+                                await _publish_template_vector_status(
+                                    session=session,
+                                    collection=collection,
+                                    row_id=rid,
+                                )
+
                             if points_vectors:
                                 await vector_store.upsert(
                                     scoped_collection_name,
@@ -333,13 +512,78 @@ def vectorize_collection_rows(
                             ),
                             {"cnt": row_chunk_count, "rid": rid},
                         )
+                        if str(collection.collection_type or "").strip().lower() == "template":
+                            await _upsert_template_retrieval_node(
+                                session=session,
+                                collection_id=collection_id,
+                                row_id=rid,
+                                node_key="indexing",
+                                status="completed",
+                                finished_at=datetime.now(timezone.utc),
+                                metrics_json={
+                                    "model_alias": scoped_collections[0][0] if scoped_collections else None,
+                                    "chunk_count": row_chunk_count,
+                                    "indexed_count": row_chunk_count,
+                                },
+                            )
+                            logger.info(
+                                "template_indexing_completed",
+                                extra={
+                                    "collection_id": collection_id,
+                                    "row_id": rid,
+                                    "chunk_count": row_chunk_count,
+                                },
+                            )
+                            await session.execute(
+                                sa_text(
+                                    f"UPDATE {table_name} SET status = 'ready' "
+                                    f"WHERE id::text = :rid AND COALESCE(status, 'uploaded') <> 'archived'"
+                                ),
+                                {"rid": rid},
+                            )
                         vectorized += 1
+                        await _publish_template_vector_status(
+                            session=session,
+                            collection=collection,
+                            row_id=rid,
+                        )
 
                     except Exception as e:
                         logger.error(
                             f"Failed to vectorize row {rid} in {table_name}: {e}",
                             exc_info=True,
                         )
+                        if str(collection.collection_type or "").strip().lower() == "template":
+                            await _upsert_template_retrieval_node(
+                                session=session,
+                                collection_id=collection_id,
+                                row_id=rid,
+                                node_key="vectorization",
+                                status="failed",
+                                error_short=str(e)[:500],
+                                metrics_json={"error_type": type(e).__name__},
+                                finished_at=datetime.now(timezone.utc),
+                            )
+                            await _upsert_template_retrieval_node(
+                                session=session,
+                                collection_id=collection_id,
+                                row_id=rid,
+                                node_key="indexing",
+                                status="failed",
+                                error_short=str(e)[:500],
+                                metrics_json={"error_type": type(e).__name__},
+                                finished_at=datetime.now(timezone.utc),
+                            )
+                            logger.error(
+                                "template_analysis_failed",
+                                extra={
+                                    "stage": "vectorization",
+                                    "collection_id": collection_id,
+                                    "row_id": rid,
+                                    "error_type": type(e).__name__,
+                                    "error_message": str(e),
+                                },
+                            )
                         await session.execute(
                             sa_text(
                                 f"UPDATE {table_name} SET _vector_status = 'error', "
@@ -349,6 +593,11 @@ def vectorize_collection_rows(
                             {"err": str(e)[:500], "rid": rid},
                         )
                         failed += 1
+                        await _publish_template_vector_status(
+                            session=session,
+                            collection=collection,
+                            row_id=rid,
+                        )
 
                 # 7. Update collection stats
                 stats_result = await session.execute(

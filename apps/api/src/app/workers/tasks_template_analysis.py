@@ -8,16 +8,17 @@ from typing import Any
 from celery import shared_task
 
 from app.core.logging import get_logger
-from app.services.collection.template_contract import TemplateContract
+from app.services.collection.template_contract import TemplateContract, TableField
 from app.services.collection.template_description_builder import TemplateDescriptionBuilder
 from app.services.collection.template_layout_parser import TemplateLayoutParser
 from app.services.collection.template_schema_builder import TemplateSchemaBuilder
 from app.services.collection.template_status_stream import (
     TemplateStatusPublisher,
+    build_template_row_runtime_payload,
     build_template_status_graph,
 )
 from app.repositories.template_analysis_status_repo import AsyncTemplateAnalysisStatusRepository
-from app.services.collection_vectorization_orchestrator import CollectionVectorizationOrchestrator
+from app.services.collection.template_analysis_orchestrator import TemplateAnalysisOrchestrator
 from app.workers.session_factory import get_worker_session
 
 logger = get_logger(__name__)
@@ -27,16 +28,83 @@ TEMPLATE_STATUS_ANALYZED = "analyzed"
 TEMPLATE_STATUS_READY = "ready"
 TEMPLATE_STATUS_ARCHIVED = "archived"
 
-_TASK_NODE_KEYS = {"description", "schema"}
+_TASK_NODE_KEYS = {"description", "schema", "approval"}
+
+
+def _serialize_analysis_nodes(nodes: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "node_key": node.node_key,
+            "status": node.status,
+            "error_short": node.error_short,
+            "metrics_json": node.metrics_json,
+            "started_at": getattr(node, "started_at", None).isoformat() if getattr(node, "started_at", None) else None,
+            "finished_at": getattr(node, "finished_at", None).isoformat() if getattr(node, "finished_at", None) else None,
+        }
+        for node in nodes
+    ]
+
+
+def _build_schema_metrics(*, row: dict[str, Any], filename: str, layout: Any, contract: TemplateContract) -> dict[str, Any]:
+    scalar_field_count = sum(1 for field in contract.fields if not isinstance(field, TableField))
+    table_fields = [field for field in contract.fields if isinstance(field, TableField)]
+    table_field_count = len(table_fields)
+    schema_preview = [field.key for field in contract.fields[:10]]
+    return {
+        "filename": filename,
+        "title": layout.title or row.get("title") or filename,
+        "version": layout.version or row.get("template_version"),
+        "format": layout.format,
+        "sheet_count": len(layout.sheets),
+        "sheet_names": layout.sheets,
+        "token_count": len(layout.tokens),
+        "scalar_key_count": len(layout.scalar_keys),
+        "table_prefix_count": len(layout.table_prefixes),
+        "table_region_count": len(layout.table_regions),
+        "fence_block_count": len(layout.fence_blocks),
+        "field_count": len(contract.fields),
+        "scalar_field_count": scalar_field_count,
+        "table_field_count": table_field_count,
+        "schema_summary": f"{len(contract.fields)} fields, {table_field_count} tables",
+        "schema_preview": schema_preview,
+    }
+
+
+def _build_description_metrics(
+    *,
+    title: str | None,
+    version: str | None,
+    contract: TemplateContract,
+    description: str,
+) -> dict[str, Any]:
+    scalar_field_count = sum(1 for field in contract.fields if not isinstance(field, TableField))
+    table_field_count = sum(1 for field in contract.fields if isinstance(field, TableField))
+    return {
+        "title": title,
+        "version": version,
+        "field_count": len(contract.fields),
+        "scalar_field_count": scalar_field_count,
+        "table_field_count": table_field_count,
+        "description_text": description,
+        "description_source": "deterministic",
+    }
 
 
 def _resolve_template_status(current_row: dict[str, Any], nodes: list[Any]) -> str:
     current_status = str(current_row.get("status") or TEMPLATE_STATUS_UPLOADED).strip().lower()
-    if current_status in {TEMPLATE_STATUS_READY, TEMPLATE_STATUS_ARCHIVED, TEMPLATE_STATUS_ANALYZED}:
+    if current_status == TEMPLATE_STATUS_ARCHIVED:
         return current_status
 
     node_map = {str(node.node_key): node for node in nodes if getattr(node, "node_key", None) in _TASK_NODE_KEYS}
-    if all(str(node_map.get(key).status if node_map.get(key) else "").strip().lower() == "completed" for key in _TASK_NODE_KEYS):
+    schema_completed = str(getattr(node_map.get("schema"), "status", "") or "").strip().lower() == "completed"
+    description_completed = str(getattr(node_map.get("description"), "status", "") or "").strip().lower() == "completed"
+    approval_completed = str(getattr(node_map.get("approval"), "status", "") or "").strip().lower() == "completed"
+    has_vector_search = bool(current_row.get("has_vector_search"))
+    vector_state = str(current_row.get("_vector_status") or "").strip().lower()
+
+    if approval_completed and (not has_vector_search or vector_state == "done"):
+        return TEMPLATE_STATUS_READY
+    if schema_completed and description_completed:
         return TEMPLATE_STATUS_ANALYZED
     return TEMPLATE_STATUS_UPLOADED
 
@@ -82,6 +150,7 @@ async def _load_template_file(row: dict[str, Any]) -> tuple[bytes, str]:
 async def _publish_snapshot(
     *,
     collection_id: str,
+    collection_uuid: uuid.UUID,
     row: dict[str, Any],
     status_repo: AsyncTemplateAnalysisStatusRepository,
 ) -> None:
@@ -95,21 +164,27 @@ async def _publish_snapshot(
     try:
         publisher = TemplateStatusPublisher(redis_client)
         nodes = await status_repo.get_nodes_by_row_id(uuid.UUID(str(row["id"])))
+        serialized_nodes = _serialize_analysis_nodes(nodes)
+        payload = build_template_row_runtime_payload(
+            {
+                **row,
+                "has_vector_search": bool(row.get("has_vector_search")),
+            },
+            collection_id=collection_id,
+            analysis_nodes=serialized_nodes,
+        )
         await publisher.publish_snapshot(
             row_id=uuid.UUID(str(row["id"])),
             payload=build_template_status_graph(
-                row,
+                payload,
                 collection_id=collection_id,
-                analysis_nodes=[
-                    {
-                        "node_key": node.node_key,
-                        "status": node.status,
-                        "error_short": node.error_short,
-                        "metrics_json": node.metrics_json,
-                    }
-                    for node in nodes
-                ],
+                analysis_nodes=serialized_nodes,
             ),
+        )
+        await publisher.publish_collection_snapshot(
+            collection_id=collection_uuid,
+            row_id=uuid.UUID(str(row["id"])),
+            payload=payload,
         )
     finally:
         try:
@@ -162,6 +237,7 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
                 started_at=datetime.now(timezone.utc),
             )
             await session.commit()
+            logger.info("template_description_started", extra={"collection_id": collection_id, "row_id": row_id})
 
             # Description is a downstream stage: it consumes the parsed contract.
             raw_schema = row.get("template_schema") or {}
@@ -192,13 +268,25 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
                 row_id=row_uuid,
                 node_key="description",
                 status="completed",
-                metrics_json={
-                    "title": resolved_title,
-                    "version": resolved_version,
-                },
+                metrics_json=_build_description_metrics(
+                    title=resolved_title,
+                    version=resolved_version,
+                    contract=contract,
+                    description=description,
+                ),
                 finished_at=datetime.now(timezone.utc),
             )
             await session.commit()
+            logger.info(
+                "template_description_completed",
+                extra={
+                    "collection_id": collection_id,
+                    "row_id": row_id,
+                    "title": resolved_title,
+                    "version": resolved_version,
+                    "field_count": len(contract.fields),
+                },
+            )
             updated_row = await service.update_row(collection, row_uuid, updates)
             nodes = await status_repo.get_nodes_by_row_id(row_uuid)
             updates_status = _resolve_template_status(updated_row or row, nodes)
@@ -207,15 +295,11 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
                 await session.commit()
             updated_row = await service.get_row_by_id(collection, row_uuid)
             if updated_row is not None:
-                await _publish_snapshot(collection_id=collection_id, row=updated_row, status_repo=status_repo)
-
-            vectorization_task_id = None
-            if updated_row is not None and collection.has_vector_search:
-                vectorization_task_id = CollectionVectorizationOrchestrator.enqueue(
-                    collection_id=collection.id,
-                    tenant_id=collection.tenant_id,
-                    row_ids=[row_id],
-                    countdown=1,
+                await _publish_snapshot(
+                    collection_id=collection_id,
+                    collection_uuid=collection_uuid,
+                    row={**updated_row, "has_vector_search": bool(collection.has_vector_search)},
+                    status_repo=status_repo,
                 )
 
             return {
@@ -223,7 +307,7 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
                 "collection_id": collection_id,
                 "row_id": row_id,
                 "template_status": str((updated_row or row).get("status") or TEMPLATE_STATUS_UPLOADED),
-                "vectorization_task_id": vectorization_task_id,
+                "vectorization_task_id": None,
             }
         except Exception as exc:
             logger.error("template_description_generation_failed: %s", exc, exc_info=True)
@@ -237,9 +321,24 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
                 finished_at=datetime.now(timezone.utc),
             )
             await session.commit()
+            logger.error(
+                "template_analysis_failed",
+                extra={
+                    "stage": "description",
+                    "collection_id": collection_id,
+                    "row_id": row_id,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
             updated_row = await service.get_row_by_id(collection, row_uuid)
             if updated_row is not None:
-                await _publish_snapshot(collection_id=collection_id, row=updated_row, status_repo=status_repo)
+                await _publish_snapshot(
+                    collection_id=collection_id,
+                    collection_uuid=collection_uuid,
+                    row={**updated_row, "has_vector_search": bool(collection.has_vector_search)},
+                    status_repo=status_repo,
+                )
             raise
 
     try:
@@ -270,6 +369,17 @@ def generate_template_schema(self, collection_id: str, row_id: str) -> dict[str,
             await session.commit()
 
             payload, filename = await _load_template_file(row)
+            file_meta = row.get("file") if isinstance(row.get("file"), dict) else {}
+            logger.info(
+                "template_schema_started",
+                extra={
+                    "collection_id": collection_id,
+                    "row_id": row_id,
+                    "template_filename": filename,
+                    "content_type": file_meta.get("content_type"),
+                    "file_size": file_meta.get("size"),
+                },
+            )
             
             # Step 1: Parse layout (S1)
             parser = TemplateLayoutParser()
@@ -285,21 +395,44 @@ def generate_template_schema(self, collection_id: str, row_id: str) -> dict[str,
                 "template_version": layout.version or row.get("template_version"),
                 "template_schema": contract.to_jsonb(),
             }
+            schema_metrics = _build_schema_metrics(
+                row=row,
+                filename=filename,
+                layout=layout,
+                contract=contract,
+            )
 
+            updated_row = await service.update_row(collection, row_uuid, updates, skip_vectorization=True)
+            await session.commit()
             await _update_analysis_node(
                 status_repo=status_repo,
                 collection_id=collection_uuid,
                 row_id=row_uuid,
                 node_key="schema",
                 status="completed",
-                metrics_json={
-                    "title": layout.title or row.get("title") or filename,
-                    "version": layout.version or row.get("template_version"),
-                },
+                metrics_json=schema_metrics,
                 finished_at=datetime.now(timezone.utc),
             )
             await session.commit()
-            updated_row = await service.update_row(collection, row_uuid, updates, skip_vectorization=True)
+            logger.info(
+                "template_schema_completed",
+                extra={
+                    "collection_id": collection_id,
+                    "row_id": row_id,
+                    "template_filename": filename,
+                    "format": layout.format,
+                    "sheet_count": len(layout.sheets),
+                    "sheet_names": layout.sheets,
+                    "token_count": len(layout.tokens),
+                    "table_region_count": len(layout.table_regions),
+                    "field_count": len(contract.fields),
+                },
+            )
+            description_task_id = TemplateAnalysisOrchestrator.enqueue_description(
+                collection_id=collection_uuid,
+                row_id=row_uuid,
+                countdown=1,
+            )
             nodes = await status_repo.get_nodes_by_row_id(row_uuid)
             updates_status = _resolve_template_status(updated_row or row, nodes)
             if updates_status != str((updated_row or row).get("status") or "").strip().lower():
@@ -307,12 +440,18 @@ def generate_template_schema(self, collection_id: str, row_id: str) -> dict[str,
                 await session.commit()
             updated_row = await service.get_row_by_id(collection, row_uuid)
             if updated_row is not None:
-                await _publish_snapshot(collection_id=collection_id, row=updated_row, status_repo=status_repo)
+                await _publish_snapshot(
+                    collection_id=collection_id,
+                    collection_uuid=collection_uuid,
+                    row={**updated_row, "has_vector_search": bool(collection.has_vector_search)},
+                    status_repo=status_repo,
+                )
             return {
                 "status": "ok",
                 "collection_id": collection_id,
                 "row_id": row_id,
                 "template_status": str((updated_row or row).get("status") or TEMPLATE_STATUS_UPLOADED),
+                "description_task_id": description_task_id,
             }
         except Exception as exc:
             logger.error("template_schema_generation_failed: %s", exc, exc_info=True)
@@ -326,9 +465,24 @@ def generate_template_schema(self, collection_id: str, row_id: str) -> dict[str,
                 finished_at=datetime.now(timezone.utc),
             )
             await session.commit()
+            logger.error(
+                "template_analysis_failed",
+                extra={
+                    "stage": "schema",
+                    "collection_id": collection_id,
+                    "row_id": row_id,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
             updated_row = await service.get_row_by_id(collection, row_uuid)
             if updated_row is not None:
-                await _publish_snapshot(collection_id=collection_id, row=updated_row, status_repo=status_repo)
+                await _publish_snapshot(
+                    collection_id=collection_id,
+                    collection_uuid=collection_uuid,
+                    row={**updated_row, "has_vector_search": bool(collection.has_vector_search)},
+                    status_repo=status_repo,
+                )
             raise
 
     try:

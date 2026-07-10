@@ -7,6 +7,10 @@ from sqlalchemy import or_
 SANDBOX_UPLOAD_CHAT_PREFIX = "__sandbox_uploads__:"
 
 
+def make_sandbox_upload_chat_name(session_id: Any) -> str:
+    return f"{SANDBOX_UPLOAD_CHAT_PREFIX}{session_id}"
+
+
 def is_sandbox_upload_chat_name(name: Any) -> bool:
     if not isinstance(name, str):
         return False

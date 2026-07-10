@@ -4,6 +4,7 @@ import { StatusModalNew } from './StatusModalNew';
 
 const apiRequestMock = vi.fn();
 const showToastMock = vi.fn();
+let mockedSelection = { nodeKey: 'upload', laneKey: null, itemKey: null } as { nodeKey: string | null; laneKey: string | null; itemKey: string | null };
 
 vi.mock('@shared/ui/Modal', () => ({
   default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -34,23 +35,32 @@ vi.mock('@shared/api/hooks/useDocumentStatus', () => ({
   }),
 }));
 
-vi.mock('./PipelineView', () => ({
-  PipelineView: () => <div data-testid="pipeline-view" />,
-}));
-
-vi.mock('./StageDetails', () => ({
-  StageDetails: ({
-    onDownloadOriginal,
-    onDownloadNormalized,
+vi.mock('@shared/components/statusFlow', () => ({
+  StatusFlowView: () => <div data-testid="pipeline-view" />,
+  StatusFlowDetails: ({
+    actions = [],
   }: {
-    onDownloadOriginal?: () => void;
-    onDownloadNormalized?: () => void;
+    actions?: Array<{ label: string; onClick: () => void }>;
   }) => (
     <div>
-      <button type="button" onClick={onDownloadOriginal}>Download Original</button>
-      <button type="button" onClick={onDownloadNormalized}>Download Normalized</button>
+      {actions.map((action) => (
+        <button key={action.label} type="button" onClick={action.onClick}>
+          {action.label}
+        </button>
+      ))}
     </div>
   ),
+  adaptDocumentStatusToFlowModel: () => ({
+    pipeline: [
+      { key: 'upload', label: 'Upload', status: 'completed' },
+      { key: 'normalize', label: 'Normalize', status: 'completed' },
+    ],
+    lanes: [],
+  }),
+  useStatusFlowSelection: () => ({
+    selection: mockedSelection,
+    setSelection: vi.fn(),
+  }),
 }));
 
 function renderModal(props?: Partial<React.ComponentProps<typeof StatusModalNew>>) {
@@ -65,6 +75,7 @@ function renderModal(props?: Partial<React.ComponentProps<typeof StatusModalNew>
 describe('StatusModalNew download behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedSelection = { nodeKey: 'upload', laneKey: null, itemKey: null };
   });
 
   it('uses API download_url when downloadUrlPrefix is provided', async () => {
@@ -72,7 +83,7 @@ describe('StatusModalNew download behavior', () => {
     apiRequestMock.mockResolvedValueOnce({ download_url: '/api/v1/files/ragdoc_doc-123_original/download' });
 
     renderModal({ downloadUrlPrefix: '/collections/1/docs/doc-123/download' });
-    fireEvent.click(screen.getByRole('button', { name: /download original/i }));
+    fireEvent.click(screen.getByRole('button', { name: /скачать оригинал/i }));
 
     await waitFor(() => {
       expect(apiRequestMock).toHaveBeenCalledWith('/collections/1/docs/doc-123/download?kind=original');
@@ -82,9 +93,10 @@ describe('StatusModalNew download behavior', () => {
 
   it('falls back to file_id endpoint when downloadUrlPrefix is not provided', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    mockedSelection = { nodeKey: 'normalize', laneKey: null, itemKey: null };
 
     renderModal();
-    fireEvent.click(screen.getByRole('button', { name: /download normalized/i }));
+    fireEvent.click(screen.getByRole('button', { name: /скачать json/i }));
 
     await waitFor(() => {
       expect(openSpy).toHaveBeenCalledWith(
@@ -95,4 +107,3 @@ describe('StatusModalNew download behavior', () => {
     });
   });
 });
-

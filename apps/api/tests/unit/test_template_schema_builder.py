@@ -27,7 +27,7 @@ def scalar_layout():
         format="text", title="Test", version=None,
         tokens=[
             TokenOccurrence(token="name", table_prefix=None, column_key=None, location={}),
-            TokenOccurrence(token="author.email", table_prefix="author", column_key="email", location={}),
+            TokenOccurrence(token="author.email", table_prefix=None, column_key=None, location={}),
         ],
         scalar_keys=["name", "author.email"],
         table_prefixes=[],
@@ -41,8 +41,28 @@ def table_layout():
     return RawLayout(
         format="excel", title="Items", version="1.0",
         tokens=[
-            TokenOccurrence(token="items.name", table_prefix="items", column_key="name", location={"sheet": "Sheet1"}),
-            TokenOccurrence(token="items.qty", table_prefix="items", column_key="qty", location={"sheet": "Sheet1"}),
+            TokenOccurrence(
+                token="items.name",
+                table_prefix="items",
+                column_key="name",
+                location={"sheet": "Sheet1"},
+                segments=[
+                    {"key": "items", "params": {"name": "Items", "min": 1, "max": 5}, "repeat": True},
+                    {"key": "name", "params": {"name": "Item Name"}, "repeat": False},
+                ],
+            ),
+            TokenOccurrence(
+                token="items.qty",
+                table_prefix="items",
+                column_key="qty",
+                location={"sheet": "Sheet1"},
+                hint_type="int",
+                hint_args="10",
+                segments=[
+                    {"key": "items", "params": {"name": "Items", "min": 1, "max": 5}, "repeat": True},
+                    {"key": "qty", "params": {"name": "Quantity", "required": True}, "repeat": False},
+                ],
+            ),
         ],
         scalar_keys=[],
         table_prefixes=["items"],
@@ -67,6 +87,10 @@ async def test_heuristic_scalars(builder, scalar_layout):
     assert contract.scalar_fields()[1].key == "author.email"
     assert contract.scalar_fields()[0].source == FieldSource.PARSER
     assert contract.scalar_fields()[0].required is False
+    dumped = contract.to_jsonb()
+    assert dumped["fields"][1]["key"] == "author"
+    assert dumped["fields"][1]["kind"] == "object"
+    assert dumped["fields"][1]["fields"][0]["key"] == "email"
 
 
 @pytest.mark.asyncio
@@ -75,13 +99,22 @@ async def test_heuristic_table(builder, table_layout):
     assert len(contract.table_fields()) == 1
     tf = contract.table_fields()[0]
     assert tf.key == "items"
+    assert tf.label == "Items"
     assert len(tf.columns) == 2
     assert tf.columns[0].key == "name"
     assert tf.columns[1].key == "qty"
+    assert tf.columns[0].label == "Item Name"
+    assert tf.columns[1].label == "Quantity"
     assert tf.source == FieldSource.PARSER
     assert tf.required is False
-    assert tf.min_rows == 0
-    assert all(col.required is False for col in tf.columns)
+    assert tf.min_rows == 1
+    assert tf.max_rows == 5
+    assert tf.columns[0].required is False
+    assert tf.columns[1].required is True
+    dumped = contract.to_jsonb()
+    assert dumped["fields"][0]["key"] == "items"
+    assert dumped["fields"][0]["kind"] == "table"
+    assert [field["key"] for field in dumped["fields"][0]["fields"]] == ["name", "qty"]
 
 
 @pytest.mark.asyncio
@@ -158,8 +191,8 @@ async def test_typed_placeholder_infers_number(builder):
         tokens=[
             TokenOccurrence(
                 token="author.tel",
-                table_prefix="author",
-                column_key="tel",
+                table_prefix=None,
+                column_key=None,
                 location={},
                 placeholder="{{author.tel:int(10)}}",
                 hint_type="int",
@@ -177,4 +210,60 @@ async def test_typed_placeholder_infers_number(builder):
     field = contract.get_field("author.tel")
     assert field is not None
     assert field.type == FieldType.NUMBER
-    assert field.description == "Template hint: int(10)"
+    assert field.description is None
+
+
+@pytest.mark.asyncio
+async def test_segment_metadata_drives_labels_and_enums(builder):
+    layout = RawLayout(
+        format="text",
+        title="Form",
+        version=None,
+        tokens=[
+            TokenOccurrence(
+                token="author.name",
+                table_prefix=None,
+                column_key=None,
+                location={},
+                segments=[
+                    {"key": "author", "params": {"name": "Author"}, "repeat": False},
+                    {"key": "name", "params": {"name": "Full name", "required": True}, "repeat": False},
+                ],
+            ),
+            TokenOccurrence(
+                token="items.traffic",
+                table_prefix="items",
+                column_key="traffic",
+                location={},
+                segments=[
+                    {"key": "items", "params": {"name": "Items", "description": "Traffic rows"}, "repeat": True},
+                    {"key": "traffic", "params": {"name": "Traffic", "choice": ["tcp", "udp"]}, "repeat": False},
+                ],
+            ),
+        ],
+        scalar_keys=["author.name"],
+        table_prefixes=["items"],
+        table_regions=[
+            TableRegion(
+                region_id="text:marker:items",
+                location={"type": "inline", "key": "items"},
+                loop_tokens=["{{items[].traffic}}"],
+                loop_prefix="items",
+            )
+        ],
+        text_lines=[],
+    )
+
+    contract = await builder.build(layout)
+
+    author = contract.get_field("author.name")
+    items = contract.get_field("items")
+    assert author is not None
+    assert author.label == "Full name"
+    assert author.required is True
+    assert items is not None
+    assert items.label == "Items"
+    assert items.description == "Traffic rows"
+    assert items.columns[0].label == "Traffic"
+    assert items.columns[0].type == FieldType.ENUM
+    assert items.columns[0].enum == ["tcp", "udp"]

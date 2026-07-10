@@ -244,6 +244,16 @@ export interface CollectionTemplate {
   template_schema?: Record<string, unknown> | null;
   description?: string | null;
   status?: string | null;
+  runtime_status?: 'uploaded' | 'processing' | 'approval_required' | 'ready' | 'failed' | 'archived' | null;
+  runtime_stage?: 'upload' | 'schema' | 'description' | 'approval' | 'vectorization' | 'indexing' | 'done' | null;
+  status_reason?: string | null;
+  approval_required?: boolean;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  has_error?: boolean;
+  error_message?: string | null;
+  vectorization_status?: string | null;
+  indexing_status?: string | null;
 }
 
 export interface UpdateTemplateRequest {
@@ -257,6 +267,11 @@ export interface CollectionTemplatesResponse {
   total: number;
   page: number;
   size: number;
+}
+
+export interface ApproveTemplateResponse {
+  item: CollectionTemplate;
+  vectorization_task_id?: string | null;
 }
 
 export interface AnalyzeTemplatesResponse {
@@ -658,6 +673,19 @@ export const collectionsApi = {
 
   getTemplateStatusEventsUrl: (collectionId: string, rowId: string): string =>
     `/api/v1/collections/${collectionId}/templates/${encodeURIComponent(rowId)}/status/events`,
+
+  getTemplateCollectionStatusEventsUrl: (collectionId: string): string =>
+    `/api/v1/collections/${collectionId}/templates/status/events`,
+
+  approveTemplate: async (
+    collectionId: string,
+    rowId: string,
+  ): Promise<ApproveTemplateResponse> => {
+    return apiRequest<ApproveTemplateResponse>(`/collections/${collectionId}/templates/${rowId}/approve`, {
+      method: 'POST',
+      body: {},
+    });
+  },
 
   // Tenant-level endpoints
   list: async (activeOnly = true): Promise<CollectionListResponse> => {

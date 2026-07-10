@@ -254,8 +254,13 @@ class ChatStreamService:
                     logger.warning("chat_attachment_not_found: %s", exc)
                     yield _safe_stream_error("attachment_not_found", "Attachment not found or access denied")
                     return
+            scoped_attachment_rows = await self.attachment_service.list_owned_attachments_for_chat(
+                chat_id=chat_id,
+                owner_id=user_id,
+            )
+            if scoped_attachment_rows:
                 attachment_prompt_context = await self.attachment_service.build_prompt_context(
-                    attachments=attachment_rows
+                    attachments=scoped_attachment_rows
                 )
 
             async for event in self.turn_orchestrator.execute_turn(

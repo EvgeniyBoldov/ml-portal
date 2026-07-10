@@ -80,8 +80,10 @@ def test_parse_text_scalars(parser: TemplateLayoutParser):
 def test_parse_text_dotted_tokens(parser: TemplateLayoutParser):
     content = b"{{items.name}} {{items.qty}} {{items.price}}"
     layout = parser.parse(content, "form.txt")
-    assert "items" in layout.table_prefixes
-    assert layout.scalar_keys == []
+    assert layout.table_prefixes == []
+    assert "items.name" in layout.scalar_keys
+    assert "items.qty" in layout.scalar_keys
+    assert "items.price" in layout.scalar_keys
 
 
 def test_parse_text_dotted_object_tokens(parser: TemplateLayoutParser):
@@ -93,13 +95,13 @@ def test_parse_text_dotted_object_tokens(parser: TemplateLayoutParser):
 
 
 def test_parse_text_table_region_from_dotted(parser: TemplateLayoutParser):
-    content = b"{{items.name}} {{items.qty}}"
+    content = b"{{items[].name}} {{items[].qty}}"
     layout = parser.parse(content, "form.txt")
     assert len(layout.table_regions) == 1
     region = layout.table_regions[0]
     assert region.loop_prefix == "items"
-    assert "{{items.name}}" in region.loop_tokens
-    assert "{{items.qty}}" in region.loop_tokens
+    assert "{{items[].name}}" in region.loop_tokens
+    assert "{{items[].qty}}" in region.loop_tokens
 
 
 def test_parse_text_fence_blocks(parser: TemplateLayoutParser):
@@ -133,19 +135,21 @@ def test_parse_text_no_tokens(parser: TemplateLayoutParser):
 
 
 def test_parse_text_mixed_scalar_and_table(parser: TemplateLayoutParser):
-    content = b"Org: {{org}}\n{{items.name}} {{items.qty}}"
+    content = b"Org: {{org}}\n{{items[].name}} {{items[].qty}}"
     layout = parser.parse(content, "mixed.txt")
     assert "org" in layout.scalar_keys
     assert "items" in layout.table_prefixes
 
 
 def test_parse_text_single_column_table_has_region(parser: TemplateLayoutParser):
-    # A single-column dotted token must still produce a table region so that
-    # table_prefixes and table_regions stay in sync.
-    content = b"{{items.name}}"
+    content = b"{{items(name='Items')[].name(name='Name')}}"
     layout = parser.parse(content, "single.txt")
     assert "items" in layout.table_prefixes
     assert any(r.loop_prefix == "items" for r in layout.table_regions)
+    token = next(t for t in layout.tokens if t.token == "items.name")
+    assert token.segments[0]["repeat"] is True
+    assert token.segments[0]["params"]["name"] == "Items"
+    assert token.segments[-1]["params"]["name"] == "Name"
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +188,9 @@ def table_excel_bytes():
     ws["B1"] = "Кол-во"
     ws["C1"] = "Цена"
     # Marker row with dotted tokens
-    ws["A2"] = "{{items.name}}"
-    ws["B2"] = "{{items.qty}}"
-    ws["C2"] = "{{items.price}}"
+    ws["A2"] = "{{items[].name}}"
+    ws["B2"] = "{{items[].qty}}"
+    ws["C2"] = "{{items[].price}}"
     buf = io.BytesIO()
     wb.save(buf)
     wb.close()
@@ -204,8 +208,8 @@ def two_tables_excel_bytes():
     # Table 1: items
     ws["A1"] = "Наименование"
     ws["B1"] = "Кол-во"
-    ws["A2"] = "{{items.name}}"
-    ws["B2"] = "{{items.qty}}"
+    ws["A2"] = "{{items[].name}}"
+    ws["B2"] = "{{items[].qty}}"
     # Gap
     # Table 2: contacts
     ws["A5"] = "ФИО"
@@ -235,9 +239,9 @@ def test_parse_excel_marker_table_region(parser, table_excel_bytes):
     assert "items" in layout.table_prefixes
     assert len(layout.table_regions) >= 1
     region = next(r for r in layout.table_regions if r.loop_prefix == "items")
-    assert "{{items.name}}" in region.loop_tokens
-    assert "{{items.qty}}" in region.loop_tokens
-    assert "{{items.price}}" in region.loop_tokens
+    assert "{{items[].name}}" in region.loop_tokens
+    assert "{{items[].qty}}" in region.loop_tokens
+    assert "{{items[].price}}" in region.loop_tokens
 
 
 def test_parse_excel_two_tables(parser, two_tables_excel_bytes):
@@ -258,6 +262,11 @@ def test_parse_excel_token_location(parser, table_excel_bytes):
     assert tok.location["sheet"] == "Заявка"
     assert "row" in tok.location
     assert "col" in tok.location
+
+
+def test_parse_xls_is_rejected(parser: TemplateLayoutParser):
+    with pytest.raises(ValueError, match=r"Legacy \.xls templates are not supported"):
+        parser.parse(b"legacy", "legacy.xls")
 
 
 def test_parse_excel_formula_token(parser):
@@ -324,9 +333,52 @@ def test_parse_excel_repeated_row_detects_table(parser):
 
     layout = parser.parse(buf.getvalue(), "repeated.xlsx")
 
-    assert "contacts" in layout.table_prefixes
-    region = next(r for r in layout.table_regions if r.loop_prefix == "contacts")
-    assert region.loop_tokens == ["{{contacts.name}}", "{{contacts.phone}}"]
+    assert "contacts" not in layout.table_prefixes
+    assert "contacts.name" in layout.scalar_keys
+    assert "contacts.phone" in layout.scalar_keys
+
+
+def test_parse_text_contract_metadata(parser: TemplateLayoutParser):
+    content = (
+        b"{{author(name='Author').name(name='Full name', type=string, required=true)}}\n"
+        b"{{items(name='Items', min=1, max=10)[].qty(name='Quantity', int(10))}}"
+    )
+
+    layout = parser.parse(content, "contract.txt")
+
+    author = next(t for t in layout.tokens if t.token == "author.name")
+    items = next(t for t in layout.tokens if t.token == "items.qty")
+
+    assert author.segments[0]["params"]["name"] == "Author"
+    assert author.segments[-1]["params"]["required"] is True
+    assert author.hint_type == "string"
+    assert items.table_prefix == "items"
+    assert items.segments[0]["repeat"] is True
+    assert items.segments[0]["params"]["min"] == 1
+    assert items.segments[-1]["params"]["name"] == "Quantity"
+    assert items.hint_type == "int"
+    assert items.hint_args == "10"
+
+
+def test_parse_text_builds_schema_tree(parser: TemplateLayoutParser):
+    content = (
+        b"{{author(name='Author').name(name='Full name')}}\n"
+        b"{{author.tel(name='Phone')}}\n"
+        b"{{items(name='Items', min=1)[].source.ip(name='Source IP')}}"
+    )
+
+    layout = parser.parse(content, "tree.txt")
+
+    author = next(node for node in layout.schema_roots if node.key == "author")
+    items = next(node for node in layout.schema_roots if node.key == "items")
+
+    assert author.repeat is False
+    assert author.params["name"] == "Author"
+    assert {child.key for child in author.children} == {"name", "tel"}
+    assert items.repeat is True
+    assert items.params["min"] == 1
+    source = next(child for child in items.children if child.key == "source")
+    assert next(child for child in source.children if child.key == "ip").params["name"] == "Source IP"
 
 
 # ---------------------------------------------------------------------------
@@ -359,9 +411,9 @@ def table_docx_bytes():
     table.rows[0].cells[0].text = "Наименование"
     table.rows[0].cells[1].text = "Кол-во"
     table.rows[0].cells[2].text = "Цена"
-    table.rows[1].cells[0].text = "{{items.name}}"
-    table.rows[1].cells[1].text = "{{items.qty}}"
-    table.rows[1].cells[2].text = "{{items.price}}"
+    table.rows[1].cells[0].text = "{{items[].name}}"
+    table.rows[1].cells[1].text = "{{items[].qty}}"
+    table.rows[1].cells[2].text = "{{items[].price}}"
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
@@ -385,7 +437,7 @@ def test_parse_docx_table_region(parser, table_docx_bytes):
     layout = parser.parse(table_docx_bytes, "items.docx")
     assert "items" in layout.table_prefixes
     region = next(r for r in layout.table_regions if r.loop_prefix == "items")
-    assert "{{items.name}}" in region.loop_tokens
+    assert "{{items[].name}}" in region.loop_tokens
 
 
 def test_parse_docx_table_header_row(parser, table_docx_bytes):

@@ -47,6 +47,7 @@ export interface ChatMessage {
 export interface ChatAttachment {
   id: string;
   file_id?: string;
+  storage_uri?: string;
   file_name: string;
   file_ext: string;
   content_type?: string | null;

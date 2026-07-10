@@ -77,6 +77,85 @@ def test_round_trip_table():
     assert len(restored.fields[0].columns) == 2
 
 
+def test_to_jsonb_returns_hierarchical_schema():
+    c = TemplateContract(
+        format=DocumentFormat.EXCEL,
+        fields=[
+            make_scalar("author.name"),
+            make_scalar("author.tel", required=False),
+            TableField(
+                key="connections",
+                label="Connections",
+                required=False,
+                columns=[
+                    TableColumn(key="source.host", label="Host", type=FieldType.STRING, required=False),
+                    TableColumn(key="source.ip", label="IP", type=FieldType.STRING, required=False),
+                    TableColumn(key="destination.host", label="Host", type=FieldType.STRING, required=False),
+                ],
+            ),
+        ],
+        node_meta={
+            "author": {"kind": "object", "label": "Author", "source": "parser", "locked": False},
+            "connections.source": {"kind": "object", "label": "Source", "source": "parser", "locked": False},
+            "connections.destination": {"kind": "object", "label": "Destination", "source": "parser", "locked": False},
+        },
+    )
+
+    dumped = c.to_jsonb()
+
+    assert dumped["fields"][0]["key"] == "author"
+    assert dumped["fields"][0]["kind"] == "object"
+    assert [field["key"] for field in dumped["fields"][0]["fields"]] == ["name", "tel"]
+    table = next(field for field in dumped["fields"] if field["key"] == "connections")
+    assert table["kind"] == "table"
+    source = next(field for field in table["fields"] if field["key"] == "source")
+    assert source["kind"] == "object"
+    assert [field["key"] for field in source["fields"]] == ["host", "ip"]
+
+
+def test_model_validate_accepts_hierarchical_schema():
+    raw = {
+        "contract_version": "1.0",
+        "format": "excel",
+        "fields": [
+            {
+                "key": "author",
+                "kind": "object",
+                "label": "Author",
+                "fields": [
+                    {"key": "name", "kind": "scalar", "label": "Name", "type": "string", "required": True},
+                    {"key": "tel", "kind": "scalar", "label": "Tel", "type": "string", "required": False},
+                ],
+            },
+            {
+                "key": "connections",
+                "kind": "table",
+                "label": "Connections",
+                "fields": [
+                    {
+                        "key": "source",
+                        "kind": "object",
+                        "label": "Source",
+                        "fields": [
+                            {"key": "host", "kind": "scalar", "label": "Host", "type": "string", "required": True},
+                            {"key": "ip", "kind": "scalar", "label": "IP", "type": "string", "required": True},
+                        ],
+                    },
+                    {"key": "traffic", "kind": "scalar", "label": "Traffic", "type": "string", "required": False},
+                ],
+            },
+        ],
+    }
+
+    contract = TemplateContract.model_validate(raw)
+
+    assert contract.get_field("author.name") is not None
+    assert contract.get_field("author.tel") is not None
+    table = contract.get_field("connections")
+    assert isinstance(table, TableField)
+    assert [column.key for column in table.columns] == ["source.host", "source.ip", "traffic"]
+
+
 def test_from_jsonb_old_format_returns_empty():
     old = {"format": "excel", "sheets": [], "placeholders": []}
     c = TemplateContract.from_jsonb(old)
@@ -151,6 +230,82 @@ def test_fill_schema_max_items():
     c = TemplateContract(fields=[make_table("rows", max_rows=10)])
     schema = c.to_fill_input_schema()
     assert schema["properties"]["rows"]["maxItems"] == 10
+
+
+def test_runtime_schema_preserves_nested_objects():
+    c = TemplateContract(fields=[
+        make_scalar("author.name"),
+        make_scalar("author.tel", required=False),
+        TableField(
+            key="connections",
+            label="Connections",
+            required=True,
+            columns=[
+                TableColumn(key="source.host", label="Host", type=FieldType.STRING, required=True),
+                TableColumn(key="source.ip", label="IP", type=FieldType.STRING, required=True),
+            ],
+        ),
+    ])
+    schema = c.to_runtime_schema()
+    assert schema["properties"]["author"]["type"] == "object"
+    assert "name" in schema["properties"]["author"]["properties"]
+    assert schema["properties"]["connections"]["type"] == "array"
+    items = schema["properties"]["connections"]["items"]
+    assert items["properties"]["source"]["type"] == "object"
+    assert "host" in items["properties"]["source"]["properties"]
+    assert "ip" in items["properties"]["source"]["properties"]
+
+
+def test_build_values_model_validates_nested_payload():
+    c = TemplateContract(fields=[
+        make_scalar("author.name"),
+        TableField(
+            key="connections",
+            label="Connections",
+            required=True,
+            columns=[
+                TableColumn(key="source.host", label="Host", type=FieldType.STRING, required=True),
+                TableColumn(key="source.ip", label="IP", type=FieldType.STRING, required=True),
+                TableColumn(key="traffic", label="Traffic", type=FieldType.ENUM, enum=["tcp", "udp"], required=True),
+            ],
+        ),
+    ])
+    model_cls = c.build_values_model()
+    validated = model_cls.model_validate(
+        {
+            "author": {"name": "Alice"},
+            "connections": [{"source": {"host": "gw", "ip": "10.0.0.1"}, "traffic": "tcp"}],
+        }
+    )
+    dumped = validated.model_dump(mode="python")
+    assert dumped["author"]["name"] == "Alice"
+    assert dumped["connections"][0]["source"]["host"] == "gw"
+
+
+def test_validate_generated_values_reports_nested_errors():
+    c = TemplateContract(fields=[
+        make_scalar("author.name"),
+        TableField(
+            key="connections",
+            label="Connections",
+            required=True,
+            columns=[
+                TableColumn(key="source.host", label="Host", type=FieldType.STRING, required=True),
+                TableColumn(key="source.ip", label="IP", type=FieldType.STRING, required=True),
+            ],
+        ),
+    ])
+    report = c.validate_generated_values(
+        {
+            "author": {},
+            "connections": [{"source": {"host": "gw"}}],
+        }
+    )
+    assert not report.ok
+    assert any("author.name" in error or "author.name" in error.replace(" ", "") for error in report.errors)
+    assert any("connections" in error and "source.ip" in error for error in report.errors)
+    assert any(issue.path == "author.name" and issue.rule for issue in report.error_details)
+    assert any(issue.path == "connections[0].source.ip" for issue in report.error_details)
 
 
 # ---------------------------------------------------------------------------

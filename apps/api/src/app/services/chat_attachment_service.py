@@ -9,7 +9,7 @@ from typing import Any, Iterable, List, Optional
 
 from botocore.exceptions import ClientError
 from fastapi import UploadFile
-from sqlalchemy import Select, and_, select
+from sqlalchemy import Select, and_, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.s3_client import s3_manager
@@ -223,6 +223,26 @@ class ChatAttachmentService:
             raise ChatAttachmentNotFoundError("Some attachments were not found or not accessible")
         return rows
 
+    async def list_owned_attachments_for_chat(
+        self,
+        *,
+        chat_id: str,
+        owner_id: str,
+        statuses: Optional[Iterable[str]] = None,
+    ) -> list[ChatAttachment]:
+        conditions = [
+            ChatAttachment.chat_id == uuid.UUID(chat_id),
+            ChatAttachment.owner_id == uuid.UUID(owner_id),
+        ]
+        normalized_statuses = [str(item).strip() for item in (statuses or []) if str(item).strip()]
+        if normalized_statuses:
+            conditions.append(ChatAttachment.status.in_(normalized_statuses))
+        return await self._fetch_rows(
+            select(ChatAttachment)
+            .where(and_(*conditions))
+            .order_by(ChatAttachment.created_at.asc())
+        )
+
     async def bind_to_message(
         self,
         *,
@@ -295,6 +315,25 @@ class ChatAttachmentService:
             "status": row.status,
         }
 
+    @staticmethod
+    def dedupe_meta(
+        attachments: Iterable[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        seen: set[tuple[str, str]] = set()
+        result: list[dict[str, Any]] = []
+        for item in attachments:
+            if not isinstance(item, dict):
+                continue
+            storage_uri = str(item.get("storage_uri") or "").strip()
+            file_id = str(item.get("file_id") or "").strip()
+            file_name = str(item.get("file_name") or "").strip()
+            dedupe_key = (storage_uri, file_id or file_name)
+            if not storage_uri or dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            result.append(item)
+        return result
+
     async def build_prompt_context(
         self,
         *,
@@ -322,6 +361,93 @@ class ChatAttachmentService:
                     "(binary or unsupported text extraction; if needed, ask user to provide text or supported format)"
                 )
         return "\n".join(lines)
+
+    async def build_prompt_context_from_meta(
+        self,
+        *,
+        attachments_meta: list[dict[str, Any]],
+        max_chars_per_file: int = 12000,
+    ) -> str:
+        deduped = self.dedupe_meta(attachments_meta)
+        if not deduped:
+            return ""
+        rows: list[ChatAttachment] = []
+        for item in deduped:
+            attachment_id = str(item.get("id") or "").strip()
+            if not attachment_id:
+                continue
+            try:
+                row = await self.session.get(ChatAttachment, uuid.UUID(attachment_id))
+            except (TypeError, ValueError):
+                continue
+            if row is not None:
+                rows.append(row)
+        if not rows:
+            return ""
+        return await self.build_prompt_context(
+            attachments=rows,
+            max_chars_per_file=max_chars_per_file,
+        )
+
+    async def delete_chat_attachments(
+        self,
+        *,
+        chat_id: str,
+        owner_id: str,
+    ) -> int:
+        rows = await self.list_owned_attachments_for_chat(chat_id=chat_id, owner_id=owner_id)
+        for row in rows:
+            try:
+                await s3_manager.delete_object(row.storage_bucket, row.storage_key)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to delete chat attachment object %s: %s",
+                    row.storage_key,
+                    exc,
+                )
+        result = await self.session.execute(
+            delete(ChatAttachment).where(
+                and_(
+                    ChatAttachment.chat_id == uuid.UUID(chat_id),
+                    ChatAttachment.owner_id == uuid.UUID(owner_id),
+                )
+            )
+        )
+        await self.session.flush()
+        return int(result.rowcount or 0)
+
+    async def cleanup_expired_detached_attachments(
+        self,
+        *,
+        older_than: datetime,
+    ) -> int:
+        rows = await self._fetch_rows(
+            select(ChatAttachment).where(
+                and_(
+                    ChatAttachment.chat_id.is_(None),
+                    ChatAttachment.created_at < older_than,
+                )
+            )
+        )
+        for row in rows:
+            try:
+                await s3_manager.delete_object(row.storage_bucket, row.storage_key)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to delete detached attachment object %s: %s",
+                    row.storage_key,
+                    exc,
+                )
+        result = await self.session.execute(
+            delete(ChatAttachment).where(
+                and_(
+                    ChatAttachment.chat_id.is_(None),
+                    ChatAttachment.created_at < older_than,
+                )
+            )
+        )
+        await self.session.flush()
+        return int(result.rowcount or 0)
 
     async def _load_text_content(self, row: ChatAttachment, *, max_chars: int) -> Optional[str]:
         payload = await s3_manager.get_object(row.storage_bucket, row.storage_key)

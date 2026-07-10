@@ -43,13 +43,9 @@ class TemplateAnalysisOrchestrator:
         collection_id: uuid.UUID | str,
         row_id: uuid.UUID | str,
         countdown: int = 1,
-    ) -> dict[str, str]:
+    ) -> dict[str, str | None]:
         return {
-            "description_task_id": cls.enqueue_description(
-                collection_id=collection_id,
-                row_id=row_id,
-                countdown=countdown,
-            ),
+            "description_task_id": None,
             "schema_task_id": cls.enqueue_schema(
                 collection_id=collection_id,
                 row_id=row_id,

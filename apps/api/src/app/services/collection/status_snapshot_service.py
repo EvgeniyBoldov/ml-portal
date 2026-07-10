@@ -134,52 +134,72 @@ class CollectionStatusSnapshotService:
             reason = "no_templates_uploaded"
             counts = {
                 "uploaded": 0,
-                "analyzed": 0,
+                "processing": 0,
+                "approval_required": 0,
                 "ready": 0,
                 "archived": 0,
-                "error_rows": 0,
+                "failed": 0,
             }
         else:
             result = await self.session.execute(
                 text(
-                    f"SELECT status "
+                    f"SELECT id, status, description, template_schema, _vector_status, _vector_error "
                     f"FROM {collection.table_name}"
                 )
             )
             counts = {
                 "uploaded": 0,
-                "analyzed": 0,
+                "processing": 0,
+                "approval_required": 0,
                 "ready": 0,
                 "archived": 0,
-                "error_rows": 0,
+                "failed": 0,
             }
-            for row in result.mappings().all():
-                row_status = str(row.get("status") or "uploaded").strip().lower()
-                if row_status in counts:
-                    counts[row_status] += 1
-                else:
-                    counts["uploaded"] += 1
             from app.repositories.template_analysis_status_repo import AsyncTemplateAnalysisStatusRepository
+            from app.services.collection.template_status_stream import build_template_row_runtime_payload
 
             status_repo = AsyncTemplateAnalysisStatusRepository(self.session)
-            failed_row_ids = await status_repo.get_failed_row_ids(collection.id)
-            counts["error_rows"] = len(failed_row_ids)
+            rows = result.mappings().all()
+            for row in rows:
+                row_id = row.get("id")
+                nodes = await status_repo.get_nodes_by_row_id(row_id)
+                payload = build_template_row_runtime_payload(
+                    {
+                        **dict(row),
+                        "has_vector_search": bool(collection.has_vector_search),
+                    },
+                    collection_id=str(collection.id),
+                    analysis_nodes=[
+                        {
+                            "node_key": node.node_key,
+                            "status": node.status,
+                            "error_short": node.error_short,
+                            "metrics_json": node.metrics_json,
+                            "finished_at": node.finished_at.isoformat() if node.finished_at else None,
+                        }
+                        for node in nodes
+                    ],
+                )
+                runtime_status = str(payload.get("runtime_status") or "uploaded").strip().lower()
+                if runtime_status in counts:
+                    counts[runtime_status] += 1
+                else:
+                    counts["uploaded"] += 1
 
             active_rows = total_rows - counts["archived"]
-            pending_rows = counts["uploaded"]
-            analyzed_rows = counts["analyzed"]
+            pending_rows = counts["uploaded"] + counts["processing"] + counts["approval_required"]
             ready_rows = counts["ready"]
 
-            if counts["error_rows"] and ready_rows == 0 and analyzed_rows == 0 and pending_rows == active_rows:
+            if counts["failed"] and ready_rows == 0 and pending_rows == active_rows:
                 status = CollectionStatus.ERROR.value
                 reason = "all_templates_analysis_failed"
-            elif counts["error_rows"] > 0:
+            elif counts["failed"] > 0:
                 status = CollectionStatus.DEGRADED.value
                 reason = "partial_template_analysis_failures"
             elif active_rows == 0:
                 status = CollectionStatus.READY.value
                 reason = "all_templates_archived"
-            elif pending_rows > 0 or analyzed_rows > 0:
+            elif pending_rows > 0:
                 status = CollectionStatus.DISCOVERED.value
                 reason = "template_analysis_in_progress"
             elif ready_rows == active_rows:
@@ -196,7 +216,7 @@ class CollectionStatusSnapshotService:
                 "lifecycle_stages": list(self._TEMPLATE_LIFECYCLE_STAGES),
                 "status_reason": reason,
                 "total_rows": total_rows,
-                "template_statuses": ["uploaded", "analyzed", "ready", "archived"],
+                "template_statuses": ["uploaded", "processing", "approval_required", "ready", "archived", "failed"],
                 **counts,
             },
         }

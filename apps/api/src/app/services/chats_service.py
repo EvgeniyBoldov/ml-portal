@@ -18,13 +18,19 @@ class ChatsService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def delete_chat(self, *, chat_id: uuid.UUID, owner_id: uuid.UUID) -> bool:
+    async def delete_chat(
+        self,
+        *,
+        chat_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        allow_internal: bool = False,
+    ) -> bool:
         chat = (
             await self.session.execute(
                 select(Chats).where(Chats.id == chat_id, Chats.owner_id == owner_id)
             )
         ).scalar_one_or_none()
-        if not chat or is_sandbox_upload_chat(chat):
+        if not chat or (is_sandbox_upload_chat(chat) and not allow_internal):
             return False
 
         attachments = (

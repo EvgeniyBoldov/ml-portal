@@ -18,7 +18,7 @@ bytes → data-structure transformation and must remain deterministic.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -57,6 +57,29 @@ class TokenOccurrence:
 
 
 @dataclass
+class PathSegment:
+    """Parsed path segment from the placeholder contract."""
+    key: str
+    params: Dict[str, Any] = field(default_factory=dict)
+    repeat: bool = False
+
+
+@dataclass
+class SchemaNode:
+    """Merged schema node assembled from placeholder segments."""
+    key: str
+    path: str
+    params: Dict[str, Any] = field(default_factory=dict)
+    repeat: bool = False
+    placeholder: Optional[str] = None
+    location: Dict[str, Any] = field(default_factory=dict)
+    hint_type: Optional[str] = None
+    hint_args: Optional[str] = None
+    anchors: List[Dict[str, Any]] = field(default_factory=list)
+    children: List["SchemaNode"] = field(default_factory=list)
+
+
+@dataclass
 class TableRegion:
     """A detected repeatable region in the document."""
     region_id: str
@@ -91,6 +114,7 @@ class RawLayout:
     # Aggregated unique token keys (scalar and table-prefixed)
     scalar_keys: List[str] = field(default_factory=list)   # non-dotted keys
     table_prefixes: List[str] = field(default_factory=list)  # dotted key table-parts
+    schema_roots: List[SchemaNode] = field(default_factory=list)
     # Raw text lines / paragraph texts — useful for LLM schema builder
     text_lines: List[str] = field(default_factory=list)
 
@@ -105,7 +129,9 @@ class TemplateLayoutParser:
 
     def parse(self, content: bytes, filename: str) -> RawLayout:
         ext = _ext(filename)
-        if ext in ("xlsx", "xlsm", "xls"):
+        if ext == "xls":
+            raise ValueError("Legacy .xls templates are not supported; save the file as .xlsx or .xlsm")
+        if ext in ("xlsx", "xlsm"):
             return self._parse_excel(content, filename)
         if ext == "docx":
             return self._parse_docx(content, filename)
@@ -194,6 +220,7 @@ class TemplateLayoutParser:
             sheets=sheet_names,
             scalar_keys=scalar_keys,
             table_prefixes=table_prefixes,
+            schema_roots=_build_schema_roots(tokens, table_regions),
             text_lines=text_lines[:500],  # cap for LLM builder
         )
 
@@ -215,7 +242,6 @@ class TemplateLayoutParser:
 
         # --- Marker detection ---
         prefix_to_rows: Dict[str, List[int]] = {}
-        prefix_signatures: Dict[str, List[Tuple[str, ...]]] = {}
         for r in sorted_rows:
             row_vals = row_map[r]
             prefixes_in_row: Dict[str, List[str]] = {}
@@ -224,15 +250,15 @@ class TemplateLayoutParser:
                     parsed = _parse_placeholder_expr(m.group(1))
                     if not parsed:
                         continue
-                    key, _, _, spec = parsed
-                    tp = spec["repeat_root"]
+                    _, _, _, spec = parsed
+                    tp, _ = _resolve_repeat_path(spec)
                     if tp:
                         prefixes_in_row.setdefault(tp, []).append(m.group(0))
             for tp, toks in prefixes_in_row.items():
                 prefix_to_rows.setdefault(tp, []).append(r)
-                prefix_signatures.setdefault(tp, []).append(tuple(dict.fromkeys(toks)))
 
-        for prefix, marker_rows in prefix_to_rows.items():
+        ordered_prefixes = sorted(prefix_to_rows.items(), key=lambda item: item[1][0] if item[1] else 10**9)
+        for prefix, marker_rows in ordered_prefixes:
             marker_row = marker_rows[0]
             # Collect all loop_tokens from that row
             loop_tokens: List[str] = []
@@ -244,8 +270,8 @@ class TemplateLayoutParser:
                     parsed = _parse_placeholder_expr(m.group(1))
                     if not parsed:
                         continue
-                    key, _, _, spec = parsed
-                    tp = spec["repeat_root"]
+                    _, _, _, spec = parsed
+                    tp, _ = _resolve_repeat_path(spec)
                     if tp == prefix:
                         tok = m.group(0)
                         if tok not in loop_tokens:
@@ -256,6 +282,11 @@ class TemplateLayoutParser:
             if header_row_idx in row_map:
                 header_vals = row_map[header_row_idx]
                 header_texts = [header_vals.get(c, "") for c in row_cols]
+
+            repeated_marker = len(marker_rows) > 1
+            multi_column_marker = len(loop_tokens) > 1 and any(text.strip() for text in header_texts)
+            if not repeated_marker and not multi_column_marker:
+                continue
 
             regions.append(TableRegion(
                 region_id=f"{sheet_name}:marker:{prefix}",
@@ -457,7 +488,9 @@ class TemplateLayoutParser:
             loop_toks = [
                 t.placeholder or f"{{{{{t.token}}}}}"
                 for t in tokens
-                if dominant_prefix and t.repeat_root == dominant_prefix
+                if dominant_prefix and (
+                    t.table_prefix == dominant_prefix
+                )
             ] if dominant_prefix else []
 
             table_regions.append(TableRegion(
@@ -491,6 +524,7 @@ class TemplateLayoutParser:
             fence_blocks=fence_blocks,
             scalar_keys=scalar_keys,
             table_prefixes=table_prefixes,
+            schema_roots=_build_schema_roots(tokens, table_regions),
             text_lines=text_lines[:500],
         )
 
@@ -551,6 +585,9 @@ class TemplateLayoutParser:
                     params=spec["params"],
                 ))
 
+        for key, open_pos in open_fences.items():
+            fence_blocks.append(FenceBlock(key=key, open_position=open_pos))
+
         # Table regions from fence blocks
         table_regions: List[TableRegion] = []
         for fb in fence_blocks:
@@ -558,7 +595,7 @@ class TemplateLayoutParser:
                 region_tokens = [
                     t.placeholder or f"{{{{{t.token}}}}}"
                     for t in tokens
-                    if t.table_prefix == fb.key
+                    if t.table_prefix == fb.key or t.token == fb.key or t.token.startswith(f"{fb.key}.")
                 ]
                 table_regions.append(TableRegion(
                     region_id=f"text:fence:{fb.key}",
@@ -573,8 +610,7 @@ class TemplateLayoutParser:
                     orientation="vertical",
                 ))
 
-        # Also add structural regions for dotted keys without fences when the
-        # template explicitly signals a repeating block.
+        # Also add inline marker regions for explicit repeats or fenced blocks.
         prefix_tokens: Dict[str, List[str]] = {}
         prefix_line_signatures: Dict[str, List[Tuple[str, ...]]] = {}
         for line in text_lines:
@@ -583,8 +619,8 @@ class TemplateLayoutParser:
                 parsed = _parse_placeholder_expr(m.group(1))
                 if not parsed:
                     continue
-                key, _, _, spec = parsed
-                tp = spec["repeat_root"]
+                _, _, _, spec = parsed
+                tp, _ = _resolve_repeat_path(spec)
                 if tp:
                     line_prefixes.setdefault(tp, []).append(m.group(0))
             for prefix, toks in line_prefixes.items():
@@ -595,7 +631,13 @@ class TemplateLayoutParser:
         for prefix, toks in prefix_tokens.items():
             signatures = prefix_line_signatures.get(prefix, [])
             repeated_signature = len({sig for sig in signatures if sig}) < len(signatures)
-            if repeated_signature or any(fb.key == prefix for fb in fence_blocks):
+            explicit_repeat = any(
+                bool(segment.get("repeat"))
+                for token in tokens
+                if token.table_prefix == prefix
+                for segment in token.segments
+            )
+            if repeated_signature or explicit_repeat or any(fb.key == prefix for fb in fence_blocks):
                 table_regions.append(TableRegion(
                     region_id=f"text:marker:{prefix}",
                     location={"type": "inline", "key": prefix},
@@ -616,6 +658,7 @@ class TemplateLayoutParser:
             fence_blocks=fence_blocks,
             scalar_keys=scalar_keys,
             table_prefixes=table_prefixes,
+            schema_roots=_build_schema_roots(tokens, table_regions),
             text_lines=text_lines[:500],
         )
 
@@ -642,15 +685,26 @@ def _split_dotted(key: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _resolve_repeat_path(spec: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-    repeat_root = spec.get("repeat_root")
-    if not repeat_root:
+    segments = spec.get("segments") or []
+    if not segments:
         return None, None
-    path = str(spec.get("path") or "")
-    if not path:
+    seen_repeat = False
+    repeat_path_parts: List[str] = []
+    tail: List[str] = []
+    for segment in segments:
+        key = str(segment.get("key") or "").strip()
+        if not key:
+            continue
+        if not seen_repeat:
+            repeat_path_parts.append(key)
+        if bool(segment.get("repeat")) and not seen_repeat:
+            seen_repeat = True
+            continue
+        if seen_repeat:
+            tail.append(key)
+    if not seen_repeat:
         return None, None
-    if "." in path:
-        return repeat_root, path.split(".", 1)[1]
-    return repeat_root, None
+    return ".".join(repeat_path_parts), ".".join(tail) if tail else None
 
 
 def _extract_title_version(texts: List[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -701,21 +755,36 @@ def _parse_placeholder_expr(expr: str) -> Optional[Tuple[str, Optional[str], Opt
     raw = expr.strip()
     if not raw or raw.startswith("#") or raw.startswith("/"):
         return None
-    spec = _parse_contract_expr(raw)
+    legacy_hint_match = re.fullmatch(
+        r"(?P<path>[A-Za-z0-9_.\-]+):(?P<hint>[A-Za-z0-9_\-]+)(?:\((?P<args>.*)\))?",
+        raw,
+    )
+    parse_target = raw
+    legacy_hint_type = None
+    legacy_hint_args = None
+    if legacy_hint_match:
+        parse_target = str(legacy_hint_match.group("path") or "").strip()
+        legacy_hint_type = str(legacy_hint_match.group("hint") or "").strip().lower() or None
+        legacy_hint_args = str(legacy_hint_match.group("args") or "").strip() or None
+
+    spec = _parse_contract_expr(parse_target)
     if spec is None:
         return None
     key = spec["path"]
     params = spec["params"]
-    hint_type = None
-    hint_args = None
-    if "type" in params:
-        hint_type = str(params["type"]).strip().lower() or None
-        if "min" in params or "max" in params:
+    leaf_params = spec.get("leaf_params") or {}
+    hint_type = legacy_hint_type
+    hint_args = legacy_hint_args
+    if "type" in leaf_params:
+        hint_type = str(leaf_params["type"]).strip().lower() or None
+        if "type_args" in leaf_params and not hint_args:
+            hint_args = str(leaf_params["type_args"]).strip() or None
+        if "min" in leaf_params or "max" in leaf_params:
             extras = []
-            if "min" in params:
-                extras.append(f"min={params['min']}")
-            if "max" in params:
-                extras.append(f"max={params['max']}")
+            if "min" in leaf_params:
+                extras.append(f"min={leaf_params['min']}")
+            if "max" in leaf_params:
+                extras.append(f"max={leaf_params['max']}")
             hint_args = ", ".join(extras) if extras else None
     return key, hint_type, hint_args, spec
 
@@ -725,7 +794,7 @@ def _parse_contract_expr(expr: str) -> Optional[Dict[str, Any]]:
     if not parts:
         return None
 
-    segments: List[Dict[str, Any]] = []
+    segments: List[PathSegment] = []
     path_parts: List[str] = []
     repeat_root = None
     merged_params: Dict[str, Any] = {}
@@ -745,20 +814,30 @@ def _parse_contract_expr(expr: str) -> Optional[Dict[str, Any]]:
                 return None
             segment = head.strip()
             params = _parse_params(tail[:-1])
-            merged_params.update(params)
         if not segment or not re.fullmatch(r"[A-Za-z0-9_\-]+", segment):
             return None
         path_parts.append(segment)
-        segments.append({"key": segment, "params": params, "repeat": repeat})
+        if idx == len(parts) - 1:
+            merged_params.update(params)
+        segments.append(PathSegment(key=segment, params=params, repeat=repeat))
         if repeat and repeat_root is None:
             repeat_root = segment
 
     path = ".".join(path_parts)
+    segment_dicts = [asdict(segment) for segment in segments]
+    repeat_params: Dict[str, Any] = {}
+    for segment in segments:
+        if segment.repeat:
+            repeat_params = dict(segment.params)
+            break
+    leaf_params = dict(segments[-1].params) if segments else {}
     return {
         "path": path,
-        "segments": segments,
+        "segments": segment_dicts,
         "repeat_root": repeat_root,
         "params": merged_params,
+        "leaf_params": leaf_params,
+        "repeat_params": repeat_params,
     }
 
 
@@ -789,17 +868,42 @@ def _parse_params(raw: str) -> Dict[str, Any]:
         if not chunk:
             continue
         if "=" not in chunk:
-            params[chunk.strip()] = True
+            chunk = chunk.strip()
+            shorthand = _parse_type_shorthand(chunk)
+            if shorthand is not None:
+                params["type"] = shorthand["type"]
+                if shorthand.get("args"):
+                    params["type_args"] = shorthand["args"]
+            else:
+                params[chunk] = True
             continue
         key, value = chunk.split("=", 1)
         params[key.strip()] = _coerce_param_value(value.strip())
     return params
 
 
+def _parse_type_shorthand(raw: str) -> Optional[Dict[str, str]]:
+    value = raw.strip()
+    if not value:
+        return None
+    match = re.fullmatch(r"(?P<type>[A-Za-z0-9_\-]+)(?:\((?P<args>.*)\))?", value)
+    if not match:
+        return None
+    type_name = str(match.group("type") or "").strip()
+    if not type_name:
+        return None
+    return {
+        "type": type_name,
+        "args": str(match.group("args") or "").strip(),
+    }
+
+
 def _split_args(raw: str) -> List[str]:
     parts: List[str] = []
     current: List[str] = []
-    depth = 0
+    depth_paren = 0
+    depth_bracket = 0
+    depth_brace = 0
     quote: Optional[str] = None
     for ch in raw:
         if quote:
@@ -812,10 +916,18 @@ def _split_args(raw: str) -> List[str]:
             current.append(ch)
             continue
         if ch == "(":
-            depth += 1
+            depth_paren += 1
         elif ch == ")":
-            depth = max(0, depth - 1)
-        if ch == "," and depth == 0:
+            depth_paren = max(0, depth_paren - 1)
+        elif ch == "[":
+            depth_bracket += 1
+        elif ch == "]":
+            depth_bracket = max(0, depth_bracket - 1)
+        elif ch == "{":
+            depth_brace += 1
+        elif ch == "}":
+            depth_brace = max(0, depth_brace - 1)
+        if ch == "," and depth_paren == 0 and depth_bracket == 0 and depth_brace == 0:
             parts.append("".join(current).strip())
             current = []
             continue
@@ -823,6 +935,100 @@ def _split_args(raw: str) -> List[str]:
     if current:
         parts.append("".join(current).strip())
     return parts
+
+
+def _build_schema_roots(tokens: List[TokenOccurrence], table_regions: List[TableRegion]) -> List[SchemaNode]:
+    roots: Dict[str, SchemaNode] = {}
+    for token in tokens:
+        _merge_token_into_tree(roots, token)
+    _attach_anchor_hints(roots, table_regions)
+    return list(roots.values())
+
+
+def _merge_token_into_tree(roots: Dict[str, SchemaNode], token: TokenOccurrence) -> None:
+    current_map = roots
+    parent_node: Optional[SchemaNode] = None
+    path_parts: List[str] = []
+    current_node: Optional[SchemaNode] = None
+    segments = token.segments or _segments_from_token(token)
+    for index, segment in enumerate(segments):
+        key = str(segment.get("key") or "").strip()
+        if not key:
+            return
+        path_parts.append(key)
+        path = ".".join(path_parts)
+        node = current_map.get(key)
+        if node is None:
+            node = SchemaNode(
+                key=key,
+                path=path,
+                params=dict(segment.get("params") or {}),
+                repeat=bool(segment.get("repeat")),
+            )
+            current_map[key] = node
+            if parent_node is not None:
+                parent_node.children = list(current_map.values())
+        else:
+            node.params.update(segment.get("params") or {})
+            node.repeat = node.repeat or bool(segment.get("repeat"))
+        if index == len(segments) - 1:
+            node.placeholder = node.placeholder or token.placeholder
+            if not node.location:
+                node.location = dict(token.location)
+            node.hint_type = node.hint_type or token.hint_type
+            node.hint_args = node.hint_args or token.hint_args
+        current_node = node
+        parent_node = node
+        current_map = {child.key: child for child in node.children}
+    if current_node is not None and current_node.placeholder is None:
+        current_node.placeholder = token.placeholder
+
+
+def _segments_from_token(token: TokenOccurrence) -> List[Dict[str, Any]]:
+    if not token.token:
+        return []
+    parts = token.token.split(".")
+    repeat_parts = token.table_prefix.split(".") if token.table_prefix else []
+    segments: List[Dict[str, Any]] = []
+    for index, part in enumerate(parts):
+        current_path = parts[: index + 1]
+        segments.append(
+            {
+                "key": part,
+                "params": {},
+                "repeat": bool(repeat_parts) and current_path == repeat_parts,
+            }
+        )
+    return segments
+
+
+def _attach_anchor_hints(roots: Dict[str, SchemaNode], table_regions: List[TableRegion]) -> None:
+    nodes_by_path: Dict[str, SchemaNode] = {}
+
+    def _walk(node: SchemaNode) -> None:
+        nodes_by_path[node.path] = node
+        for child in node.children:
+            _walk(child)
+
+    for root in roots.values():
+        _walk(root)
+
+    for region in table_regions:
+        if not region.loop_prefix:
+            continue
+        node = nodes_by_path.get(region.loop_prefix)
+        if node is None:
+            continue
+        node.anchors.append(
+            {
+                "strategy": "marker" if region.loop_tokens else "structural",
+                "loop_tokens": list(region.loop_tokens),
+                "header_row": list(region.header_row or []),
+                "location": dict(region.location),
+                "orientation": region.orientation,
+                "template_row_index": region.template_row_index,
+            }
+        )
 
 
 def _coerce_param_value(raw: str) -> Any:

@@ -62,6 +62,7 @@ class ChatMessageStreamRequest(BaseModel):
 class ChatAttachmentUploadResponse(BaseModel):
     id: str
     file_id: str
+    storage_uri: str
     file_name: str
     file_ext: str
     content_type: Optional[str] = None

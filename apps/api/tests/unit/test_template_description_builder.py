@@ -76,3 +76,11 @@ async def test_llm_failure_fallback(simple_contract):
     desc = await builder.build(simple_contract, title="Invoice")
     assert "Invoice" in desc
     assert "Name" in desc
+
+
+def test_build_prompt_uses_runtime_schema(table_contract):
+    builder = TemplateDescriptionBuilder(llm=None)
+    prompt = builder._build_prompt(table_contract, title="Sales Order", version="1.0")  # noqa: SLF001
+    assert "Runtime schema:" in prompt
+    assert "\"items\"" in prompt
+    assert "\"qty\"" in prompt

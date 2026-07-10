@@ -9,9 +9,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.models.chat import Chats
 from app.models.sandbox import (
     SandboxBranch,
     SandboxBranchOverride,
@@ -30,6 +32,8 @@ from app.repositories.sandbox_repository import (
     SandboxRunStepRepository,
     SandboxSessionRepository,
 )
+from app.services.chat_visibility import make_sandbox_upload_chat_name
+from app.services.chats_service import ChatsService
 from app.services.sandbox.types import SandboxRunPreparation
 from app.services.sandbox.branch_state_manager import SandboxBranchStateManager
 from app.services.sandbox.override_manager import SandboxOverrideManager
@@ -128,6 +132,20 @@ class SandboxService:
         obj = await self.sessions.get_by_id(session_id)
         if not obj:
             return False
+        hidden_chat = (
+            await self.db.execute(
+                select(Chats).where(
+                    Chats.owner_id == obj.owner_id,
+                    Chats.name == make_sandbox_upload_chat_name(session_id),
+                )
+            )
+        ).scalar_one_or_none()
+        if hidden_chat:
+            await ChatsService(self.db).delete_chat(
+                chat_id=hidden_chat.id,
+                owner_id=obj.owner_id,
+                allow_internal=True,
+            )
         await self.sessions.delete(obj)
         return True
 

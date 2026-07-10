@@ -8,6 +8,7 @@ Supports:
 """
 from __future__ import annotations
 
+from copy import copy, deepcopy
 import io
 import logging
 import re
@@ -17,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from app.services.collection.template_contract import (
     AnchorStrategy,
     DocumentFormat,
+    Orientation,
     ScalarField,
     TableAnchor,
     TableField,
@@ -38,6 +40,7 @@ class FillResult:
     filled_tables: List[str] = None
     missing_scalars: List[str] = None
     missing_tables: List[str] = None
+    validation: Optional[ValidationReport] = None
 
     def __post_init__(self):
         if self.filled_scalars is None:
@@ -56,13 +59,24 @@ class TemplateFillEngine:
     def __init__(self, contract: TemplateContract):
         self.contract = contract
 
-    def fill(self, template_bytes: bytes, values: Dict[str, Any], filename: str) -> FillResult:
+    def fill(
+        self,
+        template_bytes: bytes,
+        values: Dict[str, Any],
+        filename: str,
+        *,
+        assume_valid: bool = False,
+    ) -> FillResult:
         """Fill template with validated values."""
         normalized_values = self.contract.normalize_values(values)
-        # Validate values against contract
-        report = self.contract.validate_values(values, enforce_required=True)
-        if not report.ok:
-            return FillResult(success=False, error=f"Validation failed: {report.errors}")
+        if not assume_valid:
+            report = self.contract.validate_generated_values(values)
+            if not report.ok:
+                return FillResult(
+                    success=False,
+                    error=f"Validation failed: {report.errors}",
+                    validation=report,
+                )
 
         fmt = self._detect_format(filename)
         if fmt == DocumentFormat.EXCEL:
@@ -199,24 +213,36 @@ class TemplateFillEngine:
             anchor = tfield.anchor
             if anchor and anchor.strategy == AnchorStrategy.MARKER and anchor.marker:
                 # Marker-loop strategy
-                if self._expand_excel_marker_loop(wb, tfield, rows):
+                marker_success, marker_error = self._expand_excel_marker_loop(wb, tfield, rows)
+                if marker_success:
                     filled_tables.append(table_key)
                 else:
                     missing_tables.append(table_key)
+                    if marker_error:
+                        return FillResult(success=False, error=marker_error)
             elif anchor and anchor.strategy == AnchorStrategy.STRUCTURAL and anchor.structural:
                 # Structural strategy
-                if self._expand_excel_structural(wb, tfield, rows):
+                structural_success, structural_error = self._expand_excel_structural(wb, tfield, rows)
+                if structural_success:
                     filled_tables.append(table_key)
                 else:
                     missing_tables.append(table_key)
+                    if structural_error:
+                        return FillResult(success=False, error=structural_error)
             else:
                 # Auto - try marker first, then structural
-                if self._expand_excel_marker_loop(wb, tfield, rows):
-                    filled_tables.append(table_key)
-                elif self._expand_excel_structural(wb, tfield, rows):
+                marker_success, marker_error = self._expand_excel_marker_loop(wb, tfield, rows)
+                if marker_success:
                     filled_tables.append(table_key)
                 else:
-                    missing_tables.append(table_key)
+                    structural_success, structural_error = self._expand_excel_structural(wb, tfield, rows)
+                    if structural_success:
+                        filled_tables.append(table_key)
+                    else:
+                        missing_tables.append(table_key)
+                        error_message = marker_error or structural_error
+                        if error_message:
+                            return FillResult(success=False, error=error_message)
 
         output = io.BytesIO()
         wb.save(output)
@@ -240,23 +266,24 @@ class TemplateFillEngine:
 
     def _expand_excel_marker_loop(
         self, wb, tfield: TableField, rows: List[Dict]
-    ) -> bool:
-        """Expand table using marker-loop strategy. Returns True if successful."""
+    ) -> tuple[bool, Optional[str]]:
+        """Expand vertical marker table without deleting the template row after fill."""
         anchor = tfield.anchor
         if not anchor or not anchor.marker:
-            return False
+            return False, None
         loop_tokens = anchor.marker.loop_tokens
         if not loop_tokens:
-            return False
+            return False, None
+        if tfield.orientation != Orientation.VERTICAL:
+            return False, f"Failed to fill table '{tfield.key}': horizontal table fill is not implemented yet"
 
         sheet_name = anchor.sheet
         if sheet_name and sheet_name not in wb.sheetnames:
-            return False
+            return False, f"Failed to fill table '{tfield.key}': sheet '{sheet_name}' not found"
 
         sheets = [wb[sheet_name]] if sheet_name else [wb[s] for s in wb.sheetnames]
 
         for sheet in sheets:
-            # Find marker row
             marker_row_idx = None
             for idx, row in enumerate(sheet.iter_rows(), start=1):
                 for cell in row:
@@ -270,43 +297,73 @@ class TemplateFillEngine:
             if not marker_row_idx:
                 continue
 
-            # Get template row values
             template_row = list(sheet.iter_rows(min_row=marker_row_idx, max_row=marker_row_idx))[0]
             template_values = [cell.value for cell in template_row]
+            template_cells = list(template_row)
+            template_dimension = sheet.row_dimensions[marker_row_idx]
+            template_height = template_dimension.height
+            template_hidden = template_dimension.hidden
+            rows = list(rows or [])
 
-            # Delete marker row (it becomes first data row)
-            sheet.delete_rows(marker_row_idx)
+            if not rows:
+                self._write_excel_row(
+                    sheet,
+                    marker_row_idx,
+                    template_values,
+                    template_cells,
+                    {},
+                    table_key=tfield.key,
+                    cleanup_only=True,
+                )
+                return True, None
 
-            # Insert rows for each data row (in reverse to maintain order)
-            for row_data in reversed(rows):
-                sheet.insert_rows(marker_row_idx)
-                new_row = list(sheet.iter_rows(min_row=marker_row_idx, max_row=marker_row_idx))[0]
-                for cell, template_val in zip(new_row, template_values):
-                    if template_val and isinstance(template_val, str):
-                        filled_val, _ = _substitute_placeholders(
-                            template_val,
-                            _table_row_values(tfield.key, row_data),
-                        )
-                        cell.value = filled_val
+            for offset, row_data in enumerate(rows[:-1]):
+                target_row_idx = marker_row_idx + offset
+                sheet.insert_rows(target_row_idx)
+                self._copy_excel_row_template(sheet, template_cells, target_row_idx, template_height, template_hidden)
+                self._write_excel_row(
+                    sheet,
+                    target_row_idx,
+                    template_values,
+                    template_cells,
+                    row_data,
+                    table_key=tfield.key,
+                )
 
-            return True
+            self._write_excel_row(
+                sheet,
+                marker_row_idx + len(rows) - 1,
+                template_values,
+                template_cells,
+                rows[-1],
+                table_key=tfield.key,
+            )
+            final_dimension = sheet.row_dimensions[marker_row_idx + len(rows) - 1]
+            if template_height is not None:
+                final_dimension.height = template_height
+            final_dimension.hidden = template_hidden
+            return True, None
 
-        return False
+        return False, (
+            f"Failed to fill table '{tfield.key}': marker row not found for tokens {loop_tokens}"
+        )
 
     def _expand_excel_structural(
         self, wb, tfield: TableField, rows: List[Dict]
-    ) -> bool:
+    ) -> tuple[bool, Optional[str]]:
         """Expand table using structural anchor (header signature)."""
         anchor = tfield.anchor
         if not anchor or not anchor.structural:
-            return False
+            return False, None
         header_sig = anchor.structural.header_signature
         if not header_sig:
-            return False
+            return False, None
+        if tfield.orientation != Orientation.VERTICAL:
+            return False, f"Failed to fill table '{tfield.key}': horizontal table fill is not implemented yet"
 
         sheet_name = anchor.sheet
         if sheet_name and sheet_name not in wb.sheetnames:
-            return False
+            return False, f"Failed to fill table '{tfield.key}': sheet '{sheet_name}' not found"
 
         sheets = [wb[sheet_name]] if sheet_name else [wb[s] for s in wb.sheetnames]
 
@@ -332,7 +389,7 @@ class TemplateFillEngine:
             # Determine template row (first after header by default)
             template_row_idx = header_row_idx + 1
             if template_row_idx > sheet.max_row:
-                continue
+                return False, f"Failed to fill table '{tfield.key}': template row after header is missing"
 
             # Get template row
             template_row = list(sheet.iter_rows(min_row=template_row_idx, max_row=template_row_idx))[0]
@@ -348,23 +405,51 @@ class TemplateFillEngine:
                     if col.label.lower() in hv.lower() or col.key.lower() in hv.lower():
                         col_indices[col.key] = idx
                         break
+            missing_columns = [col.key for col in tfield.columns if col.key not in col_indices]
+            if missing_columns:
+                return False, (
+                    f"Failed to fill table '{tfield.key}': structural header mapping is incomplete "
+                    f"for columns {missing_columns}"
+                )
 
-            # Clear/delete template row
-            sheet.delete_rows(template_row_idx)
+            template_row = list(sheet.iter_rows(min_row=template_row_idx, max_row=template_row_idx))[0]
+            template_values = [cell.value for cell in template_row]
+            template_cells = list(template_row)
+            template_dimension = sheet.row_dimensions[template_row_idx]
+            template_height = template_dimension.height
+            template_hidden = template_dimension.hidden
+            rows = list(rows or [])
 
-            # Insert rows for data
-            for row_data in reversed(rows):
-                sheet.insert_rows(template_row_idx)
-                new_row = list(sheet.iter_rows(min_row=template_row_idx, max_row=template_row_idx))[0]
+            if not rows:
+                self._copy_excel_row_template(sheet, template_cells, template_row_idx, template_height, template_hidden)
                 for col in tfield.columns:
-                    if col.key in col_indices:
-                        idx = col_indices[col.key]
-                        if idx < len(new_row):
-                            new_row[idx].value = _lookup_nested_value(row_data, col.key)
+                    idx = col_indices[col.key]
+                    if idx < len(template_cells):
+                        sheet.cell(row=template_row_idx, column=idx + 1).value = None
+                return True, None
 
-            return True
+            for offset, row_data in enumerate(rows[:-1]):
+                target_row_idx = template_row_idx + offset
+                sheet.insert_rows(target_row_idx)
+                self._copy_excel_row_template(sheet, template_cells, target_row_idx, template_height, template_hidden)
+                self._write_excel_structural_row(sheet, target_row_idx, row_data, tfield, col_indices)
 
-        return False
+            self._write_excel_structural_row(
+                sheet,
+                template_row_idx + len(rows) - 1,
+                rows[-1],
+                tfield,
+                col_indices,
+            )
+            final_dimension = sheet.row_dimensions[template_row_idx + len(rows) - 1]
+            if template_height is not None:
+                final_dimension.height = template_height
+            final_dimension.hidden = template_hidden
+            return True, None
+
+        return False, (
+            f"Failed to fill table '{tfield.key}': structural header row not found for signature {header_sig}"
+        )
 
     def _fill_docx(self, template_bytes: bytes, values: Dict[str, Any]) -> FillResult:
         """Fill Word template with scalar and table expansion."""
@@ -420,6 +505,11 @@ class TemplateFillEngine:
             if not isinstance(rows, list):
                 missing_tables.append(table_key)
                 continue
+            if tfield.orientation != Orientation.VERTICAL:
+                return FillResult(
+                    success=False,
+                    error=f"Failed to fill table '{table_key}': horizontal table fill is not implemented yet",
+                )
 
             marker_start = f"{{{{#{table_key}}}}}"
             marker_end = f"{{{{/{table_key}}}}}"
@@ -440,28 +530,26 @@ class TemplateFillEngine:
                     # Get template row (row after start marker)
                     template_idx = start_row + 1
                     if template_idx >= len(table.rows) or template_idx >= end_row:
-                        continue
+                        return FillResult(
+                            success=False,
+                            error=f"Failed to fill table '{table_key}': template row between table markers is missing",
+                        )
 
                     template_row = table.rows[template_idx]
-                    template_cells = [cell.text for cell in template_row.cells]
+                    rows = list(rows or [])
 
-                    # Remove marker rows and template row.
-                    # <w:tr> elements belong to the table, so remove each row
-                    # via its own parent (not the table's parent / document body).
-                    for _ in range(end_row - start_row + 1):
-                        tr = table.rows[start_row]._element
-                        tr.getparent().remove(tr)
+                    for offset, row_data in enumerate(rows[:-1]):
+                        inserted_row = self._clone_docx_row_before(table, template_idx + offset, template_row)
+                        self._write_docx_table_row(inserted_row, row_data, table_key)
 
-                    # Add rows for data
-                    for row_data in rows:
-                        new_row = table.add_row()
-                        for idx, template_text in enumerate(template_cells):
-                            if idx < len(new_row.cells):
-                                filled_text, _ = _substitute_placeholders(
-                                    template_text,
-                                    _table_row_values(table_key, row_data),
-                                )
-                                new_row.cells[idx].text = filled_text
+                    if rows:
+                        self._write_docx_table_row(table.rows[template_idx + len(rows) - 1], rows[-1], table_key)
+                    else:
+                        self._write_docx_table_row(template_row, {}, table_key, cleanup_only=True)
+
+                    self._remove_docx_row(table.rows[start_row])
+                    end_row_after_start_removal = end_row - 1 + len(rows[:-1])
+                    self._remove_docx_row(table.rows[end_row_after_start_removal])
 
                     filled_tables.append(table_key)
                     break
@@ -488,6 +576,85 @@ class TemplateFillEngine:
             missing_tables=missing_tables,
         )
 
+    def _clone_docx_row_before(self, table, row_index: int, template_row):
+        cloned_tr = deepcopy(template_row._tr)
+        target_row = table.rows[row_index]
+        target_row._tr.addprevious(cloned_tr)
+        return table.rows[row_index]
+
+    def _remove_docx_row(self, row) -> None:
+        tr = row._tr
+        tr.getparent().remove(tr)
+
+    def _write_docx_table_row(self, row, row_data: Dict[str, Any], table_key: str, *, cleanup_only: bool = False) -> None:
+        row_values = _table_row_values(table_key, row_data)
+        for cell in row.cells:
+            if not cell.paragraphs:
+                continue
+            original_text = "\n".join(paragraph.text for paragraph in cell.paragraphs)
+            filled_text, _ = _substitute_placeholders(original_text, row_values)
+            final_text = _clear_placeholder_tokens(filled_text) if cleanup_only or filled_text != original_text else filled_text
+            self._replace_docx_cell_text(cell, final_text)
+
+    def _replace_docx_cell_text(self, cell, text: str) -> None:
+        paragraphs = list(cell.paragraphs)
+        if not paragraphs:
+            cell.text = text
+            return
+        paragraphs[0].clear()
+        paragraphs[0].add_run(text)
+        for paragraph in paragraphs[1:]:
+            p = paragraph._element
+            p.getparent().remove(p)
+
+    def _copy_excel_row_template(self, sheet, template_cells, target_row_idx: int, template_height: Any, template_hidden: Any) -> None:
+        target_dimension = sheet.row_dimensions[target_row_idx]
+        if template_height is not None:
+            target_dimension.height = template_height
+        target_dimension.hidden = template_hidden
+        for template_cell in template_cells:
+            target_cell = sheet.cell(row=target_row_idx, column=template_cell.column)
+            if template_cell.has_style:
+                target_cell._style = copy(template_cell._style)
+            if template_cell.number_format:
+                target_cell.number_format = copy(template_cell.number_format)
+            if template_cell.font:
+                target_cell.font = copy(template_cell.font)
+            if template_cell.fill:
+                target_cell.fill = copy(template_cell.fill)
+            if template_cell.border:
+                target_cell.border = copy(template_cell.border)
+            if template_cell.alignment:
+                target_cell.alignment = copy(template_cell.alignment)
+            if template_cell.protection:
+                target_cell.protection = copy(template_cell.protection)
+
+    def _write_excel_row(
+        self,
+        sheet,
+        row_idx: int,
+        template_values: List[Any],
+        template_cells: List[Any],
+        row_data: Dict[str, Any],
+        *,
+        table_key: str,
+        cleanup_only: bool = False,
+    ) -> None:
+        row_values = _table_row_values(table_key, row_data)
+        for template_cell, template_val in zip(template_cells, template_values):
+            target_cell = sheet.cell(row=row_idx, column=template_cell.column)
+            if template_val and isinstance(template_val, str):
+                filled_val, _ = _substitute_placeholders(template_val, row_values)
+                target_cell.value = _clear_placeholder_tokens(filled_val)
+            else:
+                target_cell.value = template_val
+
+    def _write_excel_structural_row(self, sheet, row_idx: int, row_data: Dict[str, Any], tfield: TableField, col_indices: Dict[str, int]) -> None:
+        for col in tfield.columns:
+            idx = col_indices[col.key]
+            target_cell = sheet.cell(row=row_idx, column=idx + 1)
+            target_cell.value = _lookup_nested_value(row_data, col.key)
+
 
 def _substitute_placeholders(text: str, values: Dict[str, Any]) -> Tuple[str, set[str]]:
     used_keys: set[str] = set()
@@ -504,6 +671,10 @@ def _substitute_placeholders(text: str, values: Dict[str, Any]) -> Tuple[str, se
         return str(value)
 
     return re.sub(r"\{\{([^{}]+)\}\}", _replace, text), used_keys
+
+
+def _clear_placeholder_tokens(text: str) -> str:
+    return re.sub(r"\{\{[^{}]+\}\}", "", text)
 
 
 def _table_row_values(prefix: str, row_data: Dict[str, Any]) -> Dict[str, Any]:

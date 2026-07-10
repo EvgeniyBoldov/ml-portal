@@ -26,7 +26,6 @@
   font-size: 14px;
 }
 
-/* Header */
 .header {
   display: flex;
   flex-direction: column;
@@ -51,7 +50,6 @@
   color: var(--muted);
 }
 
-/* Error Box */
 .errorBox {
   display: flex;
   align-items: flex-start;
@@ -70,7 +68,6 @@
   margin-top: 2px;
 }
 
-/* Sections */
 .section {
   display: flex;
   flex-direction: column;
@@ -86,7 +83,6 @@
   letter-spacing: 0.5px;
 }
 
-/* Timing */
 .timingGrid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -116,7 +112,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Metrics */
 .metricsGrid {
   display: flex;
   flex-direction: column;
@@ -150,7 +145,6 @@
   font-family: var(--font-mono, monospace);
 }
 
-/* Actions */
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -186,7 +180,6 @@
   to { transform: rotate(360deg); }
 }
 
-/* Responsive */
 @media (max-width: 768px) {
   .timingGrid {
     grid-template-columns: 1fr;

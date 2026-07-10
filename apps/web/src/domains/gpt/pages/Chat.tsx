@@ -107,6 +107,7 @@ export default function Chat() {
         attachmentMeta = uploaded.map((item) => ({
           id: item.id,
           file_id: item.file_id,
+          storage_uri: item.storage_uri,
           file_name: item.file_name,
           file_ext: item.file_ext,
           content_type: item.content_type ?? undefined,

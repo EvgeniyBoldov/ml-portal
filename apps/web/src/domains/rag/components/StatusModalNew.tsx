@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import Modal from '@shared/ui/Modal';
 import { useToast } from '@shared/ui/Toast';
@@ -7,8 +7,13 @@ import { buildFileDownloadUrl, buildRagDocFileId } from '@shared/api/files';
 import { config } from '@shared/config';
 import { openSSE, SSEMessage } from '@shared/lib/sse';
 import { useDocumentStatus } from '@shared/api/hooks/useDocumentStatus';
-import { PipelineView, PipelineStage, EmbeddingModel } from './PipelineView';
-import { StageDetails } from './StageDetails';
+import {
+  StatusFlowDetails,
+  StatusFlowView,
+  adaptDocumentStatusToFlowModel,
+  useStatusFlowSelection,
+  type FlowDetailAction,
+} from '@shared/components/statusFlow';
 import styles from './StatusModalNew.module.css';
 
 interface StatusModalNewProps {
@@ -27,63 +32,6 @@ interface StatusModalNewProps {
   downloadUrlPrefix?: string;
 }
 
-function pickDefaultSelection(
-  stages: PipelineStage[],
-  embeddings: EmbeddingModel[],
-  indexes: EmbeddingModel[],
-): { stage: string | null; model: string | null } {
-  const failedPipeline = stages.find((stage) => stage.status === 'failed');
-  if (failedPipeline) {
-    return { stage: failedPipeline.key, model: null };
-  }
-
-  const failedEmbedding = embeddings.find((model) => model.status === 'failed');
-  if (failedEmbedding) {
-    return { stage: 'embedding', model: failedEmbedding.model };
-  }
-
-  const failedIndex = indexes.find((model) => model.status === 'failed');
-  if (failedIndex) {
-    return { stage: 'index', model: failedIndex.model };
-  }
-
-  const activePipeline = [...stages].reverse().find((stage) => stage.status === 'processing' || stage.status === 'queued');
-  if (activePipeline) {
-    return { stage: activePipeline.key, model: null };
-  }
-
-  const activeEmbedding = embeddings.find((model) => model.status === 'processing' || model.status === 'queued');
-  if (activeEmbedding) {
-    return { stage: 'embedding', model: activeEmbedding.model };
-  }
-
-  const activeIndex = indexes.find((model) => model.status === 'processing' || model.status === 'queued');
-  if (activeIndex) {
-    return { stage: 'index', model: activeIndex.model };
-  }
-
-  const latestCompletedIndex = [...indexes].reverse().find((model) => model.status === 'completed');
-  if (latestCompletedIndex) {
-    return { stage: 'index', model: latestCompletedIndex.model };
-  }
-
-  const latestCompletedEmbedding = [...embeddings].reverse().find((model) => model.status === 'completed');
-  if (latestCompletedEmbedding) {
-    return { stage: 'embedding', model: latestCompletedEmbedding.model };
-  }
-
-  const latestCompletedPipeline = [...stages].reverse().find((stage) => stage.status === 'completed');
-  if (latestCompletedPipeline) {
-    return { stage: latestCompletedPipeline.key, model: null };
-  }
-
-  if (stages.length > 0) {
-    return { stage: stages[0].key, model: null };
-  }
-
-  return { stage: null, model: null };
-}
-
 export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl, retryUrlPrefix, stopUrlPrefix, downloadUrlPrefix }: StatusModalNewProps) {
   const queryClient = useQueryClient();
   const sseRef = useRef<ReturnType<typeof openSSE> | null>(null);
@@ -91,10 +39,9 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
   const invalidateTimerRef = useRef<number | null>(null);
   const { showToast } = useToast();
   
-  const [selectedStage, setSelectedStage] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-
   const { data: docStatus, isLoading, error } = useDocumentStatus(docId, statusGraphUrl);
+  const flowModel = React.useMemo(() => adaptDocumentStatusToFlowModel(docStatus), [docStatus]);
+  const { selection, setSelection } = useStatusFlowSelection(flowModel);
   const queryKey = React.useMemo(
     () => (statusGraphUrl ? ['collections', 'doc-status', docId] : ['document-status', docId]),
     [docId, statusGraphUrl],
@@ -165,93 +112,13 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  // Transform docStatus to pipeline format
-  const stages: PipelineStage[] = React.useMemo(() => {
-    if (!docStatus?.stages) return [];
-    
-    const stageOrder: Array<'upload' | 'extract' | 'normalize' | 'chunk'> = ['upload', 'extract', 'normalize', 'chunk'];
-    return stageOrder.map(key => {
-      const stage = docStatus.stages[key];
-      return {
-        key,
-        label: key.charAt(0).toUpperCase() + key.slice(1),
-        status: mapStateToStatus(stage?.state),
-        error: stage?.error,
-        metrics: stage?.metrics,
-        started_at: stage?.started_at,
-        finished_at: stage?.finished_at,
-      };
-    });
-  }, [docStatus?.stages]);
-
-  const embeddings: EmbeddingModel[] = React.useMemo(() => {
-    if (!docStatus?.embed_models) return [];
-    return docStatus.embed_models
-      .map(m => ({
-        model: m.id || m.name,
-        status: mapStateToStatus(m.state),
-        version: m.version,
-        error: m.error,
-        metrics: m.metrics,
-        started_at: m.started_at,
-        finished_at: m.finished_at,
-      }));
-  }, [docStatus?.embed_models]);
-
-  const indexes: EmbeddingModel[] = React.useMemo(() => {
-    if (!docStatus?.index_models) return [];
-    return docStatus.index_models
-      .map(m => ({
-        model: m.id || m.name,
-        status: mapStateToStatus(m.state),
-        version: m.version,
-        error: m.error,
-        metrics: m.metrics,
-        started_at: m.started_at,
-        finished_at: m.finished_at,
-      }));
-  }, [docStatus?.index_models]);
-
-  useEffect(() => {
-    const selectionIsValid =
-      (selectedStage != null && selectedStage !== 'embedding' && selectedStage !== 'index' && stages.some((stage) => stage.key === selectedStage)) ||
-      (selectedStage === 'embedding' && selectedModel != null && embeddings.some((model) => model.model === selectedModel)) ||
-      (selectedStage === 'index' && selectedModel != null && indexes.some((model) => model.model === selectedModel));
-
-    if (selectionIsValid) {
-      return;
-    }
-
-    const nextSelection = pickDefaultSelection(stages, embeddings, indexes);
-    setSelectedStage(nextSelection.stage);
-    setSelectedModel(nextSelection.model);
-  }, [selectedStage, selectedModel, stages, embeddings, indexes]);
-
-  // Get selected stage/model data
-  const selectedStageData = React.useMemo(() => {
-    if (!selectedStage) return null;
-    if (selectedStage === 'embedding' || selectedStage === 'index') return null;
-    return stages.find(s => s.key === selectedStage) || null;
-  }, [selectedStage, stages]);
-
-  const selectedModelData = React.useMemo(() => {
-    if (!selectedModel) return null;
-    if (selectedStage === 'embedding') {
-      return embeddings.find(e => e.model === selectedModel) || null;
-    }
-    if (selectedStage === 'index') {
-      return indexes.find(i => i.model === selectedModel) || null;
-    }
-    return null;
-  }, [selectedStage, selectedModel, embeddings, indexes]);
-
   const selectedStageSlug = React.useMemo(() => {
-    if (!selectedStage) return null;
-    if (selectedStage === 'embedding' && selectedModel) return `embed.${selectedModel}`;
-    if (selectedStage === 'index' && selectedModel) return `index.${selectedModel}`;
-    if (['upload', 'extract', 'normalize', 'chunk'].includes(selectedStage)) return selectedStage;
+    if (!selection.nodeKey) return null;
+    if (selection.laneKey === 'embedding') return `embed.${selection.itemKey || selection.nodeKey}`;
+    if (selection.laneKey === 'index') return `index.${selection.itemKey || selection.nodeKey}`;
+    if (['upload', 'extract', 'normalize', 'chunk'].includes(selection.nodeKey)) return selection.nodeKey;
     return null;
-  }, [selectedStage, selectedModel]);
+  }, [selection]);
 
   const selectedRetryStage = React.useMemo(() => {
     if (!selectedStageSlug) return null;
@@ -293,9 +160,8 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
   }, [controlByStage, selectedStopStage]);
 
   // Handlers
-  const handleSelectStage = (stage: string | null, model?: string | null) => {
-    setSelectedStage(stage);
-    setSelectedModel(model || null);
+  const handleSelectStage = (nextSelection: { nodeKey: string | null; laneKey?: string | null; itemKey?: string | null }) => {
+    setSelection(nextSelection);
   };
 
   const handleRestart = async () => {
@@ -387,9 +253,48 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
     );
   }
 
-  const stageType = selectedStage === 'embedding' ? 'embedding' 
-    : selectedStage === 'index' ? 'index' 
-    : 'pipeline';
+  const selectedNode = React.useMemo(() => {
+    if (!selection.nodeKey) return null;
+    if (selection.laneKey) {
+      return flowModel.lanes?.find((lane) => lane.key === selection.laneKey)?.items.find((item) => item.key === (selection.itemKey || selection.nodeKey)) ?? null;
+    }
+    return flowModel.pipeline.find((item) => item.key === selection.nodeKey) ?? null;
+  }, [flowModel, selection]);
+
+  const detailActions = React.useMemo<FlowDetailAction[]>(() => {
+    const actions: FlowDetailAction[] = [];
+    const showDownloadOriginal = !selection.laneKey && ['upload', 'extract'].includes(selection.nodeKey || '') && selectedNode?.status === 'completed';
+    const showDownloadNormalized = !selection.laneKey && selection.nodeKey === 'normalize' && selectedNode?.status === 'completed';
+
+    if (showDownloadOriginal) {
+      actions.push({ key: 'download-original', label: 'Скачать оригинал', icon: 'download', variant: 'outline', onClick: handleDownloadOriginal });
+    }
+    if (showDownloadNormalized) {
+      actions.push({ key: 'download-normalized', label: 'Скачать JSON', icon: 'download', variant: 'outline', onClick: handleDownloadNormalized });
+    }
+    if (canStopSelectedStage) {
+      actions.push({ key: 'stop', label: 'Остановить', icon: 'x', variant: 'warning', onClick: handleStop });
+    }
+    if (canRetrySelectedStage) {
+      actions.push({ key: 'restart', label: 'Перезапустить', icon: 'refresh-cw', variant: 'primary', onClick: handleRestart });
+    }
+    return actions;
+  }, [selection, selectedNode?.status, canStopSelectedStage, canRetrySelectedStage]);
+
+  const metricLabels = React.useMemo(() => ({
+    checksum: 'Контрольная сумма',
+    encoding: 'Кодировка',
+    extractor: 'Экстрактор',
+    char_count: 'Символов',
+    word_count: 'Слов',
+    duration_sec: 'Время (сек)',
+    chunk_count: 'Чанков',
+    chunk_size_avg: 'Средний размер чанка',
+    overlap: 'Перекрытие',
+    vector_count: 'Векторов',
+    vector_dim: 'Размерность',
+    indexed_count: 'Проиндексировано',
+  }), []);
 
   return (
     <Modal
@@ -402,54 +307,25 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
       <div className={styles.container}>
         {/* Pipeline visualization */}
         <div className={styles.pipelineSection}>
-          <PipelineView
-            stages={stages}
-            embeddings={embeddings}
-            indexes={indexes}
+          <StatusFlowView
+            model={flowModel}
             activeStageSlugs={activeStageSlugs}
-            selectedStage={selectedStage}
-            selectedModel={selectedModel}
-            onSelectStage={handleSelectStage}
+            selection={selection}
+            onSelect={handleSelectStage}
           />
         </div>
 
         {/* Details panel */}
         <div className={styles.detailsSection}>
-          <StageDetails
-            stage={selectedStageData}
-            model={selectedModelData}
-            stageType={stageType}
-            docId={docId}
-            canRestart={canRetrySelectedStage}
-            canStop={canStopSelectedStage}
-            onRestart={handleRestart}
-            onStop={handleStop}
-            onDownloadOriginal={handleDownloadOriginal}
-            onDownloadNormalized={handleDownloadNormalized}
+          <StatusFlowDetails
+            node={selectedNode}
+            metricLabels={metricLabels}
+            actions={detailActions}
           />
         </div>
       </div>
     </Modal>
   );
-}
-
-function mapStateToStatus(state?: string): 'pending' | 'processing' | 'completed' | 'failed' | 'queued' {
-  if (!state) return 'pending';
-  switch (state) {
-    case 'ok':
-    case 'completed':
-      return 'completed';
-    case 'running':
-    case 'processing':
-      return 'processing';
-    case 'error':
-    case 'failed':
-      return 'failed';
-    case 'queued':
-      return 'queued';
-    default:
-      return 'pending';
-  }
 }
 
 export default StatusModalNew;

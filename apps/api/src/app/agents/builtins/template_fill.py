@@ -246,8 +246,43 @@ class TemplateFillTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
+                validation = contract.validate_generated_values(values)
+                if not validation.ok:
+                    log.warning(
+                        "template_fill_validation_failed",
+                        error_count=len(validation.error_details),
+                        warning_count=len(validation.warning_details),
+                    )
+                    validation_errors = [
+                        issue.model_dump(mode="json", exclude_none=True)
+                        for issue in validation.error_details
+                    ]
+                    validation_warnings = [
+                        issue.model_dump(mode="json", exclude_none=True)
+                        for issue in validation.warning_details
+                    ]
+                    return ToolResult.fail(
+                        (
+                            "Provided values JSON does not match the template schema. "
+                            "Fix the invalid fields listed in metadata.validation_errors and call "
+                            "'collection.template.fill' again with corrected 'values'."
+                        ),
+                        logs=log.entries_dict(),
+                        validation_summary={
+                            "valid": False,
+                            "error_count": len(validation_errors),
+                            "warning_count": len(validation_warnings),
+                        },
+                        validation_errors=validation_errors,
+                        validation_warnings=validation_warnings,
+                        retry_hint=(
+                            "Correct each field listed in metadata.validation_errors, keep the same nested JSON shape, "
+                            "and repeat the tool call with updated values."
+                        ),
+                    )
+
                 engine = TemplateFillEngine(contract)
-                result = engine.fill(content, values, filename)
+                result = engine.fill(content, values, filename, assume_valid=True)
                 if not result.success:
                     return ToolResult.fail(
                         f"Failed to fill template: {result.error}",

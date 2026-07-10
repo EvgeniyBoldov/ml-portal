@@ -16,10 +16,11 @@ Key concepts
 from __future__ import annotations
 
 import logging
+import re
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ CONTRACT_VERSION = "1.0"
 
 class FieldKind(str, Enum):
     SCALAR = "scalar"
+    OBJECT = "object"
     TABLE = "table"
 
 
@@ -137,9 +139,16 @@ class TableColumn(BaseModel):
     type: FieldType = FieldType.STRING
     required: bool = True
     example: Optional[str] = None
+    enum: Optional[List[str]] = None
     locator: Optional[TokenLocator] = None
     source: FieldSource = FieldSource.LLM
     locked: bool = False
+
+    @model_validator(mode="after")
+    def _enum_requires_type(self) -> "TableColumn":
+        if self.enum and self.type != FieldType.ENUM:
+            raise ValueError("'enum' list provided but type is not 'enum'")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +210,27 @@ class TemplateContract(BaseModel):
     contract_version: str = Field(CONTRACT_VERSION)
     format: Optional[DocumentFormat] = None
     fields: List[AnyField] = Field(default_factory=list)
+    node_meta: Dict[str, Dict[str, Any]] = Field(default_factory=dict, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_incoming_contract(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        fields = data.get("fields")
+        if not isinstance(fields, list):
+            return data
+        if not any(isinstance(field, dict) and (field.get("kind") == "object" or (field.get("kind") == "table" and isinstance(field.get("fields"), list))) for field in fields):
+            return data
+        flattened_fields: List[Dict[str, Any]] = []
+        node_meta: Dict[str, Dict[str, Any]] = {}
+        for field in fields:
+            if isinstance(field, dict):
+                _flatten_hierarchical_field(field, parent_path="", flat_fields=flattened_fields, node_meta=node_meta)
+        normalized = dict(data)
+        normalized["fields"] = flattened_fields
+        normalized["node_meta"] = node_meta
+        return normalized
 
     # ------------------------------------------------------------------
     # Derived: fill_input_schema
@@ -240,6 +270,8 @@ class TemplateContract(BaseModel):
                         cp["description"] = col.description
                     if col.example is not None:
                         cp["example"] = col.example
+                    if col.enum:
+                        cp["enum"] = col.enum
                     self._assign_nested_schema_property(
                         item_schema,
                         col.key.split("."),
@@ -265,6 +297,100 @@ class TemplateContract(BaseModel):
                 )
         return schema
 
+    def to_runtime_schema(self) -> Dict[str, Any]:
+        """Return a nested contract representation for LLM prompting and runtime validation."""
+        schema: Dict[str, Any] = {"type": "object", "properties": {}}
+
+        for field in self.fields:
+            if isinstance(field, ScalarField):
+                node = self._field_runtime_node(field)
+                self._assign_nested_runtime_property(
+                    schema,
+                    field.key.split("."),
+                    node,
+                    required=field.required,
+                )
+                continue
+
+            item_schema: Dict[str, Any] = {"type": "object", "properties": {}}
+            for column in field.columns:
+                column_node = self._column_runtime_node(column)
+                self._assign_nested_runtime_property(
+                    item_schema,
+                    column.key.split("."),
+                    column_node,
+                    required=column.required,
+                )
+            table_node: Dict[str, Any] = {
+                "type": "array",
+                "label": field.label,
+                "required": field.required,
+                "items": item_schema,
+            }
+            if field.description:
+                table_node["description"] = field.description
+            if field.min_rows:
+                table_node["minItems"] = field.min_rows
+            if field.max_rows is not None:
+                table_node["maxItems"] = field.max_rows
+            if field.anchor is not None:
+                table_node["anchor"] = field.anchor.model_dump(mode="json", exclude_none=True)
+            self._assign_nested_runtime_property(
+                schema,
+                field.key.split("."),
+                table_node,
+                required=field.required,
+            )
+
+        return schema
+
+    def to_prompt_schema(self) -> Dict[str, Any]:
+        """Alias for nested runtime schema used in LLM prompts."""
+        return self.to_runtime_schema()
+
+    def build_values_model(self, model_name: str = "TemplateValuesModel") -> type[BaseModel]:
+        """Build a dynamic Pydantic model for generated values validation."""
+        runtime_schema = self.to_runtime_schema()
+        return _build_model_from_runtime_schema(runtime_schema, model_name=model_name)
+
+    def validate_generated_values(self, values: Dict[str, Any]) -> "ValidationReport":
+        """Validate generated values with both Pydantic structure and contract semantics."""
+        errors: List[str] = []
+        warnings: List[str] = []
+        error_details: List[ValidationIssue] = []
+
+        model_cls = self.build_values_model()
+        try:
+            validated = model_cls.model_validate(values)
+            normalized_values = validated.model_dump(mode="python", exclude_none=False)
+        except ValidationError as exc:
+            for item in exc.errors():
+                path = _format_validation_path(item.get("loc", ()))
+                msg = str(item.get("msg") or "Validation error")
+                expected, actual, rule = self._describe_pydantic_validation_issue(path, item)
+                errors.append(f"{path}: {msg}" if path else msg)
+                error_details.append(
+                    ValidationIssue(
+                        path=path,
+                        message=msg,
+                        expected=expected,
+                        actual=actual,
+                        rule=rule,
+                    )
+                )
+            return ValidationReport(errors=errors, warnings=warnings, error_details=error_details)
+
+        semantic = self.validate_values(normalized_values, enforce_required=True)
+        errors.extend(semantic.errors)
+        warnings.extend(semantic.warnings)
+        error_details.extend(semantic.error_details)
+        return ValidationReport(
+            errors=errors,
+            warnings=warnings,
+            error_details=error_details,
+            warning_details=semantic.warning_details,
+        )
+
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
@@ -285,63 +411,188 @@ class TemplateContract(BaseModel):
         """
         errors: List[str] = []
         warnings: List[str] = []
+        error_details: List[ValidationIssue] = []
+        warning_details: List[ValidationIssue] = []
 
         normalized = self.normalize_values(values)
         contract_keys = {f.key for f in self.fields}
         for path in self._collect_input_paths(values):
             if path not in contract_keys:
-                warnings.append(f"Unknown key '{path}' — not in contract")
+                msg = f"Unknown key '{path}' — not in contract"
+                warnings.append(msg)
+                warning_details.append(
+                    ValidationIssue(
+                        path=path,
+                        message=msg,
+                        expected="Known contract field",
+                        actual="Unknown key",
+                        rule="unknown_key",
+                    )
+                )
 
         for field in self.fields:
             val = normalized.get(field.key)
 
             if isinstance(field, ScalarField):
                 if enforce_required and field.required and (val is None or (isinstance(val, str) and not val.strip())):
-                    errors.append(f"Required scalar '{field.key}' is missing or empty")
+                    msg = f"Required scalar '{field.key}' is missing or empty"
+                    errors.append(msg)
+                    error_details.append(
+                        ValidationIssue(
+                            path=field.key,
+                            message=msg,
+                            expected=f"Required {field.type.value} value",
+                            actual="missing" if val is None else "empty",
+                            rule="required",
+                        )
+                    )
                     continue
                 if val is not None:
                     type_err = _check_scalar_type(field.key, val, field.type)
                     if type_err:
                         errors.append(type_err)
+                        error_details.append(
+                            ValidationIssue(
+                                path=field.key,
+                                message=type_err,
+                                expected=field.type.value,
+                                actual=type(val).__name__,
+                                rule="type",
+                            )
+                        )
 
             elif isinstance(field, TableField):
                 if enforce_required and field.required and (val is None or val == []):
-                    errors.append(f"Required table '{field.key}' is missing or empty")
+                    msg = f"Required table '{field.key}' is missing or empty"
+                    errors.append(msg)
+                    error_details.append(
+                        ValidationIssue(
+                            path=field.key,
+                            message=msg,
+                            expected="Non-empty array",
+                            actual="missing" if val is None else "empty array",
+                            rule="required",
+                        )
+                    )
                     continue
                 if val is not None:
                     if not isinstance(val, list):
-                        errors.append(f"Table '{field.key}' must be an array, got {type(val).__name__}")
+                        msg = f"Table '{field.key}' must be an array, got {type(val).__name__}"
+                        errors.append(msg)
+                        error_details.append(
+                            ValidationIssue(
+                                path=field.key,
+                                message=msg,
+                                expected="array",
+                                actual=type(val).__name__,
+                                rule="type",
+                            )
+                        )
                         continue
                     n = len(val)
                     if n < field.min_rows:
-                        errors.append(
-                            f"Table '{field.key}' has {n} row(s), but min_rows={field.min_rows}"
+                        msg = f"Table '{field.key}' has {n} row(s), but min_rows={field.min_rows}"
+                        errors.append(msg)
+                        error_details.append(
+                            ValidationIssue(
+                                path=field.key,
+                                message=msg,
+                                expected=f"at least {field.min_rows} row(s)",
+                                actual=f"{n} row(s)",
+                                rule="min_rows",
+                            )
                         )
                     if field.max_rows is not None and n > field.max_rows:
-                        errors.append(
-                            f"Table '{field.key}' has {n} row(s), but max_rows={field.max_rows}"
+                        msg = f"Table '{field.key}' has {n} row(s), but max_rows={field.max_rows}"
+                        errors.append(msg)
+                        error_details.append(
+                            ValidationIssue(
+                                path=field.key,
+                                message=msg,
+                                expected=f"at most {field.max_rows} row(s)",
+                                actual=f"{n} row(s)",
+                                rule="max_rows",
+                            )
                         )
                     col_keys = {c.key for c in field.columns}
                     req_cols = {c.key for c in field.columns if c.required}
                     for i, row in enumerate(val):
                         if not isinstance(row, dict):
-                            errors.append(f"Table '{field.key}' row[{i}] must be an object")
+                            msg = f"Table '{field.key}' row[{i}] must be an object"
+                            errors.append(msg)
+                            error_details.append(
+                                ValidationIssue(
+                                    path=f"{field.key}[{i}]",
+                                    message=msg,
+                                    expected="object",
+                                    actual=type(row).__name__,
+                                    rule="type",
+                                )
+                            )
                             continue
                         row_flat = self._flatten_nested_value(row)
                         for ck in row_flat:
                             if ck not in col_keys:
-                                warnings.append(
-                                    f"Table '{field.key}' row[{i}] has unknown column '{ck}'"
+                                msg = f"Table '{field.key}' row[{i}] has unknown column '{ck}'"
+                                warnings.append(msg)
+                                warning_details.append(
+                                    ValidationIssue(
+                                        path=f"{field.key}[{i}].{ck}",
+                                        message=msg,
+                                        expected="Known table column",
+                                        actual="Unknown column",
+                                        rule="unknown_key",
+                                    )
                                 )
                         if enforce_required:
                             for ck in req_cols:
                                 rv = row_flat.get(ck)
                                 if rv is None or (isinstance(rv, str) and not rv.strip()):
-                                    errors.append(
-                                        f"Table '{field.key}' row[{i}] missing required column '{ck}'"
+                                    msg = f"Table '{field.key}' row[{i}] missing required column '{ck}'"
+                                    errors.append(msg)
+                                    error_details.append(
+                                        ValidationIssue(
+                                            path=f"{field.key}[{i}].{ck}",
+                                            message=msg,
+                                            expected="Required value",
+                                            actual="missing" if rv is None else "empty",
+                                            rule="required",
+                                        )
                                     )
 
-        return ValidationReport(errors=errors, warnings=warnings)
+        return ValidationReport(
+            errors=errors,
+            warnings=warnings,
+            error_details=error_details,
+            warning_details=warning_details,
+        )
+
+    def _describe_pydantic_validation_issue(
+        self,
+        path: str,
+        item: Dict[str, Any],
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        path_without_indexes = re.sub(r"\[\d+\]", "", path)
+        contract_field = self.get_field(path_without_indexes)
+        if contract_field is None:
+            table_path, _, column_path = path_without_indexes.partition(".")
+            table_field = self.get_field(table_path)
+            if isinstance(table_field, TableField) and column_path:
+                column = next((col for col in table_field.columns if col.key == column_path), None)
+                if column is not None:
+                    contract_field = column
+        expected = None
+        if isinstance(contract_field, ScalarField):
+            expected = contract_field.type.value
+            if contract_field.enum:
+                expected = f"one of {contract_field.enum}"
+        elif isinstance(contract_field, TableColumn):
+            expected = contract_field.type.value
+            if contract_field.enum:
+                expected = f"one of {contract_field.enum}"
+        actual_value = item.get("input")
+        actual = type(actual_value).__name__ if actual_value is not None else None
+        return expected, actual, str(item.get("type") or "validation")
 
     def normalize_values(self, values: Dict[str, Any]) -> Dict[str, Any]:
         normalized: Dict[str, Any] = {}
@@ -397,6 +648,59 @@ class TemplateContract(BaseModel):
             if path[-1] not in req:
                 req.append(path[-1])
 
+    def _assign_nested_runtime_property(
+        self,
+        schema: Dict[str, Any],
+        path: List[str],
+        prop: Dict[str, Any],
+        *,
+        required: bool,
+    ) -> None:
+        node = schema
+        for segment in path[:-1]:
+            node.setdefault("type", "object")
+            props = node.setdefault("properties", {})
+            child = props.get(segment)
+            if not isinstance(child, dict) or child.get("type") != "object":
+                child = {"type": "object", "properties": {}, "required": False}
+                props[segment] = child
+            req = node.setdefault("required_fields", [])
+            if required and segment not in req:
+                req.append(segment)
+            node = child
+        node.setdefault("type", "object")
+        props = node.setdefault("properties", {})
+        props[path[-1]] = prop
+        req = node.setdefault("required_fields", [])
+        if required and path[-1] not in req:
+            req.append(path[-1])
+
+    def _field_runtime_node(self, field: ScalarField) -> Dict[str, Any]:
+        node: Dict[str, Any] = {
+            "type": field.type.value,
+            "label": field.label,
+            "required": field.required,
+        }
+        if field.description:
+            node["description"] = field.description
+        if field.enum:
+            node["enum"] = list(field.enum)
+        if field.format:
+            node["format"] = field.format
+        return node
+
+    def _column_runtime_node(self, column: TableColumn) -> Dict[str, Any]:
+        node: Dict[str, Any] = {
+            "type": column.type.value,
+            "label": column.label,
+            "required": column.required,
+        }
+        if column.description:
+            node["description"] = column.description
+        if column.enum:
+            node["enum"] = list(column.enum)
+        return node
+
     def _lookup_nested_value(self, values: Dict[str, Any], key: str) -> Any:
         if key in values:
             return values.get(key)
@@ -434,19 +738,16 @@ class TemplateContract(BaseModel):
     # ------------------------------------------------------------------
 
     def to_jsonb(self) -> Dict[str, Any]:
-        """Serialize to dict suitable for storing in JSONB column."""
-        return self.model_dump(mode="json", exclude_none=False)
+        """Serialize to nested dict suitable for storing in JSONB column."""
+        return {
+            "contract_version": self.contract_version,
+            "format": self.format.value if self.format else None,
+            "fields": _build_hierarchical_fields(self),
+        }
 
     @classmethod
     def from_jsonb(cls, data: Optional[Dict[str, Any]]) -> "TemplateContract":
-        """Deserialize from JSONB dict, with back-compat for old format.
-
-        Old format: ``{format, sheets, placeholders}`` or ``{format, draft_schema}``
-        → returns empty contract without raising.
-        """
         if not data:
-            return cls()
-        if "contract_version" not in data:
             return cls()
         try:
             return cls.model_validate(data)
@@ -463,6 +764,8 @@ class TemplateContract(BaseModel):
 class ValidationReport(BaseModel):
     errors: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+    error_details: List["ValidationIssue"] = Field(default_factory=list)
+    warning_details: List["ValidationIssue"] = Field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -471,6 +774,14 @@ class ValidationReport(BaseModel):
     def raise_if_invalid(self) -> None:
         if not self.ok:
             raise ValueError(f"Contract validation failed: {'; '.join(self.errors)}")
+
+
+class ValidationIssue(BaseModel):
+    path: str = ""
+    message: str
+    expected: Optional[str] = None
+    actual: Optional[str] = None
+    rule: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +843,7 @@ def merge_contract(
         contract_version=CONTRACT_VERSION,
         format=new_format,
         fields=merged_fields,
+        node_meta={**existing.node_meta, **proposed.node_meta},
     )
 
 
@@ -554,3 +866,342 @@ def _check_scalar_type(key: str, value: Any, expected: FieldType) -> Optional[st
             return f"Scalar '{key}' expected bool, got '{value}'"
     # string, date, enum — accept anything; enum value checking left to callers
     return None
+
+
+def _format_validation_path(loc: Any) -> str:
+    parts: List[str] = []
+    for item in loc or ():
+        if isinstance(item, int):
+            if not parts:
+                parts.append(f"[{item}]")
+            else:
+                parts[-1] = f"{parts[-1]}[{item}]"
+            continue
+        parts.append(str(item))
+    return ".".join(parts)
+
+
+def _flatten_hierarchical_field(
+    field: Dict[str, Any],
+    *,
+    parent_path: str,
+    flat_fields: List[Dict[str, Any]],
+    node_meta: Dict[str, Dict[str, Any]],
+) -> None:
+    key = str(field.get("key") or "").strip()
+    if not key:
+        return
+    path = f"{parent_path}.{key}" if parent_path else key
+    kind = str(field.get("kind") or "scalar").strip().lower()
+    if kind == "object":
+        node_meta[path] = _extract_node_meta(field, kind="object")
+        for child in field.get("fields") or []:
+            if isinstance(child, dict):
+                _flatten_hierarchical_field(child, parent_path=path, flat_fields=flat_fields, node_meta=node_meta)
+        return
+    if kind == "table":
+        row_fields = field.get("fields") or []
+        columns: List[Dict[str, Any]] = []
+        for child in row_fields:
+            if isinstance(child, dict):
+                _flatten_table_row_field(child, parent_path="", columns=columns, node_meta=node_meta, table_path=path)
+        flat_fields.append(
+            {
+                "key": path,
+                "kind": FieldKind.TABLE.value,
+                "label": field.get("label") or key.capitalize(),
+                "description": field.get("description"),
+                "orientation": field.get("orientation", Orientation.VERTICAL.value),
+                "required": bool(field.get("required", False)),
+                "min_rows": field.get("min_rows", 0),
+                "max_rows": field.get("max_rows"),
+                "anchor": field.get("anchor"),
+                "columns": columns,
+                "source": field.get("source", FieldSource.PARSER.value),
+                "locked": bool(field.get("locked", False)),
+            }
+        )
+        return
+    flat_fields.append(
+        {
+            "key": path,
+            "kind": FieldKind.SCALAR.value,
+            "label": field.get("label") or key.capitalize(),
+            "description": field.get("description"),
+            "type": field.get("type", FieldType.STRING.value),
+            "required": bool(field.get("required", False)),
+            "example": field.get("example"),
+            "enum": field.get("enum"),
+            "format": field.get("format"),
+            "locator": field.get("locator"),
+            "source": field.get("source", FieldSource.PARSER.value),
+            "locked": bool(field.get("locked", False)),
+        }
+    )
+
+
+def _flatten_table_row_field(
+    field: Dict[str, Any],
+    *,
+    parent_path: str,
+    columns: List[Dict[str, Any]],
+    node_meta: Dict[str, Dict[str, Any]],
+    table_path: str,
+) -> None:
+    key = str(field.get("key") or "").strip()
+    if not key:
+        return
+    path = f"{parent_path}.{key}" if parent_path else key
+    full_path = f"{table_path}.{path}" if path else table_path
+    kind = str(field.get("kind") or "scalar").strip().lower()
+    if kind == "object":
+        node_meta[full_path] = _extract_node_meta(field, kind="object")
+        for child in field.get("fields") or []:
+            if isinstance(child, dict):
+                _flatten_table_row_field(
+                    child,
+                    parent_path=path,
+                    columns=columns,
+                    node_meta=node_meta,
+                    table_path=table_path,
+                )
+        return
+    columns.append(
+        {
+            "key": path,
+            "label": field.get("label") or key.capitalize(),
+            "description": field.get("description"),
+            "type": field.get("type", FieldType.STRING.value),
+            "required": bool(field.get("required", False)),
+            "example": field.get("example"),
+            "enum": field.get("enum"),
+            "locator": field.get("locator"),
+            "source": field.get("source", FieldSource.PARSER.value),
+            "locked": bool(field.get("locked", False)),
+        }
+    )
+
+
+def _extract_node_meta(field: Dict[str, Any], *, kind: str) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {"kind": kind}
+    for name in ("label", "description", "required", "source", "locked"):
+        if name in field:
+            meta[name] = field.get(name)
+    return meta
+
+
+def _build_hierarchical_fields(contract: TemplateContract) -> List[Dict[str, Any]]:
+    tree: Dict[str, Dict[str, Any]] = {}
+
+    for field in contract.fields:
+        if isinstance(field, ScalarField):
+            _insert_scalar_field(tree, field, contract.node_meta)
+            continue
+        if isinstance(field, TableField):
+            _insert_table_field(tree, field, contract.node_meta)
+
+    return _finalize_hierarchical_nodes(tree)
+
+
+def _insert_scalar_field(tree: Dict[str, Dict[str, Any]], field: ScalarField, node_meta: Dict[str, Dict[str, Any]]) -> None:
+    parts = field.key.split(".")
+    current = tree
+    current_path: List[str] = []
+    for index, part in enumerate(parts):
+        current_path.append(part)
+        path = ".".join(current_path)
+        if index == len(parts) - 1:
+            current[part] = {
+                "key": part,
+                "kind": FieldKind.SCALAR.value,
+                "label": field.label,
+                "description": field.description,
+                "type": field.type.value,
+                "required": field.required,
+                "example": field.example,
+                "enum": field.enum,
+                "format": field.format,
+                "locator": field.locator.model_dump(mode="json", exclude_none=True) if field.locator else None,
+                "source": field.source.value,
+                "locked": field.locked,
+            }
+            continue
+        node = current.get(part)
+        if not isinstance(node, dict) or node.get("kind") != FieldKind.OBJECT.value:
+            meta = node_meta.get(path, {})
+            node = {
+                "key": part,
+                "kind": FieldKind.OBJECT.value,
+                "label": meta.get("label") or part.capitalize(),
+                "description": meta.get("description"),
+                "required": bool(meta.get("required", False)),
+                "source": meta.get("source", FieldSource.PARSER.value),
+                "locked": bool(meta.get("locked", False)),
+                "fields": [],
+                "_children": {},
+            }
+            current[part] = node
+        current = node.setdefault("_children", {})
+
+
+def _insert_table_field(tree: Dict[str, Dict[str, Any]], field: TableField, node_meta: Dict[str, Dict[str, Any]]) -> None:
+    parts = field.key.split(".")
+    current = tree
+    current_path: List[str] = []
+    for index, part in enumerate(parts):
+        current_path.append(part)
+        path = ".".join(current_path)
+        if index == len(parts) - 1:
+            node = {
+                "key": part,
+                "kind": FieldKind.TABLE.value,
+                "label": field.label,
+                "description": field.description,
+                "required": field.required,
+                "min_rows": field.min_rows,
+                "max_rows": field.max_rows,
+                "orientation": field.orientation.value,
+                "anchor": field.anchor.model_dump(mode="json", exclude_none=True) if field.anchor else None,
+                "source": field.source.value,
+                "locked": field.locked,
+                "fields": [],
+                "_children": {},
+            }
+            current[part] = node
+            for column in field.columns:
+                _insert_table_column(node["_children"], column, field.key, node_meta)
+            break
+        meta = node_meta.get(path, {})
+        node = current.get(part)
+        if not isinstance(node, dict) or node.get("kind") != FieldKind.OBJECT.value:
+            node = {
+                "key": part,
+                "kind": FieldKind.OBJECT.value,
+                "label": meta.get("label") or part.capitalize(),
+                "description": meta.get("description"),
+                "required": bool(meta.get("required", False)),
+                "source": meta.get("source", FieldSource.PARSER.value),
+                "locked": bool(meta.get("locked", False)),
+                "fields": [],
+                "_children": {},
+            }
+            current[part] = node
+        current = node.setdefault("_children", {})
+
+
+def _insert_table_column(tree: Dict[str, Dict[str, Any]], column: TableColumn, table_path: str, node_meta: Dict[str, Dict[str, Any]]) -> None:
+    parts = column.key.split(".")
+    current = tree
+    current_path: List[str] = []
+    for index, part in enumerate(parts):
+        current_path.append(part)
+        relative_path = ".".join(current_path)
+        full_path = f"{table_path}.{relative_path}"
+        if index == len(parts) - 1:
+            current[part] = {
+                "key": part,
+                "kind": FieldKind.SCALAR.value,
+                "label": column.label,
+                "description": column.description,
+                "type": column.type.value,
+                "required": column.required,
+                "example": column.example,
+                "enum": column.enum,
+                "locator": column.locator.model_dump(mode="json", exclude_none=True) if column.locator else None,
+                "source": column.source.value,
+                "locked": column.locked,
+            }
+            continue
+        meta = node_meta.get(full_path, {})
+        node = current.get(part)
+        if not isinstance(node, dict) or node.get("kind") != FieldKind.OBJECT.value:
+            node = {
+                "key": part,
+                "kind": FieldKind.OBJECT.value,
+                "label": meta.get("label") or part.capitalize(),
+                "description": meta.get("description"),
+                "required": bool(meta.get("required", False)),
+                "source": meta.get("source", FieldSource.PARSER.value),
+                "locked": bool(meta.get("locked", False)),
+                "fields": [],
+                "_children": {},
+            }
+            current[part] = node
+        current = node.setdefault("_children", {})
+
+
+def _finalize_hierarchical_nodes(nodes: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    for node in nodes.values():
+        children = node.pop("_children", {})
+        if node.get("kind") in {FieldKind.OBJECT.value, FieldKind.TABLE.value}:
+            node["fields"] = _finalize_hierarchical_nodes(children)
+        result.append(node)
+    return result
+
+
+def _build_model_from_runtime_schema(schema: Dict[str, Any], *, model_name: str) -> type[BaseModel]:
+    schema_type = str(schema.get("type") or "object").strip().lower()
+    if schema_type != "object":
+        raise ValueError(f"Top-level runtime schema must be object, got {schema_type!r}")
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+
+    required_fields = set(schema.get("required_fields") or [])
+    field_defs: Dict[str, tuple[Any, Any]] = {}
+    for key, prop in properties.items():
+        annotation, default = _annotation_from_runtime_node(prop, f"{model_name}_{_pascal_case(key)}")
+        if key in required_fields:
+            field_defs[key] = (annotation, ...)
+        else:
+            field_defs[key] = (annotation, default)
+    return create_model(model_name, __config__=ConfigDict(extra="forbid"), **field_defs)
+
+
+def _annotation_from_runtime_node(node: Dict[str, Any], model_name: str) -> tuple[Any, Any]:
+    node_type = str(node.get("type") or "string").strip().lower()
+    if node_type == "object":
+        return _build_object_annotation(node, model_name)
+    if node_type == "array":
+        return _build_array_annotation(node, model_name)
+    return _build_scalar_annotation(node_type, node)
+
+
+def _build_object_annotation(node: Dict[str, Any], model_name: str) -> tuple[Any, Any]:
+    model_cls = _build_model_from_runtime_schema(node, model_name=model_name)
+    if bool(node.get("required")):
+        return model_cls, ...
+    return Optional[model_cls], None
+
+
+def _build_array_annotation(node: Dict[str, Any], model_name: str) -> tuple[Any, Any]:
+    items = node.get("items")
+    if not isinstance(items, dict):
+        return list[dict[str, Any]], []
+    item_annotation, _ = _annotation_from_runtime_node(items, f"{model_name}Item")
+    list_annotation = list[item_annotation]
+    if bool(node.get("required")):
+        return list_annotation, ...
+    return Optional[list_annotation], None
+
+
+def _build_scalar_annotation(node_type: str, node: Dict[str, Any]) -> tuple[Any, Any]:
+    enum_values = node.get("enum")
+    if isinstance(enum_values, list) and enum_values:
+        annotation = str
+    elif node_type == FieldType.NUMBER.value:
+        annotation = float
+    elif node_type == FieldType.BOOL.value:
+        annotation = bool
+    else:
+        annotation = str
+    if bool(node.get("required")):
+        return annotation, ...
+    return Optional[annotation], None
+
+
+def _pascal_case(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() else " " for ch in value)
+    parts = [part for part in cleaned.split() if part]
+    return "".join(part[:1].upper() + part[1:] for part in parts) or "Field"

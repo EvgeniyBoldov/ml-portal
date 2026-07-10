@@ -24,6 +24,7 @@ import {
   type CollectionDocument,
   type CollectionDocumentsResponse,
   type CollectionTemplate,
+  type CollectionTemplatesResponse,
 } from '@shared/api/collections';
 import { ApiError } from '@shared/api/errors';
 import { StatusModalNew } from '@/domains/rag/components/StatusModalNew';
@@ -1345,7 +1346,7 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     queryKey: ['collections', 'templates', collectionId, { page: 1, size: 500 }],
     queryFn: () => collectionsApi.listTemplates(collectionId, { page: 1, size: 500 }),
     enabled: !!collectionId,
-    refetchInterval: 3000,
+    refetchInterval: 10000,
   });
 
   const templates = templatesData?.items ?? [];
@@ -1361,7 +1362,7 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
         || String(item.description ?? '').toLowerCase().includes(query)
         || String(item.source ?? '').toLowerCase().includes(query)
         || String(item.template_version ?? '').toLowerCase().includes(query)
-        || String(item.status ?? '').toLowerCase().includes(query)
+        || String(item.runtime_status ?? item.status ?? '').toLowerCase().includes(query)
         || fileName.includes(query)
       );
     });
@@ -1457,6 +1458,62 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     },
   });
 
+  const approveMutation = useMutation({
+    mutationFn: (rowId: string) => collectionsApi.approveTemplate(collectionId, rowId),
+    onSuccess: () => {
+      showToast('Шаблон утвержден', 'success');
+      setActionsMenu(null);
+      invalidateTemplates();
+    },
+    onError: (err: Error) => {
+      showToast(err.message || 'Ошибка утверждения шаблона', 'error');
+    },
+  });
+
+  useEffect(() => {
+    if (!collectionId) return;
+    const client = new SSEClient({
+      url: collectionsApi.getTemplateCollectionStatusEventsUrl(collectionId),
+      onMessage: (events: SSEMessage[]) => {
+        for (const event of events) {
+          const payload = event.data as Record<string, unknown> | null;
+          if (!payload) continue;
+
+          if (event.type === 'rag.snapshot') {
+            const items = (payload.items as CollectionTemplate[] | undefined) ?? [];
+            if (Array.isArray(items)) {
+              queryClient.setQueryData(
+                ['collections', 'templates', collectionId, { page: 1, size: 500 }],
+                (old: CollectionTemplatesResponse | undefined) => old ? { ...old, items, total: items.length } : old,
+              );
+            }
+            continue;
+          }
+
+          const item = payload.item as CollectionTemplate | undefined;
+          if (!item?.id) continue;
+          queryClient.setQueryData(
+            ['collections', 'templates', collectionId, { page: 1, size: 500 }],
+            (old: CollectionTemplatesResponse | undefined) => {
+              if (!old) return old;
+              const exists = old.items.some((row) => row.id === item.id);
+              return {
+                ...old,
+                items: exists
+                  ? old.items.map((row) => (row.id === item.id ? { ...row, ...item } : row))
+                  : [item, ...old.items],
+              };
+            },
+          );
+        }
+      },
+    });
+    void client.connect();
+    return () => {
+      client.disconnect();
+    };
+  }, [collectionId, queryClient]);
+
   const handleSelectAll = useCallback(() => {
     const visibleIds = filteredTemplates.map((item) => item.id);
     const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
@@ -1514,6 +1571,10 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   const handleAnalyzeOne = useCallback((rowId: string) => {
     analyzeMutation.mutate([rowId]);
   }, [analyzeMutation]);
+
+  const handleApproveOne = useCallback((rowId: string) => {
+    approveMutation.mutate(rowId);
+  }, [approveMutation]);
 
   const handleSetStatus = useCallback((rowId: string, status: 'ready' | 'archived') => {
     updateStatusMutation.mutate({ rowId, status });
@@ -1589,11 +1650,13 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   }, [descriptionDraft, saveSchemaMutation, schemaDraft, schemaEditor?.rowId]);
 
   const getTemplateStatusBadge = (row: CollectionTemplate) => {
-    const status = String(row.status ?? 'uploaded').toLowerCase();
-    const map: Record<string, { tone: 'success' | 'warn' | 'neutral' | 'info'; label: string }> = {
+    const status = String(row.runtime_status ?? row.status ?? 'uploaded').toLowerCase();
+    const map: Record<string, { tone: 'success' | 'warn' | 'neutral' | 'info' | 'danger'; label: string }> = {
       uploaded: { tone: 'neutral', label: 'Загружен' },
-      analyzed: { tone: 'info', label: 'Проанализирован' },
+      processing: { tone: 'warn', label: 'Обработка' },
+      approval_required: { tone: 'info', label: 'Утверждение' },
       ready: { tone: 'success', label: 'Готов' },
+      failed: { tone: 'danger', label: 'Ошибка' },
       archived: { tone: 'neutral', label: 'Архив' },
     };
     const cfg = map[status] ?? { tone: 'neutral' as const, label: status || '—' };
@@ -1697,6 +1760,9 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
                     <td className={`${styles.muted} ${styles.descriptionCell}`}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <span>{row.description || '—'}</span>
+                        {row.has_error && row.error_message ? (
+                          <span style={{ color: 'var(--color-danger-600, #c62828)', fontSize: 12 }}>{row.error_message}</span>
+                        ) : null}
                       </div>
                     </td>
                     <td className={styles.muted}>{row.template_version || '—'}</td>
@@ -1821,13 +1887,14 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
             onClick: () => handleAnalyzeOne(actionsMenu.row.id),
             disabled: analyzeMutation.isPending,
           },
-          ...(String(actionsMenu.row.status ?? '').toLowerCase() === 'analyzed' || String(actionsMenu.row.status ?? '').toLowerCase() === 'archived'
+          ...(String(actionsMenu.row.runtime_status ?? '').toLowerCase() === 'approval_required'
             ? [{
-                label: 'Активировать',
-                onClick: () => handleSetStatus(actionsMenu.row.id, 'ready'),
+                label: 'Утвердить',
+                onClick: () => handleApproveOne(actionsMenu.row.id),
+                disabled: approveMutation.isPending,
               }]
             : []),
-          ...((String(actionsMenu.row.status ?? '').toLowerCase() === 'ready')
+          ...((String(actionsMenu.row.runtime_status ?? actionsMenu.row.status ?? '').toLowerCase() === 'ready')
             ? [{
                 label: 'В архив',
                 onClick: () => handleSetStatus(actionsMenu.row.id, 'archived'),

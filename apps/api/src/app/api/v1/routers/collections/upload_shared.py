@@ -86,6 +86,7 @@ async def _resolve_table_collection_by_slug(
     user: UserCtx,
     tenant_id: Optional[uuid.UUID],
 ):
+    resolved_tenant_id = await _resolve_requested_tenant_id(session, user, tenant_id)
     service = CollectionService(session)
     collection = await service.get_by_slug(slug)
 
