@@ -638,14 +638,16 @@ class CollectionService:
             self.contract.normalize_default_sort(collection, expected_fields)
             mutated = True
 
-        await self.sync_collection_status(collection, persist=False)
+        previous_status = str(collection.status or "")
+        snapshot = await self.sync_collection_status(collection, persist=False)
+        if str(snapshot.get("status") or "") != previous_status:
+            mutated = True
         await self.session.flush()
         if mutated:
             await self.session.refresh(
                 collection,
                 attribute_names=[
                     "updated_at",
-                    "fields",
                     "status",
                     "vector_config",
                     "qdrant_collection_name",

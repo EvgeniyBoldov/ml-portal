@@ -115,6 +115,7 @@ class Collection(Base, LifecycleMixin):
     __table_args__ = (
         UniqueConstraint("slug", name="uq_collections_slug"),
     )
+    __mapper_args__ = {"eager_defaults": True}
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -427,6 +428,7 @@ class CollectionSchema(Base):
     """Non-versioned structural contract of a collection."""
 
     __tablename__ = "collection_schemas"
+    __mapper_args__ = {"eager_defaults": True}
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -471,6 +473,7 @@ class CollectionVersion(Base):
     __table_args__ = (
         UniqueConstraint("collection_id", "version", name="uq_collection_version"),
     )
+    __mapper_args__ = {"eager_defaults": True}
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
