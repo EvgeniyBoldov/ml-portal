@@ -551,6 +551,7 @@ class CollectionService:
 
         current_fields = list(collection.fields or [])
         collection_type = str(collection.collection_type or "").strip().lower()
+        mutated = False
         if collection_type == CollectionType.DOCUMENT.value:
             expected_fields = self.contract.ensure_document_preset_fields(current_fields)
         elif collection_type == CollectionType.SQL.value:
@@ -579,6 +580,7 @@ class CollectionService:
                     f"ADD COLUMN IF NOT EXISTS {field['name']} {pg_type} {default_sql} {nullable}".strip()
                 )
             )
+            mutated = True
 
         actual_nullable = await self._get_table_column_nullability(collection.table_name)
         for field in expected_fields:
@@ -603,6 +605,7 @@ class CollectionService:
                             f"ALTER COLUMN {field['name']} SET NOT NULL"
                         )
                     )
+                    mutated = True
             elif not expected_required and db_required is not False:
                 await self.session.execute(
                     text(
@@ -610,6 +613,7 @@ class CollectionService:
                         f"ALTER COLUMN {field['name']} DROP NOT NULL"
                     )
                 )
+                mutated = True
 
         for index_sql in self._build_indexes_sql(collection.table_name, expected_fields):
             await self.session.execute(text(index_sql))
@@ -622,17 +626,31 @@ class CollectionService:
                     "chunk_size": 512,
                     "overlap": 50,
                 }
+                mutated = True
             if not collection.qdrant_collection_name:
                 collection.qdrant_collection_name = f"coll_{collection.slug}"
+                mutated = True
             await self._ensure_table_vector_infra(collection)
             await self._provision_qdrant_collection(collection.tenant_id, collection.qdrant_collection_name)
 
         if expected_fields != current_fields:
             collection.fields = expected_fields
             self.contract.normalize_default_sort(collection, expected_fields)
+            mutated = True
 
         await self.sync_collection_status(collection, persist=False)
         await self.session.flush()
+        if mutated:
+            await self.session.refresh(
+                collection,
+                attribute_names=[
+                    "updated_at",
+                    "fields",
+                    "status",
+                    "vector_config",
+                    "qdrant_collection_name",
+                ],
+            )
         return collection
 
     async def _get_table_column_nullability(self, table_name: str) -> dict[str, bool]:
