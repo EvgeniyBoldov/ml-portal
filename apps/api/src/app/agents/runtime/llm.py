@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.core.http.clients import LLMClientProtocol
@@ -82,6 +83,12 @@ class LLMAdapter:
         try:
             return await self._client.chat(messages=messages, model=model, params=params)
         except Exception as e:
+            fallback = self._coerce_tool_choice_error_to_native_response(e)
+            if fallback is not None:
+                logger.warning(
+                    "LLM returned tool_use_failed/tool_choice mismatch on raw path; coercing failed_generation to native tool_calls",
+                )
+                return fallback
             logger.error(f"LLM call_raw failed: {e}", exc_info=True)
             raise
 
@@ -147,7 +154,7 @@ class LLMAdapter:
             name = str(payload.get("name") or "").strip()
             arguments = payload.get("arguments") or {}
             if name == "tool_call" and isinstance(arguments, dict):
-                nested_tool = str(arguments.get("tool") or "").strip()
+                nested_tool = LLMAdapter._normalize_failed_tool_name(arguments.get("tool"))
                 nested_arguments = arguments.get("arguments") or {}
                 if nested_tool:
                     if not isinstance(nested_arguments, dict):
@@ -155,6 +162,7 @@ class LLMAdapter:
                     call = {"tool": nested_tool, "arguments": nested_arguments}
                     return "```tool_call\n" + json.dumps(call, ensure_ascii=False, indent=2) + "\n```"
 
+            name = LLMAdapter._normalize_failed_tool_name(name)
             if not name:
                 return None
             if not isinstance(arguments, dict):
@@ -190,6 +198,94 @@ class LLMAdapter:
         if payload is None:
             return None
         return _build_tool_call(payload)
+
+    @staticmethod
+    def _coerce_tool_choice_error_to_native_response(exc: Exception) -> Optional[Dict[str, Any]]:
+        payload: Optional[Dict[str, Any]] = None
+
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            error = body.get("error") or {}
+            if isinstance(error, dict) and error.get("code") == "tool_use_failed":
+                raw = error.get("failed_generation") or ""
+                if isinstance(raw, dict):
+                    payload = raw
+                elif isinstance(raw, str):
+                    try:
+                        parsed = json.loads(raw)
+                        payload = parsed if isinstance(parsed, dict) else None
+                    except Exception:
+                        payload = LLMAdapter._extract_failed_generation_json(raw)
+
+        if payload is None:
+            text = str(exc or "")
+            lowered = text.lower()
+            if "tool_use_failed" not in lowered and "tool choice is none" not in lowered:
+                return None
+            payload = LLMAdapter._extract_failed_generation_json(text)
+
+        if not isinstance(payload, dict):
+            return None
+
+        native_call = LLMAdapter._failed_generation_to_native_tool_call(payload)
+        if native_call is None:
+            return None
+
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [native_call],
+                    }
+                }
+            ]
+        }
+
+    @staticmethod
+    def _normalize_failed_tool_name(value: Any) -> str:
+        name = str(value or "").strip()
+        if name.startswith("tool."):
+            return name[len("tool.") :]
+        return name
+
+    @staticmethod
+    def _failed_generation_to_native_tool_call(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return None
+
+        name = str(payload.get("name") or "").strip()
+        arguments = payload.get("arguments") or {}
+
+        if name == "tool_call" and isinstance(arguments, dict):
+            nested_tool = LLMAdapter._normalize_failed_tool_name(arguments.get("tool"))
+            nested_arguments = arguments.get("arguments") or {}
+            if nested_tool:
+                if not isinstance(nested_arguments, dict):
+                    nested_arguments = {}
+                return {
+                    "id": f"call_{uuid.uuid4().hex[:12]}",
+                    "type": "function",
+                    "function": {
+                        "name": nested_tool,
+                        "arguments": json.dumps(nested_arguments, ensure_ascii=False),
+                    },
+                }
+
+        normalized_name = LLMAdapter._normalize_failed_tool_name(name)
+        if not normalized_name:
+            return None
+        if not isinstance(arguments, dict):
+            arguments = {}
+        return {
+            "id": f"call_{uuid.uuid4().hex[:12]}",
+            "type": "function",
+            "function": {
+                "name": normalized_name,
+                "arguments": json.dumps(arguments, ensure_ascii=False),
+            },
+        }
 
     @staticmethod
     def _extract_failed_generation_json(text: str) -> Optional[Dict[str, Any]]:

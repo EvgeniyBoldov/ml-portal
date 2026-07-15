@@ -36,7 +36,7 @@ from app.schemas.sandbox import (
     SandboxRunDetailResponse,
     SandboxRunStepResponse,
 )
-from app.services.chat_attachment_service import ChatAttachmentService
+from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.chat_visibility import make_sandbox_upload_chat_name
 from app.services.sandbox_service import SandboxService
 from app.services.sandbox_step_enrichment_service import SandboxStepEnrichmentService
@@ -88,6 +88,17 @@ async def _ensure_sandbox_upload_chat(
     db.add(row)
     await db.flush()
     return row.id
+
+
+def _extract_attachment_meta_from_steps(steps: list) -> list[dict]:
+    for step in reversed(list(steps or [])):
+        payload = getattr(step, "step_data", None)
+        if not isinstance(payload, dict):
+            continue
+        attachments = payload.get("attachments")
+        if isinstance(attachments, list) and attachments:
+            return [item for item in attachments if isinstance(item, dict)]
+    return []
 
 
 @router.get(
@@ -249,12 +260,8 @@ async def run_sandbox(
         session_id=session_id,
     )
     attachment_service = ChatAttachmentService(db)
-    scoped_attachment_rows = await attachment_service.list_owned_attachments_for_chat(
-        chat_id=str(sandbox_chat_id),
-        owner_id=str(u_uuid),
-    )
-    attachment_meta: list[dict] = attachment_service.to_meta(scoped_attachment_rows)
-    attachment_prompt_context = ""
+    attachment_meta: list[dict] = []
+    attachment_contexts = []
 
     if data.attachment_ids:
         try:
@@ -265,12 +272,10 @@ async def run_sandbox(
         except ChatAttachmentNotFoundError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         attachment_meta = attachment_service.dedupe_meta(
-            attachment_meta + attachment_service.to_meta(rows)
+            attachment_service.to_meta(rows)
         )
-
-    if scoped_attachment_rows:
-        attachment_prompt_context = await attachment_service.build_prompt_context(
-            attachments=scoped_attachment_rows
+        attachment_contexts = await attachment_service.build_runtime_attachment_contexts_from_meta(
+            attachments_meta=attachment_meta
         )
 
     # Resolve overrides
@@ -364,10 +369,7 @@ async def run_sandbox(
                 run_store=RunStore(session_factory=session_factory),
             )
 
-            messages = []
-            if attachment_prompt_context:
-                messages.append({"role": "system", "content": attachment_prompt_context})
-            messages.append({"role": "user", "content": data.request_text})
+            messages = [{"role": "user", "content": data.request_text}]
 
             pipeline_request = PipelineRequest(
                 request_text=data.request_text,
@@ -375,6 +377,7 @@ async def run_sandbox(
                 user_id=str(u_uuid),
                 tenant_id=str(t_uuid),
                 messages=messages,
+                attachments=attachment_contexts,
                 agent_slug=agent_slug,
                 agent_version_id=str(agent_version_id) if agent_version_id else None,
                 sandbox_overrides=sandbox_overrides,
@@ -695,6 +698,12 @@ async def resume_sandbox_run(
         owner_id=u_uuid,
         session_id=session_id,
     )
+    attachment_service = ChatAttachmentService(db)
+    prior_steps = await svc.steps.list_by_run(run_id)
+    attachment_meta = _extract_attachment_meta_from_steps(prior_steps)
+    attachment_contexts = await attachment_service.build_runtime_attachment_contexts_from_meta(
+        attachments_meta=attachment_meta
+    )
 
     # Extract agent_run_id for pipeline continuation (internal run ID from paused context)
     agent_run_id = paused_context.get("run_id") if paused_context else None
@@ -770,6 +779,7 @@ async def resume_sandbox_run(
                 user_id=str(u_uuid),
                 tenant_id=str(t_uuid),
                 messages=[{"role": "user", "content": resume_content}],
+                attachments=attachment_contexts,
                 agent_slug=resumed_agent_slug,
                 agent_version_id=str(resumed_agent_version_id) if resumed_agent_version_id else None,
                 sandbox_overrides={

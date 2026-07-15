@@ -42,7 +42,7 @@ class ChatTurnOrchestrator:
         confirmation_tokens: Optional[list[str]] = None,
         execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         attachment_meta: list[dict[str, Any]],
-        attachment_prompt_context: str,
+        attachment_contexts: list[dict[str, Any]],
         idempotency_key: Optional[str],
         model: Optional[str],
         agent_slug: Optional[str],
@@ -51,6 +51,7 @@ class ChatTurnOrchestrator:
         run_with_router,
         store_idempotency,
         bind_attachments,
+        preloaded_context: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         turn = ChatTurnState(chat_id=chat_id, request_id=idempotency_key)
         hash_payload = content if not attachment_ids else f"{content}||attachments:{','.join(sorted(attachment_ids))}"
@@ -95,10 +96,10 @@ class ChatTurnOrchestrator:
         # RuntimePipeline already builds its own cross-turn memory from the
         # new Fact/Summary stores. Injecting legacy chat summary here duplicates
         # context and inflates token usage.
-        context = await self.context_service.load_chat_context(chat_id, limit=12)
+        context = list(preloaded_context or [])
+        if not context:
+            context = await self.context_service.load_chat_context(chat_id, limit=12)
         llm_messages = context
-        if attachment_prompt_context:
-            llm_messages.append({"role": "system", "content": attachment_prompt_context})
         llm_messages.append({"role": "user", "content": str(content)})
 
         user_messages_count = sum(1 for msg in context if msg.get("role") == "user")
@@ -149,6 +150,7 @@ class ChatTurnOrchestrator:
                 user_id=user_id,
                 tenant_id=tenant_id or "",
                 llm_messages=llm_messages,
+                attachment_contexts=[item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item) for item in (attachment_contexts or [])],
                 tool_ctx=tool_ctx,
                 model=model,
                 content=content,

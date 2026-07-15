@@ -17,7 +17,13 @@ from app.agents.execution_preflight import ExecutionMode
 from app.agents.context import ToolCall, ToolContext, ToolResult
 from app.agents.runtime.agent import AgentToolRuntime
 from app.runtime.agent_executor import AgentExecutor
-from app.runtime.contracts import ExecutionMode as RuntimeExecutionMode, NextStep, NextStepKind
+from app.runtime.contracts import (
+    AttachmentContext,
+    AttachmentRef,
+    ExecutionMode as RuntimeExecutionMode,
+    NextStep,
+    NextStepKind,
+)
 from app.runtime.events import RuntimeEventType
 from app.runtime.budgets import BudgetLimitsResolver, RunBudgetLedger
 from app.runtime.llm.structured import StructuredCallError
@@ -350,6 +356,32 @@ def test_agent_executor_build_sub_messages_is_bounded_and_trimmed():
     assert all(len(m.get("content", "")) <= 600 for m in messages[:-1])
 
 
+def test_agent_executor_build_sub_messages_includes_attachment_context():
+    step = NextStep(kind=NextStepKind.CALL_AGENT, rationale="r", agent_slug="ops", agent_input={"query": "inspect"})
+    messages = AgentExecutor._build_sub_messages(
+        [{"role": "user", "content": "history"}],
+        step,
+        "goal",
+        [
+            AttachmentContext(
+                ref=AttachmentRef(
+                    id="att-1",
+                    file_id="chatatt_att-1",
+                    storage_uri="s3://bucket/key",
+                    file_name="notes.txt",
+                ),
+                snippet="hello world",
+                snippet_status="ready",
+                readable=True,
+            ).model_dump(mode="json")
+        ],
+    )  # noqa: SLF001
+
+    assert "[Available attachments]" in messages[-1]["content"]
+    assert "notes.txt" in messages[-1]["content"]
+    assert "hello world" in messages[-1]["content"]
+
+
 def test_planner_llm_output_coerces_agent_input_json_string():
     out = PlannerLLMOutput(
         kind="call_agent",
@@ -473,6 +505,44 @@ def test_llm_adapter_does_not_coerce_regular_errors():
     err = RuntimeError("Error code: 500 - Internal server error")
     block = LLMAdapter._coerce_tool_choice_error_to_tool_call(err)  # noqa: SLF001
     assert block is None
+
+
+def test_llm_adapter_coerces_tool_choice_mismatch_into_native_tool_call_response():
+    err = RuntimeError(
+        "Error code: 400 - {'error': {'message': 'Tool choice is none, but model called a tool', "
+        "'type': 'invalid_request_error', 'code': 'tool_use_failed', "
+        "'failed_generation': '{\"name\": \"tool.file.generate\", "
+        "\"arguments\": {\"format\": \"txt\", \"filename\": \"hello.py\", \"content\": \"print(1)\"}}'}}"
+    )
+    raw = LLMAdapter._coerce_tool_choice_error_to_native_response(err)  # noqa: SLF001
+    assert raw is not None
+    tool_calls = raw["choices"][0]["message"]["tool_calls"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "file.generate"
+    assert "\"filename\": \"hello.py\"" in tool_calls[0]["function"]["arguments"]
+
+
+@pytest.mark.asyncio
+async def test_llm_adapter_call_raw_returns_coerced_native_tool_response():
+    client = AsyncMock()
+    client.chat = AsyncMock(
+        side_effect=RuntimeError(
+            "Error code: 400 - {'error': {'message': 'Tool choice is none, but model called a tool', "
+            "'type': 'invalid_request_error', 'code': 'tool_use_failed', "
+            "'failed_generation': '{\"name\": \"tool.file.generate\", "
+            "\"arguments\": {\"format\": \"txt\", \"filename\": \"hello.py\", \"content\": \"print(1)\"}}'}}"
+        )
+    )
+    adapter = LLMAdapter(client)
+
+    raw = await adapter.call_raw(
+        messages=[{"role": "user", "content": "make file"}],
+        model="test",
+        tools=[{"type": "function", "function": {"name": "file.generate", "parameters": {"type": "object"}}}],
+    )
+
+    tool_calls = raw["choices"][0]["message"]["tool_calls"]
+    assert tool_calls[0]["function"]["name"] == "file.generate"
 
 
 @pytest.mark.asyncio

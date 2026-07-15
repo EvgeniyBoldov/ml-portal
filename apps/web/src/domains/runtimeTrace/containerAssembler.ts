@@ -169,14 +169,53 @@ export function createLegacyContainerAssembler(
     return undefined;
   }
 
-  function resolveParentForEvent(event: SemanticEvent): TraceEntity {
+  function getRefString(event: SemanticEvent, key: string): string | undefined {
     const raw = (event.raw?.raw ?? {}) as Record<string, unknown>;
-    const runId = typeof raw.agent_run_id === 'string' ? raw.agent_run_id : undefined;
+    const rawValue = raw[key];
+    if (typeof rawValue === 'string' && rawValue.trim()) return rawValue.trim();
+    const refValue = event.refs?.[key];
+    if (typeof refValue === 'string' && refValue.trim()) return refValue.trim();
+    return undefined;
+  }
+
+  function getActiveAgentEntity(): TraceEntity | undefined {
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      const candidate = stack[index]?.entity;
+      if (candidate?.kind === 'agent') return candidate;
+    }
+    return undefined;
+  }
+
+  function resolveParentForEvent(event: SemanticEvent): TraceEntity {
+    const runId = getRefString(event, 'agent_run_id');
     if (runId) {
       const byRun = agentByRunId.get(runId);
       if (byRun) return byRun;
       const byEvent = resolveAgentForEvent(event);
       if (byEvent) return byEvent;
+    }
+    const parentEntityId = getRefString(event, 'parent_entity_id');
+    if (parentEntityId) {
+      const byParentRun = agentByRunId.get(parentEntityId);
+      if (byParentRun) return byParentRun;
+    }
+    const activeAgent = getActiveAgentEntity();
+    if (activeAgent) {
+      const likelyAgentScopedError = event.raw_type === 'error'
+        && (
+          event.phase === 'agent'
+          || event.category === 'operation'
+          || event.category === 'llm'
+          || String(getRefString(event, 'source') ?? '').toLowerCase() === 'tool'
+          || String(getRefString(event, 'source') ?? '').toLowerCase() === 'llm'
+          || String(getRefString(event, 'error_code') ?? '').toLowerCase().startsWith('agent_')
+          || String(getRefString(event, 'error_code') ?? '').toLowerCase().startsWith('tool_')
+          || String(getRefString(event, 'error_code') ?? '').toLowerCase().startsWith('llm_')
+          || String(getRefString(event, 'error_code') ?? '').toLowerCase().includes('operation')
+        );
+      if (event.phase === 'agent' || likelyAgentScopedError) {
+        return activeAgent;
+      }
     }
     if (event.phase === 'planner') return ensurePlannerIterationEntity(event);
     if (event.phase === 'synthesis') return ensureSynthesisEntity(event);

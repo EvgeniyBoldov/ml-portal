@@ -51,6 +51,20 @@ class PlannerInputBuilder:
             "goal": state.goal,
             "current_user_query": state.current_user_query,
             "execution_mode": state.execution_mode.value,
+            "attachments": [
+                {
+                    "file_name": item.ref.file_name,
+                    "file_id": item.ref.file_id,
+                    "storage_uri": item.ref.storage_uri,
+                    "content_type": item.ref.content_type,
+                    "size_bytes": item.ref.size_bytes,
+                    "snippet": item.snippet,
+                    "snippet_status": item.snippet_status,
+                    "readable": item.readable,
+                    "truncated": item.truncated,
+                }
+                for item in (state.attachment_contexts or [])
+            ],
             "conversation_summary": conversation_summary,
             "continuation": dict(state.continuation or {}) or None,
             "available_agents": [

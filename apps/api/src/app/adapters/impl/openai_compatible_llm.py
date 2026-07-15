@@ -102,6 +102,7 @@ class OpenAICompatibleLLM:
         return None
 
     async def _resolve_model_connection(self, model_name: Optional[str]) -> tuple[str, Optional[str], str, Optional[str], dict[str, Any]]:
+        normalized_model_name = model_name.strip() if isinstance(model_name, str) else model_name
         try:
             from sqlalchemy import or_, select
             from app.core.db import get_session_factory
@@ -120,7 +121,7 @@ class OpenAICompatibleLLM:
                     .order_by(Model.default_for_type.desc(), Model.updated_at.desc())
                     .limit(1)
                 )
-                if model_name:
+                if normalized_model_name:
                     stmt = (
                         select(Model)
                         .where(
@@ -128,8 +129,8 @@ class OpenAICompatibleLLM:
                             Model.deleted_at.is_(None),
                             Model.enabled == True,  # noqa: E712
                             or_(
-                                Model.alias == model_name,
-                                Model.provider_model_name == model_name,
+                                Model.alias == normalized_model_name,
+                                Model.provider_model_name == normalized_model_name,
                             ),
                         )
                         .order_by(Model.default_for_type.desc(), Model.updated_at.desc())
@@ -140,7 +141,7 @@ class OpenAICompatibleLLM:
 
                 if model is None:
                     raise ValueError(
-                        f"LLM model is not configured in registry for selector '{model_name or 'default'}'"
+                        f"LLM model is not configured in registry for selector '{normalized_model_name or 'default'}'"
                     )
 
                 resolved_base_url = (
@@ -179,14 +180,14 @@ class OpenAICompatibleLLM:
                 return (
                     resolved_base_url,
                     resolved_api_key,
-                    str(model.provider_model_name or model.alias),
+                    str(model.provider_model_name or model.alias).strip(),
                     getattr(model, "connector", None),
                     dict(model.extra_config or {}),
                 )
         except Exception as exc:
             logger.error(
                 "Failed to resolve runtime LLM connection for model '%s': %s",
-                model_name,
+                normalized_model_name,
                 exc,
             )
             raise
@@ -200,9 +201,10 @@ class OpenAICompatibleLLM:
     ) -> dict:
         """Send chat completion request"""
         try:
+            normalized_model = model.strip() if isinstance(model, str) else model
             # Prepare request parameters
             request_params = {
-                "model": model,
+                "model": normalized_model,
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 1000,
@@ -257,9 +259,10 @@ class OpenAICompatibleLLM:
     ) -> AsyncIterator[str]:
         """Send streaming chat completion request"""
         try:
+            normalized_model = model.strip() if isinstance(model, str) else model
             # Prepare request parameters
             request_params = {
-                "model": model,
+                "model": normalized_model,
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 1000,

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.adapters.impl.openai_compatible_llm import OpenAICompatibleLLM
+from app.services.model_resolver import ModelResolver, _cache
 from app.services.model_connector_profiles import build_model_auth_headers, get_healthcheck_paths
 
 
@@ -62,3 +63,63 @@ def test_get_or_create_client_uses_profiled_auth_headers():
     )
 
     assert client.auth_headers == {"x-litellm-api-key": "secret"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_connection_strips_model_selector(monkeypatch: pytest.MonkeyPatch):
+    llm = OpenAICompatibleLLM()
+
+    model = SimpleNamespace(
+        provider_model_name="  openai/gemma-test  ",
+        alias="gemma-test",
+        base_url="http://litellm:4000/v1",
+        instance=None,
+        instance_id=None,
+        connector="litellm_http",
+        extra_config={},
+    )
+
+    session = SimpleNamespace(
+        execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: model))
+    )
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "app.core.db.get_session_factory",
+        lambda: lambda: _SessionContext(),
+    )
+
+    base_url, api_key, resolved_model_name, connector, extra_config = await llm._resolve_model_connection(
+        "  gemma-test  "
+    )
+
+    assert base_url == "http://litellm:4000/v1"
+    assert api_key is None
+    assert resolved_model_name == "openai/gemma-test"
+    assert connector == "litellm_http"
+    assert extra_config == {}
+
+
+@pytest.mark.asyncio
+async def test_model_resolver_strips_alias_and_provider_name():
+    _cache.clear()
+    session = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                SimpleNamespace(scalar_one_or_none=lambda: "  provider/model  "),
+            ]
+        )
+    )
+    resolver = ModelResolver(session)
+
+    resolved = await resolver.resolve("  alias/model  ")
+
+    assert resolved == "provider/model"
+    assert session.execute.await_count == 1
+    assert _cache["alias/model"][0] == "provider/model"

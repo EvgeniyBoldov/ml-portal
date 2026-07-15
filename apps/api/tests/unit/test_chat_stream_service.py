@@ -23,6 +23,7 @@ def messages_repo() -> AsyncMock:
         SimpleNamespace(id="assistant-msg-1", created_at=None),
     ])
     repo.get_chat_messages = AsyncMock(return_value=[])
+    repo.get_recent_chat_messages = AsyncMock(return_value=[])
     return repo
 
 
@@ -35,12 +36,25 @@ def service(mock_session, mock_redis, mock_llm_client, chats_repo, messages_repo
         chats_repo=chats_repo,
         messages_repo=messages_repo,
     )
-    svc.attachment_service.list_owned_attachments_for_chat = AsyncMock(return_value=[])
-    svc.attachment_service.build_prompt_context = AsyncMock(return_value="")
+    svc.attachment_service.build_runtime_attachment_contexts = AsyncMock(return_value=[])
+    svc.attachment_service.build_runtime_attachment_contexts_from_meta = AsyncMock(return_value=[])
     return svc
 
 
 class TestChatStreamServiceInvariants:
+    def test_extract_attachment_meta_from_messages_collects_history_refs(self, service: ChatStreamService):
+        messages = [
+            {"role": "user", "content": "first", "meta": {"attachments": [{"id": "att-1"}, {"id": "att-2"}]}},
+            {"role": "assistant", "content": "second"},
+            {"role": "user", "content": "third", "meta": {"attachments": [{"id": "att-3"}]}},
+        ]
+
+        assert service._extract_attachment_meta_from_messages(messages) == [
+            {"id": "att-1"},
+            {"id": "att-2"},
+            {"id": "att-3"},
+        ]
+
     @pytest.mark.asyncio
     async def test_top_level_exception_is_sanitized(self, service: ChatStreamService, chats_repo: AsyncMock):
         service.verify_chat_access = AsyncMock(return_value=True)

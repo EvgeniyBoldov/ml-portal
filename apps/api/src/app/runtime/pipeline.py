@@ -256,7 +256,6 @@ class RuntimePipeline:
         effective_agent_slug = explicit_slug if explicit_slug in available_agent_slugs else None
 
         # --- Memory: read path ----------------------------------------
-        attachment_ids, attachments_dropped = _extract_attachment_ids(request.messages)
         turn_mem = await self._assembler.memory_builder.build(
             goal=effective_goal,
             chat_id=chat_id,
@@ -264,13 +263,10 @@ class RuntimePipeline:
             tenant_id=tenant_id,
             messages=list(request.messages or []),
             agent_slug=effective_agent_slug,  # RBAC-sanitized
-            attachment_ids=attachment_ids,
+            attachments=list(request.attachments or []),
             platform_config=platform.config,
             sandbox_overrides=request.sandbox_overrides,
         )
-        if attachments_dropped:
-            turn_mem.memory_diagnostics = dict(turn_mem.memory_diagnostics or {})
-            turn_mem.memory_diagnostics["attachments_dropped_count"] = attachments_dropped
 
         # Initialize RuntimeTurnState as the single source of truth
         # For resume, use the original run_id; otherwise generate new
@@ -293,6 +289,7 @@ class RuntimePipeline:
             goal=effective_goal,
             current_user_query=effective_user_query,
             memory_bundle=turn_mem.memory_bundle,
+            attachment_contexts=list(request.attachments or []),
             continuation=continuation_state,
         )
         runtime_state.execution_mode = execution_mode
@@ -1066,34 +1063,3 @@ class RuntimePipeline:
         }
         logger.info("Runtime RBAC planner agent filter: %s", audit_payload)
         return filtered, audit_payload
-
-
-def _extract_attachment_ids(
-    messages: Optional[List[dict]],
-) -> tuple[List[str], int]:
-    """Extract valid attachment IDs, returning (valid_ids, dropped_count).
-
-    Logs warnings for dropped/invalid IDs to help diagnose frontend issues.
-    """
-    attachment_ids: List[str] = []
-    dropped_count = 0
-    for message in messages or []:
-        meta = message.get("meta") if isinstance(message, dict) else None
-        if not isinstance(meta, dict):
-            continue
-        raw_attachments = meta.get("attachments")
-        if not isinstance(raw_attachments, list):
-            continue
-        for item in raw_attachments:
-            if not isinstance(item, dict):
-                dropped_count += 1
-                logger.warning("Invalid attachment item (not dict): %s", item)
-                continue
-            raw_id = item.get("id")
-            attachment_id = str(raw_id or "").strip()
-            if not attachment_id or attachment_id == "None":
-                dropped_count += 1
-                logger.warning("Invalid/missing attachment id in item: %s", item)
-                continue
-            attachment_ids.append(attachment_id)
-    return attachment_ids, dropped_count

@@ -35,6 +35,9 @@ class ResolvingLLMClient:
     async def _resolve(self, model: Optional[str]) -> Optional[str]:
         if not model:
             return model
+        normalized_model = model.strip()
+        if not normalized_model:
+            return None
         # Lazy import to avoid a circular import at module load time.
         from app.core.db import get_session_factory
         from app.services.model_resolver import ModelResolver
@@ -48,15 +51,15 @@ class ResolvingLLMClient:
         try:
             async with session_factory() as session:
                 resolver = ModelResolver(session)
-                resolved = await resolver.resolve(model)
-                if resolved and resolved != model:
-                    logger.debug("LLM model alias %r → %r", model, resolved)
-                return resolved or model
+                resolved = await resolver.resolve(normalized_model)
+                if resolved and resolved != normalized_model:
+                    logger.debug("LLM model alias %r → %r", normalized_model, resolved)
+                return resolved or normalized_model
         except Exception as exc:
             # Never break an LLM call because of resolver issues; log and
             # fall back to the original value.
-            logger.warning("Model alias resolution failed for %r: %s", model, exc)
-            return model
+            logger.warning("Model alias resolution failed for %r: %s", normalized_model, exc)
+            return normalized_model
 
     async def chat(
         self,

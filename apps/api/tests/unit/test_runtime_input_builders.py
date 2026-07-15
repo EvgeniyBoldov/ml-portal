@@ -5,6 +5,7 @@ from uuid import uuid4
 from types import SimpleNamespace
 
 from app.runtime.input_builders import PlannerInputBuilder, SynthesizerInputBuilder
+from app.runtime.contracts import AttachmentContext, AttachmentRef
 from app.runtime.memory.components import MemoryBundle
 from app.runtime.turn_state import RuntimeTurnState
 
@@ -83,6 +84,52 @@ def test_planner_input_builder_includes_structured_continuation():
     assert payload["continuation"]["mode"] == "resume"
     assert payload["continuation"]["resume_action"] == "confirm"
     assert payload["continuation"]["original_goal"] == "original goal"
+
+
+def test_planner_input_builder_includes_attachment_contexts():
+    state = RuntimeTurnState.from_seed(
+        run_id=uuid4(),
+        chat_id=uuid4(),
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        goal="inspect file",
+        current_user_query="what is in the file?",
+        memory_bundle=MemoryBundle(),
+        attachment_contexts=[
+            AttachmentContext(
+                ref=AttachmentRef(
+                    id="att-1",
+                    file_id="chatatt_att-1",
+                    storage_uri="s3://bucket/key",
+                    file_name="notes.txt",
+                ),
+                snippet="hello world",
+                snippet_status="ready",
+                readable=True,
+            )
+        ],
+    )
+
+    payload = PlannerInputBuilder().build(
+        runtime_state=state,
+        available_agents=[],
+        outline=None,
+        platform_config={},
+    )
+
+    assert payload["attachments"] == [
+        {
+            "file_name": "notes.txt",
+            "file_id": "chatatt_att-1",
+            "storage_uri": "s3://bucket/key",
+            "content_type": None,
+            "size_bytes": None,
+            "snippet": "hello world",
+            "snippet_status": "ready",
+            "readable": True,
+            "truncated": False,
+        }
+    ]
 
 
 def test_synthesizer_input_builder_builds_structured_payload_with_files_and_sources():

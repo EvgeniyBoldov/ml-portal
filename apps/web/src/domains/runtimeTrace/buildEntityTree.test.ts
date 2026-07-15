@@ -204,6 +204,50 @@ describe('buildEntityTree', () => {
         expect(errors[0].code).toBe('LLM_TIMEOUT');
       }
     });
+
+    it('keeps agent-scoped runtime errors on the agent even if event phase falls back to planner', () => {
+      const plannerScopedEvents: SemanticEvent[] = [
+        makeEvent({ id: 'e1', raw_type: 'user_request', category: 'input' }),
+        makeEvent({
+          id: 'e2',
+          raw_type: 'planner_decision',
+          category: 'planner',
+          phase: 'planner',
+          decision: { kind: 'call_agent', agent_slug: 'viewer' },
+          raw: {
+            id: 'e2',
+            raw_type: 'planner_decision',
+            raw: { kind: 'call_agent', agent_slug: 'viewer' },
+          },
+        }),
+        makeEvent({
+          id: 'e3',
+          raw_type: 'error',
+          category: 'error',
+          phase: 'planner',
+          status: 'error',
+          summary: 'Agent protocol violation',
+          raw: {
+            id: 'e3',
+            raw_type: 'error',
+            raw: {
+              error_code: 'agent_required_operation_call_missing',
+              message: 'Agent returned plain text instead of operation call',
+              source: 'runtime',
+            },
+          },
+        }),
+      ];
+
+      const tree = buildEntityTree(plannerScopedEvents);
+      const agent = flattenEntityTree(tree).find(e => e.kind === 'agent');
+      expect(agent).toBeDefined();
+      if (!agent) return;
+
+      expect(agent.children.some(child => child.kind === 'error')).toBe(true);
+      const planner = flattenEntityTree(tree).find(e => e.kind === 'planner');
+      expect(planner?.children.some(child => child.kind === 'error')).toBe(false);
+    });
   });
 
   describe('tool failure debug payload', () => {
@@ -406,6 +450,41 @@ describe('buildEntityTree', () => {
       expect(agent?.depth).toBe(4);
       const tool = agent!.children.find(c => c.kind === 'tool');
       expect(tool?.depth).toBe(5);
+    });
+
+    it('routes unscoped lifecycle error to the active agent by timing and error code', () => {
+      const errorEvents: SemanticEvent[] = [
+        { ...lc('s1', 'run_start', { entity_id: RUN_ID, entity_type: 'run' }), started_at: '2026-07-13T14:23:16.000Z' },
+        { ...lc('s2', 'orchestrator_start', { entity_id: ORCH_ID, entity_type: 'orchestrator', parent_entity_id: RUN_ID, parent_entity_type: 'run', role: 'planner' }), started_at: '2026-07-13T14:23:17.000Z' },
+        { ...lc('s3', 'planner_iteration_start', { entity_id: ITER_ID, entity_type: 'planner_iteration', parent_entity_id: ORCH_ID, parent_entity_type: 'orchestrator', iteration: 1 }), started_at: '2026-07-13T14:23:18.000Z' },
+        { ...lc('s4', 'agent_start', { entity_id: AGENT_RUN_ID, entity_type: 'agent_run', parent_entity_id: ITER_ID, parent_entity_type: 'planner_iteration', agent_slug: 'viewer' }), started_at: '2026-07-13T14:23:19.000Z' },
+        makeEvent({
+          id: 'e5',
+          raw_type: 'error',
+          category: 'error',
+          status: 'error',
+          started_at: '2026-07-13T14:23:20.000Z',
+          raw: {
+            id: 'e5',
+            raw_type: 'error',
+            raw: {
+              source: 'runtime',
+              error_code: 'agent_runtime_exception',
+              message: 'Tool choice is none, but model called a tool',
+            },
+          },
+        }),
+        { ...lc('s6', 'agent_end', { entity_id: AGENT_RUN_ID, entity_type: 'agent_run', parent_entity_id: ITER_ID, parent_entity_type: 'planner_iteration', agent_slug: 'viewer', status: 'failed' }), started_at: '2026-07-13T14:23:21.000Z' },
+      ];
+
+      const tree = buildEntityTree(errorEvents);
+      const agent = flattenEntityTree(tree).find((entity) => entity.id === AGENT_RUN_ID);
+      expect(agent).toBeDefined();
+      if (!agent) return;
+
+      expect(agent.children.some((child) => child.kind === 'error')).toBe(true);
+      const planner = flattenEntityTree(tree).find((entity) => entity.id === ITER_ID);
+      expect(planner?.children.some((child) => child.kind === 'error')).toBe(false);
     });
   });
 

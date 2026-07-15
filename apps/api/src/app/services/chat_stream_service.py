@@ -241,8 +241,9 @@ class ChatStreamService:
                 return
 
             attachment_rows = []
-            attachment_prompt_context = ""
+            attachment_contexts = []
             attachment_ids = attachment_ids or []
+            context = await self.context_service.load_chat_context(chat_id, limit=12)
             if attachment_ids:
                 try:
                     attachment_rows = await self.attachment_service.get_owned_attachments(
@@ -254,13 +255,13 @@ class ChatStreamService:
                     logger.warning("chat_attachment_not_found: %s", exc)
                     yield _safe_stream_error("attachment_not_found", "Attachment not found or access denied")
                     return
-            scoped_attachment_rows = await self.attachment_service.list_owned_attachments_for_chat(
-                chat_id=chat_id,
-                owner_id=user_id,
+            history_attachment_meta = self._extract_attachment_meta_from_messages(context)
+            merged_attachment_meta = self.attachment_service.dedupe_meta(
+                history_attachment_meta + self.attachment_service.to_meta(attachment_rows)
             )
-            if scoped_attachment_rows:
-                attachment_prompt_context = await self.attachment_service.build_prompt_context(
-                    attachments=scoped_attachment_rows
+            if merged_attachment_meta:
+                attachment_contexts = await self.attachment_service.build_runtime_attachment_contexts_from_meta(
+                    attachments_meta=merged_attachment_meta
                 )
 
             async for event in self.turn_orchestrator.execute_turn(
@@ -273,7 +274,7 @@ class ChatStreamService:
                 confirmation_tokens=confirmation_tokens or [],
                 execution_mode=execution_mode,
                 attachment_meta=self.attachment_service.to_meta(attachment_rows),
-                attachment_prompt_context=attachment_prompt_context,
+                attachment_contexts=attachment_contexts,
                 idempotency_key=idempotency_key,
                 model=model,
                 agent_slug=agent_slug,
@@ -282,12 +283,26 @@ class ChatStreamService:
                 run_with_router=self._run_with_router,
                 store_idempotency=self.store_idempotency,
                 bind_attachments=self.attachment_service.bind_to_message,
+                preloaded_context=context,
             ):
                 yield event
 
         except Exception as e:
             logger.error(f"Error in send_message_stream: {e}", exc_info=True)
             yield _safe_stream_error("chat_stream_failed", "Failed to process chat request")
+
+    @staticmethod
+    def _extract_attachment_meta_from_messages(messages: List[Dict[str, Any]]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for message in messages or []:
+            meta = message.get("meta") if isinstance(message, dict) else None
+            attachments = meta.get("attachments") if isinstance(meta, dict) else None
+            if not isinstance(attachments, list):
+                continue
+            for item in attachments:
+                if isinstance(item, dict):
+                    result.append(item)
+        return result
 
     
     async def _run_with_router(
@@ -300,6 +315,7 @@ class ChatStreamService:
         model: Optional[str],
         content: str,
         execution_mode: ExecutionMode = ExecutionMode.NORMAL,
+        attachment_contexts: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run the turn via runtime v3 Pipeline, translating events to SSE payloads."""
         try:
@@ -321,6 +337,7 @@ class ChatStreamService:
                 user_id=user_id,
                 tenant_id=tenant_id,
                 messages=llm_messages,
+                attachments=list(attachment_contexts or []),
                 agent_slug=agent_slug,
                 model=model,
                 continuation_meta=(tool_ctx.extra or {}).get("continuation_meta", {}) if hasattr(tool_ctx, "extra") else {},

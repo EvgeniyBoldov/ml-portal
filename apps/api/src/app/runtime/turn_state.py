@@ -13,7 +13,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 
 from app.runtime.memory.components import MemoryBundle, MemorySection
 from app.runtime.memory.tool_ledger import ToolLedger
-from app.runtime.contracts import AgentAnswerStatus, ExecutionMode, TaskJournalEntry, TaskJournalNeed
+from app.runtime.contracts import (
+    AgentAnswerStatus,
+    AttachmentContext,
+    ExecutionMode,
+    TaskJournalEntry,
+    TaskJournalNeed,
+)
 
 
 # Runtime limits — single source of truth (replaces divergent limits from legacy WorkingMemory)
@@ -56,6 +62,7 @@ class RuntimeTurnState(BaseModel):
 
     goal: str = ""
     current_user_query: str = ""
+    attachment_contexts: List[AttachmentContext] = Field(default_factory=list)
     continuation: Dict[str, Any] = Field(default_factory=dict)
     outline: Optional[Dict[str, Any]] = None
     current_phase_id: Optional[str] = None
@@ -124,6 +131,7 @@ class RuntimeTurnState(BaseModel):
         goal: str,
         current_user_query: str,
         memory_bundle: MemoryBundle,
+        attachment_contexts: Optional[List[AttachmentContext]] = None,
         continuation: Optional[Dict[str, Any]] = None,
     ) -> "RuntimeTurnState":
         return cls(
@@ -135,6 +143,7 @@ class RuntimeTurnState(BaseModel):
             goal=goal,
             current_user_query=current_user_query,
             memory_bundle=memory_bundle,
+            attachment_contexts=list(attachment_contexts or []),
             continuation=dict(continuation or {}),
         )
 
@@ -281,6 +290,7 @@ class RuntimeTurnState(BaseModel):
             "execution_mode": self.execution_mode.value,
             "iter_count": self.iter_count,
             "continuation": dict(self.continuation or {}),
+            "attachments": [item.model_dump(mode="json") for item in self.attachment_contexts[-max_items:]],
             "facts": [item.text for item in self.runtime_facts[-max_items:]],
             "agent_results": list(self.agent_results[-max_items:]),
             "iteration_results": [item.model_dump() for item in self.iteration_results[-max_items:]],
@@ -307,6 +317,7 @@ class RuntimeTurnState(BaseModel):
             "goal": self.goal,
             "current_user_query": self.current_user_query,
             "continuation": dict(self.continuation or {}),
+            "attachments": [item.model_dump(mode="json") for item in self.attachment_contexts[-5:]],
             "status": self.status,
             "iter_count": self.iter_count,
             "used_tool_calls": self.used_tool_calls,

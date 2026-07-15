@@ -24,6 +24,25 @@ class ExecutionMode(str, Enum):
     THINKING = "thinking"
 
 
+class AttachmentRef(BaseModel):
+    id: str = Field(..., min_length=1)
+    file_id: str = Field(..., min_length=1)
+    storage_uri: str = Field(..., min_length=1)
+    file_name: str = Field(..., min_length=1)
+    file_ext: Optional[str] = None
+    content_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    status: Optional[str] = None
+
+
+class AttachmentContext(BaseModel):
+    ref: AttachmentRef
+    snippet: str = ""
+    snippet_status: Literal["ready", "truncated", "unreadable", "missing"] = "missing"
+    readable: bool = False
+    truncated: bool = False
+
+
 # --------------------------------------------------------------------------- #
 # Pipeline inputs                                                             #
 # --------------------------------------------------------------------------- #
@@ -41,6 +60,7 @@ class PipelineRequest(BaseModel):
 
     # Full LLM context (system + summary + recent + attachments + current user).
     messages: List[Dict[str, Any]] = Field(default_factory=list)
+    attachments: List[AttachmentContext] = Field(default_factory=list)
 
     # Optional overrides
     agent_slug: Optional[str] = None

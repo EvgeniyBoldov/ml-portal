@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence, Tupl
 from uuid import UUID
 
 from app.models.memory import FactScope
+from app.runtime.contracts import AttachmentContext
 from app.runtime.memory.dto import FactDTO, SummaryDTO
 from app.runtime.memory.fact_selection import FactSelectionPolicy, LexicalFactRanker
 from app.runtime.memory.fact_store import FactStore
@@ -117,7 +118,7 @@ class MemoryQueryContext:
     available_agents: List[Dict[str, Any]] = field(default_factory=list)
     resolved_collections: List[Dict[str, Any]] = field(default_factory=list)
     resolved_operations: List[Dict[str, Any]] = field(default_factory=list)
-    attachment_ids: List[str] = field(default_factory=list)
+    attachments: List[AttachmentContext] = field(default_factory=list)
     request_id: Optional[str] = None
     trace_id: Optional[str] = None
     platform_config: Dict[str, Any] = field(default_factory=dict)
@@ -583,33 +584,53 @@ class AgentRunMemoryComponent:
 
 
 class AttachmentMemoryComponent:
-    """Reference attachment ids when user supplied files."""
+    """Expose user-supplied attachment context to planner and agents."""
 
     name = "attachments"
     priority = 40
 
     async def collect(self, ctx: MemoryQueryContext) -> MemorySection:
-        items = [
-            MemoryItem(
-                text=f"attachment: {att_id}",
-                source="chat.attachments",
-                subject=str(att_id),
-                score=0.5,
+        items: List[MemoryItem] = []
+        for attachment in (ctx.attachments or []):
+            ref = attachment.ref
+            base = (
+                f"{ref.file_name} "
+                f"(file_id={ref.file_id}; storage_uri={ref.storage_uri}; "
+                f"type={ref.content_type or 'unknown'}; size={ref.size_bytes or 0})"
             )
-            for att_id in (ctx.attachment_ids or [])
-        ]
+            if attachment.snippet:
+                base += f"\nsnippet:\n{attachment.snippet}"
+            else:
+                base += f"\nsnippet_status={attachment.snippet_status}"
+            items.append(
+                MemoryItem(
+                    text=base,
+                    source="chat.attachments",
+                    subject=ref.file_id,
+                    score=0.9 if attachment.readable else 0.5,
+                    metadata={
+                        "attachment_id": ref.id,
+                        "file_name": ref.file_name,
+                        "file_id": ref.file_id,
+                        "storage_uri": ref.storage_uri,
+                        "snippet_status": attachment.snippet_status,
+                        "readable": attachment.readable,
+                        "truncated": attachment.truncated,
+                    },
+                )
+            )
         budget = ctx.budget.for_section(
             self.name,
-            default_chars=min(ctx.budget.default_section_chars, 600),
+            default_chars=min(ctx.budget.default_section_chars, 1800),
             default_items=min(ctx.budget.max_items_per_section, 8),
         )
         return _fit_section(
             name=self.name,
             priority=self.priority,
             items=items,
-            max_chars=budget.max_chars or min(ctx.budget.default_section_chars, 600),
+            max_chars=budget.max_chars or min(ctx.budget.default_section_chars, 1800),
             max_items=budget.max_items or min(ctx.budget.max_items_per_section, 8),
-            selection_reason="request_attachment_refs",
+            selection_reason="request_attachment_context",
         )
 
 

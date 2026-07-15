@@ -97,6 +97,85 @@ function appendErrorToEntity(entity: TraceEntity, error: ReturnType<typeof build
   carrier.errors = [...current, error];
 }
 
+function getEventField(event: SemanticEvent, key: string): unknown {
+  const raw = (event.raw?.raw ?? {}) as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(raw, key)) return raw[key];
+  return event.refs?.[key];
+}
+
+function getEventString(event: SemanticEvent, key: string): string | undefined {
+  const value = getEventField(event, key);
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function getEntityEndMs(entity: TraceEntity): number | undefined {
+  if (!entity.startedAt) return undefined;
+  const start = new Date(entity.startedAt).getTime();
+  if (!Number.isFinite(start)) return undefined;
+  const duration = typeof entity.durationMs === 'number' ? entity.durationMs : undefined;
+  return duration === undefined ? undefined : start + duration;
+}
+
+function findDeepestEntityAtTime(
+  root: TraceEntity,
+  eventMs: number,
+  predicate: (entity: TraceEntity) => boolean,
+): TraceEntity | undefined {
+  let best: TraceEntity | undefined;
+  const visit = (entity: TraceEntity): void => {
+    const startMs = entity.startedAt ? new Date(entity.startedAt).getTime() : Number.NaN;
+    const endMs = getEntityEndMs(entity);
+    const startsBeforeEvent = Number.isFinite(startMs) && startMs <= eventMs;
+    const endsAfterEvent = endMs === undefined || endMs >= eventMs;
+    if (startsBeforeEvent && endsAfterEvent) {
+      if (predicate(entity) && (!best || entity.depth >= best.depth)) {
+        best = entity;
+      }
+      for (const child of entity.children) visit(child);
+    }
+  };
+  visit(root);
+  return best;
+}
+
+function resolve3PassParent(
+  event: SemanticEvent,
+  treeRoot: TraceEntity,
+  entityById: Map<string, TraceEntity>,
+): TraceEntity {
+  const parentEntityId = getEventString(event, 'parent_entity_id');
+  if (parentEntityId) {
+    return entityById.get(parentEntityId) ?? treeRoot;
+  }
+
+  const agentRunId = getEventString(event, 'agent_run_id');
+  if (agentRunId) {
+    return entityById.get(agentRunId) ?? treeRoot;
+  }
+
+  if (event.raw_type === 'error') {
+    const source = String(getEventString(event, 'source') ?? '').toLowerCase();
+    const errorCode = String(getEventString(event, 'error_code') ?? '').toLowerCase();
+    const likelyAgentScoped = (
+      event.phase === 'agent'
+      || source === 'runtime'
+      || source === 'tool'
+      || source === 'llm'
+      || errorCode.startsWith('agent_')
+      || errorCode.startsWith('tool_')
+      || errorCode.startsWith('llm_')
+      || errorCode.includes('operation')
+    );
+    const eventMs = event.started_at ? new Date(event.started_at).getTime() : Number.NaN;
+    if (likelyAgentScoped && Number.isFinite(eventMs)) {
+      const activeAgent = findDeepestEntityAtTime(treeRoot, eventMs, (entity) => entity.kind === 'agent');
+      if (activeAgent) return activeAgent;
+    }
+  }
+
+  return treeRoot;
+}
+
 // ------------------------------------------------------------------
 // Pass 1 helpers: lifecycle entity skeleton builder
 // ------------------------------------------------------------------
@@ -629,12 +708,7 @@ function _buildEntityTree3Pass(
     }
 
     // Resolve parent by parent_entity_id (from refs or raw payload)
-    const parentEntityId = (
-      typeof event.refs?.parent_entity_id === 'string' ? event.refs.parent_entity_id :
-      typeof raw.parent_entity_id === 'string' ? raw.parent_entity_id :
-      null
-    );
-    const resolvedParent = parentEntityId ? (entityById.get(parentEntityId) ?? treeRoot) : treeRoot;
+    const resolvedParent = resolve3PassParent(event, treeRoot, entityById);
 
     // --- llm_request: start pending pair ---
     if (rawType === 'llm_request') {

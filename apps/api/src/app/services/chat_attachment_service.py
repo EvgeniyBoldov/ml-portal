@@ -19,6 +19,7 @@ from app.models.chat_attachment import ChatAttachment
 from app.models.platform_settings import PlatformSettings
 from app.services.file_delivery_service import FileDeliveryService
 from app.core.exceptions import ChatAttachmentNotFoundError
+from app.runtime.contracts import AttachmentContext, AttachmentRef
 from app.services.upload_intake_policy import UploadIntakePolicy
 from app.storage.paths import calculate_file_checksum
 
@@ -385,6 +386,70 @@ class ChatAttachmentService:
         if not rows:
             return ""
         return await self.build_prompt_context(
+            attachments=rows,
+            max_chars_per_file=max_chars_per_file,
+        )
+
+    async def build_runtime_attachment_contexts(
+        self,
+        *,
+        attachments: list[ChatAttachment],
+        max_chars_per_file: int = 12000,
+    ) -> list[AttachmentContext]:
+        contexts: list[AttachmentContext] = []
+        for item in attachments:
+            snippet = await self._load_text_content(item, max_chars=max_chars_per_file)
+            snippet_status = "missing"
+            readable = False
+            truncated = False
+            if snippet:
+                readable = True
+                truncated = snippet.endswith("\n...[truncated]")
+                snippet_status = "truncated" if truncated else "ready"
+            else:
+                payload = await s3_manager.get_object(item.storage_bucket, item.storage_key)
+                snippet_status = "unreadable" if payload else "missing"
+            contexts.append(
+                AttachmentContext(
+                    ref=AttachmentRef(
+                        id=str(item.id),
+                        file_id=FileDeliveryService.make_chat_attachment_file_id(str(item.id)),
+                        storage_uri=FileDeliveryService.make_storage_uri(item.storage_bucket, item.storage_key),
+                        file_name=item.file_name,
+                        file_ext=item.file_ext,
+                        content_type=item.content_type,
+                        size_bytes=item.size_bytes,
+                        status=item.status,
+                    ),
+                    snippet=snippet or "",
+                    snippet_status=snippet_status,
+                    readable=readable,
+                    truncated=truncated,
+                )
+            )
+        return contexts
+
+    async def build_runtime_attachment_contexts_from_meta(
+        self,
+        *,
+        attachments_meta: list[dict[str, Any]],
+        max_chars_per_file: int = 12000,
+    ) -> list[AttachmentContext]:
+        deduped = self.dedupe_meta(attachments_meta)
+        rows: list[ChatAttachment] = []
+        for item in deduped:
+            attachment_id = str(item.get("id") or "").strip()
+            if not attachment_id:
+                continue
+            try:
+                row = await self.session.get(ChatAttachment, uuid.UUID(attachment_id))
+            except (TypeError, ValueError):
+                continue
+            if row is not None:
+                rows.append(row)
+        if not rows:
+            return []
+        return await self.build_runtime_attachment_contexts(
             attachments=rows,
             max_chars_per_file=max_chars_per_file,
         )

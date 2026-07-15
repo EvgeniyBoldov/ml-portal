@@ -47,6 +47,9 @@ class ModelResolver:
         """
         if not alias:
             return None
+        alias = alias.strip()
+        if not alias:
+            return None
 
         # 1. Check in-memory cache
         cached = _cache.get(alias)
@@ -65,9 +68,10 @@ class ModelResolver:
         provider_model_name = result.scalar_one_or_none()
 
         if provider_model_name:
-            _cache[alias] = (provider_model_name, time.time())
-            logger.debug(f"Resolved model alias '{alias}' → '{provider_model_name}'")
-            return provider_model_name
+            normalized_provider_name = str(provider_model_name).strip()
+            _cache[alias] = (normalized_provider_name, time.time())
+            logger.debug(f"Resolved model alias '{alias}' → '{normalized_provider_name}'")
+            return normalized_provider_name
 
         # 3. Fallback: alias might already be a provider_model_name (either
         # legacy data, or a value that has already passed through the resolver
@@ -103,6 +107,6 @@ class ModelResolver:
     def invalidate_cache(alias: Optional[str] = None) -> None:
         """Invalidate cache entry or entire cache."""
         if alias:
-            _cache.pop(alias, None)
+            _cache.pop(alias.strip(), None)
         else:
             _cache.clear()

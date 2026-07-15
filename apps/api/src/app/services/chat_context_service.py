@@ -47,6 +47,12 @@ class ChatContextService:
             context.append({
                 "role": msg.role,
                 "content": str(content_text),
+                **(
+                    {"meta": {"attachments": list(msg.meta.get("attachments") or [])}}
+                    if isinstance(getattr(msg, "meta", None), dict)
+                    and isinstance(msg.meta.get("attachments"), list)
+                    else {}
+                ),
             })
         return context
 

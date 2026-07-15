@@ -147,6 +147,35 @@ async def test_collection_filter_keeps_all_when_agent_allows_any_and_rbac_allows
 
 
 @pytest.mark.asyncio
+async def test_collection_filter_ignores_explicit_bindings_when_allow_all_enabled():
+    c1 = str(uuid4())
+    c2 = str(uuid4())
+    preflight = _build_preflight(
+        allowed_collection_ids=[c1],
+        allow_all_collections=True,
+        rbac_allow_fn=lambda _slug: True,
+        instances=[
+            _resolved_instance(slug="alpha", collection_id=c1, collection_slug="collection.alpha"),
+            _resolved_instance(slug="beta", collection_id=c2, collection_slug="collection.beta"),
+        ],
+    )
+
+    result = await preflight.prepare(
+        agent_slug="agent-a",
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        include_routable_agents=False,
+    )
+
+    assert {inst.slug for inst in result.resolved_data_instances} == {"alpha", "beta"}
+    assert {op.data_instance_slug for op in result.resolved_operations} == {"alpha", "beta"}
+    assert set(result.execution_graph.bindings.keys()) == {
+        "instance.alpha.search",
+        "instance.beta.search",
+    }
+
+
+@pytest.mark.asyncio
 async def test_collection_filter_applies_agent_allowed_collection_ids():
     c1 = str(uuid4())
     c2 = str(uuid4())

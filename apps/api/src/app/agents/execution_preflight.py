@@ -344,7 +344,11 @@ class ExecutionPreflight:
         """Step 2b: filter data instances/operations by agent capability + RBAC. Returns a log reason or None."""
         allow_all_collections = bool(getattr(agent, "allow_all_collections", False)) if agent else False
         capability_ids: Optional[set] = None if allow_all_collections else set()
-        if agent and getattr(agent, "allowed_collection_ids", None):
+        if (
+            not allow_all_collections
+            and agent
+            and getattr(agent, "allowed_collection_ids", None)
+        ):
             capability_ids = {str(cid) for cid in agent.allowed_collection_ids}
 
         before_instances = list(operation_result.resolved_data_instances or [])

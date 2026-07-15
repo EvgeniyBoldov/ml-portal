@@ -216,7 +216,12 @@ class AgentExecutor:
             return
 
         # 2. Compose the sub-agent's LLM messages. Goal + explicit agent_input.
-        sub_messages = self._build_sub_messages(messages, step, state.goal)
+        sub_messages = self._build_sub_messages(
+            messages,
+            step,
+            state.goal,
+            [item.model_dump(mode="json") for item in (state.attachment_contexts or [])],
+        )
 
         # 3. Run sub-agent tool loop and forward canonical runtime events.
         buffered_answer: List[str] = []
@@ -420,6 +425,7 @@ class AgentExecutor:
         outer_messages: List[Dict[str, Any]],
         step: NextStep,
         goal: str,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
         """Compose sub-agent messages: inherit conversation context; pass planner's
         specific input as the last user turn.
@@ -478,6 +484,26 @@ class AgentExecutor:
             final_query = "\n\n".join(parts)
         else:
             final_query = str(query)
+
+        attachment_items = list(attachments or [])
+        if attachment_items:
+            attachment_lines = ["[Available attachments]"]
+            for item in attachment_items:
+                if not isinstance(item, dict):
+                    continue
+                ref = item.get("ref") if isinstance(item.get("ref"), dict) else {}
+                file_name = str(ref.get("file_name") or "file").strip()
+                file_id = str(ref.get("file_id") or "").strip()
+                storage_uri = str(ref.get("storage_uri") or "").strip()
+                snippet_status = str(item.get("snippet_status") or "missing").strip()
+                snippet = str(item.get("snippet") or "").strip()
+                attachment_lines.append(
+                    f"- {file_name} (file_id={file_id}; storage_uri={storage_uri}; snippet_status={snippet_status})"
+                )
+                if snippet:
+                    attachment_lines.append(snippet)
+            if len(attachment_lines) > 1:
+                final_query = "\n\n".join(["\n".join(attachment_lines), final_query])
 
         non_system.append({"role": "user", "content": final_query})
         return non_system
