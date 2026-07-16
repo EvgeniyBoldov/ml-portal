@@ -34,7 +34,6 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "ExecutionTraceLogger": ("app.services.execution_trace_logger", "ExecutionTraceLogger"),
     "calculate_aggregate_status": ("app.services.status_aggregator", "calculate_aggregate_status"),
     "AsyncTenantsService": ("app.services.tenants_service", "AsyncTenantsService"),
-    "extract_text": ("app.services.text_extractor", "extract_text"),
     "AsyncUsersService": ("app.services.users_service", "AsyncUsersService"),
 }
 

@@ -62,7 +62,7 @@ Legacy удаляется после проверки imports/exports, registrat
 | Frontend `*EditorPage` / `*.old*` | Current router uses `*Page` replacements; files are absent from current tree | `EntityPageV2`/current entity pages | No deletion: candidates already absent; remove stale references only if they are non-contract comments |
 | Backend `_deprecated` paths | No current tracked `_deprecated` directory found; historical paths only in git history | Current `api/v1/routers` layout | No deletion |
 | Backend chat package patch-point shim | `messages.py` resolved symbols from `chat.__init__`; only stale tests consumed it | Direct symbols in `messages.py` and direct test patching | Removed; tests now patch the owning module |
-| Backend `services/text_extractor.py` | Exported through the lazy `services` API; no in-repo runtime consumer, but it is an exposed import surface | `services.extractors.ExtractorRegistry` | Keep temporarily as a public-surface candidate; do not delete without an explicit API break decision |
+| Backend `services/text_extractor.py` | Only lazy export remained; no runtime/test caller | `services.extractors.ExtractorRegistry` | Removed wrapper and lazy export after repository-wide call-graph check |
 | Backend compatibility/fallback branches | Some are active, others require per-symbol review | Current canonical resolver/runtime path | Remove unused aliases/adapters; retain only active data/migration compatibility |
 | Historical migrations with `legacy` in filename | Alembic history artifacts | Later schema revisions | Keep; migration history is immutable |
 
@@ -85,7 +85,7 @@ Legacy удаляется после проверки imports/exports, registrat
 - Existing `apps/api/AGENTS.md` and `apps/web/AGENTS.md` remain the broad rules; no contradictory local rule was introduced.
 - Removed the chat router package patch-point shim and the unused `ChatStreamService.agent_service` test fixture surface; no production alias was added for stale tests.
 - Runtime trace legacy normalization/heuristic paths are active read compatibility for historical event payloads and remain isolated from new event emission.
-- `services/text_extractor.py` remains only because it is still exposed through the lazy service export; it is a deletion candidate for a deliberate public API cleanup, not silently removed during this pass.
+- Removed `services/text_extractor.py` and its unused lazy export after proving that runtime, workers and tests use `ExtractorRegistry` directly.
 
 ## Verification log
 
@@ -139,7 +139,6 @@ Observed drift to review:
 | P0 | Audit migration data mutations | revision-by-revision classification and production revision state | keep history, prohibit new user/tenant backfills in Alembic |
 | P1 | Prove or remove Qdrant `_legacy_search` | repository-wide call graph and runtime test coverage | no active consumer means delete implementation and tests |
 | P1 | Audit commit ownership in workers/startup | task/service call graph and rollback behavior | one explicit owner per transaction, no nested commits |
-| P1 | Remove exposed extraction compatibility entrypoint | external/public import decision and deployment consumers | delete `services/text_extractor.py` only with explicit API break |
 | P2 | Purge generated `__pycache__` from source tree | tracked files and ignore rules | generated artifacts never belong in source directories |
 
 ## Test source of truth
