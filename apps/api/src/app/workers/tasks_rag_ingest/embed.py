@@ -11,6 +11,7 @@ from celery import Task
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
 from app.adapters.embeddings import EmbeddingServiceFactory
+from app.services.embedding_model_config_service import EmbeddingModelConfigService
 from app.repositories.rag_ingest_repos import AsyncSourceRepository, AsyncEmbStatusRepository
 from app.storage.paths import get_embeddings_path, calculate_text_checksum
 from app.services.document_artifacts import get_document_artifact_key, normalize_document_source_meta
@@ -86,7 +87,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                 raise ValueError(f"No chunks found in file for {source_id}")
 
             # 4. Prepare Embedding Service
-            await EmbeddingServiceFactory.ensure_model_registered_async(ctx.session, model_alias)
+            await EmbeddingModelConfigService.ensure_registered(ctx.session, model_alias)
             embedding_service = EmbeddingServiceFactory.get_service(model_alias)
             model_info = embedding_service.get_model_info()
             max_chars = int(getattr(model_info, "max_tokens", 0) or 0)

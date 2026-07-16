@@ -108,6 +108,7 @@ async def readiness_check_endpoint(session: AsyncSession = Depends(db_session)):
         try:
             from sqlalchemy import text
             from app.adapters.embeddings import EmbeddingServiceFactory
+            from app.services.embedding_model_config_service import EmbeddingModelConfigService
 
             result = await session.execute(
                 text(
@@ -120,7 +121,7 @@ async def readiness_check_endpoint(session: AsyncSession = Depends(db_session)):
             if not model_alias:
                 app_services["embedding"] = "not_ready"
             else:
-                await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+                await EmbeddingModelConfigService.ensure_registered(session, model_alias)
                 emb_service = EmbeddingServiceFactory.get_service(model_alias)
                 test_emb = await asyncio.to_thread(emb_service.embed_texts, ["health check"])
                 app_services["embedding"] = "ready" if test_emb else "not_ready"

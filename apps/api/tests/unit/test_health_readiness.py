@@ -32,7 +32,7 @@ class TestHealthReadiness:
              patch.object(health_module, "get_qdrant_adapter", AsyncMock()) as get_qdrant_adapter, \
              patch("app.celery_app.app") as celery_app, \
              patch("app.core.di.get_llm_client") as get_llm_client, \
-             patch("app.adapters.embeddings.EmbeddingServiceFactory.ensure_model_registered_async", new=AsyncMock()), \
+             patch("app.services.embedding_model_config_service.EmbeddingModelConfigService.ensure_registered", new=AsyncMock()), \
              patch("app.adapters.embeddings.EmbeddingServiceFactory.get_service") as get_emb_service, \
              patch("app.services.run_store.RunStore"), \
              patch.dict(sys.modules, {
@@ -89,7 +89,7 @@ class TestHealthReadiness:
              patch.object(health_module, "get_s3_client") as get_s3_client, \
              patch.object(health_module, "get_qdrant_adapter", AsyncMock(side_effect=RuntimeError("qdrant down"))), \
              patch("app.core.di.get_llm_client") as get_llm_client, \
-             patch("app.adapters.embeddings.EmbeddingServiceFactory.ensure_model_registered_async", new=AsyncMock()), \
+             patch("app.services.embedding_model_config_service.EmbeddingModelConfigService.ensure_registered", new=AsyncMock()), \
              patch("app.adapters.embeddings.EmbeddingServiceFactory.get_service") as get_emb_service, \
              patch("app.services.run_store.RunStore"), \
              patch("app.celery_app.app") as celery_app, \

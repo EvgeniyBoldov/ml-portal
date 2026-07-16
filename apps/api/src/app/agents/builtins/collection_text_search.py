@@ -124,6 +124,7 @@ class CollectionTextSearchTool(VersionedTool):
             rerank_scores,
         )
         from app.adapters.embeddings import EmbeddingServiceFactory
+        from app.services.embedding_model_config_service import EmbeddingModelConfigService
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.core.db import get_session_factory
         from app.services.collection.vector_lifecycle import (
@@ -236,7 +237,7 @@ class CollectionTextSearchTool(VersionedTool):
                     if not exists:
                         continue
                     existing_collections += 1
-                    await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+                    await EmbeddingModelConfigService.ensure_registered(session, model_alias)
                     embedding_service = EmbeddingServiceFactory.get_service(model_alias)
                     query_embedding = await asyncio.to_thread(embedding_service.embed_texts, [query])
                     model_results = await vector_store.search(

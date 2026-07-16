@@ -123,7 +123,15 @@ Legacy удаляется после проверки imports/exports, registrat
 
 ## Migration review
 
-The current history contains data-changing revisions including `0002` default admin/tenant seed, `0011` planner/triage role replacement, `0014` collection backfill, `0016` execution parameter move, `0017` membership backfill and `0025`/`0026` tenant detachment updates. These revisions are historical and must not be rewritten.
+The migration history was reviewed revision by revision. Historical data mutations remain immutable; they are not a precedent for new revisions.
+
+| Classification | Revisions | Decision |
+|---|---|---|
+| Mandatory system defaults | `0003`, `0004`, `0007`, `0008`, `0010`, `0011`, `0012`, `0023`, `0041`, `0047` | Retain only where the row is required for planner/orchestrator/runtime startup; keep the operation deterministic and idempotent. |
+| Historical working-data mutation | `0002`, `0014`, `0016`, `0017`, `0021`, `0024`, `0049` | Do not copy or extend. These seed or update tenant, user, collection, document, credential-related or agent working data. Do not rewrite applied history. |
+| Schema or platform-default changes | `0005`, `0025`, `0026`, `0027` | Retain; verify that future changes do not combine schema changes with working-data backfills. |
+
+The rule recorded in `apps/api/src/app/migrations/AGENTS.md` applies to all new revisions: migrations may change schema and may only create or update default records of mandatory system components such as planner or orchestrator. User, tenant, chat, collection, credential and other working data must be changed by application code or a separately reviewed backfill process.
 
 The new rule is recorded in `apps/api/src/app/migrations/AGENTS.md`: migrations are schema-only, except for idempotent defaults required for mandatory system components such as planner/orchestrator. User, tenant, chat, collection, credential and other working data must be changed by application code or a separately reviewed backfill process.
 
@@ -133,7 +141,7 @@ Connector instances are normalized and validated in `services/tool_instance`; pr
 
 Observed drift to review:
 
-- `adapters/embeddings.py` now only constructs providers from registered configurations. The legacy synchronous DB fallback was removed. Startup and model health checks also no longer read `instance.config`; the remaining `ensure_model_registered_async` query is transitional and must move to a service-owned resolver before further provider growth.
+- `adapters/embeddings.py` now only constructs providers from registered configurations. The legacy synchronous DB fallback was removed, and model lookup/credential resolution now belongs to `services/embedding_model_config_service.py`. Startup and model health checks no longer read `instance.config`.
 - `adapters/impl/qdrant.py` retains `_legacy_search`; it is an active 404 fallback covered by current tests, so it must remain isolated and must not become a new connector contract.
 - Provider implementations are not uniformly expressed through the declared protocols: LLM implementations expose extra methods and embeddings are partly factory-driven. New connector work must not add another parallel contract.
 - Worker modules and startup tasks call `commit()` directly. This is allowed only at their explicit transaction boundary and must not be copied into adapters, repositories or domain helper methods.
@@ -142,8 +150,8 @@ Observed drift to review:
 
 | Priority | Review item | Evidence to collect | Rule for decision |
 |---|---|---|---|
-| P0 | Move adapter DB and credential lookup to a service-owned resolver | `ensure_model_registered_async` still queries the model registry and startup still resolves credentials | adapter receives resolved config; service/startup owns persistence and credentials |
-| P0 | Audit migration data mutations | revision-by-revision classification and production revision state | keep history, prohibit new user/tenant backfills in Alembic |
+| P0 | Move adapter DB and credential lookup to a service-owned resolver | Completed in `EmbeddingModelConfigService`; verify all callers use the service | adapter receives resolved config; service/startup owns persistence and credentials |
+| P0 | Audit migration data mutations | Classified historical revisions above; production revision state still needs deployment-specific verification | keep history, prohibit new user/tenant backfills in Alembic |
 | P1 | Revisit Qdrant `_legacy_search` | provider endpoint migration and runtime test coverage | remove only after the 404 fallback is no longer needed |
 | P1 | Audit commit ownership in workers/startup | task/service call graph and rollback behavior | one explicit owner per transaction, no nested commits |
 | P2 | Purge generated `__pycache__` from source tree | tracked files and ignore rules | generated artifacts never belong in source directories |

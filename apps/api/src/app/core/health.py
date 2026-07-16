@@ -187,6 +187,7 @@ class HealthChecker:
             from sqlalchemy import text
             from app.core.db import get_session_factory
             from app.adapters.embeddings import EmbeddingServiceFactory
+            from app.services.embedding_model_config_service import EmbeddingModelConfigService
 
             session_factory = get_session_factory()
             async with session_factory() as session:
@@ -200,7 +201,7 @@ class HealthChecker:
                 model_alias = result.scalar_one_or_none()
                 if not model_alias:
                     raise RuntimeError("no_available_embedding_models")
-                await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+                await EmbeddingModelConfigService.ensure_registered(session, model_alias)
 
             service = EmbeddingServiceFactory.get_service(model_alias)
             vectors = await asyncio.to_thread(service.embed_texts, ["health check"])

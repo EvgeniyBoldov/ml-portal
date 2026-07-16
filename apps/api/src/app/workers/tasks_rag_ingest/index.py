@@ -13,6 +13,7 @@ from celery import Task
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
 from app.adapters.embeddings import EmbeddingServiceFactory
+from app.services.embedding_model_config_service import EmbeddingModelConfigService
 from app.adapters.s3_client import s3_manager
 from app.repositories.rag_ingest_repos import AsyncChunkRepository, AsyncSourceRepository
 from app.services.document_artifacts import normalize_document_source_meta
@@ -137,7 +138,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
             from app.adapters.impl.qdrant import QdrantVectorStore
 
             vector_store = QdrantVectorStore()
-            await EmbeddingServiceFactory.ensure_model_registered_async(ctx.session, model_alias)
+            await EmbeddingModelConfigService.ensure_registered(ctx.session, model_alias)
             embedding_service = EmbeddingServiceFactory.get_service(model_alias)
             model_info = embedding_service.get_model_info()
 

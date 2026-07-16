@@ -229,6 +229,7 @@ def vectorize_collection_rows(
 
     async def _execute() -> Dict[str, Any]:
         from app.adapters.embeddings import EmbeddingServiceFactory
+        from app.services.embedding_model_config_service import EmbeddingModelConfigService
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.services.collection_service import CollectionService
         from app.services.collection.vector_lifecycle import (
@@ -365,7 +366,7 @@ def vectorize_collection_rows(
                 )
                 vector_store = QdrantVectorStore()
                 for model_alias, scoped_collection_name in scoped_collections:
-                    await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+                    await EmbeddingModelConfigService.ensure_registered(session, model_alias)
                     embedding_service = EmbeddingServiceFactory.get_service(model_alias)
                     embedding_services[model_alias] = embedding_service
                     model_info = embedding_service.get_model_info()

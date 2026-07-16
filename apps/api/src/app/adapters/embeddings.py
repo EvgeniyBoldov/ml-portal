@@ -379,38 +379,6 @@ class EmbeddingServiceFactory:
             del cls._services[config.alias]
 
     @classmethod
-    async def ensure_model_registered_async(cls, session: Any, model_alias: str) -> None:
-        """Register model config from an async SQLAlchemy session when startup registry is unavailable."""
-        if model_alias in cls._model_configs or model_alias in cls._services:
-            return
-
-        from sqlalchemy import text as sa_text
-
-        result = await session.execute(
-            sa_text(
-                "SELECT alias, provider, provider_model_name, connector, base_url, extra_config "
-                "FROM models WHERE alias = :alias AND type = 'EMBEDDING'"
-            ),
-            {"alias": model_alias},
-        )
-        mdata = result.mappings().first()
-        if not mdata:
-            cls._raise_unconfigured_model(model_alias)
-
-        extra = mdata["extra_config"] or {}
-        cls.register_model(
-            ModelConfig(
-                alias=mdata["alias"],
-                provider=mdata["provider"] or "local",
-                provider_model_name=mdata["provider_model_name"] or model_alias,
-                base_url=mdata["base_url"] or extra.get("base_url", ""),
-                dimensions=extra.get("vector_dim"),
-                extra_config=extra,
-                connector=mdata["connector"] or "",
-            )
-        )
-    
-    @classmethod
     def get_service(cls, model_alias: str) -> EmbeddingInterface:
         """Get embedding service by alias"""
         # Return cached service if available

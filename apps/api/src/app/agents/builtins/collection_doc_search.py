@@ -119,6 +119,7 @@ class CollectionDocSearchTool(VersionedTool):
             rerank_scores,
         )
         from app.adapters.embeddings import EmbeddingServiceFactory
+        from app.services.embedding_model_config_service import EmbeddingModelConfigService
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.core.db import get_session_factory
         from app.services.collection.vector_lifecycle import (
@@ -244,7 +245,7 @@ class CollectionDocSearchTool(VersionedTool):
                 qdrant_prefilter = self._build_qdrant_prefilter(filters) if filters else None
                 results: list[dict[str, Any]] = []
                 for model_alias, candidate_name in search_targets:
-                    await EmbeddingServiceFactory.ensure_model_registered_async(session, model_alias)
+                    await EmbeddingModelConfigService.ensure_registered(session, model_alias)
                     embedding_service = EmbeddingServiceFactory.get_service(model_alias)
                     model_info = embedding_service.get_model_info()
                     log.info(
