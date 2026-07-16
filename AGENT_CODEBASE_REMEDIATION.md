@@ -143,6 +143,7 @@ Observed drift to review:
 
 - `adapters/embeddings.py` now only constructs providers from registered configurations. The legacy synchronous DB fallback was removed, and model lookup/credential resolution now belongs to `services/embedding_model_config_service.py`. Startup and model health checks no longer read `instance.config`.
 - `adapters/impl/qdrant.py` uses only the current `query_points` contract; the obsolete `/points/search` fallback was removed after verifying the repository's Qdrant server/client versions.
+- System file surface is now limited to `file.read`, `file.generate`, `file.list` and `file.delete`; the ambiguous `file.analyze` tool was removed. `file.list`/`file.delete` still need a service-boundary cleanup before new file tools are added.
 - Provider implementations are not uniformly expressed through the declared protocols: LLM implementations expose extra methods and embeddings are partly factory-driven. New connector work must not add another parallel contract.
 - Worker modules and startup tasks call `commit()` directly. For RAG this is intentional: `run_stage` persists `processing/done/error` stage state, artifacts and metrics independently, while `RAGStatusManager` publishes status events consumed by the frontend SSE flow. Other workers still need per-task ownership review; `workers/transaction_utils.py` is not the uniform owner for the historical task set.
 
@@ -155,6 +156,7 @@ Observed drift to review:
 | P1 | Revisit Qdrant `_legacy_search` | Completed; compose uses Qdrant `v1.17.1`, client requires `>=1.12.0`, and fallback coverage was removed | do not reintroduce the old `/points/search` contract |
 | P1 | Normalize commit ownership in workers/startup | Historical tasks mix direct final commits/checkpoints with the unused `worker_transaction` helper; staged RAG status persistence makes bulk replacement unsafe | classify each task's checkpoint needs, then migrate one flow at a time to one explicit owner |
 | P2 | Purge generated `__pycache__` from source tree | No tracked bytecode; source-tree caches removed; `.gitignore` covers future output | generated artifacts never belong in source directories |
+| P1 | Consolidate file tool ownership and bounded outputs | `file.read`/`file.generate` use canonical file services; `file.list`/`file.delete` still contain handler-level DB access; binary read fallback can return large base64 | centralize file reference resolution and lifecycle in services; keep agent outputs bounded |
 
 ## Test source of truth
 
