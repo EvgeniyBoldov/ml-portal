@@ -236,12 +236,6 @@ class AgentService:
     ) -> Tuple[List[Agent], int]:
         return await self.agent_repo.list_agents(skip, limit, include_deprecated=include_deprecated)
 
-    async def route_agent(self, request_text: str) -> Optional[Agent]:
-        """Legacy API kept for backward compatibility; auto-routing removed."""
-        _ = request_text
-        return None
-
-
     # ─────────────────────────────────────────────────────────────────────────
     # AGENT VERSION operations
     # ─────────────────────────────────────────────────────────────────────────

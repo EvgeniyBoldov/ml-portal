@@ -2,8 +2,8 @@
 services/collection — collection sub-services package.
 
 Re-exports the shared components for external use.
-CollectionService itself remains at services/collection_service.py for
-backward compatibility with existing imports.
+CollectionService itself remains at services/collection_service.py as the
+orchestrating facade for these sub-services.
 """
 from app.services.collection.ddl import (
     FIELD_TYPE_TO_PG,

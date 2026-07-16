@@ -65,6 +65,7 @@ Legacy удаляется после проверки imports/exports, registrat
 | Backend `ToolInstanceService.InstanceType` | Repository-wide search found only the alias declaration | `InstancePlacement` | Removed as unused alias |
 | Backend `PermissionService` PermissionSet compatibility | `RbacRuleRepository` has no `get_all_for_context`; only stale tests injected it | Flat `RbacRule` resolution | Removed legacy branch, alias and legacy-only tests |
 | Backend `RuntimeRbacResolver` legacy kwargs | No caller passed compatibility kwargs; only `**_legacy_kwargs` remained | Explicit RBAC arguments | Removed unused catch-all kwargs |
+| Backend `AgentService.route_agent` | Repository-wide call graph found only the declaration; planner-driven routing is canonical | `RuntimePipeline`/planner and `AgentResolver` | Removed dead auto-routing stub |
 | Backend `services/text_extractor.py` | Only lazy export remained; no runtime/test caller | `services.extractors.ExtractorRegistry` | Removed wrapper and lazy export after repository-wide call-graph check |
 | Backend compatibility/fallback branches | Some are active, others require per-symbol review | Current canonical resolver/runtime path | Remove unused aliases/adapters; retain only active data/migration compatibility |
 | Historical migrations with `legacy` in filename | Alembic history artifacts | Later schema revisions | Keep; migration history is immutable |
