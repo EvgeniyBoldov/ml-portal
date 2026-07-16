@@ -1,8 +1,8 @@
 """
 Collection Get Document Tool — get metadata and canonical storage reference for a document.
 
-Returns storage_uri that can be passed to file.read or file.analyze to inspect
-the actual file content.
+Returns storage_uri that can be passed to file.read to inspect the actual file
+content.
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ class CollectionDocumentGetTool(VersionedTool):
     """
     Get a document's metadata and a storage_uri pointing to its original file.
 
-    Pass the returned storage_uri to file.read or file.analyze to inspect the
+    Pass the returned storage_uri to file.read to inspect the
     actual content (e.g. an Excel template).
     """
 
@@ -64,7 +64,7 @@ class CollectionDocumentGetTool(VersionedTool):
     name: ClassVar[str] = "Get Collection Document"
     description: ClassVar[str] = (
         "Get a single document's metadata and a storage_uri pointing to its original file. "
-        "Pass that storage_uri to file.read or file.analyze to inspect the actual content "
+        "Pass that storage_uri to file.read to inspect the actual content "
         "(e.g. an Excel template)."
     )
 

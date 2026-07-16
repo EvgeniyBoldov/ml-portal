@@ -127,6 +127,7 @@ class FileDeleteTool(VersionedTool):
 
                 await session.delete(row)
                 await session.flush()
+                await session.commit()
 
                 log.info("File deleted", file_id=file_id, file_name=file_name)
                 return ToolResult.ok(

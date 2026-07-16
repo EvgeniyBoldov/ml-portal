@@ -15,7 +15,6 @@ Collection builtin handler slugs (internal):
 - collection.info           — collection structure, metadata, and observed filter values for bound collection
 - file.generate              — persist generated file (csv/json/txt/md) to chat storage and return storage_uri
 - file.read                  — read a file by canonical storage_uri (s3://bucket/key)
-- file.analyze               — inspect spreadsheet structure (Excel/CSV) by canonical storage_uri
 - file.list                  — list all files in the current chat
 - file.delete                — delete a file from chat storage by file_id
 
@@ -46,7 +45,6 @@ def register_builtins() -> None:
     import app.agents.builtins.collection_catalog  # noqa: F401
     import app.agents.builtins.file_generate  # noqa: F401
     import app.agents.builtins.file_read  # noqa: F401
-    import app.agents.builtins.file_analyze  # noqa: F401
     import app.agents.builtins.file_list  # noqa: F401
     import app.agents.builtins.file_delete  # noqa: F401
     import app.agents.builtins.template_list  # noqa: F401
