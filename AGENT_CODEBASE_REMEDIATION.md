@@ -79,7 +79,7 @@ Legacy удаляется после проверки imports/exports, registrat
 - `PipelineAssembler` is the wiring boundary for memory, planner, agent executor and synthesizer; stages are per-turn.
 - Tool execution is resolved through `ExecutionPreflight`/`OperationRouter`, then validated and dispatched by operation execution facade.
 - Connector implementations are behind adapter interfaces, with model/credential resolution and lifecycle owned by core/services.
-- Workers use Celery task registration and bridge into async services through per-event-loop session handling and `worker_transaction`.
+- Workers use Celery task registration and per-event-loop sessions. Staged RAG is an explicit exception to generic `worker_transaction`: each stage commits its own durable status boundary so completed stages survive later failures and retries.
 - Frontend has one router/provider composition, one HTTP client, centralized query keys, shared UI, and shared runtime trace/sandbox contracts.
 - Trace tree heuristic fallback is read compatibility for historical/pre-canonical events, not a permitted new backend emit path.
 - Triage role/model/contract compatibility remains in the repository for migration and historical/admin compatibility; it is not a current pipeline stage.
@@ -116,9 +116,9 @@ Legacy удаляется после проверки imports/exports, registrat
 | Agents and tools | agent resolution, preflight, permissions, credentials, typed operation handlers | `agents -> services/adapters`, builtin registry | Persisted deprecated/lifecycle vocabulary and historical aliases need active-consumer review |
 | Runtime | planner, pipeline assembly, stages, budgets, memory, trace events | `RuntimePipeline` and `PipelineAssembler` | Historical triage names remain only in compatibility/data paths |
 | Domain services | chat, collections, RAG, sandbox, credentials, tool instances | service owns business orchestration | Several large services and compatibility entrypoints require decomposition, not new facades |
-| Persistence | repositories, models, schemas, transaction-local CRUD/query | repositories use `flush()`, outer boundary commits | Direct session usage in services/workers needs per-flow review |
-| Adapters/connectors | LLM, embeddings, vector store, object storage, queue, email | interface/protocol -> provider implementation | Embedding factory crosses into DB/credentials; Qdrant retains `_legacy_search` |
-| Workers | Celery entry, async bridge, ingest/cleanup/health jobs | worker session/transaction boundary | Direct worker commits are allowed only at explicit task boundary |
+| Persistence | repositories, models, schemas, transaction-local CRUD/query | repositories use `flush()`; outer boundary commits, except independent staged RAG boundaries | Direct session usage in services/workers needs per-flow review |
+| Adapters/connectors | LLM, embeddings, vector store, object storage, queue, email | interface/protocol -> provider implementation | Embedding factory is config-only; DB/credentials belong to services |
+| Workers | Celery entry, async bridge, ingest/cleanup/health jobs | worker session/transaction boundary | RAG stages commit independently; other tasks require one explicit transaction owner |
 | Migrations | schema evolution and mandatory system defaults | Alembic revision chain | Historical revisions contain broad data mutation/backfills beyond the new rule |
 
 ## Migration review
@@ -144,7 +144,7 @@ Observed drift to review:
 - `adapters/embeddings.py` now only constructs providers from registered configurations. The legacy synchronous DB fallback was removed, and model lookup/credential resolution now belongs to `services/embedding_model_config_service.py`. Startup and model health checks no longer read `instance.config`.
 - `adapters/impl/qdrant.py` uses only the current `query_points` contract; the obsolete `/points/search` fallback was removed after verifying the repository's Qdrant server/client versions.
 - Provider implementations are not uniformly expressed through the declared protocols: LLM implementations expose extra methods and embeddings are partly factory-driven. New connector work must not add another parallel contract.
-- Worker modules and startup tasks call `commit()` directly. In current code these are task-owned final commits or deliberate status checkpoints; this is allowed only at that explicit boundary and must not be copied into adapters, repositories or domain helper methods. `workers/transaction_utils.py` is not yet the uniform owner for the historical task set.
+- Worker modules and startup tasks call `commit()` directly. For RAG this is intentional: `run_stage` persists `processing/done/error` stage state, artifacts and metrics independently, while `RAGStatusManager` publishes status events consumed by the frontend SSE flow. Other workers still need per-task ownership review; `workers/transaction_utils.py` is not the uniform owner for the historical task set.
 
 ## Future review queue
 
@@ -168,6 +168,7 @@ Production code and current documented contracts are authoritative. Tests must b
 | Routing | lazy user/admin/sandbox route composition and guards | `router.tsx`, `AdminGuard`, `GPTGate` | Route file is a large registry; new routes must follow current lazy/guard pattern |
 | Shared API | HTTP client, auth refresh, typed endpoint modules, query keys, SSE | `shared/api/http.ts`, `keys.ts` | `shared/api` contains deprecated fields/provider aliases that need consumer-based cleanup |
 | User domains | chat/GPT, profile, collections, RAG and common pages | domain pages + shared API/UI | Domain boundaries are feature-based but some API hooks remain broadly shared |
+| RAG status synchronization | document status graph, per-document SSE and retry/stop controls | status graph API is durable source; `rag.snapshot`/status events trigger UI refresh | Do not make frontend event receipt the persistence source; stage commits remain backend-owned |
 | Admin domain | entities, versions, models, instances, tools, RBAC, credentials, settings | `EntityPageV2` + `Tab` + typed API | Old editor/tab patterns remain in repository and must not be copied |
 | Runtime trace | event normalization, entity tree, budgets, artifacts, presentation | canonical trace entity tree | Explicit legacy assembler/field aliases are active historical-read fallback |
 | Sandbox | run/session UI, branch overlays, inspector and chat | shared runtime/snapshot contract | keep the canonical `parentRunId` contract; historical payload normalization belongs at the boundary |
