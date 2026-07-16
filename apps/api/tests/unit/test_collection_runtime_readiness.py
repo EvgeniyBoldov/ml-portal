@@ -161,6 +161,9 @@ async def test_operation_router_marks_missing_credentials_in_readiness_and_missi
     router.operation_resolver = SimpleNamespace(
         resolve_for_instance=AsyncMock(return_value=[(operation, None)])
     )
+    router.system_capability_resolver = SimpleNamespace(
+        resolve=AsyncMock(return_value=[])
+    )
     router.runtime_rbac_resolver = SimpleNamespace(
         is_collection_allowed=lambda **_kwargs: True,
     )

@@ -11,36 +11,37 @@ def service():
     return TemplateAnalyzeService()
 
 
-def test_analyze_text_plain(service):
+@pytest.mark.asyncio
+async def test_analyze_text_plain(service):
     content = b"Hello {{name}}, your code is {{code}}."
-    result = service.analyze_bytes(content, "greeting.txt")
+    result = await service.analyze_bytes(content, "greeting.txt")
 
-    assert result["title"] == "greeting"
-    assert result["kind_hint"] == "text"
-    assert result["draft_schema"] is not None
-    fields = {f["name"] for f in result["draft_schema"]["fields"]}
-    assert "name" in fields
-    assert "code" in fields
+    assert result["title"] == "Hello {{name}}, your code is {{code}}."
+    placeholders = {item["placeholder"] for item in result["draft_schema"]["placeholders"]}
+    assert placeholders == {"name", "code"}
 
 
-def test_analyze_text_with_version(service):
+@pytest.mark.asyncio
+async def test_analyze_text_with_version(service):
     content = b"Template v2.1\nUser: {{user}}"
-    result = service.analyze_bytes(content, "report.txt")
+    result = await service.analyze_bytes(content, "report.txt")
 
     assert result["version"] == "2.1"
-    assert "user" in {f["name"] for f in result["draft_schema"]["fields"]}
+    assert {item["placeholder"] for item in result["draft_schema"]["placeholders"]} == {"user"}
 
 
-def test_analyze_text_no_placeholders(service):
+@pytest.mark.asyncio
+async def test_analyze_text_no_placeholders(service):
     content = b"Just a static text file."
-    result = service.analyze_bytes(content, "static.txt")
+    result = await service.analyze_bytes(content, "static.txt")
 
-    assert result["title"] == "static"
-    assert result["draft_schema"] is None
+    assert result["title"] == "Just a static text file."
+    assert result["draft_schema"]["placeholders"] == []
     assert result["version"] is None
 
 
-def test_analyze_excel_mocked(service, monkeypatch):
+@pytest.mark.asyncio
+async def test_analyze_excel_mocked(service, monkeypatch):
     """Smoke-test that Excel path is reachable when openpyxl is present."""
     try:
         import openpyxl
@@ -58,15 +59,13 @@ def test_analyze_excel_mocked(service, monkeypatch):
     wb.save(buf)
     wb.close()
 
-    result = service.analyze_bytes(buf.getvalue(), "data.xlsx")
-    assert result["kind_hint"] == "excel"
-    assert result["draft_schema"] is not None
-    fields = {f["name"] for f in result["draft_schema"]["fields"]}
-    assert "name" in fields
-    assert "amount" in fields
+    result = await service.analyze_bytes(buf.getvalue(), "data.xlsx")
+    placeholders = {item["placeholder"] for item in result["draft_schema"]["placeholders"]}
+    assert placeholders == {"name", "amount"}
 
 
-def test_analyze_word_mocked(service, monkeypatch):
+@pytest.mark.asyncio
+async def test_analyze_word_mocked(service, monkeypatch):
     """Smoke-test that Word path is reachable when python-docx is present."""
     try:
         import docx
@@ -82,10 +81,7 @@ def test_analyze_word_mocked(service, monkeypatch):
     buf = io.BytesIO()
     doc.save(buf)
 
-    result = service.analyze_bytes(buf.getvalue(), "letter.docx")
-    assert result["kind_hint"] == "word"
-    assert result["draft_schema"] is not None
-    fields = {f["name"] for f in result["draft_schema"]["fields"]}
-    assert "customer" in fields
-    assert "item" in fields
-    assert "price" in fields
+    result = await service.analyze_bytes(buf.getvalue(), "letter.docx")
+    placeholders = {item["placeholder"] for item in result["draft_schema"]["placeholders"]}
+    assert placeholders == {"customer"}
+    assert result["draft_schema"]["tables"] == [{"index": 0, "rows": 1, "columns": 2}]

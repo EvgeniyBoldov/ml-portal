@@ -192,6 +192,17 @@ async def _collect(gen) -> List[RuntimeEvent]:
     return [e async for e in gen]
 
 
+class _UnavailableSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def execute(self, *_args, **_kwargs):
+        raise RuntimeError("database access is not part of this unit test")
+
+
 class _Ctx:
     def __init__(self, *, extra=None):
         self.extra = dict(extra or {})
@@ -199,7 +210,7 @@ class _Ctx:
     def get_runtime_deps(self):
         return SimpleNamespace(
             sandbox_overrides=dict(self.extra.get("sandbox_overrides") or {}),
-            session_factory=None,
+            session_factory=lambda: _UnavailableSession(),
         )
 
     def set_runtime_deps(self, deps):

@@ -15,7 +15,7 @@ from app.runtime.envelope import PhasedEvent
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.stages.planning_stage import PlanningOutcomeKind, PlanningStage
 from app.runtime.turn_state import RuntimeTurnState
-from app.agents.context import ToolContext
+from app.agents.context import RuntimeDependencies, ToolContext
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +129,17 @@ async def _collect(gen: AsyncIterator[PhasedEvent]) -> List[PhasedEvent]:
     async for item in gen:
         out.append(item)
     return out
+
+
+class _UnavailableSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def execute(self, *_args, **_kwargs):
+        raise RuntimeError("database access is not part of this unit test")
 
 
 def _types(events: List[PhasedEvent]) -> List[str]:
@@ -283,6 +294,9 @@ class TestPlanningStageLifecycle:
         request = _request(memory)
         state = _runtime_state(memory)
         ctx = ToolContext(tenant_id=memory.tenant_id, user_id=memory.user_id, chat_id=memory.chat_id)
+        ctx.set_runtime_deps(
+            RuntimeDependencies(session_factory=lambda: _UnavailableSession())
+        )
         return stage, state, request, ctx, memory
 
     @pytest.mark.asyncio

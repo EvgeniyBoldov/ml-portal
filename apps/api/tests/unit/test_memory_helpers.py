@@ -38,7 +38,13 @@ from app.runtime.memory.summary_compactor import (
 
 def _llm_result(value):
     return StructuredCallResult(
-        value=value, trace_id=None, raw_response="", duration_ms=1, model="test"
+        value=value,
+        trace_id=None,
+        raw_response="",
+        duration_ms=1,
+        model="test",
+        request_messages=[],
+        request_params={},
     )
 
 
@@ -72,7 +78,7 @@ async def test_fact_extractor_maps_valid_candidates_to_dtos(extractor):
     )
 
     facts = await extractor.extract(
-        user_message="Меня зовут Анна, я работаю с Cisco IOS",
+        user_message="My name is Anna and I work with Cisco IOS",
         agent_results=[],
         known_facts=[],
         user_id=uid,
@@ -103,7 +109,7 @@ async def test_fact_extractor_drops_unknown_scope(extractor):
         )
     )
     facts = await extractor.extract(
-        user_message="", agent_results=[], known_facts=[], user_id=uid,
+        user_message="Boris", agent_results=[], known_facts=[], user_id=uid,
     )
     assert len(facts) == 1
     assert facts[0].subject == "user.name"
@@ -125,7 +131,7 @@ async def test_fact_extractor_drops_user_scope_without_user_id(extractor):
         )
     )
     facts = await extractor.extract(
-        user_message="", agent_results=[], known_facts=[], user_id=None,
+        user_message="Anna", agent_results=[], known_facts=[], user_id=None,
     )
     assert facts == []
 
@@ -147,7 +153,7 @@ async def test_fact_extractor_clips_overlong_value(extractor):
         )
     )
     facts = await extractor.extract(
-        user_message="", agent_results=[], known_facts=[], user_id=uid,
+        user_message=huge, agent_results=[], known_facts=[], user_id=uid,
     )
     assert len(facts) == 1
     assert len(facts[0].value) <= 500
@@ -170,7 +176,7 @@ async def test_fact_extractor_caps_at_max_per_turn(extractor):
         )
     )
     facts = await extractor.extract(
-        user_message="", agent_results=[], known_facts=[], user_id=uid,
+        user_message=" ".join(f"v{i}" for i in range(20)), agent_results=[], known_facts=[], user_id=uid,
     )
     assert len(facts) == 8
 

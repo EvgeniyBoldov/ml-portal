@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.agents.context import ToolContext
+from app.agents.context import RuntimeDependencies, ToolContext
 from app.runtime.budgets import BudgetRegistry, RunLimits
 from app.runtime.budgets.errors import BudgetExceededError
 from app.runtime.contracts import NextStep, NextStepKind, PipelineRequest, PipelineStopReason
@@ -89,6 +89,17 @@ class _AgentErrorThenSuccess:
         )
 
 
+class _UnavailableSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def execute(self, *_args, **_kwargs):
+        raise RuntimeError("database access is not part of this unit test")
+
+
 class _PlannerFinalAfterCall:
     def __init__(self) -> None:
         self.calls = 0
@@ -132,6 +143,14 @@ def _request(memory) -> PipelineRequest:
     )
 
 
+def _context(memory, *, chat_id):
+    ctx = ToolContext(tenant_id=memory.tenant_id, user_id=memory.user_id, chat_id=chat_id)
+    ctx.set_runtime_deps(
+        RuntimeDependencies(session_factory=lambda: _UnavailableSession())
+    )
+    return ctx
+
+
 async def _collect(gen: AsyncIterator[PhasedEvent]) -> List[PhasedEvent]:
     out: List[PhasedEvent] = []
     async for item in gen:
@@ -169,7 +188,7 @@ async def test_planning_stage_syncs_runtime_turn_state_on_pause():
     }
     runtime_state = RuntimeTurnState.model_validate(state)
     request = _request(memory)
-    ctx = ToolContext(tenant_id=memory.tenant_id, user_id=memory.user_id, chat_id=memory.chat_id)
+    ctx = _context(memory, chat_id=memory.chat_id)
 
     events = await _collect(
         stage.run(
@@ -228,7 +247,7 @@ async def test_planning_stage_ignores_agent_version_id_for_chat_runtime():
         agent_version_id=str(uuid4()),
     )
     runtime_state = _runtime_state(memory, chat_id=request.chat_id)
-    ctx = ToolContext(tenant_id=memory.tenant_id, user_id=memory.user_id, chat_id=memory.chat_id)
+    ctx = _context(memory, chat_id=memory.chat_id)
 
     _ = await _collect(
         stage.run(
@@ -267,7 +286,7 @@ async def test_planning_stage_passes_agent_version_id_for_sandbox_runtime():
         agent_version_id=str(version_id),
     )
     runtime_state = _runtime_state(memory, chat_id=None)
-    ctx = ToolContext(tenant_id=memory.tenant_id, user_id=memory.user_id, chat_id=None)
+    ctx = _context(memory, chat_id=None)
 
     _ = await _collect(
         stage.run(
@@ -303,7 +322,7 @@ async def test_planning_stage_emits_iteration_end_on_step_budget_failure():
     )
     request = _request(memory)
     runtime_state = _runtime_state(memory, chat_id=request.chat_id)
-    ctx = ToolContext(tenant_id=memory.tenant_id, user_id=memory.user_id, chat_id=memory.chat_id)
+    ctx = _context(memory, chat_id=memory.chat_id)
     ctx.extra["runtime_budget_registry"] = _BudgetRegistryFailStep()
 
     events = await _collect(
@@ -332,7 +351,7 @@ async def test_planning_stage_handles_invalid_planner_step_as_failed_iteration()
     )
     request = _request(memory)
     runtime_state = _runtime_state(memory, chat_id=request.chat_id)
-    ctx = ToolContext(tenant_id=memory.tenant_id, user_id=memory.user_id, chat_id=memory.chat_id)
+    ctx = _context(memory, chat_id=memory.chat_id)
 
     events = await _collect(
         stage.run(
@@ -360,7 +379,7 @@ async def test_planning_stage_agent_end_completed_when_error_then_success_result
     )
     request = _request(memory)
     runtime_state = _runtime_state(memory, chat_id=request.chat_id)
-    ctx = ToolContext(tenant_id=memory.tenant_id, user_id=memory.user_id, chat_id=memory.chat_id)
+    ctx = _context(memory, chat_id=memory.chat_id)
 
     events = await _collect(
         stage.run(

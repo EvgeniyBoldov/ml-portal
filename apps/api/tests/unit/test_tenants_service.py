@@ -53,6 +53,7 @@ class TestAsyncTenantsService:
         tenant.name = "Test Tenant"
         tenant.description = "Test description"
         tenant.is_active = True
+        tenant.lifecycle_status = "active"
         tenant.embedding_model_alias = None
         tenant.ocr = True
         tenant.layout = False

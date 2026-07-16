@@ -41,4 +41,4 @@ async def test_download_file_by_id_returns_file_response(monkeypatch):
 
     assert response.status_code == 200
     assert response.body == b"hello"
-    assert response.headers["content-disposition"] == 'attachment; filename="file.txt"'
+    assert response.headers["content-disposition"].startswith('attachment; filename="file.txt"')

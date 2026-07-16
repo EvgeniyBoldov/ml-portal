@@ -1,49 +1,14 @@
 from __future__ import annotations
 
-import importlib.util
-import logging
-import sys
-import types
-from functools import lru_cache
-from pathlib import Path
 from types import SimpleNamespace
 
-
-@lru_cache(maxsize=1)
-def _load_module():
-    core_pkg = sys.modules.get("app.core")
-    if core_pkg is None:
-        core_pkg = types.ModuleType("app.core")
-        core_pkg.__path__ = []  # type: ignore[attr-defined]
-        sys.modules["app.core"] = core_pkg
-
-    logging_mod = sys.modules.get("app.core.logging")
-    if logging_mod is None:
-        logging_mod = types.ModuleType("app.core.logging")
-        logging_mod.get_logger = logging.getLogger  # type: ignore[attr-defined]
-        sys.modules["app.core.logging"] = logging_mod
-    setattr(core_pkg, "logging", logging_mod)
-
-    module_path = Path(__file__).resolve().parents[2] / "src" / "app" / "services" / "sandbox_override_resolver.py"
-    spec = importlib.util.spec_from_file_location("sandbox_override_resolver_test", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load module from {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _resolver_cls():
-    return _load_module().SandboxOverrideResolver
-
+from app.services.sandbox_override_resolver import SandboxOverrideResolver
 
 def test_sandbox_agent_slug_uses_only_explicit_override():
-    Resolver = _resolver_cls()
-
-    cfg_without_override = Resolver({"overrides": {}})
+    cfg_without_override = SandboxOverrideResolver({"overrides": {}})
     assert cfg_without_override.agent_slug_override is None
 
-    cfg_with_override = Resolver(
+    cfg_with_override = SandboxOverrideResolver(
         {
             "overrides": {
                 "ov-1": {
@@ -58,9 +23,8 @@ def test_sandbox_agent_slug_uses_only_explicit_override():
 
 
 def test_sandbox_runtime_overrides_include_limits_and_agent_limits():
-    Resolver = _resolver_cls()
     agent_version = SimpleNamespace(id="agent-version-1")
-    resolver = Resolver(
+    resolver = SandboxOverrideResolver(
         {
             "overrides": {
                 "ov-platform": {
