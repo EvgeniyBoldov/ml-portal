@@ -150,11 +150,11 @@ Observed drift to review:
 
 | Priority | Review item | Evidence to collect | Rule for decision |
 |---|---|---|---|
-| P0 | Move adapter DB and credential lookup to a service-owned resolver | Completed in `EmbeddingModelConfigService`; verify all callers use the service | adapter receives resolved config; service/startup owns persistence and credentials |
+| P0 | Move adapter DB and credential lookup to a service-owned resolver | Completed in `EmbeddingModelConfigService`; all runtime callers use the service | adapter receives resolved config; service/startup owns persistence and credentials |
 | P0 | Audit migration data mutations | Classified historical revisions above; production revision state still needs deployment-specific verification | keep history, prohibit new user/tenant backfills in Alembic |
 | P1 | Revisit Qdrant `_legacy_search` | Completed; compose uses Qdrant `v1.17.1`, client requires `>=1.12.0`, and fallback coverage was removed | do not reintroduce the old `/points/search` contract |
 | P1 | Normalize commit ownership in workers/startup | Historical tasks mix direct final commits/checkpoints with the unused `worker_transaction` helper; staged RAG status persistence makes bulk replacement unsafe | classify each task's checkpoint needs, then migrate one flow at a time to one explicit owner |
-| P2 | Purge generated `__pycache__` from source tree | tracked files and ignore rules | generated artifacts never belong in source directories |
+| P2 | Purge generated `__pycache__` from source tree | No tracked bytecode; source-tree caches removed; `.gitignore` covers future output | generated artifacts never belong in source directories |
 
 ## Test source of truth
 
