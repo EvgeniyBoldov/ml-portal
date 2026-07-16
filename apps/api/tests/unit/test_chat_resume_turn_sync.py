@@ -25,6 +25,13 @@ class TestChatResumeTurnSync:
                 yield event
         return _gen()
 
+    @staticmethod
+    async def _read_stream(response):
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else str(chunk))
+        return "".join(chunks)
+
     @pytest.mark.asyncio
     async def test_resume_confirm_resumes_turn_and_run(self, mock_session):
         run_id = str(uuid4())
@@ -62,17 +69,18 @@ class TestChatResumeTurnSync:
 
         with (
             patch("app.services.chat_turn_service.ChatTurnService", return_value=turn_service),
-            patch("app.api.v1.routers.chat.ChatStreamService", return_value=chat_service),
-            patch("app.api.v1.routers.chat.get_redis", return_value=AsyncMock()),
-            patch("app.api.v1.routers.chat.get_llm_client", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.ChatStreamService", return_value=chat_service),
+            patch("app.api.v1.routers.chat.messages.get_redis", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.get_llm_client", return_value=AsyncMock()),
             patch("app.api.v1.routers.chat.messages.get_confirmation_service", return_value=confirmation_service),
         ):
-            result = await resume_run(run_id=run_id, body={"action": "confirm"}, session=mock_session, current_user=current_user)
+            response = await resume_run(run_id=run_id, body={"action": "confirm"}, session=mock_session, current_user=current_user)
 
-        assert result["status"] == "resumed_completed"
+        await self._read_stream(response)
+        assert response.media_type == "text/event-stream"
         assert paused_run.status == "resumed"
-        assert paused_run.paused_action is None
-        assert paused_run.paused_context is None
+        assert paused_run.paused_action == {"kind": "confirm", "operation_fingerprint": "fp-1"}
+        assert paused_run.paused_context == {"x": 1}
         assert "resume_checkpoint" in paused_run.context_snapshot
         turn_service.cancel_turn.assert_awaited_once_with(
             turn.id,
@@ -118,14 +126,15 @@ class TestChatResumeTurnSync:
 
         with (
             patch("app.services.chat_turn_service.ChatTurnService", return_value=turn_service),
-            patch("app.api.v1.routers.chat.ChatStreamService", return_value=chat_service),
-            patch("app.api.v1.routers.chat.get_redis", return_value=AsyncMock()),
-            patch("app.api.v1.routers.chat.get_llm_client", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.ChatStreamService", return_value=chat_service),
+            patch("app.api.v1.routers.chat.messages.get_redis", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.get_llm_client", return_value=AsyncMock()),
             patch("app.api.v1.routers.chat.messages.get_confirmation_service", return_value=confirmation_service),
         ):
-            result = await resume_run(run_id=run_id, body={"action": "confirm"}, session=mock_session, current_user=current_user)
+            response = await resume_run(run_id=run_id, body={"action": "confirm"}, session=mock_session, current_user=current_user)
 
-        assert result["status"] == "resumed_completed"
+        await self._read_stream(response)
+        assert response.media_type == "text/event-stream"
         assert captured_kwargs.get("confirmation_tokens") == ["tok-confirm-ctx"]
 
     @pytest.mark.asyncio
@@ -155,9 +164,9 @@ class TestChatResumeTurnSync:
         turn_service.cancel_turn = AsyncMock()
 
         with patch("app.services.chat_turn_service.ChatTurnService", return_value=turn_service):
-            result = await resume_run(run_id=run_id, body={"action": "cancel"}, session=mock_session, current_user=current_user)
+            response = await resume_run(run_id=run_id, body={"action": "cancel"}, session=mock_session, current_user=current_user)
 
-        assert result["status"] == "cancelled"
+        assert "cancelled" in await self._read_stream(response)
         assert paused_run.status == "cancelled"
         assert paused_run.error == "Cancelled by user"
         assert paused_run.paused_action is None
@@ -198,14 +207,14 @@ class TestChatResumeTurnSync:
 
         with (
             patch("app.services.chat_turn_service.ChatTurnService", return_value=turn_service),
-            patch("app.api.v1.routers.chat.ChatStreamService", return_value=chat_service),
-            patch("app.api.v1.routers.chat.get_redis", return_value=AsyncMock()),
-            patch("app.api.v1.routers.chat.get_llm_client", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.ChatStreamService", return_value=chat_service),
+            patch("app.api.v1.routers.chat.messages.get_redis", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.get_llm_client", return_value=AsyncMock()),
         ):
-            result = await resume_run(run_id=run_id, body={"action": "input", "input": "hello"}, session=mock_session, current_user=current_user)
+            response = await resume_run(run_id=run_id, body={"action": "input", "input": "hello"}, session=mock_session, current_user=current_user)
 
-        assert result["status"] == "resumed_completed"
-        assert result["user_input"] == "hello"
+        await self._read_stream(response)
+        assert response.media_type == "text/event-stream"
         assert paused_run.status == "resumed"
         assert "resume_checkpoint" in paused_run.context_snapshot
         turn_service.cancel_turn.assert_awaited_once_with(
@@ -244,32 +253,30 @@ class TestChatResumeTurnSync:
         chat_service = AsyncMock()
         chat_service.send_message_stream = lambda **_: self._stream(
             {
-                "type": "run_paused",
+                "type": "stop",
                 "reason": "waiting_input",
                 "run_id": paused_again_run_id,
-                "action": {"type": "resume", "question": "Уточните VLAN"},
-                "context": {"question": "Уточните VLAN", "reason": "waiting_input"},
+                "question": "Уточните VLAN",
+                "message": "Уточните VLAN",
             },
         )
 
         with (
             patch("app.services.chat_turn_service.ChatTurnService", return_value=turn_service),
-            patch("app.api.v1.routers.chat.ChatStreamService", return_value=chat_service),
-            patch("app.api.v1.routers.chat.get_redis", return_value=AsyncMock()),
-            patch("app.api.v1.routers.chat.get_llm_client", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.ChatStreamService", return_value=chat_service),
+            patch("app.api.v1.routers.chat.messages.get_redis", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.get_llm_client", return_value=AsyncMock()),
         ):
-            result = await resume_run(
+            response = await resume_run(
                 run_id=run_id,
                 body={"action": "input", "input": "hello"},
                 session=mock_session,
                 current_user=current_user,
             )
 
-        assert result["status"] == "resumed_paused_again"
-        assert result["paused_again_run_id"] == paused_again_run_id
-        assert result["paused_again_reason"] == "waiting_input"
-        assert isinstance(result["paused_again_action"], dict)
-        assert isinstance(result["paused_again_context"], dict)
+        body = await self._read_stream(response)
+        assert paused_again_run_id in body
+        assert "waiting_input" in body
 
     @pytest.mark.asyncio
     async def test_resume_denies_other_user_run(self, mock_session):
@@ -317,14 +324,14 @@ class TestChatResumeTurnSync:
         self._mock_execute_with_run(mock_session, paused_run)
 
         with patch("app.services.chat_turn_service.ChatTurnService", return_value=AsyncMock()):
-            result = await resume_run(
+            response = await resume_run(
                 run_id=run_id,
                 body={"action": "cancel"},
                 session=mock_session,
                 current_user=current_user,
             )
 
-        assert result["status"] == "cancelled"
+        assert "cancelled" in await self._read_stream(response)
         mock_session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -376,7 +383,7 @@ class TestChatResumeTurnSync:
                 content="Найди проблемный vlan",
                 attachment_ids=[],
                 attachment_meta=[],
-                attachment_prompt_context="",
+                attachment_contexts=[],
                 idempotency_key=None,
                 model=None,
                 agent_slug=None,
@@ -385,7 +392,6 @@ class TestChatResumeTurnSync:
                 run_with_router=fake_run_with_router,
                 store_idempotency=AsyncMock(),
                 bind_attachments=AsyncMock(),
-                process_generated_files=AsyncMock(return_value={"content": "", "attachments": []}),
             )
         ]
         stop_event = next(event for event in phase1_events if event["type"] == "stop")
@@ -429,21 +435,21 @@ class TestChatResumeTurnSync:
 
         with (
             patch("app.services.chat_turn_service.ChatTurnService", return_value=turn_service_phase2),
-            patch("app.api.v1.routers.chat.ChatStreamService", return_value=chat_service),
-            patch("app.api.v1.routers.chat.get_redis", return_value=AsyncMock()),
-            patch("app.api.v1.routers.chat.get_llm_client", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.ChatStreamService", return_value=chat_service),
+            patch("app.api.v1.routers.chat.messages.get_redis", return_value=AsyncMock()),
+            patch("app.api.v1.routers.chat.messages.get_llm_client", return_value=AsyncMock()),
         ):
-            result = await resume_run(
+            response = await resume_run(
                 run_id=run_id,
                 body={"action": "input", "input": "VLAN 100"},
                 session=mock_session,
                 current_user=current_user,
             )
 
-        assert result["status"] == "resumed_completed"
-        assert result["user_input"] == "VLAN 100"
+        await self._read_stream(response)
+        assert response.media_type == "text/event-stream"
         assert paused_run.status == "resumed"
-        assert paused_run.paused_action is None
-        assert paused_run.paused_context is None
+        assert paused_run.paused_action == paused_action
+        assert paused_run.paused_context == paused_context
         assert sent_payloads
         assert "VLAN 100" in str(sent_payloads[0].get("content", ""))

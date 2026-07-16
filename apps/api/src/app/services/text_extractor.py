@@ -1,9 +1,8 @@
 """
-Backward-compatible wrapper around ExtractorRegistry.
+Legacy extraction entrypoint.
 
 All extraction logic now lives in app.services.extractors.*.
-This module re-exports ExtractResult and extract_text() so existing
-imports continue to work without changes.
+New code imports ExtractorRegistry directly.
 """
 from __future__ import annotations
 

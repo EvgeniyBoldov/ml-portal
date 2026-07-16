@@ -6,8 +6,8 @@
  * - "tabs" - Tabbed layout (overview | versions | settings)
  * 
  * Examples:
- * - Prompt/Baseline pages: <BaseLayout type="split">
- * - Policy pages: <BaseLayout type="tabs">
+ * - Versioned entity pages: <BaseLayout type="split">
+ * - Policy/detail pages: <BaseLayout type="tabs">
  */
 import React from 'react';
 import { ContentGrid } from '../ContentBlock/ContentGrid';
@@ -27,7 +27,7 @@ export interface BaseLayoutProps {
 
 /**
  * Split layout - two columns for container + version
- * Used by PromptEditorPage, BaselineEditorPage
+ * Used by versioned entity pages that show container and version/status data
  */
 export interface SplitLayoutProps {
   /** Left column content (container info) */
@@ -42,7 +42,7 @@ export interface SplitLayoutProps {
 
 /**
  * Tabs layout - tabbed interface
- * Used by PolicyEditorPage
+ * Used by detail pages that group related content into tabs
  */
 export interface TabsLayoutProps {
   /** Tab configuration */

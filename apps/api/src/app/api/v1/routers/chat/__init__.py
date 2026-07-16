@@ -17,8 +17,7 @@ from .chats import list_chats as list_chats_core
 from .messages import router as messages_router
 from .attachments import router as attachments_router
 from .meta import router as meta_router
-from .messages import resume_run  # backward-compat for tests/importers
-from .messages import ChatStreamService, get_redis, get_llm_client  # patch points in legacy tests
+from .messages import resume_run
 from app.api.deps import db_uow, get_current_user
 from app.core.security import UserCtx
 
@@ -62,7 +61,4 @@ async def create_chat_no_slash(
 __all__ = [
     "router",
     "resume_run",
-    "ChatStreamService",
-    "get_redis",
-    "get_llm_client",
 ]

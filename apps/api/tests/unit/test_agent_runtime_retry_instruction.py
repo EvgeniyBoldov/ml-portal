@@ -14,7 +14,7 @@ def test_required_operation_retry_instruction_uses_default():
 
 def test_required_operation_retry_instruction_uses_platform_config():
     text = AgentToolRuntime._required_operation_retry_instruction(
-        platform_config={"required_operation_retry_instruction": "platform instruction"},
+        platform_config={"retry_instruction": "platform instruction"},
         sandbox_overrides={},
     )
     assert text == "platform instruction"
@@ -22,8 +22,7 @@ def test_required_operation_retry_instruction_uses_platform_config():
 
 def test_required_operation_retry_instruction_sandbox_override_priority():
     text = AgentToolRuntime._required_operation_retry_instruction(
-        platform_config={"required_operation_retry_instruction": "platform instruction"},
+        platform_config={"retry_instruction": "platform instruction"},
         sandbox_overrides={"required_operation_retry_instruction": "sandbox instruction"},
     )
     assert text == "sandbox instruction"
-

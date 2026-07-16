@@ -58,16 +58,6 @@ def _normalize_resume_agent_slug(agent_slug: str | None) -> str | None:
     return normalized
 
 
-def _compat_symbol(name: str, fallback: Any) -> Any:
-    """Compatibility shim for legacy test patch points on package module."""
-    try:
-        from app.api.v1.routers import chat as chat_pkg  # type: ignore
-
-        return getattr(chat_pkg, name, fallback)
-    except Exception:
-        return fallback
-
-
 @router.get("/{chat_id}/messages")
 async def list_messages(
     chat_id: str,
@@ -267,7 +257,14 @@ async def resume_run(
         await session.commit()
         # Return SSE for cancel (single error-like event with status)
         async def _cancel_gen() -> AsyncGenerator[str, None]:
-            yield format_chat_sse(ChatSSEEventType.ERROR, {"run_id": run_id, "status": "cancelled", "reason": "User cancelled"})
+            yield format_chat_sse(
+                ChatSSEEventType.ERROR,
+                ErrorPayload(
+                    error="User cancelled",
+                    code="cancelled",
+                    details={"run_id": run_id, "status": "cancelled"},
+                ),
+            )
             yield format_chat_sse_done()
         return StreamingResponse(_cancel_gen(), media_type="text/event-stream")
 
@@ -343,14 +340,10 @@ async def resume_run(
     user_uuid_val = uuid.UUID(str(current_user.id))
     chats_repo = AsyncChatsRepository(session, tenant_uuid_val, user_uuid_val)
     messages_repo = AsyncChatMessagesRepository(session, tenant_uuid_val, user_uuid_val)
-    chat_stream_service_cls = _compat_symbol("ChatStreamService", ChatStreamService)
-    redis_factory = _compat_symbol("get_redis", get_redis)
-    llm_factory = _compat_symbol("get_llm_client", get_llm_client)
-
-    service = chat_stream_service_cls(
+    service = ChatStreamService(
         session=session,
-        redis=redis_factory(),
-        llm_client=llm_factory(),
+        redis=get_redis(),
+        llm_client=get_llm_client(),
         chats_repo=chats_repo,
         messages_repo=messages_repo,
     )

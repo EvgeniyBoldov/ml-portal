@@ -1,14 +1,14 @@
-from app.agents.protocol import build_operations_prompt
+from app.agents.protocol import build_tools_prompt
 from app.agents.runtime.prompt_assembler import OperationPromptRenderer, PromptAssembler, filter_prompt_visible_operations
 
 
-def test_build_operations_prompt_uses_default_mandatory_rules():
-    prompt = build_operations_prompt([{"type": "function", "function": {"name": "x", "parameters": {}}}])
+def test_build_tools_prompt_uses_default_mandatory_rules():
+    prompt = build_tools_prompt([{"type": "function", "function": {"name": "x", "parameters": {}}}])
     assert "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА" in prompt
 
 
-def test_build_operations_prompt_uses_override_rules_text():
-    prompt = build_operations_prompt(
+def test_build_tools_prompt_uses_override_rules_text():
+    prompt = build_tools_prompt(
         [{"type": "function", "function": {"name": "x", "parameters": {}}}],
         mandatory_rules_text="CUSTOM RULES BLOCK",
     )
@@ -29,8 +29,8 @@ def test_prompt_assembler_resolves_operations_rules_override_priority():
     )
 
 
-def test_build_operations_prompt_includes_collection_selection_guidance():
-    prompt = build_operations_prompt([{"type": "function", "function": {"name": "x", "parameters": {}}}])
+def test_build_tools_prompt_includes_collection_selection_guidance():
+    prompt = build_tools_prompt([{"type": "function", "function": {"name": "x", "parameters": {}}}])
     assert "Сначала сопоставь задачу с нужной коллекцией" in prompt
     assert "сначала вызови `collection.info`" in prompt.lower()
     assert "которые вернулись в результате `collection.info`" in prompt

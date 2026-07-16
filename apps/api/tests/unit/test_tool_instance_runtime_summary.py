@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.api.v1.routers.admin.tool_instances import (
-    _materialize_runtime_operations,
     _runtime_tool_summary,
 )
 
 
 def _instance(**overrides):
     base = {
+        "id": "instance-id",
         "slug": "contracts",
         "domain": "collection.table",
         "config": {},
@@ -49,41 +49,12 @@ def _tool(**overrides):
     return SimpleNamespace(**base)
 
 
-def test_materialize_runtime_operations_deduplicates_and_applies_runtime_flags():
-    instance = _instance()
-    provider = _provider()
-    discovered_tools = [
-        _tool(
-            slug="collection.search",
-            input_schema={
-                "type": "object",
-                "x-runtime": {
-                    "risk_level": "destructive",
-                    "requires_confirmation": True,
-                },
-            },
-        ),
-        _tool(slug="collection.table.search"),
-        _tool(slug="collection.unknown"),
-    ]
-
-    operations = _materialize_runtime_operations(
-        instance=instance,
-        provider=provider,
-        discovered_tools=discovered_tools,
-    )
-
-    assert len(operations) == 1
-    op = operations[0]
-    assert op.operation == "collection.table.search"
-    assert op.operation_slug == "instance.contracts.collection.table.search"
-    assert op.provider_instance_slug == "mcp-prod"
-    assert op.risk_level == "destructive"
-    assert op.requires_confirmation is True
-
-
 @pytest.mark.asyncio
-async def test_runtime_tool_summary_returns_zero_for_non_data_instance():
+async def test_runtime_tool_summary_returns_zero_for_non_data_instance(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.collection_tool_resolver.CollectionToolResolver._resolve_bound_collection",
+        AsyncMock(return_value=None),
+    )
     summary = await _runtime_tool_summary(
         db=SimpleNamespace(),
         instance=_instance(instance_kind="service", is_data=False),
@@ -104,6 +75,25 @@ async def test_runtime_tool_summary_builds_counts(monkeypatch):
     monkeypatch.setattr(
         "app.api.v1.routers.admin.tool_instances._load_discovered_tools_for_instance",
         AsyncMock(return_value=discovered_tools),
+    )
+    monkeypatch.setattr(
+        "app.services.collection_tool_resolver.CollectionToolResolver._resolve_bound_collection",
+        AsyncMock(return_value=SimpleNamespace(collection_type="table", has_vector_search=True)),
+    )
+    monkeypatch.setattr(
+        "app.agents.capability_resolver.CollectionCapabilityResolver.resolve_for_instance",
+        AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    canonical_op_slug="collection.table.search",
+                    discovered_tool=discovered_tools[0],
+                ),
+                SimpleNamespace(
+                    canonical_op_slug="collection.table.search",
+                    discovered_tool=discovered_tools[1],
+                ),
+            ]
+        ),
     )
 
     discovered_count, runtime_count, operations = await _runtime_tool_summary(

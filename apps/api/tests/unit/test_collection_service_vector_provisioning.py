@@ -11,17 +11,17 @@ from app.services.collection_service import CollectionService
 
 
 @pytest.mark.asyncio
-async def test_provision_qdrant_collection_uses_resolved_model_dimensions(monkeypatch):
+async def test_provision_qdrant_collection_uses_configured_model_dimensions(monkeypatch):
     service = CollectionService(session=MagicMock())
 
     monkeypatch.setattr(
-        service,
-        "_resolve_primary_vector_model",
-        AsyncMock(return_value="emb-default"),
+        service.vector,
+        "resolve_target_vector_models",
+        AsyncMock(return_value=["emb-default"]),
     )
     monkeypatch.setattr(
-        service,
-        "_resolve_embedding_dimensions",
+        service.vector,
+        "resolve_embedding_dimensions",
         AsyncMock(return_value=1024),
     )
 
@@ -39,12 +39,12 @@ async def test_provision_qdrant_collection_uses_resolved_model_dimensions(monkey
 
 
 @pytest.mark.asyncio
-async def test_provision_qdrant_collection_falls_back_to_default_dimension(monkeypatch):
+async def test_provision_qdrant_collection_requires_configured_model(monkeypatch):
     service = CollectionService(session=MagicMock())
 
     monkeypatch.setattr(
-        service,
-        "_resolve_primary_vector_model",
+        service.vector,
+        "resolve_target_vector_models",
         AsyncMock(return_value=None),
     )
 
@@ -56,9 +56,10 @@ async def test_provision_qdrant_collection_falls_back_to_default_dimension(monke
 
     monkeypatch.setattr("app.adapters.impl.qdrant.QdrantVectorStore", FakeQdrantVectorStore)
 
-    await service._provision_qdrant_collection(uuid4(), "coll_test_vector")
+    with pytest.raises(RuntimeError, match="No embedding target models resolved"):
+        await service._provision_qdrant_collection(uuid4(), "coll_test_vector")
 
-    ensure_collection.assert_awaited_once_with("coll_test_vector", 384)
+    ensure_collection.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -160,7 +161,7 @@ async def test_create_collection_cleans_up_sql_and_qdrant_on_late_failure(monkey
     service = CollectionService(session=session)
     tenant_id = uuid4()
     slug = "docs"
-    expected_qdrant = f"coll_{str(tenant_id).replace('-', '')[:8]}_{slug}"
+    expected_qdrant = "coll_docs"
 
     monkeypatch.setattr(service, "_validate_slug", lambda _slug: None)
     monkeypatch.setattr(service, "_validate_admin_defined_fields", lambda *_args, **_kwargs: None)
@@ -220,8 +221,10 @@ async def test_delete_collection_deletes_db_row_before_best_effort_cleanup(monke
         id=uuid4(),
         tenant_id=tenant_id,
         slug="docs",
+        collection_type="table",
         table_name="coll_test_docs",
         qdrant_collection_name="coll_test_docs",
+        vector_config={},
     )
 
     monkeypatch.setattr(service, "get_by_slug", AsyncMock(return_value=collection))
@@ -233,7 +236,7 @@ async def test_delete_collection_deletes_db_row_before_best_effort_cleanup(monke
         ),
     )
 
-    result = await service.delete_collection(tenant_id, "docs")
+    result = await service.delete_collection("docs")
 
     assert result is True
     session.delete.assert_awaited_once_with(collection)

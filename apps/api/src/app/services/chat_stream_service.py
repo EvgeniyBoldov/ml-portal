@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Optional, Dict, Any, List, AsyncGenerator
 from datetime import datetime, timezone
 import uuid
-from types import SimpleNamespace
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
@@ -41,7 +40,7 @@ def _safe_stream_error(code: str, user_message: str) -> Dict[str, str]:
 
 
 class ChatStreamService:
-    """Compatibility façade for chat streaming built on smaller chat services."""
+    """Transport facade for chat streaming built on smaller chat services."""
     
     def __init__(
         self,
@@ -71,9 +70,6 @@ class ChatStreamService:
             title_service=self.title_service,
             turn_service=self.chat_turn_service,
         )
-        # Backward-compatible patch point for older unit tests.
-        self.agent_service = SimpleNamespace(agent_repo=SimpleNamespace())
-    
     async def verify_chat_access(self, chat_id: str, user_id: str) -> bool:
         """Verify that user has access to the chat"""
         chat = await self.chats_repo.get_chat_by_id(chat_id)

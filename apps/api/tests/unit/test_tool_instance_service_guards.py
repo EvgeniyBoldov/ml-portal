@@ -160,18 +160,20 @@ async def test_ensure_local_service_instances_create_when_missing():
     service.repo.create = AsyncMock(side_effect=lambda instance: instance)
     service.repo.update = AsyncMock(side_effect=lambda instance: instance)
 
-    table_instance, document_instance, created, updated = await service.ensure_local_service_instances()
+    table_instance, document_instance, template_instance, created, updated = await service.ensure_local_service_instances()
 
-    assert created == 2
+    assert created == 3
     assert updated == 0
     assert table_instance.slug == service.LOCAL_TABLE_SERVICE_SLUG
     assert document_instance.slug == service.LOCAL_DOCUMENT_SERVICE_SLUG
+    assert template_instance.slug == service.LOCAL_TEMPLATE_SERVICE_SLUG
     assert table_instance.instance_kind == InstanceKind.SERVICE.value
     assert document_instance.instance_kind == InstanceKind.SERVICE.value
     assert table_instance.placement == InstancePlacement.LOCAL.value
     assert document_instance.placement == InstancePlacement.LOCAL.value
     assert table_instance.is_active is True
     assert document_instance.is_active is True
+    assert template_instance.is_active is True
 
 
 @pytest.mark.asyncio
@@ -193,20 +195,30 @@ async def test_ensure_local_service_instances_normalize_existing():
     document_existing.is_active = False
     document_existing.health_status = "unknown"
     document_existing.domain = "rag"
-    service.repo.get_by_slug = AsyncMock(side_effect=[table_existing, document_existing])
+    template_existing = _build_instance(
+        placement=InstancePlacement.REMOTE.value,
+        instance_kind=InstanceKind.DATA.value,
+    )
+    template_existing.slug = service.LOCAL_TEMPLATE_SERVICE_SLUG
+    template_existing.is_active = False
+    template_existing.health_status = "unknown"
+    template_existing.domain = "rag"
+    service.repo.get_by_slug = AsyncMock(side_effect=[table_existing, document_existing, template_existing])
     service.repo.update = AsyncMock(side_effect=lambda instance: instance)
 
-    table_instance, document_instance, created, updated = await service.ensure_local_service_instances()
+    table_instance, document_instance, template_instance, created, updated = await service.ensure_local_service_instances()
 
     assert created == 0
-    assert updated == 2
+    assert updated == 3
     assert table_instance.instance_kind == InstanceKind.SERVICE.value
     assert document_instance.instance_kind == InstanceKind.SERVICE.value
     assert table_instance.placement == InstancePlacement.LOCAL.value
     assert document_instance.placement == InstancePlacement.LOCAL.value
     assert table_instance.domain == "collection.table"
     assert document_instance.domain == "collection.document"
+    assert template_instance.domain == "collection.template"
     assert table_instance.is_active is True
     assert document_instance.is_active is True
     assert table_instance.health_status == "healthy"
     assert document_instance.health_status == "healthy"
+    assert template_instance.health_status == "healthy"

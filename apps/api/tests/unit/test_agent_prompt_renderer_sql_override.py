@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from app.agents.runtime.agent_prompt_renderer import AgentPromptRenderer
 
 
-def test_sql_prompt_override_replaces_hardcoded_coll_name_and_adds_guidance():
+def test_render_base_prompt_preserves_compiled_prompt():
     renderer = AgentPromptRenderer()
     exec_request = SimpleNamespace(
         prompt=(
@@ -23,8 +23,4 @@ def test_sql_prompt_override_replaces_hardcoded_coll_name_and_adds_guidance():
 
     rendered = renderer.render_base_prompt(exec_request=exec_request)
 
-    assert "coll_a0eebc99_ticket_network" not in rendered
-    assert "обязательно используй таблицу" not in rendered.lower()
-    assert "## SQL Runtime Override" in rendered
-    assert "`tenwork_tickets`" in rendered
-    assert "`services`" in rendered
+    assert rendered == exec_request.prompt

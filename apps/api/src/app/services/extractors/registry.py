@@ -55,9 +55,7 @@ class ExtractorRegistry:
         """
         Extract text from file data using the appropriate extractor.
 
-        Falls back to text extractor for unknown extensions.
-        This is the main entry point — drop-in replacement for
-        the old text_extractor.extract_text() function.
+        Falls back to text extraction for unknown extensions.
         """
         cls._ensure_initialized()
 

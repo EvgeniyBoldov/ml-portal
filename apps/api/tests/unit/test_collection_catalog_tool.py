@@ -212,13 +212,7 @@ async def test_collection_info_builder_uses_runtime_resolved_operations():
         session=_FakeSession(),
         collection=collection,
         operations=operations,
-        legacy_payload={
-            "schema": {"fields": []},
-            "filter_hints": {"fields": {}},
-            "stats": {},
-            "dimensions": {},
-            "remote_catalog": {},
-        },
+        inspection_payload={"schema": {"fields": []}},
     )
 
     assert payload["collection"]["usage_rules"] == "Find template, inspect schema, then fill."
@@ -271,13 +265,7 @@ async def test_collection_info_builder_builds_remote_api_metadata_enrichment():
         session=_FakeSession(),
         collection=collection,
         operations=[],
-        legacy_payload={
-            "schema": {"fields": []},
-            "filter_hints": {"fields": {}},
-            "stats": {},
-            "dimensions": {},
-            "remote_catalog": {},
-        },
+        inspection_payload={"schema": {"fields": []}},
     )
 
     assert payload["runtime_enrichment"]["status"] == "ready"

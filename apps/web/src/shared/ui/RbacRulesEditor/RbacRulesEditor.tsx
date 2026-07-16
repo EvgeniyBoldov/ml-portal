@@ -1,10 +1,7 @@
 /**
  * RbacRulesEditor - Reusable component for editing RBAC permissions
  * 
- * Used in:
- * - DefaultsPage (scope: default)
- * - TenantEditorPage (scope: tenant)
- * - UserEditorPage (scope: user)
+ * Used in admin scope pages for default, tenant and user permissions.
  */
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';

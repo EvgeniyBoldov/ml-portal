@@ -173,8 +173,6 @@ class TestChatStreamServiceInvariants:
         service.chat_turn_service.attach_user_message = AsyncMock()
         service.chat_turn_service.complete_turn = AsyncMock()
         service.context_service.generate_and_store_summary = AsyncMock(return_value=None)
-        service.agent_service.resolve_active_version = AsyncMock(return_value=SimpleNamespace(agent_id="agent-1", version=1))
-        service.agent_service.agent_repo.get_by_id = AsyncMock(return_value=SimpleNamespace(slug="rag-search"))
 
         async def fake_run_with_router(**kwargs):
             yield {"type": "delta", "content": "Hello"}
@@ -210,8 +208,6 @@ class TestChatStreamServiceInvariants:
         service.chat_turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id="00000000-0000-0000-0000-000000000030"))
         service.chat_turn_service.attach_user_message = AsyncMock()
         service.chat_turn_service.fail_turn = AsyncMock()
-        service.agent_service.resolve_active_version = AsyncMock(return_value=SimpleNamespace(agent_id="agent-1", version=1))
-        service.agent_service.agent_repo.get_by_id = AsyncMock(return_value=SimpleNamespace(slug="rag-search"))
 
         async def fake_run_with_router(**kwargs):
             if False:

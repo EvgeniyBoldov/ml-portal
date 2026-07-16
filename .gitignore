@@ -189,3 +189,6 @@ review/
 
 .windsurf/
 .windsurfrules/
+
+# Local agent instructions
+AGENTS.md

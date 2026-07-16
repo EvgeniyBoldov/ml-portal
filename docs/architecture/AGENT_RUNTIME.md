@@ -4,12 +4,11 @@
 
 Текущий runtime построен как многослойный execution pipeline:
 
-`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> ExecutionPreflight -> PlannerRuntime -> AgentToolRuntime -> DirectOperationExecutor`
+`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> PipelineAssembler -> PlanningStage -> AgentExecutor -> DirectOperationExecutor`
 
 Это важно: агентный runtime больше не является одним простым tool-call loop. Он уже включает:
-- triage,
 - preflight разрешение доступных агентов/коллекций/операций,
-- planner loop,
+- planner loop with clarify/ask-user pause handling,
 - sub-agent operation loop,
 - trace/logging and pause handling.
 
@@ -72,6 +71,9 @@ Singleton реестр локальных handlers.
   - `ProviderExecutionTarget`
 - для local providers registry допустим как implementation detail
 - для MCP providers capability discovery идёт через `tools/list`
+- старые triage role/model contracts и historical event names могут сохраняться
+  для миграции, админских контрактов и чтения старых данных, но не являются
+  отдельной стадией текущего runtime pipeline.
 
 ```python
 class ToolRegistry:
@@ -101,7 +103,7 @@ class ExecutionPreflight:
 ```python
 class RuntimePipeline:
     async def execute(...) -> AsyncGenerator[RuntimeEvent, None]:
-        # triage -> preflight -> outline -> planner dispatch
+        # platform snapshot -> memory -> planning -> agent execution -> finalization
 ```
 
 ## Tool Contract
@@ -125,13 +127,13 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 
 ```
 1. `ChatStreamService` или sandbox создаёт `ToolContext`.
-2. `RuntimePipeline` делает triage: `final | clarify | orchestrate`.
-3. Для `orchestrate` path выполняется `ExecutionPreflight`.
-4. Preflight собирает `ExecutionRequest` с доступными агентами, коллекциями, операциями и execution targets.
-5. `PlannerRuntime` выбирает следующий шаг.
-6. Если нужен sub-agent, `AgentToolRuntime` выполняет operation loop.
+2. `RuntimePipeline` загружает platform snapshot и строит turn memory.
+3. `PlanningStage` выбирает следующий шаг; clarify/ask-user переводятся в pause events.
+4. Для agent operation выполняется `ExecutionPreflight`.
+5. Preflight собирает `ExecutionRequest` с доступными агентами, коллекциями, операциями и execution targets.
+6. `AgentExecutor` и `AgentToolRuntime` выполняют operation loop.
 7. `DirectOperationExecutor` dispatch-ит local/MCP execution.
-8. Runtime стримит события и пишет trace/run steps.
+8. FinalizationStage формирует финальный ответ, memory writer сохраняет turn state, runtime стримит canonical events и пишет trace/run steps.
 ```
 
 ## Execution Modes

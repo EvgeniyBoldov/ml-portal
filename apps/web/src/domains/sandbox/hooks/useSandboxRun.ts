@@ -109,18 +109,13 @@ export function useSandboxRun(sessionId: string) {
   const run = useCallback(
     async (
       requestText: string,
-      parentRunIdOrLegacy?: string | null | unknown,
+      parentRunId?: string | null,
       branchId?: string | null,
       attachmentIds?: string[],
       executionMode: ExecutionMode = 'normal',
     ) => {
       // Abort previous run if any
       abortRef.current?.abort();
-
-      const parentRunId =
-        typeof parentRunIdOrLegacy === 'string' || parentRunIdOrLegacy == null
-          ? parentRunIdOrLegacy
-          : null;
 
       setActiveRun({
         runId: null,
