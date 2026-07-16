@@ -27,8 +27,6 @@ class TraceStep:
 
 class RuntimeTraceBuilder:
     _logger = get_logger(__name__)
-    # Legacy raw types — cleared for v3 (system not in production)
-    _LEGACY_RAW_TYPES: set[str] = set()
 
     _CATEGORY_MAP: Dict[str, str] = {
         # lifecycle
@@ -126,11 +124,6 @@ class RuntimeTraceBuilder:
     def _normalize(self, step: TraceStep) -> SemanticEventResponse:
         raw_type = step.raw_type
         data = step.data or {}
-        if raw_type in self._LEGACY_RAW_TYPES:
-            self._logger.warning(
-                "RuntimeTraceBuilder legacy raw_type=%s used; expected canonical v3 type",
-                raw_type,
-            )
         category = self._CATEGORY_MAP.get(raw_type)
         if category is None:
             self._logger.warning("RuntimeTraceBuilder unknown raw_type=%s; fallback to system", raw_type)

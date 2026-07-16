@@ -48,7 +48,7 @@ def test_runtime_trace_builder_unknown_event_fallback():
     assert "brand_new_event" in event.title
 
 
-def test_runtime_trace_builder_treats_llm_request_as_canonical_event(caplog):
+def test_runtime_trace_builder_treats_llm_request_as_canonical_event():
     trace = RuntimeTraceBuilder().build(
         [TraceStep(id="legacy-1", raw_type="llm_request", data={"model": "x"})]
     )
@@ -56,7 +56,6 @@ def test_runtime_trace_builder_treats_llm_request_as_canonical_event(caplog):
     assert trace.total_events == 1
     assert trace.iterations[0].events[0].category == "llm"
     assert trace.iterations[0].events[0].summary == "{'model': 'x'}"
-    assert not any("legacy raw_type=llm_request" in rec.message for rec in caplog.records)
 
 
 def test_runtime_trace_builder_knows_all_runtime_event_types():

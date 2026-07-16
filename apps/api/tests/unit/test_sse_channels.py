@@ -62,7 +62,6 @@ async def test_aggregate_update_goes_to_agg_and_doc_channels():
     assert RAGEventPublisher.CHANNEL_AGG_TENANT_FMT.format(tenant_id=str(tenant_id)) in channels
     assert RAGEventPublisher.CHANNEL_DOC_FMT.format(doc_id=str(doc_id)) in channels
     # Must NOT publish to legacy channels
-    assert RAGEventPublisher.CHANNEL_LEGACY not in channels
 
 
 @pytest.mark.asyncio

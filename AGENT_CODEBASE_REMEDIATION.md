@@ -68,6 +68,8 @@ Legacy удаляется после проверки imports/exports, registrat
 | Backend `AgentService.route_agent` | Repository-wide call graph found only the declaration; planner-driven routing is canonical | `RuntimePipeline`/planner and `AgentResolver` | Removed dead auto-routing stub |
 | Backend `services/text_extractor.py` | Only lazy export remained; no runtime/test caller | `services.extractors.ExtractorRegistry` | Removed wrapper and lazy export after repository-wide call-graph check |
 | Backend flat runtime budget tracker | `RunBudgetLedger`, `BudgetLimitsResolver` and `SubBudgetLedger` had no production construction; only stale tests and `agent.py` compatibility branches consumed them | `BudgetRegistry`/`BudgetResolver` with per-entity limits | Removed tracker, flat schemas, resolver, compatibility branches and stale tests; current runtime tests use the registry path |
+| Backend `RuntimeTraceBuilder._LEGACY_RAW_TYPES` branch | The set was intentionally empty and no legacy raw type could enter the branch | Canonical event category mapping and unknown-event system fallback | Removed empty branch and its obsolete log assertion |
+| Backend RAG status channel publisher | No caller used `_broadcast` or the `rag:status:*` constants; current publisher emits aggregate/document channels | `_broadcast_agg_and_doc` and `_broadcast_doc` | Removed obsolete channels, method and absence-only test assertions |
 | Backend compatibility/fallback branches | Some are active, others require per-symbol review | Current canonical resolver/runtime path | Remove unused aliases/adapters; retain only active data/migration compatibility |
 | Historical migrations with `legacy` in filename | Alembic history artifacts | Later schema revisions | Keep; migration history is immutable |
 

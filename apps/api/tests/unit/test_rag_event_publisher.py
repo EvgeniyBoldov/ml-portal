@@ -38,8 +38,6 @@ async def test_publish_status_update_broadcasts_to_doc_channel_only(
     assert redis_client.publish.await_count == 1
     channels = [call.args[0] for call in redis_client.publish.await_args_list]
     assert RAGEventPublisher.CHANNEL_DOC_FMT.format(doc_id=str(doc_id)) in channels
-    assert RAGEventPublisher.CHANNEL_LEGACY not in channels
-    assert RAGEventPublisher.CHANNEL_ADMIN not in channels
 
 
 @pytest.mark.asyncio
@@ -64,7 +62,7 @@ async def test_publish_status_update_payload_shape(
 
 
 @pytest.mark.asyncio
-async def test_publish_aggregate_status_sets_legacy_status_alias(
+async def test_publish_aggregate_status_includes_current_status_alias(
     publisher: RAGEventPublisher, redis_client: AsyncMock
 ):
     await publisher.publish_aggregate_status(

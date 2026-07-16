@@ -37,11 +37,6 @@ class RAGEventPublisher:
     CHANNEL_AGG_TENANT_FMT = "rag:agg:tenant:{tenant_id}"
     CHANNEL_DOC_FMT = "rag:doc:{doc_id}"
 
-    # Legacy — оставлены для обратной совместимости, будут удалены после полной миграции
-    CHANNEL_LEGACY = "rag:status:updates"
-    CHANNEL_ADMIN = "rag:status:admin"
-    CHANNEL_TENANT_FMT = "rag:status:tenant:{tenant_id}"
-    
     def __init__(self, redis_client: Optional[Any] = None):
         """
         Args:
@@ -266,18 +261,6 @@ class RAGEventPublisher:
             logger.debug(f"Published {label}")
         except Exception as e:
             logger.error(f"Failed to publish {label}: {e}")
-
-    async def _broadcast(self, event: Dict[str, Any], tenant_id: UUID, label: str) -> None:
-        """Legacy broadcast — kept for backward compatibility. Use _broadcast_agg_and_doc instead."""
-        try:
-            tenant_channel = self.CHANNEL_TENANT_FMT.format(tenant_id=str(tenant_id))
-            payload = json.dumps(event)
-            await self.redis.publish(self.CHANNEL_ADMIN, payload)
-            await self.redis.publish(tenant_channel, payload)
-            logger.debug(f"Published (legacy) {label}")
-        except Exception as e:
-            logger.error(f"Failed to publish {label}: {e}")
-
 
 class RAGEventSubscriber:
     """
