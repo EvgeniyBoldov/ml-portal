@@ -160,57 +160,6 @@ class PermissionService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.rule_repo = RbacRuleRepository(session)
-        # Back-compat alias used by older tests/callers.
-        self.repo = self.rule_repo
-
-    @staticmethod
-    def _resolve_tri_state(
-        user_value: Optional[str],
-        tenant_value: Optional[str],
-        default_value: Optional[str],
-        *,
-        fallback_allow: bool,
-    ) -> bool:
-        for candidate in (user_value, tenant_value, default_value):
-            if candidate == "allowed":
-                return True
-            if candidate == "denied":
-                return False
-            if candidate == "undefined":
-                continue
-        return bool(fallback_allow)
-
-    async def _resolve_from_legacy_permission_sets(
-        self,
-        permission_sets: List[object],
-        *,
-        default_collection_allow: bool,
-    ) -> EffectivePermissions:
-        effective = EffectivePermissions(
-            default_collection_allow=default_collection_allow,
-        )
-
-        default_set = next((p for p in permission_sets if getattr(p, "scope", "") == "default"), None)
-        tenant_set = next((p for p in permission_sets if getattr(p, "scope", "") == "tenant"), None)
-        user_set = next((p for p in permission_sets if getattr(p, "scope", "") == "user"), None)
-
-        default_collections = dict(getattr(default_set, "collection_permissions", {}) or {})
-        tenant_collections = dict(getattr(tenant_set, "collection_permissions", {}) or {})
-        user_collections = dict(getattr(user_set, "collection_permissions", {}) or {})
-        all_collection_slugs = (
-            set(default_collections.keys())
-            | set(tenant_collections.keys())
-            | set(user_collections.keys())
-        )
-        for collection_slug in all_collection_slugs:
-            effective.collection_permissions[collection_slug] = self._resolve_tri_state(
-                user_collections.get(collection_slug),
-                tenant_collections.get(collection_slug),
-                default_collections.get(collection_slug),
-                fallback_allow=default_collection_allow,
-            )
-
-        return effective
 
     async def resolve_permissions(
         self,
@@ -218,31 +167,17 @@ class PermissionService:
         tenant_id: Optional[UUID] = None,
         *,
         default_collection_allow: bool = False,
-        **_legacy_kwargs,
     ) -> EffectivePermissions:
         """
         Resolve effective permissions from RbacRule.
 
         Priority: user > tenant > platform > default deny.
 
-        Tool-level RBAC was removed; any `default_tool_allow` kwarg is accepted
-        and ignored for backward compatibility.
+        Tool-level RBAC is not part of this contract.
         """
         effective = EffectivePermissions(
             default_collection_allow=default_collection_allow,
         )
-
-        # Legacy path: PermissionSet-like providers (kept for compatibility).
-        get_all_for_context = getattr(self.repo, "get_all_for_context", None)
-        if callable(get_all_for_context):
-            permission_sets = await get_all_for_context(user_id=user_id, tenant_id=tenant_id)
-            if permission_sets is not None:
-                if callable(getattr(self, "_apply_rbac_rules", None)):
-                    await self._apply_rbac_rules(effective, user_id=user_id, tenant_id=tenant_id)
-                return await self._resolve_from_legacy_permission_sets(
-                    list(permission_sets),
-                    default_collection_allow=default_collection_allow,
-                )
 
         # Load all applicable rules in priority order
         platform_rules = await self.rule_repo.list_platform_rules()

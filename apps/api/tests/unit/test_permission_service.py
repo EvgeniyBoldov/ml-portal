@@ -21,47 +21,9 @@ def test_effective_permissions_helpers():
 
 
 @pytest.mark.asyncio
-async def test_permission_service_resolve_permissions_from_legacy_sets():
+async def test_permission_service_maps_instance_rules_to_collection_permissions(monkeypatch):
     service = PermissionService(session=AsyncMock())
-
-    default_set = type(
-        "PS",
-        (),
-        {
-            "scope": "default",
-            "collection_permissions": {"docs": "allowed", "secrets": "denied"},
-        },
-    )()
-    tenant_set = type(
-        "PS",
-        (),
-        {
-            "scope": "tenant",
-            "collection_permissions": {"docs": "denied"},
-        },
-    )()
-    user_set = type(
-        "PS",
-        (),
-        {
-            "scope": "user",
-            "collection_permissions": {"docs": "allowed"},
-        },
-    )()
-
-    service.repo.get_all_for_context = AsyncMock(return_value=[default_set, tenant_set, user_set])
-    service._apply_rbac_rules = AsyncMock()
-
-    perms = await service.resolve_permissions()
-
-    assert perms.is_collection_allowed("docs") is True
-    assert perms.is_collection_allowed("secrets") is False
-    service._apply_rbac_rules.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_permission_service_maps_legacy_instance_rules_to_collection_permissions(monkeypatch):
-    service = PermissionService(session=AsyncMock())
+    tenant_id = UUID("22222222-2222-2222-2222-222222222222")
     collection_id = UUID("11111111-1111-1111-1111-111111111111")
     service.rule_repo.list_platform_rules = AsyncMock(return_value=[])
     service.rule_repo.list_by_tenant = AsyncMock(return_value=[
@@ -88,7 +50,10 @@ async def test_permission_service_maps_legacy_instance_rules_to_collection_permi
         _fake_batch_resolve,
     )
 
-    perms = await service.resolve_permissions(default_collection_allow=False)
+    perms = await service.resolve_permissions(
+        tenant_id=tenant_id,
+        default_collection_allow=False,
+    )
 
     assert perms.is_collection_allowed("docs") is True
     assert perms.collection_permissions["docs"] is True
