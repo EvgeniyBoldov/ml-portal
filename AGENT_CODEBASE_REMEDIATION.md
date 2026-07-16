@@ -62,6 +62,7 @@ Legacy удаляется после проверки imports/exports, registrat
 | Frontend `*EditorPage` / `*.old*` | Current router uses `*Page` replacements; files are absent from current tree | `EntityPageV2`/current entity pages | No deletion: candidates already absent; remove stale references only if they are non-contract comments |
 | Backend `_deprecated` paths | No current tracked `_deprecated` directory found; historical paths only in git history | Current `api/v1/routers` layout | No deletion |
 | Backend chat package patch-point shim | `messages.py` resolved symbols from `chat.__init__`; only stale tests consumed it | Direct symbols in `messages.py` and direct test patching | Removed; tests now patch the owning module |
+| Backend `ToolInstanceService.InstanceType` | Repository-wide search found only the alias declaration | `InstancePlacement` | Removed as unused alias |
 | Backend `services/text_extractor.py` | Only lazy export remained; no runtime/test caller | `services.extractors.ExtractorRegistry` | Removed wrapper and lazy export after repository-wide call-graph check |
 | Backend compatibility/fallback branches | Some are active, others require per-symbol review | Current canonical resolver/runtime path | Remove unused aliases/adapters; retain only active data/migration compatibility |
 | Historical migrations with `legacy` in filename | Alembic history artifacts | Later schema revisions | Keep; migration history is immutable |

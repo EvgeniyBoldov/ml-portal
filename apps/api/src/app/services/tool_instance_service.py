@@ -38,9 +38,6 @@ from app.services.tool_instance.health_service import ToolInstanceHealthService
 logger = get_logger(__name__)
 _UNSET = object()
 
-# Backward-compat alias
-InstanceType = InstancePlacement
-
 class ToolInstanceService:
     """
     Сервис для управления ToolInstance v3.
