@@ -166,7 +166,7 @@ Production code and current documented contracts are authoritative. Tests must b
 | `runtimeTrace/containerAssembler.ts` and legacy tree path | Imported by `buildEntityTree.ts` for events without canonical lifecycle parent links | Keep as read-only historical compatibility; no new emitter may depend on it; remove after event history migration is complete |
 | `runtimeTrace/treeBudget.ts` legacy exports and `LegacyBudgetMetric` | Used by normalization and historical budget snapshot conversion | Keep only at read boundary; no new code may emit legacy budget shape |
 | `sandbox/hooks/useSandboxRun.ts` legacy argument | Only caller passed `string | null`; `unknown` branch had no active consumer | Removed; hook now accepts the canonical `parentRunId?: string | null` type |
-| `shared/ui/DataTable` legacy aliases | Props/comments explicitly mark aliases | P1 call-site audit; remove aliases after all consumers use canonical props |
+| `shared/ui/DataTable` legacy aliases | Only `SandboxListPage` used `title`/`idField`; all other columns already used canonical props | Removed aliases and migrated `SandboxListPage` to `label`/`keyField` |
 | `shared/api/admin.ts` provider/deprecated fields | Types expose `provider` as deprecated and list APIs expose `include_deprecated` | Keep while backend lifecycle contract exposes them; UI must not introduce new deprecated flows |
 | `shared/ui/themes/*` compatibility font aliases | Token comments only; no separate behavior | Low-risk cleanup after token consumers are checked |
 
@@ -180,7 +180,6 @@ Current unit tests cover shared UI, chat, runtime trace, sandbox selectors and n
 
 | Priority | Review item | Evidence to collect | Rule for decision |
 |---|---|---|---|
-| P1 | Remove DataTable compatibility aliases | TypeScript call graph and component tests | delete aliases and stale tests when no consumer remains |
 | P1 | Split/retire runtime trace historical assembler | backend event history and `buildEntityTree` fallback coverage | retain only if historical payloads are still supported |
 | P1 | Audit shared API deprecated fields | backend response schemas and UI usage | keep read compatibility only; remove write/UI paths for deprecated fields |
 | P2 | Review shared UI ownership and large components | dependency graph and component size | move domain-specific behavior out of shared UI |

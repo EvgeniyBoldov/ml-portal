@@ -56,8 +56,6 @@ export interface DataTableColumnFilter<T = any> {
 export interface DataTableColumn<T = any> {
   key: string;
   label?: string;
-  /** Legacy alias */
-  title?: string;
   width?: number | string;
   align?: 'left' | 'center' | 'right';
   sortable?: boolean;
@@ -71,8 +69,6 @@ export interface DataTableProps<T = any> {
   columns: DataTableColumn<T>[];
   data: T[];
   keyField?: string;
-  /** Legacy alias */
-  idField?: string;
   headerActions?: React.ReactNode | ActionItem[];
   beforeTableContent?: React.ReactNode;
   
@@ -121,7 +117,6 @@ export default function DataTable<T = any>({
   columns,
   data,
   keyField,
-  idField,
   selectable = false,
   selectedKeys: controlledSelectedKeys,
   onSelectionChange,
@@ -149,12 +144,12 @@ export default function DataTable<T = any>({
   rowClassName,
   onRowClick,
 }: DataTableProps<T>) {
-  const rowKeyField = keyField || idField || 'id';
+  const rowKeyField = keyField || 'id';
   const normalizedColumns = useMemo(
     () =>
       columns.map((column) => ({
         ...column,
-        label: column.label ?? column.title ?? column.key,
+        label: column.label ?? column.key,
       })),
     [columns],
   );

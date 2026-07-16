@@ -41,7 +41,7 @@ export default function SandboxListPage() {
   const columns: DataTableColumn<SandboxSessionListItem>[] = [
     {
       key: 'name',
-      title: 'Название',
+      label: 'Название',
       render: (row) => (
         <span
           className={styles['session-name']}
@@ -56,7 +56,7 @@ export default function SandboxListPage() {
     },
     {
       key: 'owner_email',
-      title: 'Владелец',
+      label: 'Владелец',
       render: (row) => (
         <div className={styles['owner-cell']}>
           <span className={styles['owner-email']}>{row.owner_email}</span>
@@ -65,7 +65,7 @@ export default function SandboxListPage() {
     },
     {
       key: 'status',
-      title: 'Статус',
+      label: 'Статус',
       render: (row) => (
         <Badge tone={row.status === 'active' ? 'success' : 'neutral'}>
           {row.status === 'active' ? 'Активна' : 'Архив'}
@@ -74,17 +74,17 @@ export default function SandboxListPage() {
     },
     {
       key: 'overrides_count',
-      title: 'Оверрайды',
+      label: 'Оверрайды',
       render: (row) => <span>{row.overrides_count}</span>,
     },
     {
       key: 'runs_count',
-      title: 'Запуски',
+      label: 'Запуски',
       render: (row) => <span>{row.runs_count}</span>,
     },
     {
       key: 'expires_at',
-      title: 'Истекает',
+      label: 'Истекает',
       render: (row) => (
         <span className={styles['meta-label']}>
           {new Date(row.expires_at).toLocaleDateString('ru-RU')}
@@ -93,7 +93,7 @@ export default function SandboxListPage() {
     },
     {
       key: 'actions',
-      title: '',
+      label: '',
       render: (row) => (
         <div className={styles.actions}>
           <Button
@@ -153,7 +153,7 @@ export default function SandboxListPage() {
             columns={columns}
             data={sessions}
             loading={isLoading}
-            idField="id"
+            keyField="id"
             onRowClick={(row) => navigate(`/sandbox/${row.id}`)}
           />
         </div>
