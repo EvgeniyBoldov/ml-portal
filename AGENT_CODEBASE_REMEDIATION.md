@@ -64,6 +64,7 @@ Legacy удаляется после проверки imports/exports, registrat
 | Backend chat package patch-point shim | `messages.py` resolved symbols from `chat.__init__`; only stale tests consumed it | Direct symbols in `messages.py` and direct test patching | Removed; tests now patch the owning module |
 | Backend `ToolInstanceService.InstanceType` | Repository-wide search found only the alias declaration | `InstancePlacement` | Removed as unused alias |
 | Backend `PermissionService` PermissionSet compatibility | `RbacRuleRepository` has no `get_all_for_context`; only stale tests injected it | Flat `RbacRule` resolution | Removed legacy branch, alias and legacy-only tests |
+| Backend `RuntimeRbacResolver` legacy kwargs | No caller passed compatibility kwargs; only `**_legacy_kwargs` remained | Explicit RBAC arguments | Removed unused catch-all kwargs |
 | Backend `services/text_extractor.py` | Only lazy export remained; no runtime/test caller | `services.extractors.ExtractorRegistry` | Removed wrapper and lazy export after repository-wide call-graph check |
 | Backend compatibility/fallback branches | Some are active, others require per-symbol review | Current canonical resolver/runtime path | Remove unused aliases/adapters; retain only active data/migration compatibility |
 | Historical migrations with `legacy` in filename | Alembic history artifacts | Later schema revisions | Keep; migration history is immutable |

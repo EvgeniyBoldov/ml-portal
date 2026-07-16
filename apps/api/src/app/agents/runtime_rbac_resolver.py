@@ -36,7 +36,6 @@ class RuntimeRbacResolver:
         user_id: Optional[UUID],
         tenant_id: Optional[UUID],
         default_collection_allow: bool,
-        **_legacy_kwargs,
     ) -> EffectivePermissions:
         effective_default_collection_allow = bool(default_collection_allow or self.allow_undefined)
 
