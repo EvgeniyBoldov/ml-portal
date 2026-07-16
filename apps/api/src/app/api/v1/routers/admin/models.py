@@ -5,7 +5,6 @@ No file system scanning - models are added manually.
 """
 from __future__ import annotations
 import uuid
-import os
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Tuple
 import httpx
@@ -69,13 +68,6 @@ async def _resolve_model_api_key(model: Model, session: AsyncSession) -> Optiona
         except CredentialError as exc:
             logger.warning("Failed to resolve model credentials for %s: %s", model.alias, exc)
 
-    if model.instance and isinstance(model.instance.config, dict):
-        api_key = model.instance.config.get("api_key")
-        if api_key:
-            return api_key
-        api_key_ref = model.instance.config.get("api_key_ref")
-        if api_key_ref:
-            return os.getenv(api_key_ref)
     return None
 
 

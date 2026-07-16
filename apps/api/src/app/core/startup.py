@@ -144,13 +144,6 @@ async def register_embedding_models(session_factory: async_sessionmaker[AsyncSes
                     except Exception as exc:
                         logger.warning(f"Failed to resolve credentials for {model.alias}: {exc}")
 
-                if not api_key and model.instance and model.instance.config:
-                    api_key = model.instance.config.get("api_key")
-                    if not api_key:
-                        ref = model.instance.config.get("api_key_ref")
-                        if ref:
-                            api_key = os.getenv(ref)
-
                 dimensions = None
                 if model.extra_config and "vector_dim" in model.extra_config:
                     dimensions = model.extra_config["vector_dim"]

@@ -133,7 +133,7 @@ Connector instances are normalized and validated in `services/tool_instance`; pr
 
 Observed drift to review:
 
-- `adapters/embeddings.py` contains model DB lookup, credential resolution and provider construction in one factory, including legacy sync fallback. This crosses the adapter/service boundary and should be split before further provider growth.
+- `adapters/embeddings.py` now only constructs providers from registered configurations. The legacy synchronous DB fallback was removed. Startup and model health checks also no longer read `instance.config`; the remaining `ensure_model_registered_async` query is transitional and must move to a service-owned resolver before further provider growth.
 - `adapters/impl/qdrant.py` retains `_legacy_search`; it is an active 404 fallback covered by current tests, so it must remain isolated and must not become a new connector contract.
 - Provider implementations are not uniformly expressed through the declared protocols: LLM implementations expose extra methods and embeddings are partly factory-driven. New connector work must not add another parallel contract.
 - Worker modules and startup tasks call `commit()` directly. This is allowed only at their explicit transaction boundary and must not be copied into adapters, repositories or domain helper methods.
@@ -142,7 +142,7 @@ Observed drift to review:
 
 | Priority | Review item | Evidence to collect | Rule for decision |
 |---|---|---|---|
-| P0 | Remove/replace adapter DB and credential lookup | imports and tests for `EmbeddingServiceFactory` fallbacks | adapter receives resolved config; service/startup owns persistence and credentials |
+| P0 | Move adapter DB and credential lookup to a service-owned resolver | `ensure_model_registered_async` still queries the model registry and startup still resolves credentials | adapter receives resolved config; service/startup owns persistence and credentials |
 | P0 | Audit migration data mutations | revision-by-revision classification and production revision state | keep history, prohibit new user/tenant backfills in Alembic |
 | P1 | Revisit Qdrant `_legacy_search` | provider endpoint migration and runtime test coverage | remove only after the 404 fallback is no longer needed |
 | P1 | Audit commit ownership in workers/startup | task/service call graph and rollback behavior | one explicit owner per transaction, no nested commits |

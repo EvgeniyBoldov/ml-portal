@@ -334,14 +334,6 @@ class EmbeddingServiceFactory:
         )
     
     @classmethod
-    def _resolve_api_key(cls, api_key_ref: Optional[str]) -> Optional[str]:
-        """Resolve API key from environment variable reference"""
-        if not api_key_ref:
-            return None
-        # api_key_ref is env var name like "OPENAI_API_KEY"
-        return os.getenv(api_key_ref)
-    
-    @classmethod
     def _create_provider(cls, config: ModelConfig) -> EmbeddingInterface:
         """Create embedding provider based on config"""
         connector = (config.connector or "").lower()
@@ -432,97 +424,7 @@ class EmbeddingServiceFactory:
             cls._services[model_alias] = service
             return service
         
-        # Fallback: try to load from database synchronously
-        # This is a fallback for cases where startup didn't register models
-        config = cls._load_model_config_sync(model_alias)
-        if config:
-            cls._model_configs[model_alias] = config
-            service = cls._create_provider(config)
-            cls._services[model_alias] = service
-            return service
-        
         cls._raise_unconfigured_model(model_alias)
-    
-    @classmethod
-    def _load_model_config_sync(cls, model_alias: str) -> Optional[ModelConfig]:
-        """Load model config from database (sync fallback)"""
-        try:
-            import asyncio
-            from app.core.db import get_session_factory
-            from app.models.model_registry import Model, ModelType
-            from sqlalchemy import select
-            
-            async def _load():
-                session_factory = get_session_factory()
-                async with session_factory() as session:
-                    result = await session.execute(
-                        select(Model).where(
-                            (Model.alias == model_alias) &
-                            (Model.type == ModelType.EMBEDDING)
-                        )
-                    )
-                    model = result.scalars().first()
-                    if model:
-                        # Resolve base_url and api_key from instance + credentials
-                        base_url = ''
-                        api_key = None
-                        if model.instance:
-                            base_url = model.instance.url or ''
-                        
-                        # 1. Try CredentialService (new approach)
-                        if model.instance_id:
-                            try:
-                                from app.services.credential_service import CredentialService
-                                cred_service = CredentialService(session)
-                                decrypted = await cred_service.resolve_credentials(
-                                    instance_id=model.instance_id,
-                                    strategy="PLATFORM_FIRST",
-                                )
-                                if decrypted:
-                                    if decrypted.auth_type in {"api_key", "litellm_api_key"}:
-                                        api_key = decrypted.payload.get("api_key")
-                                    elif decrypted.auth_type == "token":
-                                        api_key = decrypted.payload.get("token")
-                            except Exception as e:
-                                logger.warning(f"Failed to resolve credentials for {model.alias}: {e}")
-                        
-                        # 2. Fallback: instance.config (legacy)
-                        if not api_key and model.instance and model.instance.config:
-                            api_key = model.instance.config.get('api_key')
-                            if not api_key:
-                                ref = model.instance.config.get('api_key_ref')
-                                if ref:
-                                    api_key = os.getenv(ref)
-                        
-                        if not base_url and model.extra_config and model.extra_config.get('base_url'):
-                            base_url = model.extra_config['base_url']
-                        
-                        return ModelConfig(
-                            alias=model.alias,
-                            provider=model.provider,
-                            provider_model_name=model.provider_model_name,
-                            base_url=base_url,
-                            api_key=api_key,
-                            dimensions=model.extra_config.get('vector_dim') if model.extra_config else None,
-                            extra_config=model.extra_config,
-                            connector=getattr(model, "connector", None),
-                        )
-                    return None
-            
-            # Try to get existing event loop or create new one
-            try:
-                loop = asyncio.get_running_loop()
-                # If we're in async context, we can't use run()
-                # This shouldn't happen in normal flow
-                logger.warning(f"Cannot load model config in async context for {model_alias}")
-                return None
-            except RuntimeError:
-                # No running loop, safe to create one
-                return asyncio.run(_load())
-                
-        except Exception as e:
-            logger.error(f"Failed to load model config for {model_alias}: {e}")
-            return None
     
     @classmethod
     def list_available_models(cls) -> List[str]:

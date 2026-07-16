@@ -4,7 +4,6 @@ Supports: OpenAI, Groq, Azure OpenAI, LocalAI, vLLM, Ollama, etc.
 """
 from __future__ import annotations
 from typing import Any, AsyncIterator, Mapping, Optional
-import os
 import httpx
 from app.core.logging import get_logger
 from openai import AsyncOpenAI
@@ -165,17 +164,6 @@ class OpenAICompatibleLLM:
                             decrypted.payload or {},
                             decrypted.auth_type,
                         )
-
-                if (
-                    not resolved_api_key
-                    and model.instance
-                    and isinstance(model.instance.config, dict)
-                ):
-                    resolved_api_key = model.instance.config.get("api_key")
-                    if not resolved_api_key:
-                        api_key_ref = model.instance.config.get("api_key_ref")
-                        if api_key_ref:
-                            resolved_api_key = os.getenv(api_key_ref)
 
                 return (
                     resolved_base_url,

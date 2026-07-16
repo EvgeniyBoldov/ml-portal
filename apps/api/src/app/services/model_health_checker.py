@@ -16,7 +16,6 @@ import time
 from typing import Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
-import os
 import httpx
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,7 +47,7 @@ class ModelHealthChecker:
         self.settings = get_settings()
     
     async def _resolve_api_key(self, model: Model, session: Optional[AsyncSession] = None) -> Optional[str]:
-        """Resolve API key via CredentialService, fallback to instance.config"""
+        """Resolve API key through the credential service."""
         # 1. Try CredentialService (new approach)
         if session and model.instance_id:
             try:
@@ -69,14 +68,6 @@ class ModelHealthChecker:
             except CredentialError as e:
                 logger.warning(f"Failed to resolve credentials for model {model.alias}: {e}")
         
-        # 2. Fallback: instance.config (legacy)
-        if model.instance and model.instance.config:
-            api_key = model.instance.config.get("api_key")
-            if api_key:
-                return api_key
-            api_key_ref = model.instance.config.get("api_key_ref")
-            if api_key_ref:
-                return os.getenv(api_key_ref)
         return None
     
     def _resolve_base_url(self, model: Model) -> Optional[str]:

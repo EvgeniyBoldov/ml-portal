@@ -9,13 +9,7 @@ def teardown_function() -> None:
     EmbeddingServiceFactory.clear_cache()
 
 
-def test_get_service_raises_when_model_is_not_registered(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        EmbeddingServiceFactory,
-        "_load_model_config_sync",
-        classmethod(lambda cls, model_alias: None),
-    )
-
+def test_get_service_raises_when_model_is_not_registered() -> None:
     with pytest.raises(RuntimeError, match="not configured or could not be resolved"):
         EmbeddingServiceFactory.get_service("missing-embedding-model")
 
