@@ -34,6 +34,8 @@ class PlannerLLMTraceEmitter:
                 purpose="planning_decision",
                 actor_type="planner",
                 actor_entity_id=llm_parent_id,
+                error_type=getattr(planner_llm_trace, "error_type", None),
+                debug=getattr(planner_llm_trace, "debug", None),
             ),
             OrchestrationPhase.PLANNER,
         )

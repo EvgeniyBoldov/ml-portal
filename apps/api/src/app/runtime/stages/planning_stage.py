@@ -239,12 +239,34 @@ class PlanningStage:
 
             runtime_state.iter_count = planner_iteration
 
-            for planner_llm_trace in planner_llm_traces:
+            for trace_index, planner_llm_trace in enumerate(planner_llm_traces):
                 yield PlannerLLMTraceEmitter.emit_turn_event(
                     planner_llm_trace=planner_llm_trace,
                     planner_iteration_id=planner_event_ctx["planner_iteration_id"],
                     planner_run_id=planner_event_ctx["planner_run_id"],
                 )
+                has_later_success = any(
+                    bool(getattr(later_trace, "success", False))
+                    for later_trace in planner_llm_traces[trace_index + 1 :]
+                )
+                if getattr(planner_llm_trace, "debug", None) and not has_later_success:
+                    error_type = getattr(planner_llm_trace, "error_type", None) or "LLMError"
+                    yield PhasedEvent(
+                        RuntimeEvent.error(
+                            f"Planner LLM call failed: {error_type}: {planner_llm_trace.retry_reason}",
+                            recoverable=True,
+                            error_code="llm_structured_call_error",
+                            retryable=True,
+                            user_message="Planner temporarily failed to contact the language model.",
+                            operator_message=str(planner_llm_trace.retry_reason or error_type),
+                            source="llm",
+                            error_type=error_type,
+                            debug=planner_llm_trace.debug,
+                            parent_entity_type="planner_iteration",
+                            parent_entity_id=planner_event_ctx["planner_iteration_id"],
+                        ),
+                        OrchestrationPhase.PLANNER,
+                    )
                 if (
                     str(getattr(planner_llm_trace, "step_kind", "")) == "thinking"
                     and bool(getattr(planner_llm_trace, "success", False))

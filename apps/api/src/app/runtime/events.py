@@ -455,7 +455,7 @@ class RuntimeEvent:
         parent_entity_id: Optional[str] = None,
         **extra: Any,
     ) -> "RuntimeEvent":
-        payload: Dict[str, Any] = {"error": message, "recoverable": recoverable}
+        payload: Dict[str, Any] = {"error": message, "recoverable": recoverable, "level": "error"}
         if error_code is not None:
             payload["error_code"] = (
                 error_code.value if isinstance(error_code, RuntimeErrorCode) else str(error_code)

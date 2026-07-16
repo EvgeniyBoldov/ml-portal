@@ -17,6 +17,7 @@ import asyncio
 import json
 import re
 import time
+import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generic, Optional, Type, TypeVar
 from uuid import UUID
@@ -39,6 +40,32 @@ T = TypeVar("T", bound=BaseModel)
 
 class StructuredCallError(RuntimeError):
     """Raised when LLM output cannot be coerced into the requested schema."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        original_exception: Optional[BaseException] = None,
+        traceback_text: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.original_exception = original_exception
+        self.traceback_text = traceback_text
+
+    @property
+    def error_type(self) -> Optional[str]:
+        return type(self.original_exception).__name__ if self.original_exception is not None else None
+
+    def debug_payload(self) -> Optional[Dict[str, Any]]:
+        if self.original_exception is None and not self.traceback_text:
+            return None
+        payload: Dict[str, Any] = {}
+        if self.original_exception is not None:
+            payload["exception_type"] = type(self.original_exception).__name__
+            payload["exception_message"] = str(self.original_exception)
+        if self.traceback_text:
+            payload["traceback"] = self.traceback_text
+        return payload or None
 
 
 @dataclass
@@ -178,6 +205,8 @@ class StructuredLLMCall:
                 params["response_format"] = {"type": "json_object"}
 
         last_error: Optional[str] = None
+        last_exception: Optional[BaseException] = None
+        last_traceback: Optional[str] = None
         raw_response = ""
         start = time.time()
 
@@ -188,13 +217,18 @@ class StructuredLLMCall:
                     timeout=timeout_s,
                 )
             except asyncio.TimeoutError:
-                last_error = f"llm_timeout after {timeout_s}s (attempt {attempt + 1})"
+                timeout_exc = asyncio.TimeoutError(f"llm_timeout after {timeout_s}s")
+                last_exception = timeout_exc
+                last_traceback = traceback.format_exc()
+                last_error = f"{type(timeout_exc).__name__}: {timeout_exc} (attempt {attempt + 1})"
                 logger.warning("StructuredLLMCall timeout role=%s attempt=%s", role, attempt + 1)
                 continue
             except LLMLimitExceededError:
                 raise
             except Exception as exc:  # network / upstream failure
-                last_error = f"llm_error: {exc}"
+                last_exception = exc
+                last_traceback = traceback.format_exc()
+                last_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("StructuredLLMCall error role=%s attempt=%s: %s", role, attempt + 1, exc)
                 if self._is_non_retryable_llm_error(exc):
                     logger.warning(
@@ -205,6 +239,10 @@ class StructuredLLMCall:
                     break
                 continue
 
+            # A response starts a new failure mode; do not report a stale
+            # transport exception if the final attempts fail validation.
+            last_exception = None
+            last_traceback = None
             raw_response = self._extract_text(response)
             if not raw_response:
                 last_error = "empty_response"
@@ -250,7 +288,9 @@ class StructuredLLMCall:
 
         raise StructuredCallError(
             f"LLM failed to produce a valid {schema.__name__} after "
-            f"{max_retries + 1} attempts: {last_error}"
+            f"{max_retries + 1} attempts: {last_error}",
+            original_exception=last_exception,
+            traceback_text=last_traceback,
         )
 
     # --------------------------------------------------------------- helpers --

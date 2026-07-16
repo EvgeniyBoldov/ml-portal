@@ -105,6 +105,7 @@ class ChatEventMapper:
                 ),
                 "recoverable": recoverable,
                 "code": error_code,
+                "level": event.data.get("level", "error"),
                 "details": {
                     "retryable": retryable,
                     "recoverable": recoverable,
