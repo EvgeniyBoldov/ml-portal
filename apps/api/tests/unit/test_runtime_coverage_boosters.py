@@ -25,7 +25,6 @@ from app.runtime.contracts import (
     NextStepKind,
 )
 from app.runtime.events import RuntimeEventType
-from app.runtime.budgets import BudgetLimitsResolver, RunBudgetLedger
 from app.runtime.llm.structured import StructuredCallError
 from app.agents.runtime.llm import LLMAdapter
 from app.runtime.operation_errors import RuntimeErrorCode
@@ -926,22 +925,6 @@ async def test_agent_tool_runtime_respects_shared_budget_tool_call_limit(monkeyp
         partial_mode_warning=None,
     )
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
-    ctx.extra["runtime_budget_ledger"] = RunBudgetLedger(
-        limits=BudgetLimitsResolver.resolve_from_platform(
-            planner_max_steps=10,
-            planner_max_wall_time_ms=120_000,
-            platform_config={
-                "runtime_budget": {
-                    "max_planner_iterations": 10,
-                    "max_agent_steps": 10,
-                    "max_tool_calls_total": 2,
-                    "max_wall_time_ms": 120_000,
-                    "per_tool_timeout_ms": 30_000,
-                    "max_steps_without_success": 2,
-                }
-            },
-        ).run
-    )
     events = [
         e
         async for e in runtime.execute(
@@ -1022,22 +1005,6 @@ async def test_agent_tool_runtime_reused_call_does_not_consume_shared_budget(mon
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4())
     ctx.extra["runtime_tool_ledger"] = _FakeLedger()
     ctx.extra["runtime_tool_reuse_enabled"] = True
-    ctx.extra["runtime_budget_ledger"] = RunBudgetLedger(
-        limits=BudgetLimitsResolver.resolve_from_platform(
-            planner_max_steps=10,
-            planner_max_wall_time_ms=120_000,
-            platform_config={
-                "runtime_budget": {
-                    "max_planner_iterations": 10,
-                    "max_agent_steps": 10,
-                    "max_tool_calls_total": 2,
-                    "max_wall_time_ms": 120_000,
-                    "per_tool_timeout_ms": 30_000,
-                    "max_steps_without_success": 2,
-                }
-            },
-        ).run
-    )
     events = [
         e
         async for e in runtime.execute(

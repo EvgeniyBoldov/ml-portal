@@ -39,6 +39,7 @@ from app.runtime.stages.planning_stage import (
     PlanningOutcome,
     PlanningOutcomeKind,
 )
+from app.services.permission_service import EffectivePermissions, PermissionService
 
 
 def _canned_turn_memory(chat_id, user_id, tenant_id) -> TurnMemory:
@@ -62,6 +63,16 @@ def _canned_platform() -> PlatformSnapshot:
     snap.policy = MagicMock(max_steps=3, max_wall_time_ms=60_000)
     snap.available_agents_for_planner = MagicMock(return_value=[])
     return snap
+
+
+@pytest.fixture(autouse=True)
+def _stub_current_rbac_resolution(monkeypatch):
+    """Keep coordinator tests focused on pipeline flow, not SQL rule loading."""
+
+    async def _resolve_permissions(*_args, **_kwargs):
+        return EffectivePermissions(default_collection_allow=True)
+
+    monkeypatch.setattr(PermissionService, "resolve_permissions", _resolve_permissions)
 
 
 class _StubPlanningStage:

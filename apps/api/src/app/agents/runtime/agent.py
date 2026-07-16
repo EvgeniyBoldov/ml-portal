@@ -52,7 +52,6 @@ from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.agents.runtime.prompt_assembler import filter_prompt_visible_operations
 from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
-from app.runtime.budgets import RunBudgetLedger
 from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.error_payloads import build_debug_payload
 from app.runtime.events import RuntimeEvent, RuntimeEventType
@@ -280,9 +279,6 @@ class AgentToolRuntime(BaseRuntime):
         ) and bool(available_operations)
         prompt_visible_operations = filter_prompt_visible_operations(available_operations)
         tools_payload = build_tools_payload(prompt_visible_operations) if native_tool_calling else None
-        runtime_budget = ctx.extra.get("runtime_budget_ledger")
-        if isinstance(runtime_budget, RunBudgetLedger):
-            budget_payload["shared_budget"] = runtime_budget.snapshot()
         tool_ledger = ctx.extra.get("runtime_tool_ledger")
         reuse_enabled = bool(ctx.extra.get("runtime_tool_reuse_enabled", True))
 
@@ -294,11 +290,7 @@ class AgentToolRuntime(BaseRuntime):
                     else f"agent-llm:{step + 1}"
                 )
                 elapsed_ms = (time.time() - loop_state.start_time) * 1000
-                global_remaining = (
-                    runtime_budget.remaining_wall_time_ms()
-                    if isinstance(runtime_budget, RunBudgetLedger)
-                    else policy.max_wall_time_ms
-                )
+                global_remaining = policy.max_wall_time_ms - elapsed_ms
                 if elapsed_ms > policy.max_wall_time_ms or global_remaining <= 0:
                     yield RuntimeEvent.error(
                         "Wall time limit exceeded",
@@ -312,20 +304,6 @@ class AgentToolRuntime(BaseRuntime):
                     await run_session.finish("failed", "Wall time limit exceeded")
                     return
 
-                if isinstance(runtime_budget, RunBudgetLedger):
-                    if not runtime_budget.can_run_agent_step():
-                        yield RuntimeEvent.error(
-                            "Agent step budget exhausted",
-                            recoverable=False,
-                            error_code=RuntimeErrorCode.AGENT_NO_SUCCESSFUL_OPERATION_RESULT,
-                            retryable=False,
-                            user_message="Agent step budget exhausted",
-                            operator_message="Agent step budget exhausted",
-                            source="runtime",
-                        )
-                        await run_session.finish("failed", "Agent step budget exhausted")
-                        return
-                    runtime_budget.record_agent_step()
                 step_budget_snapshot = _build_budget_snapshot_payload(
                     owner_id=budget_owner_id,
                     reason="agent_step",
@@ -396,13 +374,6 @@ class AgentToolRuntime(BaseRuntime):
                 loop_state.tokens_in += max(0, prompt_tokens)
                 loop_state.tokens_out += max(0, completion_tokens)
                 loop_state.tokens_total += max(0, total_tokens)
-                if isinstance(runtime_budget, RunBudgetLedger):
-                    runtime_budget.record_tokens(
-                        tokens_in=max(0, prompt_tokens),
-                        tokens_out=max(0, completion_tokens),
-                        owner_id=budget_owner_id,
-                    )
-
                 await run_session.log_step("llm_turn", {
                     "step": step + 1,
                     "model": gen.model,
@@ -519,8 +490,6 @@ class AgentToolRuntime(BaseRuntime):
                             },
                         )
                         loop_state.retry_count += 1
-                        if isinstance(runtime_budget, RunBudgetLedger):
-                            runtime_budget.record_retry(owner_id=budget_owner_id)
                         continue
 
                     # No operation calls — agent decided to answer directly
@@ -545,17 +514,6 @@ class AgentToolRuntime(BaseRuntime):
                         "tool_calls_total": len(loop_state.tool_outputs),
                         "content": final_answer_content[0] if final_answer_content else "",
                     })
-                    if isinstance(runtime_budget, RunBudgetLedger):
-                        final_budget_snapshot = _build_budget_snapshot_payload(
-                            owner_id=budget_owner_id,
-                            reason="final",
-                            step=step + 1,
-                            policy=policy,
-                            loop_state=loop_state,
-                            start_time=loop_state.start_time,
-                        )
-                        await run_session.log_step("budget_snapshot", final_budget_snapshot)
-                        yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, final_budget_snapshot)
                     await run_session.finish("completed")
                     return
 
@@ -589,8 +547,6 @@ class AgentToolRuntime(BaseRuntime):
                         },
                     )
                     loop_state.retry_count += 1
-                    if isinstance(runtime_budget, RunBudgetLedger):
-                        runtime_budget.record_retry(owner_id=budget_owner_id)
                     if native_tool_calling:
                         loop_state.force_tool_choice = True
                     yield RuntimeEvent(
@@ -624,7 +580,6 @@ class AgentToolRuntime(BaseRuntime):
                         ctx=ctx,
                         available_operations=available_operations,
                         policy=policy,
-                        runtime_budget=runtime_budget,
                         run_session=run_session,
                         all_operation_outputs=loop_state.tool_outputs,
                         all_sources=loop_state.sources,
@@ -749,18 +704,6 @@ class AgentToolRuntime(BaseRuntime):
                     f"{len(parsed.tool_calls)} tool calls executed, "
                     f"total_outputs={len(loop_state.tool_outputs)}",
                 )
-                if isinstance(runtime_budget, RunBudgetLedger):
-                    loop_budget_snapshot = _build_budget_snapshot_payload(
-                        owner_id=budget_owner_id,
-                        reason="tool_call",
-                        step=step + 1,
-                        policy=policy,
-                        loop_state=loop_state,
-                        start_time=loop_state.start_time,
-                    )
-                    await run_session.log_step("budget_snapshot", loop_budget_snapshot)
-                    yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, loop_budget_snapshot)
-
             # Max steps reached — synthesize with whatever we have
             if loop_state.tool_outputs:
                 synth_final_content: List[str] = []
@@ -785,17 +728,6 @@ class AgentToolRuntime(BaseRuntime):
                     operator_message=f"Maximum agent steps ({policy.max_steps}) reached without result",
                     source="runtime",
                 )
-            if isinstance(runtime_budget, RunBudgetLedger):
-                final_budget_snapshot = _build_budget_snapshot_payload(
-                    owner_id=budget_owner_id,
-                    reason="final",
-                    step=min(policy.max_steps, step + 1),
-                    policy=policy,
-                    loop_state=loop_state,
-                    start_time=loop_state.start_time,
-                )
-                await run_session.log_step("budget_snapshot", final_budget_snapshot)
-                yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, final_budget_snapshot)
             await run_session.finish("completed" if loop_state.tool_outputs else "failed")
 
         except Exception as e:
@@ -839,7 +771,6 @@ class AgentToolRuntime(BaseRuntime):
         ctx: "ToolContext",
         available_operations: List[Any],
         policy: Any,
-        runtime_budget: Any,
         run_session: Any,
         all_operation_outputs: List[Dict[str, Any]],
         all_sources: List[dict],
@@ -847,7 +778,7 @@ class AgentToolRuntime(BaseRuntime):
         operation_calls_total_ref: List[int],
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """Execute one operation call: budget check → tool → SSE events → logging → collect."""
-        # Per-policy budget check first (local, cheap), then global tracker.
+        # Keep the operation cap local to the current agent run.
         if operation_calls_total_ref[0] >= policy.max_tool_calls_total:
             limit_message = f"Maximum operation calls ({policy.max_tool_calls_total}) reached"
             yield RuntimeEvent.error(
@@ -869,38 +800,6 @@ class AgentToolRuntime(BaseRuntime):
                     "tool_calls": {
                         "used": operation_calls_total_ref[0],
                         "limit": policy.max_tool_calls_total,
-                        "remaining": 0,
-                    },
-                },
-                "delta": {},
-                "at_ms": int(time.time() * 1000),
-            })
-            await run_session.finish("failed", limit_message)
-            return
-
-        if isinstance(runtime_budget, RunBudgetLedger) and not runtime_budget.can_consume_tool_call():
-            limit_message = (
-                f"Maximum operation calls ({runtime_budget.budget.max_tool_calls_total}) reached"
-            )
-            yield RuntimeEvent.error(
-                limit_message,
-                recoverable=False,
-                error_code=RuntimeErrorCode.AGENT_MAX_TOOL_CALLS_EXCEEDED,
-                retryable=False,
-                user_message=limit_message,
-                operator_message=limit_message,
-                source="runtime",
-            )
-            await run_session.log_step("budget_snapshot", {
-                "owner_scope": "agent",
-                "owner_id": agent_run_id,
-                "parent_entity_type": "agent_run",
-                "parent_entity_id": agent_run_id,
-                "reason": "limit_exceeded",
-                "snapshot": {
-                    "tool_calls": {
-                        "used": runtime_budget.snapshot().get("consumed_tool_calls"),
-                        "limit": runtime_budget.budget.max_tool_calls_total,
                         "remaining": 0,
                     },
                 },
@@ -940,11 +839,7 @@ class AgentToolRuntime(BaseRuntime):
             result, sources = await self.tools.execute(
                 operation_call, ctx, available_operations,
                 timeout_s=(
-                    int(
-                        min(policy.tool_timeout_ms, runtime_budget.budget.per_tool_timeout_ms) / 1000
-                    )
-                    if policy.tool_timeout_ms and isinstance(runtime_budget, RunBudgetLedger)
-                    else int(policy.tool_timeout_ms / 1000) if policy.tool_timeout_ms else None
+                    int(policy.tool_timeout_ms / 1000) if policy.tool_timeout_ms else None
                 ),
             )
         except ConfirmationRequiredError as exc:
@@ -955,8 +850,6 @@ class AgentToolRuntime(BaseRuntime):
         consumed_tool_call = not bool(result.metadata.get("reused"))
         if consumed_tool_call:
             operation_calls_total_ref[0] += 1
-            if isinstance(runtime_budget, RunBudgetLedger):
-                runtime_budget.record_tool_call()
 
         raw_error_code = result.metadata.get("error_code")
         typed_error_code = None

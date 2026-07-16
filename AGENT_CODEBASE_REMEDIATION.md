@@ -67,6 +67,7 @@ Legacy удаляется после проверки imports/exports, registrat
 | Backend `RuntimeRbacResolver` legacy kwargs | No caller passed compatibility kwargs; only `**_legacy_kwargs` remained | Explicit RBAC arguments | Removed unused catch-all kwargs |
 | Backend `AgentService.route_agent` | Repository-wide call graph found only the declaration; planner-driven routing is canonical | `RuntimePipeline`/planner and `AgentResolver` | Removed dead auto-routing stub |
 | Backend `services/text_extractor.py` | Only lazy export remained; no runtime/test caller | `services.extractors.ExtractorRegistry` | Removed wrapper and lazy export after repository-wide call-graph check |
+| Backend flat runtime budget tracker | `RunBudgetLedger`, `BudgetLimitsResolver` and `SubBudgetLedger` had no production construction; only stale tests and `agent.py` compatibility branches consumed them | `BudgetRegistry`/`BudgetResolver` with per-entity limits | Removed tracker, flat schemas, resolver, compatibility branches and stale tests; current runtime tests use the registry path |
 | Backend compatibility/fallback branches | Some are active, others require per-symbol review | Current canonical resolver/runtime path | Remove unused aliases/adapters; retain only active data/migration compatibility |
 | Historical migrations with `legacy` in filename | Alembic history artifacts | Later schema revisions | Keep; migration history is immutable |
 
@@ -131,7 +132,7 @@ Connector instances are normalized and validated in `services/tool_instance`; pr
 Observed drift to review:
 
 - `adapters/embeddings.py` contains model DB lookup, credential resolution and provider construction in one factory, including legacy sync fallback. This crosses the adapter/service boundary and should be split before further provider growth.
-- `adapters/impl/qdrant.py` retains `_legacy_search`; prove an active consumer or remove it rather than extending it.
+- `adapters/impl/qdrant.py` retains `_legacy_search`; it is an active 404 fallback covered by current tests, so it must remain isolated and must not become a new connector contract.
 - Provider implementations are not uniformly expressed through the declared protocols: LLM implementations expose extra methods and embeddings are partly factory-driven. New connector work must not add another parallel contract.
 - Worker modules and startup tasks call `commit()` directly. This is allowed only at their explicit transaction boundary and must not be copied into adapters, repositories or domain helper methods.
 
@@ -141,7 +142,7 @@ Observed drift to review:
 |---|---|---|---|
 | P0 | Remove/replace adapter DB and credential lookup | imports and tests for `EmbeddingServiceFactory` fallbacks | adapter receives resolved config; service/startup owns persistence and credentials |
 | P0 | Audit migration data mutations | revision-by-revision classification and production revision state | keep history, prohibit new user/tenant backfills in Alembic |
-| P1 | Prove or remove Qdrant `_legacy_search` | repository-wide call graph and runtime test coverage | no active consumer means delete implementation and tests |
+| P1 | Revisit Qdrant `_legacy_search` | provider endpoint migration and runtime test coverage | remove only after the 404 fallback is no longer needed |
 | P1 | Audit commit ownership in workers/startup | task/service call graph and rollback behavior | one explicit owner per transaction, no nested commits |
 | P2 | Purge generated `__pycache__` from source tree | tracked files and ignore rules | generated artifacts never belong in source directories |
 
@@ -159,7 +160,7 @@ Production code and current documented contracts are authoritative. Tests must b
 | User domains | chat/GPT, profile, collections, RAG and common pages | domain pages + shared API/UI | Domain boundaries are feature-based but some API hooks remain broadly shared |
 | Admin domain | entities, versions, models, instances, tools, RBAC, credentials, settings | `EntityPageV2` + `Tab` + typed API | Old editor/tab patterns remain in repository and must not be copied |
 | Runtime trace | event normalization, entity tree, budgets, artifacts, presentation | canonical trace entity tree | Explicit legacy assembler/field aliases are active historical-read fallback |
-| Sandbox | run/session UI, branch overlays, inspector and chat | shared runtime/snapshot contract | `useSandboxRun` still accepts a legacy-shaped argument; active callers must be migrated |
+| Sandbox | run/session UI, branch overlays, inspector and chat | shared runtime/snapshot contract | keep the canonical `parentRunId` contract; historical payload normalization belongs at the boundary |
 | Shared UI/lib | reusable components, tokens, forms, status/error/RBAC helpers | `shared/ui`, `shared/lib` | `DataTable` exposes legacy aliases; shared surface is large and needs API ownership review |
 
 ## Frontend legacy and drift
