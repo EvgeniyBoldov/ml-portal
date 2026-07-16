@@ -142,7 +142,7 @@ Connector instances are normalized and validated in `services/tool_instance`; pr
 Observed drift to review:
 
 - `adapters/embeddings.py` now only constructs providers from registered configurations. The legacy synchronous DB fallback was removed, and model lookup/credential resolution now belongs to `services/embedding_model_config_service.py`. Startup and model health checks no longer read `instance.config`.
-- `adapters/impl/qdrant.py` retains `_legacy_search`; it is an active 404 fallback covered by current tests, so it must remain isolated and must not become a new connector contract.
+- `adapters/impl/qdrant.py` uses only the current `query_points` contract; the obsolete `/points/search` fallback was removed after verifying the repository's Qdrant server/client versions.
 - Provider implementations are not uniformly expressed through the declared protocols: LLM implementations expose extra methods and embeddings are partly factory-driven. New connector work must not add another parallel contract.
 - Worker modules and startup tasks call `commit()` directly. This is allowed only at their explicit transaction boundary and must not be copied into adapters, repositories or domain helper methods.
 
@@ -152,7 +152,7 @@ Observed drift to review:
 |---|---|---|---|
 | P0 | Move adapter DB and credential lookup to a service-owned resolver | Completed in `EmbeddingModelConfigService`; verify all callers use the service | adapter receives resolved config; service/startup owns persistence and credentials |
 | P0 | Audit migration data mutations | Classified historical revisions above; production revision state still needs deployment-specific verification | keep history, prohibit new user/tenant backfills in Alembic |
-| P1 | Revisit Qdrant `_legacy_search` | provider endpoint migration and runtime test coverage | remove only after the 404 fallback is no longer needed |
+| P1 | Revisit Qdrant `_legacy_search` | Completed; compose uses Qdrant `v1.17.1`, client requires `>=1.12.0`, and fallback coverage was removed | do not reintroduce the old `/points/search` contract |
 | P1 | Audit commit ownership in workers/startup | task/service call graph and rollback behavior | one explicit owner per transaction, no nested commits |
 | P2 | Purge generated `__pycache__` from source tree | tracked files and ignore rules | generated artifacts never belong in source directories |
 
