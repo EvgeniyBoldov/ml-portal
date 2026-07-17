@@ -3,6 +3,8 @@ Universal LLM client for OpenAI-compatible APIs
 Supports: OpenAI, Groq, Azure OpenAI, LocalAI, vLLM, Ollama, etc.
 """
 from __future__ import annotations
+import asyncio
+import time
 from typing import Any, AsyncIterator, Mapping, Optional
 import httpx
 from app.core.logging import get_logger
@@ -188,6 +190,8 @@ class OpenAICompatibleLLM:
         params: Optional[dict] = None
     ) -> dict:
         """Send chat completion request"""
+        request_started = time.monotonic()
+        request_model = model
         try:
             normalized_model = model.strip() if isinstance(model, str) else model
             # Prepare request parameters
@@ -208,6 +212,7 @@ class OpenAICompatibleLLM:
                 request_params.get("model")
             )
             request_params["model"] = resolved_model_name
+            request_model = resolved_model_name
             client = self._get_or_create_client(
                 base_url=runtime_base_url,
                 api_key=runtime_api_key,
@@ -234,8 +239,21 @@ class OpenAICompatibleLLM:
                 "finish_reason": response.choices[0].finish_reason
             }
             
+        except asyncio.CancelledError:
+            logger.exception(
+                "LLM chat request cancelled model=%s elapsed_ms=%s",
+                request_model,
+                int((time.monotonic() - request_started) * 1000),
+            )
+            raise
         except Exception as e:
-            logger.error(f"Error in chat request: {str(e)}", exc_info=True)
+            logger.exception(
+                "LLM chat request failed model=%s exception_type=%s elapsed_ms=%s message=%s",
+                request_model,
+                type(e).__name__,
+                int((time.monotonic() - request_started) * 1000),
+                str(e),
+            )
             raise
     
     async def chat_stream(
@@ -246,6 +264,8 @@ class OpenAICompatibleLLM:
         params: Optional[dict] = None
     ) -> AsyncIterator[str]:
         """Send streaming chat completion request"""
+        request_started = time.monotonic()
+        request_model = model
         try:
             normalized_model = model.strip() if isinstance(model, str) else model
             # Prepare request parameters
@@ -267,6 +287,7 @@ class OpenAICompatibleLLM:
                 request_params.get("model")
             )
             request_params["model"] = resolved_model_name
+            request_model = resolved_model_name
             client = self._get_or_create_client(
                 base_url=runtime_base_url,
                 api_key=runtime_api_key,
@@ -285,8 +306,21 @@ class OpenAICompatibleLLM:
                     content = chunk.choices[0].delta.content
                     yield content
                     
+        except asyncio.CancelledError:
+            logger.exception(
+                "LLM streaming request cancelled model=%s elapsed_ms=%s",
+                request_model,
+                int((time.monotonic() - request_started) * 1000),
+            )
+            raise
         except Exception as e:
-            logger.error(f"Error in streaming chat request: {str(e)}", exc_info=True)
+            logger.exception(
+                "LLM streaming request failed model=%s exception_type=%s elapsed_ms=%s message=%s",
+                request_model,
+                type(e).__name__,
+                int((time.monotonic() - request_started) * 1000),
+                str(e),
+            )
             raise
     
     async def list_models(self) -> list[dict]:

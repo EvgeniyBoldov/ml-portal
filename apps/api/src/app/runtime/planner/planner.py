@@ -49,6 +49,8 @@ class PlannerLLMTrace:
     step_kind: str = "decision"
     structured_input: Dict[str, Any] = field(default_factory=dict)
     parsed_response: Dict[str, Any] = field(default_factory=dict)
+    error_type: Optional[str] = None
+    debug: Optional[Dict[str, Any]] = None
 
 
 class ThinkingHypothesis(BaseModel):
@@ -222,6 +224,8 @@ class Planner:
                         tokens_total=0,
                         step_kind="decision",
                         structured_input=payload,
+                        error_type=exc.error_type,
+                        debug=exc.debug_payload(),
                     )
                 )
                 continue
@@ -341,6 +345,8 @@ class Planner:
                 tokens_total=self._estimate_tokens(request_text),
                 step_kind="thinking",
                 structured_input=payload,
+                error_type=exc.error_type,
+                debug=exc.debug_payload(),
             )
 
     # --------------------------------------------------------------- helpers --

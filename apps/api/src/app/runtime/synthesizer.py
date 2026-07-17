@@ -301,6 +301,8 @@ class Synthesizer:
                     user_message=stream_event.message,
                     operator_message=stream_event.message,
                     source="llm",
+                    error_type=stream_event.error_type,
+                    debug=stream_event.debug,
                     parent_entity_type="synthesis_run",
                     parent_entity_id=synthesis_run_id,
                 )

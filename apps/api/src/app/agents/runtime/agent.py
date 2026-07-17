@@ -11,6 +11,7 @@ Flow:
 from __future__ import annotations
 
 import json
+import asyncio
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -338,24 +339,62 @@ class AgentToolRuntime(BaseRuntime):
                     return
                 effective_max_tokens = boundary.output_tokens if boundary.output_tokens is not None else gen.max_tokens
                 raw_response_dict: Optional[Dict[str, Any]] = None
-                if native_tool_calling and tools_payload:
-                    raw_response_dict = await self.llm.call_raw(
-                        messages=llm_messages,
-                        model=gen.model,
-                        temperature=gen.temperature,
-                        max_tokens=effective_max_tokens,
-                        tools=tools_payload,
-                        force_tool_choice=loop_state.force_tool_choice,
+                try:
+                    if native_tool_calling and tools_payload:
+                        raw_response_dict = await self.llm.call_raw(
+                            messages=llm_messages,
+                            model=gen.model,
+                            temperature=gen.temperature,
+                            max_tokens=effective_max_tokens,
+                            tools=tools_payload,
+                            force_tool_choice=loop_state.force_tool_choice,
+                        )
+                        loop_state.force_tool_choice = False
+                        raw_response = self.llm.normalize_response(raw_response_dict)
+                    else:
+                        raw_response = await self.llm.call(
+                            messages=llm_messages,
+                            model=gen.model,
+                            temperature=gen.temperature,
+                            max_tokens=effective_max_tokens,
+                        )
+                except asyncio.CancelledError:
+                    logger.exception(
+                        "Agent LLM call cancelled run_id=%s agent=%s step=%s model=%s",
+                        run_session.run_id,
+                        agent.slug,
+                        step + 1,
+                        gen.model,
                     )
-                    loop_state.force_tool_choice = False
-                    raw_response = self.llm.normalize_response(raw_response_dict)
-                else:
-                    raw_response = await self.llm.call(
-                        messages=llm_messages,
-                        model=gen.model,
-                        temperature=gen.temperature,
-                        max_tokens=effective_max_tokens,
+                    raise
+                except Exception as exc:
+                    logger.exception(
+                        "Agent LLM call failed run_id=%s agent=%s step=%s model=%s exception_type=%s",
+                        run_session.run_id,
+                        agent.slug,
+                        step + 1,
+                        gen.model,
+                        type(exc).__name__,
                     )
+                    debug = build_debug_payload(exc=exc, traceback_text=traceback.format_exc())
+                    message = f"Agent LLM call failed: {type(exc).__name__}: {exc}"
+                    yield RuntimeEvent.error(
+                        message,
+                        recoverable=True,
+                        error_code="agent_llm_call_error",
+                        retryable=True,
+                        user_message="The language model request failed. Please try again.",
+                        operator_message=message,
+                        source="llm",
+                        error_type=type(exc).__name__,
+                        debug=debug,
+                        parent_entity_type="agent_run",
+                        parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                        agent_slug=agent.slug,
+                        agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                    )
+                    await run_session.finish("failed", message)
+                    return
                 llm_duration = int((time.time() - llm_start) * 1000)
                 usage = (raw_response_dict or {}).get("usage") if isinstance(raw_response_dict, dict) else None
                 prompt_tokens = 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import traceback
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 from uuid import UUID
@@ -11,6 +12,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.budgets import BudgetRegistry
+from app.runtime.error_payloads import build_debug_payload
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
 from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 from app.services.system_llm_role_service import SystemLLMRoleService
@@ -44,6 +46,8 @@ class StreamError:
     code: str = ""
     message: str = ""
     recoverable: bool = True
+    error_type: Optional[str] = None
+    debug: Optional[Dict[str, Any]] = None
 
 
 StreamEvent = StreamDelta | StreamTurn | StreamError
@@ -117,6 +121,7 @@ class RoleStreamingCall:
         buffer: List[str] = []
         started_at = time.monotonic()
         stream_error: Optional[Exception] = None
+        stream_traceback: Optional[str] = None
         try:
             stream_iter = self._llm_client.chat_stream(messages, model=model, params=params or None)
             async for chunk in _collect_stream(stream_iter):
@@ -128,6 +133,7 @@ class RoleStreamingCall:
             stream_error = exc
         except Exception as exc:  # noqa: BLE001
             stream_error = exc
+            stream_traceback = traceback.format_exc()
 
         content = "".join(buffer).strip()
         tokens_out = estimate_tokens(content)
@@ -146,7 +152,16 @@ class RoleStreamingCall:
             if isinstance(stream_error, LLMLimitExceededError):
                 yield StreamError(code=stream_error.code, message=str(stream_error), recoverable=False)
             else:
-                yield StreamError(code="llm_stream_error", message=str(stream_error), recoverable=True)
+                yield StreamError(
+                    code="llm_stream_error",
+                    message=f"{type(stream_error).__name__}: {stream_error}",
+                    recoverable=True,
+                    error_type=type(stream_error).__name__,
+                    debug=build_debug_payload(
+                        exc=stream_error,
+                        traceback_text=stream_traceback,
+                    ),
+                )
             return
 
         yield StreamTurn(
