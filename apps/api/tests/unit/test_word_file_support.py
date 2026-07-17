@@ -73,6 +73,10 @@ async def test_file_read_returns_text_for_docx(monkeypatch):
         "app.services.file_delivery_service.FileDeliveryService.resolve_storage_uri",
         AsyncMock(return_value=resolved),
     )
+    monkeypatch.setattr(
+        "app.services.chat_artifact_reference_service.ChatArtifactReferenceService.resolve",
+        AsyncMock(return_value=resolved),
+    )
     monkeypatch.setattr("app.adapters.s3_client.s3_manager.get_object", AsyncMock(return_value=data))
 
     tool = FileReadTool()
@@ -82,10 +86,10 @@ async def test_file_read_returns_text_for_docx(monkeypatch):
         chat_id=uuid4(),
     )
 
-    result = await tool.v1_0_0(ctx, {"storage_uri": "s3://bucket/path/example.docx"})
+    result = await tool.v1_0_0(ctx, {"artifact_id": str(uuid4())})
 
     assert result.success is True
-    assert result.data["encoding"] == "text"
+    assert result.data["representation"] == "document"
     assert "First paragraph" in result.data["content"]
     assert "Second paragraph" in result.data["content"]
 

@@ -22,8 +22,17 @@ Implemented:
 - assistant-generated files from response blocks,
 - unified file delivery by attachment endpoint and by file id.
 
-Not yet unified:
-- shared extraction layer between chat attachments and document collection ingest.
+Shared inspection is provided by `DocumentExtractionService`; chat and document
+collection ingest use separate profiles over the same parser registry.
+
+## Chat artifact references
+
+`chat_artifact_references` stores only files mentioned or returned in a chat.
+Its UUID is the unified `artifact_id` passed to file tools. The row points to a
+chat attachment or an external collection/template/export target; it does not
+duplicate storage coordinates. Collection access is revalidated through RBAC on
+every read. Removing an attachment reference removes the owned chat attachment
+and storage object; removing an external reference never removes its source.
 
 ## Contracts
 
@@ -69,6 +78,10 @@ Current file id contract:
 - `chatatt_<attachment_uuid>`
 - `ragdoc_<document_uuid>_original`
 - `ragdoc_<document_uuid>_canonical`
+
+New tool-facing contract: `artifact_id` (UUID of a chat artifact reference).
+The legacy file ids remain available to download endpoints while existing
+transport consumers are migrated.
 
 Delivery endpoints:
 - `GET /api/v1/chats/attachments/{attachment_id}/download`

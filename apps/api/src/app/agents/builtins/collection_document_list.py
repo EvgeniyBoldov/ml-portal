@@ -3,7 +3,7 @@ Collection List Documents Tool — lists files in a document collection.
 
 The agent uses this to enumerate available files (e.g. templates, registers)
 within a collection after discovering the collection via collection.document.search.
-Each result carries storage_uri that can be passed to file.read.
+Each result carries artifact_id that can be passed to file.read.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, Source
 from app.services.collection_service import CollectionService
 from app.services.file_delivery_service import FileDeliveryService
+from app.services.chat_artifact_reference_service import ArtifactTarget, ChatArtifactReferenceService
 from app.core.config import get_settings
 
 logger = get_logger(__name__)
@@ -63,8 +64,7 @@ _OUTPUT_SCHEMA_V1 = {
                 "type": "object",
                 "properties": {
                     "document_id": {"type": "string"},
-                    "file_id": {"type": "string"},
-                    "storage_uri": {"type": "string"},
+                    "artifact_id": {"type": "string"},
                     "filename": {"type": "string"},
                     "title": {"type": "string"},
                     "status": {"type": "string"},
@@ -88,7 +88,7 @@ class CollectionDocumentListTool(VersionedTool):
 
     Use this AFTER collection.document.search found a relevant collection to
     enumerate available files (e.g. find an Excel template by filename).
-    For each document a storage_uri is returned — pass it to file.read to inspect
+    For each document an artifact_id is returned — pass it to file.read to inspect
     the actual file content.
     """
 
@@ -99,7 +99,7 @@ class CollectionDocumentListTool(VersionedTool):
         "List all files in a document collection with their names and metadata. "
         "Use to enumerate available files (e.g. find a template by name). "
         "For content search use collection.document.search. "
-        "Returns a storage_uri for each document that can be passed to file.read."
+        "Returns an artifact_id for each document that can be passed to file.read."
     )
 
     @tool_version(
@@ -115,6 +115,8 @@ class CollectionDocumentListTool(VersionedTool):
         if not collection_slug:
             log.error("Missing collection_slug")
             return ToolResult.fail("Missing 'collection_slug' argument", logs=log.entries_dict())
+        if not ctx.chat_id:
+            return ToolResult.fail("Collection document listing requires a chat context.", logs=log.entries_dict())
 
         query_filter = str(args.get("query") or "").strip().lower() or None
         status_filter = str(args.get("status") or "").strip().lower() or None
@@ -198,6 +200,7 @@ class CollectionDocumentListTool(VersionedTool):
                 row_id_map = {}
                 if doc_ids:
                     membership_q = select(
+                        DocumentCollectionMembership.id,
                         DocumentCollectionMembership.source_id,
                         DocumentCollectionMembership.collection_row_id,
                     ).where(
@@ -207,7 +210,9 @@ class CollectionDocumentListTool(VersionedTool):
                         ),
                     )
                     m_rows = (await session.execute(membership_q)).all()
+                    membership_id_map: Dict[str, str] = {}
                     for m in m_rows:
+                        membership_id_map[str(m.source_id)] = str(m.id)
                         row_id_map[str(m.source_id)] = str(m.collection_row_id) if m.collection_row_id else None
 
                 # Batch-fetch meta_fields from dynamic table
@@ -242,14 +247,27 @@ class CollectionDocumentListTool(VersionedTool):
                 for doc, _ in rows:
                     doc_id_str = str(doc.id)
                     collection_row_id = row_id_map.get(doc_id_str)
-                    file_id = FileDeliveryService.make_rag_document_file_id(doc_id_str, "original")
-                    storage_uri = FileDeliveryService.make_storage_uri(rag_bucket, str(doc.s3_key_raw or ""))
+                    membership_id = membership_id_map.get(doc_id_str)
+                    if not membership_id or not ctx.chat_id:
+                        continue
+                    reference = await ChatArtifactReferenceService(session).register(
+                        chat_id=ctx.chat_id,
+                        owner_id=ctx.user_id,
+                        target=ArtifactTarget(
+                            kind="collection_document",
+                            target_id=membership_id,
+                            collection_id=collection.id,
+                            display_name=doc.filename,
+                            content_type=doc.content_type,
+                            size_bytes=doc.size_bytes or doc.size,
+                            metadata={"status": doc.status},
+                        ),
+                    )
                     meta = meta_fields_map.get(collection_row_id) if collection_row_id else None
 
                     documents.append({
                         "document_id": doc_id_str,
-                        "file_id": file_id,
-                        "storage_uri": storage_uri,
+                        "artifact_id": str(reference.id),
                         "filename": doc.filename,
                         "title": doc.title or doc.filename,
                         "status": doc.status,

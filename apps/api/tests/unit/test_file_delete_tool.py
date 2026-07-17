@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -26,83 +26,49 @@ def _context():
 
 
 @pytest.mark.asyncio
-async def test_file_delete_commits_after_s3_and_db_delete(monkeypatch):
-    attachment_id = uuid4()
+async def test_file_delete_commits_reference_removal(monkeypatch):
     session = AsyncMock()
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = SimpleNamespace(
-        file_name="report.txt",
-        storage_bucket="chat-bucket",
-        storage_key="chat/report.txt",
+    delete_reference = AsyncMock(
+        return_value={"deleted": True, "artifact_id": str(uuid4()), "file_name": "report.txt"}
     )
-    session.execute.return_value = result
-    delete_object = AsyncMock(return_value=True)
-
+    monkeypatch.setattr("app.agents.builtins.file_delete.get_session_factory", lambda: _session_manager(session))
     monkeypatch.setattr(
-        "app.agents.builtins.file_delete.get_session_factory",
-        lambda: _session_manager(session),
-    )
-    monkeypatch.setattr("app.agents.builtins.file_delete.s3_manager.delete_object", delete_object)
-
-    result = await FileDeleteTool().v1_0_0(
-        _context(),
-        {"file_id": f"chatatt_{attachment_id}"},
-    )
-
-    assert result.success is True
-    session.delete.assert_awaited_once()
-    session.flush.assert_awaited_once()
-    session.commit.assert_awaited_once()
-    delete_object.assert_awaited_once_with("chat-bucket", "chat/report.txt")
-
-
-@pytest.mark.asyncio
-async def test_file_delete_removes_db_row_when_s3_reports_missing(monkeypatch):
-    attachment_id = uuid4()
-    session = AsyncMock()
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = SimpleNamespace(
-        file_name="missing.txt",
-        storage_bucket="chat-bucket",
-        storage_key="chat/missing.txt",
-    )
-    session.execute.return_value = result
-
-    monkeypatch.setattr(
-        "app.agents.builtins.file_delete.get_session_factory",
-        lambda: _session_manager(session),
-    )
-    monkeypatch.setattr(
-        "app.agents.builtins.file_delete.s3_manager.delete_object",
-        AsyncMock(return_value=False),
+        "app.services.chat_artifact_reference_service.ChatArtifactReferenceService.delete_reference",
+        delete_reference,
     )
 
     result = await FileDeleteTool().v1_0_0(
         _context(),
-        {"file_id": f"chatatt_{attachment_id}"},
+        {"artifact_id": str(uuid4())},
     )
 
     assert result.success is True
+    delete_reference.assert_awaited_once()
     session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_file_delete_rejects_missing_attachment_without_commit(monkeypatch):
+async def test_file_delete_returns_safe_error_on_lifecycle_failure(monkeypatch):
     session = AsyncMock()
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = None
-    session.execute.return_value = result
-
+    monkeypatch.setattr("app.agents.builtins.file_delete.get_session_factory", lambda: _session_manager(session))
     monkeypatch.setattr(
-        "app.agents.builtins.file_delete.get_session_factory",
-        lambda: _session_manager(session),
+        "app.services.chat_artifact_reference_service.ChatArtifactReferenceService.delete_reference",
+        AsyncMock(side_effect=ValueError("storage deletion failed")),
     )
 
     result = await FileDeleteTool().v1_0_0(
         _context(),
-        {"file_id": f"chatatt_{uuid4()}"},
+        {"artifact_id": str(uuid4())},
     )
 
     assert result.success is False
-    session.delete.assert_not_awaited()
     session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_delete_rejects_missing_chat_context():
+    result = await FileDeleteTool().v1_0_0(
+        ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=None),
+        {"artifact_id": str(uuid4())},
+    )
+    assert result.success is False

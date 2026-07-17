@@ -15,6 +15,7 @@ from app.models.collection import CollectionType
 from app.services.collection.row_service import CollectionRowService
 from app.services.collection_service import CollectionService
 from app.services.file_delivery_service import FileDeliveryService
+from app.services.chat_artifact_reference_service import ArtifactTarget, ChatArtifactReferenceService
 
 logger = get_logger(__name__)
 
@@ -51,8 +52,7 @@ _OUTPUT_SCHEMA_V1 = {
                     "source": {"type": "string"},
                     "template_version": {"type": "string"},
                     "description": {"type": "string"},
-                    "file_id": {"type": "string"},
-                    "storage_uri": {"type": "string"},
+                    "artifact_id": {"type": "string"},
                 },
             },
         },
@@ -70,7 +70,7 @@ class TemplateListTool(VersionedTool):
     name: ClassVar[str] = "List Templates"
     description: ClassVar[str] = (
         "List templates in a template collection. Returns metadata for each template: "
-        "title, version, source, description, row_id, and canonical storage_uri of the original template file."
+        "title, version, source, description, row_id, and artifact_id of the original template file."
     )
 
     @tool_version(
@@ -81,6 +81,9 @@ class TemplateListTool(VersionedTool):
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         log = ctx.tool_logger("collection.template.list")
+
+        if not ctx.chat_id:
+            return ToolResult.fail("Template listing requires a chat context.", logs=log.entries_dict())
 
         collection_id = str(args.get("collection_id") or "").strip()
         if not collection_id:
@@ -128,18 +131,29 @@ class TemplateListTool(VersionedTool):
                     file_meta = row.get("file") or {}
                     bucket = str(file_meta.get("bucket") or "").strip()
                     s3_key = str(file_meta.get("s3_key") or "").strip()
+                    file_target_id = str(file_meta.get("file_id") or "").strip()
+                    if not file_target_id or not ctx.chat_id:
+                        continue
+                    reference = await ChatArtifactReferenceService(session).register(
+                        chat_id=ctx.chat_id,
+                        owner_id=ctx.user_id,
+                        target=ArtifactTarget(
+                            kind="template_file",
+                            target_id=file_target_id,
+                            collection_id=collection.id,
+                            display_name=str(file_meta.get("filename") or row.get("title") or "template"),
+                            content_type=str(file_meta.get("content_type") or "application/octet-stream"),
+                            size_bytes=file_meta.get("size"),
+                            metadata={"status": "ready"},
+                        ),
+                    )
                     templates.append({
                         "row_id": str(row.get("id")),
                         "title": row.get("title") or "",
                         "source": row.get("source") or "",
                         "template_version": row.get("template_version") or "",
                         "description": row.get("description") or "",
-                        "file_id": file_meta.get("file_id") or "",
-                        "storage_uri": (
-                            FileDeliveryService.make_storage_uri(bucket, s3_key)
-                            if bucket and s3_key
-                            else ""
-                        ),
+                        "artifact_id": str(reference.id),
                     })
 
                 return ToolResult.ok(

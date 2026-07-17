@@ -21,6 +21,8 @@ from app.services.file_delivery_service import FileDeliveryService
 from app.core.exceptions import ChatAttachmentNotFoundError
 from app.runtime.contracts import AttachmentContext, AttachmentRef
 from app.services.upload_intake_policy import UploadIntakePolicy
+from app.services.chat_artifact_reference_service import ArtifactTarget, ChatArtifactReferenceService
+from app.models.chat_artifact_reference import ChatArtifactReference
 from app.storage.paths import calculate_file_checksum
 
 logger = get_logger(__name__)
@@ -114,7 +116,21 @@ class ChatAttachmentService:
             key=key,
             status="uploaded",
         )
-        return self._serialize_attachment(row)
+        result = self._serialize_attachment(row)
+        reference = await ChatArtifactReferenceService(self.session).register(
+            chat_id=chat_id,
+            owner_id=owner_id,
+            target=ArtifactTarget(
+                kind="chat_attachment",
+                target_id=str(row.id),
+                display_name=row.file_name,
+                content_type=row.content_type,
+                size_bytes=row.size_bytes,
+                metadata={"status": row.status},
+            ),
+        )
+        result["artifact_id"] = str(reference.id)
+        return result
 
     async def create_generated_attachment(
         self,
@@ -166,7 +182,22 @@ class ChatAttachmentService:
             key=key,
             status="generated",
         )
-        return self._serialize_attachment(row)
+        result = self._serialize_attachment(row)
+        if chat_id:
+            reference = await ChatArtifactReferenceService(self.session).register(
+                chat_id=chat_id,
+                owner_id=owner_id,
+                target=ArtifactTarget(
+                    kind="chat_attachment",
+                    target_id=str(row.id),
+                    display_name=row.file_name,
+                    content_type=row.content_type,
+                    size_bytes=row.size_bytes,
+                    metadata={"status": row.status},
+                ),
+            )
+            result["artifact_id"] = str(reference.id)
+        return result
 
     async def get_owned_attachments(
         self,
@@ -287,10 +318,16 @@ class ChatAttachmentService:
         if not rows:
             raise ChatAttachmentNotFoundError("Attachment not found")
         row = rows[0]
-
+        reference = await self.session.scalar(
+            select(ChatArtifactReference).where(
+                ChatArtifactReference.target_kind == "chat_attachment",
+                ChatArtifactReference.target_id == str(row.id),
+            )
+        )
         file_id = FileDeliveryService.make_chat_attachment_file_id(str(row.id))
         return {
             "id": str(row.id),
+            "artifact_id": str(reference.id) if reference else None,
             "file_id": file_id,
             "storage_uri": FileDeliveryService.make_storage_uri(row.storage_bucket, row.storage_key),
             "file_name": row.file_name,
@@ -302,6 +339,25 @@ class ChatAttachmentService:
     @staticmethod
     def to_meta(attachments: list[ChatAttachment]) -> list[dict[str, Any]]:
         return [ChatAttachmentService._serialize_attachment(item) for item in attachments]
+
+    async def to_meta_with_references(self, attachments: list[ChatAttachment]) -> list[dict[str, Any]]:
+        """Serialize attachments with canonical chat artifact ids for prompts."""
+        if not attachments:
+            return []
+        ids = [str(item.id) for item in attachments]
+        result = await self.session.execute(
+            select(ChatArtifactReference).where(
+                ChatArtifactReference.target_kind == "chat_attachment",
+                ChatArtifactReference.target_id.in_(ids),
+            )
+        )
+        refs = {str(ref.target_id): str(ref.id) for ref in result.scalars().all()}
+        metadata = self.to_meta(attachments)
+        for item in metadata:
+            artifact_id = refs.get(str(item.get("id")))
+            if artifact_id:
+                item["artifact_id"] = artifact_id
+        return metadata
 
     @staticmethod
     def _serialize_attachment(row: ChatAttachment) -> dict[str, Any]:
@@ -348,9 +404,16 @@ class ChatAttachmentService:
         ]
         for item in attachments:
             file_id = FileDeliveryService.make_chat_attachment_file_id(str(item.id))
-            storage_uri = FileDeliveryService.make_storage_uri(item.storage_bucket, item.storage_key)
+            reference = await self.session.scalar(
+                select(ChatArtifactReference).where(
+                    ChatArtifactReference.target_kind == "chat_attachment",
+                    ChatArtifactReference.target_id == str(item.id),
+                    ChatArtifactReference.chat_id == item.chat_id,
+                )
+            )
+            artifact_id = str(reference.id) if reference else file_id
             lines.append(
-                f"- storage_uri={storage_uri}; file_id={file_id}; name={item.file_name}; type={item.content_type or 'unknown'}; size={item.size_bytes}"
+                f"- artifact_id={artifact_id}; name={item.file_name}; type={item.content_type or 'unknown'}; size={item.size_bytes}"
             )
             text_snippet = await self._load_text_content(item, max_chars=max_chars_per_file)
             if text_snippet:
@@ -409,10 +472,18 @@ class ChatAttachmentService:
             else:
                 payload = await s3_manager.get_object(item.storage_bucket, item.storage_key)
                 snippet_status = "unreadable" if payload else "missing"
+            reference = await self.session.scalar(
+                select(ChatArtifactReference).where(
+                    ChatArtifactReference.target_kind == "chat_attachment",
+                    ChatArtifactReference.target_id == str(item.id),
+                    ChatArtifactReference.chat_id == item.chat_id,
+                )
+            )
             contexts.append(
                 AttachmentContext(
                     ref=AttachmentRef(
                         id=str(item.id),
+                        artifact_id=str(reference.id) if reference else None,
                         file_id=FileDeliveryService.make_chat_attachment_file_id(str(item.id)),
                         storage_uri=FileDeliveryService.make_storage_uri(item.storage_bucket, item.storage_key),
                         file_name=item.file_name,
@@ -518,10 +589,18 @@ class ChatAttachmentService:
         payload = await s3_manager.get_object(row.storage_bucket, row.storage_key)
         if not payload:
             return None
-        from app.services.document_text_reader import read_text_from_bytes
+        from app.services.document_extraction_service import DocumentExtractionService, ExtractionRequest
 
-        result = read_text_from_bytes(payload, row.file_name or "")
-        if result is None or not result.text:
+        result = await DocumentExtractionService().extract(
+            ExtractionRequest(
+                payload=payload,
+                filename=row.file_name or "",
+                content_type=row.content_type,
+                profile="chat_preview",
+                max_chars=max_chars,
+            )
+        )
+        if not result.text:
             return None
         decoded = result.text
         if len(decoded) <= max_chars:

@@ -235,24 +235,6 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
     }
   };
 
-  // Loading state
-  if (isLoading) {
-    return (
-      <Modal open={true} onClose={onClose} title="Статус документа" size="xl">
-        <div className={styles.loading}>Загрузка...</div>
-      </Modal>
-    );
-  }
-
-  // Error state
-  if (error) {
-    return (
-      <Modal open={true} onClose={onClose} title="Статус документа" size="xl">
-        <div className={styles.error}>Не удалось загрузить статус документа</div>
-      </Modal>
-    );
-  }
-
   const selectedNode = React.useMemo(() => {
     if (!selection.nodeKey) return null;
     if (selection.laneKey) {
@@ -295,6 +277,25 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
     vector_dim: 'Размерность',
     indexed_count: 'Проиндексировано',
   }), []);
+
+  // Keep all hooks above the loading/error branches. The status query starts
+  // in a loading state, and returning before the derived hooks run causes the
+  // next render to have a different hook count (React error #310).
+  if (isLoading) {
+    return (
+      <Modal open={true} onClose={onClose} title="Статус документа" size="xl">
+        <div className={styles.loading}>Загрузка...</div>
+      </Modal>
+    );
+  }
+
+  if (error) {
+    return (
+      <Modal open={true} onClose={onClose} title="Статус документа" size="xl">
+        <div className={styles.error}>Не удалось загрузить статус документа</div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal

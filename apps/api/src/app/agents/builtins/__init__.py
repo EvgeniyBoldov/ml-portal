@@ -8,15 +8,15 @@ Collection builtin handler slugs (internal):
 - collection.search          — SQL search with DSL filters, sorting, pagination
 - collection.doc_search      — internal handler slug for collection.document.search
 - collection.template.search — semantic search in template collections (retrieval-enabled text fields)
-- collection.list_documents  — list files in a document collection with metadata and storage_uri
-- collection.get_document    — get single document metadata and storage_uri
+- collection.list_documents  — list files in a document collection with metadata and artifact_id
+- collection.get_document    — get single document metadata and artifact_id
 - collection.get             — get single record by primary key
 - collection.aggregate       — aggregations (count, sum, avg, min, max, group_by, having)
 - collection.info           — collection structure, metadata, and observed filter values for bound collection
-- file.generate              — persist generated file (csv/json/txt/md) to chat storage and return storage_uri
-- file.read                  — read a file by canonical storage_uri (s3://bucket/key)
-- file.list                  — list all files in the current chat
-- file.delete                — delete a file from chat storage by file_id
+- file.generate              — persist generated file and return a chat artifact_id
+- file.read                  — read a bounded representation by artifact_id
+- file.list                  — list artifact references in the current chat
+- file.delete                — delete a chat artifact reference
 
 Runtime publishes canonical operation names for LLM/planner:
 - collection.document.search

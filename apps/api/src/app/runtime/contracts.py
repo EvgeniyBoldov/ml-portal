@@ -26,6 +26,7 @@ class ExecutionMode(str, Enum):
 
 class AttachmentRef(BaseModel):
     id: str = Field(..., min_length=1)
+    artifact_id: Optional[str] = None
     file_id: str = Field(..., min_length=1)
     storage_uri: str = Field(..., min_length=1)
     file_name: str = Field(..., min_length=1)

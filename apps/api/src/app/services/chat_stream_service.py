@@ -253,7 +253,8 @@ class ChatStreamService:
                     return
             history_attachment_meta = self._extract_attachment_meta_from_messages(context)
             merged_attachment_meta = self.attachment_service.dedupe_meta(
-                history_attachment_meta + self.attachment_service.to_meta(attachment_rows)
+                history_attachment_meta
+                + await self.attachment_service.to_meta_with_references(attachment_rows)
             )
             if merged_attachment_meta:
                 attachment_contexts = await self.attachment_service.build_runtime_attachment_contexts_from_meta(
@@ -269,7 +270,7 @@ class ChatStreamService:
                 attachment_ids=attachment_ids,
                 confirmation_tokens=confirmation_tokens or [],
                 execution_mode=execution_mode,
-                attachment_meta=self.attachment_service.to_meta(attachment_rows),
+                attachment_meta=await self.attachment_service.to_meta_with_references(attachment_rows),
                 attachment_contexts=attachment_contexts,
                 idempotency_key=idempotency_key,
                 model=model,

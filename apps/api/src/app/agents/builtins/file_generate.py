@@ -54,9 +54,7 @@ _INPUT_SCHEMA_V1 = {
 _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
-        "file_id": {"type": "string", "description": "Stable file identifier (e.g. chatatt_<uuid>)"},
-        "storage_uri": {"type": "string", "description": "Canonical storage URI in the form s3://bucket/key"},
-        "download_url": {"type": "string", "description": "Absolute download endpoint for the file"},
+        "artifact_id": {"type": "string", "description": "Chat-scoped artifact reference UUID"},
         "file_name": {"type": "string"},
         "content_type": {"type": "string"},
         "size_bytes": {"type": "integer"},
@@ -78,8 +76,7 @@ class FileGenerateTool(VersionedTool):
     domains: ClassVar[list] = ["system"]
     name: ClassVar[str] = "Generate File"
     description: ClassVar[str] = (
-        "Create a new downloadable file from the provided content and store it in chat storage. "
-        "Returns file_id, storage_uri, download_url, and file metadata for the newly created artifact."
+        "Create a new downloadable file and register it as a chat artifact."
     )
 
     @tool_version(
@@ -174,6 +171,11 @@ class FileGenerateTool(VersionedTool):
 
         user_id = ctx.user_id
         chat_id = ctx.chat_id
+        if not chat_id:
+            return ToolResult.fail(
+                "File generation requires a chat context.",
+                logs=log.entries_dict(),
+            )
 
         log.info(
             "Generating file",
@@ -198,14 +200,12 @@ class FileGenerateTool(VersionedTool):
                 log.info(
                     "File saved",
                     attachment_id=attachment.get("id"),
-                    file_id=attachment.get("file_id"),
+                    artifact_id=attachment.get("artifact_id"),
                     size_bytes=attachment.get("size_bytes"),
                 )
                 return ToolResult.ok(
                     data={
-                        "file_id": attachment.get("file_id"),
-                        "storage_uri": attachment.get("storage_uri"),
-                        "download_url": f"/api/v1/files/{attachment.get('file_id')}/download",
+                        "artifact_id": attachment.get("artifact_id"),
                         "file_name": attachment.get("file_name"),
                         "content_type": content_type,
                         "size_bytes": attachment.get("size_bytes"),

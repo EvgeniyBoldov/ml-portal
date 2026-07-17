@@ -5,6 +5,7 @@ from .user import Users
 from .tenant import Tenants, UserTenants
 from .chat import Chats, ChatMessages
 from .chat_attachment import ChatAttachment
+from .chat_artifact_reference import ChatArtifactReference
 from .rag import RAGDocument, RAGChunk
 from .rag_ingest import Source, Chunk, EmbStatus, RAGStatus, DocumentCollectionMembership
 from .template_analysis_status import TemplateAnalysisStatus
@@ -56,6 +57,7 @@ __all__ = [
     "Chats",
     "ChatMessages",
     "ChatAttachment",
+    "ChatArtifactReference",
     "RAGDocument",
     "RAGChunk",
     "Source",

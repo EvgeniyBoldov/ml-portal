@@ -272,7 +272,7 @@ async def run_sandbox(
         except ChatAttachmentNotFoundError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         attachment_meta = attachment_service.dedupe_meta(
-            attachment_service.to_meta(rows)
+            await attachment_service.to_meta_with_references(rows)
         )
         attachment_contexts = await attachment_service.build_runtime_attachment_contexts_from_meta(
             attachments_meta=attachment_meta

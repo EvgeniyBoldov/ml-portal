@@ -61,6 +61,7 @@ class ChatMessageStreamRequest(BaseModel):
 
 class ChatAttachmentUploadResponse(BaseModel):
     id: str
+    artifact_id: Optional[str] = None
     file_id: str
     storage_uri: str
     file_name: str
@@ -78,6 +79,7 @@ class ChatUploadPolicyResponse(BaseModel):
 
 class ChatAttachmentDownloadResponse(BaseModel):
     id: str
+    artifact_id: Optional[str] = None
     file_id: str
     file_name: str
     content_type: Optional[str] = None

@@ -51,9 +51,7 @@ _INPUT_SCHEMA_V1 = {
 _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
-        "file_id": {"type": "string"},
-        "storage_uri": {"type": "string"},
-        "download_url": {"type": "string"},
+        "artifact_id": {"type": "string"},
         "file_name": {"type": "string"},
         "content_type": {"type": "string"},
         "size_bytes": {"type": "integer"},
@@ -148,8 +146,7 @@ class TemplateFillTool(VersionedTool):
     name: ClassVar[str] = "Fill Template"
     description: ClassVar[str] = (
         "Fill a template row with provided values and create the final downloadable file artifact. "
-        "Returns the resulting file reference as file_id, storage_uri, and download_url. "
-        "Use the returned download_url or file_id as the user-facing result. "
+        "Returns the resulting chat artifact_id. Use it as the file reference. "
         "The values object must match the stored fill schema for the selected template row."
     )
 
@@ -295,6 +292,11 @@ class TemplateFillTool(VersionedTool):
                 # Store generated attachment
                 chat_id = str(ctx.chat_id) if ctx.chat_id else None
                 owner_id = str(ctx.user_id or "")
+                if not chat_id:
+                    return ToolResult.fail(
+                        "Template filling requires a chat context.",
+                        logs=log.entries_dict(),
+                    )
                 if not owner_id:
                     return ToolResult.fail(
                         "Tool context missing user_id; cannot store generated file",
@@ -312,13 +314,9 @@ class TemplateFillTool(VersionedTool):
                 )
                 await session.commit()
 
-                file_id = FileDeliveryService.make_chat_attachment_file_id(str(attachment["id"]))
-
                 return ToolResult.ok(
                     data={
-                        "file_id": file_id,
-                        "storage_uri": attachment.get("storage_uri"),
-                        "download_url": f"/api/v1/files/{file_id}/download",
+                        "artifact_id": attachment.get("artifact_id"),
                         "file_name": safe_filename,
                         "content_type": file_meta.get("content_type") or "application/octet-stream",
                         "size_bytes": len(filled_bytes),

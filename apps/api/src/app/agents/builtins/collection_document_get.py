@@ -1,7 +1,7 @@
 """
 Collection Get Document Tool — get metadata and canonical storage reference for a document.
 
-Returns storage_uri that can be passed to file.read to inspect the actual file
+Returns artifact_id that can be passed to file.read to inspect the actual file
 content.
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ from app.core.logging import get_logger
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, Source
 from app.services.file_delivery_service import FileDeliveryService
+from app.services.chat_artifact_reference_service import ArtifactTarget, ChatArtifactReferenceService
 from app.core.config import get_settings
 
 logger = get_logger(__name__)
@@ -37,8 +38,7 @@ _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
         "document_id": {"type": "string"},
-        "file_id": {"type": "string"},
-        "storage_uri": {"type": "string"},
+        "artifact_id": {"type": "string"},
         "filename": {"type": "string"},
         "title": {"type": "string"},
         "status": {"type": "string"},
@@ -53,9 +53,9 @@ _OUTPUT_SCHEMA_V1 = {
 @register_tool
 class CollectionDocumentGetTool(VersionedTool):
     """
-    Get a document's metadata and a storage_uri pointing to its original file.
+    Get a document's metadata and an artifact_id pointing to its original file.
 
-    Pass the returned storage_uri to file.read to inspect the
+    Pass the returned artifact_id to file.read to inspect the
     actual content (e.g. an Excel template).
     """
 
@@ -63,8 +63,8 @@ class CollectionDocumentGetTool(VersionedTool):
     domains: ClassVar[list] = ["collection.document"]
     name: ClassVar[str] = "Get Collection Document"
     description: ClassVar[str] = (
-        "Get a single document's metadata and a storage_uri pointing to its original file. "
-        "Pass that storage_uri to file.read to inspect the actual content "
+        "Get a single document's metadata and an artifact_id pointing to its original file. "
+        "Pass that artifact_id to file.read to inspect the actual content "
         "(e.g. an Excel template)."
     )
 
@@ -72,7 +72,7 @@ class CollectionDocumentGetTool(VersionedTool):
         version="1.0.0",
         input_schema=_INPUT_SCHEMA_V1,
         output_schema=_OUTPUT_SCHEMA_V1,
-        description="Get document metadata and file_id",
+        description="Get document metadata and artifact_id",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         log = ctx.tool_logger("collection.get_document")
@@ -161,10 +161,23 @@ class CollectionDocumentGetTool(VersionedTool):
                                         if row.get(fname) is not None
                                     }
 
-                file_id = FileDeliveryService.make_rag_document_file_id(doc_id_str, "original")
-                storage_uri = FileDeliveryService.make_storage_uri(
-                    get_settings().S3_BUCKET_RAG,
-                    str(doc.s3_key_raw or ""),
+                if not membership or not ctx.chat_id:
+                    return ToolResult.fail(
+                        "Getting a collection document file requires a chat context.",
+                        logs=log.entries_dict(),
+                    )
+                reference = await ChatArtifactReferenceService(session).register(
+                    chat_id=ctx.chat_id,
+                    owner_id=ctx.user_id,
+                    target=ArtifactTarget(
+                        kind="collection_document",
+                        target_id=str(membership.id),
+                        collection_id=membership.collection_id,
+                        display_name=doc.filename,
+                        content_type=doc.content_type,
+                        size_bytes=doc.size_bytes or doc.size,
+                        metadata={"status": doc.status},
+                    ),
                 )
 
                 log.info("Document fetched", document_id=doc_id_str, collection=collection_slug)
@@ -172,8 +185,7 @@ class CollectionDocumentGetTool(VersionedTool):
                 return ToolResult.ok(
                     data={
                         "document_id": doc_id_str,
-                        "file_id": file_id,
-                        "storage_uri": storage_uri,
+                        "artifact_id": str(reference.id),
                         "filename": doc.filename,
                         "title": doc.title or doc.filename,
                         "status": doc.status,

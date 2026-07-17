@@ -54,8 +54,9 @@ class PlannerInputBuilder:
             "attachments": [
                 {
                     "file_name": item.ref.file_name,
-                    "file_id": item.ref.file_id,
-                    "storage_uri": item.ref.storage_uri,
+                "file_id": item.ref.file_id,
+                "artifact_id": item.ref.artifact_id,
+                "storage_uri": item.ref.storage_uri,
                     "content_type": item.ref.content_type,
                     "size_bytes": item.ref.size_bytes,
                     "snippet": item.snippet,
@@ -155,6 +156,7 @@ class SynthesizerInputBuilder:
                         continue
                     generated_files.append(
                         {
+                            "artifact_id": att.get("artifact_id") or att.get("file_id"),
                             "file_id": att.get("file_id"),
                             "storage_uri": att.get("storage_uri") or "",
                             "file_name": att.get("file_name") or att.get("name") or "file",
@@ -162,8 +164,8 @@ class SynthesizerInputBuilder:
                                 att.get("download_url")
                                 or att.get("url")
                                 or (
-                                    f"/api/v1/files/{att.get('file_id')}/download"
-                                    if att.get("file_id")
+                                    f"/api/v1/files/{att.get('artifact_id') or att.get('file_id')}/download"
+                                    if att.get("artifact_id") or att.get("file_id")
                                     else ""
                                 )
                             ),

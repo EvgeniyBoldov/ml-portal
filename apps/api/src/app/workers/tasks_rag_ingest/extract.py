@@ -16,6 +16,7 @@ from app.services.document_artifacts import (
     upsert_document_artifact,
 )
 from app.services.extractors import ExtractorRegistry
+from app.services.document_extraction_service import DocumentExtractionService, ExtractionRequest
 from app.storage.paths import get_extracted_path, calculate_text_checksum
 from app.workers.tasks_rag_ingest.stage_context import IngestStageContext, run_stage
 from app.workers.tasks_rag_ingest.stage_results import ExtractResult
@@ -130,7 +131,7 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
         )
 
         extractor = await _resolve_extractor(ctx, ext)
-        if extractor:
+        if extractor and getattr(extractor, "kind", "") == "pdf(layout-pdfminer)":
             logger.info(
                 "Resolved extractor: source_id=%s filename=%s ext=%s extractor=%s",
                 source_id,
@@ -138,23 +139,37 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                 ext,
                 getattr(extractor, "kind", type(extractor).__name__),
             )
-            extract_res = extractor.extract(file_content, filename)
+            parser_result = extractor.extract(file_content, filename)
+            extracted_text = parser_result.text.strip()
+            extractor_kind = parser_result.kind
+            extraction_warnings = parser_result.warnings
+            extraction_meta = parser_result.meta
         else:
-            # Fallback to registry (handles unknown extensions)
-            extract_res = ExtractorRegistry.extract(file_content, filename)
+            shared = await DocumentExtractionService().extract(
+                ExtractionRequest(
+                    payload=file_content,
+                    filename=filename,
+                    content_type=source_meta.get("document", {}).get("content_type"),
+                    profile="rag_ingest",
+                    max_bytes=max(len(file_content), 1),
+                )
+            )
+            extracted_text = shared.text.strip()
+            extractor_kind = shared.parser
+            extraction_warnings = shared.warnings
+            extraction_meta = shared.meta
 
-        extracted_text = extract_res.text.strip()
-        if extract_res.warnings:
+        if extraction_warnings:
             logger.warning(
                 "Extractor warnings: source_id=%s filename=%s extractor=%s warnings=%s",
                 source_id,
                 filename,
-                getattr(extractor, "kind", "registry"),
-                extract_res.warnings,
+                extractor_kind,
+                extraction_warnings,
             )
 
         if not extracted_text:
-            warning_suffix = f" Warnings: {' | '.join(extract_res.warnings)}" if extract_res.warnings else ""
+            warning_suffix = f" Warnings: {' | '.join(extraction_warnings)}" if extraction_warnings else ""
             raise ValueError(f"Failed to extract text from {filename}.{warning_suffix}")
 
         # 5. Upload Artifact
@@ -175,7 +190,7 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
                 "content_type": "text/plain",
                 "checksum": text_checksum,
                 "size_bytes": len(extracted_text.encode("utf-8")),
-                "extractor_kind": extract_res.kind,
+                "extractor_kind": extractor_kind,
             },
         )
         ctx.session.add(source)
@@ -184,28 +199,28 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
         metrics = {
             "word_count": len(extracted_text.split()),
             "char_count": len(extracted_text),
-            "extractor": extract_res.kind,
+            "extractor": extractor_kind,
             "checksum": text_checksum,
             "duration_sec": ctx.elapsed_sec,
             "file_size_bytes": len(file_content),
         }
-        if extract_res.meta:
-            metrics.update(extract_res.meta)
+        if extraction_meta:
+            metrics.update(extraction_meta)
 
         await ctx.set_completed(metrics=metrics)
         await ctx.save_idempotency({
             "status": "completed",
             "extracted_key": extracted_key,
             "checksum": text_checksum,
-            "extractor_kind": extract_res.kind,
+            "extractor_kind": extractor_kind,
         })
         await ctx.session.commit()
 
         return ExtractResult(
             source_id=source_id,
             extracted_key=extracted_key,
-            extractor_kind=extract_res.kind,
-            warnings=extract_res.warnings,
+            extractor_kind=extractor_kind,
+            warnings=extraction_warnings,
         )
 
     return run_stage(

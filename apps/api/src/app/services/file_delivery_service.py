@@ -87,6 +87,26 @@ class FileDeliveryService:
         return bucket, key
 
     async def resolve(self, file_id: str, *, owner_id: str) -> ResolvedDownload:
+        # Unified chat artifact references are UUIDs and resolve through the
+        # chat-scoped access service before legacy source ids are considered.
+        if re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
+            from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
+            from app.models.chat_artifact_reference import ChatArtifactReference
+
+            reference = await self.session.scalar(
+                select(ChatArtifactReference).where(
+                    ChatArtifactReference.id == uuid.UUID(file_id),
+                    ChatArtifactReference.owner_id == uuid.UUID(owner_id),
+                )
+            )
+            if reference:
+                return await ChatArtifactReferenceService(self.session).resolve(
+                    artifact_id=file_id,
+                    chat_id=reference.chat_id,
+                    owner_id=owner_id,
+                    tenant_id=self.repo_factory.tenant_id,
+                )
+
         chat_match = self.CHAT_RE.match(file_id)
         if chat_match:
             return await self._resolve_chat_attachment(

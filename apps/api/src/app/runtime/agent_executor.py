@@ -493,12 +493,12 @@ class AgentExecutor:
                     continue
                 ref = item.get("ref") if isinstance(item.get("ref"), dict) else {}
                 file_name = str(ref.get("file_name") or "file").strip()
-                file_id = str(ref.get("file_id") or "").strip()
+                file_id = str(ref.get("artifact_id") or ref.get("file_id") or "").strip()
                 storage_uri = str(ref.get("storage_uri") or "").strip()
                 snippet_status = str(item.get("snippet_status") or "missing").strip()
                 snippet = str(item.get("snippet") or "").strip()
                 attachment_lines.append(
-                    f"- {file_name} (file_id={file_id}; storage_uri={storage_uri}; snippet_status={snippet_status})"
+                    f"- {file_name} (artifact_id={file_id}; snippet_status={snippet_status})"
                 )
                 if snippet:
                     attachment_lines.append(snippet)

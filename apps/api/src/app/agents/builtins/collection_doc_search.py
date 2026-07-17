@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import uuid
 from typing import Any, ClassVar, Dict, List, Optional
+from sqlalchemy import select
 
 from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
 from app.core.logging import get_logger
-from app.services.file_delivery_service import FileDeliveryService
+from app.services.chat_artifact_reference_service import ArtifactTarget, ChatArtifactReferenceService
+from app.models.rag_ingest import DocumentCollectionMembership
 
 logger = get_logger(__name__)
 
@@ -130,6 +132,9 @@ class CollectionDocSearchTool(VersionedTool):
         from app.services.collection_service import CollectionService
 
         log = ctx.tool_logger("collection.doc_search")
+
+        if not ctx.chat_id:
+            return ToolResult.fail("Document search file references require a chat context.", logs=log.entries_dict())
 
         collection_slug = args["collection_slug"]
         query = args["query"]
@@ -353,6 +358,17 @@ class CollectionDocSearchTool(VersionedTool):
                     {h["payload"].get("source_id") for h in sorted_hits if h.get("payload", {}).get("source_id")}
                 )
                 source_names = await self._get_source_names(session, source_ids)
+                membership_map: dict[str, Any] = {}
+                if source_ids and ctx.chat_id:
+                    membership_rows = (
+                        await session.execute(
+                            select(DocumentCollectionMembership).where(
+                                DocumentCollectionMembership.collection_id == collection.id,
+                                DocumentCollectionMembership.source_id.in_([uuid.UUID(sid) for sid in source_ids]),
+                            )
+                        )
+                    ).scalars().all()
+                    membership_map = {str(item.source_id): item for item in membership_rows}
 
                 # 8. Enrich with collection metadata from dynamic table
                 row_ids = list(
@@ -374,12 +390,28 @@ class CollectionDocSearchTool(VersionedTool):
 
                     source_name = source_names.get(source_id, "Без названия")
                     meta = row_meta.get(row_id, {}) if row_id else {}
+                    membership = membership_map.get(str(source_id))
+                    artifact_id = None
+                    if membership and ctx.chat_id:
+                        reference = await ChatArtifactReferenceService(session).register(
+                            chat_id=ctx.chat_id,
+                            owner_id=ctx.user_id,
+                            target=ArtifactTarget(
+                                kind="collection_document",
+                                target_id=str(membership.id),
+                                collection_id=collection.id,
+                                display_name=source_name,
+                                metadata={"status": "ready"},
+                            ),
+                        )
+                        artifact_id = str(reference.id)
 
                     hit_entry = {
                         "text": text,
                         "source_name": source_name,
                         "score": round(hit["score"], 3),
                         "page": payload.get("page", 0),
+                        "artifact_id": artifact_id,
                     }
                     if meta:
                         hit_entry["metadata"] = meta
@@ -390,7 +422,7 @@ class CollectionDocSearchTool(VersionedTool):
                         "source_id": source_id,
                         "source_name": source_name,
                         "title": source_name,
-                        "uri": self._build_source_uri(source_id),
+                        "artifact_id": artifact_id,
                         "chunk_id": payload.get("chunk_id"),
                         "text": text[:200],
                         "page": payload.get("page", 0),
@@ -419,13 +451,6 @@ class CollectionDocSearchTool(VersionedTool):
             logger.error(f"Collection doc search failed: {e}", exc_info=True)
             log.error("Search failed", error=str(e))
             return ToolResult.fail(f"Search failed: {str(e)}", logs=log.entries_dict())
-
-    @staticmethod
-    def _build_source_uri(source_id: str) -> Optional[str]:
-        sid = str(source_id or "").strip()
-        if not sid:
-            return None
-        return f"/api/v1/files/{FileDeliveryService.make_rag_document_file_id(sid, 'original')}/download"
 
     async def _get_source_names(
         self, session: Any, source_ids: List[str]

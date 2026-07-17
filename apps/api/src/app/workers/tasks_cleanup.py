@@ -21,6 +21,7 @@ from app.models.agent import Agent
 from app.models.rbac import RbacRule
 from app.services.lifecycle_admin_service import LifecycleAdminService
 from app.services.chat_attachment_service import ChatAttachmentService
+from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
 from app.services.sandbox_service import SandboxService
 from app.workers.session_factory import get_worker_session
 
@@ -31,6 +32,7 @@ AUDIT_LOG_RETENTION_DAYS = 7
 AGENT_RUN_RETENTION_DAYS = 7
 DEFAULT_LIFECYCLE_RETENTION_DAYS = 14
 DETACHED_CHAT_ATTACHMENT_RETENTION_HOURS = 24
+ORPHAN_CHAT_ATTACHMENT_GRACE_MINUTES = 15
 
 
 LIFECYCLE_MODELS = (
@@ -186,6 +188,38 @@ def cleanup_expired_detached_chat_attachments(self):
 
 
 @shared_task(
+    name="app.workers.tasks_cleanup.cleanup_orphaned_chat_attachments",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def cleanup_orphaned_chat_attachments(self):
+    """Remove chat-bound attachments that have no owning artifact reference."""
+    import asyncio
+
+    async def _cleanup():
+        async with get_worker_session() as session:
+            older_than = datetime.now(timezone.utc) - timedelta(
+                minutes=ORPHAN_CHAT_ATTACHMENT_GRACE_MINUTES
+            )
+            service = ChatArtifactReferenceService(session)
+            deleted_count = await service.cleanup_orphaned_attachments(older_than=older_than)
+            await session.commit()
+            logger.info(
+                "Deleted %s orphaned chat attachments older than %s",
+                deleted_count,
+                older_than.isoformat(),
+            )
+            return deleted_count
+
+    try:
+        return asyncio.run(_cleanup())
+    except Exception as e:
+        logger.error("Failed to cleanup orphaned chat attachments: %s", e, exc_info=True)
+        raise self.retry(exc=e)
+
+
+@shared_task(
     name="app.workers.tasks_cleanup.cleanup_deprecated_entities",
     bind=True,
     max_retries=3,
@@ -300,6 +334,11 @@ def run_all_cleanup():
         results["detached_chat_attachments"] = cleanup_expired_detached_chat_attachments.delay().get(timeout=300)
     except Exception as e:
         results["detached_chat_attachments"] = f"error: {e}"
+
+    try:
+        results["orphaned_chat_attachments"] = cleanup_orphaned_chat_attachments.delay().get(timeout=300)
+    except Exception as e:
+        results["orphaned_chat_attachments"] = f"error: {e}"
 
     try:
         results["deprecated_entities"] = cleanup_deprecated_entities.delay().get(timeout=300)
