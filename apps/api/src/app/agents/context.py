@@ -40,7 +40,7 @@ class ToolLogger:
     Structured logger for tool executions.
 
     Collects log entries inside a tool's execute() method so they can be
-    persisted alongside the tool_result step in RunStore.
+    included in the canonical tool-result event when the effective level permits it.
 
     Usage inside a ToolHandler:
         async def execute(self, ctx: ToolContext, args: Dict) -> ToolResult:
@@ -119,7 +119,6 @@ class RuntimeDependencies:
     sandbox_overrides: Dict[str, Any] = field(default_factory=dict)
     helper_summary: Optional[Dict[str, Any]] = None
     execution_outline: Optional[Dict[str, Any]] = None
-    runtime_trace_logger: Any = None
 
 
 @dataclass
@@ -159,15 +158,11 @@ class ToolContext:
     
     async def log_intent(self, description: str, details: Optional[Dict[str, Any]] = None) -> None:
         """Log a high-level intent step (e.g., 'Сформирую план', 'Проверяю стойки в NetBox')."""
-        deps = self.get_runtime_deps()
-        if deps.runtime_trace_logger:
-            run_id = self.extra.get("run_id")
-            if run_id:
-                await deps.runtime_trace_logger.log_intent(
-                    run_id=run_id,
-                    description=description,
-                    details=details,
-                )
+        runtime_logger = self.extra.get("runtime_event_logger")
+        if runtime_logger is not None:
+            await runtime_logger.event("planner_decision", payload={
+                "description": description, "details": details or {},
+            })
 
     def get_runtime_deps(self) -> RuntimeDependencies:
         raw = self.extra.get("runtime_deps")

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from app.runtime.ports import PlannerServicePort
+from app.runtime.ports import NextStepPlannerPort
 from app.runtime.turn_state import RuntimeTurnState
 
 
@@ -11,7 +11,7 @@ class PlannerNextStepInvoker:
     @staticmethod
     async def invoke(
         *,
-        planner: PlannerServicePort,
+        planner: NextStepPlannerPort,
         runtime_state: RuntimeTurnState,
         available_agents: List[Dict[str, Any]],
         outline: Optional[Dict[str, Any]],

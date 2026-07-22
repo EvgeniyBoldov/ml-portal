@@ -66,10 +66,3 @@ export { buildRunTrace, normalizeTraceEvent } from './normalize';
 // Budget UI (Stage 6)
 export { BudgetPills, BudgetTable, SpendSummary } from './budget';
 export { parseBudgetSnapshot } from './budget';
-
-// Runtime trace UI
-export { RuntimeTraceTree } from './components/RuntimeTraceTree';
-
-// Artifacts (existing)
-export { extractTraceArtifacts } from './artifacts';
-export type { TraceArtifacts } from './artifacts';

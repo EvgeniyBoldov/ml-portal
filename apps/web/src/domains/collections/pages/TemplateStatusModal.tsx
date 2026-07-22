@@ -31,6 +31,10 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
     [collectionId, row.id],
   );
   const [graph, setGraph] = useState<TemplateStatusGraphModel>(() => buildTemplateFallbackGraph(row));
+  const [descriptionDraft, setDescriptionDraft] = useState(String(row.description ?? ''));
+  const [savedDescription, setSavedDescription] = useState(String(row.description ?? ''));
+  const [saving, setSaving] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   const { data: statusGraph } = useQuery<TemplateStatusGraphModel>({
     queryKey: statusQueryKey,
@@ -44,6 +48,9 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
 
   useEffect(() => {
     setGraph(buildTemplateFallbackGraph(row));
+    const description = String(row.description ?? '');
+    setDescriptionDraft(description);
+    setSavedDescription(description);
   }, [row]);
 
   useEffect(() => {
@@ -208,6 +215,28 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
   );
 
   const title = graph.title || row.title || 'Статус шаблона';
+  const awaitingApproval = String(graph.runtime_status ?? graph.status ?? row.runtime_status ?? row.status ?? '').toLowerCase() === 'approval_required';
+  const dirty = descriptionDraft !== savedDescription;
+  const saveDescription = async () => {
+    setSaving(true);
+    try {
+      await collectionsApi.updateTemplate(collectionId, row.id, { description: descriptionDraft.trim() || null });
+      setSavedDescription(descriptionDraft);
+      await queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
+    } finally {
+      setSaving(false);
+    }
+  };
+  const approve = async () => {
+    setApproving(true);
+    try {
+      await collectionsApi.approveTemplate(collectionId, row.id);
+      await queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
+      onClose();
+    } finally {
+      setApproving(false);
+    }
+  };
 
   return (
     <Modal
@@ -233,6 +262,23 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
             processingText="Этап выполняется..."
           />
         </div>
+        {awaitingApproval && (
+          <div className={statusModalStyles.detailsSection}>
+            <label>
+              Схема (только для просмотра)
+              <pre>{JSON.stringify(graph.template_schema ?? {}, null, 2)}</pre>
+            </label>
+            <label>
+              Описание
+              <textarea value={descriptionDraft} onChange={(event) => setDescriptionDraft(event.target.value)} rows={6} />
+            </label>
+            <div>
+              <button type="button" onClick={() => void saveDescription()} disabled={saving || !dirty}>Сохранить</button>
+              <button type="button" onClick={() => void approve()} disabled={approving || dirty}>Согласовать</button>
+              <button type="button" onClick={onClose}>Отмена</button>
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   );

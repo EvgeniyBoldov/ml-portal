@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 import json
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 from uuid import uuid4
@@ -27,7 +28,7 @@ from app.runtime.memory.transport import TurnMemory
 from app.runtime.memory.writer import MemoryWriter
 from app.runtime.events import RuntimeEvent
 from app.services.system_llm_role_service import SystemLLMRoleService
-from app.services.runtime_tail_event_bus import RuntimeTailEventBus
+from app.services.runtime_event_logger import RuntimeEventLogger, RuntimeLogContext
 
 logger = get_logger(__name__)
 
@@ -91,6 +92,7 @@ class MemoryFinalizePayload(BaseModel):
     facts_limits: Optional[Dict[str, int]] = None
     conversation_limits: Optional[Dict[str, int]] = None
     logging_level: Optional[str] = None
+    runtime_log_context: Optional[Dict[str, Any]] = None
 
 
 def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
@@ -187,20 +189,30 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
     
     async def _finalize():
         payload = MemoryFinalizePayload.model_validate(payload_dict)
-        bus = RuntimeTailEventBus()
+        runtime_logger = None
+        if payload.runtime_log_context:
+            context = replace(
+                RuntimeLogContext.from_payload(payload.runtime_log_context),
+                origin="worker",
+            )
+            runtime_logger = RuntimeEventLogger(context=context)
         metric_keys = ("planner_steps", "agent_steps", "tool_calls", "tokens_in", "tokens_out", "tokens_total", "retries", "wall_time_ms")
 
         async def _publish(event: RuntimeEvent) -> None:
-            if not payload.stream_key:
+            if runtime_logger is None:
                 return
-            message = {
-                "type": event.type.value,
-                "run_id": payload.stream_key,
-                **dict(event.data or {}),
-            }
+            event_data = dict(event.data or {})
             if payload.tail_id:
-                message["tail_id"] = payload.tail_id
-            await bus.publish(stream_key=payload.stream_key, payload=message)
+                event_data["tail_id"] = payload.tail_id
+            await runtime_logger.event(
+                event.type.value,
+                payload=event_data,
+                entity_type=event_data.get("entity_type"),
+                entity_id=event_data.get("entity_id"),
+                parent_entity_type=event_data.get("parent_entity_type"),
+                parent_entity_id=event_data.get("parent_entity_id"),
+                duration_ms=event_data.get("duration_ms"),
+            )
 
         async with get_worker_session() as session:
             # Create LLM client from settings
@@ -274,7 +286,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 tokens_out = int(llm_payload.get("tokens_out") or 0)
                 tokens_total = int(llm_payload.get("tokens_total") or (tokens_in + tokens_out))
                 await _publish(
-                    RuntimeEvent.llm_turn(
+                    RuntimeEvent.llm_response(
                         llm_call_id=f"{parent_id}:llm:{uuid4().hex[:8]}",
                         parent_entity_type="agent_run",
                         parent_entity_id=parent_id,

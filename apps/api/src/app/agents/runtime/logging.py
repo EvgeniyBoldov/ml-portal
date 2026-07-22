@@ -25,6 +25,7 @@ logger = get_logger(__name__)
 
 class LoggingLevel(str, Enum):
     NONE = "none"
+    ERROR = "error"
     BRIEF = "brief"
     FULL = "full"
 
@@ -51,6 +52,8 @@ _FULL_STEP_TYPES = frozenset({
 def should_log_step(level: LoggingLevel, step_type: str) -> bool:
     """Check if a step type should be logged at the given level."""
     if level == LoggingLevel.NONE:
+        return False
+    if level == LoggingLevel.ERROR:
         return step_type == "error"
     if level == LoggingLevel.BRIEF:
         return step_type in _BRIEF_STEP_TYPES
@@ -73,7 +76,7 @@ def should_emit_event(level: LoggingLevel, event_type: str) -> bool:
         return True
     if level == LoggingLevel.BRIEF:
         return event_type in {"status", "user_message"}
-    # NONE — only always_emit
+    # NONE/ERROR — runtime transport remains independent from diagnostics.
     return False
 
 

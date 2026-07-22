@@ -7,7 +7,9 @@
 1. `pipeline.py` receives `PipelineRequest`.
 2. `assembler.py` builds per-turn dependencies (`PipelineAssembler`).
 3. Stages execute in order:
-   - `stages/planning_stage.py` — single decision engine (clarify + agent routing + finalization intent)
+   - `orchestrator.py` / `plan_store.py` — deterministic plan control and task lifecycle
+   - `planner/*` — planner contract and graph patch generation
+   - `stages/finalization_stage.py` — synthesizer after terminal plan
    - `stages/finalization_stage.py` — synthesizer for NEEDS_FINAL outcomes
 4. State is persisted through ports (`ports.py`) and adapters (services/repos).
 5. Output events are normalized in `events.py` and wrapped with envelope (`envelope.py`).
@@ -17,7 +19,9 @@
 - `pipeline.py`: orchestration only (stage order, terminal handling, replay/resume entry points).
 - `assembler.py`: dependency wiring, cached services, stage factories.
 - `platform_config.py`: load platform snapshot (`policy`, routable agents, config degradation).
-- `turn_state.py`: canonical runtime state (`RuntimeTurnState`) — single source of truth for planner/agent/finalization.
+- `orchestrator_contracts.py`: planner/orchestrator/task/result contracts.
+- `plan_store.py`: transactional graph state, dependencies, checkpoint and attempts.
+- `turn_state.py`: current-turn memory/context DTO; it is not the persisted plan.
 - `synthesizer.py`: final answer synthesis and role prompt/model params loading.
 
 ## Ports and Adapters
@@ -95,7 +99,7 @@ Rules:
 
 ## Trace-Pack v2 and Replay
 
-- Trace pack version: `runtime.trace_pack.v2`.
+- Trace pack version: `runtime.trace_pack.v2` plus canonical plan/task/attempt lifecycle events. Historical packs remain readable through adapters.
 - Includes: runtime config snapshot, budget policy/consumed, planner IO, policy decisions,
   memory bundle compact, typed tool errors, model config.
 - Replay CLI:
@@ -111,13 +115,9 @@ By default replay blocks destructive/write operations.
 - Canonical runtime event stream includes lifecycle events:
   `run_start/run_end`, `orchestrator_*`, `planner_iteration_*`,
   `agent_*`, `synthesis_*`.
-- `agent_run_steps` (chat/agent runs) persist execution-relevant steps
-  (`planner_decision`, `llm_turn`, `tool_*`, `budget_snapshot`, `final`, `error`)
-  and do **not** require lifecycle duplication there.
-- `sandbox_run_steps` persist the full event stream (including lifecycle events),
-  which is used by sandbox inspector and deep replay/debug flows.
-- Trace consumers must treat legacy step types (`llm_request/llm_response/llm_call`,
-  `routing/triage/planner_action`) as historical fallback only.
+- `runtime_execution_events` persists the full sandbox stream and is the only
+  source for live inspection and historical replay.
+- LLM trace uses `llm_request` and `llm_response` for one stable `llm_call_id`.
 
 ## Tests
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import re
+from pathlib import PurePosixPath
 from typing import Any, ClassVar, Dict
 
 from app.agents.context import ToolContext, ToolResult
@@ -16,7 +17,7 @@ from app.agents.handlers.versioned_tool import VersionedTool, register_tool, too
 from app.core.db import get_session_factory
 from app.core.logging import get_logger
 from app.models.collection import CollectionType
-from app.services.chat_attachment_service import ChatAttachmentService
+from app.services.artifact_writer import ArtifactWriter
 from app.services.collection.row_service import CollectionRowService
 from app.services.collection.template_contract import TemplateContract
 from app.services.collection.template_fill_engine import TemplateFillEngine
@@ -43,6 +44,10 @@ _INPUT_SCHEMA_V1 = {
         "values": {
             "type": "object",
             "description": "Values payload for the selected template row. Keys, nesting, and types must match the stored fill schema.",
+        },
+        "filename": {
+            "type": "string",
+            "description": "Optional output filename. Its extension must match the template format.",
         },
     },
     "required": ["collection_id", "row_id", "values"],
@@ -204,6 +209,11 @@ class TemplateFillTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
+                if str(row.get("status") or "").lower() != "ready":
+                    return ToolResult.fail(
+                        "Template is not ready. It must finish analysis, be approved, and be vectorized before filling.",
+                        logs=log.entries_dict(),
+                    )
                 file_meta = row.get("file") or {}
                 s3_key = file_meta.get("s3_key")
                 bucket = file_meta.get("bucket")
@@ -211,6 +221,18 @@ class TemplateFillTool(VersionedTool):
                 if not s3_key or not bucket:
                     return ToolResult.fail(
                         "Template file metadata is incomplete (missing s3_key or bucket)",
+                        logs=log.entries_dict(),
+                    )
+
+                requested_filename = str(args.get("filename") or "").strip()
+                output_filename = requested_filename or f"filled_{filename}"
+                source_ext = PurePosixPath(str(filename)).suffix.lower()
+                output_ext = PurePosixPath(output_filename).suffix.lower()
+                if source_ext not in {".xlsx", ".xlsm"}:
+                    return ToolResult.fail("Only .xlsx and .xlsm templates are supported", logs=log.entries_dict())
+                if requested_filename and source_ext and output_ext != source_ext:
+                    return ToolResult.fail(
+                        "Output filename extension must match the template format",
                         logs=log.entries_dict(),
                     )
 
@@ -226,12 +248,10 @@ class TemplateFillTool(VersionedTool):
                 ext = ""
                 if "." in filename:
                     ext = filename.rsplit(".", 1)[-1].strip().lower()
-                if ext in {"xlsx", "xls", "xlsm"}:
+                if ext in {"xlsx", "xlsm"}:
                     fmt = "excel"
-                elif ext in {"docx", "doc"}:
-                    fmt = "word"
                 else:
-                    fmt = "text"
+                    return ToolResult.fail("Only .xlsx and .xlsm templates are supported", logs=log.entries_dict())
 
                 # Load contract
                 raw_schema = row.get("template_schema") or {}
@@ -303,23 +323,22 @@ class TemplateFillTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
-                att_service = ChatAttachmentService(session)
-                safe_filename = f"filled_{filename}"
-                attachment = await att_service.create_generated_attachment(
+                artifact = await ArtifactWriter(session).write(
                     chat_id=chat_id,
                     owner_id=owner_id,
-                    filename=safe_filename,
+                    filename=output_filename,
                     content=filled_bytes,
                     content_type=file_meta.get("content_type") or "application/octet-stream",
+                    metadata={"format": fmt, "template_filename": filename},
                 )
                 await session.commit()
 
                 return ToolResult.ok(
                     data={
-                        "artifact_id": attachment.get("artifact_id"),
-                        "file_name": safe_filename,
+                        "artifact_id": artifact.artifact_id,
+                        "file_name": artifact.file_name,
                         "content_type": file_meta.get("content_type") or "application/octet-stream",
-                        "size_bytes": len(filled_bytes),
+                        "size_bytes": artifact.size_bytes,
                         "format": fmt,
                         "filled_placeholders": len(filled_keys),
                         "missing_placeholders": missing,

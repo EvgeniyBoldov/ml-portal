@@ -99,6 +99,12 @@ class PlannerCallAgentDispatcher:
                 )
                 agent_started = True
 
+            if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
+                event.data.setdefault("entity_type", "interaction")
+                event.data.setdefault("entity_id", f"{lifecycle_agent_run_id}:interaction")
+                event.data.setdefault("interaction_kind", "confirm")
+                event.data.setdefault("parent_entity_type", "agent_run")
+                event.data.setdefault("parent_entity_id", lifecycle_agent_run_id)
             yield PhasedEvent(event, OrchestrationPhase.AGENT)
             if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
                 runtime_state.status = PipelineStopReason.WAITING_CONFIRMATION.value
@@ -128,11 +134,12 @@ class PlannerCallAgentDispatcher:
                     OrchestrationPhase.AGENT,
                 )
                 yield PhasedEvent(
-                    RuntimeEvent.planner_iteration_end(
-                        iteration_id=planner_iteration_id,
-                        orchestrator_id=effective_orchestrator_id,
-                        iteration=planner_iteration,
-                        status="paused",
+                RuntimeEvent.planner_iteration_end(
+                    iteration_id=planner_iteration_id,
+                    orchestrator_id=effective_orchestrator_id,
+                    iteration=planner_iteration,
+                    iteration_type="execution",
+                    status="paused",
                     ),
                     OrchestrationPhase.PLANNER,
                 )
@@ -246,6 +253,7 @@ class PlannerCallAgentDispatcher:
                     iteration_id=planner_iteration_id,
                     orchestrator_id=effective_orchestrator_id,
                     iteration=planner_iteration,
+                    iteration_type="execution",
                     status="failed",
                 ),
                 OrchestrationPhase.PLANNER,

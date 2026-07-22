@@ -70,6 +70,8 @@ class DirectRuntime(BaseRuntime):
             ctx,
             getattr(agent, "logging_level", None),
         )
+        ctx.extra["logging_level"] = resolved_logging_level.value
+        ctx.extra["trace_enabled"] = resolved_logging_level.value != "none"
         run_session = self._create_run_session(
             ctx=ctx,
             agent_slug=agent.slug,

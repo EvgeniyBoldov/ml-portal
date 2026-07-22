@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_session, get_current_user_sse, require_admin
 from app.agents import ToolContext
 from app.agents.runtime_sandbox_resolver import RuntimeSandboxResolver
-from app.agents.runtime_trace_logger import RuntimeTraceLogger
 from app.core.db import get_session_factory
 from app.runtime import PipelineRequest, RuntimeEventType, RuntimePipeline
 from app.runtime.contracts import ExecutionMode
@@ -34,17 +33,16 @@ from app.schemas.sandbox import (
     SandboxRunCreate,
     SandboxRunListItem,
     SandboxRunDetailResponse,
-    SandboxRunStepResponse,
+    RuntimeJournalEventResponse,
 )
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.chat_visibility import make_sandbox_upload_chat_name
 from app.services.sandbox_service import SandboxService
-from app.services.sandbox_step_enrichment_service import SandboxStepEnrichmentService
-from app.services.run_store import RunStore
+from app.services.runtime_event_journal_service import RuntimeEventJournalService
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.chat_router_event_mapper import build_resume_content
 from app.services.runtime_terminal_status import planner_terminal_from_event
-from app.services.runtime_trace_builder import RuntimeTraceBuilder, TraceStep
+from app.services.runtime_event_logger import RuntimeEventLogger, RuntimeLogContext, RuntimeLoggingLevel
 from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
 
 from .helpers import check_session_owner, tenant_uuid, user_uuid
@@ -52,13 +50,15 @@ from .helpers import check_session_owner, tenant_uuid, user_uuid
 logger = get_logger(__name__)
 
 router = APIRouter()
-def _is_pause_transport_step(evt_type: str, evt_data: dict) -> bool:
-    reason = str(evt_data.get("reason") or "").strip().lower()
-    if evt_type == "run_paused":
-        return True
-    if evt_type == "stop" and reason in {"waiting_input", "waiting_confirmation"}:
-        return True
-    return False
+def _extract_attachment_meta_from_events(events: list) -> list[dict]:
+    for event in reversed(events):
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, dict):
+            continue
+        attachments = payload.get("attachments")
+        if isinstance(attachments, list):
+            return [item for item in attachments if isinstance(item, dict)]
+    return []
 
 
 
@@ -90,17 +90,6 @@ async def _ensure_sandbox_upload_chat(
     return row.id
 
 
-def _extract_attachment_meta_from_steps(steps: list) -> list[dict]:
-    for step in reversed(list(steps or [])):
-        payload = getattr(step, "step_data", None)
-        if not isinstance(payload, dict):
-            continue
-        attachments = payload.get("attachments")
-        if isinstance(attachments, list) and attachments:
-            return [item for item in attachments if isinstance(item, dict)]
-    return []
-
-
 @router.get(
     "/sessions/{session_id}/runs",
     response_model=list[SandboxRunListItem],
@@ -113,7 +102,7 @@ async def list_runs(
 ):
     """List all runs for a session."""
     svc = SandboxService(db)
-    runs_with_counts = await svc.list_runs_with_steps_count(session_id, branch_id)
+    runs_with_counts = await svc.list_runs_with_event_count(session_id, branch_id)
     return [
         SandboxRunListItem(
             id=r.id,
@@ -124,9 +113,9 @@ async def list_runs(
             status=r.status,
             started_at=r.started_at,
             finished_at=r.finished_at,
-            steps_count=steps_count,
+            steps_count=events_count,
         )
-        for r, steps_count in runs_with_counts
+        for r, events_count in runs_with_counts
     ]
 
 
@@ -140,45 +129,13 @@ async def get_run_detail(
     db: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(require_admin),
 ):
-    """Get run detail with steps."""
+    """Get run detail with the canonical runtime journal."""
     svc = SandboxService(db)
     run = await svc.get_run_detail(run_id)
     if not run or run.session_id != session_id:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    branch = await db.scalar(select(SandboxBranch).where(SandboxBranch.id == run.branch_id))
-    snapshot = await db.scalar(
-        select(SandboxOverrideSnapshot).where(SandboxOverrideSnapshot.id == run.snapshot_id)
-    )
-    enricher = SandboxStepEnrichmentService(db)
-    enriched_steps: list[SandboxRunStepResponse] = []
-    for s in run.steps:
-        enriched_payload = await enricher.enrich(
-            s.step_data,
-            branch_name=branch.name if branch else None,
-            snapshot_hash=snapshot.snapshot_hash if snapshot else None,
-        )
-        enriched_steps.append(
-            SandboxRunStepResponse(
-                id=s.id,
-                step_type=s.step_type,
-                step_data=enriched_payload,
-                order_num=s.order_num,
-                created_at=s.created_at,
-            )
-        )
-
-    trace = RuntimeTraceBuilder().build(
-        TraceStep(
-            id=str(s.id),
-            raw_type=str(s.step_type),
-            data=dict(enriched_steps[idx].step_data or {}),
-            step_number=int(s.order_num) if s.order_num is not None else None,
-            created_at=s.created_at,
-            duration_ms=None,
-        )
-        for idx, s in enumerate(run.steps)
-    )
+    events = await RuntimeEventJournalService(db).list_run_events(run.id)
 
     return SandboxRunDetailResponse(
         id=run.id,
@@ -191,8 +148,14 @@ async def get_run_detail(
         error=run.error,
         started_at=run.started_at,
         finished_at=run.finished_at,
-        steps=enriched_steps,
-        trace=trace,
+        events=[RuntimeJournalEventResponse(
+            id=event.id, run_id=event.run_id, sequence=event.sequence,
+            event_type=event.event_type, occurred_at=event.occurred_at,
+            entity_type=event.entity_type, entity_id=event.entity_id,
+            parent_entity_type=event.parent_entity_type, parent_entity_id=event.parent_entity_id,
+            caused_by_event_id=event.caused_by_event_id, duration_ms=event.duration_ms,
+            payload=event.payload,
+        ) for event in events],
     )
 
 
@@ -259,6 +222,9 @@ async def run_sandbox(
         owner_id=u_uuid,
         session_id=session_id,
     )
+    # The SSE generator uses a separate database session.  Commit the hidden
+    # sandbox chat before it can register generated artifacts against its FK.
+    await db.commit()
     attachment_service = ChatAttachmentService(db)
     attachment_meta: list[dict] = []
     attachment_contexts = []
@@ -306,21 +272,11 @@ async def run_sandbox(
                         agent_version_id=agent_version_id,
                     )
                 except Exception as agent_err:
-                    runtime_trace = RuntimeTraceLogger(
-                        session=stream_db,
+                    await RuntimeEventLogger(
+                        context=RuntimeLogContext(run_id=run_id, level=RuntimeLoggingLevel.FULL,
+                            origin="sandbox", tenant_id=t_uuid, user_id=u_uuid, stream=True),
                         session_factory=session_factory,
-                        run_store=RunStore(session_factory=session_factory),
-                    )
-                    await runtime_trace.log_error(
-                        run_id,
-                        stage="sandbox_agent_resolve",
-                        error=agent_err,
-                        data={
-                            "run_id": str(run_id),
-                            "agent_slug": agent_slug,
-                            "tenant_id": str(t_uuid),
-                        },
-                    )
+                    ).error(agent_err, payload={"stage": "sandbox_agent_resolve", "agent_slug": agent_slug})
                     try:
                         svc_err = SandboxService(stream_db)
                         await svc_err.finish_run(run_id, "failed", str(agent_err))
@@ -348,25 +304,23 @@ async def run_sandbox(
             sandbox_overrides["sandbox_run_id"] = str(run_id)
             sandbox_overrides["sandbox_branch_id"] = str(branch_id)
             sandbox_overrides["sandbox_session_id"] = str(session_id)
-            runtime_trace = RuntimeTraceLogger(
-                session=stream_db,
-                session_factory=session_factory,
-                run_store=RunStore(session_factory=session_factory),
-            )
             logger.info("[Sandbox] Runtime logging level forced to full")
 
-            tool_ctx = runtime_trace.attach_context(ToolContext(
+            tool_ctx = ToolContext(
                 tenant_id=t_uuid,
                 user_id=u_uuid,
                 chat_id=str(sandbox_chat_id),
                 request_id=str(uuid.uuid4()),
                 extra={"sandbox_confirmed_fingerprints": sandbox_confirmed_fingerprints},
-            ))
+            )
+            runtime_deps = tool_ctx.get_runtime_deps()
+            runtime_deps.session_factory = session_factory
+            runtime_deps.sandbox_overrides = sandbox_overrides
+            tool_ctx.set_runtime_deps(runtime_deps)
 
             pipeline = RuntimePipeline(
                 session=stream_db,
                 llm_client=llm_client,
-                run_store=RunStore(session_factory=session_factory),
             )
 
             messages = [{"role": "user", "content": data.request_text}]
@@ -383,48 +337,14 @@ async def run_sandbox(
                 sandbox_overrides=sandbox_overrides,
                 execution_mode=ExecutionMode(data.execution_mode or ExecutionMode.NORMAL.value),
             )
-            step_num = await SandboxService(stream_db).get_next_run_step_order(run_id) - 1
             final_status = "completed"
             final_error: Optional[str] = None
-            stream_enricher = SandboxStepEnrichmentService(stream_db)
             tail_pending: set[str] = set()
             tail_finished_early: set[str] = set()
+            emitted_event_ids: set[str] = set()
             tail_subscriber = RuntimeTailSubscriber(stream_key=str(run_id))
             tail_queue: asyncio.Queue[dict] = asyncio.Queue()
             tail_listener_task: Optional[asyncio.Task] = None
-
-            async def _persist_step(evt_type: str, evt_data: dict) -> None:
-                nonlocal step_num
-                if _is_pause_transport_step(evt_type, evt_data):
-                    return
-                step_num += 1
-                try:
-                    svc_inner = SandboxService(stream_db)
-                    step_payload = {
-                        **evt_data,
-                        "snapshot_id": str(snapshot_id),
-                        "branch_id": str(branch_id),
-                    }
-                    step_payload = stream_enricher.sanitize_step_payload(
-                        step_type=evt_type,
-                        step_data=step_payload,
-                    )
-                    step_payload = await stream_enricher.enrich(
-                        step_payload,
-                        branch_name=branch.name,
-                        snapshot_hash=snapshot.snapshot_hash,
-                    )
-                    if attachment_meta:
-                        step_payload["attachments"] = attachment_meta
-                    await svc_inner.add_run_step(
-                        run_id=run_id,
-                        step_type=evt_type,
-                        step_data=step_payload,
-                        order_num=step_num,
-                    )
-                    await stream_db.commit()
-                except Exception as step_err:
-                    logger.warning(f"[Sandbox] Failed to persist step: {step_err}")
 
             async def _handle_tail_event(message: dict) -> tuple[str, dict]:
                 evt_type = str(message.get("type") or "status")
@@ -449,9 +369,38 @@ async def run_sandbox(
                     drained += 1
                 return out
 
+            async def _journal_fallback() -> list[dict]:
+                rows = await RuntimeEventJournalService(stream_db).list_run_events(run_id)
+                payloads: list[dict] = []
+                for row in rows:
+                    event_id = str(row.id)
+                    if event_id in emitted_event_ids:
+                        continue
+                    emitted_event_ids.add(event_id)
+                    payloads.append({
+                        "type": row.event_type,
+                        "run_id": str(row.run_id),
+                        "event_id": event_id,
+                        "sequence": row.sequence,
+                        "occurred_at": row.occurred_at.isoformat(),
+                        "entity_type": row.entity_type,
+                        "entity_id": row.entity_id,
+                        "parent_entity_type": row.parent_entity_type,
+                        "parent_entity_id": row.parent_entity_id,
+                        "caused_by_event_id": str(row.caused_by_event_id) if row.caused_by_event_id else None,
+                        "duration_ms": row.duration_ms,
+                        **(row.payload or {}),
+                    })
+                return payloads
+
             try:
                 await tail_subscriber.subscribe()
 
+                yield f'data: {json.dumps({"type": "stream_connected", "run_id": str(run_id)})}\n\n'
+
+                # Confirm the HTTP/SSE connection immediately.  Runtime work
+                # can spend several seconds inside an LLM/tool call before the
+                # pipeline emits its first high-level event.
                 async def _tail_listener() -> None:
                     async for message in tail_subscriber.listen():
                         await tail_queue.put(message)
@@ -486,11 +435,6 @@ async def run_sandbox(
                     elif event.type == RuntimeEventType.FINAL:
                         final_status = "completed"
                         final_error = None
-                    payload = {
-                        "type": event.type.value,
-                        "run_id": str(run_id),
-                        **event.data,
-                    }
                     if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
                         tail_id = str(event.data.get("tail_id") or "").strip()
                         if tail_id:
@@ -498,12 +442,25 @@ async def run_sandbox(
                                 tail_finished_early.discard(tail_id)
                             else:
                                 tail_pending.add(tail_id)
-                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                    await _persist_step(event.type.value, event.data)
+                    # The runtime logger is the sole producer of sandbox
+                    # events.  It persists first and then publishes to this
+                    # run's tail channel; consuming that channel here keeps
+                    # the live inspector identical to the event journal.
+                    try:
+                        message = await asyncio.wait_for(tail_queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        for fallback in await _journal_fallback():
+                            yield f"data: {json.dumps(fallback, ensure_ascii=False, default=str)}\n\n"
+                        continue
+                    evt_type, evt_payload = await _handle_tail_event(message)
+                    if evt_payload.get("event_id"):
+                        emitted_event_ids.add(str(evt_payload["event_id"]))
+                    yield f"data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n"
                     drained_tail = await _drain_tail_events()
                     for evt_type, evt_payload in drained_tail:
+                        if evt_payload.get("event_id"):
+                            emitted_event_ids.add(str(evt_payload["event_id"]))
                         yield f"data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n"
-                        await _persist_step(evt_type, evt_payload)
 
                 if not str(final_status).startswith("waiting_"):
                     svc_final = SandboxService(stream_db)
@@ -520,7 +477,6 @@ async def run_sandbox(
                             continue
                         evt_type, evt_payload = await _handle_tail_event(message)
                         yield f"data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n"
-                        await _persist_step(evt_type, evt_payload)
                     if tail_pending:
                         timeout_payload = {
                             "type": "status",
@@ -529,15 +485,18 @@ async def run_sandbox(
                             "pending_tail_ids": sorted(tail_pending),
                         }
                         yield f"data: {json.dumps(timeout_payload, ensure_ascii=False)}\n\n"
-                        await _persist_step("status", timeout_payload)
+
+                # Redis pub/sub is best effort.  Flush anything persisted while
+                # the pipeline was running before closing the SSE response.
+                for fallback in await _journal_fallback():
+                    yield f"data: {json.dumps(fallback, ensure_ascii=False, default=str)}\n\n"
 
             except Exception as e:
-                await runtime_trace.log_error(
-                    run_id,
-                    stage="sandbox_stream",
-                    error=e,
-                    data={"run_id": str(run_id)},
-                )
+                await RuntimeEventLogger(
+                    context=RuntimeLogContext(run_id=run_id, level=RuntimeLoggingLevel.FULL,
+                        origin="sandbox", tenant_id=t_uuid, user_id=u_uuid, stream=True),
+                    session_factory=session_factory,
+                ).error(e, payload={"stage": "sandbox_stream"})
                 yield f"data: {json.dumps({'type': 'error', 'error': str(e), 'run_id': str(run_id)})}\n\n"
                 try:
                     svc_err = SandboxService(stream_db)
@@ -698,9 +657,10 @@ async def resume_sandbox_run(
         owner_id=u_uuid,
         session_id=session_id,
     )
+    await db.commit()
     attachment_service = ChatAttachmentService(db)
-    prior_steps = await svc.steps.list_by_run(run_id)
-    attachment_meta = _extract_attachment_meta_from_steps(prior_steps)
+    prior_events = await RuntimeEventJournalService(db).list_run_events(run_id)
+    attachment_meta = _extract_attachment_meta_from_events(list(prior_events))
     attachment_contexts = await attachment_service.build_runtime_attachment_contexts_from_meta(
         attachments_meta=attachment_meta
     )
@@ -738,24 +698,21 @@ async def resume_sandbox_run(
     async def event_stream() -> AsyncGenerator[str, None]:
         session_factory = get_session_factory()
         async with session_factory() as stream_db:
-            runtime_trace = RuntimeTraceLogger(
-                session=stream_db,
-                session_factory=session_factory,
-                run_store=RunStore(session_factory=session_factory),
-            )
-
-            tool_ctx = runtime_trace.attach_context(ToolContext(
+            tool_ctx = ToolContext(
                 tenant_id=t_uuid,
                 user_id=u_uuid,
                 chat_id=str(sandbox_chat_id),
                 request_id=str(uuid.uuid4()),
                 extra={"sandbox_confirmed_fingerprints": confirmed_fingerprints},
-            ))
+            )
+            runtime_deps = tool_ctx.get_runtime_deps()
+            runtime_deps.session_factory = session_factory
+            runtime_deps.sandbox_overrides = {"logging_level": "full", "sandbox_run_id": str(run_id)}
+            tool_ctx.set_runtime_deps(runtime_deps)
 
             pipeline = RuntimePipeline(
                 session=stream_db,
                 llm_client=llm_client,
-                run_store=RunStore(session_factory=session_factory),
             )
 
             # Build request from paused state context
@@ -795,45 +752,14 @@ async def resume_sandbox_run(
                 confirmation_tokens=confirmed_fingerprints,
             )
 
-            step_num = await SandboxService(stream_db).get_next_run_step_order(run_id) - 1
             final_status = "completed"
             final_error: Optional[str] = None
-            stream_enricher = SandboxStepEnrichmentService(stream_db)
             tail_pending: set[str] = set()
             tail_finished_early: set[str] = set()
+            emitted_event_ids: set[str] = set()
             tail_subscriber = RuntimeTailSubscriber(stream_key=str(run_id))
             tail_queue: asyncio.Queue[dict] = asyncio.Queue()
             tail_listener_task: Optional[asyncio.Task] = None
-
-            async def _persist_step(evt_type: str, evt_data: dict) -> None:
-                nonlocal step_num
-                if _is_pause_transport_step(evt_type, evt_data):
-                    return
-                step_num += 1
-                try:
-                    svc_inner = SandboxService(stream_db)
-                    step_payload = {
-                        **evt_data,
-                        "branch_id": str(branch.id) if branch else "",
-                    }
-                    step_payload = stream_enricher.sanitize_step_payload(
-                        step_type=evt_type,
-                        step_data=step_payload,
-                    )
-                    step_payload = await stream_enricher.enrich(
-                        step_payload,
-                        branch_name=branch.name if branch else "",
-                        snapshot_hash="",
-                    )
-                    await svc_inner.add_run_step(
-                        run_id=run_id,
-                        step_type=evt_type,
-                        step_data=step_payload,
-                        order_num=step_num,
-                    )
-                    await stream_db.commit()
-                except Exception as step_err:
-                    logger.warning(f"[Sandbox Resume] Failed to persist step: {step_err}")
 
             async def _handle_tail_event(message: dict) -> tuple[str, dict]:
                 evt_type = str(message.get("type") or "status")
@@ -858,8 +784,34 @@ async def resume_sandbox_run(
                     drained += 1
                 return out
 
+            async def _journal_fallback() -> list[dict]:
+                rows = await RuntimeEventJournalService(stream_db).list_run_events(run_id)
+                payloads: list[dict] = []
+                for row in rows:
+                    event_id = str(row.id)
+                    if event_id in emitted_event_ids:
+                        continue
+                    emitted_event_ids.add(event_id)
+                    payloads.append({
+                        "type": row.event_type,
+                        "run_id": str(row.run_id),
+                        "event_id": event_id,
+                        "sequence": row.sequence,
+                        "occurred_at": row.occurred_at.isoformat(),
+                        "entity_type": row.entity_type,
+                        "entity_id": row.entity_id,
+                        "parent_entity_type": row.parent_entity_type,
+                        "parent_entity_id": row.parent_entity_id,
+                        "caused_by_event_id": str(row.caused_by_event_id) if row.caused_by_event_id else None,
+                        "duration_ms": row.duration_ms,
+                        **(row.payload or {}),
+                    })
+                return payloads
+
             try:
                 await tail_subscriber.subscribe()
+
+                yield f'data: {json.dumps({"type": "stream_connected", "run_id": str(run_id)})}\n\n'
 
                 async def _tail_listener() -> None:
                     async for message in tail_subscriber.listen():
@@ -896,11 +848,6 @@ async def resume_sandbox_run(
                         final_status = "completed"
                         final_error = None
 
-                    payload = {
-                        "type": event.type.value,
-                        "run_id": str(run_id),
-                        **event.data,
-                    }
                     if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
                         tail_id = str(event.data.get("tail_id") or "").strip()
                         if tail_id:
@@ -908,12 +855,21 @@ async def resume_sandbox_run(
                                 tail_finished_early.discard(tail_id)
                             else:
                                 tail_pending.add(tail_id)
-                    yield f'data: {json.dumps(payload, ensure_ascii=False)}\n\n'
-                    await _persist_step(event.type.value, event.data)
+                    try:
+                        message = await asyncio.wait_for(tail_queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        for fallback in await _journal_fallback():
+                            yield f"data: {json.dumps(fallback, ensure_ascii=False, default=str)}\n\n"
+                        continue
+                    evt_type, evt_payload = await _handle_tail_event(message)
+                    if evt_payload.get("event_id"):
+                        emitted_event_ids.add(str(evt_payload["event_id"]))
+                    yield f'data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n'
                     drained_tail = await _drain_tail_events()
                     for evt_type, evt_payload in drained_tail:
+                        if evt_payload.get("event_id"):
+                            emitted_event_ids.add(str(evt_payload["event_id"]))
                         yield f'data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n'
-                        await _persist_step(evt_type, evt_payload)
 
                 if not str(final_status).startswith("waiting_"):
                     svc_final = SandboxService(stream_db)
@@ -930,7 +886,6 @@ async def resume_sandbox_run(
                             continue
                         evt_type, evt_payload = await _handle_tail_event(message)
                         yield f'data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n'
-                        await _persist_step(evt_type, evt_payload)
                     if tail_pending:
                         timeout_payload = {
                             "type": "status",
@@ -939,15 +894,16 @@ async def resume_sandbox_run(
                             "pending_tail_ids": sorted(tail_pending),
                         }
                         yield f'data: {json.dumps(timeout_payload, ensure_ascii=False)}\n\n'
-                        await _persist_step("status", timeout_payload)
+
+                for fallback in await _journal_fallback():
+                    yield f"data: {json.dumps(fallback, ensure_ascii=False, default=str)}\n\n"
 
             except Exception as e:
-                await runtime_trace.log_error(
-                    run_id,
-                    stage="sandbox_resume_stream",
-                    error=e,
-                    data={"run_id": str(run_id)},
-                )
+                await RuntimeEventLogger(
+                    context=RuntimeLogContext(run_id=run_id, level=RuntimeLoggingLevel.FULL,
+                        origin="sandbox", tenant_id=t_uuid, user_id=u_uuid, stream=True),
+                    session_factory=session_factory,
+                ).error(e, payload={"stage": "sandbox_resume_stream"})
                 yield f'data: {json.dumps({"type": "error", "error": str(e), "run_id": str(run_id)})}\n\n'
                 try:
                     svc_err = SandboxService(stream_db)

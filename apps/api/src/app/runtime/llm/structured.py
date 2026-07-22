@@ -6,7 +6,7 @@ Responsibilities:
     * Call LLM with timeout + retries
     * Extract JSON (handles ```json fences and prose wrappers)
     * Validate against Pydantic schema; fall back or raise
-    * Log a SystemLLMTrace row for observability
+    * Emit canonical runtime events through the caller's logger
 
 Callers get a typed `StructuredCallResult` with the parsed model instance and
 the trace_id they can attach to downstream events.

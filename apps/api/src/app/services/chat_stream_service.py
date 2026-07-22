@@ -16,7 +16,6 @@ from redis.asyncio import Redis
 
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 from app.core.http.clients import LLMClientProtocol
-from app.services.run_store import RunStore
 from app.agents import ToolContext
 from app.runtime import PipelineRequest, RuntimeEvent, RuntimeEventType, RuntimePipeline
 from app.runtime.contracts import ExecutionMode
@@ -56,8 +55,6 @@ class ChatStreamService:
         self.chats_repo = chats_repo
         self.messages_repo = messages_repo
         self.idempotency = IdempotencyManager(redis)
-        # Keep constructor test-friendly: RunStore resolves global factory lazily on first write.
-        self.run_store = RunStore(session=session)
         self.context_service = ChatContextService(session, llm_client, messages_repo)
         self.title_service = ChatTitleService(session, llm_client, chats_repo)
         self.persistence_service = ChatPersistenceService(session, messages_repo)
@@ -323,7 +320,6 @@ class ChatStreamService:
             pipeline = RuntimePipeline(
                 session=self.session,
                 llm_client=self.llm_client,
-                run_store=self.run_store,
             )
 
             text_content = content.get("text", str(content)) if isinstance(content, dict) else str(content)

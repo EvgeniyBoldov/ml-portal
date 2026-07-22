@@ -190,18 +190,24 @@ class SandboxRunDetailResponse(BaseModel):
     error: Optional[str] = None
     started_at: datetime
     finished_at: Optional[datetime] = None
-    steps: list[SandboxRunStepResponse] = []
-    trace: Optional[RunTraceResponse] = None
+    events: list[RuntimeJournalEventResponse] = []
 
 
 # ── Run Step ─────────────────────────────────────────────────────────────────
 
-class SandboxRunStepResponse(BaseModel):
+class RuntimeJournalEventResponse(BaseModel):
     id: UUID
-    step_type: str
-    step_data: dict[str, Any]
-    order_num: int
-    created_at: datetime
+    run_id: UUID
+    sequence: int
+    event_type: str
+    occurred_at: datetime
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    parent_entity_type: Optional[str] = None
+    parent_entity_id: Optional[str] = None
+    caused_by_event_id: Optional[UUID] = None
+    duration_ms: Optional[int] = None
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 # ── Actions ──────────────────────────────────────────────────────────────────

@@ -1,35 +1,24 @@
 """
 File Generate Tool — saves a generated file and returns canonical artifact info.
 
-The agent (not the orchestrator) owns content creation. This tool is a thin
-write-through to ChatAttachmentService: it persists the agent-generated body
-to S3 / MinIO and returns a stable download URL.
+The agent (not the orchestrator) owns content creation. This tool delegates
+serialization and canonical artifact persistence to shared services.
 
 Supported formats: csv, json, txt, md, docx.
 Excel support is TODO — it requires binary generation (e.g. openpyxl/xlsxwriter).
 """
 from __future__ import annotations
 
-from io import BytesIO
 from typing import Any, ClassVar, Dict
 
 from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
 from app.core.logging import get_logger
+from app.services.file_formats import FileCodecRegistry
 
 logger = get_logger(__name__)
 
-_SUPPORTED_FORMATS = {"csv", "json", "txt", "md", "docx"}
-_CONTENT_TYPES = {
-    "csv": "text/csv",
-    "json": "application/json",
-    "txt": "text/plain",
-    "md": "text/markdown",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
-
-# Limit to prevent accidental abuse (2 MB text ≈ huge)
-_MAX_FILE_BYTES = 2 * 1024 * 1024
+_SUPPORTED_FORMATS = set(FileCodecRegistry.supported_formats())
 
 _INPUT_SCHEMA_V1 = {
     "type": "object",
@@ -45,7 +34,7 @@ _INPUT_SCHEMA_V1 = {
         "format": {
             "type": "string",
             "description": "File format: csv, json, txt, md, or docx.",
-            "enum": list(_SUPPORTED_FORMATS),
+            "enum": sorted(_SUPPORTED_FORMATS),
         },
     },
     "required": ["filename", "content", "format"],
@@ -87,7 +76,7 @@ class FileGenerateTool(VersionedTool):
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         from app.core.db import get_session_factory
-        from app.services.chat_attachment_service import ChatAttachmentService
+        from app.services.file_generation_service import FileGenerationService
 
         log = ctx.tool_logger("file.generate")
 
@@ -112,65 +101,14 @@ class FileGenerateTool(VersionedTool):
             )
 
         output_filename = filename
-        if fmt == "docx":
-            lowered = output_filename.lower()
-            if lowered.endswith(".docx"):
-                pass
-            elif lowered.endswith(".doc"):
-                output_filename = output_filename[:-4] + ".docx"
-            elif "." not in output_filename:
-                output_filename = f"{output_filename}.docx"
-            else:
-                output_filename = f"{output_filename}.docx"
-        elif fmt in {"csv", "json", "txt", "md"} and "." not in output_filename:
-            output_filename = f"{output_filename}.{fmt}"
-
-        # Derive content_type from format or filename
-        content_type = _CONTENT_TYPES.get(fmt)
-        if not content_type and "." in output_filename:
-            ext = output_filename.rsplit(".", 1)[-1].strip().lower()
-            content_type = _CONTENT_TYPES.get(ext)
-
-        if fmt == "docx":
-            try:
-                from docx import Document  # type: ignore
-            except ImportError as exc:
-                log.error("python-docx is required for docx generation", error=str(exc))
-                return ToolResult.fail(
-                    "DOCX generation requires python-docx to be installed in the runtime.",
-                    logs=log.entries_dict(),
-                )
-
-            doc = Document()
-            normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
-            blocks = [block.strip() for block in normalized.split("\n\n") if block.strip()]
-            if not blocks and normalized:
-                blocks = [normalized]
-            for block in blocks:
-                lines = [line.rstrip() for line in block.splitlines() if line.strip()]
-                if not lines:
-                    continue
-                doc.add_paragraph("\n".join(lines))
-
-            buf = BytesIO()
-            doc.save(buf)
-            encoded = buf.getvalue()
-        else:
-            encoded = content.encode("utf-8")
-        if len(encoded) > _MAX_FILE_BYTES:
-            log.error(
-                "File too large",
-                size_bytes=len(encoded),
-                max_bytes=_MAX_FILE_BYTES,
-            )
-            return ToolResult.fail(
-                f"File content exceeds limit of {_MAX_FILE_BYTES} bytes. "
-                "Consider splitting into multiple smaller files or reducing data.",
-                logs=log.entries_dict(),
-            )
 
         user_id = ctx.user_id
         chat_id = ctx.chat_id
+        if not user_id:
+            return ToolResult.fail(
+                "File generation requires a user context.",
+                logs=log.entries_dict(),
+            )
         if not chat_id:
             return ToolResult.fail(
                 "File generation requires a chat context.",
@@ -181,38 +119,38 @@ class FileGenerateTool(VersionedTool):
             "Generating file",
             filename=output_filename,
             format=fmt,
-            size_bytes=len(encoded),
             chat_id=str(chat_id) if chat_id else None,
         )
 
         try:
             session_factory = get_session_factory()
             async with session_factory() as session:
-                service = ChatAttachmentService(session)
-                attachment = await service.create_generated_attachment(
-                    chat_id=str(chat_id) if chat_id else None,
+                artifact = await FileGenerationService(session).generate(
+                    chat_id=str(chat_id),
                     owner_id=str(user_id),
                     filename=output_filename,
-                    content=encoded,
-                    content_type=content_type,
+                    content=content,
+                    format_name=fmt,
                 )
                 await session.commit()
                 log.info(
                     "File saved",
-                    attachment_id=attachment.get("id"),
-                    artifact_id=attachment.get("artifact_id"),
-                    size_bytes=attachment.get("size_bytes"),
+                    artifact_id=artifact.artifact_id,
+                    size_bytes=artifact.size_bytes,
                 )
                 return ToolResult.ok(
                     data={
-                        "artifact_id": attachment.get("artifact_id"),
-                        "file_name": attachment.get("file_name"),
-                        "content_type": content_type,
-                        "size_bytes": attachment.get("size_bytes"),
+                        "artifact_id": artifact.artifact_id,
+                        "file_name": artifact.file_name,
+                        "content_type": artifact.content_type,
+                        "size_bytes": artifact.size_bytes,
                     },
                     message=f"File '{output_filename}' generated successfully.",
                     logs=log.entries_dict(),
                 )
+        except ValueError as exc:
+            log.error("Invalid generated file content", error=str(exc))
+            return ToolResult.fail(f"Invalid generated file: {exc}", logs=log.entries_dict())
         except Exception as exc:
             logger.error("File generation failed: %s", exc, exc_info=True)
             log.error("File generation failed", error=str(exc))

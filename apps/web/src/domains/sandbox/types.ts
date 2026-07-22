@@ -1,7 +1,6 @@
 /**
  * Sandbox domain types — mirrors backend schemas.
  */
-import type { RunTrace } from '@/domains/runtimeTrace/types';
 import type { ResponseContract } from '@/shared/api/admin';
 import type { ExecutionMode } from '@/shared/api/types';
 
@@ -136,8 +135,7 @@ export interface SandboxRunDetail {
   error: string | null;
   started_at: string;
   finished_at: string | null;
-  steps: SandboxRunStep[];
-  trace?: RunTrace;
+  events: RuntimeJournalEvent[];
 }
 
 export interface SandboxRunCreate {
@@ -150,12 +148,19 @@ export interface SandboxRunCreate {
 
 // ── Run Step ────────────────────────────────────────────────────────────────
 
-export interface SandboxRunStep {
+export interface RuntimeJournalEvent {
   id: string;
-  step_type: string;
-  step_data: Record<string, unknown>;
-  order_num: number;
-  created_at: string;
+  run_id: string;
+  sequence: number;
+  event_type: string;
+  occurred_at: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  parent_entity_type: string | null;
+  parent_entity_id: string | null;
+  caused_by_event_id: string | null;
+  duration_ms: number | null;
+  payload: Record<string, unknown>;
 }
 
 // ── SSE events (streamed from backend) ──────────────────────────────────────

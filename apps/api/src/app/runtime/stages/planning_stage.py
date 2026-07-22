@@ -49,7 +49,7 @@ from app.runtime.stages.planner_step_dispatcher import PlannerStepDispatcher
 from app.runtime.stages.planning_outcome_mapper import PlanningOutcomeMapper
 from app.runtime.ports import (
     AgentExecutionPort,
-    PlannerServicePort,
+    NextStepPlannerPort,
 )
 from app.runtime.turn_state import RuntimeTurnState
 
@@ -78,7 +78,7 @@ class PlanningStage:
     def __init__(
         self,
         *,
-        planner: PlannerServicePort,
+        planner: NextStepPlannerPort,
         agent_executor: AgentExecutionPort,
         max_iterations: int,
     ) -> None:
@@ -124,8 +124,9 @@ class PlanningStage:
         while runtime_state.iter_count < self._max_iterations:
             planner_iteration = runtime_state.iter_count + 1
             planner_iteration_id = f"{planner_run_id}:planner:{planner_iteration}"
+            planner_executor_id = f"{planner_iteration_id}:executor:planner"
             planner_event_ctx = {
-                "planner_run_id": planner_run_id,
+                "planner_run_id": planner_executor_id,
                 "planner_iteration_id": planner_iteration_id,
                 "iteration": planner_iteration,
             }
@@ -156,7 +157,23 @@ class PlanningStage:
                     iteration_id=planner_iteration_id,
                     orchestrator_id=effective_orchestrator_id,
                     iteration=planner_iteration,
+                    iteration_type="decision",
                     context_snapshot=iteration_context_snapshot,
+                ),
+                OrchestrationPhase.PLANNER,
+            )
+            # The planner is an executor run inside the iteration.  Emit its
+            # parent entity before any planner LLM call so the journal and the
+            # frontend trace reducer can build the hierarchy deterministically.
+            yield PhasedEvent(
+                RuntimeEvent.agent_start(
+                    agent_run_id=planner_executor_id,
+                    parent_entity_id=planner_iteration_id,
+                    parent_entity_type="planner_iteration",
+                    agent_slug="planner",
+                    executor_type="planner",
+                    executor_name="Планер",
+                    task_title=runtime_state.goal or request.request_text,
                 ),
                 OrchestrationPhase.PLANNER,
             )
@@ -209,7 +226,7 @@ class PlanningStage:
                     chat_id=chat_id,
                     tenant_id=tenant_id,
                     user_id=user_id,
-                    agent_run_id=run_id,
+                    agent_run_id=planner_executor_id,
                     planner_iteration_id=planner_event_ctx["planner_iteration_id"],
                     sandbox_overrides=request.sandbox_overrides,
                 )
@@ -240,7 +257,12 @@ class PlanningStage:
             runtime_state.iter_count = planner_iteration
 
             for trace_index, planner_llm_trace in enumerate(planner_llm_traces):
-                yield PlannerLLMTraceEmitter.emit_turn_event(
+                yield PlannerLLMTraceEmitter.emit_request_event(
+                    planner_llm_trace=planner_llm_trace,
+                    planner_iteration_id=planner_event_ctx["planner_iteration_id"],
+                    planner_run_id=planner_event_ctx["planner_run_id"],
+                )
+                yield PlannerLLMTraceEmitter.emit_response_event(
                     planner_llm_trace=planner_llm_trace,
                     planner_iteration_id=planner_event_ctx["planner_iteration_id"],
                     planner_run_id=planner_event_ctx["planner_run_id"],
@@ -337,6 +359,7 @@ class PlanningStage:
                 step=step,
                 runtime_state=runtime_state,
                 run_id=str(run_id),
+                planner_executor_id=planner_executor_id,
                 planner_iteration=planner_iteration,
                 planner_iteration_id=planner_iteration_id,
                 orchestrator_id=effective_orchestrator_id,
@@ -359,6 +382,30 @@ class PlanningStage:
                 return
 
             # kind == CALL_AGENT
+            # Close the planner decision iteration before opening the
+            # execution iteration.  Both share the same logical cycle number;
+            # the explicit type keeps ordering deterministic for consumers.
+            yield PhasedEvent(
+                RuntimeEvent.planner_iteration_end(
+                    iteration_id=planner_iteration_id,
+                    orchestrator_id=effective_orchestrator_id,
+                    iteration=planner_iteration,
+                    iteration_type="decision",
+                    status="completed",
+                ),
+                OrchestrationPhase.PLANNER,
+            )
+            execution_iteration_id = f"{planner_iteration_id}:execution"
+            yield PhasedEvent(
+                RuntimeEvent.planner_iteration_start(
+                    iteration_id=execution_iteration_id,
+                    orchestrator_id=effective_orchestrator_id,
+                    iteration=planner_iteration,
+                    iteration_type="execution",
+                    mode="execution",
+                ),
+                OrchestrationPhase.AGENT,
+            )
             call_agent_dispatcher = PlannerCallAgentDispatcher(agent_executor=self._agent)
             async for event in call_agent_dispatcher.run(
                 step=step,
@@ -371,11 +418,23 @@ class PlanningStage:
                 planner_agents=planner_agents,
                 run_id=str(run_id),
                 planner_iteration=planner_iteration,
-                planner_iteration_id=planner_iteration_id,
+                planner_iteration_id=execution_iteration_id,
                 effective_orchestrator_id=effective_orchestrator_id,
                 agent_version_id=self._resolve_agent_version_override(request),
             ):
                 yield event
+
+            if call_agent_dispatcher.result is not None and call_agent_dispatcher.result.outcome == "continue":
+                yield PhasedEvent(
+                    RuntimeEvent.planner_iteration_end(
+                        iteration_id=execution_iteration_id,
+                        orchestrator_id=effective_orchestrator_id,
+                        iteration=planner_iteration,
+                        iteration_type="execution",
+                        status="completed",
+                    ),
+                    OrchestrationPhase.AGENT,
+                )
 
             dispatch_result = call_agent_dispatcher.result
             mapped_dispatch = (

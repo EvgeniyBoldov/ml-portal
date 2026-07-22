@@ -29,16 +29,22 @@ async def test_file_generate_commits_created_attachment(monkeypatch):
         "size_bytes": 5,
         "artifact_id": str(uuid4()),
     }
-    create_generated_attachment = AsyncMock(return_value=attachment_payload)
-
-    service_instance = SimpleNamespace(create_generated_attachment=create_generated_attachment)
+    generate = AsyncMock(
+        return_value=SimpleNamespace(
+            artifact_id=attachment_payload["artifact_id"],
+            file_name=attachment_payload["file_name"],
+            content_type="text/plain",
+            size_bytes=5,
+        )
+    )
+    service_instance = SimpleNamespace(generate=generate)
 
     monkeypatch.setattr(
         "app.core.db.get_session_factory",
         lambda: _SessionManager,
     )
     monkeypatch.setattr(
-        "app.services.chat_attachment_service.ChatAttachmentService",
+        "app.services.file_generation_service.FileGenerationService",
         lambda _session: service_instance,
     )
 
@@ -60,7 +66,7 @@ async def test_file_generate_commits_created_attachment(monkeypatch):
 
     assert result.success is True
     assert result.data["artifact_id"] == attachment_payload["artifact_id"]
-    create_generated_attachment.assert_awaited_once()
+    generate.assert_awaited_once()
     session.commit.assert_awaited_once()
 
 
@@ -75,13 +81,12 @@ async def test_file_generate_rejects_detached_artifact_without_chat(monkeypatch)
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    create_generated_attachment = AsyncMock()
-
-    service_instance = SimpleNamespace(create_generated_attachment=create_generated_attachment)
+    generate = AsyncMock()
+    service_instance = SimpleNamespace(generate=generate)
 
     monkeypatch.setattr("app.core.db.get_session_factory", lambda: _SessionManager)
     monkeypatch.setattr(
-        "app.services.chat_attachment_service.ChatAttachmentService",
+        "app.services.file_generation_service.FileGenerationService",
         lambda _session: service_instance,
     )
 
@@ -102,5 +107,5 @@ async def test_file_generate_rejects_detached_artifact_without_chat(monkeypatch)
     )
 
     assert result.success is False
-    create_generated_attachment.assert_not_awaited()
+    generate.assert_not_awaited()
     session.commit.assert_not_awaited()

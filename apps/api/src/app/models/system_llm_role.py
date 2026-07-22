@@ -16,9 +16,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 # Import for relationship - will be resolved after both models are loaded
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from app.models.system_llm_trace import SystemLLMTrace
 
 
 class SystemLLMRoleType(str, Enum):
@@ -135,12 +132,6 @@ class SystemLLMRole(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False
-    )
-
-    # Relationships
-    traces: Mapped[List["SystemLLMTrace"]] = relationship(
-        "app.models.system_llm_trace.SystemLLMTrace",
-        back_populates="role"
     )
 
     def __repr__(self):

@@ -1,5 +1,18 @@
 # TODO
 
+## Runtime trace terminology — rename iteration to PlanRevision
+
+- Сохранить текущую runtime-структуру на первом этапе, но в следующем breaking-изменении переименовать сущность и поля `iteration`/`planner_iteration` в `PlanRevision`.
+- Зафиксировать семантику: planner decision создаёт или изменяет PlanRevision, а executor runs выполняют задачи этой версии плана.
+- Не смешивать номер версии плана с визуальным этапом или параллельной волной исполнения.
+
+## Chat stream — публичная проекция оркестратора
+
+- Разобрать контракт `POST /chats/{chat_id}/messages`: сейчас в один SSE-поток смешаны ответ, tool request/response и диагностические решения планера.
+- Оставить в chat SSE только пользовательский ответ, интеракции (`confirmation_required`, `waiting_input`, `stop`), безопасные ошибки и компактные статусы работы оркестратора.
+- Убрать из chat SSE LLM-вызовы, аргументы и результаты tools, внутренние идентификаторы исполнителей и подробные события планера; эти данные доступны только в журнале ранса и sandbox stream.
+- Зафиксировать отдельный публичный typed SSE contract и удалить legacy-поля/маппинг из chat transport.
+
 ## Credentials — platform level dedup
 
 - Разобраться с дублированием credential записей на одном owner-уровне (platform/user/tenant) для одного `instance_id`.

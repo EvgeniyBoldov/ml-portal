@@ -153,7 +153,7 @@ async def test_llm_failure_fallback_to_heuristic(table_layout):
 
 
 @pytest.mark.asyncio
-async def test_structural_region_fallback_creates_table(builder):
+async def test_structural_region_does_not_create_table_without_marker(builder):
     layout = RawLayout(
         format="excel",
         title="Sheet",
@@ -175,11 +175,7 @@ async def test_structural_region_fallback_creates_table(builder):
 
     contract = await builder.build(layout)
 
-    assert len(contract.table_fields()) == 1
-    table = contract.table_fields()[0]
-    assert table.key == "table_1"
-    assert [column.key for column in table.columns] == ["name", "qty"]
-    assert table.source == FieldSource.PARSER
+    assert contract.table_fields() == []
 
 
 @pytest.mark.asyncio

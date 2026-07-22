@@ -37,9 +37,13 @@ class RuntimeEventType(str, Enum):
     # Lifecycle — orchestrator (planner loop)
     ORCHESTRATOR_START = "orchestrator_start"
     ORCHESTRATOR_END = "orchestrator_end"
+    ORCHESTRATOR_CHECKPOINT_STARTED = "orchestrator_checkpoint_started"
+    ORCHESTRATOR_CHECKPOINT_FINISHED = "orchestrator_checkpoint_finished"
     # Lifecycle — planner iteration
     PLANNER_ITERATION_START = "planner_iteration_start"
     PLANNER_ITERATION_END = "planner_iteration_end"
+    PLANNER_INVOCATION_STARTED = "planner_invocation_started"
+    PLANNER_INVOCATION_FINISHED = "planner_invocation_finished"
     # Lifecycle — agent
     AGENT_START = "agent_start"
     AGENT_END = "agent_end"
@@ -52,7 +56,10 @@ class RuntimeEventType(str, Enum):
     PROTOCOL_RETRY = "protocol_retry"
     INTENT = "intent"
     BUDGET_SNAPSHOT = "budget_snapshot"
-    LLM_TURN = "llm_turn"
+    BUDGET_CONSUMED = "budget_consumed"
+    BUDGET_REJECTED = "budget_rejected"
+    LLM_REQUEST = "llm_request"
+    LLM_RESPONSE = "llm_response"
     # Tool execution
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
@@ -66,6 +73,27 @@ class RuntimeEventType(str, Enum):
     STOP = "stop"
     # Errors
     ERROR = "error"
+    # Canonical persisted plan/task lifecycle
+    PLAN_CREATED = "plan_created"
+    PLAN_PATCH_APPLIED = "plan_patch_applied"
+    PLAN_WAITING_INPUT = "plan_waiting_input"
+    PLAN_COMPLETED = "plan_completed"
+    PLAN_FAILED = "plan_failed"
+    TASK_READY = "task_ready"
+    TASK_CLAIMED = "task_claimed"
+    TASK_STARTED = "task_started"
+    TASK_PAUSED = "task_paused"
+    TASK_RESUMED = "task_resumed"
+    TASK_COMPLETED = "task_completed"
+    TASK_UNFULFILLABLE = "task_unfulfillable"
+    TASK_FAILED = "task_failed"
+    ATTEMPT_STARTED = "attempt_started"
+    ATTEMPT_SUCCEEDED = "attempt_succeeded"
+    ATTEMPT_FAILED = "attempt_failed"
+    ATTEMPT_RETRY_SCHEDULED = "attempt_retry_scheduled"
+    REQUIREMENT_CREATED = "requirement_created"
+    REQUIREMENT_RESOLVED = "requirement_resolved"
+    REQUIREMENT_UNRESOLVABLE = "requirement_unresolvable"
 
 
 @dataclass
@@ -103,33 +131,40 @@ class RuntimeEvent:
 
     @classmethod
     def planner_iteration_start(
-        cls, *, iteration_id: str, orchestrator_id: str, iteration: int, **extra: Any
+        cls, *, iteration_id: str, orchestrator_id: str, iteration: int,
+        iteration_type: str = "decision", **extra: Any
     ) -> "RuntimeEvent":
         return cls(RuntimeEventType.PLANNER_ITERATION_START, {
             "entity_id": iteration_id, "entity_type": "planner_iteration",
             "parent_entity_type": "orchestrator", "parent_entity_id": orchestrator_id,
-            "iteration": iteration, **extra,
+            "iteration": iteration, "iteration_type": iteration_type, **extra,
         })
 
     @classmethod
     def planner_iteration_end(
-        cls, *, iteration_id: str, orchestrator_id: str, iteration: int, status: str = "completed", **extra: Any
+        cls, *, iteration_id: str, orchestrator_id: str, iteration: int,
+        status: str = "completed", iteration_type: str = "decision", **extra: Any
     ) -> "RuntimeEvent":
         return cls(RuntimeEventType.PLANNER_ITERATION_END, {
             "entity_id": iteration_id, "entity_type": "planner_iteration",
             "parent_entity_type": "orchestrator", "parent_entity_id": orchestrator_id,
-            "iteration": iteration, "status": status, **extra,
+            "iteration": iteration, "iteration_type": iteration_type, "status": status, **extra,
         })
 
     @classmethod
     def agent_start(
         cls, *, agent_run_id: str, parent_entity_id: str, parent_entity_type: str = "planner_iteration",
-        agent_slug: str, **extra: Any
+        agent_slug: str, executor_type: str = "agent", executor_name: Optional[str] = None,
+        task_title: Optional[str] = None, **extra: Any
     ) -> "RuntimeEvent":
         return cls(RuntimeEventType.AGENT_START, {
             "entity_id": agent_run_id, "entity_type": "agent_run",
             "parent_entity_type": parent_entity_type, "parent_entity_id": parent_entity_id,
-            "agent_slug": agent_slug, **extra,
+            "agent_slug": agent_slug,
+            "executor_type": executor_type,
+            "executor_name": executor_name or ("Планер" if agent_slug == "planner" else agent_slug),
+            **({"task_title": task_title} if task_title else {}),
+            **extra,
         })
 
     @classmethod
@@ -163,6 +198,58 @@ class RuntimeEvent:
     @classmethod
     def status(cls, stage: str, **extra: Any) -> "RuntimeEvent":
         return cls(RuntimeEventType.STATUS, {"stage": stage, **extra})
+
+    @classmethod
+    def plan_lifecycle(cls, event_type: RuntimeEventType, *, plan_id: str, **extra: Any) -> "RuntimeEvent":
+        if event_type not in {
+            RuntimeEventType.PLAN_CREATED,
+            RuntimeEventType.PLAN_PATCH_APPLIED,
+            RuntimeEventType.PLAN_WAITING_INPUT,
+            RuntimeEventType.PLAN_COMPLETED,
+            RuntimeEventType.PLAN_FAILED,
+        }:
+            raise ValueError(f"not a plan event: {event_type}")
+        return cls(event_type, {"entity_id": plan_id, "entity_type": "plan", **extra})
+
+    @classmethod
+    def task_lifecycle(cls, event_type: RuntimeEventType, *, plan_id: str, task_id: str, **extra: Any) -> "RuntimeEvent":
+        allowed = {
+            RuntimeEventType.TASK_READY,
+            RuntimeEventType.TASK_CLAIMED,
+            RuntimeEventType.TASK_STARTED,
+            RuntimeEventType.TASK_PAUSED,
+            RuntimeEventType.TASK_RESUMED,
+            RuntimeEventType.TASK_COMPLETED,
+            RuntimeEventType.TASK_UNFULFILLABLE,
+            RuntimeEventType.TASK_FAILED,
+        }
+        if event_type not in allowed:
+            raise ValueError(f"not a task event: {event_type}")
+        return cls(event_type, {
+            "entity_id": task_id,
+            "entity_type": "task",
+            "parent_entity_type": "plan",
+            "parent_entity_id": plan_id,
+            **extra,
+        })
+
+    @classmethod
+    def attempt_lifecycle(cls, event_type: RuntimeEventType, *, task_id: str, attempt_id: str, **extra: Any) -> "RuntimeEvent":
+        allowed = {
+            RuntimeEventType.ATTEMPT_STARTED,
+            RuntimeEventType.ATTEMPT_SUCCEEDED,
+            RuntimeEventType.ATTEMPT_FAILED,
+            RuntimeEventType.ATTEMPT_RETRY_SCHEDULED,
+        }
+        if event_type not in allowed:
+            raise ValueError(f"not an attempt event: {event_type}")
+        return cls(event_type, {
+            "entity_id": attempt_id,
+            "entity_type": "attempt",
+            "parent_entity_type": "task",
+            "parent_entity_id": task_id,
+            **extra,
+        })
 
     @classmethod
     def planner_step(cls, *, iteration: int, kind: str, payload: Dict[str, Any]) -> "RuntimeEvent":
@@ -230,8 +317,18 @@ class RuntimeEvent:
         return cls(RuntimeEventType.BUDGET_SNAPSHOT, payload)
 
     @classmethod
-    def llm_turn(cls, **payload: Any) -> "RuntimeEvent":
-        return cls(RuntimeEventType.LLM_TURN, dict(payload))
+    def llm_request(cls, **payload: Any) -> "RuntimeEvent":
+        data = dict(payload)
+        data.setdefault("entity_type", "llm_call")
+        data.setdefault("entity_id", data.get("llm_call_id"))
+        return cls(RuntimeEventType.LLM_REQUEST, data)
+
+    @classmethod
+    def llm_response(cls, **payload: Any) -> "RuntimeEvent":
+        data = dict(payload)
+        data.setdefault("entity_type", "llm_call")
+        data.setdefault("entity_id", data.get("llm_call_id"))
+        return cls(RuntimeEventType.LLM_RESPONSE, data)
 
     @classmethod
     def tool_call(
@@ -248,7 +345,10 @@ class RuntimeEvent:
         actor_type: Optional[str] = None,
         actor_entity_id: Optional[str] = None,
     ) -> "RuntimeEvent":
-        payload: Dict[str, Any] = {"tool": tool, "call_id": call_id, "arguments": arguments}
+        payload: Dict[str, Any] = {
+            "entity_type": "tool_call", "entity_id": call_id,
+            "tool": tool, "call_id": call_id, "arguments": arguments,
+        }
         if parent_entity_type is not None:
             payload["parent_entity_type"] = parent_entity_type
         if parent_entity_id is not None:
@@ -294,6 +394,8 @@ class RuntimeEvent:
         truncated: Optional[bool] = None,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {
+            "entity_type": "tool_call",
+            "entity_id": call_id,
             "tool": tool,
             "call_id": call_id,
             "success": success,
@@ -360,10 +462,29 @@ class RuntimeEvent:
         return cls(RuntimeEventType.FINAL, payload)
 
     @classmethod
-    def waiting_input(cls, question: str, *, run_id: Optional[str] = None) -> "RuntimeEvent":
+    def waiting_input(
+        cls,
+        question: str,
+        *,
+        run_id: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        parent_entity_type: Optional[str] = None,
+        parent_entity_id: Optional[str] = None,
+        interaction_kind: str = "clarify",
+    ) -> "RuntimeEvent":
         data: Dict[str, Any] = {"question": question}
         if run_id:
             data["run_id"] = run_id
+        if entity_id:
+            data.update({
+                "entity_type": "interaction",
+                "entity_id": entity_id,
+                "interaction_kind": interaction_kind,
+            })
+        if parent_entity_type:
+            data["parent_entity_type"] = parent_entity_type
+        if parent_entity_id:
+            data["parent_entity_id"] = parent_entity_id
         return cls(RuntimeEventType.WAITING_INPUT, data)
 
     @classmethod
@@ -378,6 +499,9 @@ class RuntimeEvent:
         risk_level: Optional[str] = None,
         args_preview: Optional[str] = None,
         summary: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        parent_entity_type: Optional[str] = None,
+        parent_entity_id: Optional[str] = None,
     ) -> "RuntimeEvent":
         data: Dict[str, Any] = {"message": message}
         if run_id:
@@ -394,6 +518,16 @@ class RuntimeEvent:
             data["args_preview"] = args_preview
         if summary:
             data["summary"] = summary
+        if entity_id:
+            data.update({
+                "entity_type": "interaction",
+                "entity_id": entity_id,
+                "interaction_kind": "confirm",
+            })
+        if parent_entity_type:
+            data["parent_entity_type"] = parent_entity_type
+        if parent_entity_id:
+            data["parent_entity_id"] = parent_entity_id
         return cls(RuntimeEventType.CONFIRMATION_REQUIRED, data)
 
     @classmethod

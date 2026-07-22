@@ -45,7 +45,6 @@ from app.runtime.planner.iteration_policy import (
     resolve_sufficient_for_phase,
 )
 from app.runtime.turn_state import RuntimeTurnState
-from app.services.run_store import RunStore
 
 logger = get_logger(__name__)
 
@@ -62,15 +61,12 @@ class AgentExecutor:
         *,
         session: AsyncSession,
         llm_client: LLMClientProtocol,
-        run_store: Optional[RunStore] = None,
     ) -> None:
         self.session = session
         self.llm_client = llm_client
-        self.run_store = run_store
         self.preflight = ExecutionPreflight(session)
         self._tool_runtime = AgentToolRuntime(
             llm_client=llm_client,
-            run_store=run_store,
         )
         # Shared executor instance per pipeline adapter to avoid per-step re-init churn.
         self._operation_executor = DirectOperationExecutor()

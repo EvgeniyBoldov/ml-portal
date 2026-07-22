@@ -258,8 +258,6 @@ export interface CollectionTemplate {
 
 export interface UpdateTemplateRequest {
   description?: string | null;
-  template_schema?: Record<string, unknown> | null;
-  status?: 'uploaded' | 'analyzed' | 'ready' | 'archived' | null;
 }
 
 export interface CollectionTemplatesResponse {
@@ -633,6 +631,9 @@ export const collectionsApi = {
     return apiRequest<CollectionTemplate>(`/collections/${collectionId}/templates/${rowId}`);
   },
 
+  getTemplateDownload: async (collectionId: string, rowId: string): Promise<{ download_url: string }> =>
+    apiRequest<{ download_url: string }>(`/collections/${collectionId}/templates/${rowId}/download`),
+
   getTemplateStatusGraph: async (
     collectionId: string,
     rowId: string,
@@ -648,16 +649,6 @@ export const collectionsApi = {
     return apiRequest<CollectionTemplate>(`/collections/${collectionId}/templates/${rowId}`, {
       method: 'PATCH',
       body: data,
-    });
-  },
-
-  updateTemplateSchema: async (
-    collectionId: string,
-    rowId: string,
-    templateSchema: Record<string, unknown>,
-  ): Promise<CollectionTemplate> => {
-    return collectionsApi.updateTemplate(collectionId, rowId, {
-      template_schema: templateSchema,
     });
   },
 

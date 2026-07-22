@@ -16,6 +16,7 @@ from app.schemas.sandbox import (
     SandboxSessionUpdate,
 )
 from app.services.sandbox_service import SandboxService
+from app.services.runtime_event_journal_service import RuntimeEventJournalService
 
 from .helpers import check_session_owner, get_owner_email, tenant_uuid, user_uuid
 
@@ -117,7 +118,7 @@ async def get_session(
 
     runs = []
     for r in session.runs:
-        steps_count = await svc.get_run_steps_count(r.id)
+        steps_count = await RuntimeEventJournalService(db).count_run_events(r.id)
         runs.append(SandboxRunListItem(
             id=r.id,
             branch_id=r.branch_id,

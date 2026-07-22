@@ -36,7 +36,6 @@ from app.agents.operation_router import OperationRouter
 from app.agents.preflight_policy import apply_operation_policy_filter
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.runtime_graph import RuntimeExecutionGraph
-from app.agents.runtime_trace_logger import RuntimeTraceLogger
 from app.core.exceptions import AgentUnavailableError, AppError as PreflightError
 from app.core.logging import get_logger
 from app.models.agent import Agent
@@ -120,7 +119,6 @@ class ExecutionPreflight:
         self.agent_resolver = AgentResolver(session)
         self.operation_router = OperationRouter(session)
         self.runtime_rbac_resolver = RuntimeRbacResolver(PermissionService(session))
-        self.trace_logger = RuntimeTraceLogger(session=session)
 
     async def prepare(
         self,
@@ -498,42 +496,21 @@ class ExecutionPreflight:
             "Responses may be incomplete or less accurate."
         )
 
+    async def _log_decision(self, **decision: Any) -> None:
+        """Record a redacted routing decision without making preflight stateful.
 
-    async def _log_decision(
-        self,
-        run_id: UUID,
-        user_id: UUID,
-        tenant_id: UUID,
-        request_text: Optional[str],
-        agent_slug: str,
-        mode: ExecutionMode,
-        missing: MissingRequirements,
-        available_operations: List[ResolvedOperation],
-        available_collections: List[str],
-        execution_graph: RuntimeExecutionGraph,
-        routing_reasons: List[str],
-        status: RoutingStatus,
-        duration_ms: int,
-        error_message: Optional[str] = None,
-    ) -> None:
-        """Log routing decision for observability."""
-        try:
-            execution_targets, _, _ = execution_graph.to_legacy_maps()
-            await self.trace_logger.trace.log_routing_decision(
-                run_id=run_id,
-                user_id=user_id,
-                tenant_id=tenant_id,
-                request_text=request_text,
-                agent_slug=agent_slug,
-                mode=mode,
-                missing=missing,
-                available_operations=available_operations,
-                available_collections=available_collections,
-                execution_targets=execution_targets,
-                routing_reasons=routing_reasons,
-                status=status,
-                duration_ms=duration_ms,
-                error_message=error_message,
-            )
-        except Exception as e:
-            logger.error(f"Failed to log routing decision: {e}")
+        Runtime lifecycle events are emitted by the canonical pipeline logger;
+        this structured application log is only the preflight diagnostic and
+        must never be allowed to break execution.
+        """
+        safe = {
+            "run_id": str(decision.get("run_id") or ""),
+            "agent_slug": str(decision.get("agent_slug") or ""),
+            "status": getattr(decision.get("status"), "value", decision.get("status")),
+            "mode": getattr(decision.get("mode"), "value", decision.get("mode")),
+            "duration_ms": decision.get("duration_ms"),
+            "routing_reasons": list(decision.get("routing_reasons") or [])[:40],
+        }
+        if decision.get("error_message"):
+            safe["error"] = str(decision["error_message"])
+        logger.info("runtime_preflight_decision", extra={"decision": safe})

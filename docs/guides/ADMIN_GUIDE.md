@@ -88,7 +88,7 @@
 
 ## 6. Операционный минимум (ежедневный контроль)
 
-1. Проверить failed agent runs.
+1. Проверить `runtime_execution_events` с `event_type=error` и terminal executor outcomes.
 2. Проверить health tool instances.
 3. Проверить ошибки ingestion/RAG pipeline.
 4. Проверить изменения прав/кредов в audit.

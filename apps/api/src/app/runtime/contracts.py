@@ -54,6 +54,9 @@ class PipelineRequest(BaseModel):
     or Sandbox. All ids are strings at this boundary for easy serialization."""
 
     request_text: str = Field(..., min_length=1)
+    # Canonical runtime identity shared by plan, events, SSE and timeline.
+    # Entry points create it; the pipeline never generates a second root id.
+    runtime_run_id: Optional[str] = None
     # chat_id is None for sandbox runs that have no persistent chat binding.
     chat_id: Optional[str] = None
     user_id: str = Field(..., min_length=1)

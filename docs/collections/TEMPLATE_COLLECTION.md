@@ -1,344 +1,37 @@
-# Коллекция типа TEMPLATE (Шаблоны)
+# Template collections
 
-## 1. Назначение
+Template collections support only `.xlsx` and `.xlsm` files. A template is a
+deterministic Excel layout, not a manually maintained web schema.
 
-Коллекция типа `template` предназначена для хранения и управления шаблонными документами (Word, Excel, текстовые файлы) с поддержкой структурированного заполнения. Шаблоны используются в инструменте `template.fill` для подстановки плейсхолдеров на основе JSON-контракта схемы.
+## Authoring a template
 
-**Ключевые отличия от `document`:**
-- Шаблоны не используют векторный поиск по умолчанию — данные не чанкируются и не индексируются в Qdrant (векторизация опциональна и отключаемая).
-- Каждая запись — это отдельный файл-шаблон с собственной JSON-схемой заполнения.
-- Есть специальный пайплайн автоматического анализа загруженного шаблона: сначала строится schema, затем по schema строится description.
+Put scalar anchors directly in cells: `{{company(name="Компания")}}`.
 
----
+For a repeated table, keep the visible header row and put one technical marker
+row below it. For example:
 
-## 2. Обязательные и опциональные поля
+| Имя | Логин | Возраст |
+| --- | --- | --- |
+| `{{users[].name(name="Имя")}}` | `{{users[].login(name="Логин")}}` | `{{users[].age(name="Возраст")}}` |
 
-При создании коллекции типа `template` backend автоматически добавляет preset-поля. Админ может добавлять дополнительные `user`-поля.
+The marker row is copied for each input item, so its styles and formulas are
+preserved. An empty or absent optional list deletes that technical row. An
+empty optional scalar removes just its anchor token. `required` is optional and
+defaults to `false`.
 
-### Preset-поля (системные, нередактируемые)
+## Lifecycle
 
-| Поле | Тип | Required | Описание |
-|------|-----|----------|----------|
-| `file` | `file` | ✅ | Файл шаблона (хранится в S3, метаданные в JSONB) |
-| `title` | `text` | ✅ | Название шаблона |
-| `source` | `string` | ✅ | Источник шаблона |
-| `template_version` | `string` | ❌ | Версия шаблона (извлекается из заголовков при анализе) |
-| `template_schema` | `json` | ✅ | JSON-схема заполнения (описание плейсхолдеров) |
-| `semantic_description` | `text` | ❌ | Семантическое описание для поиска/дисскавери шаблона |
+1. Upload creates an `uploaded` row.
+2. The deterministic parser reads anchors and derives `template_schema`.
+3. The description is generated from the title and schema, then the row becomes
+   `approval_required`.
+4. In the status modal, a reviewer sees the schema read-only and may edit only
+   the description. Saving keeps the status; approval is disabled until the
+   edited description is saved.
+5. Approval starts mandatory vectorization/indexing. Only then is the row
+   `ready` and available to `collection.template.fill`.
 
-**Удалено:** поле `template_kind` (ранее предполагалось, но не востребовано).
-
----
-
-## 3. Модель и классификация
-
-### CollectionType
-```python
-class CollectionType(str, Enum):
-    TABLE = "table"
-    DOCUMENT = "document"
-    SQL = "sql"
-    API = "api"
-    TEMPLATE = "template"
-```
-
-### is_local / is_remote
-```python
-@property
-def is_local(self) -> bool:
-    return self.collection_type in (
-        CollectionType.TABLE.value,
-        CollectionType.DOCUMENT.value,
-        CollectionType.SQL.value,
-        CollectionType.TEMPLATE.value,  # ← template считается локальной коллекцией
-    )
-```
-
-TEMPLATE — **локальная** коллекция: платформа управляет хранением (PostgreSQL + S3), DDL генерируется автоматически, lifecycle контролируется внутренними сервисами.
-
----
-
-## 4. Жизненный цикл документа (шаблона) в коллекции
-
-Каждая строка (row) в таблице коллекции — это один шаблон. Статус строки проходит следующие этапы:
-
-### 4.1 Статусы строки
-
-| Статус | Описание | Переход |
-|--------|----------|---------|
-| `uploaded` | Файл загружен, но анализ не запущен/не завершен | → `analyzed` или `ready` |
-| `analyzed` | LLM сгенерировала description или schema (частично) | → `ready` |
-| `ready` | Есть и description, и schema — шаблон готов к использованию | → `archived` |
-| `archived` | Шаблон архивирован (не участвует в поиске/выдаче) | — |
-
-### 4.2 Пайплайн загрузки и анализа
-
-```
-Пользователь загружает файл
-         ↓
-POST /collections/{id}/templates/upload
-         ↓
-[TemplateUploadService] → сохраняет файл в S3
-                          → создает row в PostgreSQL (status = "uploaded")
-         ↓
-[TemplateAnalysisOrchestrator] → ставит 2 Celery-задачи:
-    1. generate_template_schema
-    2. generate_template_description
-         ↓
-[Worker] Загружает файл из S3
-    → сначала строится JSON-контракт схемы
-    → затем по контракту генерируется description
-         ↓
-Обновление row:
-    - status переходит в "analyzed" (если готово что-то одно)
-    - status переходит в "ready" (если готово и description, и schema)
-         ↓
-SSE-стриминг статуса в реальном времени (Redis pub/sub)
-```
-
-### 4.3 Автоматический переход статуса
-
-Логика `_resolve_next_template_status`:
-- Если есть `description` **и** `template_schema` → `ready`
-- Если есть что-то одно → `analyzed`
-- Иначе → остается текущий статус (или `uploaded`)
-
-### 4.4 Жизненный цикл коллекции (верхний уровень)
-
-```python
-_TEMPLATE_LIFECYCLE_STAGES = (
-    CollectionStatus.CREATED.value,      # Коллекция создана, но нет шаблонов
-    CollectionStatus.DISCOVERED.value,   # Есть шаблоны в процессе анализа
-    CollectionStatus.READY.value,          # Все шаблоны готовы
-    CollectionStatus.DEGRADED.value,     # Часть шаблонов в ошибке
-    CollectionStatus.ERROR.value,          # Все шаблоны в ошибке анализа
-)
-```
-
-| Коллекция статус | Условие |
-|------------------|---------|
-| `created` | `total_rows == 0` (нет загруженных шаблонов) |
-| `discovered` | Есть шаблоны в статусе `uploaded` или `analyzed` |
-| `ready` | Все активные шаблоны в статусе `ready` |
-| `degraded` | Часть шаблонов имеет ошибку анализа, но есть и рабочие |
-| `error` | Все шаблоны в ошибке анализа |
-
----
-
-## 5. Функции, возложенные на коллекцию
-
-### 5.1 Хранение файлов-шаблонов
-- Загрузка через `POST /collections/{id}/templates/upload`
-- Файл сохраняется в S3 (bucket + s3_key)
-- Метаданные файла (filename, content_type, size, s3_key, bucket) хранятся в поле `file` типа `JSONB`
-
-### 5.2 Генерация description и schema
-- `generate_template_schema` — строит JSON-схему с описанием токенов и repeat-region в файле.
-- `generate_template_description` — строит semantic_description уже на основе готового контракта.
-- Оба процесса могут быть поставлены вместе, но description является downstream-этапом схемы.
-
-#### Контракт токенов в шаблоне
-- `.` задает вложенность: `source.ip`, `user.name`.
-- `[]` задает повторяемый блок: `connections(name='Связности')[]`.
-- `()` задает метаданные и ограничения: `name`, `description`, `type`, `required`, `min`, `max`.
-- Таблица определяется только явным repeat-сегментом `[]`. Ни dotted path, ни табличное расположение ячеек сами по себе не делают поле таблицей.
-- Repeat-region и anchors нужны для понимания, куда вставлять строки/ячейки, но не для определения типа поля.
-- Метаданные применяются к своему сегменту пути, а не ко всему токену целиком:
-  - `author(name='Автор').name(name='ФИО')` → label поля `ФИО`
-  - `items(name='Позиции', min=1)[]` → label таблицы `Позиции`, `min_rows=1`
-- `author.name` без `[]` не считается таблицей сам по себе.
-- Ограничения из `()` должны разбираться как constraints конкретного узла схемы, а не сворачиваться в текстовое описание.
-- Поддерживается legacy-подсказка `{{field:int(10)}}`, но канонический контракт для новых шаблонов задается через `()`.
-- В Excel заполнение идет только по уже существующим строкам и столбцам: движок клонирует размеченные ячейки, но не создает новую структуру.
-
-### 5.3 Инструмент `template.fill`
-Регистрация: `template.fill` (slug)
-
-**Input:**
-```json
-{
-  "collection_id": "uuid или slug коллекции",
-  "row_id": "uuid строки-шаблона",
-  "values": {"placeholder_name": "значение", ...}
-}
-```
-
-**Output:**
-```json
-{
-  "file_id": "chatatt_<uuid>",
-  "filename": "filled_<original>.docx",
-  "size_bytes": 12345,
-  "format": "word | excel | text",
-  "filled_placeholders": 5,
-  "missing_placeholders": ["unfilled_key"]
-}
-```
-
-**Поддерживаемые форматы:**
-- `.docx` — Word (через `python-docx`)
-- `.xlsx`, `.xls`, `.xlsm` — Excel (через `openpyxl`)
-- Остальное — plain text (`{{key}}` → подстановка)
-
-**Flow:**
-1. Находит коллекцию типа `template`.
-2. Получает row по `row_id`.
-3. Читает `file.s3_key` и `file.bucket`.
-4. Скачивает файл из S3.
-5. Проверяет `values` по `template_schema`.
-6. Подставляет значения во все `{{token}}`.
-7. Вычисляет список незаполненных плейсхолдеров.
-8. Сохраняет результат как downloadable artifact; при наличии чата артефакт может быть привязан к нему для UX.
-9. Возвращает `file_id` для скачивания.
-
-### 5.4 SSE-стриминг статуса анализа
-- `GET /collections/{id}/templates/{row_id}/status/events`
-- Возвращает `text/event-stream` с текущим графом статуса.
-- Использует Redis pub/sub для real-time обновлений.
-
-### 5.5 CRUD шаблонов
-- `GET /collections/{id}/templates` — список с пагинацией
-- `GET /collections/{id}/templates/{row_id}` — получить один шаблон
-- `PATCH /collections/{id}/templates/{row_id}` — обновить metadata, schema, status
-- `PATCH /collections/{id}/templates/{row_id}/schema` — обновить только schema
-- `POST /collections/{id}/templates/analyze` — пере-запустить анализ выбранных шаблонов
-
----
-
-## 6. Интеграция фронтенда
-
-### 6.1 Создание коллекции
-- В селекте типа добавлен пункт **"Шаблоны"** (`template`).
-- При выборе `template` автоматически подставляются preset-поля из `TEMPLATE_PRESET_FIELDS`.
-- Поля `file`, `title`, `source`, `template_schema` — обязательные и заблокированы для редактирования.
-- Векторный поиск отключен для шаблонов.
-
-### 6.2 Загрузка файла
-- На странице коллекции показывается кнопка **"Загрузить шаблон"**.
-- Используется API `uploadTemplate` (`POST /collections/{id}/templates/upload`).
-- После загрузки запускается SSE-подписка на статус анализа.
-
-### 6.3 Отображение в списках
-- `CollectionListPage`, `CollectionsListPage`, `CollectionDataPage` — везде добавлен badge **"Шаблоны"** (зеленый `success`).
-
----
-
-## 7. Схема БД (DDL)
-
-Для каждой коллекции `template` создается динамическая таблица:
-
-```sql
-CREATE TABLE <tenant_slug> (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    file JSONB,           -- {s3_key, bucket, filename, content_type, size}
-    title TEXT,
-    source VARCHAR,
-    template_version VARCHAR,
-    template_schema JSONB,
-    semantic_description TEXT,
-    status VARCHAR DEFAULT 'uploaded',
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    -- + пользовательские поля
-    -- + system поля (vector embeddings, etc. при необходимости)
-);
-```
-
-**Типы PostgreSQL:**
-- `file`, `template_schema` → `JSONB`
-- `title`, `semantic_description` → `TEXT`
-- `source`, `template_version`, `status` → `VARCHAR`
-
----
-
-## 8. Tool Instance
-
-Каждая `template` коллекция привязана к локальному `ToolInstance` с типом `data`.
-
-```python
-def resolve_local_service_for_collection_type(self, collection_type: str) -> DiscoveredTool:
-    if collection_type == CollectionType.TEMPLATE.value:
-        return self.template_instance  # ← свой instance для шаблонов
-```
-
-Это позволяет агентам обращаться к шаблонам через инструмент `collection.template.*`.
-
----
-
-## 9. Валидация и контракт
-
-### SchemaContractService
-- `validate_admin_defined_fields` — проверяет, что админ не добавил preset-поля с неверными типами.
-- `ensure_template_preset_fields` — гарантирует наличие всех preset-полей при создании/обновлении коллекции.
-- `get_type_specific_field_presets` — возвращает `TEMPLATE_SPECIFIC_FIELD_DEFS` для UI и API.
-
-### CreateCollectionRequest (Pydantic)
-```python
-collection_type: str = Field(
-    default=CollectionType.TABLE.value,
-    pattern=r"^(table|document|sql|api|template)$",
-)
-```
-
----
-
-## 10. Отличия от DOCUMENT
-
-| Аспект | DOCUMENT | TEMPLATE |
-|--------|----------|----------|
-| Векторный поиск | Обязателен (Qdrant) | Отключен |
-| Чанкирование | Да (параграфы/токены) | Нет |
-| Поле `file` | Хранит ссылку на документ | Хранит шаблон для заполнения |
-| Анализ контента | OCR + эмбеддинги | LLM-генерация description + schema |
-| Инструмент | `collection.document.search` | `template.fill` |
-| Статус строки | `uploaded/processing/ready/failed` | `uploaded/analyzed/ready/archived` |
-| Назначение | RAG / knowledge base | Шаблонная генерация документов |
-
----
-
-## 11. Архитектура сервисов
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Frontend (React)                      │
-│  CollectionPage → FieldsEditor → TEMPLATE_PRESET_FIELDS      │
-│  UploadButton → collectionsApi.uploadTemplate()               │
-└──────────────────────┬────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      API (FastAPI)                           │
-│  /collections/{id}/templates/upload                          │
-│  /collections/{id}/templates/{row_id}/status/events (SSE)    │
-│  /admin/collections (CRUD)                                   │
-└──────────────────────┬────────────────────────────────────────┘
-                       │
-         ┌─────────────┴──────────────┐
-         ▼                            ▼
-┌─────────────────┐       ┌──────────────────────┐
-│ TemplateUpload   │       │ TemplateAnalysis      │
-│ Service          │       │ Orchestrator          │
-│ (S3 + row insert)│       │ (Celery tasks enqueue)│
-└────────┬─────────┘       └──────────┬───────────┘
-         │                              │
-         ▼                              ▼
-┌─────────────────┐       ┌──────────────────────┐
-│ S3 (MinIO)       │       │ Celery Worker         │
-│                  │       │  • generate_template  │
-│  template files  │       │    _description      │
-│                  │       │  • generate_template  │
-└──────────────────┘       │    _schema            │
-                           └──────────┬───────────┘
-                                      │
-                                      ▼
-                           ┌──────────────────────┐
-                           │ TemplateAnalyzeService│
-                           │ (LLM calls)         │
-                           └──────────────────────┘
-                                      │
-                                      ▼
-                           ┌──────────────────────┐
-                           │ PostgreSQL           │
-                           │ (row + status graph) │
-                           └──────────────────────┘
-```
+The fill tool validates its `values` JSON against the stored contract, copies
+the original template, writes a generated chat file through the artifact
+writer, and returns `artifact_id`. The original template is downloaded through
+the collection RBAC endpoint, not through a chat artifact identifier.

@@ -343,21 +343,24 @@ class Synthesizer:
                             reason="llm_turn",
                             at_ms=snap.get("at_ms"),
                         )
-                yield RuntimeEvent.llm_turn(
+                yield RuntimeEvent.llm_request(
                     llm_call_id=stream_event.llm_call_id,
                     model=effective_model or stream_event.model or "unknown",
                     messages=stream_event.messages,
-                    content=full,
-                    response_length=stream_event.response_length,
-                    tokens_in=stream_event.tokens_in,
-                    tokens_out=stream_event.tokens_out,
-                    tokens_total=stream_event.tokens_total,
-                    duration_ms=stream_event.duration_ms,
                     parent_entity_type="synthesis_run",
                     parent_entity_id=synthesis_run_id,
                     purpose="final_answer",
                     actor_type="synthesizer",
                     actor_entity_id=synthesis_run_id,
+                )
+                yield RuntimeEvent.llm_response(
+                    llm_call_id=stream_event.llm_call_id,
+                    model=effective_model or stream_event.model or "unknown",
+                    content=full, response_length=stream_event.response_length,
+                    tokens_in=stream_event.tokens_in, tokens_out=stream_event.tokens_out,
+                    tokens_total=stream_event.tokens_total, duration_ms=stream_event.duration_ms,
+                    parent_entity_type="synthesis_run", parent_entity_id=synthesis_run_id,
+                    purpose="final_answer", actor_type="synthesizer", actor_entity_id=synthesis_run_id,
                 )
         if not full:
             # Fallback: stitched summaries (LLM вернул пустой ответ).

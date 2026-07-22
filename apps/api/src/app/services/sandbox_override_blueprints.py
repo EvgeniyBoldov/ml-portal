@@ -79,11 +79,18 @@ def _limit_fields(prefix: str = "limits") -> List[Dict[str, Any]]:
         _field("llm_input_tokens_max", "LLM input tokens", f"{prefix}.llm_input_tokens_max", field_type="integer", source_key="limits.llm_input_tokens_max"),
         _field("llm_output_tokens_max", "LLM output tokens", f"{prefix}.llm_output_tokens_max", field_type="integer", source_key="limits.llm_output_tokens_max"),
         _field("llm_context_window_max", "LLM context window", f"{prefix}.llm_context_window_max", field_type="integer", source_key="limits.llm_context_window_max"),
-        _field("runtime_steps_max", "Runtime steps", f"{prefix}.runtime_steps_max", field_type="integer", source_key="limits.runtime_steps_max"),
-        _field("runtime_tool_calls_max", "Runtime tool calls", f"{prefix}.runtime_tool_calls_max", field_type="integer", source_key="limits.runtime_tool_calls_max"),
-        _field("runtime_retries_max", "Runtime retries", f"{prefix}.runtime_retries_max", field_type="integer", source_key="limits.runtime_retries_max"),
-        _field("runtime_wall_time_ms_max", "Runtime wall time (ms)", f"{prefix}.runtime_wall_time_ms_max", field_type="integer", source_key="limits.runtime_wall_time_ms_max"),
-        _field("runtime_tokens_total_max", "Runtime total tokens", f"{prefix}.runtime_tokens_total_max", field_type="integer", source_key="limits.runtime_tokens_total_max"),
+        _field("plan_revisions_max", "Plan revisions", f"{prefix}.plan_revisions_max", field_type="integer", source_key="limits.plan_revisions_max"),
+        _field("task_attempts_total_max", "Task attempts", f"{prefix}.task_attempts_total_max", field_type="integer", source_key="limits.task_attempts_total_max"),
+        _field("agent_runs_total_max", "Agent runs", f"{prefix}.agent_runs_total_max", field_type="integer", source_key="limits.agent_runs_total_max"),
+        _field("llm_calls_total_max", "LLM calls", f"{prefix}.llm_calls_total_max", field_type="integer", source_key="limits.llm_calls_total_max"),
+        _field("tool_calls_total_max", "Tool calls", f"{prefix}.tool_calls_total_max", field_type="integer", source_key="limits.tool_calls_total_max"),
+        _field("tokens_total_max", "Total tokens", f"{prefix}.tokens_total_max", field_type="integer", source_key="limits.tokens_total_max"),
+        _field("execution_wall_time_ms_max", "Execution wall time (ms)", f"{prefix}.execution_wall_time_ms_max", field_type="integer", source_key="limits.execution_wall_time_ms_max"),
+        _field("run_ttl_ms", "Run TTL (ms)", f"{prefix}.run_ttl_ms", field_type="integer", source_key="limits.run_ttl_ms"),
+        _field("planner_llm_calls_max", "Planner LLM calls", f"{prefix}.planner_llm_calls_max", field_type="integer", source_key="limits.planner_llm_calls_max"),
+        _field("planner_retries_max", "Planner retries", f"{prefix}.planner_retries_max", field_type="integer", source_key="limits.planner_retries_max"),
+        _field("agent_llm_calls_max", "Agent LLM calls", f"{prefix}.agent_llm_calls_max", field_type="integer", source_key="limits.agent_llm_calls_max"),
+        _field("agent_tool_calls_max", "Agent tool calls", f"{prefix}.agent_tool_calls_max", field_type="integer", source_key="limits.agent_tool_calls_max"),
     ]
 
 

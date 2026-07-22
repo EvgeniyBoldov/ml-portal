@@ -190,6 +190,8 @@ class AgentToolRuntime(BaseRuntime):
             ctx,
             getattr(agent, "logging_level", None),
         )
+        ctx.extra["logging_level"] = resolved_logging_level.value
+        ctx.extra["trace_enabled"] = resolved_logging_level.value != "none"
         run_session = self._create_run_session(
             ctx=ctx,
             agent_slug=agent.slug,
@@ -312,7 +314,7 @@ class AgentToolRuntime(BaseRuntime):
                     policy=policy,
                     loop_state=loop_state,
                     start_time=loop_state.start_time,
-                    delta={"agent_steps": 1},
+                    delta={"agent_turns": 1},
                 )
                 await run_session.log_step("budget_snapshot", step_budget_snapshot)
                 yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, step_budget_snapshot)
@@ -434,7 +436,21 @@ class AgentToolRuntime(BaseRuntime):
                     "actor_type": "agent",
                     "actor_entity_id": str(run_session.run_id) if run_session.run_id else None,
                 }, duration_ms=llm_duration, tokens_in=max(0, prompt_tokens), tokens_out=max(0, completion_tokens))
-                yield RuntimeEvent.llm_turn(
+                yield RuntimeEvent.llm_request(
+                    llm_call_id=llm_call_id,
+                    model=gen.model,
+                    temperature=gen.temperature,
+                    max_tokens=effective_max_tokens,
+                    messages=llm_messages,
+                    parent_entity_type="agent_run",
+                    parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_slug=agent.slug,
+                    purpose="tool_decision_or_answer",
+                    actor_type="agent",
+                    actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                )
+                yield RuntimeEvent.llm_response(
                     llm_call_id=llm_call_id,
                     step=step + 1,
                     model=gen.model,

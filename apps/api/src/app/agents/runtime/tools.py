@@ -68,7 +68,7 @@ class OperationExecutionFacade:
             Tuple of (ToolResult, sources list for RAG-like tools)
 
         Tool logs (from ToolLogger) are automatically extracted from
-        result.metadata["logs"] and available for RunStore persistence.
+        result.metadata["logs"] for canonical runtime-event persistence.
         """
         original_operation_slug = operation_call.tool_name
         operation, resolved_slug_error = self._find_operation(

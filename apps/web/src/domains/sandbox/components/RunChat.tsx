@@ -7,57 +7,20 @@ import { useState, useRef, useEffect, useMemo, type ChangeEvent, type KeyboardEv
 import { useQuery } from '@tanstack/react-query';
 import Button from '@/shared/ui/Button';
 import { Icon } from '@/shared/ui/Icon';
-import { Badge, Tooltip } from '@/shared/ui';
+import { Tooltip } from '@/shared/ui';
 import { qk } from '@/shared/api/keys';
 import type { ActiveRun, RunStep } from '../hooks/useSandboxRun';
-import type { SandboxBranchListItem, SandboxRunListItem } from '../types';
-import { normalizeTraceEvent } from '@/domains/runtimeTrace/normalize';
-import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import type { SandboxBranchListItem, SandboxRunListItem, RuntimeJournalEvent } from '../types';
+import { replayRuntimeJournal } from '../traceState';
 import { sandboxApi } from '../api';
 import type { ExecutionMode } from '@/shared/api/types';
 import ChatQuestionCard from './ChatQuestionCard';
 import ChatAnswerCard from './ChatAnswerCard';
-import { TraceSteps } from './TraceSteps';
+import { ExecutionTrace } from './ExecutionTrace';
+import type { TraceInspectionTarget } from '../traceProjection';
 import styles from './RunChat.module.css';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-const HIDDEN_STEP_TYPES = new Set(['delta', 'final_content', 'done']);
-
-type Tone = 'neutral' | 'info' | 'warn' | 'success' | 'danger';
-type BudgetTone = 'neutral' | 'warn' | 'danger';
-
-const CATEGORY_META: Record<string, { icon: string; tone: Tone }> = {
-  input: { icon: '◉', tone: 'neutral' },
-  budget: { icon: '◷', tone: 'warn' },
-  llm: { icon: '◇', tone: 'info' },
-  decision: { icon: '🔀', tone: 'info' },
-  retry: { icon: '↺', tone: 'warn' },
-  operation: { icon: '🔧', tone: 'info' },
-  policy: { icon: '🛡', tone: 'warn' },
-  planner: { icon: '📐', tone: 'info' },
-  final: { icon: '✅', tone: 'success' },
-  error: { icon: '❌', tone: 'danger' },
-  system: { icon: '', tone: 'neutral' },
-};
-
-function getSemantic(step: RunStep, index: number) {
-  return normalizeTraceEvent({
-    id: step.id,
-    raw_type: step.type,
-    data: step.data,
-    step_number: step.orderNumber ?? index,
-    duration_ms: typeof step.data.duration_ms === 'number' ? step.data.duration_ms : undefined,
-  });
-}
-
-function getStepBadge(step: RunStep, index: number): { text: string; tone: Tone } | null {
-  const semantic = getSemantic(step, index);
-  if (semantic.status === 'error') return { text: 'ERR', tone: 'danger' };
-  if (semantic.status === 'warn') return { text: 'WARN', tone: 'warn' };
-  if (semantic.status === 'ok') return { text: 'OK', tone: 'success' };
-  return null;
-}
 
 function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -109,174 +72,23 @@ function extractClarifyQuestion(step: RunStep): string | null {
   return null;
 }
 
-function fmtDuration(ms: number): string {
-  return `${(ms / 1000).toFixed(1).replace('.', ',')} s`;
-}
-
 function extractFinalContent(
-  steps: Array<{ step_type: string; step_data: Record<string, unknown> }>,
+  events: RuntimeJournalEvent[],
 ): string {
-  for (let i = steps.length - 1; i >= 0; i--) {
-    const step = steps[i];
-    if (step.step_type === 'final' || step.step_type === 'final_content') {
-      const content = step.step_data.content;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.event_type === 'final' || event.event_type === 'final_content') {
+      const content = event.payload.content;
       if (typeof content === 'string') return content;
     }
   }
   let result = '';
-  for (const step of steps) {
-    if (step.step_type === 'delta' && typeof step.step_data.content === 'string') {
-      result += step.step_data.content;
+  for (const event of events) {
+    if (event.event_type === 'delta' && typeof event.payload.content === 'string') {
+      result += event.payload.content;
     }
   }
   return result;
-}
-
-function apiStepsToRunSteps(
-  apiSteps: Array<{ id: string; step_type: string; step_data: Record<string, unknown>; created_at: string; order_num?: number }>,
-): RunStep[] {
-  return apiSteps.map((s) => ({
-    id: s.id,
-    type: s.step_type as RunStep['type'],
-    data: s.step_data,
-    timestamp: new Date(s.created_at).getTime(),
-    orderNumber: typeof s.order_num === 'number' ? s.order_num : undefined,
-  }));
-}
-
-function toNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat('ru-RU').format(value);
-}
-
-function buildRunSummary(steps: RunStep[]): { toolCalls: number; retries: number; tokensTotal?: number } {
-  let toolCalls = 0;
-  let retries = 0;
-  let tokensTotal = 0;
-  let hasTokens = false;
-
-  for (const s of steps) {
-    if (s.type === 'tool_call' || s.type === 'operation_call') {
-      toolCalls += 1;
-    }
-    if (s.type === 'protocol_retry') {
-      retries += 1;
-    }
-    if (s.type === 'llm_response' || s.type === 'llm_turn') {
-      const tokensTotalRaw = toNumber(s.data.tokens_total);
-      const tokensInRaw = toNumber(s.data.tokens_in);
-      const tokensOutRaw = toNumber(s.data.tokens_out);
-      const stepTokens = tokensTotalRaw ?? (
-        tokensInRaw !== undefined || tokensOutRaw !== undefined
-          ? Number(tokensInRaw ?? 0) + Number(tokensOutRaw ?? 0)
-          : undefined
-      );
-      if (stepTokens !== undefined) {
-        tokensTotal += stepTokens;
-        hasTokens = true;
-      }
-    }
-  }
-
-  return {
-    toolCalls,
-    retries,
-    tokensTotal: hasTokens ? tokensTotal : undefined,
-  };
-}
-
-// ── ExpandableSteps — inline step list in chat ────────────────────────────
-
-function ExpandableSteps({
-  steps,
-  isRunning,
-  selectedDisplayStepId,
-  onSelectStep,
-}: {
-  steps: RunStep[];
-  isRunning: boolean;
-  selectedDisplayStepId: string | null;
-  onSelectStep: (displayStepId: string, rawStepId: string, inspectorSteps: RunStep[], entity?: TraceEntity) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const summary = useMemo(() => buildRunSummary(steps), [steps]);
-  const totalDuration = useMemo(() => {
-    if (steps.length < 2) return null;
-    const diff = steps[steps.length - 1].timestamp - steps[0].timestamp;
-    return diff > 0 ? fmtDuration(diff) : null;
-  }, [steps]);
-
-  // Filter visible steps (hide delta, final_content, done)
-  const visibleSteps = useMemo(() => steps.filter((s) => !HIDDEN_STEP_TYPES.has(s.type)), [steps]);
-
-  if (visibleSteps.length === 0 && !isRunning) return null;
-
-  return (
-    <div className={styles['steps-block']}>
-      <button
-        type="button"
-        className={`${styles['steps-summary']} ${expanded ? styles['steps-summary-expanded'] : ''}`}
-        onClick={() => setExpanded((p) => !p)}
-        aria-expanded={expanded}
-        aria-label="Развернуть шаги"
-      >
-        <span className={styles['steps-summary-icon']}>
-          {isRunning ? '◎' : '✓'}
-        </span>
-        <span className={styles['steps-summary-text']}>
-          Трейс
-        </span>
-        <span className={styles['steps-summary-metrics']}>
-          <Badge tone="neutral" size="sm">
-            Шаги {formatCount(visibleSteps.length)}
-          </Badge>
-          {totalDuration && (
-            <Badge tone="neutral" size="sm">
-              Время {totalDuration}
-            </Badge>
-          )}
-          {summary.toolCalls > 0 && (
-            <Badge tone="info" size="sm">
-              Операции {formatCount(summary.toolCalls)}
-            </Badge>
-          )}
-          {summary.retries > 0 && (
-            <Badge tone="warn" size="sm">
-              Ретраи {formatCount(summary.retries)}
-            </Badge>
-          )}
-          {summary.tokensTotal !== undefined && summary.tokensTotal > 0 && (
-            <Badge tone="danger" size="sm">
-              Токены {formatCount(summary.tokensTotal)}
-            </Badge>
-          )}
-        </span>
-        {isRunning && (
-          <span className={styles['steps-summary-running']}>выполняется...</span>
-        )}
-        <span className={`${styles['steps-summary-chevron']} ${expanded ? styles['steps-summary-chevron-open'] : ''}`}>
-          ▾
-        </span>
-      </button>
-
-      {expanded && (
-        <div className={styles['steps-list']}>
-          <TraceSteps
-            steps={visibleSteps}
-            isRunning={isRunning}
-            selectedEntityId={selectedDisplayStepId}
-            onSelectEntity={(entity) => {
-              const sourceStepId = entity.sourceEventIds[0] ?? entity.id;
-              onSelectStep(entity.id, sourceStepId, visibleSteps, entity);
-            }}
-          />
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ── HistoricalRunItem ───────────────────────────────────────────────────────
@@ -287,15 +99,8 @@ interface HistoricalRunItemProps {
   branch?: SandboxBranchListItem;
   isCurrentBranch: boolean;
   isReadOnly: boolean;
-  selectedDisplayStepId: string | null;
-  onSelectStep: (
-    runId: string,
-    displayStepId: string,
-    rawStepId: string,
-    steps: RunStep[],
-    entity?: TraceEntity,
-  ) => void;
   onForkBranch: (runId: string, sourceText: string) => void;
+  onSelectTraceTarget?: (target: TraceInspectionTarget, trace: ReturnType<typeof replayRuntimeJournal>) => void;
 }
 
 function HistoricalRunItem(props: HistoricalRunItemProps) {
@@ -305,9 +110,8 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
     branch,
     isCurrentBranch,
     isReadOnly,
-    selectedDisplayStepId,
-    onSelectStep,
     onForkBranch,
+    onSelectTraceTarget,
   } = props;
   const { data: runDetail } = useQuery({
     queryKey: qk.sandbox.runs.detail(sessionId, run.id),
@@ -316,11 +120,11 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
     staleTime: 60_000,
   });
 
-  const finalContent = runDetail ? extractFinalContent(runDetail.steps) : '';
+  const finalContent = runDetail ? extractFinalContent(runDetail.events) : '';
   const isFailed = run.status === 'failed';
 
-  const runSteps = useMemo(
-    () => (runDetail ? apiStepsToRunSteps(runDetail.steps) : []),
+  const trace = useMemo(
+    () => replayRuntimeJournal(runDetail?.events ?? []),
     [runDetail],
   );
 
@@ -334,14 +138,7 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
         <span className={styles['branch-label']}>от ветки: {branch.name}</span>
       )}
 
-      <ExpandableSteps
-        steps={runSteps}
-        isRunning={false}
-        selectedDisplayStepId={selectedDisplayStepId}
-        onSelectStep={(displayStepId, rawStepId, inspectorSteps, entity) => 
-          onSelectStep(run.id, displayStepId, rawStepId, inspectorSteps, entity)
-        }
-      />
+      <ExecutionTrace trace={trace} isRunning={false} onSelectTarget={(target) => onSelectTraceTarget?.(target, trace)} />
 
       <div className={styles['answer-row']}>
         {runDetail ? (
@@ -385,7 +182,7 @@ interface Props {
   onResumeSubmit: (text: string) => void;
   onStop: () => void;
   onSelectRun?: (runId?: string) => void;
-  onSelectStep?: (runId: string, stepId: string, steps: RunStep[], entity?: TraceEntity) => void;
+  onSelectTraceTarget?: (target: TraceInspectionTarget, trace: ReturnType<typeof replayRuntimeJournal>) => void;
 }
 
 // ── RunChat ──────────────────────────────────────────────────────────────────
@@ -406,7 +203,7 @@ export default function RunChat({
   onResumeSubmit,
   onStop,
   onSelectRun,
-  onSelectStep,
+  onSelectTraceTarget,
 }: Props) {
   type PendingAttachment = { id: string; file: File };
   const [input, setInput] = useState('');
@@ -419,8 +216,6 @@ export default function RunChat({
     allowed_extensions: string[];
     allowed_content_types_by_extension?: Record<string, string[]>;
   } | null>(null);
-  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [selectedDisplayStepId, setSelectedDisplayStepId] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const clarifyInputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -462,8 +257,6 @@ export default function RunChat({
 
   useEffect(() => {
     setInput('');
-    setSelectedStepId(null);
-    setSelectedDisplayStepId(null);
   }, [activeBranchId]);
 
   useEffect(() => {
@@ -597,18 +390,6 @@ export default function RunChat({
     }
   };
 
-  const handleSelectStep = (
-    runId: string,
-    displayStepId: string,
-    rawStepId: string,
-    steps: RunStep[],
-    entity?: TraceEntity,
-  ) => {
-    setSelectedDisplayStepId(displayStepId);
-    setSelectedStepId(rawStepId);
-    onSelectStep?.(runId, rawStepId, steps, entity);
-  };
-
   const handleForkBranch = (parentRunId: string, sourceText: string) => {
     if (isCreatingBranch) return;
     void onCreateBranchFromMessage(sourceText, parentRunId).then(() => {
@@ -675,9 +456,8 @@ export default function RunChat({
             branch={run.branch_id ? branchMap.get(run.branch_id) : undefined}
             isCurrentBranch={run.branch_id === activeBranchId}
             isReadOnly={isReadOnly}
-            selectedDisplayStepId={selectedDisplayStepId}
-            onSelectStep={handleSelectStep}
             onForkBranch={handleForkBranch}
+            onSelectTraceTarget={onSelectTraceTarget}
           />
         ))}
 
@@ -687,16 +467,7 @@ export default function RunChat({
               <ChatQuestionCard text={activeUserMessage} />
             </div>
 
-            <ExpandableSteps
-              steps={activeRun.steps}
-              isRunning={isRunning}
-              selectedDisplayStepId={selectedDisplayStepId}
-              onSelectStep={(displayStepId, rawStepId, inspectorSteps, entity) => {
-                setSelectedDisplayStepId(displayStepId);
-                setSelectedStepId(rawStepId);
-                onSelectStep?.('active', rawStepId, inspectorSteps, entity);
-              }}
-            />
+            <ExecutionTrace trace={activeRun.trace} isRunning={isRunning} onSelectTarget={(target) => onSelectTraceTarget?.(target, activeRun.trace)} />
 
             <div className={styles['answer-row']}>
               {showActiveAnswerCard && (

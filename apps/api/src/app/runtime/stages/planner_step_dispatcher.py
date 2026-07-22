@@ -28,6 +28,7 @@ class PlannerStepDispatcher:
         step: NextStep,
         runtime_state: RuntimeTurnState,
         run_id: str,
+        planner_executor_id: str,
         planner_iteration: int,
         planner_iteration_id: str,
         orchestrator_id: str,
@@ -72,6 +73,19 @@ class PlannerStepDispatcher:
             if question not in runtime_state.open_questions:
                 runtime_state.open_questions.append(question)
             runtime_state.status = PipelineStopReason.WAITING_INPUT.value
+            events.append(
+                PhasedEvent(
+                    RuntimeEvent.waiting_input(
+                        question,
+                        run_id=str(run_id),
+                        entity_id=f"{planner_executor_id}:interaction",
+                        parent_entity_type="agent_run",
+                        parent_entity_id=planner_executor_id,
+                        interaction_kind="clarify",
+                    ),
+                    OrchestrationPhase.PLANNER,
+                )
+            )
             events.append(
                 PhasedEvent(
                     RuntimeEvent.stop(

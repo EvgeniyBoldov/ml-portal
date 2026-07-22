@@ -1,0 +1,93 @@
+.trace {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+}
+
+.summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.summaryTitle { font-size: var(--text-sm); font-weight: 600; }
+.running { color: var(--primary); font-size: var(--text-xs); }
+.chevron { margin-left: auto; color: var(--text-secondary); transition: transform .16s ease; }
+.chevronOpen { transform: rotate(180deg); }
+
+.iterations { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+.iteration { overflow: hidden; border: 1px solid var(--border-color); border-radius: 12px; color: var(--text-primary); }
+.iteration-decision { background: color-mix(in srgb, #4b9fd1 24%, var(--bg-elevated)); }
+.iteration-execution { background: color-mix(in srgb, #94a3b8 20%, var(--bg-elevated)); }
+.iteration-synthesis, .iteration-extraction, .iteration-preparation { background: color-mix(in srgb, var(--bg-hover) 85%, var(--bg-elevated)); }
+
+.iterationHeader { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: center; gap: 10px; min-height: 42px; padding: 8px 12px; border-bottom: 1px solid var(--border-color); }
+.iterationType { font-size: var(--text-xs); font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+button.iterationType { padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.iterationTask { overflow: hidden; font-size: var(--text-sm); font-weight: 600; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.iterationBody { padding: 10px; }
+
+.stageRow { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 8px; }
+.stageNumber { display: grid; width: 26px; height: 26px; place-items: center; border: 1px solid var(--border-color); border-radius: 50%; background: var(--bg-hover); color: var(--text-secondary); font-size: var(--text-xs); font-weight: 700; cursor: pointer; }
+.stage { min-width: 0; padding: 10px; border: 1px solid var(--border-color); border-radius: 9px; background: transparent; }
+.executorList { display: flex; flex-direction: column; gap: 10px; }
+
+.executor { position: relative; overflow: hidden; border: 2px solid var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--primary) 8%, var(--bg-elevated)); }
+.executor > * { position: relative; z-index: 1; }
+.executor.executorRunning { border-color: transparent; }
+.executor.executorRunning::before { position: absolute; z-index: 0; inset: -2px; border-radius: inherit; background: conic-gradient(from var(--trace-angle), transparent 0deg 275deg, color-mix(in srgb, var(--primary) 20%, transparent) 300deg, var(--primary) 325deg, color-mix(in srgb, var(--primary) 20%, transparent) 350deg, transparent 360deg); content: ''; -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; padding: 2px; animation: trace-border-sweep 1.4s linear infinite; }
+.executor.executorComplete { border-color: var(--success); }
+.executor.executorFailed { border-color: var(--danger); }
+.executorBody { display: flex; align-items: stretch; gap: 8px; padding: 9px 10px 0; }
+.executorComplete { border-color: var(--success); }
+.executorFailed { border-color: var(--danger); }
+.executorLabel { display: grid; width: 100%; min-width: 0; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: center; padding: 0; border: 0; border-radius: 6px; background: var(--bg-hover); color: var(--text-primary); cursor: pointer; text-align: left; }
+.executorType { padding: 10px 8px; border-right: 1px solid var(--border-color); font-size: var(--text-xs); }
+.executorName { overflow: hidden; padding: 6px 12px; font-size: var(--text-base); font-weight: 600; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.executorName small { display: block; color: var(--text-secondary); font-size: var(--text-xs); font-weight: 400; }
+.executorStatus { padding: 0 10px; }
+.executorExpand { width: 28px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.executor > .metrics { margin: 8px 10px 0; }
+
+.callList { display: flex; flex-direction: column; gap: 8px; margin: 10px 20px 12px 64px; }
+.callWrap { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); }
+.call { display: grid; min-width: 0; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: center; overflow: hidden; border: 1px solid var(--call-color, var(--border-color)); border-radius: 7px; background: color-mix(in srgb, var(--call-color, var(--border-color)) 12%, var(--bg-elevated)); color: var(--text-primary); cursor: pointer; text-align: left; }
+.call-llm { --call-color: #eab308; }
+.call-tool { --call-color: #64748b; }
+.call-clarify { --call-color: #2563eb; }
+.call-confirm { --call-color: #d97706; }
+.call-error { --call-color: #ef4444; }
+.callType { padding: 9px 8px; border-right: 1px solid var(--border-color); font-size: var(--text-xs); }
+.callTitle { overflow: hidden; padding: 8px 12px; font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.callStatus { padding: 3px 7px; border: 1px solid var(--border-color); border-radius: 5px; font-size: 10px; white-space: nowrap; }
+.callStatusComplete { border-color: var(--success); color: var(--success); }
+.callStatusRunning { border-color: var(--primary); color: var(--primary); }
+.callStatusError { border-color: var(--danger); color: var(--danger); }
+
+.metrics { display: flex; flex-direction: column; gap: 2px; padding: 5px 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-hover); color: var(--text-secondary); font-size: 10px; line-height: 1.25; }
+.status { padding: 3px 7px; border: 1px solid var(--border-color); border-radius: 5px; font-size: 10px; text-transform: uppercase; white-space: nowrap; }
+.status-complete { border-color: var(--success); color: var(--success); }
+.status-fail, .status-failed { border-color: var(--danger); color: var(--danger); }
+.status-running { border-color: var(--primary); color: var(--primary); }
+
+@property --trace-angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@keyframes trace-border-sweep { to { --trace-angle: 360deg; } }
+
+@media (max-width: 700px) {
+  .iterations { padding: 8px; }
+  .iterationHeader { grid-template-columns: 1fr max-content; }
+  .iterationTask { grid-column: 1 / -1; grid-row: 1; text-align: left; }
+  .iterationType { grid-row: 2; }
+  .iterationHeader > .status { grid-row: 2; }
+  .stageRow { grid-template-columns: 24px minmax(0, 1fr); gap: 6px; }
+  .stageNumber { width: 22px; height: 22px; }
+  .callList { margin-left: 34px; }
+}

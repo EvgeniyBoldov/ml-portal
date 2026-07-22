@@ -30,8 +30,6 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "RAGUploadService": ("app.services.rag_upload_service", "RAGUploadService"),
     "RAGEventPublisher": ("app.services.rag_event_publisher", "RAGEventPublisher"),
     "RAGEventSubscriber": ("app.services.rag_event_publisher", "RAGEventSubscriber"),
-    "RunStore": ("app.services.run_store", "RunStore"),
-    "ExecutionTraceLogger": ("app.services.execution_trace_logger", "ExecutionTraceLogger"),
     "calculate_aggregate_status": ("app.services.status_aggregator", "calculate_aggregate_status"),
     "AsyncTenantsService": ("app.services.tenants_service", "AsyncTenantsService"),
     "AsyncUsersService": ("app.services.users_service", "AsyncUsersService"),

@@ -11,8 +11,10 @@ BudgetEmitCallback = Callable[[dict], None]
 
 
 MetricName = Literal[
-    "planner_steps",
-    "agent_steps",
+    "plan_revisions",
+    "task_attempts",
+    "agent_runs",
+    "llm_calls",
     "tool_calls",
     "tokens_in",
     "tokens_out",
@@ -59,8 +61,10 @@ class EntityLedger:
         limits_payload = None
         if self.limits is not None:
             limits_payload = {
-                "planner_steps": self.limits.planner_steps,
-                "agent_steps": self.limits.agent_steps,
+                "plan_revisions": self.limits.plan_revisions,
+                "task_attempts": self.limits.task_attempts,
+                "agent_runs": self.limits.agent_runs,
+                "llm_calls": self.limits.llm_calls,
                 "tool_calls": self.limits.tool_calls,
                 "tokens_total": self.limits.tokens_total,
                 "retries": self.limits.retries,

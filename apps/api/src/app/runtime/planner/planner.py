@@ -85,18 +85,24 @@ class PlannerThinkingOutput(BaseModel):
 class PlannerLLMOutput(BaseModel):
     """Schema the planner LLM is required to produce."""
 
-    kind: Literal[
+    # The active planner role now emits graph decisions. The next-step loop
+    # accepts that canonical shape and projects it to its first executable
+    # action below; the legacy `kind` shape remains readable for old prompts.
+    kind: Optional[Literal[
         "call_agent",
         "clarify",
         "ask_user",
         "final",
         "abort",
-    ]
-    rationale: str = Field(..., min_length=1)
+    ]] = None
+    decision: Optional[Literal["create_plan", "revise_plan", "ask_user", "complete_plan", "fail_plan"]] = None
+    tasks: List[Dict[str, Any]] = Field(default_factory=list)
+    rationale: str = "planner decision"
     agent_slug: Optional[str] = None
     agent_input: Dict[str, Any] = Field(default_factory=dict)
     question: Optional[str] = None
     final_answer: Optional[str] = None
+    answer_brief: Optional[str] = None
     phase_id: Optional[str] = None
     phase_title: Optional[str] = None
     risk: Literal["low", "medium", "high"] = "low"
@@ -360,17 +366,37 @@ class Planner:
             "final": NextStepKind.FINAL,
             "abort": NextStepKind.ABORT,
         }
+        if raw.kind:
+            return NextStep(
+                kind=kind_map[raw.kind], rationale=raw.rationale,
+                agent_slug=raw.agent_slug, agent_input=raw.agent_input,
+                question=raw.question, final_answer=raw.final_answer,
+                phase_id=raw.phase_id, phase_title=raw.phase_title,
+                risk=raw.risk, requires_confirmation=raw.requires_confirmation,
+            )
+
+        decision = raw.decision or "fail_plan"
+        if decision in {"create_plan", "revise_plan"}:
+            task = raw.tasks[0] if raw.tasks else {}
+            task_input = task.get("agent_input", task.get("input", {}))
+            if not isinstance(task_input, dict):
+                task_input = {"query": str(task_input)}
+            return NextStep(
+                kind=NextStepKind.CALL_AGENT,
+                rationale=raw.rationale,
+                agent_slug=task.get("agent_slug"),
+                agent_input=task_input,
+            )
+        decision_map = {
+            "ask_user": NextStepKind.ASK_USER,
+            "complete_plan": NextStepKind.FINAL,
+            "fail_plan": NextStepKind.ABORT,
+        }
         return NextStep(
-            kind=kind_map[raw.kind],
+            kind=decision_map[decision],
             rationale=raw.rationale,
-            agent_slug=raw.agent_slug,
-            agent_input=raw.agent_input,
             question=raw.question,
-            final_answer=raw.final_answer,
-            phase_id=raw.phase_id,
-            phase_title=raw.phase_title,
-            risk=raw.risk,
-            requires_confirmation=raw.requires_confirmation,
+            final_answer=raw.answer_brief or raw.final_answer,
         )
 
     @staticmethod

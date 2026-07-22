@@ -4,7 +4,7 @@ BaseRuntime — абстрактный базовый класс для всех
 Предоставляет общую инфраструктуру:
 - LLMAdapter для вызовов LLM
 - ExecutionConfigResolver для конфигурации
-- RuntimeTraceLogger для run/session logging
+- scoped RuntimeEventLogger через RunSession
 - RuntimeLoggingResolver для уровня логирования
 - RuntimeSandboxResolver для sandbox overlay helpers
 - OperationExecutor для выполнения operations
@@ -22,7 +22,6 @@ from app.agents.runtime.agent_prompt_renderer import AgentPromptRenderer
 from app.agents.execution_config_resolver import ExecutionConfigResolver
 from app.agents.runtime_logging_resolver import RuntimeLoggingResolver
 from app.agents.runtime_sandbox_resolver import RuntimeSandboxResolver
-from app.agents.runtime_trace_logger import RuntimeTraceLogger
 from app.agents.runtime.prompt_assembler import PromptAssembler
 from app.agents.runtime.tools import OperationExecutionFacade
 from app.core.logging import get_logger
@@ -32,7 +31,6 @@ if TYPE_CHECKING:
     from app.agents.context import ToolContext
     from app.agents.execution_preflight import ExecutionRequest
     from app.core.http.clients import LLMClientProtocol
-    from app.services.run_store import RunStore
 
 logger = get_logger(__name__)
 
@@ -47,17 +45,14 @@ class BaseRuntime(ABC):
     def __init__(
         self,
         llm_client: LLMClientProtocol,
-        run_store: Optional[RunStore] = None,
     ) -> None:
         self.llm = LLMAdapter(llm_client)
-        self.trace_logger = RuntimeTraceLogger(run_store=run_store)
         self.logging_resolver = RuntimeLoggingResolver()
         self.sandbox_resolver = RuntimeSandboxResolver()
         self.config_resolver = ExecutionConfigResolver()
         self.tools = OperationExecutionFacade()
         self.prompts = AgentPromptRenderer()
         self.prompt_assembler = PromptAssembler(self.prompts)
-        self.run_store = run_store
 
     @abstractmethod
     async def execute(
@@ -85,7 +80,8 @@ class BaseRuntime(ABC):
         run_id_override: Optional[UUID] = None,
     ):
         """Factory method for creating a RunSession."""
-        return self.trace_logger.make_run_session(
+        from app.agents.runtime.session import RunSession
+        return RunSession(
             ctx=ctx,
             agent_slug=agent_slug,
             mode=mode,

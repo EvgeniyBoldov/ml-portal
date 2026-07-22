@@ -1,8 +1,7 @@
 """
 FinalizationStage — synthesizer stream + terminal state flag.
 
-Invoked by the pipeline when PlanningStage reports NEEDS_FINAL (planner
-FINAL, loop-detected, max-iters).
+Invoked by the pipeline after the persisted graph reaches a terminal state.
 
 Cross-turn memory is owned by FactStore + DialogueSummaryStore via
 MemoryBuilder/MemoryWriter; there is nothing left to persist at the

@@ -24,7 +24,7 @@ from app.workers.session_factory import get_worker_session
 logger = get_logger(__name__)
 
 TEMPLATE_STATUS_UPLOADED = "uploaded"
-TEMPLATE_STATUS_ANALYZED = "analyzed"
+TEMPLATE_STATUS_APPROVAL_REQUIRED = "approval_required"
 TEMPLATE_STATUS_READY = "ready"
 TEMPLATE_STATUS_ARCHIVED = "archived"
 
@@ -86,7 +86,7 @@ def _build_description_metrics(
         "scalar_field_count": scalar_field_count,
         "table_field_count": table_field_count,
         "description_text": description,
-        "description_source": "deterministic",
+        "description_source": "llm_or_deterministic_fallback",
     }
 
 
@@ -99,13 +99,12 @@ def _resolve_template_status(current_row: dict[str, Any], nodes: list[Any]) -> s
     schema_completed = str(getattr(node_map.get("schema"), "status", "") or "").strip().lower() == "completed"
     description_completed = str(getattr(node_map.get("description"), "status", "") or "").strip().lower() == "completed"
     approval_completed = str(getattr(node_map.get("approval"), "status", "") or "").strip().lower() == "completed"
-    has_vector_search = bool(current_row.get("has_vector_search"))
     vector_state = str(current_row.get("_vector_status") or "").strip().lower()
 
-    if approval_completed and (not has_vector_search or vector_state == "done"):
+    if approval_completed and vector_state in {"completed", "done"}:
         return TEMPLATE_STATUS_READY
     if schema_completed and description_completed:
-        return TEMPLATE_STATUS_ANALYZED
+        return TEMPLATE_STATUS_APPROVAL_REQUIRED
     return TEMPLATE_STATUS_UPLOADED
 
 
@@ -249,7 +248,10 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
             resolved_version = row.get("template_version")
 
             # Build description from contract (S3)
-            desc_builder = TemplateDescriptionBuilder(llm=None)  # Can be configured with LLM
+            # The description is semantic metadata: use the configured LLM,
+            # while the builder retains its deterministic failure fallback.
+            from app.core.di import get_llm_client
+            desc_builder = TemplateDescriptionBuilder(llm=get_llm_client())
             description = await desc_builder.build(
                 contract,
                 title=resolved_title,
@@ -287,7 +289,7 @@ def generate_template_description(self, collection_id: str, row_id: str) -> dict
                     "field_count": len(contract.fields),
                 },
             )
-            updated_row = await service.update_row(collection, row_uuid, updates)
+            updated_row = await service.update_row(collection, row_uuid, updates, skip_vectorization=True)
             nodes = await status_repo.get_nodes_by_row_id(row_uuid)
             updates_status = _resolve_template_status(updated_row or row, nodes)
             if updates_status != str((updated_row or row).get("status") or "").strip().lower():

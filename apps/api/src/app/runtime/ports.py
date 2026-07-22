@@ -6,7 +6,8 @@ adapters. Concrete adapters live next to them:
 
     AgentExecutionPort      ← app.runtime.agent_executor.AgentExecutor
     SynthesizerPort         ← app.runtime.synthesizer.Synthesizer
-    PlannerServicePort      ← app.runtime.planner.planner.Planner
+    PlannerPort             ← canonical graph planner
+    TaskExecutionPort       ← canonical task attempt executor
 
 Keeping these as Protocols (structural typing) means we do not force existing
 adapters to inherit — they already match by method shape.
@@ -33,6 +34,14 @@ from uuid import UUID
 
 from app.agents.context import ToolContext
 from app.runtime.contracts import NextStep
+from app.runtime.orchestrator_contracts import (
+    AgentTaskResult,
+    PlanPatch,
+    PlanRequest,
+    TaskAttemptFailure,
+    TaskRequest,
+    PlannerDecisionKind,
+)
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.events import RuntimeEvent
 from app.runtime.turn_state import RuntimeTurnState
@@ -49,23 +58,29 @@ from app.runtime.turn_state import RuntimeTurnState
 
 
 @runtime_checkable
-class PlannerServicePort(Protocol):
-    """Next-step planner — produces one NextStep per invocation."""
+class PlannerPort(Protocol):
+    """Planner boundary for the canonical persisted execution graph."""
 
-    async def next_step(
-        self,
-        *,
-        runtime_state: RuntimeTurnState,
-        available_agents: List[Dict[str, Any]],
-        outline: Any,
-        platform_config: Dict[str, Any],
-        chat_id: Optional[UUID],
-        tenant_id: UUID,
-        user_id: UUID,
-        agent_run_id: UUID,
-        planner_iteration_id: Optional[str] = None,
-        sandbox_overrides: Optional[Dict[str, Any]] = None,
-    ) -> tuple[NextStep, List[Any]]: ...
+    async def plan(self, *, request: PlanRequest, **kwargs: Any) -> PlanPatch: ...
+
+
+@runtime_checkable
+class NextStepPlannerPort(Protocol):
+    """Planner boundary for the chat turn planner loop."""
+
+    async def next_step(self, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class TaskExecutionPort(Protocol):
+    """Executes a logical task attempt and returns a strict agent result."""
+
+    async def execute_task(self, *, request: TaskRequest, **kwargs: Any) -> AgentTaskResult: ...
+
+
+@runtime_checkable
+class TaskFailureClassifier(Protocol):
+    def classify(self, exc: BaseException) -> TaskAttemptFailure: ...
 
 
 # --------------------------------------------------------------------------- #

@@ -6,9 +6,9 @@ Public surface:
 
 Design goals:
     * Componentized memory: MemoryBundle assembled per-turn from MemoryComponents
-    * Single decision engine: Planner (step-by-step: agent_call / ask_user / final / abort)
-    * Flat pipeline: no thin-wrapper orchestrators, one class owns the flow
-    * Clean contracts: NextStep, RuntimeTurnState, MemoryBundle
+    * Planner produces a persisted task graph; orchestrator owns execution
+    * Task attempts distinguish technical failures from valid agent outcomes
+    * Clean contracts: PlanPatch, TaskRequest, AgentTaskResult, RuntimeTurnState
 """
 from app.runtime.events import RuntimeEvent, RuntimeEventType, OrchestrationPhase
 from app.runtime.contracts import (
@@ -17,11 +17,18 @@ from app.runtime.contracts import (
     NextStepKind,
     PipelineStopReason,
 )
+from app.runtime.orchestrator_contracts import (
+    AgentTaskResult,
+    PlanPatch,
+    PlanRequest,
+    TaskAttemptFailure,
+    TaskRequest,
+)
 
 
 def __getattr__(name: str):
     # Lazy: avoids a circular import via
-    #   pipeline → services.run_store → services.runtime_terminal_status
+    #   pipeline → services.runtime_event_logger
     #   → app.runtime.events (which re-enters this package's __init__).
     if name == "RuntimePipeline":
         from app.runtime.pipeline import RuntimePipeline
@@ -39,4 +46,9 @@ __all__ = [
     "NextStep",
     "NextStepKind",
     "PipelineStopReason",
+    "PlanPatch",
+    "PlanRequest",
+    "TaskRequest",
+    "AgentTaskResult",
+    "TaskAttemptFailure",
 ]

@@ -8,6 +8,7 @@ import { qk } from '@/shared/api/keys';
 import { sandboxApi } from '../api';
 import type { SandboxSSEEvent, SandboxRunCreate } from '../types';
 import type { ExecutionMode } from '@/shared/api/types';
+import { applyRuntimeJournalEvent, emptySandboxTrace, type SandboxTraceState, type RuntimeJournalEvent } from '../traceState';
 
 export type RunStepType =
   | 'user_request'
@@ -57,6 +58,7 @@ export interface ActiveRun {
   requestText: string;
   startedAt: string;
   steps: RunStep[];
+  trace: SandboxTraceState;
   finalContent: string;
   status: 'idle' | 'running' | 'completed' | 'error' | 'waiting_confirmation' | 'waiting_input';
   pendingConfirmation: SandboxSSEEvent | null;
@@ -68,6 +70,7 @@ const INITIAL_RUN: ActiveRun = {
   requestText: '',
   startedAt: '',
   steps: [],
+  trace: emptySandboxTrace(),
   finalContent: '',
   status: 'idle',
   pendingConfirmation: null,
@@ -106,6 +109,29 @@ export function useSandboxRun(sessionId: string) {
     [],
   );
 
+  const applyTraceEvent = useCallback((event: SandboxSSEEvent) => {
+    const eventId = typeof event.event_id === 'string' ? event.event_id : null;
+    const sequence = typeof event.sequence === 'number' ? event.sequence : null;
+    const runId = typeof event.run_id === 'string' ? event.run_id : null;
+    if (!eventId || sequence === null || !runId || typeof event.type !== 'string') return;
+    const payload = { ...event } as Record<string, unknown>;
+    delete payload.type; delete payload.run_id; delete payload.event_id; delete payload.sequence;
+    delete payload.entity_type; delete payload.entity_id; delete payload.parent_entity_type;
+    delete payload.parent_entity_id; delete payload.occurred_at; delete payload.duration_ms;
+    const journalEvent: RuntimeJournalEvent = {
+      id: eventId, run_id: runId, sequence, event_type: event.type,
+      occurred_at: typeof event.occurred_at === 'string' ? event.occurred_at : new Date().toISOString(),
+      entity_type: typeof event.entity_type === 'string' ? event.entity_type : null,
+      entity_id: typeof event.entity_id === 'string' ? event.entity_id : null,
+      parent_entity_type: typeof event.parent_entity_type === 'string' ? event.parent_entity_type : null,
+      parent_entity_id: typeof event.parent_entity_id === 'string' ? event.parent_entity_id : null,
+      caused_by_event_id: typeof event.caused_by_event_id === 'string' ? event.caused_by_event_id : null,
+      duration_ms: typeof event.duration_ms === 'number' ? event.duration_ms : null,
+      payload,
+    };
+    setActiveRun((prev) => ({ ...prev, trace: applyRuntimeJournalEvent(prev.trace, journalEvent) }));
+  }, []);
+
   const run = useCallback(
     async (
       requestText: string,
@@ -123,6 +149,7 @@ export function useSandboxRun(sessionId: string) {
         requestText,
         startedAt: new Date().toISOString(),
         steps: [],
+        trace: emptySandboxTrace(),
         finalContent: '',
         status: 'running',
         pendingConfirmation: null,
@@ -177,6 +204,7 @@ export function useSandboxRun(sessionId: string) {
             try {
               const event = JSON.parse(raw) as SandboxSSEEvent;
               const { type, run_id, ...data } = event;
+              applyTraceEvent(event);
 
               if (run_id && !runId) {
                 runId = run_id;
@@ -286,7 +314,7 @@ export function useSandboxRun(sessionId: string) {
         });
       }
     },
-    [sessionId, addStep, qc],
+    [sessionId, addStep, applyTraceEvent, qc],
   );
 
   const confirmAction = useCallback(
@@ -355,6 +383,8 @@ export function useSandboxRun(sessionId: string) {
             try {
               const event = JSON.parse(raw) as SandboxSSEEvent;
               const { type, run_id, ...data } = event;
+
+              applyTraceEvent(event);
 
               if (type === 'chunk' && typeof data.text === 'string') {
                 finalContent += data.text;
@@ -451,7 +481,7 @@ export function useSandboxRun(sessionId: string) {
         }));
       }
     },
-    [sessionId, activeRun.runId, addStep],
+    [sessionId, activeRun.runId, addStep, applyTraceEvent],
   );
 
   const stop = useCallback(() => {

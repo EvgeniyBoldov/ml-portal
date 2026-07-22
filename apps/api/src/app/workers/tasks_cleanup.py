@@ -1,7 +1,7 @@
 """
 Cleanup tasks for retention policies.
 
-Handles automatic cleanup of old audit logs, agent runs, etc.
+Handles automatic cleanup of audit logs and canonical runtime events.
 """
 from __future__ import annotations
 from app.core.logging import get_logger
@@ -11,7 +11,7 @@ from celery import shared_task
 from sqlalchemy import delete, select, func, text
 
 from app.models.audit_log import AuditLog
-from app.models.agent_run import AgentRun
+from app.models.runtime_observability import RuntimeExecutionEvent, RuntimeEventSequence
 from app.models.chat import Chats
 from app.models.sandbox import SandboxSession
 from app.models.tenant import Tenants
@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 
 # Retention periods (days)
 AUDIT_LOG_RETENTION_DAYS = 7
-AGENT_RUN_RETENTION_DAYS = 7
+RUNTIME_EVENT_RETENTION_DAYS = 7
 DEFAULT_LIFECYCLE_RETENTION_DAYS = 14
 DETACHED_CHAT_ATTACHMENT_RETENTION_HOURS = 24
 ORPHAN_CHAT_ATTACHMENT_GRACE_MINUTES = 15
@@ -81,14 +81,14 @@ def cleanup_old_audit_logs(self):
 
 
 @shared_task(
-    name="app.workers.tasks_cleanup.cleanup_old_agent_runs",
+    name="app.workers.tasks_cleanup.cleanup_old_runtime_events",
     bind=True,
     max_retries=3,
     default_retry_delay=60,
 )
-def cleanup_old_agent_runs(self):
+def cleanup_old_runtime_events(self):
     """
-    Delete agent runs older than retention period.
+    Delete canonical runtime journal events older than retention period.
     
     Runs daily via Celery beat.
     """
@@ -96,22 +96,25 @@ def cleanup_old_agent_runs(self):
     
     async def _cleanup():
         async with get_worker_session() as session:
-            cutoff_date = datetime.utcnow() - timedelta(days=AGENT_RUN_RETENTION_DAYS)
-            
-            # AgentRunStep will be cascade deleted
+            cutoff_date = datetime.utcnow() - timedelta(days=RUNTIME_EVENT_RETENTION_DAYS)
             result = await session.execute(
-                delete(AgentRun).where(AgentRun.started_at < cutoff_date)
+                delete(RuntimeExecutionEvent).where(RuntimeExecutionEvent.occurred_at < cutoff_date)
             )
             deleted_count = result.rowcount
+            await session.execute(
+                delete(RuntimeEventSequence).where(~RuntimeEventSequence.run_id.in_(
+                    select(RuntimeExecutionEvent.run_id).distinct()
+                ))
+            )
             await session.commit()
             
-            logger.info(f"Deleted {deleted_count} agent runs older than {cutoff_date}")
+            logger.info(f"Deleted {deleted_count} runtime events older than {cutoff_date}")
             return deleted_count
     
     try:
         return asyncio.run(_cleanup())
     except Exception as e:
-        logger.error(f"Failed to cleanup agent runs: {e}", exc_info=True)
+        logger.error(f"Failed to cleanup runtime events: {e}", exc_info=True)
         raise self.retry(exc=e)
 
 
@@ -321,9 +324,9 @@ def run_all_cleanup():
         results["audit_logs"] = f"error: {e}"
     
     try:
-        results["agent_runs"] = cleanup_old_agent_runs.delay().get(timeout=300)
+        results["runtime_events"] = cleanup_old_runtime_events.delay().get(timeout=300)
     except Exception as e:
-        results["agent_runs"] = f"error: {e}"
+        results["runtime_events"] = f"error: {e}"
 
     try:
         results["sandbox_sessions"] = cleanup_expired_sandbox_sessions.delay().get(timeout=300)

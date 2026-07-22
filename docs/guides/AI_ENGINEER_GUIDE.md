@@ -80,7 +80,7 @@
 
 Смотреть в первую очередь:
 
-1. Agent runs (status, duration, step timeline).
+1. Runtime event journal: sandbox root-runs и самостоятельные chat executor-runs.
 2. Tool-level ошибки и таймауты.
 3. RAG ingest статусы и failed stages.
 4. Search quality (recall/precision, пустые выдачи).

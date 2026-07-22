@@ -202,7 +202,8 @@ def _resolve_runtime(row: dict[str, Any], analysis_nodes: list[dict[str, Any]] |
     indexing_ready = _has_completed(indexing_node) or (
         not indexing_node and fallback_vector_state == "completed"
     )
-    retrieval_ready = (not has_vector_search) or (vectorization_ready and indexing_ready)
+    # A template is searchable only after its approved description is indexed.
+    retrieval_ready = has_vector_search and vectorization_ready and indexing_ready
 
     has_error = any(
         (

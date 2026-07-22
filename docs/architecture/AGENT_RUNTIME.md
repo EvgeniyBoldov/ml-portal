@@ -4,13 +4,20 @@
 
 Текущий runtime построен как многослойный execution pipeline:
 
-`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> PipelineAssembler -> PlanningStage -> AgentExecutor -> DirectOperationExecutor`
+`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> PipelineAssembler -> OrchestratorStage -> PlanStore -> TaskExecutionStage -> AgentExecutor -> DirectOperationExecutor`
+
+Канонический планировщик теперь возвращает не следующий шаг, а мутацию
+сохраняемого графа: `PlannerGraphOutput -> PlanPatch -> SqlPlanStore`.
+`SqlDeterministicOrchestrator` единолично меняет статусы задач, фиксирует
+попытки, checkpoint и различает технический failure от бизнес-результата
+`unfulfillable`. Выполнение v1 последовательное; зависимости уже являются
+частью контракта и готовы к будущему параллельному scheduler.
 
 Это важно: агентный runtime больше не является одним простым tool-call loop. Он уже включает:
 - preflight разрешение доступных агентов/коллекций/операций,
-- planner loop with clarify/ask-user pause handling,
+- persisted planner task graph with dependency/checkpoint pause handling,
 - sub-agent operation loop,
-- trace/logging and pause handling.
+- canonical event journal and pause handling.
 
 ## Архитектурное правило
 
@@ -71,9 +78,7 @@ Singleton реестр локальных handlers.
   - `ProviderExecutionTarget`
 - для local providers registry допустим как implementation detail
 - для MCP providers capability discovery идёт через `tools/list`
-- старые triage role/model contracts и historical event names могут сохраняться
-  для миграции, админских контрактов и чтения старых данных, но не являются
-  отдельной стадией текущего runtime pipeline.
+- historical trace/run contracts не сохраняются и не читаются.
 
 ```python
 class ToolRegistry:
@@ -128,12 +133,12 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 ```
 1. `ChatStreamService` или sandbox создаёт `ToolContext`.
 2. `RuntimePipeline` загружает platform snapshot и строит turn memory.
-3. `PlanningStage` выбирает следующий шаг; clarify/ask-user переводятся в pause events.
-4. Для agent operation выполняется `ExecutionPreflight`.
-5. Preflight собирает `ExecutionRequest` с доступными агентами, коллекциями, операциями и execution targets.
-6. `AgentExecutor` и `AgentToolRuntime` выполняют operation loop.
-7. `DirectOperationExecutor` dispatch-ит local/MCP execution.
-8. FinalizationStage формирует финальный ответ, memory writer сохраняет turn state, runtime стримит canonical events и пишет trace/run steps.
+3. Planner создаёт или изменяет persisted plan через `PlanPatch`.
+4. Orchestrator выбирает одну ready task и создаёт `RuntimeTaskAttempt`.
+5. Для task выполняется `ExecutionPreflight`, затем `AgentExecutor` возвращает строгий `AgentTaskResult`.
+6. Технический сбой сохраняется отдельно и может быть retried; `unfulfillable` является валидным бизнес-результатом.
+7. Checkpoint и outputs открывают зависимости или возобновляют логическую task новым attempt.
+8. FinalizationStage формирует финальный ответ только после terminal plan; sandbox сохраняет и стримит canonical journal events, chat стримит только пользовательский transport.
 ```
 
 ## Execution Modes
@@ -189,7 +194,7 @@ Runtime уже должен мыслить не "любой collection один�
 
 ### Текущее поведение
 - Runtime может остановиться на `waiting_input` или `waiting_confirmation`.
-- Pause state сохраняется в `agent_run` и `chat_turn`.
+- Pause state сохраняется в `chat_turn` и canonical checkpoint/plan state.
 - Continuation идёт как новый chat turn в том же чате.
 
 Это рабочий production path, но это ещё не mid-run checkpoint resume.
@@ -197,8 +202,8 @@ Runtime уже должен мыслить не "любой collection один�
 ### Усиление контракта continuation
 - При `POST /api/v1/chats/runs/{run_id}/resume` формируется `resume_checkpoint`.
 - Source run переводится в статус `resumed`.
-- Checkpoint сохраняется в `agent_runs.context_snapshot.resume_checkpoint`.
-- Continuation run получает lineage через `context_snapshot.continuation_meta`.
+- Checkpoint сохраняется в `chat_turn.paused_context` и continuation metadata.
+- Continuation сохраняет lineage через `continuation_meta`; отдельный AgentRun не создаётся.
 
 ### Известные проблемы (Chat + Sandbox)
 1. **Песочница вместо resume запуска новый run** — пользователь жмёт "Ответить" на вопрос → создаётся новый `SandboxRun`, рантайм гоняется второй раз с нуля.
@@ -213,7 +218,7 @@ Runtime уже должен мыслить не "любой collection один�
 ### Resume endpoints
 - **Chat**: `POST /chats/runs/{id}/resume` → SSE-стрим (не JSON).
 - **Sandbox**: `POST /sandbox/sessions/{sid}/runs/{rid}/resume` → SSE-стрим, тот же `RuntimePipeline`, тот же run_id (не создавать новый).
-- Resume должен продолжать **тот же** `AgentRun`/`SandboxRun`, а не создавать новый.
+- Sandbox resume продолжает тот же sandbox run id; chat continuation не создаёт root journal run.
 
 ## Retrieval Surfaces
 
@@ -241,28 +246,17 @@ Runtime уже должен мыслить не "любой collection один�
 - прогон эталонных сценариев chat/document/sql/tool-path на уровне trace/event контракта,
 - быстрый регрессионный фильтр до полноценного deterministic replay/trace-pack.
 
-Для trace-pack добавлен admin export endpoint:
-- `GET /api/v1/admin/agent-runs/{run_id}/trace-pack`
-- включает: `context_snapshot`, `operations`, `prompt_surfaces`, `tool_io`, `errors`, `timeline`
-- canonical trace contract and frontend rendering rules live in [RUNTIME_TRACE_SPEC.md](./RUNTIME_TRACE_SPEC.md)
-- используется как стабильный вход для воспроизводимого анализа и будущего replay runner.
+Для admin inspection читается `runtime_execution_events` по самостоятельному
+executor `run_id` или sandbox root `run_id`. Отдельных trace-pack и AgentRun
+read contracts нет.
 
 Budget policy visibility:
 - planner и agent runtime публикуют status stage `budget_policy` в event stream,
 - в trace steps пишется `budget_policy` (и `budget_limit_exceeded` при срабатывании лимита),
 - `AgentToolRuntime` блокирует исполнение при достижении `max_tool_calls_total`.
 
-Runtime control-plane endpoints:
-- `GET /api/v1/admin/agent-runs/capability-graph?tenant_id=...&user_id=...&agent_slug=...`
-  - возвращает граф `agent -> operation -> data_instance/provider/collection`,
-  - показывает `missing.tools|collections|credentials` из resolve-прохода,
-  - используется как explainability surface для preflight/inspector UI.
-- `GET /api/v1/admin/agent-runs/hitl-policy?tenant_id=...&user_id=...`
-  - возвращает явный HITL-contract:
-    - global gates (`forbid_destructive`, `require_confirmation_*`, `max_iters`),
-    - condition-level правила (`require_input`, `require_confirmation`, `block`),
-    - operation-level effective decision для каждой runtime operation,
-    - pause/resume contract (`waiting_input|waiting_confirmation`, resume endpoint/payload).
+Runtime control-plane reads plan state and canonical event journal directly;
+legacy AgentRun control-plane endpoints are removed.
 
 Structured answer contract (backend):
 - assistant messages now persist `meta.answer_contract = answer_blocks.v1`,
@@ -316,9 +310,8 @@ class RuntimeEvent:
 ```
 
 Примечание:
-- persisted trace/inspector compatibility still accepts `operation_call` / `operation_result`,
-- newer tool-first surfaces may emit `tool_call` / `tool_result`,
-- sandbox inspector and traces should normalize both vocabularies to the same semantic payloads.
+- new runtime emits only canonical `tool_request` / `tool_result` journal events;
+- transport aliases do not create persisted compatibility events.
 
 ## Context Snapshot Contract
 
