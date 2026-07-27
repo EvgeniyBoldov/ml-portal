@@ -15,15 +15,18 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_index(
-        "uq_runtime_plan_one_running",
-        "runtime_plan_tasks",
-        ["plan_id"],
-        unique=True,
-        postgresql_where=sa.text("status = 'running'"),
-    )
+    # 0055 already creates this index as part of the canonical runtime-plan
+    # graph.  Keep this follow-up revision idempotent for databases that have
+    # already applied 0055, while still repairing installations where the
+    # index is missing.
+    op.execute(sa.text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_runtime_plan_one_running "
+        "ON runtime_plan_tasks (plan_id) "
+        "WHERE status = 'running'"
+    ))
 
 
 def downgrade() -> None:
-    op.drop_index("uq_runtime_plan_one_running", table_name="runtime_plan_tasks")
-
+    # The index is owned by 0055; do not remove it when only 0057 is
+    # downgraded.
+    pass
