@@ -12,54 +12,21 @@ def _planner_examples() -> ExamplesV2:
     return {
         "input": {
             "goal": "Понять, какие источники данных доступны для вопроса пользователя",
-            "conversation_summary": "Пользователь спрашивает про доступные источники данных.",
+            "trigger": "initial",
+            "plan": {"revision": 0, "tasks": {}, "outputs": {}},
             "available_agents": [
                 {"slug": "other_answer", "description": "Отвечает на общие и non-domain вопросы без доступа к доменным системам"},
                 {"slug": "viewer", "description": "Отвечает по структуре и метаданным источников"},
                 {"slug": "netbox", "description": "Работает с API инвентаря инфраструктуры"},
             ],
-            "execution_outline": {
-                "goal": "Ответить пользователю по источникам данных",
-                "phases": [
-                    {"phase_id": "discover", "title": "Discovery"},
-                    {"phase_id": "answer", "title": "Answer"},
-                ],
-            },
-            "memory": {
-                "runtime_facts": ["Есть агент viewer"],
-                "open_questions": [],
-            },
-            "policies": "Не раскрывать внутренние идентификаторы и секреты.",
+            "completed_outputs": {},
+            "needs": [],
         },
         "outputs": {
-            "call_agent": {
-                "kind": "call_agent",
-                "rationale": "Нужно делегировать ответ non-domain агенту, чтобы сохранить единый путь через agent result и synthesizer.",
-                "agent_slug": "other_answer",
-                "agent_input": {"query": "Какие источники данных доступны?"},
-                "risk": "low",
-                "requires_confirmation": False,
-            },
-            "clarify": {
-                "kind": "clarify",
-                "rationale": "Вопрос слишком общий, нужно уточнить предметную область.",
-                "question": "Вас интересуют документы, API-источники или оба варианта?",
-                "risk": "low",
-                "requires_confirmation": False,
-            },
-            "final": {
-                "kind": "final",
-                "rationale": "Данных уже достаточно для ответа без дополнительных вызовов.",
-                "final_answer": "Доступны источники: документные коллекции и API-инвентарь NetBox.",
-                "risk": "low",
-                "requires_confirmation": False,
-            },
-            "abort": {
-                "kind": "abort",
-                "rationale": "Нет доступных агентов и данных для безопасного ответа.",
-                "risk": "low",
-                "requires_confirmation": False,
-            },
+            "create": {"decision": "create_plan", "expected_revision": 0, "rationale": "Нужен один discovery task.", "tasks": [{"task_id": "discover", "executor": "viewer", "intent": "Собрать источники", "instructions": "Собрать доступные источники"}]},
+            "ask_user": {"decision": "ask_user", "expected_revision": 1, "question": "Уточните фокус запроса."},
+            "complete": {"decision": "complete_plan", "expected_revision": 1, "answer_brief": "Данных достаточно."},
+            "fail": {"decision": "fail_plan", "expected_revision": 1, "failure_reason": "Нет подходящего агента."},
         },
     }
 

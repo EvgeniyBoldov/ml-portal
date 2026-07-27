@@ -6,7 +6,7 @@ Responsibilities:
     * Call LLM with timeout + retries
     * Extract JSON (handles ```json fences and prose wrappers)
     * Validate against Pydantic schema; fall back or raise
-    * Log a SystemLLMTrace row for observability
+    * Emit canonical runtime events through the caller's logger
 
 Callers get a typed `StructuredCallResult` with the parsed model instance and
 the trace_id they can attach to downstream events.
@@ -19,8 +19,8 @@ import re
 import time
 import traceback
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generic, Optional, Type, TypeVar
-from uuid import UUID
+from typing import Any, Awaitable, Callable, Dict, Generic, Optional, Type, TypeVar
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +30,7 @@ from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
+from app.runtime.events import RuntimeEvent
 from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 from app.services.system_llm_role_service import SystemLLMRoleService
 
@@ -119,7 +120,8 @@ class StructuredLLMCall:
         chat_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
-        agent_run_id: Optional[UUID] = None,
+        agent_execution_id: Optional[UUID] = None,
+        event_sink: Optional[Callable[[RuntimeEvent], Awaitable[None]]] = None,
         fallback_factory: Optional[Callable[[str], T]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> StructuredCallResult[T]:
@@ -211,6 +213,20 @@ class StructuredLLMCall:
         start = time.time()
 
         for attempt in range(max_retries + 1):
+            llm_call_id = str(uuid4())
+            if event_sink is not None and agent_execution_id is not None:
+                await event_sink(RuntimeEvent.llm_request(
+                    llm_call_id=llm_call_id,
+                    parent_entity_type="agent_execution",
+                    parent_entity_id=str(agent_execution_id),
+                    agent_execution_id=str(agent_execution_id),
+                    agent_slug=role_key,
+                    purpose="planning_decision" if role_key == "planner" else role_key,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=params.get("max_tokens"),
+                    messages=messages,
+                ))
             try:
                 response = await asyncio.wait_for(
                     self.llm_client.chat(messages, model=model, params=params or None),
@@ -244,6 +260,19 @@ class StructuredLLMCall:
             last_exception = None
             last_traceback = None
             raw_response = self._extract_text(response)
+            if event_sink is not None and agent_execution_id is not None:
+                await event_sink(RuntimeEvent.llm_response(
+                    llm_call_id=llm_call_id,
+                    parent_entity_type="agent_execution",
+                    parent_entity_id=str(agent_execution_id),
+                    agent_execution_id=str(agent_execution_id),
+                    agent_slug=role_key,
+                    purpose="planning_decision" if role_key == "planner" else role_key,
+                    model=model,
+                    response=raw_response,
+                    content=raw_response,
+                    duration_ms=int((time.time() - start) * 1000),
+                ))
             if not raw_response:
                 last_error = "empty_response"
                 continue

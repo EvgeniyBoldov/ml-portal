@@ -30,7 +30,6 @@ from app.repositories.template_analysis_status_repo import AsyncTemplateAnalysis
 from app.services.collection.template_upload_service import TemplateUploadService
 from app.services.collection.row_service import CollectionRowService
 from app.services.collection.status_snapshot_service import CollectionStatusSnapshotService
-from app.services.collection.template_contract import TemplateContract, FieldSource
 from app.services.collection_vectorization_orchestrator import CollectionVectorizationOrchestrator
 from app.core.sse import format_sse
 import redis.asyncio as aioredis
@@ -60,25 +59,8 @@ def _is_legacy_xls(file_meta: object) -> bool:
     return filename.endswith(".xls")
 
 
-def _mark_schema_fields_admin(fields: list[dict]) -> None:
-    for field in fields:
-        if not isinstance(field, dict):
-            continue
-        field["source"] = FieldSource.ADMIN.value
-        field["locked"] = True
-        nested = field.get("fields")
-        if isinstance(nested, list):
-            _mark_schema_fields_admin(nested)
-
-
-class UpdateTemplateSchemaRequest(BaseModel):
-    template_schema: dict
-
-
 class UpdateTemplateRequest(BaseModel):
     description: str | None = None
-    template_schema: dict | None = None
-    status: str | None = None
 
 
 class AnalyzeTemplatesRequest(BaseModel):
@@ -91,24 +73,8 @@ class ApproveTemplateRequest(BaseModel):
 
 def _resolve_next_template_status(existing: dict, updates: dict) -> str:
     current_status = str(existing.get("status") or "uploaded").strip().lower()
-    explicit_status = str(updates.get("status") or "").strip().lower()
-    allowed_statuses = {"uploaded", "analyzed", "archived"}
-    if explicit_status:
-        if explicit_status not in allowed_statuses:
-            raise HTTPException(status_code=400, detail="Invalid template status")
-        return explicit_status
-
     if current_status == "archived":
         return "archived"
-
-    merged = dict(existing)
-    merged.update(updates)
-    has_description = bool(str(merged.get("description") or "").strip())
-    has_schema = merged.get("template_schema") is not None
-    if has_description and has_schema:
-        return "ready"
-    if has_description or has_schema:
-        return "analyzed"
     return current_status or "uploaded"
 
 
@@ -170,9 +136,6 @@ async def _update_template_row(
 
     updates = dict(payload)
     skip_vectorization = set(payload.keys()) == {"status"}
-    explicit_status = str(updates.pop("status", "") or "").strip().lower()
-    if explicit_status:
-        updates["status"] = explicit_status
     updates["status"] = _resolve_next_template_status(existing, updates)
 
     updated = await row_service.update_row(
@@ -345,6 +308,8 @@ async def approve_template(
     )
     if not bool(graph.get("approval_required")):
         raise HTTPException(status_code=400, detail="Template is not awaiting approval")
+    if not collection.has_vector_search:
+        raise HTTPException(status_code=400, detail="Template collection must have vector search enabled before approval")
 
     approved_at = datetime.now(timezone.utc)
     approver = data.approved_by if data and data.approved_by else str(user.id)
@@ -372,19 +337,17 @@ async def approve_template(
         },
     )
 
-    next_status = "ready" if not collection.has_vector_search else "analyzed"
-    await row_service.update_row(collection, row_id, {"status": next_status}, skip_vectorization=not collection.has_vector_search)
+    await row_service.update_row(collection, row_id, {"status": "processing"}, skip_vectorization=False)
     await CollectionStatusSnapshotService(session).sync_collection_status(collection, persist=False)
     await session.commit()
 
     vectorization_task_id = None
-    if collection.has_vector_search:
-        vectorization_task_id = CollectionVectorizationOrchestrator.enqueue(
-            collection_id=collection.id,
-            tenant_id=collection.tenant_id,
-            row_ids=[str(row_id)],
-            countdown=1,
-        )
+    vectorization_task_id = CollectionVectorizationOrchestrator.enqueue(
+        collection_id=collection.id,
+        tenant_id=collection.tenant_id,
+        row_ids=[str(row_id)],
+        countdown=1,
+    )
 
     refreshed_row = await row_service.get_row_by_id(collection, row_id)
     runtime_rows = await _load_template_runtime_rows(collection=collection, session=session, rows=[refreshed_row or row])
@@ -610,6 +573,27 @@ async def get_template(
     return runtime_rows[0] if runtime_rows else row
 
 
+@router.get("/{collection_id}/templates/{row_id}/download")
+async def download_template(
+    collection_id: uuid.UUID,
+    row_id: uuid.UUID,
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+):
+    """Return a short-lived original-template URL after collection RBAC checks."""
+    collection = await _resolve_template_collection(collection_id, session, user)
+    row = await _get_template_row(collection, row_id, session)
+    file_meta = row.get("file") if isinstance(row.get("file"), dict) else {}
+    bucket, key = file_meta.get("bucket"), file_meta.get("s3_key")
+    if not bucket or not key:
+        raise HTTPException(status_code=404, detail="Template file is unavailable")
+    from app.adapters.s3_client import s3_manager
+    url = await s3_manager.generate_presigned_url(bucket=str(bucket), key=str(key))
+    if not url:
+        raise HTTPException(status_code=503, detail="Could not create a download URL")
+    return {"download_url": url}
+
+
 @router.patch("/{collection_id}/templates/{row_id}")
 async def update_template(
     collection_id: uuid.UUID,
@@ -622,6 +606,9 @@ async def update_template(
     payload = data.model_dump(exclude_unset=True)
     if not payload:
         raise HTTPException(status_code=400, detail="No template fields to update")
+    existing = await _get_template_row(collection, row_id, session)
+    if str(existing.get("status") or "").lower() != "approval_required":
+        raise HTTPException(status_code=400, detail="Description can be edited only while the template awaits approval")
     result = await _update_template_row(
         collection=collection,
         row_id=row_id,
@@ -630,8 +617,7 @@ async def update_template(
     )
     status_repo = AsyncTemplateAnalysisStatusRepository(session)
     description_changed = "description" in payload
-    schema_changed = "template_schema" in payload
-    if description_changed or schema_changed:
+    if description_changed:
         edited_by = str(user.id)
         approval_node = await status_repo.get_node(row_id, "approval")
         approval_record = await status_repo.upsert_node(
@@ -643,120 +629,11 @@ async def update_template(
                 **((approval_node.metrics_json or {}) if approval_node and isinstance(approval_node.metrics_json, dict) else {}),
                 "edited_by": edited_by,
                 "description_edited": description_changed,
-                "schema_edited": schema_changed,
+                "schema_edited": False,
             },
             finished_at=None,
         )
         approval_record.finished_at = None
         await session.commit()
-    runtime_rows = await _load_template_runtime_rows(collection=collection, session=session, rows=[result])
-    return runtime_rows[0] if runtime_rows else result
-
-
-@router.patch("/{collection_id}/templates/{row_id}/schema")
-async def update_template_schema(
-    collection_id: uuid.UUID,
-    row_id: uuid.UUID,
-    data: UpdateTemplateSchemaRequest,
-    session: AsyncSession = Depends(db_uow),
-    user: UserCtx = Depends(get_current_user),
-):
-    collection = await _resolve_template_collection(collection_id, session, user)
-    result = await _update_template_row(
-        collection=collection,
-        row_id=row_id,
-        payload={"template_schema": data.template_schema},
-        session=session,
-    )
-    status_repo = AsyncTemplateAnalysisStatusRepository(session)
-    approval_node = await status_repo.get_node(row_id, "approval")
-    approval_record = await status_repo.upsert_node(
-        collection_id=collection.id,
-        row_id=row_id,
-        node_key="approval",
-        status="pending",
-        metrics_json={
-            **((approval_node.metrics_json or {}) if approval_node and isinstance(approval_node.metrics_json, dict) else {}),
-            "edited_by": str(user.id),
-            "schema_edited": True,
-        },
-        finished_at=None,
-    )
-    approval_record.finished_at = None
-    await session.commit()
-    runtime_rows = await _load_template_runtime_rows(collection=collection, session=session, rows=[result])
-    return runtime_rows[0] if runtime_rows else result
-
-
-
-@router.patch("/{collection_id}/templates/{row_id}/schema/admin")
-async def update_template_schema_admin(
-    collection_id: uuid.UUID,
-    row_id: uuid.UUID,
-    data: UpdateTemplateSchemaRequest,
-    session: AsyncSession = Depends(db_uow),
-    user: UserCtx = Depends(get_current_user),
-):
-    """
-    Admin edit of template schema with provenance.
-    Sets source=admin and locked=true for all edited fields.
-    """
-    collection = await _resolve_template_collection(collection_id, session, user)
-    row_service = CollectionRowService(session)
-    row = await row_service.get_row_by_id(collection, row_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Template row not found")
-    
-    # Mark submitted fields as admin/locked (provenance)
-    raw_schema = data.template_schema
-    if isinstance(raw_schema.get("fields"), list):
-        _mark_schema_fields_admin(raw_schema["fields"])
-
-    # Validate structure strictly — never silently wipe the schema
-    try:
-        new_contract = TemplateContract.model_validate(raw_schema)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid template schema: {exc}")
-
-    # Admin-priority merge: admin fields win; preserve existing fields the
-    # admin did not submit (matched by key). merge_contract is NOT used here
-    # because its semantics keep *existing* protected fields, which would
-    # discard the admin's new edits.
-    existing_contract = TemplateContract.from_jsonb(row.get("template_schema") or {})
-    submitted_keys = {f.key for f in new_contract.fields}
-    preserved = [f for f in existing_contract.fields if f.key not in submitted_keys]
-    merged_node_meta = {
-        **{key: value for key, value in existing_contract.node_meta.items() if key not in submitted_keys},
-        **new_contract.node_meta,
-    }
-    final_contract = TemplateContract(
-        contract_version=new_contract.contract_version,
-        format=new_contract.format or existing_contract.format,
-        fields=new_contract.fields + preserved,
-        node_meta=merged_node_meta,
-    )
-
-    result = await _update_template_row(
-        collection=collection,
-        row_id=row_id,
-        payload={"template_schema": final_contract.to_jsonb()},
-        session=session,
-    )
-    status_repo = AsyncTemplateAnalysisStatusRepository(session)
-    approval_node = await status_repo.get_node(row_id, "approval")
-    approval_record = await status_repo.upsert_node(
-        collection_id=collection.id,
-        row_id=row_id,
-        node_key="approval",
-        status="pending",
-        metrics_json={
-            **((approval_node.metrics_json or {}) if approval_node and isinstance(approval_node.metrics_json, dict) else {}),
-            "edited_by": str(user.id),
-            "schema_edited": True,
-        },
-        finished_at=None,
-    )
-    approval_record.finished_at = None
-    await session.commit()
     runtime_rows = await _load_template_runtime_rows(collection=collection, session=session, rows=[result])
     return runtime_rows[0] if runtime_rows else result

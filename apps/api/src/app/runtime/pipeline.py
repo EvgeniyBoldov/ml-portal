@@ -7,9 +7,8 @@ Responsibilities (and NOTHING else):
     3. Ask `MemoryBuilder` to assemble the turn's memory from the
        persisted FactStore + SummaryStore.
     4. Initialize `RuntimeTurnState` as the single source of truth.
-    5. Run the PlanningStage — single decision engine:
-           CLARIFY/ASK_USER → pause (waiting_input)
-           CALL_AGENT loop → eventually FINAL / ABORT / max_iters
+    5. Run the persisted graph planning stage until the plan pauses or reaches
+       a terminal state.
     6. Run FinalizationStage for NEEDS_FINAL outcomes (synthesizer).
     7. Hand off to `MemoryWriter.finalize` to persist extracted facts
        and the updated DialogueSummary for next-turn memory.
@@ -27,7 +26,6 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.context import ToolContext
-from app.agents.runtime.logging import LoggingConfig, LoggingLevel
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
@@ -35,25 +33,25 @@ from app.runtime.assembler import PipelineAssembler
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.contracts import ExecutionMode, PipelineRequest, PipelineStopReason
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot, serialize_limits
-from app.runtime.envelope import EventEnvelopeStamper, PhasedEvent
+from app.runtime.envelope import PhasedEvent
 from app.runtime.entity_ids import (
+    interaction_id as _interaction_id,
     memory_component_entity_id as _memory_component_entity_id,
     memory_orchestrator_id as _memory_orchestrator_id,
     planner_orchestrator_id,
 )
-from app.runtime.event_emitter import RuntimeEventEmitter
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.platform_config import PlatformConfigLoader
-from app.runtime.stages.planning_stage import PlanningOutcomeKind
+from app.runtime.stages.graph_planning_stage import GraphPlanningOutcomeKind
 from app.runtime.turn_state import RuntimeTurnState
 from app.core.prometheus_metrics import memory_writer_finalize_failures_total
 from app.models.system_llm_role import SystemLLMRoleType
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
-from app.services.run_store import RunStore
 from app.services.system_llm_role_service import SystemLLMRoleService
+from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
 
 # Memory writeback runs via Celery (single canonical execution mode).
 RUNTIME_MEMORY_INLINE = False
@@ -185,7 +183,7 @@ def _build_question_answer_event(
     source_run_id = str(checkpoint.get("source_run_id") or "").strip() or None
 
     return RuntimeEvent.question_answer(
-        interaction_id=f"{run_id}:question-answer",
+        interaction_id=_interaction_id(str(run_id)),
         parent_entity_id=orchestrator_id,
         resume_action=resume_action,
         question=question or None,
@@ -204,12 +202,10 @@ class RuntimePipeline:
         *,
         session: AsyncSession,
         llm_client: LLMClientProtocol,
-        run_store: Optional[RunStore] = None,
     ) -> None:
         self._session = session
-        self._run_store = run_store
         self._assembler = PipelineAssembler(
-            session=session, llm_client=llm_client, run_store=run_store,
+            session=session, llm_client=llm_client,
         )
 
     # ------------------------------------------------------------------ #
@@ -228,9 +224,6 @@ class RuntimePipeline:
         user_id = UUID(request.user_id)
         tenant_id = UUID(request.tenant_id)
 
-        # EventEnvelopeStamper is stateful per execute (carries chat_id for envelope stamping).
-        # Per-execute creation is OK; the stamper has no heavy initialization cost.
-        envelope = EventEnvelopeStamper(chat_id=request.chat_id)
         platform = await PlatformConfigLoader(self._session).load()
         resume_checkpoint = _extract_resume_checkpoint(request)
         effective_goal = _extract_effective_goal(request, resume_checkpoint)
@@ -271,7 +264,18 @@ class RuntimePipeline:
         # Initialize RuntimeTurnState as the single source of truth
         # For resume, use the original run_id; otherwise generate new
         resumed_from_run_id = continuation_state.get("resumed_from_run_id") if isinstance(continuation_state, dict) else None
-        if resumed_from_run_id:
+        sandbox_run_id = (request.sandbox_overrides or {}).get("sandbox_run_id")
+        if request.runtime_run_id:
+            try:
+                run_id = UUID(str(request.runtime_run_id))
+            except (TypeError, ValueError):
+                run_id = uuid4()
+        elif sandbox_run_id:
+            try:
+                run_id = UUID(str(sandbox_run_id))
+            except (TypeError, ValueError):
+                run_id = uuid4()
+        elif resumed_from_run_id:
             try:
                 run_id = UUID(resumed_from_run_id)
             except ValueError:
@@ -279,7 +283,7 @@ class RuntimePipeline:
         else:
             run_id = uuid4()
 
-        run_logging_level = await self._resolve_run_logging_level(ctx)
+        run_logging_level = (RuntimeLoggingLevel.FULL if bool((request.sandbox_overrides or {}).get("sandbox_run_id")) else RuntimeLoggingLevel.NONE).value
 
         runtime_state = RuntimeTurnState.from_seed(
             run_id=run_id,
@@ -294,7 +298,25 @@ class RuntimePipeline:
         )
         runtime_state.execution_mode = execution_mode
         run_id_str = str(run_id)
-        emitter = RuntimeEventEmitter(stamper=envelope, run_id=run_id_str)
+        sandbox_run = bool((request.sandbox_overrides or {}).get("sandbox_run_id"))
+        root_logger = RuntimeEventJournalFactory.create(
+            context=RuntimeLogContext(
+                run_id=run_id,
+                level=RuntimeLoggingLevel.FULL if sandbox_run else RuntimeLoggingLevel.NONE,
+                origin="sandbox" if sandbox_run else "chat",
+                tenant_id=tenant_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                entity_type="run",
+                entity_id=run_id_str,
+                stream_logs=sandbox_run,
+                stream_progress=True,
+            ),
+            session_factory=ctx.get_runtime_deps().session_factory,
+        )
+        ctx.extra["runtime_root_run_id"] = run_id_str
+        ctx.extra["runtime_event_logger"] = root_logger
+        emitter = root_logger
         orchestrator_id = planner_orchestrator_id(run_id_str)
         ctx.extra["runtime_logging_level"] = run_logging_level
 
@@ -342,29 +364,14 @@ class RuntimePipeline:
             },
         )
 
-        if self._run_store is not None:
-            try:
-                await self._run_store.start_or_resume_run(
-                    tenant_id=str(tenant_id),
-                    agent_slug=request.agent_slug or "planner",
-                    logging_level=run_logging_level,
-                    user_id=str(user_id),
-                    chat_id=str(chat_id) if chat_id else None,
-                    context_snapshot=run_context_snapshot,
-                    run_id_override=run_id,
-                    resume_from_run_id=run_id if resumed_from_run_id else None,
-                )
-            except Exception as _e:  # noqa: BLE001
-                logger.warning("Failed to create/resume top-level AgentRun: %s", _e)
-
-        yield emitter.emit(
+        yield await emitter.emit(
             RuntimeEvent.run_start(
                 run_id=run_id_str,
                 context_snapshot=run_context_snapshot,
             ),
             phase=OrchestrationPhase.PIPELINE,
         )
-        yield emitter.emit(
+        yield await emitter.emit(
             RuntimeEvent.orchestrator_start(
                 orchestrator_id=orchestrator_id,
                 run_id=run_id_str,
@@ -379,7 +386,7 @@ class RuntimePipeline:
             checkpoint=resume_checkpoint,
         )
         if question_answer_event is not None:
-            yield emitter.emit(
+            yield await emitter.emit(
                 question_answer_event,
                 phase=OrchestrationPhase.PLANNER,
             )
@@ -395,7 +402,7 @@ class RuntimePipeline:
         ctx.extra["runtime_budget_registry"] = budget_registry
         ctx.extra["runtime_budget_resolver"] = budget_resolver
         run_budget_payload = budget_registry.emit_snapshot(run_id_str, reason="init") or {}
-        yield emitter.emit(
+        yield await emitter.emit(
             RuntimeEvent.budget_snapshot(
                 entity_type="run",
                 entity_id=run_id_str,
@@ -410,8 +417,8 @@ class RuntimePipeline:
         )
 
         # --- Planning (single decision engine) --------------------------
-        planning_stage = self._assembler.build_planning_stage(
-            max_iterations=platform.policy.max_steps,
+        planning_stage = self._assembler.build_graph_planning_stage(
+            max_steps=platform.policy.max_steps,
         )
         async for phased in planning_stage.run(
             runtime_state=runtime_state,
@@ -423,19 +430,18 @@ class RuntimePipeline:
             platform_config=platform.config,
             orchestrator_id=orchestrator_id,
         ):
-            yield emitter.emit_phased(phased)
+            yield await emitter.emit(phased.event, phase=phased.phase)
 
         assert planning_stage.outcome is not None
         planning_outcome = planning_stage.outcome
         await_background_tail = bool(getattr(request, "await_background_tail", True))
 
         if planning_outcome.kind in (
-            PlanningOutcomeKind.PAUSED,
-            PlanningOutcomeKind.ABORTED,
-            PlanningOutcomeKind.FAILED,
+            GraphPlanningOutcomeKind.PAUSED,
+            GraphPlanningOutcomeKind.FAILED,
         ):
             terminal_status = (planning_outcome.stop_reason.value if planning_outcome.stop_reason else "failed")
-            yield emitter.emit(
+            yield await emitter.emit(
                 RuntimeEvent.orchestrator_end(
                     orchestrator_id=orchestrator_id,
                     run_id=run_id_str,
@@ -443,24 +449,7 @@ class RuntimePipeline:
                 ),
                 phase=OrchestrationPhase.PLANNER,
             )
-            # Mark status only (paused_action/context are stored by endpoint or
-            # orchestrator before pipeline gets here, e.g., via turn_service.pause_turn
-            # or SandboxService.pause_run). We only update status here.
-            if planning_outcome.kind == PlanningOutcomeKind.PAUSED and self._run_store is not None:
-                try:
-                    pause_status = planning_outcome.stop_reason.value if planning_outcome.stop_reason else "paused"
-                    await self._run_store.set_run_status(run_id=run_id, status=pause_status)
-                except Exception as _e:  # noqa: BLE001
-                    logger.warning("Failed to set paused status on AgentRun: %s", _e)
-            elif self._run_store is not None:
-                try:
-                    await self._run_store.finish_run(
-                        run_id=run_id,
-                        status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "failed",
-                    )
-                except Exception as _e:  # noqa: BLE001
-                    logger.warning("Failed to finish top-level AgentRun: %s", _e)
-            if planning_outcome.kind == PlanningOutcomeKind.PAUSED:
+            if planning_outcome.kind == GraphPlanningOutcomeKind.PAUSED:
                 # A paused run must stop the user-visible stream immediately.
                 # Memory side effects may continue, but never in the same SSE
                 # stream after STOP/run_paused.
@@ -486,7 +475,7 @@ class RuntimePipeline:
                     logging_level=run_logging_level,
                 ):
                     yield memory_ev
-                yield emitter.emit(
+                yield await emitter.emit(
                     RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
                     phase=OrchestrationPhase.PIPELINE,
                 )
@@ -504,7 +493,7 @@ class RuntimePipeline:
             return
 
         # --- Finalization -----------------------------------------------
-        yield emitter.emit(
+        yield await emitter.emit(
             RuntimeEvent.orchestrator_end(
                 orchestrator_id=orchestrator_id,
                 run_id=run_id_str,
@@ -513,7 +502,7 @@ class RuntimePipeline:
             phase=OrchestrationPhase.PLANNER,
         )
 
-        if planning_outcome.kind == PlanningOutcomeKind.NEEDS_FINAL:
+        if planning_outcome.kind == GraphPlanningOutcomeKind.NEEDS_FINAL:
             async for ev in self._run_finalization(
                 runtime_state=runtime_state,
                 stop_reason=planning_outcome.stop_reason,
@@ -522,22 +511,13 @@ class RuntimePipeline:
                 model=request.model,
                 platform_config=platform.config,
                 sandbox_overrides=request.sandbox_overrides,
-                envelope=envelope,
+                emitter=emitter,
                 run_id=run_id,
                 budget_registry=budget_registry,
                 budget_resolver=budget_resolver,
                 logging_level=run_logging_level,
             ):
                 yield ev
-        if self._run_store is not None:
-            try:
-                await self._run_store.finish_run(
-                    run_id=run_id,
-                    status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
-                )
-            except Exception as _e:  # noqa: BLE001
-                logger.warning("Failed to finish top-level AgentRun: %s", _e)
-
         if await_background_tail:
             # Sandbox/trace mode consumes the full runtime tail after final answer.
             async for memory_ev in self._finalize_memory(
@@ -550,7 +530,7 @@ class RuntimePipeline:
                 logging_level=run_logging_level,
             ):
                 yield memory_ev
-            yield emitter.emit(
+            yield await emitter.emit(
                 RuntimeEvent.run_end(
                     run_id=run_id_str,
                     status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
@@ -621,16 +601,6 @@ class RuntimePipeline:
             ctx.extra = {}
         ctx.extra["sandbox_overrides"] = current
 
-    @staticmethod
-    async def _resolve_run_logging_level(ctx: ToolContext) -> str:
-        """Resolve top-level run logging level with safe fallback."""
-        if not isinstance(getattr(ctx, "extra", None), dict):
-            return LoggingLevel.BRIEF.value
-        try:
-            return (await LoggingConfig.resolve(ctx)).value
-        except Exception:
-            return LoggingLevel.BRIEF.value
-
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
@@ -645,7 +615,7 @@ class RuntimePipeline:
         model: Optional[str],
         platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
-        envelope: EventEnvelopeStamper,
+        emitter: RuntimeEventLogger,
         run_id: Optional[UUID] = None,
         budget_registry: Optional[BudgetRegistry] = None,
         budget_resolver: Optional[BudgetResolver] = None,
@@ -678,7 +648,7 @@ class RuntimePipeline:
                     stop_reason=stop_reason.value,
                 )
                 phased = PhasedEvent(ev, phased.phase)
-            yield envelope.stamp_phased(phased, run_id=str(runtime_state.run_id))
+            yield await emitter.emit(phased.event, phase=phased.phase)
 
     async def _finalize_memory(
         self,
@@ -687,7 +657,7 @@ class RuntimePipeline:
         runtime_state: RuntimeTurnState,
         request: PipelineRequest,
         stop_reason: PipelineStopReason,
-        emitter: RuntimeEventEmitter,
+        emitter: RuntimeEventLogger,
         budget_resolver: Optional[BudgetResolver] = None,
         logging_level: Optional[str] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
@@ -715,7 +685,7 @@ class RuntimePipeline:
         inline_memory = bool(RUNTIME_MEMORY_INLINE)
         if isinstance(request.sandbox_overrides, dict):
             inline_memory = inline_memory or bool(request.sandbox_overrides.get("memory_inline"))
-        yield emitter.emit(
+        yield await emitter.emit(
             RuntimeEvent.status(
                 "memory_write_start",
                 turn_number=turn_mem.turn_number,
@@ -729,10 +699,10 @@ class RuntimePipeline:
         if inline_memory:
             memory_orchestrator = _memory_orchestrator_id(str(runtime_state.run_id))
             component_ids = {
-                "facts": f"{runtime_state.run_id}:memory:facts",
-                "conversation": f"{runtime_state.run_id}:memory:conversation",
+                "facts": _memory_component_entity_id(str(runtime_state.run_id), "facts", 1),
+                "conversation": _memory_component_entity_id(str(runtime_state.run_id), "conversation", 1),
             }
-            yield emitter.emit(
+            yield await emitter.emit(
                 RuntimeEvent.orchestrator_start(
                     orchestrator_id=memory_orchestrator,
                     run_id=str(runtime_state.run_id),
@@ -741,9 +711,9 @@ class RuntimePipeline:
                 phase=OrchestrationPhase.PIPELINE,
             )
             for component, component_id in component_ids.items():
-                yield emitter.emit(
+                yield await emitter.emit(
                     RuntimeEvent.agent_start(
-                        agent_run_id=component_id,
+                        agent_execution_id=component_id,
                         parent_entity_type="orchestrator",
                         parent_entity_id=memory_orchestrator,
                         agent_slug=component,
@@ -777,7 +747,7 @@ class RuntimePipeline:
                     lifecycle_status = "failed" if component_status == "failed" else (
                         "paused" if component_status in {"degraded", "skipped"} else "completed"
                     )
-                    yield emitter.emit(
+                    yield await emitter.emit(
                         RuntimeEvent.status(
                             "memory_component_result",
                             component_name=component_name,
@@ -788,14 +758,14 @@ class RuntimePipeline:
                             error_code=item.get("error_code"),
                             error_message=item.get("error_message"),
                             duration_ms=item.get("duration_ms", 0),
-                            parent_entity_type="agent_run",
+                            parent_entity_type="agent_execution",
                             parent_entity_id=component_entity_id,
                         ),
                         phase=OrchestrationPhase.PIPELINE,
                     )
-                    yield emitter.emit(
+                    yield await emitter.emit(
                         RuntimeEvent.agent_end(
-                            agent_run_id=component_entity_id,
+                            agent_execution_id=component_entity_id,
                             parent_entity_type="orchestrator",
                             parent_entity_id=memory_orchestrator,
                             agent_slug=component_name,
@@ -808,7 +778,7 @@ class RuntimePipeline:
                 memory_writer_finalize_failures_total.labels(
                     stop_reason=stop_reason.value if stop_reason else "unknown"
                 ).inc()
-                yield emitter.emit(
+                yield await emitter.emit(
                     RuntimeEvent.status(
                         "memory_write_failed",
                         error=str(exc)[:500],
@@ -818,7 +788,7 @@ class RuntimePipeline:
                     ),
                     phase=OrchestrationPhase.PIPELINE,
                 )
-            yield emitter.emit(
+            yield await emitter.emit(
                 RuntimeEvent.status(
                     "memory_write_end",
                     turn_number=turn_mem.turn_number,
@@ -829,7 +799,7 @@ class RuntimePipeline:
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )
-            yield emitter.emit(
+            yield await emitter.emit(
                 RuntimeEvent.orchestrator_end(
                     orchestrator_id=memory_orchestrator,
                     run_id=str(runtime_state.run_id),
@@ -870,12 +840,14 @@ class RuntimePipeline:
 
                     def _limits_payload(entity_limits) -> Optional[dict[str, int]]:
                         payload = {
-                            "planner_steps": entity_limits.planner_steps,
-                            "agent_steps": entity_limits.agent_steps,
-                            "tool_calls": entity_limits.tool_calls,
-                            "tokens_total": entity_limits.tokens_total,
-                            "retries": entity_limits.retries,
-                            "wall_time_ms": entity_limits.wall_time_ms,
+                            "plan_revisions": getattr(entity_limits, "plan_revisions", None),
+                            "task_attempts": getattr(entity_limits, "task_attempts", None),
+                            "agent_runs": getattr(entity_limits, "agent_runs", None),
+                            "llm_calls": getattr(entity_limits, "llm_calls", None),
+                            "tool_calls": getattr(entity_limits, "tool_calls", None),
+                            "tokens_total": getattr(entity_limits, "tokens_total", None),
+                            "retries": getattr(entity_limits, "retries", None),
+                            "wall_time_ms": getattr(entity_limits, "wall_time_ms", None),
                         }
                         values = {k: int(v) for k, v in payload.items() if isinstance(v, int) and v > 0}
                         return values or None
@@ -933,9 +905,14 @@ class RuntimePipeline:
                 facts_limits=facts_limits,
                 conversation_limits=conversation_limits,
                 logging_level=logging_level,
+                runtime_log_context=(
+                    emitter.logger.worker_payload()
+                    if getattr(emitter.logger, "context", None) is not None
+                    else None
+                ),
             )
             finalize_memory_task.delay(payload.model_dump(mode="json"))
-            yield emitter.emit(
+            yield await emitter.emit(
                 RuntimeEvent.status(
                     "memory_write_dispatched",
                     turn_number=turn_mem.turn_number,
@@ -952,7 +929,7 @@ class RuntimePipeline:
             memory_writer_finalize_failures_total.labels(
                 stop_reason=stop_reason.value if stop_reason else "unknown"
             ).inc()
-            yield emitter.emit(
+            yield await emitter.emit(
                 RuntimeEvent.status(
                     "memory_write_failed",
                     error=str(exc)[:500],
@@ -971,7 +948,7 @@ class RuntimePipeline:
         runtime_state: RuntimeTurnState,
         request: PipelineRequest,
         stop_reason: PipelineStopReason,
-        emitter: RuntimeEventEmitter,
+        emitter: RuntimeEventLogger,
         budget_resolver: Optional[BudgetResolver] = None,
         logging_level: Optional[str] = None,
     ) -> None:

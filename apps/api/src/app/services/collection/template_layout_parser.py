@@ -86,6 +86,7 @@ class TableRegion:
     location: Dict[str, Any]           # {sheet, row_start, row_end, col_start, col_end} etc.
     # Marker-loop info (if any column token found in the region)
     loop_tokens: List[str] = field(default_factory=list)   # e.g. ["{{items.name}}", "{{items.qty}}"]
+    marker_columns: Dict[str, int] = field(default_factory=dict)
     loop_prefix: Optional[str] = None                       # common table prefix, e.g. "items"
     # Structural anchor hint
     header_row: Optional[List[str]] = field(default_factory=list)  # text of header cells
@@ -129,13 +130,9 @@ class TemplateLayoutParser:
 
     def parse(self, content: bytes, filename: str) -> RawLayout:
         ext = _ext(filename)
-        if ext == "xls":
-            raise ValueError("Legacy .xls templates are not supported; save the file as .xlsx or .xlsm")
-        if ext in ("xlsx", "xlsm"):
-            return self._parse_excel(content, filename)
-        if ext == "docx":
-            return self._parse_docx(content, filename)
-        return self._parse_text(content, filename)
+        if ext not in ("xlsx", "xlsm"):
+            raise ValueError("Only .xlsx and .xlsm templates are supported")
+        return self._parse_excel(content, filename)
 
     # ------------------------------------------------------------------
     # Excel
@@ -152,7 +149,9 @@ class TemplateLayoutParser:
         # For template analysis we need the source cell text, including formulas
         # that may produce placeholder strings. ``data_only=True`` drops formula
         # bodies and often returns ``None`` when cached values are absent.
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=False)
+        wb = openpyxl.load_workbook(
+            io.BytesIO(content), data_only=False, keep_vba=filename.lower().endswith(".xlsm")
+        )
         tokens: List[TokenOccurrence] = []
         table_regions: List[TableRegion] = []
         text_lines: List[str] = []
@@ -230,13 +229,7 @@ class TemplateLayoutParser:
         sheet_name: str,
         row_map: Dict[int, Dict[int, str]],
     ) -> List[TableRegion]:
-        """Detect table regions in an Excel sheet.
-
-        Two detection paths:
-        1. **Marker rows** — rows that contain ≥2 dotted tokens sharing the same prefix.
-        2. **Dense rows** — heuristic: ≥2 consecutive non-empty rows with ≥2 columns
-           → candidate table; first row treated as header if it has no tokens.
-        """
+        """Detect repeat regions solely from explicit technical marker rows."""
         regions: List[TableRegion] = []
         sorted_rows = sorted(row_map.keys())
 
@@ -262,10 +255,11 @@ class TemplateLayoutParser:
             marker_row = marker_rows[0]
             # Collect all loop_tokens from that row
             loop_tokens: List[str] = []
+            marker_columns: Dict[str, int] = {}
             row_cols = sorted(row_map.get(marker_row, {}).keys())
             col_start = row_cols[0] if row_cols else 1
             col_end = row_cols[-1] if row_cols else 1
-            for val in row_map.get(marker_row, {}).values():
+            for column, val in row_map.get(marker_row, {}).items():
                 for m in _TOKEN_RE.finditer(val):
                     parsed = _parse_placeholder_expr(m.group(1))
                     if not parsed:
@@ -276,6 +270,7 @@ class TemplateLayoutParser:
                         tok = m.group(0)
                         if tok not in loop_tokens:
                             loop_tokens.append(tok)
+                        marker_columns[tok] = column
             # Check for optional row above as header
             header_row_idx = marker_row - 1
             header_texts: List[str] = []
@@ -283,9 +278,7 @@ class TemplateLayoutParser:
                 header_vals = row_map[header_row_idx]
                 header_texts = [header_vals.get(c, "") for c in row_cols]
 
-            repeated_marker = len(marker_rows) > 1
-            multi_column_marker = len(loop_tokens) > 1 and any(text.strip() for text in header_texts)
-            if not repeated_marker and not multi_column_marker:
+            if not loop_tokens:
                 continue
 
             regions.append(TableRegion(
@@ -297,17 +290,12 @@ class TemplateLayoutParser:
                     "col_end": col_end,
                 },
                 loop_tokens=loop_tokens,
+                marker_columns=marker_columns,
                 loop_prefix=prefix,
                 header_row=header_texts,
                 template_row_index=None,
                 orientation="vertical",
             ))
-
-        # --- Structural (dense rows) fallback — only if no markers found ---
-        if not prefix_to_rows:
-            regions.extend(
-                self._detect_dense_regions(sheet_name, row_map, sorted_rows)
-            )
 
         return regions
 
@@ -1023,6 +1011,7 @@ def _attach_anchor_hints(roots: Dict[str, SchemaNode], table_regions: List[Table
             {
                 "strategy": "marker" if region.loop_tokens else "structural",
                 "loop_tokens": list(region.loop_tokens),
+                "marker_columns": dict(region.marker_columns),
                 "header_row": list(region.header_row or []),
                 "location": dict(region.location),
                 "orientation": region.orientation,

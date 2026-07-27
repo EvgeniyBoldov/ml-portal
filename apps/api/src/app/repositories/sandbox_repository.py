@@ -20,7 +20,6 @@ from app.models.sandbox import (
     SandboxOverride,
     SandboxOverrideSnapshot,
     SandboxRun,
-    SandboxRunStep,
 )
 
 
@@ -267,15 +266,6 @@ class SandboxRunRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_id_with_steps(self, run_id: UUID) -> Optional[SandboxRun]:
-        stmt = (
-            select(SandboxRun)
-            .where(SandboxRun.id == run_id)
-            .options(selectinload(SandboxRun.steps))
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
     async def list_by_session(
         self,
         session_id: UUID,
@@ -288,41 +278,12 @@ class SandboxRunRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def list_by_session_with_steps_count(
-        self,
-        session_id: UUID,
-        branch_id: Optional[UUID] = None,
-    ) -> List[Tuple[SandboxRun, int]]:
-        """List runs with steps_count in a single query (no N+1)."""
-        steps_count_sq = (
-            select(
-                SandboxRunStep.run_id,
-                func.count().label("steps_count"),
-            )
-            .group_by(SandboxRunStep.run_id)
-            .subquery()
-        )
-        stmt = (
-            select(SandboxRun, func.coalesce(steps_count_sq.c.steps_count, 0))
-            .outerjoin(steps_count_sq, SandboxRun.id == steps_count_sq.c.run_id)
-            .where(SandboxRun.session_id == session_id)
-        )
-        if branch_id is not None:
-            stmt = stmt.where(SandboxRun.branch_id == branch_id)
-        stmt = stmt.order_by(SandboxRun.started_at.desc())
-        result = await self.session.execute(stmt)
-        return [(row[0], row[1]) for row in result.all()]
-
     async def update(self, obj: SandboxRun, data: dict) -> SandboxRun:
         for key, value in data.items():
             setattr(obj, key, value)
         self.session.add(obj)
         await self.session.flush()
         return obj
-
-    async def get_steps_count(self, run_id: UUID) -> int:
-        stmt = select(func.count()).where(SandboxRunStep.run_id == run_id)
-        return await self.session.scalar(stmt) or 0
 
     async def fail_stale_runs(
         self, session_id: UUID, stale_threshold_minutes: int = 5
@@ -347,33 +308,6 @@ class SandboxRunRepository:
         result = await self.session.execute(stmt)
         await self.session.flush()
         return result.rowcount
-
-
-class SandboxRunStepRepository:
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
-    async def create(self, obj: SandboxRunStep) -> SandboxRunStep:
-        self.session.add(obj)
-        await self.session.flush()
-        return obj
-
-    async def bulk_create(self, steps: List[SandboxRunStep]) -> None:
-        self.session.add_all(steps)
-        await self.session.flush()
-
-    async def list_by_run(self, run_id: UUID) -> List[SandboxRunStep]:
-        stmt = (
-            select(SandboxRunStep)
-            .where(SandboxRunStep.run_id == run_id)
-            .order_by(SandboxRunStep.order_num)
-        )
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def get_max_order_num(self, run_id: UUID) -> int:
-        stmt = select(func.max(SandboxRunStep.order_num)).where(SandboxRunStep.run_id == run_id)
-        return int(await self.session.scalar(stmt) or 0)
 
 
 class SandboxBranchRepository:

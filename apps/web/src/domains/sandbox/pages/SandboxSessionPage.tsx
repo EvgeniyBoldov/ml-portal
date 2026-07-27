@@ -19,9 +19,8 @@ import RunChat from '../components/RunChat';
 import ConfigPanel from '../components/ConfigPanel';
 import ConfirmWriteDialog from '../components/ConfirmWriteDialog';
 import type { SandboxSelectedItem } from '../types';
-import type { RunStep } from '../hooks/useSandboxRun';
-import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
-import type { ExecutionMode } from '@/shared/api/types';
+import type { SandboxTraceState } from '../traceState';
+import { resolveTraceInspectionTarget, type TraceInspectionTarget } from '../traceProjection';
 import styles from './SandboxSessionPage.module.css';
 
 const SIDEBAR_WIDTH_KEY = 'sandbox.sidebar.width';
@@ -45,6 +44,8 @@ export default function SandboxSessionPage() {
   const { data: catalog } = useCatalogData(sessionId);
   const queryClient = useQueryClient();
   const [selectedItem, setSelectedItem] = useState<SandboxSelectedItem | null>(null);
+  const [selectedTraceTarget, setSelectedTraceTarget] = useState<TraceInspectionTarget | null>(null);
+  const [selectedTraceState, setSelectedTraceState] = useState<SandboxTraceState | null>(null);
   const [activeBranchId, setActiveBranchId] = useState<string>('');
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
@@ -58,11 +59,14 @@ export default function SandboxSessionPage() {
   });
   const [isCompactLayout, setIsCompactLayout] = useState<boolean>(window.innerWidth < 1200);
   
-  // Inspector state: steps + selected step for right panel
-  const [inspectorSteps, setInspectorSteps] = useState<RunStep[]>([]);
-  const [selectedEntity, setSelectedEntity] = useState<TraceEntity | null>(null); // New hierarchical entity
-  
   const sandboxRun = useSandboxRun(sessionId ?? '');
+
+  useEffect(() => {
+    if (!selectedTraceTarget || selectedTraceState?.runId !== sandboxRun.activeRun.trace.runId) return;
+    const resolved = resolveTraceInspectionTarget(sandboxRun.activeRun.trace, selectedTraceTarget.key);
+    if (resolved) setSelectedTraceTarget(resolved);
+    setSelectedTraceState(sandboxRun.activeRun.trace);
+  }, [sandboxRun.activeRun.trace, selectedTraceState?.runId, selectedTraceTarget?.key]);
 
   const { data: branches = [] } = useQuery({
     queryKey: qk.sandbox.branches.list(sessionId ?? ''),
@@ -130,19 +134,13 @@ export default function SandboxSessionPage() {
   const isOwner = user?.id === session?.owner_id;
   const isReadOnly = !isOwner;
 
-  const handleRun = (text: string, parentRunId?: string | null, attachmentIds?: string[], executionMode: ExecutionMode = 'normal') => {
+  const handleRun = (text: string, parentRunId?: string | null, attachmentIds?: string[]) => {
     if (isReadOnly) return;
-    sandboxRun.run(text, parentRunId, activeBranchId || undefined, attachmentIds, executionMode);
+    sandboxRun.run(text, parentRunId, activeBranchId || undefined, attachmentIds);
   };
 
   const handleSelectRun = (runId?: string) => {
     setSelectedItem({ type: 'run', id: runId ?? 'active', name: 'Лог выполнения' });
-  };
-
-  const handleSelectStep = async (runId: string, _stepId: string, steps: RunStep[], entity?: TraceEntity) => {
-    setInspectorSteps(steps);
-    setSelectedEntity(entity ?? null);
-    setSelectedItem({ type: 'run', id: runId, name: 'Детали шага' });
   };
 
   const handleCreateBranchFromMessage = async (
@@ -273,7 +271,7 @@ export default function SandboxSessionPage() {
           activeBranchId={activeBranchId}
           selectedItem={selectedItem}
           onSelectBranch={setActiveBranchId}
-          onSelectItem={setSelectedItem}
+          onSelectItem={(item) => { setSelectedItem(item); setSelectedTraceTarget(null); setSelectedTraceState(null); }}
           onCreateBranch={() => createBranchMutation.mutate()}
           onClearBranchOverrides={() => clearOverridesMutation.mutate()}
           isClearingOverrides={clearOverridesMutation.isPending}
@@ -306,9 +304,8 @@ export default function SandboxSessionPage() {
           onResumeSubmit={(text) => sandboxRun.confirmAction(true, text)}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
-          onSelectStep={(runId, stepId, steps, entity) => {
-            void handleSelectStep(runId, stepId, steps, entity);
-          }}
+          onSelectTraceTarget={(target, trace) => { setSelectedTraceTarget(target); setSelectedTraceState(trace); }}
+          selectedTraceTargetKey={selectedTraceTarget?.key}
         />
       </div>
       {!isCompactLayout && (
@@ -329,8 +326,8 @@ export default function SandboxSessionPage() {
           selectedItem={selectedItem}
           activeBranchId={activeBranchId}
           catalog={catalog}
-          inspectorSteps={inspectorSteps}
-          selectedEntity={selectedEntity}
+          traceTarget={selectedTraceTarget}
+          traceState={selectedTraceState}
         />
       </div>
 

@@ -303,7 +303,11 @@ class LLMAdapter:
                 end_quote = text.find("'", val_quote + 1)
                 if end_quote > val_quote:
                     candidate = text[val_quote + 1:end_quote]
-                    for raw in (candidate, LLMAdapter._unescape_json_candidate(candidate)):
+                    for raw in (
+                        candidate,
+                        candidate.replace("\\'", "'"),
+                        LLMAdapter._unescape_json_candidate(candidate),
+                    ):
                         if not raw:
                             continue
                         try:
@@ -321,7 +325,11 @@ class LLMAdapter:
         candidate = LLMAdapter._extract_balanced_braces(text, start)
         if not candidate:
             return None
-        for raw in (candidate, LLMAdapter._unescape_json_candidate(candidate)):
+        for raw in (
+            candidate,
+            candidate.replace("\\'", "'"),
+            LLMAdapter._unescape_json_candidate(candidate),
+        ):
             if not raw:
                 continue
             try:

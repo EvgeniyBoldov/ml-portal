@@ -57,15 +57,12 @@ class FieldSource(str, Enum):
 
 
 class AnchorStrategy(str, Enum):
-    AUTO = "auto"        # marker if present, structural fallback
-    MARKER = "marker"    # marker-loop only
-    STRUCTURAL = "structural"  # header-based only
+    """The only supported way to locate a repeatable template row."""
+    MARKER = "marker"
 
 
 class DocumentFormat(str, Enum):
     EXCEL = "excel"
-    DOCX = "docx"
-    TEXT = "text"
 
 
 # ---------------------------------------------------------------------------
@@ -95,35 +92,21 @@ class MarkerAnchor(BaseModel):
         description="List of column tokens present in the marker row, e.g. ['{{items.name}}', '{{items.qty}}']",
         min_length=1,
     )
-
-
-class StructuralAnchor(BaseModel):
-    """Structural anchor: table is located by its header text."""
-    header_signature: List[str] = Field(
-        ...,
-        description="Ordered list of header cell texts to match (fuzzy).",
-        min_length=1,
-    )
-    match: str = Field("fuzzy", description="'exact' or 'fuzzy'")
-    template_row: str = Field(
-        "first_after_header",
-        description="Which row to use as the clone template: 'first_after_header'.",
+    row: int = Field(..., ge=1, description="One-based technical marker row in the worksheet.")
+    columns: Dict[str, int] = Field(
+        default_factory=dict,
+        description="One-based worksheet column for each marker token.",
     )
 
 
 class TableAnchor(BaseModel):
-    """Combined anchor — supports marker-loop and/or structural strategy."""
+    """Exact location of the technical marker row in an Excel worksheet."""
     sheet: Optional[str] = Field(None, description="Sheet name (Excel only).")
-    strategy: AnchorStrategy = AnchorStrategy.AUTO
-    marker: Optional[MarkerAnchor] = None
-    structural: Optional[StructuralAnchor] = None
+    strategy: AnchorStrategy = AnchorStrategy.MARKER
+    marker: MarkerAnchor
 
     @model_validator(mode="after")
     def _check_strategy_data(self) -> "TableAnchor":
-        if self.strategy == AnchorStrategy.MARKER and not self.marker:
-            raise ValueError("strategy='marker' requires marker to be set")
-        if self.strategy == AnchorStrategy.STRUCTURAL and not self.structural:
-            raise ValueError("strategy='structural' requires structural to be set")
         return self
 
 
@@ -137,7 +120,7 @@ class TableColumn(BaseModel):
     label: str = Field(..., min_length=1)
     description: Optional[str] = None
     type: FieldType = FieldType.STRING
-    required: bool = True
+    required: bool = False
     example: Optional[str] = None
     enum: Optional[List[str]] = None
     locator: Optional[TokenLocator] = None
@@ -162,7 +145,7 @@ class ScalarField(BaseModel):
     label: str = Field(..., min_length=1)
     description: Optional[str] = None
     type: FieldType = FieldType.STRING
-    required: bool = True
+    required: bool = False
     example: Optional[str] = None
     enum: Optional[List[str]] = None
     format: Optional[str] = Field(None, description="Format hint, e.g. 'DD.MM.YYYY' for dates.")
@@ -183,7 +166,7 @@ class TableField(BaseModel):
     label: str = Field(..., min_length=1)
     description: Optional[str] = None
     orientation: Orientation = Orientation.VERTICAL
-    required: bool = True
+    required: bool = False
     min_rows: int = Field(1, ge=0)
     max_rows: Optional[int] = Field(None, ge=1)
     anchor: Optional[TableAnchor] = None

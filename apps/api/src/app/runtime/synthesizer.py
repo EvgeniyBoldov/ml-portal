@@ -16,7 +16,7 @@ synthesizer may short-circuit and restream it directly.
 from __future__ import annotations
 
 from typing import AsyncGenerator, Dict, List, Literal, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -118,7 +118,7 @@ class Synthesizer:
             platform_config=platform_config,
             sandbox_overrides=sandbox_overrides,
         )
-        synthesis_run_id = f"{run_id}:synthesis:1"
+        synthesis_run_id = str(uuid4())
         synthesis_status = "completed"
 
         # Load synthesizer role config early for context snapshot
@@ -275,7 +275,7 @@ class Synthesizer:
             answer_brief=resolved_answer_brief,
             system_prompt=system_prompt,
         )
-        llm_call_id = f"{run_id}:synthesis-llm:1"
+        llm_call_id = str(uuid4())
         full = ""
         async for stream_event in self._streaming_call.invoke_stream(
             role=SystemLLMRoleType.SYNTHESIZER,
@@ -343,21 +343,24 @@ class Synthesizer:
                             reason="llm_turn",
                             at_ms=snap.get("at_ms"),
                         )
-                yield RuntimeEvent.llm_turn(
+                yield RuntimeEvent.llm_request(
                     llm_call_id=stream_event.llm_call_id,
                     model=effective_model or stream_event.model or "unknown",
                     messages=stream_event.messages,
-                    content=full,
-                    response_length=stream_event.response_length,
-                    tokens_in=stream_event.tokens_in,
-                    tokens_out=stream_event.tokens_out,
-                    tokens_total=stream_event.tokens_total,
-                    duration_ms=stream_event.duration_ms,
                     parent_entity_type="synthesis_run",
                     parent_entity_id=synthesis_run_id,
                     purpose="final_answer",
                     actor_type="synthesizer",
                     actor_entity_id=synthesis_run_id,
+                )
+                yield RuntimeEvent.llm_response(
+                    llm_call_id=stream_event.llm_call_id,
+                    model=effective_model or stream_event.model or "unknown",
+                    content=full, response_length=stream_event.response_length,
+                    tokens_in=stream_event.tokens_in, tokens_out=stream_event.tokens_out,
+                    tokens_total=stream_event.tokens_total, duration_ms=stream_event.duration_ms,
+                    parent_entity_type="synthesis_run", parent_entity_id=synthesis_run_id,
+                    purpose="final_answer", actor_type="synthesizer", actor_entity_id=synthesis_run_id,
                 )
         if not full:
             # Fallback: stitched summaries (LLM вернул пустой ответ).

@@ -20,16 +20,16 @@ from app.models.sandbox import (
     SandboxOverrideSnapshot,
     SandboxOverride,
     SandboxRun,
-    SandboxRunStep,
     SandboxSession,
 )
+from app.models.runtime_observability import RuntimeExecutionEvent
+from sqlalchemy import func
 from app.repositories.sandbox_repository import (
     SandboxBranchOverrideRepository,
     SandboxBranchRepository,
     SandboxOverrideRepository,
     SandboxSnapshotRepository,
     SandboxRunRepository,
-    SandboxRunStepRepository,
     SandboxSessionRepository,
 )
 from app.services.chat_visibility import make_sandbox_upload_chat_name
@@ -51,7 +51,6 @@ class SandboxService:
         self.snapshots = SandboxSnapshotRepository(session)
         self.overrides = SandboxOverrideRepository(session)
         self.runs = SandboxRunRepository(session)
-        self.steps = SandboxRunStepRepository(session)
         self.branch_state = SandboxBranchStateManager(self)
         self.override_manager = SandboxOverrideManager(self)
         self.run_manager = SandboxRunManager(self)
@@ -380,14 +379,26 @@ class SandboxService:
     ) -> List[SandboxRun]:
         return await self.run_manager.list_runs(session_id=session_id, branch_id=branch_id)
 
-    async def list_runs_with_steps_count(
+    async def list_runs_with_event_count(
         self,
         session_id: UUID,
         branch_id: Optional[UUID] = None,
     ) -> List[Tuple[SandboxRun, int]]:
-        return await self.run_manager.list_runs_with_steps_count(
-            session_id=session_id, branch_id=branch_id
+        event_count = (
+            select(RuntimeExecutionEvent.run_id, func.count().label("events_count"))
+            .group_by(RuntimeExecutionEvent.run_id)
+            .subquery()
         )
+        stmt = (
+            select(SandboxRun, func.coalesce(event_count.c.events_count, 0))
+            .outerjoin(event_count, SandboxRun.id == event_count.c.run_id)
+            .where(SandboxRun.session_id == session_id)
+            .order_by(SandboxRun.started_at.desc())
+        )
+        if branch_id is not None:
+            stmt = stmt.where(SandboxRun.branch_id == branch_id)
+        rows = await self.db.execute(stmt)
+        return [(run, int(count)) for run, count in rows.all()]
 
     async def finish_run(
         self,
@@ -425,36 +436,6 @@ class SandboxService:
     ) -> Optional[SandboxRun]:
         """Update the context_snapshot for a run (used during resume)."""
         return await self.run_manager.update_run_context(run_id, context_snapshot)
-
-    async def get_run_steps_count(self, run_id: UUID) -> int:
-        return await self.run_manager.get_run_steps_count(run_id)
-
-    async def get_next_run_step_order(self, run_id: UUID) -> int:
-        return await self.run_manager.get_next_run_step_order(run_id)
-
-    # ── Run Steps ────────────────────────────────────────────────────────
-
-    async def add_run_step(
-        self,
-        run_id: UUID,
-        step_type: str,
-        step_data: Dict[str, Any],
-        order_num: int,
-    ) -> SandboxRunStep:
-        return await self.run_manager.add_run_step(
-            run_id=run_id,
-            step_type=step_type,
-            step_data=step_data,
-            order_num=order_num,
-        )
-
-    async def add_run_steps_bulk(
-        self, run_id: UUID, steps_data: List[Dict[str, Any]]
-    ) -> None:
-        await self.run_manager.add_run_steps_bulk(run_id, steps_data)
-
-    async def list_run_steps(self, run_id: UUID) -> List[SandboxRunStep]:
-        return await self.run_manager.list_run_steps(run_id)
 
     # ── Effective Config ─────────────────────────────────────────────────
 

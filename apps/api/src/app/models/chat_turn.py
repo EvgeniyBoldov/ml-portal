@@ -27,10 +27,8 @@ class ChatTurn(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=False,
     )
-    agent_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("agent_runs.id", ondelete="SET NULL"),
-        nullable=True,
+    runtime_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True,
     )
     user_message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

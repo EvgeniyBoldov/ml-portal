@@ -75,7 +75,7 @@ class CollectionGetTool(VersionedTool):
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
         
-        log = ctx.tool_logger("collection.get")
+        log = ctx.tool_notes("collection.get")
         
         collection_slug = args.get("collection_slug")
         record_id = args.get("id")

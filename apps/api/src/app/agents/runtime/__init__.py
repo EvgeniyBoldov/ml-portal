@@ -5,7 +5,6 @@ The top-level orchestration (triage + planner + synthesizer) lives in
 `app.runtime` (v3). This package owns only the building blocks that execute
 a single agent with a tool-call loop:
 
-- events.py                 — RuntimeEvent, RuntimeEventType
 - policy.py                 — PolicyLimits, GenerationParams
 - session.py                — RunSession (lifecycle logging)
 - llm.py                    — LLMAdapter (call + stream)
@@ -17,7 +16,7 @@ a single agent with a tool-call loop:
 """
 from __future__ import annotations
 
-from app.agents.runtime.events import RuntimeEvent, RuntimeEventType
+from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
 
 __all__ = [

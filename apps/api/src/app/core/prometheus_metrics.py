@@ -93,6 +93,55 @@ memory_writer_component_status_total = Counter(
     registry=_registry
 )
 
+# Runtime observability is deliberately low-cardinality: no run, tenant,
+# artifact, prompt, argument or error-message labels may be added here.
+runtime_journal_events_total = Counter(
+    "runtime_journal_events_total",
+    "Canonical runtime events persisted by type and origin",
+    ["event_type", "origin"],
+    registry=_registry,
+)
+
+runtime_journal_append_failures_total = Counter(
+    "runtime_journal_append_failures_total",
+    "Canonical runtime journal append failures",
+    ["origin"],
+    registry=_registry,
+)
+
+runtime_progress_delivery_failures_total = Counter(
+    "runtime_progress_delivery_failures_total",
+    "Runtime progress delivery failures after event admission",
+    ["origin"],
+    registry=_registry,
+)
+
+runtime_progress_published_total = Counter(
+    "runtime_progress_published_total",
+    "Safe runtime progress messages published by origin",
+    ["origin"],
+    registry=_registry,
+)
+
+chat_runtime_progress_forwarded_total = Counter(
+    "chat_runtime_progress_forwarded_total",
+    "Runtime progress messages forwarded to chat SSE",
+    registry=_registry,
+)
+
+runtime_event_duration_ms = Histogram(
+    "runtime_event_duration_ms",
+    "Duration reported by canonical runtime events",
+    ["event_type"],
+    registry=_registry,
+)
+
+
+def record_runtime_journal_event(*, event_type: str, origin: str, duration_ms: Optional[int]) -> None:
+    runtime_journal_events_total.labels(event_type=event_type, origin=origin).inc()
+    if isinstance(duration_ms, int) and duration_ms >= 0:
+        runtime_event_duration_ms.labels(event_type=event_type).observe(duration_ms)
+
 # Model progress ratio
 model_progress_ratio = Gauge(
     'rag_model_progress_ratio',

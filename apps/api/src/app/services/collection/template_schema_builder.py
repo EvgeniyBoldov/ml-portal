@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from app.services.collection.template_contract import (
     TemplateContract, ScalarField, TableField, TableColumn,
     TokenLocator, FieldSource, FieldType, FieldKind,
-    TableAnchor, MarkerAnchor, StructuralAnchor, AnchorStrategy,
+    TableAnchor, MarkerAnchor, AnchorStrategy,
     DocumentFormat, Orientation, merge_contract,
 )
 from app.services.collection.template_layout_parser import (
@@ -87,7 +87,7 @@ class TemplateSchemaBuilder:
                 tf = self._parse_table_field(f, layout)
                 if tf:
                     fields.append(tf)
-        fmt = DocumentFormat(layout.format) if layout.format in ("excel", "docx", "text") else None
+        fmt = DocumentFormat.EXCEL if layout.format == "excel" else None
         return TemplateContract(fields=fields, format=fmt)
 
     def _parse_scalar_field(self, data: Dict) -> Optional[ScalarField]:
@@ -147,32 +147,23 @@ class TemplateSchemaBuilder:
     def _build_anchor(self, key: str, data: Dict, layout: RawLayout) -> Optional[TableAnchor]:
         strategy = data.get("strategy", "auto")
         marker_data = data.get("marker")
-        structural_data = data.get("structural")
-        marker = MarkerAnchor(loop_tokens=marker_data.get("loop_tokens", [])) if marker_data else None
-        structural = None
-        if structural_data:
-            structural = StructuralAnchor(
-                header_signature=structural_data.get("header_signature", []),
-                match=structural_data.get("match", "fuzzy"),
-                template_row=structural_data.get("template_row", "first_after_header"),
-            )
+        marker = None
         sheet = None
         for r in layout.table_regions:
             if r.loop_prefix == key:
                 sheet = r.location.get("sheet")
+                marker = MarkerAnchor(
+                    loop_tokens=list(r.loop_tokens),
+                    row=int(r.location["marker_row"]),
+                    columns={},
+                )
                 break
-        if strategy == "auto":
-            if marker and marker.loop_tokens:
-                strategy = AnchorStrategy.MARKER
-            elif structural and structural.header_signature:
-                strategy = AnchorStrategy.STRUCTURAL
-            else:
-                strategy = AnchorStrategy.AUTO
+        if marker is None:
+            return None
         return TableAnchor(
             sheet=sheet,
-            strategy=AnchorStrategy(strategy),
+            strategy=AnchorStrategy.MARKER,
             marker=marker,
-            structural=structural,
         )
 
     def _heuristic_build(self, layout: RawLayout) -> TemplateContract:
@@ -188,43 +179,7 @@ class TemplateSchemaBuilder:
                 continue
             fields.extend(self._scalar_fields_from_node(node))
 
-        # Structural fallback for spreadsheets/documents without explicit
-        # placeholders. This keeps analysis useful when admins rely on
-        # header-only tabular layout instead of ``{{table.col}}`` markers.
-        table_counter = 0
-        existing_keys = {field.key for field in fields}
-        for region in layout.table_regions:
-            if region.loop_prefix and region.loop_prefix in existing_keys:
-                continue
-            if not region.header_row:
-                continue
-            columns = self._columns_from_header(region.header_row)
-            if len(columns) < 2:
-                continue
-            table_counter += 1
-            key = region.loop_prefix or f"table_{table_counter}"
-            if key in existing_keys:
-                continue
-            existing_keys.add(key)
-            fields.append(TableField(
-                key=key,
-                label=self._region_label(region, table_counter),
-                orientation=Orientation.VERTICAL,
-                required=False,
-                min_rows=0,
-                anchor=TableAnchor(
-                    sheet=region.location.get("sheet"),
-                    strategy=AnchorStrategy.STRUCTURAL,
-                    structural=StructuralAnchor(
-                        header_signature=[h for h in region.header_row if str(h).strip()],
-                        match="fuzzy",
-                        template_row="first_after_header",
-                    ),
-                ),
-                columns=columns,
-                source=FieldSource.PARSER,
-            ))
-        fmt = DocumentFormat(layout.format) if layout.format in ("excel", "docx", "text") else None
+        fmt = DocumentFormat.EXCEL if layout.format == "excel" else None
         return TemplateContract(fields=fields, format=fmt, node_meta=node_meta)
 
     def _collect_node_meta(self, roots: List[SchemaNode]) -> Dict[str, Dict[str, Any]]:
@@ -324,22 +279,26 @@ class TemplateSchemaBuilder:
         if hint is None:
             return None
         location = hint.get("location") or {}
-        strategy = AnchorStrategy.MARKER if hint.get("loop_tokens") else AnchorStrategy.STRUCTURAL
-        if strategy == AnchorStrategy.MARKER:
+        if hint.get("loop_tokens") and int(location.get("marker_row") or 0) >= 1:
+            columns: Dict[str, int] = {}
+            for token in node.anchors[0].get("loop_tokens") or []:
+                for occurrence in node.anchors[0].get("tokens", []) or []:
+                    if occurrence.get("placeholder") == token:
+                        columns[token] = int((occurrence.get("location") or {}).get("col") or 0)
             return TableAnchor(
                 sheet=location.get("sheet"),
-                strategy=strategy,
-                marker=MarkerAnchor(loop_tokens=list(hint.get("loop_tokens") or [])),
+                strategy=AnchorStrategy.MARKER,
+                marker=MarkerAnchor(
+                    loop_tokens=list(hint.get("loop_tokens") or []),
+                    row=int(location.get("marker_row") or 0),
+                    columns={
+                        key: int(value)
+                        for key, value in (hint.get("marker_columns") or {}).items()
+                        if int(value) > 0
+                    },
+                ),
             )
-        return TableAnchor(
-            sheet=location.get("sheet"),
-            strategy=strategy,
-            structural=StructuralAnchor(
-                header_signature=[str(value) for value in hint.get("header_row") or [] if str(value).strip()],
-                match="fuzzy",
-                template_row="first_after_header",
-            ),
-        )
+        return None
 
     def _label_for_node(self, node: SchemaNode) -> str:
         label = node.params.get("name") or node.params.get("label")

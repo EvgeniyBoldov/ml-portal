@@ -41,7 +41,7 @@ def normalize_run_terminal_status(reason: Optional[str]) -> RunTerminalStatus:
 
 def normalize_run_status_for_storage(status: Optional[str]) -> str:
     """
-    Normalize AgentRun.status values persisted in DB.
+    Normalize terminal runtime status values persisted in DB.
 
     Keeps lifecycle statuses used outside finish flow (running/resumed/cancelled),
     and normalizes runtime terminal statuses to canonical values.

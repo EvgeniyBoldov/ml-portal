@@ -157,7 +157,7 @@ class CollectionAggregateTool(VersionedTool):
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
         
-        log = ctx.tool_logger("collection.aggregate")
+        log = ctx.tool_notes("collection.aggregate")
         
         collection_slug = args.get("collection_slug")
         metrics = args.get("metrics", [])

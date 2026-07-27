@@ -10,6 +10,7 @@ from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from app.schemas.runtime_events import RuntimeJournalEventResponse
 from app.schemas.runtime_trace import RunTraceResponse
 
 
@@ -190,19 +191,10 @@ class SandboxRunDetailResponse(BaseModel):
     error: Optional[str] = None
     started_at: datetime
     finished_at: Optional[datetime] = None
-    steps: list[SandboxRunStepResponse] = []
-    trace: Optional[RunTraceResponse] = None
+    events: list[RuntimeJournalEventResponse] = []
 
 
 # ── Run Step ─────────────────────────────────────────────────────────────────
-
-class SandboxRunStepResponse(BaseModel):
-    id: UUID
-    step_type: str
-    step_data: dict[str, Any]
-    order_num: int
-    created_at: datetime
-
 
 # ── Actions ──────────────────────────────────────────────────────────────────
 

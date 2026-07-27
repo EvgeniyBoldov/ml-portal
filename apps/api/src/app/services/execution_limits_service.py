@@ -18,11 +18,24 @@ class ExecutionLimitsPayload:
     llm_input_tokens_max: Optional[int] = None
     llm_output_tokens_max: Optional[int] = None
     llm_context_window_max: Optional[int] = None
-    runtime_steps_max: Optional[int] = None
-    runtime_tool_calls_max: Optional[int] = None
-    runtime_retries_max: Optional[int] = None
-    runtime_wall_time_ms_max: Optional[int] = None
-    runtime_tokens_total_max: Optional[int] = None
+    plan_revisions_max: Optional[int] = None
+    task_attempts_total_max: Optional[int] = None
+    agent_runs_total_max: Optional[int] = None
+    llm_calls_total_max: Optional[int] = None
+    tool_calls_total_max: Optional[int] = None
+    tokens_total_max: Optional[int] = None
+    execution_wall_time_ms_max: Optional[int] = None
+    run_ttl_ms: Optional[int] = None
+    planner_llm_calls_max: Optional[int] = None
+    planner_retries_max: Optional[int] = None
+    planner_tokens_total_max: Optional[int] = None
+    planner_execution_wall_time_ms_max: Optional[int] = None
+    agent_attempts_max: Optional[int] = None
+    agent_llm_calls_max: Optional[int] = None
+    agent_tool_calls_max: Optional[int] = None
+    agent_tokens_total_max: Optional[int] = None
+    agent_execution_wall_time_ms_max: Optional[int] = None
+    max_parallel_tasks: Optional[int] = None
 
 
 class ExecutionLimitsService:
@@ -44,11 +57,7 @@ class ExecutionLimitsService:
             llm_input_tokens_max=self._pick(own, platform, "llm_input_tokens_max"),
             llm_output_tokens_max=self._pick(own, platform, "llm_output_tokens_max"),
             llm_context_window_max=self._pick(own, platform, "llm_context_window_max"),
-            runtime_steps_max=self._pick(own, platform, "runtime_steps_max"),
-            runtime_tool_calls_max=self._pick(own, platform, "runtime_tool_calls_max"),
-            runtime_retries_max=self._pick(own, platform, "runtime_retries_max"),
-            runtime_wall_time_ms_max=self._pick(own, platform, "runtime_wall_time_ms_max"),
-            runtime_tokens_total_max=self._pick(own, platform, "runtime_tokens_total_max"),
+            **{field: self._pick(own, platform, field) for field in ExecutionLimitsPayload.__dataclass_fields__ if field not in {"llm_input_tokens_max", "llm_output_tokens_max", "llm_context_window_max"}},
         )
 
     async def get_scope(self, *, scope_type: str, scope_ref: Optional[str]) -> Optional[ExecutionLimit]:
@@ -122,9 +131,5 @@ def apply_limits_override(
         llm_input_tokens_max=_coerce(override.get("llm_input_tokens_max")) if "llm_input_tokens_max" in override else base.llm_input_tokens_max,
         llm_output_tokens_max=_coerce(override.get("llm_output_tokens_max")) if "llm_output_tokens_max" in override else base.llm_output_tokens_max,
         llm_context_window_max=_coerce(override.get("llm_context_window_max")) if "llm_context_window_max" in override else base.llm_context_window_max,
-        runtime_steps_max=_coerce(override.get("runtime_steps_max")) if "runtime_steps_max" in override else base.runtime_steps_max,
-        runtime_tool_calls_max=_coerce(override.get("runtime_tool_calls_max")) if "runtime_tool_calls_max" in override else base.runtime_tool_calls_max,
-        runtime_retries_max=_coerce(override.get("runtime_retries_max")) if "runtime_retries_max" in override else base.runtime_retries_max,
-        runtime_wall_time_ms_max=_coerce(override.get("runtime_wall_time_ms_max")) if "runtime_wall_time_ms_max" in override else base.runtime_wall_time_ms_max,
-        runtime_tokens_total_max=_coerce(override.get("runtime_tokens_total_max")) if "runtime_tokens_total_max" in override else base.runtime_tokens_total_max,
+        **{field: _coerce(override[field]) if field in override else getattr(base, field) for field in ExecutionLimitsPayload.__dataclass_fields__ if field not in {"llm_input_tokens_max", "llm_output_tokens_max", "llm_context_window_max"}},
     )

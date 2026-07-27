@@ -10,6 +10,7 @@ from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_title_service import ChatTitleService
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_turn_state import ChatTurnState, TurnPhase
+from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.runtime.contracts import ExecutionMode
 
 logger = get_logger(__name__)
@@ -54,12 +55,18 @@ class ChatTurnOrchestrator:
         preloaded_context: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         turn = ChatTurnState(chat_id=chat_id, request_id=idempotency_key)
+        continuation_run_id = (continuation_meta or {}).get("resumed_from_run_id")
+        try:
+            runtime_run_id = str(uuid.UUID(str(continuation_run_id))) if continuation_run_id else str(uuid.uuid4())
+        except (TypeError, ValueError):
+            runtime_run_id = str(uuid.uuid4())
         hash_payload = content if not attachment_ids else f"{content}||attachments:{','.join(sorted(attachment_ids))}"
         persisted_turn = await self.turn_service.start_turn(
             chat_id=chat_id,
             user_id=user_id,
             idempotency_key=idempotency_key,
             request_hash=self.turn_service.build_request_hash(hash_payload),
+            runtime_run_id=runtime_run_id,
         )
         turn_id = persisted_turn.id  # cache scalar to survive ORM expiry
 
@@ -155,6 +162,7 @@ class ChatTurnOrchestrator:
                 model=model,
                 content=content,
                 execution_mode=execution_mode,
+                runtime_run_id=runtime_run_id,
             ):
                 if isinstance(event_data.get("run_id"), str):
                     last_run_id = str(event_data.get("run_id"))
@@ -245,7 +253,7 @@ class ChatTurnOrchestrator:
             await self.turn_service.pause_turn(
                 turn_id,
                 pause_status=paused_reason or "paused",
-                agent_run_id=paused_run_id,
+                runtime_run_id=paused_run_id,
                 paused_action=paused_action,
                 paused_context=paused_context,
             )
@@ -265,6 +273,9 @@ class ChatTurnOrchestrator:
                 "question": question or None,
                 "message": message or None,
                 "run_id": paused_run_id,
+                "action": paused_action if isinstance(paused_action, dict) else {},
+                "context": paused_context if isinstance(paused_context, dict) else {},
+                "contract_version": RuntimeHitlProtocolService.CONTRACT_VERSION,
             }
             terminal_event_emitted = True
         elif llm_error:

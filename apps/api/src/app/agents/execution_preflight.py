@@ -36,11 +36,11 @@ from app.agents.operation_router import OperationRouter
 from app.agents.preflight_policy import apply_operation_policy_filter
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.runtime_graph import RuntimeExecutionGraph
-from app.agents.runtime_trace_logger import RuntimeTraceLogger
 from app.core.exceptions import AgentUnavailableError, AppError as PreflightError
 from app.core.logging import get_logger
 from app.models.agent import Agent
 from app.services.permission_service import EffectivePermissions, PermissionService
+from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 
 logger = get_logger(__name__)
 
@@ -120,7 +120,6 @@ class ExecutionPreflight:
         self.agent_resolver = AgentResolver(session)
         self.operation_router = OperationRouter(session)
         self.runtime_rbac_resolver = RuntimeRbacResolver(PermissionService(session))
-        self.trace_logger = RuntimeTraceLogger(session=session)
 
     async def prepare(
         self,
@@ -134,6 +133,8 @@ class ExecutionPreflight:
         include_routable_agents: bool = True,
         routable_agents_override: Optional[List[Any]] = None,
         effective_permissions_override: Optional[EffectivePermissions] = None,
+        event_sink: Optional[Any] = None,
+        trace_parent_id: Optional[str] = None,
     ) -> ExecutionRequest:
         """Prepare ExecutionRequest for an already selected agent.
 
@@ -155,6 +156,23 @@ class ExecutionPreflight:
         start_time = time.time()
         run_id = uuid.uuid4()
         routing_reasons: List[str] = []
+
+        async def emit(event_type: RuntimeEventType, **payload: Any) -> None:
+            if event_sink is None:
+                return
+            await event_sink.emit(
+                RuntimeEvent(event_type, {
+                    "entity_type": "preflight",
+                    "entity_id": str(run_id),
+                    "parent_entity_type": "agent_execution" if trace_parent_id else "run",
+                    "parent_entity_id": trace_parent_id,
+                    "agent_slug": agent_slug,
+                    **payload,
+                }),
+                phase=OrchestrationPhase.AGENT,
+            )
+
+        await emit(RuntimeEventType.PREFLIGHT_STARTED)
 
         try:
             # 1. Resolve agent + version
@@ -282,10 +300,30 @@ class ExecutionPreflight:
                 status=RoutingStatus.SUCCESS,
                 duration_ms=exec_request.routing_duration_ms,
             )
+            await emit(
+                RuntimeEventType.PREFLIGHT_COMPLETED,
+                mode=mode.value,
+                duration_ms=exec_request.routing_duration_ms,
+                operations_count=len(operation_result.resolved_operations),
+                data_instances_count=len(operation_result.resolved_data_instances),
+                missing={
+                    "tools": list(operation_result.missing.tools),
+                    "collections": list(operation_result.missing.collections),
+                    "credentials": list(operation_result.missing.credentials),
+                },
+                rbac_audit=exec_request.rbac_audit,
+            )
+            await emit(
+                RuntimeEventType.PREFLIGHT_SNAPSHOT,
+                mode=mode.value,
+                limits=exec_request.limit_data,
+                rbac_audit=exec_request.rbac_audit,
+            )
 
             return exec_request
 
         except AgentUnavailableError:
+            await emit(RuntimeEventType.PREFLIGHT_FAILED, reason="unavailable")
             raise
         except Exception as e:
             logger.error(f"Preflight failed: {e}", exc_info=True)
@@ -301,6 +339,12 @@ class ExecutionPreflight:
                 status=RoutingStatus.FAILED,
                 duration_ms=int((time.time() - start_time) * 1000),
                 error_message=str(e),
+            )
+            await emit(
+                RuntimeEventType.PREFLIGHT_FAILED,
+                reason="exception",
+                duration_ms=int((time.time() - start_time) * 1000),
+                error_code=type(e).__name__,
             )
             raise PreflightError(f"Preflight failed: {e}") from e
 
@@ -498,42 +542,21 @@ class ExecutionPreflight:
             "Responses may be incomplete or less accurate."
         )
 
+    async def _log_decision(self, **decision: Any) -> None:
+        """Record a redacted routing decision without making preflight stateful.
 
-    async def _log_decision(
-        self,
-        run_id: UUID,
-        user_id: UUID,
-        tenant_id: UUID,
-        request_text: Optional[str],
-        agent_slug: str,
-        mode: ExecutionMode,
-        missing: MissingRequirements,
-        available_operations: List[ResolvedOperation],
-        available_collections: List[str],
-        execution_graph: RuntimeExecutionGraph,
-        routing_reasons: List[str],
-        status: RoutingStatus,
-        duration_ms: int,
-        error_message: Optional[str] = None,
-    ) -> None:
-        """Log routing decision for observability."""
-        try:
-            execution_targets, _, _ = execution_graph.to_legacy_maps()
-            await self.trace_logger.trace.log_routing_decision(
-                run_id=run_id,
-                user_id=user_id,
-                tenant_id=tenant_id,
-                request_text=request_text,
-                agent_slug=agent_slug,
-                mode=mode,
-                missing=missing,
-                available_operations=available_operations,
-                available_collections=available_collections,
-                execution_targets=execution_targets,
-                routing_reasons=routing_reasons,
-                status=status,
-                duration_ms=duration_ms,
-                error_message=error_message,
-            )
-        except Exception as e:
-            logger.error(f"Failed to log routing decision: {e}")
+        Runtime lifecycle events are emitted by the canonical pipeline logger;
+        this structured application log is only the preflight diagnostic and
+        must never be allowed to break execution.
+        """
+        safe = {
+            "run_id": str(decision.get("run_id") or ""),
+            "agent_slug": str(decision.get("agent_slug") or ""),
+            "status": getattr(decision.get("status"), "value", decision.get("status")),
+            "mode": getattr(decision.get("mode"), "value", decision.get("mode")),
+            "duration_ms": decision.get("duration_ms"),
+            "routing_reasons": list(decision.get("routing_reasons") or [])[:40],
+        }
+        if decision.get("error_message"):
+            safe["error"] = str(decision["error_message"])
+        logger.info("runtime_preflight_decision", extra={"decision": safe})

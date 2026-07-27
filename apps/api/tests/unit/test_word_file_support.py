@@ -114,12 +114,19 @@ async def test_file_generate_supports_docx(monkeypatch):
         "file_name": "report.docx",
         "size_bytes": 5,
     }
-    create_generated_attachment = AsyncMock(return_value=attachment_payload)
-    service_instance = SimpleNamespace(create_generated_attachment=create_generated_attachment)
+    generate = AsyncMock(
+        return_value=SimpleNamespace(
+            artifact_id=str(uuid4()),
+            file_name="report.docx",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            size_bytes=5,
+        )
+    )
+    service_instance = SimpleNamespace(generate=generate)
 
     monkeypatch.setattr("app.core.db.get_session_factory", lambda: _SessionManager)
     monkeypatch.setattr(
-        "app.services.chat_attachment_service.ChatAttachmentService",
+        "app.services.file_generation_service.FileGenerationService",
         lambda _session: service_instance,
     )
 
@@ -140,7 +147,6 @@ async def test_file_generate_supports_docx(monkeypatch):
     )
 
     assert result.success is True
-    assert create_generated_attachment.await_args.kwargs["filename"] == "report.docx"
-    generated_bytes = create_generated_attachment.await_args.kwargs["content"]
-    assert generated_bytes[:2] == b"PK"
+    assert generate.await_args.kwargs["filename"] == "report"
+    assert generate.await_args.kwargs["format_name"] == "docx"
     session.commit.assert_awaited_once()

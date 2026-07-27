@@ -140,6 +140,7 @@ class ChatAttachmentService:
         filename: str,
         content: bytes,
         content_type: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         safe_name = self._sanitize_filename(filename)
         extension = safe_name.rsplit(".", 1)[-1].strip().lower() if "." in safe_name else "txt"
@@ -169,35 +170,52 @@ class ChatAttachmentService:
         if not uploaded:
             raise RuntimeError(f"Failed to upload generated file to s3://{bucket}/{key}")
 
-        row = await self._create_attachment_row(
-            attachment_id=attachment_id,
-            chat_id=chat_id,
-            owner_id=owner_id,
-            file_name=safe_name,
-            file_ext=extension,
-            content_type=content_type,
-            size_bytes=len(content),
-            checksum=checksum,
-            bucket=bucket,
-            key=key,
-            status="generated",
-        )
-        result = self._serialize_attachment(row)
-        if chat_id:
-            reference = await ChatArtifactReferenceService(self.session).register(
+        row = None
+        try:
+            row = await self._create_attachment_row(
+                attachment_id=attachment_id,
                 chat_id=chat_id,
                 owner_id=owner_id,
-                target=ArtifactTarget(
-                    kind="chat_attachment",
-                    target_id=str(row.id),
-                    display_name=row.file_name,
-                    content_type=row.content_type,
-                    size_bytes=row.size_bytes,
-                    metadata={"status": row.status},
-                ),
+                file_name=safe_name,
+                file_ext=extension,
+                content_type=content_type,
+                size_bytes=len(content),
+                checksum=checksum,
+                bucket=bucket,
+                key=key,
+                status="generated",
             )
-            result["artifact_id"] = str(reference.id)
-        return result
+            result = self._serialize_attachment(row)
+            if chat_id:
+                reference = await ChatArtifactReferenceService(self.session).register(
+                    chat_id=chat_id,
+                    owner_id=owner_id,
+                    target=ArtifactTarget(
+                        kind="chat_attachment",
+                        target_id=str(row.id),
+                        display_name=row.file_name,
+                        content_type=row.content_type,
+                        size_bytes=row.size_bytes,
+                        metadata={"status": row.status, **(metadata or {})},
+                    ),
+                )
+                result["artifact_id"] = str(reference.id)
+            return result
+        except Exception:
+            # A generated file is only valid once both storage and the
+            # chat-scoped artifact reference exist. Remove partial state and
+            # let the caller retry safely.
+            if row is not None:
+                try:
+                    await self.session.delete(row)
+                    await self.session.flush()
+                except Exception:
+                    logger.exception("Failed to rollback generated attachment row %s", row.id)
+            try:
+                await s3_manager.delete_object(bucket, key)
+            except Exception:
+                logger.exception("Failed to rollback generated object s3://%s/%s", bucket, key)
+            raise
 
     async def get_owned_attachments(
         self,

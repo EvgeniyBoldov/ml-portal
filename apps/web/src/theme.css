@@ -25,6 +25,24 @@
   --info: #3b82f6;
   --info-light: rgba(59, 130, 246, 0.12);
 
+  /* Runtime trace: semantic roles, never hardcoded in trace components. */
+  --trace-surface: var(--bg-elevated);
+  --trace-surface-raised: var(--panel);
+  --trace-surface-hover: var(--panel-hover);
+  --trace-rail: var(--border);
+  --trace-selected: var(--primary);
+  --trace-selected-bg: var(--primary-light);
+  --trace-type-planner: var(--primary);
+  --trace-type-agent: var(--info);
+  --trace-type-llm: var(--warning);
+  --trace-type-tool: var(--text-secondary);
+  --trace-type-clarify: var(--info);
+  --trace-type-confirm: var(--warning);
+  --trace-type-error: var(--danger);
+  --trace-phase-planning: var(--primary);
+  --trace-phase-execution: var(--text-secondary);
+  --trace-phase-replanning: var(--warning);
+
   /* Panels & Surfaces */
   --panel: #11172a;
   --panel-alt: #0e1424;
@@ -118,6 +136,23 @@
   --danger-light: rgba(220, 38, 38, 0.1);
   --info: #2563eb;
   --info-light: rgba(37, 99, 235, 0.1);
+
+  --trace-surface: var(--bg-elevated);
+  --trace-surface-raised: var(--panel-alt);
+  --trace-surface-hover: var(--panel-hover);
+  --trace-rail: var(--border);
+  --trace-selected: var(--primary);
+  --trace-selected-bg: var(--primary-light);
+  --trace-type-planner: var(--primary);
+  --trace-type-agent: var(--info);
+  --trace-type-llm: var(--warning);
+  --trace-type-tool: var(--text-secondary);
+  --trace-type-clarify: var(--info);
+  --trace-type-confirm: var(--warning);
+  --trace-type-error: var(--danger);
+  --trace-phase-planning: var(--primary);
+  --trace-phase-execution: var(--text-secondary);
+  --trace-phase-replanning: var(--warning);
 
   /* Panels & Surfaces */
   --panel: #f8fafc;

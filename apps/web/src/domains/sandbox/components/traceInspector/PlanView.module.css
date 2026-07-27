@@ -1,0 +1,10 @@
+.summary { display: flex; flex-direction: column; gap: var(--space-2); }
+.taskList { display: flex; flex-direction: column; gap: var(--space-2); }
+.task { padding: var(--space-3); border: 1px solid var(--border); border-left: 3px solid var(--trace-type-planner, var(--primary)); border-radius: var(--radius-md); background: var(--trace-surface, var(--bg-elevated)); }
+.taskHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
+.taskTitle { font-size: var(--text-sm); font-weight: var(--font-weight-semibold); }
+.taskObjective { margin: var(--space-2) 0; color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.45; }
+.meta { display: flex; flex-wrap: wrap; gap: var(--space-1); color: var(--text-secondary); font-size: var(--text-xs); }
+.meta span { padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.outputs { margin-top: var(--space-2); color: var(--text-secondary); font-size: var(--text-xs); }
+.removed { color: var(--danger); font-size: var(--text-xs); }

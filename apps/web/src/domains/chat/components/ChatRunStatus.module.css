@@ -1,0 +1,5 @@
+.card { margin: 6px 52px; max-width: 720px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary); color: var(--text-secondary); font-size: 13px; }
+.summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+.summary span { flex: 1; }
+.summary button { border: 0; background: transparent; color: var(--primary); cursor: pointer; font-size: 12px; }
+.history { margin: 0; padding: 0 16px 12px 34px; display: grid; gap: 5px; }

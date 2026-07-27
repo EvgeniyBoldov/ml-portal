@@ -34,7 +34,7 @@ describe('ChatComposer', () => {
     fireEvent.click(sendButton);
 
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(onSend).toHaveBeenCalledWith('', expect.objectContaining({ executionMode: 'normal', attachments: [image] }));
+    expect(onSend).toHaveBeenCalledWith('', expect.objectContaining({ attachments: [image] }));
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview');
   });

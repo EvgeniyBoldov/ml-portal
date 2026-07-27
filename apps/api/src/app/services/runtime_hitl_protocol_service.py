@@ -21,11 +21,15 @@ class RuntimeHitlProtocolService:
             "message": stop_payload.get("message"),
             "contract_version": cls.CONTRACT_VERSION,
         }
+        existing_action = stop_payload.get("action")
+        if isinstance(existing_action, dict):
+            action.update(existing_action)
         for key in ("operation_fingerprint", "tool_slug", "operation", "risk_level", "args_preview", "summary"):
             if stop_payload.get(key) is not None:
                 action[key] = stop_payload[key]
 
-        context = dict(stop_payload or {})
+        existing_context = stop_payload.get("context")
+        context = dict(existing_context) if isinstance(existing_context, dict) else dict(stop_payload or {})
         context.setdefault("contract_version", cls.CONTRACT_VERSION)
         return {
             "reason": reason,

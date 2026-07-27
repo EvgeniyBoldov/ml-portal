@@ -133,7 +133,7 @@ class CollectionTextSearchTool(VersionedTool):
         )
         from app.services.collection_service import CollectionService
 
-        log = ctx.tool_logger("collection.template.search")
+        log = ctx.tool_notes("collection.template.search")
 
         collection_slug = args["collection_slug"]
         query = args["query"]

@@ -6,7 +6,8 @@ adapters. Concrete adapters live next to them:
 
     AgentExecutionPort      ← app.runtime.agent_executor.AgentExecutor
     SynthesizerPort         ← app.runtime.synthesizer.Synthesizer
-    PlannerServicePort      ← app.runtime.planner.planner.Planner
+    PlannerPort             ← canonical graph planner
+    TaskExecutionPort       ← canonical task attempt executor
 
 Keeping these as Protocols (structural typing) means we do not force existing
 adapters to inherit — they already match by method shape.
@@ -32,7 +33,14 @@ from typing import (
 from uuid import UUID
 
 from app.agents.context import ToolContext
-from app.runtime.contracts import NextStep
+from app.runtime.orchestrator_contracts import (
+    AgentTaskResult,
+    PlanPatch,
+    PlanRequest,
+    TaskAttemptFailure,
+    TaskRequest,
+    PlannerDecisionKind,
+)
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.events import RuntimeEvent
 from app.runtime.turn_state import RuntimeTurnState
@@ -42,30 +50,28 @@ from app.runtime.turn_state import RuntimeTurnState
 # Planner                                                                      #
 # --------------------------------------------------------------------------- #
 #
-# Post-M5: TriageServicePort removed. The planner is the sole decision
-# engine — clarify / call_agent / final / abort all come
-# from a single `next_step` call. SummaryPort removed too — rolling
-# summary is owned by `MemoryWriter` + `SummaryCompactor` now.
+# The graph planner is the sole planner boundary. Summary ownership remains
+# with `MemoryWriter` + `SummaryCompactor`.
 
 
 @runtime_checkable
-class PlannerServicePort(Protocol):
-    """Next-step planner — produces one NextStep per invocation."""
+class PlannerPort(Protocol):
+    """Planner boundary for the canonical persisted execution graph."""
 
-    async def next_step(
-        self,
-        *,
-        runtime_state: RuntimeTurnState,
-        available_agents: List[Dict[str, Any]],
-        outline: Any,
-        platform_config: Dict[str, Any],
-        chat_id: Optional[UUID],
-        tenant_id: UUID,
-        user_id: UUID,
-        agent_run_id: UUID,
-        planner_iteration_id: Optional[str] = None,
-        sandbox_overrides: Optional[Dict[str, Any]] = None,
-    ) -> tuple[NextStep, List[Any]]: ...
+    async def plan(self, *, request: PlanRequest, **kwargs: Any) -> PlanPatch: ...
+
+
+@runtime_checkable
+@runtime_checkable
+class TaskExecutionPort(Protocol):
+    """Executes a logical task attempt and returns a strict agent result."""
+
+    async def execute_task(self, *, request: TaskRequest, **kwargs: Any) -> AgentTaskResult: ...
+
+
+@runtime_checkable
+class TaskFailureClassifier(Protocol):
+    def classify(self, exc: BaseException) -> TaskAttemptFailure: ...
 
 
 # --------------------------------------------------------------------------- #
@@ -74,26 +80,6 @@ class PlannerServicePort(Protocol):
 
 
 @runtime_checkable
-class AgentExecutionPort(Protocol):
-    """Executes a single sub-agent step chosen by the planner. Streams
-    RuntimeEvents and mutates `runtime_state` (appends AgentResult, facts)."""
-
-    def execute(
-        self,
-        *,
-        step: NextStep,
-        lifecycle_agent_run_id: str,
-        runtime_state: RuntimeTurnState,
-        messages: List[Dict[str, Any]],
-        ctx: ToolContext,
-        user_id: UUID,
-        tenant_id: UUID,
-        platform_config: Dict[str, Any],
-        model: Optional[str] = None,
-        agent_version_id: Optional[UUID] = None,
-    ) -> AsyncIterator[RuntimeEvent]: ...
-
-
 # --------------------------------------------------------------------------- #
 # Synthesizer                                                                  #
 # --------------------------------------------------------------------------- #

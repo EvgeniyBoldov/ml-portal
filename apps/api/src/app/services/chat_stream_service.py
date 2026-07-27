@@ -9,6 +9,7 @@ This service acts as a thin transport layer:
 from __future__ import annotations
 from typing import Optional, Dict, Any, List, AsyncGenerator
 from datetime import datetime, timezone
+import asyncio
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +17,6 @@ from redis.asyncio import Redis
 
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 from app.core.http.clients import LLMClientProtocol
-from app.services.run_store import RunStore
 from app.agents import ToolContext
 from app.runtime import PipelineRequest, RuntimeEvent, RuntimeEventType, RuntimePipeline
 from app.runtime.contracts import ExecutionMode
@@ -31,6 +31,7 @@ from app.services.chat_turn_orchestrator import ChatTurnOrchestrator
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
+from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
 from app.core.db import get_session_factory
 
 logger = get_logger(__name__)
@@ -56,8 +57,6 @@ class ChatStreamService:
         self.chats_repo = chats_repo
         self.messages_repo = messages_repo
         self.idempotency = IdempotencyManager(redis)
-        # Keep constructor test-friendly: RunStore resolves global factory lazily on first write.
-        self.run_store = RunStore(session=session)
         self.context_service = ChatContextService(session, llm_client, messages_repo)
         self.title_service = ChatTitleService(session, llm_client, chats_repo)
         self.persistence_service = ChatPersistenceService(session, messages_repo)
@@ -313,6 +312,7 @@ class ChatStreamService:
         content: str,
         execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         attachment_contexts: Optional[list[dict[str, Any]]] = None,
+        runtime_run_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run the turn via runtime v3 Pipeline, translating events to SSE payloads."""
         try:
@@ -323,13 +323,13 @@ class ChatStreamService:
             pipeline = RuntimePipeline(
                 session=self.session,
                 llm_client=self.llm_client,
-                run_store=self.run_store,
             )
 
             text_content = content.get("text", str(content)) if isinstance(content, dict) else str(content)
 
             pipeline_request = PipelineRequest(
                 request_text=text_content,
+                runtime_run_id=runtime_run_id,
                 chat_id=str(tool_ctx.chat_id),
                 user_id=user_id,
                 tenant_id=tenant_id,
@@ -343,13 +343,28 @@ class ChatStreamService:
                 execution_mode=execution_mode,
             )
 
-            async for event in pipeline.execute(pipeline_request, tool_ctx):
+            # Subscribe before the pipeline can emit RUN_START. The tail bus is
+            # the one shared transport for sandbox and chat; chat accepts only
+            # its safe progress projection and never raw journal events.
+            tail_subscriber = RuntimeTailSubscriber(stream_key=str(runtime_run_id))
+            progress_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            listener_task: Optional[asyncio.Task[None]] = None
+
+            async def _listen_progress() -> None:
+                async for message in tail_subscriber.listen():
+                    if (
+                        message.get("type") == "runtime_progress"
+                        and str(message.get("run_id")) == str(runtime_run_id)
+                    ):
+                        await progress_queue.put(message)
+
+            async def _map_pipeline_event(event: RuntimeEvent) -> Optional[dict[str, Any]]:
                 # FINAL and STOP are handled specially below — skip _map for them
                 if event.type == RuntimeEventType.FINAL:
                     final_content = event.data.get("content", "")
                     final_sources = event.data.get("sources", [])
                     final_attachments = event.data.get("attachments", [])
-                    yield {
+                    return {
                         "type": "final_content",
                         "content": final_content,
                         "sources": final_sources,
@@ -363,7 +378,7 @@ class ChatStreamService:
                 elif event.type == RuntimeEventType.STOP:
                     stop_payload = dict(event.data or {})
                     paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(stop_payload)
-                    yield {
+                    return {
                         "type": "run_paused",
                         "reason": paused_payload["reason"],
                         "run_id": paused_payload["run_id"],
@@ -372,11 +387,58 @@ class ChatStreamService:
                         "contract_version": paused_payload["contract_version"],
                     }
 
-                else:
-                    # Map all other events (status, delta, error, operation_call, etc.)
-                    mapped = self.event_mapper.map_runtime_event(event)
-                    if mapped:
-                        yield mapped
+                # Progress has a single delivery path: the tail subscription.
+                # Direct pipeline delivery would duplicate root progress and
+                # cannot include asynchronous agent-child events.
+                if isinstance(event.data.get("_progress"), dict):
+                    return None
+                return self.event_mapper.map_runtime_event(event)
+
+            try:
+                await tail_subscriber.subscribe()
+                listener_task = asyncio.create_task(_listen_progress())
+            except Exception:
+                logger.warning("chat_runtime_progress_subscription_failed", exc_info=True)
+
+            pipeline_iter = pipeline.execute(pipeline_request, tool_ctx).__aiter__()
+            pipeline_task: Optional[asyncio.Task[RuntimeEvent]] = asyncio.create_task(anext(pipeline_iter))
+            progress_task: Optional[asyncio.Task[dict[str, Any]]] = asyncio.create_task(progress_queue.get())
+            try:
+                while pipeline_task is not None:
+                    pending = {pipeline_task}
+                    if listener_task is not None and progress_task is not None:
+                        pending.add(progress_task)
+                    done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+
+                    if progress_task is not None and progress_task in done:
+                        progress = progress_task.result()
+                        try:
+                            from app.core.prometheus_metrics import chat_runtime_progress_forwarded_total
+                            chat_runtime_progress_forwarded_total.inc()
+                        except Exception:
+                            pass
+                        yield {"type": "status", "stage": "runtime_progress", "progress": progress}
+                        progress_task = asyncio.create_task(progress_queue.get())
+
+                    if pipeline_task in done:
+                        try:
+                            event = pipeline_task.result()
+                        except StopAsyncIteration:
+                            pipeline_task = None
+                            continue
+                        mapped = await _map_pipeline_event(event)
+                        if mapped:
+                            yield mapped
+                        pipeline_task = asyncio.create_task(anext(pipeline_iter))
+            finally:
+                for task in (pipeline_task, progress_task, listener_task):
+                    if task is not None and not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    *(task for task in (pipeline_task, progress_task, listener_task) if task is not None),
+                    return_exceptions=True,
+                )
+                await tail_subscriber.unsubscribe()
 
         except AgentUnavailableError as e:
             reason_code = str(getattr(e, "reason_code", "") or "").strip() or None

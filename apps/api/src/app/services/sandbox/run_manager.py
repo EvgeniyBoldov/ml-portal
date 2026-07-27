@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from app.models.sandbox import SandboxRun, SandboxRunStep
+from app.models.sandbox import SandboxRun
 from app.services.sandbox.types import SandboxRunPreparation
 
 
@@ -74,7 +74,7 @@ class SandboxRunManager:
         return await self.host.runs.get_by_id(run_id)
 
     async def get_run_detail(self, run_id: UUID) -> Optional[SandboxRun]:
-        return await self.host.runs.get_by_id_with_steps(run_id)
+        return await self.host.runs.get_by_id(run_id)
 
     async def list_runs(
         self,
@@ -83,14 +83,6 @@ class SandboxRunManager:
         branch_id: Optional[UUID] = None,
     ) -> List[SandboxRun]:
         return await self.host.runs.list_by_session(session_id, branch_id)
-
-    async def list_runs_with_steps_count(
-        self,
-        *,
-        session_id: UUID,
-        branch_id: Optional[UUID] = None,
-    ) -> List[Tuple[SandboxRun, int]]:
-        return await self.host.runs.list_by_session_with_steps_count(session_id, branch_id)
 
     async def finish_run(
         self,
@@ -158,43 +150,6 @@ class SandboxRunManager:
                 "context_snapshot": context_snapshot,
             },
         )
-
-    async def get_run_steps_count(self, run_id: UUID) -> int:
-        return await self.host.runs.get_steps_count(run_id)
-
-    async def get_next_run_step_order(self, run_id: UUID) -> int:
-        return await self.host.steps.get_max_order_num(run_id) + 1
-
-    async def add_run_step(
-        self,
-        *,
-        run_id: UUID,
-        step_type: str,
-        step_data: Dict[str, Any],
-        order_num: int,
-    ) -> SandboxRunStep:
-        obj = SandboxRunStep(
-            run_id=run_id,
-            step_type=step_type,
-            step_data=step_data,
-            order_num=order_num,
-        )
-        return await self.host.steps.create(obj)
-
-    async def add_run_steps_bulk(self, run_id: UUID, steps_data: List[Dict[str, Any]]) -> None:
-        objs = [
-            SandboxRunStep(
-                run_id=run_id,
-                step_type=s["step_type"],
-                step_data=s["step_data"],
-                order_num=s["order_num"],
-            )
-            for s in steps_data
-        ]
-        await self.host.steps.bulk_create(objs)
-
-    async def list_run_steps(self, run_id: UUID) -> List[SandboxRunStep]:
-        return await self.host.steps.list_by_run(run_id)
 
     async def fail_stale_runs(self, session_id: UUID, stale_threshold_minutes: int = 5) -> int:
         return await self.host.runs.fail_stale_runs(session_id, stale_threshold_minutes)

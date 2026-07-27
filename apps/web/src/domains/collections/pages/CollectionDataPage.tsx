@@ -1244,78 +1244,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   );
 }
 
-type SchemaEditorState = {
-  rowId: string;
-  title: string;
-  description: string;
-} | null;
-
-function TemplateSchemaEditorModal({
-  open,
-  title,
-  draft,
-  description,
-  error,
-  saving,
-  onDraftChange,
-  onDescriptionChange,
-  onClose,
-  onSave,
-}: {
-  open: boolean;
-  title: string;
-  draft: string;
-  description: string;
-  error: string | null;
-  saving: boolean;
-  onDraftChange: (value: string) => void;
-  onDescriptionChange: (value: string) => void;
-  onClose: () => void;
-  onSave: () => void;
-}) {
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={title}
-      size="xl"
-      className={styles.schemaEditorModal}
-      bodyClassName={styles.schemaEditorBody}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button onClick={onSave} disabled={saving}>
-            {saving ? 'Сохранение...' : 'Сохранить'}
-          </Button>
-        </>
-      }
-    >
-      <div className={styles.schemaEditorLayout}>
-        <div className={styles.schemaEditorPane}>
-          <div className={styles.schemaEditorLabel}>Схема</div>
-          <textarea
-            className={styles.schemaEditorTextarea}
-            value={draft}
-            onChange={(e) => onDraftChange(e.target.value)}
-            spellCheck={false}
-          />
-        </div>
-        <div className={styles.schemaEditorPane}>
-          <div className={styles.schemaEditorLabel}>Описание</div>
-          <textarea
-            className={styles.schemaEditorDescription}
-            value={description}
-            onChange={(e) => onDescriptionChange(e.target.value)}
-            spellCheck={false}
-            placeholder="Короткое семантическое описание шаблона..."
-          />
-        </div>
-      </div>
-      {error && <div className={styles.schemaEditorError}>{error}</div>}
-    </Modal>
-  );
-}
-
 // ─── Template collection view ───────────────────────────────────
 interface TemplateViewProps {
   collection: Collection;
@@ -1333,10 +1261,6 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [schemaEditor, setSchemaEditor] = useState<SchemaEditorState>(null);
-  const [schemaDraft, setSchemaDraft] = useState('');
-  const [descriptionDraft, setDescriptionDraft] = useState('');
-  const [schemaError, setSchemaError] = useState<string | null>(null);
   const [statusModalRow, setStatusModalRow] = useState<CollectionTemplate | null>(null);
   const [actionsMenu, setActionsMenu] = useState<{ row: CollectionTemplate; anchorEl: HTMLElement } | null>(null);
 
@@ -1389,60 +1313,6 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     },
   });
 
-  const saveSchemaMutation = useMutation({
-    mutationFn: ({
-      rowId,
-      templateSchema,
-      description,
-    }: {
-      rowId: string;
-      templateSchema: Record<string, unknown>;
-      description: string | null;
-    }) =>
-      collectionsApi.updateTemplate(collectionId, rowId, {
-        template_schema: templateSchema,
-        description,
-      }),
-    onSuccess: () => {
-      showToast('Шаблон обновлен', 'success');
-      setSchemaEditor(null);
-      setSchemaDraft('');
-      setDescriptionDraft('');
-      setSchemaError(null);
-      invalidateTemplates();
-    },
-    onError: (err: Error) => {
-      showToast(err.message || 'Ошибка обновления схемы', 'error');
-    },
-  });
-
-  const updateStatusMutation = useMutation({
-    mutationFn: ({
-      rowId,
-      status,
-    }: {
-      rowId: string;
-      status: 'uploaded' | 'analyzed' | 'ready' | 'archived';
-    }) =>
-      collectionsApi.updateTemplate(collectionId, rowId, {
-        status,
-      }),
-    onSuccess: (_, variables) => {
-      const labelMap: Record<string, string> = {
-        uploaded: 'Загружен',
-        analyzed: 'Проанализирован',
-        ready: 'Активирован',
-        archived: 'Отправлен в архив',
-      };
-      showToast(labelMap[variables.status] || 'Статус обновлен', 'success');
-      setActionsMenu(null);
-      invalidateTemplates();
-    },
-    onError: (err: Error) => {
-      showToast(err.message || 'Ошибка изменения статуса', 'error');
-    },
-  });
-
   const analyzeMutation = useMutation({
     mutationFn: (rowIds: string[]) => collectionsApi.analyzeTemplates(collectionId, rowIds),
     onSuccess: (result) => {
@@ -1455,18 +1325,6 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     },
     onError: (err: Error) => {
       showToast(err.message || 'Ошибка запуска анализа', 'error');
-    },
-  });
-
-  const approveMutation = useMutation({
-    mutationFn: (rowId: string) => collectionsApi.approveTemplate(collectionId, rowId),
-    onSuccess: () => {
-      showToast('Шаблон утвержден', 'success');
-      setActionsMenu(null);
-      invalidateTemplates();
-    },
-    onError: (err: Error) => {
-      showToast(err.message || 'Ошибка утверждения шаблона', 'error');
     },
   });
 
@@ -1572,14 +1430,6 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     analyzeMutation.mutate([rowId]);
   }, [analyzeMutation]);
 
-  const handleApproveOne = useCallback((rowId: string) => {
-    approveMutation.mutate(rowId);
-  }, [approveMutation]);
-
-  const handleSetStatus = useCallback((rowId: string, status: 'ready' | 'archived') => {
-    updateStatusMutation.mutate({ rowId, status });
-  }, [updateStatusMutation]);
-
   const handleDeleteOne = useCallback((rowId: string, title: string) => {
     showConfirmDialog({
       title: `Удалить "${title}"?`,
@@ -1599,17 +1449,6 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     });
   }, [handleDeleteRows, showConfirmDialog]);
 
-  const openSchemaEditor = useCallback((row: CollectionTemplate) => {
-    setSchemaEditor({
-      rowId: row.id,
-      title: row.title || 'Редактирование шаблона',
-      description: String(row.description ?? ''),
-    });
-    setSchemaDraft(JSON.stringify(row.template_schema ?? {}, null, 2));
-    setDescriptionDraft(String(row.description ?? ''));
-    setSchemaError(null);
-  }, []);
-
   const openStatusModal = useCallback((row: CollectionTemplate) => {
     setStatusModalRow(row);
   }, []);
@@ -1622,32 +1461,14 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     setActionsMenu(null);
   }, []);
 
-  const handleDownload = useCallback((row: CollectionTemplate) => {
-    const fileMeta = row.file as Record<string, unknown> | undefined;
-    const directDownloadUrl = String(fileMeta?.download_url ?? '').trim();
-    const fileId = String(fileMeta?.file_id ?? '').trim();
-    const downloadUrl = directDownloadUrl || (fileId ? buildFileDownloadUrl(fileId) : '');
-    if (!downloadUrl) {
-      showToast('Оригинальный файл не найден', 'warning');
-      return;
-    }
-    window.open(downloadUrl, '_blank', 'noopener,noreferrer');
-  }, [showToast]);
-
-  const handleSaveSchema = useCallback(() => {
-    if (!schemaEditor?.rowId) return;
+  const handleDownload = useCallback(async (row: CollectionTemplate) => {
     try {
-      const parsed = JSON.parse(schemaDraft) as Record<string, unknown>;
-      setSchemaError(null);
-      saveSchemaMutation.mutate({
-        rowId: schemaEditor.rowId,
-        templateSchema: parsed,
-        description: descriptionDraft.trim() ? descriptionDraft.trim() : null,
-      });
-    } catch {
-      setSchemaError('Некорректный JSON');
+      const { download_url } = await collectionsApi.getTemplateDownload(collectionId, row.id);
+      window.open(download_url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Оригинальный файл не найден', 'warning');
     }
-  }, [descriptionDraft, saveSchemaMutation, schemaDraft, schemaEditor?.rowId]);
+  }, [collectionId, showToast]);
 
   const getTemplateStatusBadge = (row: CollectionTemplate) => {
     const status = String(row.runtime_status ?? row.status ?? 'uploaded').toLowerCase();
@@ -1827,12 +1648,12 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
           >
             <Icon name="upload" size={32} />
             <span>Нажмите, чтобы выбрать файл шаблона</span>
-            <span className={styles.dropZoneHint}>Поддерживаются Excel, Word и текстовые шаблоны</span>
+            <span className={styles.dropZoneHint}>Поддерживаются Excel-шаблоны XLSX и XLSM</span>
           </div>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".xlsx,.xls,.xlsm,.docx,.doc,.txt,.md"
+            accept=".xlsx,.xlsm"
             style={{ display: 'none' }}
             onChange={(e) => {
               const file = e.target.files?.[0] ?? null;
@@ -1855,19 +1676,6 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
         </div>
       </Modal>
 
-      <TemplateSchemaEditorModal
-        open={Boolean(schemaEditor)}
-        title={schemaEditor?.title || 'Редактирование схемы шаблона'}
-        draft={schemaDraft}
-        description={descriptionDraft}
-        error={schemaError}
-        saving={saveSchemaMutation.isPending}
-        onDraftChange={setSchemaDraft}
-        onDescriptionChange={setDescriptionDraft}
-        onClose={() => { setSchemaEditor(null); setSchemaDraft(''); setDescriptionDraft(''); setSchemaError(null); }}
-        onSave={handleSaveSchema}
-      />
-
       <DropdownMenu
         isOpen={Boolean(actionsMenu?.row)}
         onClose={closeActionsMenu}
@@ -1876,30 +1684,13 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
           {
             label: 'Скачать',
             onClick: () => handleDownload(actionsMenu.row),
-            disabled: !String((actionsMenu.row.file as Record<string, unknown> | undefined)?.file_id ?? '').trim(),
-          },
-          {
-            label: 'Редактировать',
-            onClick: () => openSchemaEditor(actionsMenu.row),
+            disabled: false,
           },
           {
             label: 'Анализ',
             onClick: () => handleAnalyzeOne(actionsMenu.row.id),
             disabled: analyzeMutation.isPending,
           },
-          ...(String(actionsMenu.row.runtime_status ?? '').toLowerCase() === 'approval_required'
-            ? [{
-                label: 'Утвердить',
-                onClick: () => handleApproveOne(actionsMenu.row.id),
-                disabled: approveMutation.isPending,
-              }]
-            : []),
-          ...((String(actionsMenu.row.runtime_status ?? actionsMenu.row.status ?? '').toLowerCase() === 'ready')
-            ? [{
-                label: 'В архив',
-                onClick: () => handleSetStatus(actionsMenu.row.id, 'archived'),
-              }]
-            : []),
           {
             label: 'Удалить',
             onClick: () => handleDeleteOne(actionsMenu.row.id, actionsMenu.row.title || 'Шаблон'),

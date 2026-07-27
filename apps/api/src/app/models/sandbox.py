@@ -7,7 +7,6 @@ SandboxBranchOverride: current override key-value state per branch.
 SandboxOverrideSnapshot: immutable snapshot of branch overrides at run start.
 SandboxOverride: legacy phantom session override (backward compatibility).
 SandboxRun: single agent execution within a session/branch/snapshot.
-SandboxRunStep: individual step of a run (SSE event persisted).
 """
 import uuid
 from datetime import datetime, timezone
@@ -415,13 +414,6 @@ class SandboxRun(Base):
         back_populates="runs",
         foreign_keys=[snapshot_id],
     )
-    steps: Mapped[List["SandboxRunStep"]] = relationship(
-        "SandboxRunStep",
-        back_populates="run",
-        cascade="all, delete-orphan",
-        order_by="SandboxRunStep.order_num",
-    )
-
     __table_args__ = (
         Index("ix_sandbox_runs_session_id", "session_id"),
         Index("ix_sandbox_runs_branch_id", "branch_id"),
@@ -430,45 +422,3 @@ class SandboxRun(Base):
 
     def __repr__(self) -> str:
         return f"<SandboxRun {self.id} status={self.status}>"
-
-
-class SandboxRunStep(Base):
-    """
-    Individual step persisted from SSE stream during a sandbox run.
-    """
-    __tablename__ = "sandbox_run_steps"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-
-    run_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("sandbox_runs.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-    # status | thinking | routing | tool_call | tool_result | delta | final | error | confirmation_required
-    step_type: Mapped[str] = mapped_column(String(50), nullable=False)
-
-    step_data: Mapped[Dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict
-    )
-
-    order_num: Mapped[int] = mapped_column(Integer, nullable=False)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
-
-    # Relationship
-    run: Mapped["SandboxRun"] = relationship("SandboxRun", back_populates="steps")
-
-    __table_args__ = (
-        Index("ix_sandbox_run_steps_run_id", "run_id"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<SandboxRunStep {self.order_num} type={self.step_type}>"

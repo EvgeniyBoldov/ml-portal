@@ -12,7 +12,7 @@ import uuid
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TOOL LOGGER
+# TOOL EXECUTION NOTES
 # ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -35,16 +35,16 @@ class ToolLogEntry:
         return d
 
 
-class ToolLogger:
+class ToolExecutionNotes:
     """
-    Structured logger for tool executions.
+    Bounded diagnostics buffer for one tool execution.
 
     Collects log entries inside a tool's execute() method so they can be
-    persisted alongside the tool_result step in RunStore.
+    included in the canonical tool-result event when the effective level permits it.
 
     Usage inside a ToolHandler:
         async def execute(self, ctx: ToolContext, args: Dict) -> ToolResult:
-            log = ctx.tool_logger("collection.search")
+            notes = ctx.tool_notes("collection.search")
             log.info("Starting search", query=args["query"])
 
             try:
@@ -100,7 +100,7 @@ class ToolLogger:
         return self._elapsed()
 
     def __repr__(self) -> str:
-        return f"<ToolLogger {self.tool_slug} entries={len(self._entries)}>"
+        return f"<ToolExecutionNotes {self.tool_slug} entries={len(self._entries)}>"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,7 +119,6 @@ class RuntimeDependencies:
     sandbox_overrides: Dict[str, Any] = field(default_factory=dict)
     helper_summary: Optional[Dict[str, Any]] = None
     execution_outline: Optional[Dict[str, Any]] = None
-    runtime_trace_logger: Any = None
 
 
 @dataclass
@@ -153,21 +152,20 @@ class ToolContext:
             # Backward-compat: legacy code may still pass non-UUID identifiers.
             return uuid.uuid5(uuid.NAMESPACE_URL, f"{field_name}:{value}")
 
-    def tool_logger(self, tool_slug: str) -> ToolLogger:
-        """Create a ToolLogger scoped to a specific tool execution."""
-        return ToolLogger(tool_slug)
+    def tool_notes(self, tool_slug: str) -> ToolExecutionNotes:
+        """Create bounded diagnostics attached to the canonical tool result."""
+        return ToolExecutionNotes(tool_slug)
     
     async def log_intent(self, description: str, details: Optional[Dict[str, Any]] = None) -> None:
         """Log a high-level intent step (e.g., 'Сформирую план', 'Проверяю стойки в NetBox')."""
-        deps = self.get_runtime_deps()
-        if deps.runtime_trace_logger:
-            run_id = self.extra.get("run_id")
-            if run_id:
-                await deps.runtime_trace_logger.log_intent(
-                    run_id=run_id,
-                    description=description,
-                    details=details,
-                )
+        runtime_sink = self.extra.get("runtime_event_logger")
+        if runtime_sink is not None:
+            from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
+
+            await runtime_sink.emit(
+                RuntimeEvent(RuntimeEventType.INTENT, {"description": description, "details": details or {}}),
+                phase=OrchestrationPhase.AGENT,
+            )
 
     def get_runtime_deps(self) -> RuntimeDependencies:
         raw = self.extra.get("runtime_deps")

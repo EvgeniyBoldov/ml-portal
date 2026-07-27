@@ -32,17 +32,16 @@ class BudgetResolver:
             scope_ref="global",
         )
         limits = apply_limits_override(limits, (sandbox_overrides or {}).get("platform_limits"))
-        planner_steps = _as_optional_int(limits.runtime_steps_max)
-        wall_time_ms = _as_optional_int(limits.runtime_wall_time_ms_max)
-
         return RunLimits(
-            planner_steps=planner_steps,
-            # Unified step budget: planner/agent use the same limit.
-            agent_steps=planner_steps,
-            tool_calls=_as_optional_int(limits.runtime_tool_calls_max),
-            tokens_total=_as_optional_int(limits.runtime_tokens_total_max),
-            retries=_as_optional_int(limits.runtime_retries_max),
-            wall_time_ms=wall_time_ms,
+            plan_revisions=_as_optional_int(limits.plan_revisions_max),
+            task_attempts=_as_optional_int(limits.task_attempts_total_max),
+            agent_runs=_as_optional_int(limits.agent_runs_total_max),
+            llm_calls=_as_optional_int(limits.llm_calls_total_max),
+            tool_calls=_as_optional_int(limits.tool_calls_total_max),
+            tokens_total=_as_optional_int(limits.tokens_total_max),
+            retries=_as_optional_int(limits.planner_retries_max),
+            wall_time_ms=_as_optional_int(limits.execution_wall_time_ms_max),
+            max_parallel_tasks=_as_optional_int(limits.max_parallel_tasks) or 1,
         )
 
     async def resolve_orchestrator(self, role: str, sandbox_overrides: Optional[Dict[str, Any]] = None) -> EntityLimits:
@@ -55,15 +54,13 @@ class BudgetResolver:
             limits,
             ((sandbox_overrides or {}).get("orchestrator_limits") or {}).get(role_key),
         )
-        runtime_steps = _as_optional_int(limits.runtime_steps_max)
-        retries = _as_optional_int(limits.runtime_retries_max)
-        wall_time_ms = _as_optional_int(limits.runtime_wall_time_ms_max)
-        tokens_total = _as_optional_int(limits.runtime_tokens_total_max)
-
         return EntityLimits(
-            planner_steps=runtime_steps,
-            agent_steps=runtime_steps,
-            tokens_total=tokens_total,
-            retries=retries,
-            wall_time_ms=wall_time_ms,
+            plan_revisions=_as_optional_int(limits.plan_revisions_max),
+            task_attempts=_as_optional_int(limits.task_attempts_total_max),
+            agent_runs=_as_optional_int(limits.agent_runs_total_max),
+            llm_calls=_as_optional_int(limits.planner_llm_calls_max if role_key == "planner" else limits.agent_llm_calls_max),
+            tool_calls=_as_optional_int(limits.agent_tool_calls_max if role_key != "planner" else None),
+            tokens_total=_as_optional_int(limits.planner_tokens_total_max if role_key == "planner" else limits.agent_tokens_total_max),
+            retries=_as_optional_int(limits.planner_retries_max),
+            wall_time_ms=_as_optional_int(limits.planner_execution_wall_time_ms_max if role_key == "planner" else limits.agent_execution_wall_time_ms_max),
         )

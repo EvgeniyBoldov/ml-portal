@@ -17,7 +17,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from app.agents.runtime.base import BaseRuntime
-from app.agents.runtime.events import RuntimeEvent
+from app.runtime.events import RuntimeEvent
 from app.core.db import get_session_factory
 from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
@@ -70,6 +70,8 @@ class DirectRuntime(BaseRuntime):
             ctx,
             getattr(agent, "logging_level", None),
         )
+        ctx.extra["logging_level"] = resolved_logging_level.value
+        ctx.extra["trace_enabled"] = resolved_logging_level.value != "none"
         run_session = self._create_run_session(
             ctx=ctx,
             agent_slug=agent.slug,
@@ -87,7 +89,7 @@ class DirectRuntime(BaseRuntime):
             f"messages={len(llm_messages)}, max_tokens={gen.max_tokens}",
         )
 
-        llm_call_id = f"{str(run_session.run_id)}:direct-llm:1" if run_session.run_id else str(uuid4())
+        llm_call_id = str(uuid4())
         llm_limits = ExecutionLimitsPayload()
         runtime_deps = ctx.get_runtime_deps()
         session_factory = runtime_deps.session_factory or get_session_factory()
@@ -134,7 +136,7 @@ class DirectRuntime(BaseRuntime):
             completion_tokens = estimate_tokens(full_content)
             total_tokens = prompt_tokens + completion_tokens
 
-            await run_session.log_step("llm_turn", {
+            await run_session.record_event("llm_turn", {
                 "step": 1,
                 "model": gen.model,
                 "temperature": gen.temperature,
@@ -143,9 +145,9 @@ class DirectRuntime(BaseRuntime):
                 "content": full_content,
                 "response_length": len(full_content),
                 "llm_call_id": llm_call_id,
-                "parent_entity_type": "agent_run",
+                "parent_entity_type": "agent_execution",
                 "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
-                "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
+                "agent_execution_id": str(run_session.run_id) if run_session.run_id else None,
                 "agent_slug": agent.slug,
                 "tokens_in": prompt_tokens,
                 "tokens_out": completion_tokens,
@@ -163,9 +165,9 @@ class DirectRuntime(BaseRuntime):
                 messages=llm_messages,
                 content=full_content,
                 response_length=len(full_content),
-                parent_entity_type="agent_run",
+                parent_entity_type="agent_execution",
                 parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
                 agent_slug=agent.slug,
                 tokens_in=prompt_tokens,
                 tokens_out=completion_tokens,
@@ -182,7 +184,7 @@ class DirectRuntime(BaseRuntime):
                 run_id=str(exec_request.run_id),
             )
 
-            await run_session.log_step("direct_response", {
+            await run_session.record_event("direct_response", {
                 "content_length": len(full_content),
                 "model": gen.model,
             })

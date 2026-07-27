@@ -15,6 +15,32 @@ MAX_AGENT_DESCRIPTION_CHARS = 280
 class PlannerInputBuilder:
     """Build structured planner payload from runtime state."""
 
+    def build_graph_request(self, request: Any) -> Dict[str, Any]:
+        """Canonical compact payload for graph planning and replanning.
+
+        Keep this intentionally independent from ``RuntimeTurnState`` so the
+        planner can be resumed from a persisted plan in a worker process.
+        """
+        agents = []
+        for item in request.available_agents or []:
+            if not item.get("slug"):
+                continue
+            agents.append({
+                "slug": item.get("slug"),
+                "description": self._trim_text(item.get("description", ""), MAX_AGENT_DESCRIPTION_CHARS),
+                "tags": list(item.get("tags") or []),
+                "provides_keys": list(item.get("provides_keys") or []),
+            })
+        return {
+            "goal": request.goal,
+            "trigger": request.trigger,
+            "plan": request.plan or {},
+            "completed_outputs": request.completed_outputs or {},
+            "needs": request.needs or [],
+            "last_failure": request.last_failure,
+            "available_agents": agents,
+        }
+
     def build(
         self,
         *,
@@ -55,7 +81,7 @@ class PlannerInputBuilder:
                 {
                     "file_name": item.ref.file_name,
                 "file_id": item.ref.file_id,
-                "artifact_id": item.ref.artifact_id,
+                    **({"artifact_id": item.ref.artifact_id} if item.ref.artifact_id else {}),
                 "storage_uri": item.ref.storage_uri,
                     "content_type": item.ref.content_type,
                     "size_bytes": item.ref.size_bytes,

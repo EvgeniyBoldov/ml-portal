@@ -29,8 +29,6 @@ const DiscoveredToolViewPage = lazy(() => import('@/domains/admin/pages/Discover
 const AgentListPage = lazy(() => import('@/domains/admin/pages/AgentListPage').then(m => ({ default: m.AgentListPage })));
 const AgentPage = lazy(() => import('@/domains/admin/pages/AgentPage').then(m => ({ default: m.AgentPage })));
 const AgentVersionPage = lazy(() => import('@/domains/admin/pages/AgentVersionPage').then(m => ({ default: m.AgentVersionPage })));
-const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage').then(m => ({ default: m.AgentRunsPage })));
-const AgentRunPage = lazy(() => import('@/domains/admin/pages/AgentRunPage').then(m => ({ default: m.AgentRunPage })));
 const CollectionListPage = lazy(() => import('@/domains/admin/pages/CollectionListPage'));
 const CollectionPage = lazy(() => import('@/domains/admin/pages/CollectionPage'));
 const CollectionVersionPage = lazy(() => import('@/domains/admin/pages/CollectionVersionPage').then(m => ({ default: m.CollectionVersionPage })));
@@ -107,8 +105,6 @@ const router = createBrowserRouter([
       { path: 'agents/:id', element: withSuspense(<AgentPage />) },
       { path: 'agents/:id/versions/new', element: withSuspense(<AgentVersionPage />) },
       { path: 'agents/:id/versions/:version', element: withSuspense(<AgentVersionPage />) },
-      { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },
-      { path: 'agent-runs/:id', element: withSuspense(<AgentRunPage />) },
       { path: 'collections', element: withSuspense(<CollectionListPage />) },
       { path: 'collections/new', element: withSuspense(<CollectionPage />) },
       { path: 'collections/:slug', element: withSuspense(<CollectionPage />) },

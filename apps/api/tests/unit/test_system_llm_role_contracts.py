@@ -8,53 +8,37 @@ from app.services.system_llm_role_contracts import (
 )
 
 
-def test_planner_contract_has_json_format_and_kind_enum() -> None:
+def test_planner_contract_has_graph_decision_enum() -> None:
     contract = build_response_contract(SystemLLMRoleType.PLANNER)
     assert contract["format"] == "json"
     schema = contract["schema"]
-    assert "kind" in schema["properties"]
-    # Use set comparison - order doesn't matter for enum values
-    assert set(schema["properties"]["kind"]["enum"]) == {
-        "clarify",
-        "call_agent",
-        "ask_user",
-        "final",
-        "abort",
+    assert set(schema["properties"]["decision"]["enum"]) == {
+        "create_plan", "revise_plan", "ask_user", "complete_plan", "fail_plan",
     }
-    assert "kind" in schema["required"]
-    assert "rationale" in schema["required"]
-    variants = schema["oneOf"]
-    assert isinstance(variants, list)
-    assert any(v.get("title") == "call_agent" for v in variants)
-    assert any(v.get("title") == "clarify" for v in variants)
+    assert {"decision", "expected_revision"}.issubset(set(schema["required"]))
 
 
 def test_planner_contract_is_aligned_with_runtime_model() -> None:
-    from app.runtime.planner.planner import PlannerLLMOutput
+    from app.runtime.planner.graph_planner import PlannerGraphOutput
 
     contract = build_response_contract(SystemLLMRoleType.PLANNER)
     schema = contract["schema"]
-    runtime_schema = PlannerLLMOutput.model_json_schema()
+    runtime_schema = PlannerGraphOutput.model_json_schema()
 
     contract_keys = set(schema["properties"].keys())
     runtime_keys = set(runtime_schema["properties"].keys())
     assert contract_keys == runtime_keys
 
-    contract_kind_enum = set(schema["properties"]["kind"]["enum"])
-    runtime_kind_enum = set(runtime_schema["properties"]["kind"]["enum"])
-    assert contract_kind_enum == runtime_kind_enum
+    assert set(schema["properties"]) == set(runtime_schema["properties"])
 
 
-def test_planner_contract_has_conditional_markers() -> None:
-    """Contract should include x_when markers for conditional fields."""
+def test_planner_contract_describes_graph_tasks() -> None:
     contract = build_response_contract(SystemLLMRoleType.PLANNER)
     schema = contract["schema"]
     props = schema["properties"]
 
-    assert props["agent_slug"].get("x_when") == "kind=call_agent"
-    assert props["agent_input"].get("x_when") == "kind=call_agent"
-    assert props["question"].get("x_when") == "kind=clarify|ask_user"
-    assert props["final_answer"].get("x_when") == "kind=final"
+    assert "tasks" in props
+    assert "executor" in props["tasks"]["description"]
 
 
 def test_fact_extractor_contract_is_json_from_pydantic() -> None:
@@ -114,11 +98,11 @@ def test_validate_role_contracts_passes_for_valid_roles() -> None:
 
 def test_get_role_output_model_returns_correct_models() -> None:
     """Registry should return correct Pydantic models for JSON roles."""
-    from app.runtime.planner.planner import PlannerLLMOutput
+    from app.runtime.planner.graph_planner import PlannerGraphOutput
     from app.runtime.memory.fact_extractor import _LLMFactOutput
     from app.runtime.memory.summary_compactor import _LLMSummaryOutput
 
-    assert get_role_output_model(SystemLLMRoleType.PLANNER) is PlannerLLMOutput
+    assert get_role_output_model(SystemLLMRoleType.PLANNER) is PlannerGraphOutput
     assert get_role_output_model(SystemLLMRoleType.FACT_EXTRACTOR) is _LLMFactOutput
     assert get_role_output_model(SystemLLMRoleType.SUMMARY_COMPACTOR) is _LLMSummaryOutput
     # Triage has no model yet (manual contract)
@@ -132,12 +116,12 @@ def test_get_role_output_model_returns_correct_models() -> None:
 
 def test_planner_contract_has_all_required_fields() -> None:
     """Ensure planner contract includes all expected fields from Pydantic model."""
-    from app.runtime.planner.planner import PlannerLLMOutput
+    from app.runtime.planner.graph_planner import PlannerGraphOutput
 
     contract = build_response_contract(SystemLLMRoleType.PLANNER)
     schema = contract["schema"]
 
-    expected_fields = set(PlannerLLMOutput.model_fields.keys())
+    expected_fields = set(PlannerGraphOutput.model_fields.keys())
     actual_fields = set(schema["properties"].keys())
 
     assert actual_fields == expected_fields, f"Missing fields: {expected_fields - actual_fields}"

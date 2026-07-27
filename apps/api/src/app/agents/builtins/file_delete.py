@@ -64,7 +64,7 @@ class FileDeleteTool(VersionedTool):
         description="Delete chat attachment from DB and S3/MinIO",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("file.delete")
+        log = ctx.tool_notes("file.delete")
 
         artifact_id = str(args.get("artifact_id") or "").strip()
         if not artifact_id:

@@ -1,194 +1,21 @@
-from __future__ import annotations
-
 from types import SimpleNamespace
 
 from app.runtime.events import RuntimeEventType
 from app.services.chat_event_mapper import ChatEventMapper
 
 
-class TestChatEventMapper:
-    def test_maps_tool_call_event(self):
-        mapper = ChatEventMapper()
-        event = SimpleNamespace(
-            type=RuntimeEventType.TOOL_CALL,
-            data={
-                "tool": "rag.search",
-                "call_id": "1",
-                "arguments": {"q": "hi"},
-                "parent_entity_type": "agent_run",
-                "parent_entity_id": "agent-1",
-                "agent_slug": "ops",
-                "agent_run_id": "agent-1",
-                "llm_call_id": "llm-1",
-                "actor_type": "agent",
-                "actor_entity_id": "agent-1",
-            },
-        )
+def test_runtime_mapper_drops_raw_tool_events():
+    result = ChatEventMapper().map_runtime_event(SimpleNamespace(
+        type=RuntimeEventType.TOOL_CALL, data={"arguments": {"secret": 1}},
+    ))
+    assert result is None
 
-        result = mapper.map_runtime_event(event)
 
-        assert result == {
-            "type": "tool_call",
-            "tool": "rag.search",
-            "call_id": "1",
-            "arguments": {"q": "hi"},
-            "parent_entity_type": "agent_run",
-            "parent_entity_id": "agent-1",
-            "agent_slug": "ops",
-            "agent_run_id": "agent-1",
-            "llm_call_id": "llm-1",
-            "actor_type": "agent",
-            "actor_entity_id": "agent-1",
-            "orchestration_envelope": None,
-        }
-
-    def test_maps_tool_result_event_with_runtime_linkage(self):
-        mapper = ChatEventMapper()
-        event = SimpleNamespace(
-            type=RuntimeEventType.TOOL_RESULT,
-            data={
-                "tool": "collection.info",
-                "call_id": "c1",
-                "success": False,
-                "data": {"safe_message": "bad args"},
-                "error_code": "operation_invalid_args",
-                "retryable": True,
-                "safe_message": "$.dimensions must be array",
-                "parent_entity_type": "agent_run",
-                "parent_entity_id": "agent-2",
-                "agent_slug": "net.enginer",
-                "agent_run_id": "agent-2",
-                "llm_call_id": "llm-2",
-                "operator_message": "validation stack",
-                "debug": {"traceback": "stack"},
-            },
-        )
-
-        result = mapper.map_runtime_event(event)
-
-        assert result == {
-            "type": "tool_result",
-            "tool": "collection.info",
-            "call_id": "c1",
-            "success": False,
-            "data": {"safe_message": "bad args"},
-            "error_code": "operation_invalid_args",
-            "retryable": True,
-            "safe_message": "$.dimensions must be array",
-            "parent_entity_type": "agent_run",
-            "parent_entity_id": "agent-2",
-            "agent_slug": "net.enginer",
-            "agent_run_id": "agent-2",
-            "llm_call_id": "llm-2",
-            "actor_type": None,
-            "actor_entity_id": None,
-            "orchestration_envelope": None,
-        }
-        assert "operator_message" not in result
-        assert "debug" not in result
-
-    def test_returns_none_for_unhandled_event(self):
-        mapper = ChatEventMapper()
-        event = SimpleNamespace(type=RuntimeEventType.FINAL, data={"content": "done"})
-
-        assert mapper.map_runtime_event(event) is None
-
-    def test_maps_planner_decision_event(self):
-        mapper = ChatEventMapper()
-        event = SimpleNamespace(
-            type=RuntimeEventType.PLANNER_DECISION,
-            data={
-                "iteration": 3,
-                "kind": "call_agent",
-                "agent_slug": "netbox",
-                "phase_id": "search",
-                "phase_title": "Поиск",
-                "rationale": "Нужны данные из NetBox",
-                "risk": "low",
-            },
-        )
-
-        result = mapper.map_runtime_event(event)
-
-        assert result is not None
-        assert result["type"] == "planner_decision"
-        assert result["agent_slug"] == "netbox"
-        assert result["kind"] == "call_agent"
-        assert result["rationale"] == "Нужны данные из NetBox"
-        assert result["contract_version"] == 1
-
-    def test_maps_error_event_with_code_and_details(self):
-        mapper = ChatEventMapper()
-        event = SimpleNamespace(
-            type=RuntimeEventType.ERROR,
-            data={
-                "error": "Sub-agent net.enginer failed: traceback ...",
-                "error_code": "operation_unavailable",
-                "retryable": False,
-                "operator_message": "internal detail",
-                "debug": {"traceback": "stack"},
-            },
-        )
-        result = mapper.map_runtime_event(event)
-        assert result is not None
-        assert result["type"] == "error"
-        assert result["code"] == "operation_unavailable"
-        assert result["recoverable"] is False
-        assert result["error"] == "Во время выполнения запроса возникли проблемы. Сообщите ран-администратору."
-        assert result["details"]["retryable"] is False
-        assert "operator_message" not in result
-        assert "debug" not in result
-
-    def test_llm_mapping_uses_whitelist_only(self):
-        mapper = ChatEventMapper()
-        event = SimpleNamespace(
-            type=RuntimeEventType.LLM_TURN,
-            data={
-                "llm_call_id": "c1",
-                "model": "gpt-test",
-                "messages": [{"role": "system", "content": "hidden"}],
-                "system_prompt": "secret",
-                "response_length": 10,
-            },
-        )
-        result = mapper.map_runtime_event(event)
-        assert result is not None
-        assert result["type"] == "llm_turn"
-        assert result["llm_call_id"] == "c1"
-        assert result["model"] == "gpt-test"
-        assert result["response_length"] == 10
-        assert "messages" not in result
-        assert "system_prompt" not in result
-
-    def test_legacy_llm_event_is_not_mapped(self):
-        mapper = ChatEventMapper()
-        event = SimpleNamespace(
-            type="llm_request",
-            data={"llm_call_id": "legacy-1", "model": "gpt-test"},
-        )
-        assert mapper.map_runtime_event(event) is None
-
-    def test_maps_llm_turn_event(self):
-        mapper = ChatEventMapper()
-        event = SimpleNamespace(
-            type=RuntimeEventType.LLM_TURN,
-            data={
-                "llm_call_id": "turn-1",
-                "model": "gpt-test",
-                "tokens_in": 100,
-                "tokens_out": 50,
-                "tokens_total": 150,
-                "duration_ms": 320,
-                "actor_type": "planner",
-                "actor_entity_id": "planner-1",
-                "messages": [{"role": "system", "content": "hidden"}],
-            },
-        )
-        result = mapper.map_runtime_event(event)
-        assert result is not None
-        assert result["type"] == "llm_turn"
-        assert result["llm_call_id"] == "turn-1"
-        assert result["tokens_total"] == 150
-        assert result["actor_type"] == "planner"
-        assert result["actor_entity_id"] == "planner-1"
-        assert "messages" not in result
+def test_runtime_mapper_maps_progress_and_safe_error():
+    mapper = ChatEventMapper()
+    progress = {"run_id": "run-1", "phase": "planning", "kind": "plan", "description": "Планирую"}
+    assert mapper.map_runtime_event(SimpleNamespace(type=RuntimeEventType.PLAN_CREATED, data={"_progress": progress})) == {
+        "type": "status", "stage": "runtime_progress", "progress": progress,
+    }
+    error = mapper.map_runtime_event(SimpleNamespace(type=RuntimeEventType.ERROR, data={"error_code": "operation_unavailable", "retryable": False}))
+    assert error is not None and error["type"] == "error" and "error_code" not in error

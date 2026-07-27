@@ -118,14 +118,6 @@ export const qk = {
       ['credentials', 'list', params] as const,
     detail: (id: string) => ['credentials', 'detail', id] as const,
   },
-  agentRuns: {
-    all: () => ['agent-runs'] as const,
-    list: (params?: { page?: number; page_size?: number; agent_slug?: string; status?: string }) =>
-      ['agent-runs', 'list', params] as const,
-    detail: (id: string) => ['agent-runs', 'detail', id] as const,
-    stats: (params?: { tenant_id?: string; from_date?: string; to_date?: string }) =>
-      ['agent-runs', 'stats', params] as const,
-  },
   rbac: {
     all: () => ['rbac'] as const,
     list: (params?: Record<string, unknown>) => ['rbac', 'list', params] as const,

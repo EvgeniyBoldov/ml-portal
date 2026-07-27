@@ -22,18 +22,14 @@ from app.core.http.clients import LLMClientProtocol
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.memory.builder import MemoryBuilder
 from app.runtime.memory.writer import MemoryWriter
-from app.runtime.planner import Planner
-from app.runtime.ports import (
-    AgentExecutionPort,
-    PlannerServicePort,
-    SynthesizerPort,
-)
-from app.runtime.stages import (
-    FinalizationStage,
-    PlanningStage,
-)
+from app.runtime.planner.graph_planner import GraphPlanner
+from app.runtime.ports import SynthesizerPort, TaskExecutionPort
+from app.runtime.stages import FinalizationStage
 from app.runtime.synthesizer import Synthesizer
-from app.services.run_store import RunStore
+from app.runtime.orchestrator import GraphOrchestrator
+from app.runtime.plan_store import SqlPlanStore
+from app.runtime.stages.graph_planning_stage import GraphPlanningStage
+from app.services.runtime_budget_service import RuntimeBudgetService
 
 
 class PipelineAssembler:
@@ -44,11 +40,9 @@ class PipelineAssembler:
         *,
         session: AsyncSession,
         llm_client: LLMClientProtocol,
-        run_store: Optional[RunStore] = None,
     ) -> None:
         self._session = session
         self._llm_client = llm_client
-        self._run_store = run_store
 
     # ------------------------------------------------------------------ #
     # Adapters (cached for the pipeline's lifetime)                      #
@@ -67,15 +61,14 @@ class PipelineAssembler:
         )
 
     @cached_property
-    def planner(self) -> PlannerServicePort:
-        return Planner(session=self._session, llm_client=self._llm_client)
+    def graph_planner(self) -> GraphPlanner:
+        return GraphPlanner(session=self._session, llm_client=self._llm_client)
 
     @cached_property
-    def agent_executor(self) -> AgentExecutionPort:
+    def agent_executor(self) -> TaskExecutionPort:
         return AgentExecutor(
             session=self._session,
             llm_client=self._llm_client,
-            run_store=self._run_store,
         )
 
     @cached_property
@@ -86,15 +79,17 @@ class PipelineAssembler:
     # Stage factories (fresh per turn)                                   #
     # ------------------------------------------------------------------ #
 
-    def build_planning_stage(
-        self,
-        *,
-        max_iterations: int,
-    ) -> PlanningStage:
-        return PlanningStage(
-            planner=self.planner,
-            agent_executor=self.agent_executor,
-            max_iterations=max_iterations,
+    def build_graph_planning_stage(self, *, max_steps: int) -> GraphPlanningStage:
+        store = SqlPlanStore(self._session)
+        return GraphPlanningStage(
+            store=store,
+            orchestrator=GraphOrchestrator(
+                store=store,
+                planner=self.graph_planner,
+                executor=self.agent_executor,
+                budget_service=RuntimeBudgetService(self._session),
+            ),
+            max_steps=max_steps,
         )
 
     def build_finalization_stage(self) -> FinalizationStage:

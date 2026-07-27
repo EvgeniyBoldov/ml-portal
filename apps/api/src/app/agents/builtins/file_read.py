@@ -67,7 +67,7 @@ class FileReadTool(VersionedTool):
         )
         from app.services.document_extraction_service import DocumentExtractionService, ExtractionRequest
 
-        log = ctx.tool_logger("file.read")
+        log = ctx.tool_notes("file.read")
 
         artifact_id = str(args.get("artifact_id") or "").strip()
         if not artifact_id:
@@ -117,6 +117,26 @@ class FileReadTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
                 size_bytes = len(payload)
+                call_id = str(ctx.extra.get("runtime_active_tool_call_id") or artifact_id)
+                async def observe_extraction(stage: str, payload: dict) -> None:
+                    sink = ctx.extra.get("runtime_event_logger")
+                    if sink is None:
+                        return
+                    from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
+                    event_type = {
+                        "started": RuntimeEventType.EXTRACTION_STARTED,
+                        "completed": RuntimeEventType.EXTRACTION_COMPLETED,
+                        "failed": RuntimeEventType.EXTRACTION_FAILED,
+                    }[stage]
+                    await sink.emit(RuntimeEvent(event_type, {
+                        "entity_type": "extraction",
+                        "entity_id": f"{call_id}:extraction",
+                        "parent_entity_type": "tool_call",
+                        "parent_entity_id": call_id,
+                        "artifact_id": artifact_id,
+                        **payload,
+                    }), phase=OrchestrationPhase.AGENT)
+
                 extraction = await DocumentExtractionService().extract(
                     ExtractionRequest(
                         payload=payload,
@@ -124,6 +144,7 @@ class FileReadTool(VersionedTool):
                         content_type=resolved.content_type,
                         profile="chat_preview",
                         max_bytes=_MAX_READ_BYTES,
+                        observer=observe_extraction,
                     )
                 )
 

@@ -1,0 +1,15 @@
+.message { display: flex; gap: 12px; padding: 10px 16px; }
+.user { flex-direction: row-reverse; }
+.avatar { flex: 0 0 36px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; color: white; background: linear-gradient(135deg, #667eea, #764ba2); }
+.user .avatar { background: var(--primary); }
+.content { min-width: 0; max-width: min(100%, 980px); flex: 1; }
+.user .content { display: flex; flex-direction: column; align-items: flex-end; max-width: min(76%, 760px); }
+.header { display: flex; gap: 8px; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--text); }
+.header time { color: var(--muted); font-weight: 400; }
+.user .header { flex-direction: row-reverse; }
+.userBody { padding: 10px 14px; border-radius: 14px 14px 4px; background: var(--primary); color: white; white-space: pre-wrap; overflow-wrap: anywhere; }
+.assistantBody { line-height: 1.5; overflow-wrap: anywhere; }
+.actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.runRef { color: var(--muted); font: 11px var(--font-family-mono, monospace); }
+.copy { display: inline-flex; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.copy:hover { background: var(--bg-hover); color: var(--text); }

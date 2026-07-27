@@ -75,7 +75,7 @@ class CollectionDocumentGetTool(VersionedTool):
         description="Get document metadata and artifact_id",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("collection.get_document")
+        log = ctx.tool_notes("collection.get_document")
 
         doc_id_str = str(args.get("document_id") or "").strip()
         if not doc_id_str:

@@ -59,11 +59,8 @@ Runtime и admin diagnostics используют единый readiness DTO (`C
 Для planner/runtime card это устраняет "guessing" по коллекциям: в prompt идут только
 каноничные readiness/operations/table preview данные.
 
-### Trace-Pack v2 / Replay / Eval
+### Runtime Eval
 
-- Trace-pack экспортируется в версии `runtime.trace_pack.v2`.
-- Payload включает redacted prompt/tool/memory/policy/model/budget surfaces.
-- Replay: `python -m app.runtime.replay path/to/trace_pack.json` (без side-effects по умолчанию).
 - Eval harness (`tests/eval`) оценивает runtime по dimension scores:
   `tool_choice`, `memory_selection`, `grounding`, `terminal_behavior`, `safety`.
 

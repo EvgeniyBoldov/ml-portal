@@ -210,7 +210,7 @@ class TestChatTurnOrchestrator:
         orchestrator.turn_service.pause_turn.assert_awaited_once_with(
             turn_id,
             pause_status="waiting_input",
-            agent_run_id="00000000-0000-0000-0000-000000000040",
+            runtime_run_id="00000000-0000-0000-0000-000000000040",
             paused_action=None,
             paused_context=None,
         )

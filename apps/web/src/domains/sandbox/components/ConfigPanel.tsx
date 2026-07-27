@@ -27,9 +27,9 @@ import type {
 } from '../types';
 import ConfigDataField, { type SandboxConfigField, type SandboxConfigFieldType } from './ConfigDataField';
 import ConfigTabs from './ConfigTabs';
-import { EntityInspector } from './EntityInspector';
-import type { RunStep } from '../hooks/useSandboxRun';
-import type { TraceEntity } from '@/domains/runtimeTrace/entityTypes';
+import { TraceInspector } from './traceInspector/TraceInspector';
+import type { SandboxTraceState } from '../traceState';
+import type { TraceInspectionTarget } from '../traceProjection';
 import { SandboxResolver } from '../lib/sandboxResolver';
 import styles from './ConfigPanel.module.css';
 
@@ -40,8 +40,8 @@ interface SessionConfigPanelProps {
   selectedItem: SandboxSelectedItem | null;
   activeBranchId: string;
   catalog?: SandboxCatalog;
-  inspectorSteps?: RunStep[];
-  selectedEntity?: TraceEntity | null; // New hierarchical entity
+  traceTarget?: TraceInspectionTarget | null;
+  traceState?: SandboxTraceState | null;
 }
 
 function stringifyValue(value: unknown): string {
@@ -284,7 +284,7 @@ function buildSectionsFromBlueprint(
 export function ConfigPanel({
   ...props
 }: SessionConfigPanelProps) {
-  const { overrides, selectedItem, catalog, sessionId, isReadOnly, activeBranchId, inspectorSteps, selectedEntity } = props;
+  const { overrides, selectedItem, catalog, sessionId, isReadOnly, activeBranchId, traceTarget, traceState } = props;
   const queryClient = useQueryClient();
   const [activeSectionTab, setActiveSectionTab] = useState<string>('');
   const [activeParameterTab, setActiveParameterTab] = useState<'platform'>('platform');
@@ -301,6 +301,7 @@ export function ConfigPanel({
   const selectedTool = selectedItem?.type === 'tool'
     ? catalog?.tools.find((tool) => tool.id === selectedItem.id)
     : undefined;
+  const toolNames = useMemo(() => new Map(catalog?.tools.map((tool) => [tool.slug, tool.name]) ?? []), [catalog?.tools]);
 
   const selectedBaseAgentVersion = selectedAgent?.versions.find((v) => v.id === selectedAgentVersionId);
 
@@ -805,15 +806,12 @@ export function ConfigPanel({
     });
   };
 
-  const isEntityInspectorMode = selectedItem?.type === 'run' && selectedEntity;
+  const isEntityInspectorMode = Boolean(traceTarget);
 
   return (
     <div className={styles.panel}>
       {isEntityInspectorMode ? (
-        <EntityInspector
-          entity={selectedEntity}
-          steps={inspectorSteps ?? []}
-        />
+        <TraceInspector target={traceTarget ?? null} trace={traceState ?? null} toolNames={toolNames} />
       ) : (
       <>
       <div className={styles.header}>

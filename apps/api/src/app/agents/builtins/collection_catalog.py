@@ -76,7 +76,7 @@ class CollectionInfoTool(VersionedTool):
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
 
-        log = ctx.tool_logger("collection.info")
+        log = ctx.tool_notes("collection.info")
 
         collection_slug = str(args.get("collection_slug") or "").strip()
         if not collection_slug:

@@ -1,15 +1,8 @@
-"""Pipeline stages — the two discrete phases of a runtime turn.
-
-Post-M5: triage is dead. The planner absorbed clarify / resume, so the
-pipeline is:
-
-    MemoryBuilder → PlanningStage → FinalizationStage? → MemoryWriter
-"""
-from app.runtime.stages.planning_stage import PlanningOutcome, PlanningStage
+"""Pipeline stages for persisted graph execution and finalization."""
 from app.runtime.stages.finalization_stage import FinalizationStage
+from app.runtime.stages.graph_planning_stage import GraphPlanningStage
 
 __all__ = [
-    "PlanningStage",
-    "PlanningOutcome",
     "FinalizationStage",
+    "GraphPlanningStage",
 ]

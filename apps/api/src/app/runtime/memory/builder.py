@@ -18,7 +18,7 @@ from app.core.logging import get_logger
 from app.models.memory import FactScope, FactSource
 from app.models.sandbox import SandboxBranch
 from app.runtime.memory.components import (
-    AgentRunMemoryComponent,
+    AgentExecutionMemoryComponent,
     AttachmentMemoryComponent,
     CollectionMemoryComponent,
     ConversationMemoryComponent,
@@ -72,7 +72,7 @@ class MemoryBuilder:
                     fact_limit=fact_limit,
                 ),
                 ToolLedgerMemoryComponent(),
-                AgentRunMemoryComponent(),
+                AgentExecutionMemoryComponent(),
                 AttachmentMemoryComponent(),
                 CollectionMemoryComponent(),
             ],

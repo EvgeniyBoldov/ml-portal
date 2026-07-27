@@ -1,7 +1,6 @@
 /**
  * Sandbox domain types — mirrors backend schemas.
  */
-import type { RunTrace } from '@/domains/runtimeTrace/types';
 import type { ResponseContract } from '@/shared/api/admin';
 import type { ExecutionMode } from '@/shared/api/types';
 
@@ -136,8 +135,7 @@ export interface SandboxRunDetail {
   error: string | null;
   started_at: string;
   finished_at: string | null;
-  steps: SandboxRunStep[];
-  trace?: RunTrace;
+  events: RuntimeJournalEvent[];
 }
 
 export interface SandboxRunCreate {
@@ -148,23 +146,52 @@ export interface SandboxRunCreate {
   execution_mode?: ExecutionMode;
 }
 
-// ── Run Step ────────────────────────────────────────────────────────────────
+// ── Runtime journal and live stream ─────────────────────────────────────────
 
-export interface SandboxRunStep {
+export interface RuntimeJournalEvent {
   id: string;
-  step_type: string;
-  step_data: Record<string, unknown>;
-  order_num: number;
-  created_at: string;
+  run_id: string;
+  sequence: number;
+  event_type: string;
+  occurred_at: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  parent_entity_type: string | null;
+  parent_entity_id: string | null;
+  caused_by_event_id: string | null;
+  duration_ms: number | null;
+  payload: Record<string, unknown>;
 }
 
 // ── SSE events (streamed from backend) ──────────────────────────────────────
 
-export interface SandboxSSEEvent {
-  type: string;
-  run_id?: string;
-  [key: string]: unknown;
+export interface RuntimeProgress {
+  run_id: string;
+  phase: string;
+  kind: string;
+  description: string;
+  status?: string | null;
 }
+
+export interface SandboxPause {
+  run_id: string;
+  reason: 'waiting_confirmation' | 'waiting_input';
+  action: Record<string, unknown>;
+  context: Record<string, unknown>;
+  contract_version: number;
+}
+
+export type SandboxSSEEvent = SandboxPause;
+
+export type SandboxStreamEvent =
+  | { type: 'run_started'; runId: string }
+  | { type: 'progress'; progress: RuntimeProgress }
+  | { type: 'journal'; journal: RuntimeJournalEvent }
+  | { type: 'delta'; runId: string; content: string }
+  | { type: 'final'; runId: string; content: string }
+  | { type: 'pause'; pause: SandboxPause }
+  | { type: 'error'; runId: string; error: string }
+  | { type: 'done'; runId: string };
 
 // ── Confirm ─────────────────────────────────────────────────────────────────
 

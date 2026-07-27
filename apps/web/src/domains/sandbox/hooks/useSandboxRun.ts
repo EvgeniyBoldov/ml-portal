@@ -1,65 +1,29 @@
-/**
- * Hook for sandbox run execution via SSE streaming.
- * Session-first: runs are scoped to a sandbox session.
- */
-import { useState, useCallback, useRef } from 'react';
+/** Live sandbox run state backed by the canonical journal and named SSE frames. */
+import { useCallback, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { qk } from '@/shared/api/keys';
+import { consumeSse, type SseFrame } from '@/shared/api/sse';
 import { sandboxApi } from '../api';
-import type { SandboxSSEEvent, SandboxRunCreate } from '../types';
-import type { ExecutionMode } from '@/shared/api/types';
+import type {
+  RuntimeProgress,
+  SandboxPause,
+  SandboxRunCreate,
+  SandboxStreamEvent,
+} from '../types';
+import { applyRuntimeJournalEvent, emptySandboxTrace, replayRuntimeJournal, type SandboxTraceState } from '../traceState';
 
-export type RunStepType =
-  | 'user_request'
-  | 'status'
-  | 'llm_call'
-  | 'llm_request'
-  | 'llm_response'
-  | 'llm_turn'
-  | 'tool_call'
-  | 'tool_result'
-  | 'operation_call'
-  | 'operation_result'
-  | 'budget'
-  | 'budget_snapshot'
-  | 'delta'
-  | 'final'
-  | 'final_response'
-  | 'final_content'
-  | 'error'
-  | 'routing'
-  | 'protocol_retry'
-  | 'planner_step'
-  | 'planner_action'
-  | 'planner_decision'
-  | 'agent_result'
-  | 'policy_decision'
-  | 'confirmation_required'
-  | 'question_answer'
-  | 'answer'
-  | 'waiting_input'
-  | 'run_paused'
-  | 'stop'
-  | 'done'
-  | 'intent'; // High-level intent descriptions
-
-export interface RunStep {
-  id: string;
-  type: RunStepType;
-  data: Record<string, unknown>;
-  timestamp: number;
-  orderNumber?: number;
-}
+type RunStatus = 'idle' | 'running' | 'completed' | 'error' | 'waiting_confirmation' | 'waiting_input';
 
 export interface ActiveRun {
   runId: string | null;
   id?: string | null;
   requestText: string;
   startedAt: string;
-  steps: RunStep[];
+  trace: SandboxTraceState;
+  progress: RuntimeProgress[];
   finalContent: string;
-  status: 'idle' | 'running' | 'completed' | 'error' | 'waiting_confirmation' | 'waiting_input';
-  pendingConfirmation: SandboxSSEEvent | null;
+  status: RunStatus;
+  pendingConfirmation: SandboxPause | null;
 }
 
 const INITIAL_RUN: ActiveRun = {
@@ -67,7 +31,8 @@ const INITIAL_RUN: ActiveRun = {
   id: null,
   requestText: '',
   startedAt: '',
-  steps: [],
+  trace: emptySandboxTrace(),
+  progress: [],
   finalContent: '',
   status: 'idle',
   pendingConfirmation: null,
@@ -77,418 +42,194 @@ export interface SandboxRun {
   id: string;
   requestText: string;
   startedAt: string;
-  status: ActiveRun['status'];
-  steps: RunStep[];
+  status: RunStatus;
   finalContent: string;
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | null => (
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+);
+const asString = (value: unknown): string | null => typeof value === 'string' ? value : null;
+const asNumber = (value: unknown): number | null => typeof value === 'number' ? value : null;
+
+function decodeSandboxFrame(frame: SseFrame): SandboxStreamEvent | null {
+  if (frame.data === '[DONE]') return null;
+  let payload: Record<string, unknown> | null = null;
+  try { payload = asRecord(JSON.parse(frame.data)); } catch { return null; }
+  if (!payload) return null;
+  const runId = asString(payload.run_id) ?? '';
+
+  if (frame.event === 'run_started' && runId) return { type: 'run_started', runId };
+  if (frame.event === 'progress' && runId) {
+    const phase = asString(payload.phase);
+    const kind = asString(payload.kind);
+    const description = asString(payload.description);
+    if (phase && kind && description) return { type: 'progress', progress: { run_id: runId, phase, kind, description, status: asString(payload.status) } };
+  }
+  if (frame.event === 'journal') {
+    const id = asString(payload.id);
+    const sequence = asNumber(payload.sequence);
+    const eventType = asString(payload.event_type);
+    const occurredAt = asString(payload.occurred_at);
+    const eventPayload = asRecord(payload.payload);
+    if (id && runId && sequence !== null && eventType && occurredAt && eventPayload) {
+      return { type: 'journal', journal: {
+        id, run_id: runId, sequence, event_type: eventType, occurred_at: occurredAt,
+        entity_type: asString(payload.entity_type), entity_id: asString(payload.entity_id),
+        parent_entity_type: asString(payload.parent_entity_type), parent_entity_id: asString(payload.parent_entity_id),
+        caused_by_event_id: asString(payload.caused_by_event_id), duration_ms: asNumber(payload.duration_ms), payload: eventPayload,
+      } };
+    }
+  }
+  if (frame.event === 'delta' && runId) return { type: 'delta', runId, content: asString(payload.content) ?? '' };
+  if (frame.event === 'final' && runId) return { type: 'final', runId, content: asString(payload.content) ?? '' };
+  if (frame.event === 'pause' && runId) {
+    const reason = asString(payload.reason);
+    const action = asRecord(payload.action);
+    const context = asRecord(payload.context);
+    const contractVersion = asNumber(payload.contract_version);
+    if ((reason === 'waiting_confirmation' || reason === 'waiting_input') && action && context && contractVersion !== null) {
+      return { type: 'pause', pause: { run_id: runId, reason, action, context, contract_version: contractVersion } };
+    }
+  }
+  if (frame.event === 'error' && runId) return { type: 'error', runId, error: asString(payload.error) ?? 'Sandbox execution failed' };
+  if (frame.event === 'done' && runId) return { type: 'done', runId };
+  return null;
+}
+
+function appendProgress(items: RuntimeProgress[], progress: RuntimeProgress): RuntimeProgress[] {
+  const last = items[items.length - 1];
+  if (last?.description === progress.description && last.phase === progress.phase && last.kind === progress.kind) return items;
+  return [...items, progress].slice(-10);
 }
 
 export function useSandboxRun(sessionId: string) {
   const [activeRun, setActiveRun] = useState<ActiveRun>(INITIAL_RUN);
   const abortRef = useRef<AbortController | null>(null);
-  const stepCounterRef = useRef(0);
   const qc = useQueryClient();
 
-  const addStep = useCallback(
-    (type: RunStepType, data: Record<string, unknown>) => {
-      stepCounterRef.current += 1;
-      const step: RunStep = {
-        id: crypto.randomUUID(),
-        type,
-        data,
-        timestamp: Date.now(),
-        orderNumber: stepCounterRef.current,
-      };
-      setActiveRun((prev) => ({
+  const consumeRunStream = useCallback(async (response: Response): Promise<string | null> => {
+    let finalContent = '';
+    let paused = false;
+    let streamedRunId: string | null = null;
+    await consumeSse(response, (frame) => {
+      const event = decodeSandboxFrame(frame);
+      if (!event) return;
+      if (event.type === 'error') throw new Error(event.error);
+      if (event.type === 'run_started') {
+        streamedRunId = event.runId;
+        setActiveRun((prev) => ({ ...prev, runId: event.runId, id: event.runId }));
+      } else if (event.type === 'progress') {
+        setActiveRun((prev) => ({ ...prev, progress: appendProgress(prev.progress, event.progress) }));
+      } else if (event.type === 'journal') {
+        streamedRunId = event.journal.run_id;
+        setActiveRun((prev) => ({ ...prev, trace: applyRuntimeJournalEvent(prev.trace, event.journal) }));
+      } else if (event.type === 'delta') {
+        streamedRunId = event.runId;
+        finalContent += event.content;
+        setActiveRun((prev) => ({ ...prev, finalContent }));
+      } else if (event.type === 'final') {
+        streamedRunId = event.runId;
+        finalContent = event.content || finalContent;
+        setActiveRun((prev) => ({ ...prev, finalContent }));
+      } else if (event.type === 'pause') {
+        streamedRunId = event.pause.run_id;
+        paused = true;
+        setActiveRun((prev) => ({
+          ...prev,
+          status: event.pause.reason,
+          pendingConfirmation: event.pause,
+          finalContent: '',
+        }));
+        finalContent = '';
+      }
+    });
+    setActiveRun((prev) => ({ ...prev, status: paused ? prev.status : 'completed', finalContent }));
+    return streamedRunId;
+  }, []);
+
+  const reconcileTrace = useCallback(async (runId: string | null) => {
+    if (!runId) return;
+    try {
+      const detail = await sandboxApi.getRunDetail(sessionId, runId);
+      setActiveRun((prev) => prev.runId === runId ? {
         ...prev,
-        steps: [...prev.steps, step],
-      }));
-    },
-    [],
-  );
+        trace: replayRuntimeJournal(detail.events),
+        finalContent: prev.finalContent,
+      } : prev);
+    } catch {
+      // Live SSE remains usable when the terminal detail refresh is unavailable.
+    }
+  }, [sessionId]);
 
-  const run = useCallback(
-    async (
-      requestText: string,
-      parentRunId?: string | null,
-      branchId?: string | null,
-      attachmentIds?: string[],
-      executionMode: ExecutionMode = 'normal',
-    ) => {
-      // Abort previous run if any
-      abortRef.current?.abort();
+  const invalidate = useCallback((branchId?: string | null) => {
+    qc.invalidateQueries({ queryKey: qk.sandbox.runs.list(sessionId) });
+    if (branchId) qc.invalidateQueries({ queryKey: qk.sandbox.runs.list(sessionId, branchId) });
+    qc.invalidateQueries({ queryKey: qk.sandbox.sessions.detail(sessionId) });
+  }, [qc, sessionId]);
 
-      setActiveRun({
-        runId: null,
-        id: null,
-        requestText,
-        startedAt: new Date().toISOString(),
-        steps: [],
-        finalContent: '',
-        status: 'running',
-        pendingConfirmation: null,
-      });
-      stepCounterRef.current = 0;
-
-      const controller = new AbortController();
-      abortRef.current = controller;
-
+  const run = useCallback(async (
+    requestText: string,
+    parentRunId?: string | null,
+    branchId?: string | null,
+    attachmentIds?: string[],
+  ) => {
+    abortRef.current?.abort();
+    setActiveRun({ ...INITIAL_RUN, requestText, startedAt: new Date().toISOString(), status: 'running' });
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const { fetchStreamWithAuth } = await import('@/shared/api/streamAuth');
       const body: SandboxRunCreate = {
-        request_text: requestText,
-        branch_id: branchId ?? undefined,
-        parent_run_id: parentRunId ?? undefined,
-        attachment_ids: attachmentIds?.length ? attachmentIds : undefined,
-        execution_mode: executionMode,
+        request_text: requestText, branch_id: branchId ?? undefined, parent_run_id: parentRunId ?? undefined,
+        attachment_ids: attachmentIds?.length ? attachmentIds : undefined, execution_mode: 'normal',
       };
+      const response = await fetchStreamWithAuth(`/sandbox/sessions/${sessionId}/run`, { body, signal: controller.signal });
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const runId = await consumeRunStream(response);
+      await reconcileTrace(runId);
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') setActiveRun((prev) => ({ ...prev, status: 'error' }));
+    } finally { invalidate(branchId); }
+  }, [consumeRunStream, invalidate, reconcileTrace, sessionId]);
 
-      try {
-        const { fetchStreamWithAuth } = await import('@/shared/api/streamAuth');
-        const response = await fetchStreamWithAuth(
-          `/sandbox/sessions/${sessionId}/run`,
-          {
-            body,
-            signal: controller.signal,
-          }
-        );
-
-        if (!response.ok) {
-          const err = await response.text();
-          throw new Error(err || `HTTP ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let finalContent = '';
-        let runId: string | null = null;
-        let isDone = false;
-
-        while (reader && !isDone) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-            if (!raw) continue;
-            try {
-              const event = JSON.parse(raw) as SandboxSSEEvent;
-              const { type, run_id, ...data } = event;
-
-              if (run_id && !runId) {
-                runId = run_id;
-                setActiveRun((prev) => ({ ...prev, runId, id: runId }));
-              }
-
-              if (type === 'done') {
-                isDone = true;
-                addStep('done', data);
-                break;
-              }
-
-              if (type === 'delta') {
-                finalContent += (data.content as string) ?? '';
-                setActiveRun((prev) => ({ ...prev, finalContent }));
-              }
-              if (type === 'final' || type === 'final_content') {
-                finalContent = (data.content as string) ?? finalContent;
-                setActiveRun((prev) => ({ ...prev, finalContent }));
-              }
-
-              if (type === 'confirmation_required') {
-                setActiveRun((prev) => ({
-                  ...prev,
-                  status: 'waiting_confirmation',
-                  pendingConfirmation: event,
-                  finalContent: '',
-                }));
-                finalContent = '';
-                addStep(type as RunStepType, data);
-                continue;
-              }
-
-              if (type === 'waiting_input') {
-                setActiveRun((prev) => ({
-                  ...prev,
-                  status: 'waiting_input',
-                  pendingConfirmation: null,
-                  finalContent: '',
-                }));
-                finalContent = '';
-                addStep(type as RunStepType, data);
-                continue;
-              }
-
-              if (type === 'run_paused') {
-                const reason = String((data.reason as string) ?? '').trim();
-                const isPaused = reason === 'waiting_confirmation' || reason === 'waiting_input';
-                setActiveRun((prev) => ({
-                  ...prev,
-                  status:
-                    reason === 'waiting_confirmation'
-                      ? 'waiting_confirmation'
-                      : reason === 'waiting_input'
-                        ? 'waiting_input'
-                        : prev.status,
-                  finalContent: isPaused ? '' : prev.finalContent,
-                }));
-                if (isPaused) finalContent = '';
-                continue;
-              }
-
-              if (type === 'stop') {
-                const reason = String((data.reason as string) ?? '').trim();
-                const isPaused = reason === 'waiting_confirmation' || reason === 'waiting_input';
-                if (isPaused) {
-                  setActiveRun((prev) => ({
-                    ...prev,
-                    status: reason as ActiveRun['status'],
-                    finalContent: '',
-                  }));
-                  finalContent = '';
-                } else {
-                  setActiveRun((prev) => ({ ...prev, status: reason as ActiveRun['status'] }));
-                }
-                if (!isPaused) addStep(type as RunStepType, data);
-                continue;
-              }
-
-              addStep(type as RunStepType, data);
-            } catch {
-              // ignore parse errors
-            }
-          }
-        }
-
-        setActiveRun((prev) => ({
-          ...prev,
-          status: prev.status === 'waiting_confirmation' || prev.status === 'waiting_input'
-            ? prev.status
-            : 'completed',
-          finalContent,
-        }));
-      } catch (err: unknown) {
-        if ((err as Error).name === 'AbortError') return;
-        const message = err instanceof Error ? err.message : String(err);
-        addStep('error', { error: message });
-        setActiveRun((prev) => ({ ...prev, status: 'error' }));
-      } finally {
-        // Invalidate runs list to show new run
-        qc.invalidateQueries({ queryKey: qk.sandbox.runs.list(sessionId) });
-        if (branchId) {
-          qc.invalidateQueries({ queryKey: qk.sandbox.runs.list(sessionId, branchId) });
-        }
-        qc.invalidateQueries({
-          queryKey: qk.sandbox.sessions.detail(sessionId),
-        });
-      }
-    },
-    [sessionId, addStep, qc],
-  );
-
-  const confirmAction = useCallback(
-    async (confirmed: boolean, userInput?: string) => {
-      if (!activeRun.runId) return;
-      try {
-        if (!confirmed) {
-          // Just cancel without streaming
-          await sandboxApi.confirmRunAction(sessionId, activeRun.runId, {
-            confirmed: false,
-          });
-          setActiveRun((prev) => ({
-            ...prev,
-            status: 'completed',
-            pendingConfirmation: null,
-          }));
-          addStep('status', { stage: 'write_rejected' });
-          return;
-        }
-
-        // For confirm, use resume endpoint with SSE streaming
-        const controller = new AbortController();
-        abortRef.current = controller;
-
-        const response = await sandboxApi.resumeRun(
-          sessionId,
-          activeRun.runId,
-          { confirmed: true, user_input: userInput },
-          controller.signal,
-        );
-
-        if (!response.ok) {
-          const err = await response.text();
-          throw new Error(err || `HTTP ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let finalContent = '';
-        let isDone = false;
-
-        setActiveRun((prev) => ({
-          ...prev,
-          status: 'running',
-          pendingConfirmation: null,
-        }));
-        addStep('status', { stage: 'write_confirmed' });
-
-        while (reader && !isDone) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-            if (!raw) continue;
-            if (raw === '[DONE]') {
-              isDone = true;
-              break;
-            }
-            try {
-              const event = JSON.parse(raw) as SandboxSSEEvent;
-              const { type, run_id, ...data } = event;
-
-              if (type === 'chunk' && typeof data.text === 'string') {
-                finalContent += data.text;
-                setActiveRun((prev) => ({ ...prev, finalContent }));
-              }
-
-              if (type === 'delta') {
-                finalContent += (data.content as string) ?? '';
-                setActiveRun((prev) => ({ ...prev, finalContent }));
-              }
-
-              if (type === 'final' || type === 'final_content') {
-                finalContent = (data.content as string) ?? finalContent;
-                setActiveRun((prev) => ({ ...prev, finalContent }));
-              }
-
-              if (type === 'run_paused') {
-                const reason = String((data.reason as string) ?? '').trim();
-                setActiveRun((prev) => ({
-                  ...prev,
-                  status: reason === 'waiting_confirmation' ? 'waiting_confirmation' : 'waiting_input',
-                  pendingConfirmation: event,
-                }));
-                continue;
-              }
-
-              if (type === 'confirmation_required') {
-                setActiveRun((prev) => ({
-                  ...prev,
-                  status: 'waiting_confirmation',
-                  pendingConfirmation: event,
-                  finalContent: '',
-                }));
-                finalContent = '';
-                addStep(type as RunStepType, data);
-                continue;
-              }
-
-              if (type === 'waiting_input') {
-                setActiveRun((prev) => ({
-                  ...prev,
-                  status: 'waiting_input',
-                  pendingConfirmation: null,
-                  finalContent: '',
-                }));
-                finalContent = '';
-                addStep(type as RunStepType, data);
-                continue;
-              }
-
-              if (type === 'run_paused') {
-                const reason = String((event.reason as string) ?? '').trim();
-                if (reason === 'waiting_confirmation' || reason === 'waiting_input') {
-                  setActiveRun((prev) => ({
-                    ...prev,
-                    status: reason as ActiveRun['status'],
-                    finalContent: '',
-                  }));
-                  finalContent = '';
-                }
-                continue;
-              }
-
-              if (type === 'error') {
-                const errorMsg = String((data.error as string) ?? 'Unknown error');
-                throw new Error(errorMsg);
-              }
-
-              if (type === 'done') {
-                isDone = true;
-              }
-
-              addStep(type as RunStepType, data);
-            } catch {
-              // Ignore malformed events
-            }
-          }
-        }
-
-        setActiveRun((prev) => ({
-          ...prev,
-          status: prev.status === 'waiting_confirmation' || prev.status === 'waiting_input'
-            ? prev.status
-            : 'completed',
-          finalContent,
-        }));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        addStep('error', { error: `Resume failed: ${message}` });
-        setActiveRun((prev) => ({
-          ...prev,
-          status: 'error',
-          pendingConfirmation: null,
-        }));
-      }
-    },
-    [sessionId, activeRun.runId, addStep],
-  );
+  const confirmAction = useCallback(async (confirmed: boolean, userInput?: string) => {
+    if (!activeRun.runId) return;
+    if (!confirmed) {
+      await sandboxApi.confirmRunAction(sessionId, activeRun.runId, { confirmed: false });
+      setActiveRun((prev) => ({ ...prev, status: 'completed', pendingConfirmation: null }));
+      invalidate();
+      return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setActiveRun((prev) => ({ ...prev, status: 'running', pendingConfirmation: null, progress: [] }));
+    try {
+      const response = await sandboxApi.resumeRun(sessionId, activeRun.runId, { confirmed: true, user_input: userInput }, controller.signal);
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const runId = await consumeRunStream(response);
+      await reconcileTrace(runId ?? activeRun.runId);
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') setActiveRun((prev) => ({ ...prev, status: 'error', pendingConfirmation: null }));
+    } finally { invalidate(); }
+  }, [activeRun.runId, consumeRunStream, invalidate, reconcileTrace, sessionId]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
-    setActiveRun((prev) => ({
-      ...prev,
-      status: prev.status === 'running' ? 'completed' : prev.status,
-    }));
+    setActiveRun((prev) => ({ ...prev, status: prev.status === 'running' ? 'completed' : prev.status }));
   }, []);
-
-  const reset = useCallback(() => {
-    abortRef.current?.abort();
-    setActiveRun(INITIAL_RUN);
-  }, []);
+  const reset = useCallback(() => { abortRef.current?.abort(); setActiveRun(INITIAL_RUN); }, []);
 
   return {
     activeRun,
-    runs: activeRun.runId
-      ? [
-          {
-            id: activeRun.runId,
-            requestText: activeRun.requestText,
-            startedAt: activeRun.startedAt,
-            status: activeRun.status,
-            steps: activeRun.steps,
-            finalContent: activeRun.finalContent,
-          } satisfies SandboxRun,
-        ]
-      : [],
+    runs: activeRun.runId ? [{ id: activeRun.runId, requestText: activeRun.requestText, startedAt: activeRun.startedAt, status: activeRun.status, finalContent: activeRun.finalContent } satisfies SandboxRun] : [],
     activeRunId: activeRun.runId,
     setActiveRunId: (_id: string | null) => {},
     isRunning: activeRun.status === 'running',
     isWaitingConfirmation: activeRun.status === 'waiting_confirmation' && activeRun.pendingConfirmation !== null,
     isWaitingInput: activeRun.status === 'waiting_input',
-    run,
-    stop,
-    reset,
-    confirmAction,
+    run, stop, reset, confirmAction,
   };
 }

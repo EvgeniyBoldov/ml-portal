@@ -104,14 +104,14 @@ class ExecutionConfigResolver:
                     scope_type=ExecutionLimitScope.AGENT,
                     scope_ref=agent_slug or None,
                 )
-                if limits.runtime_steps_max is not None:
-                    policy.max_steps = int(limits.runtime_steps_max)
-                if limits.runtime_wall_time_ms_max is not None:
-                    policy.max_wall_time_ms = int(limits.runtime_wall_time_ms_max)
-                if limits.runtime_retries_max is not None:
-                    policy.max_retries = int(limits.runtime_retries_max)
-                if limits.runtime_tool_calls_max is not None:
-                    policy.max_tool_calls_total = int(limits.runtime_tool_calls_max)
+                if limits.agent_llm_calls_max is not None:
+                    policy.max_steps = int(limits.agent_llm_calls_max)
+                if limits.agent_execution_wall_time_ms_max is not None:
+                    policy.max_wall_time_ms = int(limits.agent_execution_wall_time_ms_max)
+                if limits.planner_retries_max is not None:
+                    policy.max_retries = int(limits.planner_retries_max)
+                if limits.agent_tool_calls_max is not None:
+                    policy.max_tool_calls_total = int(limits.agent_tool_calls_max)
 
                 # temperature: Agent -> orchestration default
                 agent_temperature = getattr(agent, "temperature", None) if agent else None

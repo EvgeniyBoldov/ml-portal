@@ -16,7 +16,7 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
-from uuid import UUID
+from uuid import UUID, uuid4
 
 MAX_OPERATION_RESULT_PREVIEW_CHARS = 4096
 
@@ -98,7 +98,7 @@ def _build_budget_snapshot_payload(
     return {
         "owner_scope": "agent",
         "owner_id": owner_id,
-        "parent_entity_type": "agent_run",
+        "parent_entity_type": "agent_execution",
         "parent_entity_id": owner_id,
         "snapshot": {
             "agent_steps": {
@@ -178,18 +178,20 @@ class AgentToolRuntime(BaseRuntime):
 
         system_prompt = prompt_bundle.system_prompt
         run_id_override: Optional[UUID] = None
-        raw_run_id_override = ctx.extra.get("lifecycle_agent_run_id")
+        raw_run_id_override = ctx.extra.get("lifecycle_agent_execution_id")
         if raw_run_id_override is not None:
             try:
                 run_id_override = UUID(str(raw_run_id_override))
             except (TypeError, ValueError):
-                logger.warning("Ignoring invalid lifecycle_agent_run_id: %r", raw_run_id_override)
+                logger.warning("Ignoring invalid lifecycle_agent_execution_id: %r", raw_run_id_override)
 
         # Logging
         resolved_logging_level = await self.logging_resolver.resolve_logging_level(
             ctx,
             getattr(agent, "logging_level", None),
         )
+        ctx.extra["logging_level"] = resolved_logging_level.value
+        ctx.extra["trace_enabled"] = resolved_logging_level.value != "none"
         run_session = self._create_run_session(
             ctx=ctx,
             agent_slug=agent.slug,
@@ -210,7 +212,7 @@ class AgentToolRuntime(BaseRuntime):
         await run_session.start()
         agent_event_ctx = {
             "agent_slug": agent.slug,
-            "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
+            "agent_execution_id": str(run_session.run_id) if run_session.run_id else None,
         }
         
         # Add run_id to context for intent logging
@@ -218,7 +220,7 @@ class AgentToolRuntime(BaseRuntime):
             ctx.extra["run_id"] = run_session.run_id
 
         user_content = messages[-1].get("content", "") if messages else ""
-        await run_session.log_step("user_request", {
+        await run_session.record_event("user_request", {
             "content": user_content, "agent_slug": agent.slug,
             "mode": "agent_with_operations",
         })
@@ -238,7 +240,7 @@ class AgentToolRuntime(BaseRuntime):
             policy=policy,
             loop_state=AgentLoopState(start_time=time.time()),
         )
-        await run_session.log_step("budget_snapshot", init_budget_snapshot)
+        await run_session.record_event("budget_snapshot", init_budget_snapshot)
         yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, init_budget_snapshot)
 
         if exec_request.partial_mode_warning:
@@ -285,11 +287,7 @@ class AgentToolRuntime(BaseRuntime):
 
         try:
             for step in range(policy.max_steps):
-                llm_call_id = (
-                    f"{run_session.run_id}:agent-llm:{step + 1}"
-                    if run_session.run_id
-                    else f"agent-llm:{step + 1}"
-                )
+                llm_call_id = str(uuid4())
                 elapsed_ms = (time.time() - loop_state.start_time) * 1000
                 global_remaining = policy.max_wall_time_ms - elapsed_ms
                 if elapsed_ms > policy.max_wall_time_ms or global_remaining <= 0:
@@ -312,9 +310,9 @@ class AgentToolRuntime(BaseRuntime):
                     policy=policy,
                     loop_state=loop_state,
                     start_time=loop_state.start_time,
-                    delta={"agent_steps": 1},
+                    delta={"agent_turns": 1},
                 )
-                await run_session.log_step("budget_snapshot", step_budget_snapshot)
+                await run_session.record_event("budget_snapshot", step_budget_snapshot)
                 yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, step_budget_snapshot)
 
                 # Non-streaming LLM call to let agent decide
@@ -388,10 +386,10 @@ class AgentToolRuntime(BaseRuntime):
                         source="llm",
                         error_type=type(exc).__name__,
                         debug=debug,
-                        parent_entity_type="agent_run",
+                        parent_entity_type="agent_execution",
                         parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
                         agent_slug=agent.slug,
-                        agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                        agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
                     )
                     await run_session.finish("failed", message)
                     return
@@ -413,7 +411,7 @@ class AgentToolRuntime(BaseRuntime):
                 loop_state.tokens_in += max(0, prompt_tokens)
                 loop_state.tokens_out += max(0, completion_tokens)
                 loop_state.tokens_total += max(0, total_tokens)
-                await run_session.log_step("llm_turn", {
+                await run_session.record_event("llm_turn", {
                     "step": step + 1,
                     "model": gen.model,
                     "temperature": gen.temperature,
@@ -423,9 +421,9 @@ class AgentToolRuntime(BaseRuntime):
                     "response_length": len(raw_response),
                     "native_tool_calling": native_tool_calling,
                     "llm_call_id": llm_call_id,
-                    "parent_entity_type": "agent_run",
+                    "parent_entity_type": "agent_execution",
                     "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
-                    "agent_run_id": str(run_session.run_id) if run_session.run_id else None,
+                    "agent_execution_id": str(run_session.run_id) if run_session.run_id else None,
                     "agent_slug": agent.slug,
                     "tokens_in": max(0, prompt_tokens),
                     "tokens_out": max(0, completion_tokens),
@@ -434,7 +432,21 @@ class AgentToolRuntime(BaseRuntime):
                     "actor_type": "agent",
                     "actor_entity_id": str(run_session.run_id) if run_session.run_id else None,
                 }, duration_ms=llm_duration, tokens_in=max(0, prompt_tokens), tokens_out=max(0, completion_tokens))
-                yield RuntimeEvent.llm_turn(
+                yield RuntimeEvent.llm_request(
+                    llm_call_id=llm_call_id,
+                    model=gen.model,
+                    temperature=gen.temperature,
+                    max_tokens=effective_max_tokens,
+                    messages=llm_messages,
+                    parent_entity_type="agent_execution",
+                    parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_slug=agent.slug,
+                    purpose="tool_decision_or_answer",
+                    actor_type="agent",
+                    actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                )
+                yield RuntimeEvent.llm_response(
                     llm_call_id=llm_call_id,
                     step=step + 1,
                     model=gen.model,
@@ -448,9 +460,9 @@ class AgentToolRuntime(BaseRuntime):
                     tokens_total=max(0, total_tokens),
                     native_tool_calling=native_tool_calling,
                     duration_ms=llm_duration,
-                    parent_entity_type="agent_run",
+                    parent_entity_type="agent_execution",
                     parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                    agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
                     agent_slug=agent.slug,
                     purpose="tool_decision_or_answer",
                     actor_type="agent",
@@ -481,7 +493,7 @@ class AgentToolRuntime(BaseRuntime):
                                 operator_message=limit_message,
                                 source="runtime",
                             )
-                            await run_session.log_step("budget_snapshot", _build_budget_snapshot_payload(
+                            await run_session.record_event("budget_snapshot", _build_budget_snapshot_payload(
                                 owner_id=budget_owner_id,
                                 reason="limit_exceeded",
                                 step=step + 1,
@@ -520,7 +532,7 @@ class AgentToolRuntime(BaseRuntime):
                         )
                         if native_tool_calling:
                             loop_state.force_tool_choice = True
-                        await run_session.log_step(
+                        await run_session.record_event(
                             "protocol_retry",
                             {
                                 "step": step + 1,
@@ -548,7 +560,7 @@ class AgentToolRuntime(BaseRuntime):
                         if ev.type == RuntimeEventType.FINAL and isinstance(ev.data, dict):
                             final_answer_content.append(str(ev.data.get("content", "") or ""))
                         yield ev
-                    await run_session.log_step("final_response", {
+                    await run_session.record_event("final_response", {
                         "step": step + 1,
                         "tool_calls_total": len(loop_state.tool_outputs),
                         "content": final_answer_content[0] if final_answer_content else "",
@@ -576,7 +588,7 @@ class AgentToolRuntime(BaseRuntime):
                     )
                     llm_messages.append({"role": "assistant", "content": raw_response})
                     llm_messages.append({"role": "user", "content": retry_message})
-                    await run_session.log_step(
+                    await run_session.record_event(
                         "protocol_retry",
                         {
                             "step": step + 1,
@@ -614,7 +626,7 @@ class AgentToolRuntime(BaseRuntime):
                     async for ev in self._execute_single_operation_call(
                         operation_call=operation_call,
                         agent_slug=agent.slug,
-                        agent_run_id=str(run_session.run_id) if run_session.run_id else None,
+                        agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
                         llm_call_id=llm_call_id,
                         ctx=ctx,
                         available_operations=available_operations,
@@ -683,7 +695,7 @@ class AgentToolRuntime(BaseRuntime):
                         operator_message=fail_message,
                         source="runtime",
                     )
-                    await run_session.log_step(
+                    await run_session.record_event(
                         "invalid_operation_call_fail_fast",
                         {
                             "step": step + 1,
@@ -706,7 +718,7 @@ class AgentToolRuntime(BaseRuntime):
                         operator_message=fail_message,
                         source="runtime",
                     )
-                    await run_session.log_step("budget_snapshot", _build_budget_snapshot_payload(
+                    await run_session.record_event("budget_snapshot", _build_budget_snapshot_payload(
                         owner_id=budget_owner_id,
                         reason="limit_exceeded",
                         step=step + 1,
@@ -752,7 +764,7 @@ class AgentToolRuntime(BaseRuntime):
                     if ev.type == RuntimeEventType.FINAL and isinstance(ev.data, dict):
                         synth_final_content.append(str(ev.data.get("content", "") or ""))
                     yield ev
-                await run_session.log_step("final_response", {
+                await run_session.record_event("final_response", {
                     "step": step + 1,
                     "tool_calls_total": len(loop_state.tool_outputs),
                     "content": synth_final_content[0] if synth_final_content else "",
@@ -805,7 +817,7 @@ class AgentToolRuntime(BaseRuntime):
         *,
         operation_call: Any,
         agent_slug: str,
-        agent_run_id: Optional[str],
+        agent_execution_id: Optional[str],
         llm_call_id: Optional[str],
         ctx: "ToolContext",
         available_operations: List[Any],
@@ -829,11 +841,11 @@ class AgentToolRuntime(BaseRuntime):
                 operator_message=limit_message,
                 source="runtime",
             )
-            await run_session.log_step("budget_snapshot", {
+            await run_session.record_event("budget_snapshot", {
                 "owner_scope": "agent",
-                "owner_id": agent_run_id,
-                "parent_entity_type": "agent_run",
-                "parent_entity_id": agent_run_id,
+                "owner_id": agent_execution_id,
+                "parent_entity_type": "agent_execution",
+                "parent_entity_id": agent_execution_id,
                 "reason": "limit_exceeded",
                 "snapshot": {
                     "tool_calls": {
@@ -853,25 +865,25 @@ class AgentToolRuntime(BaseRuntime):
             call_id=operation_call.id,
             arguments=operation_call.arguments,
             agent_slug=agent_slug,
-            agent_run_id=agent_run_id,
+            agent_execution_id=agent_execution_id,
             llm_call_id=llm_call_id,
-            parent_entity_type="agent_run",
-            parent_entity_id=agent_run_id,
+            parent_entity_type="agent_execution",
+            parent_entity_id=agent_execution_id,
             actor_type="agent",
-            actor_entity_id=agent_run_id,
+            actor_entity_id=agent_execution_id,
         )
-        await run_session.log_step("tool_call", {
+        await run_session.record_event("tool_call", {
             "tool": operation_call.tool_name,
             "call_id": operation_call.id,
             "arguments": operation_call.arguments,
             "input": operation_call.arguments,
             "agent_slug": agent_slug,
-            "agent_run_id": agent_run_id,
+            "agent_execution_id": agent_execution_id,
             "llm_call_id": llm_call_id,
-            "parent_entity_type": "agent_run",
-            "parent_entity_id": agent_run_id,
+            "parent_entity_type": "agent_execution",
+            "parent_entity_id": agent_execution_id,
             "actor_type": "agent",
-            "actor_entity_id": agent_run_id,
+            "actor_entity_id": agent_execution_id,
         })
 
         try:
@@ -927,12 +939,12 @@ class AgentToolRuntime(BaseRuntime):
             data=sse_data,
             sources=sources if sources else None,
             agent_slug=agent_slug,
-            agent_run_id=agent_run_id,
+            agent_execution_id=agent_execution_id,
             llm_call_id=llm_call_id,
-            parent_entity_type="agent_run",
-            parent_entity_id=agent_run_id,
+            parent_entity_type="agent_execution",
+            parent_entity_id=agent_execution_id,
             actor_type="agent",
-            actor_entity_id=agent_run_id,
+            actor_entity_id=agent_execution_id,
             reused=bool(result.metadata.get("reused")),
             reused_from_call_id=result.metadata.get("reused_from_call_id"),
             error_code=raw_error_code,
@@ -946,7 +958,7 @@ class AgentToolRuntime(BaseRuntime):
             truncated=sse_truncated if sse_truncated else None,
         )
         yield operation_result_payload
-        await run_session.log_step("tool_result", {
+        await run_session.record_event("tool_result", {
             "tool": operation_call.tool_name,
             "call_id": operation_call.id,
             "success": result.success,
@@ -966,12 +978,12 @@ class AgentToolRuntime(BaseRuntime):
             "result_envelope": envelope.to_metadata(),
             "sources": list(sources or []),
             "agent_slug": agent_slug,
-            "agent_run_id": agent_run_id,
+            "agent_execution_id": agent_execution_id,
             "llm_call_id": llm_call_id,
-            "parent_entity_type": "agent_run",
-            "parent_entity_id": agent_run_id,
+            "parent_entity_type": "agent_execution",
+            "parent_entity_id": agent_execution_id,
             "actor_type": "agent",
-            "actor_entity_id": agent_run_id,
+            "actor_entity_id": agent_execution_id,
         })
 
         raw_output = result.data or {}

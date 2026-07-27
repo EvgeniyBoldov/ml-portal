@@ -3,7 +3,6 @@ import styles from './ChatPage.module.css';
 import ChatSidebar from './ChatSidebar';
 import Chat from './Chat';
 import { ChatProvider } from '@/domains/chat/contexts/ChatContext';
-import ChatStatus from '@/domains/chat/components/ChatStatus';
 
 export default function ChatPage() {
   return (
@@ -13,7 +12,6 @@ export default function ChatPage() {
         <div className={styles.main}>
           <Chat />
         </div>
-        <ChatStatus />
       </div>
     </ChatProvider>
   );

@@ -56,3 +56,18 @@ async def test_unknown_binary_returns_safe_metadata() -> None:
     assert result.content_kind == "binary"
     assert result.text == ""
     assert result.parser == "unsupported"
+
+
+@pytest.mark.asyncio
+async def test_extraction_observer_gets_terminal_summary() -> None:
+    events: list[tuple[str, dict]] = []
+
+    async def observe(stage: str, payload: dict) -> None:
+        events.append((stage, payload))
+
+    await DocumentExtractionService().extract(
+        ExtractionRequest(payload=b"hello", filename="sample.txt", observer=observe)
+    )
+
+    assert [stage for stage, _ in events] == ["started", "completed"]
+    assert events[-1][1]["parser"] == "text"

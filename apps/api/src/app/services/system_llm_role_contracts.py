@@ -9,7 +9,7 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.services.system_llm_role_examples import get_role_examples
 
 if TYPE_CHECKING:
-    from app.runtime.planner.planner import PlannerLLMOutput
+    from app.runtime.planner.graph_planner import PlannerGraphOutput
     from app.runtime.memory.fact_extractor import _LLMFactOutput
     from app.runtime.memory.summary_compactor import _LLMSummaryOutput
 
@@ -56,8 +56,8 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
     model: Type[BaseModel] | None = None
 
     if role == SystemLLMRoleType.PLANNER:
-        from app.runtime.planner.planner import PlannerLLMOutput
-        model = PlannerLLMOutput
+        from app.runtime.planner.graph_planner import PlannerGraphOutput
+        model = PlannerGraphOutput
     elif role == SystemLLMRoleType.FACT_EXTRACTOR:
         from app.runtime.memory.fact_extractor import _LLMFactOutput
         model = _LLMFactOutput
@@ -77,40 +77,9 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
 def _enrich_schema_with_contract_metadata(schema: Dict[str, Any], role: SystemLLMRoleType) -> Dict[str, Any]:
     """Add contract-specific metadata (x_when, oneOf variants) to generated JSON schema."""
     if role == SystemLLMRoleType.PLANNER:
-        # Add conditional field markers (x_when) to properties
         props = schema.get("properties", {})
-        if "agent_slug" in props:
-            props["agent_slug"]["x_when"] = "kind=call_agent"
-        if "agent_input" in props:
-            props["agent_input"]["x_when"] = "kind=call_agent"
-        if "question" in props:
-            props["question"]["x_when"] = "kind=clarify|ask_user"
-        if "final_answer" in props:
-            props["final_answer"]["x_when"] = "kind=final"
-
-        # Add oneOf variants for discriminated union on 'kind'
-        schema["oneOf"] = [
-            {
-                "title": "call_agent",
-                "required": ["kind", "rationale", "agent_slug", "agent_input"],
-                "properties": {"kind": {"const": "call_agent"}},
-            },
-            {
-                "title": "clarify",
-                "required": ["kind", "rationale", "question"],
-                "properties": {"kind": {"enum": ["clarify", "ask_user"]}},
-            },
-            {
-                "title": "final",
-                "required": ["kind", "rationale", "final_answer"],
-                "properties": {"kind": {"const": "final"}},
-            },
-            {
-                "title": "abort",
-                "required": ["kind", "rationale"],
-                "properties": {"kind": {"const": "abort"}},
-            },
-        ]
+        if "tasks" in props:
+            props["tasks"]["description"] = "Complete task graph mutation; every task has executor, intent, instructions, dependencies and needs."
 
     elif role == SystemLLMRoleType.FACT_EXTRACTOR:
         # Add scope enum to fact items

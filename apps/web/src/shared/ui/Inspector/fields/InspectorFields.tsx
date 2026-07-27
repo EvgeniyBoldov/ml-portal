@@ -17,6 +17,15 @@ export function InspectorFieldRow({ label, children }: { label: string; children
   );
 }
 
+export function InspectorScalar({ value }: { value: string | number | boolean | null | undefined }) {
+  const text = value === null || value === undefined || value === ''
+    ? '—'
+    : typeof value === 'boolean'
+      ? value ? 'Да' : 'Нет'
+      : String(value);
+  return <span className={styles.scalar}>{text}</span>;
+}
+
 export function InspectorJsonBlock({ value }: { value: unknown }) {
   const [open, setOpen] = useState(false);
   return (

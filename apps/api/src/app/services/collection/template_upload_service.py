@@ -25,7 +25,7 @@ from app.storage.paths import calculate_file_checksum, get_origin_path
 
 logger = get_logger(__name__)
 
-_UNSUPPORTED_TEMPLATE_EXTENSIONS = {"xls"}
+_SUPPORTED_TEMPLATE_EXTENSIONS = {"xlsx", "xlsm"}
 
 
 def _get_template_extension(filename: str) -> str:
@@ -53,8 +53,8 @@ class TemplateUploadService:
         if collection.collection_type != CollectionType.TEMPLATE.value:
             raise InvalidSchemaError("Collection must be of type 'template'")
         ext = _get_template_extension(filename)
-        if ext in _UNSUPPORTED_TEMPLATE_EXTENSIONS:
-            raise InvalidSchemaError("Legacy .xls templates are not supported; save the file as .xlsx or .xlsm")
+        if ext not in _SUPPORTED_TEMPLATE_EXTENSIONS:
+            raise InvalidSchemaError("Only .xlsx and .xlsm templates are supported")
 
         file_id = uuid.uuid4()
         settings = get_settings()
