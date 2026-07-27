@@ -258,7 +258,7 @@ export default function Chat() {
               {message.role === 'user' ? <UserMessage message={message} /> : null}
               {activeRun?.userMessageId === message.id && <ChatRunStatus run={activeRun} />}
               {message.role === 'assistant' && (message.content || !message.isOptimistic) && (
-                <AssistantMessage message={message} isStreaming={state.isStreaming && message.isOptimistic} />
+                <AssistantMessage message={message} isStreaming={Boolean(state.isStreaming && message.isOptimistic)} />
               )}
             </React.Fragment>
           ))

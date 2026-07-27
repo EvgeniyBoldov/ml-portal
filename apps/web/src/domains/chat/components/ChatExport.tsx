@@ -23,7 +23,7 @@ export default function ChatExport() {
           msg => ({
             role: msg.role,
             content: msg.content,
-            created_at: msg.created_at,
+            created_at: msg.createdAt,
           })
         ),
       }));

@@ -125,8 +125,6 @@ export type { GridLayoutProps, BlockProps, BlockWidth as GridBlockWidth, BlockHe
 // EntityField
 export { EntityField } from './EntityField';
 
-// PlanVisualization
-export { PlanVisualization } from './PlanVisualization';
 
 // AI Generate
 export { AIGenerateButton } from './AIGenerateButton';
