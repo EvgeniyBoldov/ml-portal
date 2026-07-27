@@ -33,7 +33,6 @@ from typing import (
 from uuid import UUID
 
 from app.agents.context import ToolContext
-from app.runtime.contracts import NextStep
 from app.runtime.orchestrator_contracts import (
     AgentTaskResult,
     PlanPatch,
@@ -51,10 +50,8 @@ from app.runtime.turn_state import RuntimeTurnState
 # Planner                                                                      #
 # --------------------------------------------------------------------------- #
 #
-# Post-M5: TriageServicePort removed. The planner is the sole decision
-# engine — clarify / call_agent / final / abort all come
-# from a single `next_step` call. SummaryPort removed too — rolling
-# summary is owned by `MemoryWriter` + `SummaryCompactor` now.
+# The graph planner is the sole planner boundary. Summary ownership remains
+# with `MemoryWriter` + `SummaryCompactor`.
 
 
 @runtime_checkable
@@ -65,12 +62,6 @@ class PlannerPort(Protocol):
 
 
 @runtime_checkable
-class NextStepPlannerPort(Protocol):
-    """Planner boundary for the chat turn planner loop."""
-
-    async def next_step(self, **kwargs: Any) -> Any: ...
-
-
 @runtime_checkable
 class TaskExecutionPort(Protocol):
     """Executes a logical task attempt and returns a strict agent result."""
@@ -89,26 +80,6 @@ class TaskFailureClassifier(Protocol):
 
 
 @runtime_checkable
-class AgentExecutionPort(Protocol):
-    """Executes a single sub-agent step chosen by the planner. Streams
-    RuntimeEvents and mutates `runtime_state` (appends AgentResult, facts)."""
-
-    def execute(
-        self,
-        *,
-        step: NextStep,
-        lifecycle_agent_run_id: str,
-        runtime_state: RuntimeTurnState,
-        messages: List[Dict[str, Any]],
-        ctx: ToolContext,
-        user_id: UUID,
-        tenant_id: UUID,
-        platform_config: Dict[str, Any],
-        model: Optional[str] = None,
-        agent_version_id: Optional[UUID] = None,
-    ) -> AsyncIterator[RuntimeEvent]: ...
-
-
 # --------------------------------------------------------------------------- #
 # Synthesizer                                                                  #
 # --------------------------------------------------------------------------- #

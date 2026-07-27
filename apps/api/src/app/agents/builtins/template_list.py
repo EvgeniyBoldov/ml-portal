@@ -80,7 +80,7 @@ class TemplateListTool(VersionedTool):
         description="List templates in a collection",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("collection.template.list")
+        log = ctx.tool_notes("collection.template.list")
 
         if not ctx.chat_id:
             return ToolResult.fail("Template listing requires a chat context.", logs=log.entries_dict())

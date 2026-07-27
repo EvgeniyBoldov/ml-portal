@@ -4,7 +4,7 @@ BaseRuntime — абстрактный базовый класс для всех
 Предоставляет общую инфраструктуру:
 - LLMAdapter для вызовов LLM
 - ExecutionConfigResolver для конфигурации
-- scoped RuntimeEventLogger через RunSession
+- scoped canonical runtime event sink through RunSession
 - RuntimeLoggingResolver для уровня логирования
 - RuntimeSandboxResolver для sandbox overlay helpers
 - OperationExecutor для выполнения operations

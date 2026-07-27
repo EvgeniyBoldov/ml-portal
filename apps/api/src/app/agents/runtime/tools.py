@@ -67,8 +67,8 @@ class OperationExecutionFacade:
         Returns:
             Tuple of (ToolResult, sources list for RAG-like tools)
 
-        Tool logs (from ToolLogger) are automatically extracted from
-        result.metadata["logs"] for canonical runtime-event persistence.
+        Bounded tool diagnostics (from ToolExecutionNotes) are attached to
+        result.metadata["logs"] and become part of the canonical tool result.
         """
         original_operation_slug = operation_call.tool_name
         operation, resolved_slug_error = self._find_operation(
@@ -189,12 +189,20 @@ class OperationExecutionFacade:
                     ),
                 ), []
 
-            if timeout_s is not None:
-                result = await asyncio.wait_for(
-                    executor.execute(operation_call, ctx), timeout=timeout_s,
-                )
-            else:
-                result = await executor.execute(operation_call, ctx)
+            previous_call_id = ctx.extra.get("runtime_active_tool_call_id")
+            ctx.extra["runtime_active_tool_call_id"] = operation_call.id
+            try:
+                if timeout_s is not None:
+                    result = await asyncio.wait_for(
+                        executor.execute(operation_call, ctx), timeout=timeout_s,
+                    )
+                else:
+                    result = await executor.execute(operation_call, ctx)
+            finally:
+                if previous_call_id is None:
+                    ctx.extra.pop("runtime_active_tool_call_id", None)
+                else:
+                    ctx.extra["runtime_active_tool_call_id"] = previous_call_id
 
             sources: List[dict] = []
             if result.success and result.metadata.get("sources"):

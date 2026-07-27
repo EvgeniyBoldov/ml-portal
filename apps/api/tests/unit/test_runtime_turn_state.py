@@ -4,7 +4,6 @@ from uuid import uuid4
 
 from app.runtime.memory.components import MemoryBundle
 from app.runtime.turn_state import RuntimeTurnState
-from app.runtime.planner.iteration_policy import build_iteration_result, latest_call_agent_iteration
 
 
 def _state() -> RuntimeTurnState:
@@ -19,49 +18,13 @@ def _state() -> RuntimeTurnState:
     )
 
 
-def test_runtime_turn_state_loop_detection_and_snapshot():
+def test_runtime_turn_state_snapshot_preserves_runtime_facts():
     state = _state()
     state.add_runtime_fact("f1", source="planner")
     state.add_agent_result({"agent_slug": "a", "summary": "ok", "success": True})
-    state.add_planner_step({"kind": "call_agent", "agent_slug": "a", "phase_id": "p1"})
-    state.add_planner_step({"kind": "call_agent", "agent_slug": "a", "phase_id": "p1"})
-    state.add_planner_step({"kind": "call_agent", "agent_slug": "a", "phase_id": "p1"})
-    state.iter_count = 3
 
     snap = state.planner_snapshot()
-    assert snap["iter_count"] == 3
     assert snap["facts"] == ["f1"]
-    assert state.detect_loop() is True
-
-
-def test_runtime_turn_state_loop_detection_distinguishes_agent_query():
-    state = _state()
-    state.add_planner_step(
-        {
-            "kind": "call_agent",
-            "agent_slug": "a",
-            "phase_id": "p1",
-            "agent_input": {"query": "find incidents in dc-1"},
-        }
-    )
-    state.add_planner_step(
-        {
-            "kind": "call_agent",
-            "agent_slug": "a",
-            "phase_id": "p1",
-            "agent_input": {"query": "find incidents in dc-2"},
-        }
-    )
-    state.add_planner_step(
-        {
-            "kind": "call_agent",
-            "agent_slug": "a",
-            "phase_id": "p1",
-            "agent_input": {"query": "find incidents in dc-3"},
-        }
-    )
-
-    assert state.detect_loop() is False
 
 
 def test_runtime_turn_state_compact_view_is_serializable():
@@ -85,25 +48,3 @@ def test_runtime_turn_state_can_finalize_with_outline():
     assert state.can_finalize() is False
     state.completed_phase_ids = ["p1"]
     assert state.can_finalize() is True
-
-
-def test_runtime_turn_state_exposes_canonical_iteration_fields_for_planner_policy():
-    state = _state()
-    state.add_iteration_result(
-        build_iteration_result(
-            state=state,
-            iteration=2,
-            step_kind="call_agent",
-            agent_slug="ops",
-            phase_id="phase-1",
-            outcome="failed",
-            summary="temporary failure",
-            missing_inputs=["site"],
-            retryable=True,
-        )
-    )
-
-    latest = latest_call_agent_iteration(state)
-    assert latest["outcome"] == "failed"
-    assert latest["missing_inputs"] == ["site"]
-    assert latest["retryable"] is True

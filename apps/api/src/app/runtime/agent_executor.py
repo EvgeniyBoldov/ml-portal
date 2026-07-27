@@ -29,7 +29,8 @@ from app.agents.operation_executor import DirectOperationExecutor
 from app.agents.runtime.agent import AgentToolRuntime
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
-from app.runtime.contracts import AgentAnswerStatus, NeedSpec, NextStep
+from app.runtime.contracts import AgentAnswerStatus, NeedSpec
+from app.runtime.orchestrator_contracts import AgentTaskResult, TaskOutcome, TaskRequest
 from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.error_payloads import build_debug_payload
 from app.agents.runtime.published_capabilities import (
@@ -38,12 +39,9 @@ from app.agents.runtime.published_capabilities import (
 )
 from app.runtime.error_surface import build_user_safe_error_message
 from app.runtime.events import RuntimeEvent, RuntimeEventType
+from app.runtime.events import OrchestrationPhase
 from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
 from app.runtime.operation_errors import RuntimeErrorCode
-from app.runtime.planner.iteration_policy import (
-    resolve_agent_outcome,
-    resolve_sufficient_for_phase,
-)
 from app.runtime.turn_state import RuntimeTurnState
 
 logger = get_logger(__name__)
@@ -54,7 +52,7 @@ MAX_OPERATION_RESULT_PREVIEW_CHARS = 4096  # Limit payload size in SSE
 
 
 class AgentExecutor:
-    """Runs a single sub-agent step."""
+    """Runs one persisted graph task through the canonical agent runtime."""
 
     def __init__(
         self,
@@ -74,8 +72,8 @@ class AgentExecutor:
     async def execute(
         self,
         *,
-        step: NextStep,
-        lifecycle_agent_run_id: Optional[str] = None,
+        task: TaskRequest,
+        lifecycle_agent_execution_id: Optional[str] = None,
         runtime_state: RuntimeTurnState,
         messages: List[Dict[str, Any]],
         ctx: ToolContext,
@@ -85,7 +83,7 @@ class AgentExecutor:
         model: Optional[str] = None,
         agent_version_id: Optional[UUID] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
-        agent_slug = step.agent_slug
+        agent_slug = task.executor
         if not agent_slug:
             yield RuntimeEvent.error(
                 "AgentExecutor invoked without agent_slug",
@@ -103,11 +101,13 @@ class AgentExecutor:
                 agent_slug=agent_slug,
                 user_id=user_id,
                 tenant_id=tenant_id,
-                request_text=(step.agent_input.get("query") or state.goal)[:500],
+                request_text=str(task.inputs.get("query") or task.instructions or state.goal)[:500],
                 allow_partial=True,
                 platform_config=platform_config,
                 include_routable_agents=False,
                 agent_version_id=agent_version_id,
+                event_sink=ctx.extra.get("runtime_event_logger"),
+                trace_parent_id=lifecycle_agent_execution_id,
             )
         except Exception as exc:
             debug_traceback = traceback.format_exc()
@@ -124,7 +124,7 @@ class AgentExecutor:
                     "error_code": RuntimeErrorCode.AGENT_PRECHECK_FAILED.value,
                     "retryable": False,
                     "iteration": state.iter_count,
-                    "phase_id": step.phase_id,
+                    "phase_id": task.task_id,
                     "debug": {
                         "exception_type": type(exc).__name__,
                         "traceback": debug_traceback,
@@ -159,7 +159,7 @@ class AgentExecutor:
                     "error_code": RuntimeErrorCode.AGENT_UNAVAILABLE.value,
                     "retryable": False,
                     "iteration": state.iter_count,
-                    "phase_id": step.phase_id,
+                    "phase_id": task.task_id,
                 }
             )
             yield RuntimeEvent.status(msg, agent=agent_slug)
@@ -169,7 +169,7 @@ class AgentExecutor:
             "agent_context_snapshot",
             agent_slug=agent_slug,
             context_snapshot=self._build_context_snapshot(
-                step=step,
+                task=task,
                 sub_request=sub_request,
                 goal=state.goal,
                 model=model,
@@ -182,8 +182,8 @@ class AgentExecutor:
         deps.execution_graph = sub_request.execution_graph
         deps.resolved_operations = list(sub_request.resolved_operations or [])
         ctx.set_runtime_deps(deps)
-        if lifecycle_agent_run_id:
-            ctx.extra["lifecycle_agent_run_id"] = lifecycle_agent_run_id
+        if lifecycle_agent_execution_id:
+            ctx.extra["lifecycle_agent_execution_id"] = lifecycle_agent_execution_id
         ctx.extra["runtime_tool_ledger"] = state.tool_ledger
         ctx.extra["runtime_tool_reuse_enabled"] = bool(
             (platform_config or {}).get("runtime_tool_reuse_enabled", True),
@@ -205,7 +205,7 @@ class AgentExecutor:
                     "error_code": RuntimeErrorCode.AGENT_NO_OPERATIONS.value,
                     "retryable": False,
                     "iteration": state.iter_count,
-                    "phase_id": step.phase_id,
+                    "phase_id": task.task_id,
                 }
             )
             yield RuntimeEvent.status(msg, agent=agent_slug)
@@ -214,7 +214,7 @@ class AgentExecutor:
         # 2. Compose the sub-agent's LLM messages. Goal + explicit agent_input.
         sub_messages = self._build_sub_messages(
             messages,
-            step,
+            task,
             state.goal,
             [item.model_dump(mode="json") for item in (state.attachment_contexts or [])],
         )
@@ -245,7 +245,7 @@ class AgentExecutor:
                         call_id=str(runtime_event.data.get("call_id") or ""),
                         arguments=dict(runtime_event.data.get("arguments") or {}),
                         agent_slug=agent_slug,
-                        phase_id=step.phase_id,
+                        phase_id=task.task_id,
                     )
                 elif runtime_event.type == RuntimeEventType.TOOL_RESULT:
                     result_payload = runtime_event.data.get("data")
@@ -343,14 +343,10 @@ class AgentExecutor:
         sufficient_for_phase = (
             False
             if status == AgentAnswerStatus.NEEDS_INPUT
-            else resolve_sufficient_for_phase(
-                success=success,
-                summary=summary_preview,
-                missing_inputs=missing_inputs,
-            )
+            else bool(success and summary_preview)
         )
 
-        outcome = resolve_agent_outcome(success=success)
+        outcome = "completed" if success else "failed"
         result_summary = summary_preview or ("no_output" if success else (final_error or "failed"))
 
         state.add_agent_result(
@@ -358,7 +354,7 @@ class AgentExecutor:
                 "agent_slug": agent_slug,
                 "summary": result_summary,
                 "facts": facts,
-                "phase_id": step.phase_id,
+                "phase_id": task.task_id,
                 "iteration": state.iter_count,
                 "success": success,
                 "outcome": outcome,
@@ -414,12 +410,80 @@ class AgentExecutor:
             # Limit to 50
             sources_section.items = sources_section.items[-50:]
 
+    async def execute_task(
+        self,
+        *,
+        request: TaskRequest,
+        runtime_state: RuntimeTurnState,
+        messages: List[Dict[str, Any]],
+        ctx: ToolContext,
+        user_id: UUID,
+        tenant_id: UUID,
+        platform_config: Optional[Dict[str, Any]] = None,
+        model: Optional[str] = None,
+        agent_version_id: Optional[UUID] = None,
+        lifecycle_agent_execution_id: Optional[str] = None,
+        runtime_log_parent: Optional[Dict[str, str]] = None,
+        **_: Any,
+    ) -> AgentTaskResult:
+        """Consume the agent stream and expose the graph task-result protocol.
+
+        Every agent event is persisted by the root sink before the graph turns
+        the terminal result into a state transition.
+        """
+        before = len(runtime_state.agent_results)
+        logger = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
+        if runtime_log_parent:
+            ctx.extra["runtime_log_parent"] = dict(runtime_log_parent)
+        async for event in self.execute(
+            task=request,
+            lifecycle_agent_execution_id=lifecycle_agent_execution_id,
+            runtime_state=runtime_state,
+            messages=messages,
+            ctx=ctx,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            platform_config=platform_config,
+            model=model,
+            agent_version_id=agent_version_id,
+        ):
+            if logger is not None:
+                await logger.emit(event, phase=OrchestrationPhase.AGENT)
+        payload = runtime_state.agent_results[-1] if len(runtime_state.agent_results) > before else {}
+        raw_needs = payload.get("needs") if isinstance(payload, dict) else []
+        task_needs = []
+        for item in raw_needs if isinstance(raw_needs, list) else []:
+            if not isinstance(item, dict):
+                continue
+            task_needs.append({
+                "key": str(item.get("key") or "need"),
+                "kind": str(item.get("kind") or "data"),
+                "description": str(item.get("description") or item.get("key") or "Need additional input"),
+            })
+        if task_needs:
+            return AgentTaskResult(
+                outcome=TaskOutcome.NEEDS_DEPENDENCY,
+                summary=str(payload.get("summary") or ""),
+                needs=task_needs,
+            )
+        if not bool(payload.get("success", False)):
+            return AgentTaskResult(
+                outcome=TaskOutcome.UNFULFILLABLE,
+                summary=str(payload.get("summary") or "Task execution failed"),
+                reason_code=str(payload.get("error_code") or "agent_failed"),
+            )
+        return AgentTaskResult(
+            outcome=TaskOutcome.COMPLETED,
+            summary=str(payload.get("summary") or ""),
+            outputs={"summary": str(payload.get("summary") or ""), "attachments": list(payload.get("attachments") or [])},
+        )
+
     # ---------------------------------------------------------------- helpers --
 
     @staticmethod
     def _build_sub_messages(
         outer_messages: List[Dict[str, Any]],
-        step: NextStep,
+        task: TaskRequest,
         goal: str,
         attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
@@ -428,7 +492,7 @@ class AgentExecutor:
 
         For recall calls (dozvon) injects resolved_needs and prior_summary from
         agent_input so the agent can continue its task with fresh data."""
-        query = step.agent_input.get("query") if step.agent_input else None
+        query = task.inputs.get("query") or task.instructions
         if not query:
             query = goal or (outer_messages[-1].get("content", "") if outer_messages else "")
 
@@ -465,11 +529,11 @@ class AgentExecutor:
 
         # Build the final user message: inject recall context if present
         parts: List[str] = []
-        if step.agent_input:
-            prior_summary = step.agent_input.get("prior_summary")
+        if task.inputs:
+            prior_summary = task.inputs.get("prior_summary")
             if prior_summary:
                 parts.append(f"[Previous work summary]\n{prior_summary}")
-            resolved_needs = step.agent_input.get("resolved_needs")
+            resolved_needs = task.inputs.get("resolved_needs")
             if isinstance(resolved_needs, list) and resolved_needs:
                 parts.append("[Resolved needs]")
                 for rn in resolved_needs:
@@ -618,7 +682,7 @@ class AgentExecutor:
     @staticmethod
     def _build_context_snapshot(
         *,
-        step: NextStep,
+        task: TaskRequest,
         sub_request: ExecutionRequest,
         goal: str,
         model: Optional[str] = None,
@@ -637,7 +701,12 @@ class AgentExecutor:
         return compact_snapshot(
             inputs={
                 "goal": goal,
-                "agent_input": step.agent_input or {},
+                "task_id": task.task_id,
+                "intent": task.intent,
+                "instructions": task.instructions,
+                "inputs": task.inputs,
+                "dependency_outputs": task.dependency_outputs,
+                "needs": [need.model_dump(mode="json", by_alias=True) for need in task.needs],
             },
             prompt={"system_prompt": sub_request.prompt} if sub_request.prompt else None,
             rbac=deepcopy(collection_filter_audit) if isinstance(collection_filter_audit, dict) else None,
@@ -646,6 +715,7 @@ class AgentExecutor:
                 "agent_slug": sub_request.agent_slug,
                 "model": model or getattr(sub_request.agent, "model", None),
                 "version_label": version_label,
+                "execution_mode": sub_request.mode.value,
                 "available_operations": serialize_published_operations(sub_request.resolved_operations or []),
                 "available_collections": serialize_published_collections(
                     sub_request.resolved_data_instances or [],

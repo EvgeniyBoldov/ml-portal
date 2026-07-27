@@ -6,9 +6,8 @@ Instance v3 classification axes:
 - connector_subtype: sql | api (for data connectors)
 - placement: local | remote
 
-Credentials and RoutingLogs schemas live in their own files:
+Credentials schemas live in their own files:
 - app.schemas.credentials
-- app.schemas.routing_logs
 """
 from typing import Optional, Dict, Any, List
 from uuid import UUID
@@ -17,7 +16,6 @@ from pydantic import BaseModel, Field, model_validator, ConfigDict
 
 # Re-exports for backward compatibility
 from app.schemas.credentials import CredentialCreate, CredentialUpdate, CredentialResponse  # noqa: F401
-from app.schemas.routing_logs import RoutingLogResponse  # noqa: F401
 
 
 # ── ToolInstance ─────────────────────────────────────────────────────

@@ -9,11 +9,10 @@ import Button from '@/shared/ui/Button';
 import { Icon } from '@/shared/ui/Icon';
 import { Tooltip } from '@/shared/ui';
 import { qk } from '@/shared/api/keys';
-import type { ActiveRun, RunStep } from '../hooks/useSandboxRun';
+import type { ActiveRun } from '../hooks/useSandboxRun';
 import type { SandboxBranchListItem, SandboxRunListItem, RuntimeJournalEvent } from '../types';
 import { replayRuntimeJournal } from '../traceState';
 import { sandboxApi } from '../api';
-import type { ExecutionMode } from '@/shared/api/types';
 import ChatQuestionCard from './ChatQuestionCard';
 import ChatAnswerCard from './ChatAnswerCard';
 import { ExecutionTrace } from './ExecutionTrace';
@@ -22,54 +21,9 @@ import styles from './RunChat.module.css';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function toRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== 'string' || value.trim().length === 0) return undefined;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractClarifyQuestion(step: RunStep): string | null {
-  const data = toRecord(step.data);
-  const directQuestion = typeof data.question === 'string' ? data.question.trim() : '';
-  if (directQuestion) return directQuestion;
-
-  if (step.type === 'question_answer') {
-    const answeredQuestion = typeof data.question === 'string' ? data.question.trim() : '';
-    return answeredQuestion || null;
-  }
-
-  if (step.type === 'planner_decision') {
-    const plannerQuestion = typeof data.question === 'string' ? data.question.trim() : '';
-    if (plannerQuestion) return plannerQuestion;
-  }
-
-  if (step.type === 'llm_turn' || step.type === 'llm_response' || step.type === 'llm_call') {
-    const content = typeof data.content === 'string'
-      ? data.content
-      : typeof data.response === 'string'
-        ? data.response
-        : typeof data.text === 'string'
-          ? data.text
-          : '';
-    const parsed = parseJsonObject(content);
-    const kind = typeof parsed?.kind === 'string' ? parsed.kind.trim().toLowerCase() : '';
-    const question = typeof parsed?.question === 'string' ? parsed.question.trim() : '';
-    if ((kind === 'clarify' || kind === 'ask_user') && question) return question;
-  }
-
-  return null;
+function extractClarifyQuestion(context: Record<string, unknown> | undefined): string | null {
+  const question = context && typeof context.question === 'string' ? context.question.trim() : '';
+  return question || null;
 }
 
 function extractFinalContent(
@@ -101,6 +55,7 @@ interface HistoricalRunItemProps {
   isReadOnly: boolean;
   onForkBranch: (runId: string, sourceText: string) => void;
   onSelectTraceTarget?: (target: TraceInspectionTarget, trace: ReturnType<typeof replayRuntimeJournal>) => void;
+  selectedTraceTargetKey?: string | null;
 }
 
 function HistoricalRunItem(props: HistoricalRunItemProps) {
@@ -112,12 +67,14 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
     isReadOnly,
     onForkBranch,
     onSelectTraceTarget,
+    selectedTraceTargetKey,
   } = props;
   const { data: runDetail } = useQuery({
     queryKey: qk.sandbox.runs.detail(sessionId, run.id),
     queryFn: () => sandboxApi.getRunDetail(sessionId, run.id),
-    enabled: run.status !== 'running',
+    enabled: true,
     staleTime: 60_000,
+    refetchInterval: run.status === 'running' ? 2_000 : false,
   });
 
   const finalContent = runDetail ? extractFinalContent(runDetail.events) : '';
@@ -138,7 +95,7 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
         <span className={styles['branch-label']}>от ветки: {branch.name}</span>
       )}
 
-      <ExecutionTrace trace={trace} isRunning={false} onSelectTarget={(target) => onSelectTraceTarget?.(target, trace)} />
+      <ExecutionTrace trace={trace} isRunning={false} onSelectTarget={(target) => onSelectTraceTarget?.(target, trace)} selectedTargetKey={selectedTraceTargetKey} />
 
       <div className={styles['answer-row']}>
         {runDetail ? (
@@ -178,11 +135,12 @@ interface Props {
   isCreatingBranch?: boolean;
   onSelectBranch: (branchId: string) => void;
   onCreateBranchFromMessage: (sourceText: string, parentRunId?: string | null) => Promise<void>;
-  onRun: (text: string, parentRunId?: string | null, attachmentIds?: string[], executionMode?: ExecutionMode) => void;
+  onRun: (text: string, parentRunId?: string | null, attachmentIds?: string[]) => void;
   onResumeSubmit: (text: string) => void;
   onStop: () => void;
   onSelectRun?: (runId?: string) => void;
   onSelectTraceTarget?: (target: TraceInspectionTarget, trace: ReturnType<typeof replayRuntimeJournal>) => void;
+  selectedTraceTargetKey?: string | null;
 }
 
 // ── RunChat ──────────────────────────────────────────────────────────────────
@@ -204,10 +162,10 @@ export default function RunChat({
   onStop,
   onSelectRun,
   onSelectTraceTarget,
+  selectedTraceTargetKey,
 }: Props) {
   type PendingAttachment = { id: string; file: File };
   const [input, setInput] = useState('');
-  const [executionMode, setExecutionMode] = useState<ExecutionMode>('normal');
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -262,7 +220,7 @@ export default function RunChat({
   useEffect(() => {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [activeRun.steps.length, historicalRuns.length]);
+  }, [activeRun.trace.eventIdsBySequence.length, activeRun.progress.length, historicalRuns.length]);
 
   useEffect(() => {
     if (isWaitingInput && !isRunning) {
@@ -309,7 +267,7 @@ export default function RunChat({
     setAttachments([]);
     setUploadError(null);
     setIsUploading(false);
-    onRun(text, isWaitingInput ? activeRun.runId : undefined, attachmentIds, executionMode);
+    onRun(text, isWaitingInput ? activeRun.runId : undefined, attachmentIds);
   };
 
   const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
@@ -410,18 +368,10 @@ export default function RunChat({
   const hasHistory = historicalRuns.length > 0;
   const isPaused = activeRun.status === 'waiting_input' || activeRun.status === 'waiting_confirmation';
   const showActiveAnswerCard = !isPaused && (isRunning || activeRun.finalContent.trim().length > 0);
-  const latestClarifyQuestion = useMemo(() => {
-    for (let i = activeRun.steps.length - 1; i >= 0; i--) {
-      const step = activeRun.steps[i];
-      const extractedQuestion = extractClarifyQuestion(step);
-      if (extractedQuestion) return extractedQuestion;
-      if (step.type === 'stop') {
-        const q = step.data.question ?? step.data.message;
-        if (typeof q === 'string' && q.trim().length > 0) return q;
-      }
-    }
-    return null;
-  }, [activeRun.steps]);
+  const latestClarifyQuestion = useMemo(
+    () => extractClarifyQuestion(activeRun.pendingConfirmation?.context),
+    [activeRun.pendingConfirmation],
+  );
 
   const activeUserMessage = useMemo(() => {
     const fromRun = String(activeRun.requestText || '').trim();
@@ -458,6 +408,7 @@ export default function RunChat({
             isReadOnly={isReadOnly}
             onForkBranch={handleForkBranch}
             onSelectTraceTarget={onSelectTraceTarget}
+            selectedTraceTargetKey={selectedTraceTargetKey}
           />
         ))}
 
@@ -467,7 +418,7 @@ export default function RunChat({
               <ChatQuestionCard text={activeUserMessage} />
             </div>
 
-            <ExecutionTrace trace={activeRun.trace} isRunning={isRunning} onSelectTarget={(target) => onSelectTraceTarget?.(target, activeRun.trace)} />
+            <ExecutionTrace trace={activeRun.trace} isRunning={isRunning} progress={activeRun.progress} onSelectTarget={(target) => onSelectTraceTarget?.(target, activeRun.trace)} selectedTargetKey={selectedTraceTargetKey} />
 
             <div className={styles['answer-row']}>
               {showActiveAnswerCard && (
@@ -490,8 +441,8 @@ export default function RunChat({
                 <div className={styles['clarify-title']}>
                   {isWaitingInput
                     ? (latestClarifyQuestion || 'Нужно уточнение от пользователя')
-                    : (String((activeRun?.pendingConfirmation as Record<string, unknown> | null)?.summary || '')
-                      || String((activeRun?.pendingConfirmation as Record<string, unknown> | null)?.message || '')
+                    : (String(activeRun?.pendingConfirmation?.context.summary || '')
+                      || String(activeRun?.pendingConfirmation?.context.message || '')
                       || 'Требуется подтверждение')}
                 </div>
                 <div className={styles['clarify-row']}>
@@ -542,16 +493,6 @@ export default function RunChat({
             </div>
           </div>
           <div className={styles['input-row']}>
-            <select
-              className={styles['mode-select']}
-              value={executionMode}
-              onChange={(e) => setExecutionMode(e.target.value as ExecutionMode)}
-              disabled={isRunning || isUploading || isWaitingInput}
-              aria-label="Execution mode"
-            >
-              <option value="normal">Normal</option>
-              <option value="thinking">Thinking</option>
-            </select>
             <button
               type="button"
               className={styles['upload-btn']}

@@ -5,7 +5,7 @@ import mimetypes
 import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from app.services.extractors import ExtractResult, ExtractorRegistry
 
@@ -24,6 +24,7 @@ class ExtractionRequest:
     profile: str = "chat_preview"
     max_chars: int = 32_000
     max_bytes: int = 8 * 1024 * 1024
+    observer: Optional[Callable[[str, dict[str, Any]], Awaitable[None]]] = None
 
 
 @dataclass
@@ -41,52 +42,71 @@ class DocumentExtractionService:
     """Shared profile-driven facade for tools and RAG ingestion."""
 
     async def extract(self, request: ExtractionRequest) -> ExtractionOutput:
-        if len(request.payload) > request.max_bytes:
-            raise ValueError(f"File exceeds extraction limit of {request.max_bytes} bytes")
-        if request.profile not in {"chat_preview", "rag_ingest"}:
-            raise ValueError(f"Unsupported extraction profile: {request.profile}")
+        started_at = asyncio.get_running_loop().time()
 
-        detected = self.detect_format(
-            request.payload,
-            filename=request.filename,
-            content_type=request.content_type,
+        async def observe(stage: str, **payload: Any) -> None:
+            if request.observer is not None:
+                await request.observer(stage, payload)
+
+        await observe(
+            "started", filename=request.filename, profile=request.profile,
+            size_bytes=len(request.payload), content_type=request.content_type,
         )
-        if detected is None:
-            return ExtractionOutput(
-                text="",
-                content_kind="binary",
-                parser="unsupported",
-                warnings=["File format is not supported for text extraction"],
+        try:
+            if len(request.payload) > request.max_bytes:
+                raise ValueError(f"File exceeds extraction limit of {request.max_bytes} bytes")
+            if request.profile not in {"chat_preview", "rag_ingest"}:
+                raise ValueError(f"Unsupported extraction profile: {request.profile}")
+
+            detected = self.detect_format(
+                request.payload,
+                filename=request.filename,
+                content_type=request.content_type,
             )
+            if detected is None:
+                output = ExtractionOutput(
+                    text="", content_kind="binary", parser="unsupported",
+                    warnings=["File format is not supported for text extraction"],
+                )
+                await observe("completed", parser=output.parser, content_kind=output.content_kind,
+                              warnings=output.warnings, duration_ms=int((asyncio.get_running_loop().time() - started_at) * 1000))
+                return output
 
-        result: ExtractResult = await asyncio.to_thread(
-            ExtractorRegistry.extract, request.payload, detected
-        )
-        warnings = list(result.warnings)
-        text = result.text or ""
-        truncated = False
-        if request.profile == "chat_preview" and len(text) > request.max_chars:
-            text = text[: request.max_chars]
-            truncated = True
-            warnings.append(f"Preview truncated to {request.max_chars} characters")
+            result: ExtractResult = await asyncio.to_thread(
+                ExtractorRegistry.extract, request.payload, detected
+            )
+            warnings = list(result.warnings)
+            text = result.text or ""
+            truncated = False
+            if request.profile == "chat_preview" and len(text) > request.max_chars:
+                text = text[: request.max_chars]
+                truncated = True
+                warnings.append(f"Preview truncated to {request.max_chars} characters")
 
-        ext = detected.rsplit(".", 1)[-1].lower() if "." in detected else ""
-        content_kind = "table" if ext in TABLE_EXTENSIONS else "document"
-        if ext in TEXT_EXTENSIONS and ext not in TABLE_EXTENSIONS:
-            content_kind = "text"
-        table = None
-        if content_kind == "table":
-            table = {"format": ext, "text_projection": text}
+            ext = detected.rsplit(".", 1)[-1].lower() if "." in detected else ""
+            content_kind = "table" if ext in TABLE_EXTENSIONS else "document"
+            if ext in TEXT_EXTENSIONS and ext not in TABLE_EXTENSIONS:
+                content_kind = "text"
+            table = None
+            if content_kind == "table":
+                table = {"format": ext, "text_projection": text}
 
-        return ExtractionOutput(
-            text=text,
-            content_kind=content_kind,
-            parser=result.kind,
-            meta=dict(result.meta or {}),
-            warnings=warnings,
-            truncated=truncated,
-            table=table,
-        )
+            output = ExtractionOutput(
+                text=text, content_kind=content_kind, parser=result.kind,
+                meta=dict(result.meta or {}), warnings=warnings, truncated=truncated, table=table,
+            )
+            await observe(
+                "completed", parser=output.parser, content_kind=output.content_kind,
+                truncated=output.truncated, warnings=output.warnings,
+                output_chars=len(output.text), duration_ms=int((asyncio.get_running_loop().time() - started_at) * 1000),
+            )
+            return output
+        except Exception as exc:
+            await observe(
+                "failed", error_code=type(exc).__name__,
+                duration_ms=int((asyncio.get_running_loop().time() - started_at) * 1000),
+            )
+            raise
 
     @classmethod
     def detect_format(

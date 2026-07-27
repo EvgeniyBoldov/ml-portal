@@ -1,5 +1,5 @@
 """
-Runtime v3 — agentic pipeline with componentized memory and next-step planner.
+Runtime v3 — agentic pipeline with componentized memory and persisted task graphs.
 
 Public surface:
     from app.runtime import RuntimePipeline, PipelineRequest, RuntimeEvent, RuntimeEventType
@@ -13,8 +13,6 @@ Design goals:
 from app.runtime.events import RuntimeEvent, RuntimeEventType, OrchestrationPhase
 from app.runtime.contracts import (
     PipelineRequest,
-    NextStep,
-    NextStepKind,
     PipelineStopReason,
 )
 from app.runtime.orchestrator_contracts import (
@@ -43,8 +41,6 @@ __all__ = [
     "RuntimeEvent",
     "RuntimeEventType",
     "OrchestrationPhase",
-    "NextStep",
-    "NextStepKind",
     "PipelineStopReason",
     "PlanPatch",
     "PlanRequest",

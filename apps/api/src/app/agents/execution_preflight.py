@@ -40,6 +40,7 @@ from app.core.exceptions import AgentUnavailableError, AppError as PreflightErro
 from app.core.logging import get_logger
 from app.models.agent import Agent
 from app.services.permission_service import EffectivePermissions, PermissionService
+from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 
 logger = get_logger(__name__)
 
@@ -132,6 +133,8 @@ class ExecutionPreflight:
         include_routable_agents: bool = True,
         routable_agents_override: Optional[List[Any]] = None,
         effective_permissions_override: Optional[EffectivePermissions] = None,
+        event_sink: Optional[Any] = None,
+        trace_parent_id: Optional[str] = None,
     ) -> ExecutionRequest:
         """Prepare ExecutionRequest for an already selected agent.
 
@@ -153,6 +156,23 @@ class ExecutionPreflight:
         start_time = time.time()
         run_id = uuid.uuid4()
         routing_reasons: List[str] = []
+
+        async def emit(event_type: RuntimeEventType, **payload: Any) -> None:
+            if event_sink is None:
+                return
+            await event_sink.emit(
+                RuntimeEvent(event_type, {
+                    "entity_type": "preflight",
+                    "entity_id": str(run_id),
+                    "parent_entity_type": "agent_execution" if trace_parent_id else "run",
+                    "parent_entity_id": trace_parent_id,
+                    "agent_slug": agent_slug,
+                    **payload,
+                }),
+                phase=OrchestrationPhase.AGENT,
+            )
+
+        await emit(RuntimeEventType.PREFLIGHT_STARTED)
 
         try:
             # 1. Resolve agent + version
@@ -280,10 +300,30 @@ class ExecutionPreflight:
                 status=RoutingStatus.SUCCESS,
                 duration_ms=exec_request.routing_duration_ms,
             )
+            await emit(
+                RuntimeEventType.PREFLIGHT_COMPLETED,
+                mode=mode.value,
+                duration_ms=exec_request.routing_duration_ms,
+                operations_count=len(operation_result.resolved_operations),
+                data_instances_count=len(operation_result.resolved_data_instances),
+                missing={
+                    "tools": list(operation_result.missing.tools),
+                    "collections": list(operation_result.missing.collections),
+                    "credentials": list(operation_result.missing.credentials),
+                },
+                rbac_audit=exec_request.rbac_audit,
+            )
+            await emit(
+                RuntimeEventType.PREFLIGHT_SNAPSHOT,
+                mode=mode.value,
+                limits=exec_request.limit_data,
+                rbac_audit=exec_request.rbac_audit,
+            )
 
             return exec_request
 
         except AgentUnavailableError:
+            await emit(RuntimeEventType.PREFLIGHT_FAILED, reason="unavailable")
             raise
         except Exception as e:
             logger.error(f"Preflight failed: {e}", exc_info=True)
@@ -299,6 +339,12 @@ class ExecutionPreflight:
                 status=RoutingStatus.FAILED,
                 duration_ms=int((time.time() - start_time) * 1000),
                 error_message=str(e),
+            )
+            await emit(
+                RuntimeEventType.PREFLIGHT_FAILED,
+                reason="exception",
+                duration_ms=int((time.time() - start_time) * 1000),
+                error_code=type(e).__name__,
             )
             raise PreflightError(f"Preflight failed: {e}") from e
 

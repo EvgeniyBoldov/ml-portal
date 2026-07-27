@@ -68,7 +68,7 @@ class PlannerDecisionKind(str, Enum):
     FAIL_PLAN = "fail_plan"
 
 
-class RequirementSpec(BaseModel):
+class NeedSpec(BaseModel):
     key: str = Field(..., min_length=1)
     kind: Literal["data", "artifact", "decision"] = "data"
     description: str = Field(..., min_length=1)
@@ -88,13 +88,15 @@ class TaskOutputSpec(BaseModel):
 
 class PlannedTask(BaseModel):
     task_id: str = Field(..., min_length=1)
-    title: str = Field(..., min_length=1)
-    objective: str = Field(..., min_length=1)
-    agent_slug: str = Field(..., min_length=1)
+    executor: str = Field(..., min_length=1)
+    intent: str = Field(..., min_length=1)
+    instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
     depends_on: List[str] = Field(default_factory=list)
-    requirements: List[RequirementSpec] = Field(default_factory=list)
+    needs: List[NeedSpec] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid"}
 
 
 class PlanPatch(BaseModel):
@@ -134,7 +136,7 @@ class PlanRequest(BaseModel):
     available_agents: List[Dict[str, Any]] = Field(default_factory=list)
     plan: Dict[str, Any] = Field(default_factory=dict)
     completed_outputs: Dict[str, Any] = Field(default_factory=dict)
-    requirements: List[Dict[str, Any]] = Field(default_factory=list)
+    needs: List[Dict[str, Any]] = Field(default_factory=list)
     last_failure: Optional[Dict[str, Any]] = None
     trigger: Optional[str] = None
     run_id: Optional[UUID] = None
@@ -144,10 +146,11 @@ class PlanRequest(BaseModel):
 
 class TaskRequest(BaseModel):
     task_id: str = Field(..., min_length=1)
-    title: str = Field(..., min_length=1)
-    objective: str = Field(..., min_length=1)
-    agent_slug: str = Field(..., min_length=1)
+    executor: str = Field(..., min_length=1)
+    intent: str = Field(..., min_length=1)
+    instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
+    needs: List[NeedSpec] = Field(default_factory=list)
     checkpoint: Dict[str, Any] = Field(default_factory=dict)
     dependency_outputs: Dict[str, Any] = Field(default_factory=dict)
 
@@ -163,7 +166,7 @@ class AgentTaskResult(BaseModel):
     summary: str = ""
     outputs: Dict[str, Any] = Field(default_factory=dict)
     checkpoint: Dict[str, Any] = Field(default_factory=dict)
-    needs: List[RequirementSpec] = Field(default_factory=list)
+    needs: List[NeedSpec] = Field(default_factory=list)
     question: Optional[str] = None
     reason_code: Optional[str] = None
     evidence: Dict[str, Any] = Field(default_factory=dict)

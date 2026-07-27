@@ -21,7 +21,6 @@ from app.api.v1.routers import profile as profile_router
 from app.api.v1.routers.rag import router as rag_router
 from app.api.v1.routers.collections import router as collections_router
 from app.api.v1.routers.admin import router as admin_router
-from app.api.v1.routers.runtime_plans import router as runtime_plans_router
 from app.api.v1.routers.files import router as files_router
 from app.api.v1.routers.internal_mcp_credentials import router as internal_mcp_credentials_router
 from app.api.mcp import router as mcp_router
@@ -50,9 +49,6 @@ api_v1.include_router(api_keys_router.router, prefix="/api-keys", tags=["api-key
 
 # Profile endpoints (user profile and API tokens)
 api_v1.include_router(profile_router.router, tags=["profile"])
-
-# Plans endpoints (execution plan management)
-api_v1.include_router(runtime_plans_router, tags=["runtime-plans"])
 
 # Unified file delivery endpoints
 api_v1.include_router(files_router)

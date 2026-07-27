@@ -146,7 +146,7 @@ export interface SandboxRunCreate {
   execution_mode?: ExecutionMode;
 }
 
-// ── Run Step ────────────────────────────────────────────────────────────────
+// ── Runtime journal and live stream ─────────────────────────────────────────
 
 export interface RuntimeJournalEvent {
   id: string;
@@ -165,11 +165,33 @@ export interface RuntimeJournalEvent {
 
 // ── SSE events (streamed from backend) ──────────────────────────────────────
 
-export interface SandboxSSEEvent {
-  type: string;
-  run_id?: string;
-  [key: string]: unknown;
+export interface RuntimeProgress {
+  run_id: string;
+  phase: string;
+  kind: string;
+  description: string;
+  status?: string | null;
 }
+
+export interface SandboxPause {
+  run_id: string;
+  reason: 'waiting_confirmation' | 'waiting_input';
+  action: Record<string, unknown>;
+  context: Record<string, unknown>;
+  contract_version: number;
+}
+
+export type SandboxSSEEvent = SandboxPause;
+
+export type SandboxStreamEvent =
+  | { type: 'run_started'; runId: string }
+  | { type: 'progress'; progress: RuntimeProgress }
+  | { type: 'journal'; journal: RuntimeJournalEvent }
+  | { type: 'delta'; runId: string; content: string }
+  | { type: 'final'; runId: string; content: string }
+  | { type: 'pause'; pause: SandboxPause }
+  | { type: 'error'; runId: string; error: string }
+  | { type: 'done'; runId: string };
 
 // ── Confirm ─────────────────────────────────────────────────────────────────
 

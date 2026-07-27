@@ -1,13 +1,13 @@
 """
 Canonical runtime events for the v3 pipeline.
 
-One event model, one envelope, one sequence counter. Consumers:
+One event model, one journal-assigned envelope. Consumers:
     * ChatEventMapper (SSE to frontend)
     * Sandbox inspector
     * Trace logger
 
-Envelope fields (phase, sequence, run_id, chat_id) attach on emission
-via Pipeline's event emitter — the raw event itself only carries domain data.
+Envelope fields attach only after the journal has persisted the row and
+assigned its DB sequence — the raw event itself only carries domain data.
 """
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ class RuntimeEventType(str, Enum):
     # Lifecycle — planner iteration
     PLANNER_ITERATION_START = "planner_iteration_start"
     PLANNER_ITERATION_END = "planner_iteration_end"
+    STEP_START = "step_start"
+    STEP_END = "step_end"
     PLANNER_INVOCATION_STARTED = "planner_invocation_started"
     PLANNER_INVOCATION_FINISHED = "planner_invocation_finished"
     # Lifecycle — agent
@@ -58,11 +60,20 @@ class RuntimeEventType(str, Enum):
     BUDGET_SNAPSHOT = "budget_snapshot"
     BUDGET_CONSUMED = "budget_consumed"
     BUDGET_REJECTED = "budget_rejected"
+    PREFLIGHT_SNAPSHOT = "preflight_snapshot"
+    PREFLIGHT_STARTED = "preflight_started"
+    PREFLIGHT_COMPLETED = "preflight_completed"
+    PREFLIGHT_FAILED = "preflight_failed"
+    RBAC_SNAPSHOT = "rbac_snapshot"
+    LIMITS_SNAPSHOT = "limits_snapshot"
     LLM_REQUEST = "llm_request"
     LLM_RESPONSE = "llm_response"
     # Tool execution
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    EXTRACTION_STARTED = "extraction_started"
+    EXTRACTION_COMPLETED = "extraction_completed"
+    EXTRACTION_FAILED = "extraction_failed"
     # Streaming answer
     DELTA = "delta"
     FINAL = "final"
@@ -152,13 +163,55 @@ class RuntimeEvent:
         })
 
     @classmethod
+    def step_start(
+        cls, *, step_id: str, iteration_id: str, kind: str, title: Optional[str] = None,
+        objective: Optional[str] = None, intent: Optional[str] = None,
+        inputs: Optional[Dict[str, Any]] = None, risk: Optional[str] = None,
+        **extra: Any,
+    ) -> "RuntimeEvent":
+        payload: Dict[str, Any] = {
+            "entity_id": step_id, "entity_type": "step",
+            "parent_entity_type": "planner_iteration", "parent_entity_id": iteration_id,
+            "kind": kind,
+        }
+        for key, value in {
+            "title": title, "objective": objective, "intent": intent,
+            "inputs": inputs, "risk": risk,
+        }.items():
+            if value not in (None, "", {}, []):
+                payload[key] = value
+        payload.update(extra)
+        return cls(RuntimeEventType.STEP_START, payload)
+
+    @classmethod
+    def step_end(
+        cls, *, step_id: str, iteration_id: str, status: str,
+        outcome: Optional[str] = None, summary: Optional[str] = None,
+        sufficient_for_phase: Optional[bool] = None, **extra: Any,
+    ) -> "RuntimeEvent":
+        payload: Dict[str, Any] = {
+            "entity_id": step_id, "entity_type": "step",
+            "parent_entity_type": "planner_iteration", "parent_entity_id": iteration_id,
+            "status": status,
+        }
+        for key, value in {
+            "outcome": outcome, "summary": summary,
+            "sufficient_for_phase": sufficient_for_phase,
+        }.items():
+            if value is not None and value != "":
+                payload[key] = value
+        payload.update(extra)
+        return cls(RuntimeEventType.STEP_END, payload)
+
+    @classmethod
     def agent_start(
-        cls, *, agent_run_id: str, parent_entity_id: str, parent_entity_type: str = "planner_iteration",
+        cls, *, agent_execution_id: str,
+        parent_entity_id: str, parent_entity_type: str = "planner_iteration",
         agent_slug: str, executor_type: str = "agent", executor_name: Optional[str] = None,
         task_title: Optional[str] = None, **extra: Any
     ) -> "RuntimeEvent":
         return cls(RuntimeEventType.AGENT_START, {
-            "entity_id": agent_run_id, "entity_type": "agent_run",
+            "entity_id": agent_execution_id, "entity_type": "agent_execution",
             "parent_entity_type": parent_entity_type, "parent_entity_id": parent_entity_id,
             "agent_slug": agent_slug,
             "executor_type": executor_type,
@@ -169,11 +222,12 @@ class RuntimeEvent:
 
     @classmethod
     def agent_end(
-        cls, *, agent_run_id: str, parent_entity_id: str, parent_entity_type: str = "planner_iteration",
+        cls, *, agent_execution_id: str,
+        parent_entity_id: str, parent_entity_type: str = "planner_iteration",
         agent_slug: str, status: str = "completed", **extra: Any
     ) -> "RuntimeEvent":
         return cls(RuntimeEventType.AGENT_END, {
-            "entity_id": agent_run_id, "entity_type": "agent_run",
+            "entity_id": agent_execution_id, "entity_type": "agent_execution",
             "parent_entity_type": parent_entity_type, "parent_entity_id": parent_entity_id,
             "agent_slug": agent_slug, "status": status, **extra,
         })
@@ -340,7 +394,7 @@ class RuntimeEvent:
         parent_entity_type: Optional[str] = None,
         parent_entity_id: Optional[str] = None,
         agent_slug: Optional[str] = None,
-        agent_run_id: Optional[str] = None,
+        agent_execution_id: Optional[str] = None,
         llm_call_id: Optional[str] = None,
         actor_type: Optional[str] = None,
         actor_entity_id: Optional[str] = None,
@@ -355,8 +409,8 @@ class RuntimeEvent:
             payload["parent_entity_id"] = parent_entity_id
         if agent_slug is not None:
             payload["agent_slug"] = agent_slug
-        if agent_run_id is not None:
-            payload["agent_run_id"] = agent_run_id
+        if agent_execution_id is not None:
+            payload["agent_execution_id"] = agent_execution_id
         if llm_call_id is not None:
             payload["llm_call_id"] = llm_call_id
         if actor_type is not None:
@@ -385,7 +439,7 @@ class RuntimeEvent:
         parent_entity_type: Optional[str] = None,
         parent_entity_id: Optional[str] = None,
         agent_slug: Optional[str] = None,
-        agent_run_id: Optional[str] = None,
+        agent_execution_id: Optional[str] = None,
         llm_call_id: Optional[str] = None,
         actor_type: Optional[str] = None,
         actor_entity_id: Optional[str] = None,
@@ -427,8 +481,8 @@ class RuntimeEvent:
             payload["parent_entity_id"] = parent_entity_id
         if agent_slug is not None:
             payload["agent_slug"] = agent_slug
-        if agent_run_id is not None:
-            payload["agent_run_id"] = agent_run_id
+        if agent_execution_id is not None:
+            payload["agent_execution_id"] = agent_execution_id
         if llm_call_id is not None:
             payload["llm_call_id"] = llm_call_id
         if actor_type is not None:
@@ -612,6 +666,8 @@ class RuntimeEvent:
         sequence: int,
         run_id: Optional[str] = None,
         chat_id: Optional[str] = None,
+        event_id: Optional[str] = None,
+        occurred_at: Optional[str] = None,
     ) -> "RuntimeEvent":
         """Return a copy of this event with orchestration envelope attached in `data`."""
         enriched = dict(self.data)
@@ -620,5 +676,7 @@ class RuntimeEvent:
             "sequence": sequence,
             "run_id": run_id,
             "chat_id": chat_id,
+            "event_id": event_id,
+            "occurred_at": occurred_at,
         }
         return RuntimeEvent(self.type, enriched)

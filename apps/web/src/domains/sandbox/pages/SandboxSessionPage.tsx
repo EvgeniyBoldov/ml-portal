@@ -19,9 +19,8 @@ import RunChat from '../components/RunChat';
 import ConfigPanel from '../components/ConfigPanel';
 import ConfirmWriteDialog from '../components/ConfirmWriteDialog';
 import type { SandboxSelectedItem } from '../types';
-import type { ExecutionMode } from '@/shared/api/types';
 import type { SandboxTraceState } from '../traceState';
-import type { TraceInspectionTarget } from '../traceProjection';
+import { resolveTraceInspectionTarget, type TraceInspectionTarget } from '../traceProjection';
 import styles from './SandboxSessionPage.module.css';
 
 const SIDEBAR_WIDTH_KEY = 'sandbox.sidebar.width';
@@ -61,6 +60,13 @@ export default function SandboxSessionPage() {
   const [isCompactLayout, setIsCompactLayout] = useState<boolean>(window.innerWidth < 1200);
   
   const sandboxRun = useSandboxRun(sessionId ?? '');
+
+  useEffect(() => {
+    if (!selectedTraceTarget || selectedTraceState?.runId !== sandboxRun.activeRun.trace.runId) return;
+    const resolved = resolveTraceInspectionTarget(sandboxRun.activeRun.trace, selectedTraceTarget.key);
+    if (resolved) setSelectedTraceTarget(resolved);
+    setSelectedTraceState(sandboxRun.activeRun.trace);
+  }, [sandboxRun.activeRun.trace, selectedTraceState?.runId, selectedTraceTarget?.key]);
 
   const { data: branches = [] } = useQuery({
     queryKey: qk.sandbox.branches.list(sessionId ?? ''),
@@ -128,9 +134,9 @@ export default function SandboxSessionPage() {
   const isOwner = user?.id === session?.owner_id;
   const isReadOnly = !isOwner;
 
-  const handleRun = (text: string, parentRunId?: string | null, attachmentIds?: string[], executionMode: ExecutionMode = 'normal') => {
+  const handleRun = (text: string, parentRunId?: string | null, attachmentIds?: string[]) => {
     if (isReadOnly) return;
-    sandboxRun.run(text, parentRunId, activeBranchId || undefined, attachmentIds, executionMode);
+    sandboxRun.run(text, parentRunId, activeBranchId || undefined, attachmentIds);
   };
 
   const handleSelectRun = (runId?: string) => {
@@ -299,6 +305,7 @@ export default function SandboxSessionPage() {
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
           onSelectTraceTarget={(target, trace) => { setSelectedTraceTarget(target); setSelectedTraceState(trace); }}
+          selectedTraceTargetKey={selectedTraceTarget?.key}
         />
       </div>
       {!isCompactLayout && (

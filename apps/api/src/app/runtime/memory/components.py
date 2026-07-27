@@ -544,10 +544,10 @@ class ToolLedgerMemoryComponent:
         )
 
 
-class AgentRunMemoryComponent:
+class AgentExecutionMemoryComponent:
     """Recent sub-agent outcomes from prior turns/runs."""
 
-    name = "agent_runs"
+    name = "agent_executions"
     priority = 35
 
     async def collect(self, ctx: MemoryQueryContext) -> MemorySection:
@@ -560,7 +560,7 @@ class AgentRunMemoryComponent:
             items.append(
                 MemoryItem(
                     text=f"{slug} [{label}]: {_trim_text(summary, 260)}",
-                    source="runtime.agent_runs",
+                    source="runtime.agent_executions",
                     subject=slug,
                     score=0.35,
                     redaction_level="internal",

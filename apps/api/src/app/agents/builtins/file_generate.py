@@ -78,7 +78,7 @@ class FileGenerateTool(VersionedTool):
         from app.core.db import get_session_factory
         from app.services.file_generation_service import FileGenerationService
 
-        log = ctx.tool_logger("file.generate")
+        log = ctx.tool_notes("file.generate")
 
         filename = str(args.get("filename") or "").strip()
         content = str(args.get("content") or "")

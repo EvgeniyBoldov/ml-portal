@@ -2,7 +2,7 @@
 import asyncio
 import json
 import uuid
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -33,8 +33,8 @@ from app.schemas.sandbox import (
     SandboxRunCreate,
     SandboxRunListItem,
     SandboxRunDetailResponse,
-    RuntimeJournalEventResponse,
 )
+from app.schemas.runtime_events import RuntimeJournalEventResponse
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.chat_visibility import make_sandbox_upload_chat_name
 from app.services.sandbox_service import SandboxService
@@ -42,7 +42,7 @@ from app.services.runtime_event_journal_service import RuntimeEventJournalServic
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.chat_router_event_mapper import build_resume_content
 from app.services.runtime_terminal_status import planner_terminal_from_event
-from app.services.runtime_event_logger import RuntimeEventLogger, RuntimeLogContext, RuntimeLoggingLevel
+from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
 from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
 
 from .helpers import check_session_owner, tenant_uuid, user_uuid
@@ -50,6 +50,101 @@ from .helpers import check_session_owner, tenant_uuid, user_uuid
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+_JOURNAL_WIRE_FIELDS = {
+    "type", "run_id", "event_id", "sequence", "occurred_at", "entity_type",
+    "entity_id", "parent_entity_type", "parent_entity_id", "caused_by_event_id",
+    "duration_ms",
+}
+
+
+def _format_sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+def _journal_payload(*, event_id: object, run_id: object, sequence: object, event_type: object,
+                     occurred_at: object, entity_type: object = None, entity_id: object = None,
+                     parent_entity_type: object = None, parent_entity_id: object = None,
+                     caused_by_event_id: object = None, duration_ms: object = None,
+                     payload: object = None) -> dict:
+    event = RuntimeJournalEventResponse.model_validate({
+        "id": event_id, "run_id": run_id, "sequence": sequence, "event_type": event_type,
+        "occurred_at": occurred_at, "entity_type": entity_type, "entity_id": entity_id,
+        "parent_entity_type": parent_entity_type, "parent_entity_id": parent_entity_id,
+        "caused_by_event_id": caused_by_event_id, "duration_ms": duration_ms,
+        "payload": payload if isinstance(payload, dict) else {},
+    })
+    return event.model_dump(mode="json")
+
+
+def _journal_from_row(row: object) -> dict:
+    return _journal_payload(
+        event_id=getattr(row, "id"), run_id=getattr(row, "run_id"), sequence=getattr(row, "sequence"),
+        event_type=getattr(row, "event_type"), occurred_at=getattr(row, "occurred_at"),
+        entity_type=getattr(row, "entity_type"), entity_id=getattr(row, "entity_id"),
+        parent_entity_type=getattr(row, "parent_entity_type"), parent_entity_id=getattr(row, "parent_entity_id"),
+        caused_by_event_id=getattr(row, "caused_by_event_id"), duration_ms=getattr(row, "duration_ms"),
+        payload=getattr(row, "payload"),
+    )
+
+
+def _journal_from_tail(message: dict) -> dict | None:
+    if not all(key in message for key in ("event_id", "run_id", "sequence", "type", "occurred_at")):
+        return None
+    return _journal_payload(
+        event_id=message["event_id"], run_id=message["run_id"], sequence=message["sequence"],
+        event_type=message["type"], occurred_at=message["occurred_at"],
+        entity_type=message.get("entity_type"), entity_id=message.get("entity_id"),
+        parent_entity_type=message.get("parent_entity_type"), parent_entity_id=message.get("parent_entity_id"),
+        caused_by_event_id=message.get("caused_by_event_id"), duration_ms=message.get("duration_ms"),
+        payload={key: value for key, value in message.items() if key not in _JOURNAL_WIRE_FIELDS},
+    )
+
+
+def _tail_sse_frame(message: dict) -> str | None:
+    if message.get("type") == "runtime_progress":
+        return _format_sse("progress", {
+            "run_id": str(message.get("run_id") or ""),
+            "phase": str(message.get("phase") or ""),
+            "kind": str(message.get("kind") or ""),
+            "description": str(message.get("description") or ""),
+            "status": message.get("status"),
+        })
+    journal = _journal_from_tail(message)
+    return _format_sse("journal", journal) if journal is not None else None
+
+
+async def _merge_pipeline_and_tail(
+    pipeline_events: AsyncIterator[Any],
+    tail_queue: asyncio.Queue[dict],
+) -> AsyncGenerator[tuple[str, Any], None]:
+    """Yield journal events while the pipeline is awaiting an LLM, tool, or worker."""
+    iterator = pipeline_events.__aiter__()
+    pipeline_task: asyncio.Task[Any] | None = asyncio.create_task(anext(iterator))
+    tail_task: asyncio.Task[dict] | None = asyncio.create_task(tail_queue.get())
+    try:
+        while pipeline_task is not None:
+            pending = {pipeline_task}
+            if tail_task is not None:
+                pending.add(tail_task)
+            done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            if tail_task is not None and tail_task in done:
+                yield "tail", tail_task.result()
+                tail_task = asyncio.create_task(tail_queue.get())
+            if pipeline_task in done:
+                try:
+                    event = pipeline_task.result()
+                except StopAsyncIteration:
+                    pipeline_task = None
+                    continue
+                yield "pipeline", event
+                pipeline_task = asyncio.create_task(anext(iterator))
+    finally:
+        for task in (pipeline_task, tail_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(*(task for task in (pipeline_task, tail_task) if task is not None), return_exceptions=True)
+
 def _extract_attachment_meta_from_events(events: list) -> list[dict]:
     for event in reversed(events):
         payload = getattr(event, "payload", None)
@@ -148,14 +243,7 @@ async def get_run_detail(
         error=run.error,
         started_at=run.started_at,
         finished_at=run.finished_at,
-        events=[RuntimeJournalEventResponse(
-            id=event.id, run_id=event.run_id, sequence=event.sequence,
-            event_type=event.event_type, occurred_at=event.occurred_at,
-            entity_type=event.entity_type, entity_id=event.entity_id,
-            parent_entity_type=event.parent_entity_type, parent_entity_id=event.parent_entity_id,
-            caused_by_event_id=event.caused_by_event_id, duration_ms=event.duration_ms,
-            payload=event.payload,
-        ) for event in events],
+        events=[RuntimeJournalEventResponse.model_validate(_journal_from_row(event)) for event in events],
     )
 
 
@@ -272,9 +360,10 @@ async def run_sandbox(
                         agent_version_id=agent_version_id,
                     )
                 except Exception as agent_err:
-                    await RuntimeEventLogger(
+                    await RuntimeEventJournalFactory.create(
                         context=RuntimeLogContext(run_id=run_id, level=RuntimeLoggingLevel.FULL,
-                            origin="sandbox", tenant_id=t_uuid, user_id=u_uuid, stream=True),
+                            origin="sandbox", tenant_id=t_uuid, user_id=u_uuid,
+                            stream_logs=True, stream_progress=True),
                         session_factory=session_factory,
                     ).error(agent_err, payload={"stage": "sandbox_agent_resolve", "agent_slug": agent_slug})
                     try:
@@ -283,8 +372,8 @@ async def run_sandbox(
                         await stream_db.commit()
                     except Exception:
                         pass
-                    yield f"data: {json.dumps({'type': 'error', 'error': str(agent_err), 'run_id': str(run_id)})}\n\n"
-                    yield f"data: {json.dumps({'type': 'done', 'run_id': str(run_id)})}\n\n"
+                    yield _format_sse("error", {"run_id": str(run_id), "error": "Sandbox agent resolution failed"})
+                    yield _format_sse("done", {"run_id": str(run_id)})
                     return
 
             if resolved_agent_state is not None:
@@ -327,6 +416,7 @@ async def run_sandbox(
 
             pipeline_request = PipelineRequest(
                 request_text=data.request_text,
+                runtime_run_id=str(run_id),
                 chat_id=str(sandbox_chat_id),
                 user_id=str(u_uuid),
                 tenant_id=str(t_uuid),
@@ -377,26 +467,13 @@ async def run_sandbox(
                     if event_id in emitted_event_ids:
                         continue
                     emitted_event_ids.add(event_id)
-                    payloads.append({
-                        "type": row.event_type,
-                        "run_id": str(row.run_id),
-                        "event_id": event_id,
-                        "sequence": row.sequence,
-                        "occurred_at": row.occurred_at.isoformat(),
-                        "entity_type": row.entity_type,
-                        "entity_id": row.entity_id,
-                        "parent_entity_type": row.parent_entity_type,
-                        "parent_entity_id": row.parent_entity_id,
-                        "caused_by_event_id": str(row.caused_by_event_id) if row.caused_by_event_id else None,
-                        "duration_ms": row.duration_ms,
-                        **(row.payload or {}),
-                    })
+                    payloads.append(_journal_from_row(row))
                 return payloads
 
             try:
                 await tail_subscriber.subscribe()
 
-                yield f'data: {json.dumps({"type": "stream_connected", "run_id": str(run_id)})}\n\n'
+                yield _format_sse("run_started", {"run_id": str(run_id)})
 
                 # Confirm the HTTP/SSE connection immediately.  Runtime work
                 # can spend several seconds inside an LLM/tool call before the
@@ -407,7 +484,16 @@ async def run_sandbox(
 
                 tail_listener_task = asyncio.create_task(_tail_listener())
 
-                async for event in pipeline.execute(pipeline_request, tool_ctx):
+                async for source, item in _merge_pipeline_and_tail(pipeline.execute(pipeline_request, tool_ctx), tail_queue):
+                    if source == "tail":
+                        _evt_type, evt_payload = await _handle_tail_event(item)
+                        if evt_payload.get("event_id"):
+                            emitted_event_ids.add(str(evt_payload["event_id"]))
+                        frame = _tail_sse_frame(evt_payload)
+                        if frame is not None:
+                            yield frame
+                        continue
+                    event = item
                     terminal = planner_terminal_from_event(event)
                     if terminal is not None:
                         final_status = terminal[0].value
@@ -424,17 +510,26 @@ async def run_sandbox(
                         )
                         await stream_db.commit()
                         pause_event = {
-                            "type": "run_paused",
                             "reason": paused_payload["reason"],
                             "action": paused_payload["action"],
                             "context": paused_payload["context"],
                             "contract_version": paused_payload["contract_version"],
                             "run_id": str(run_id),
                         }
-                        yield f"data: {json.dumps(pause_event, ensure_ascii=False)}\n\n"
+                        yield _format_sse("pause", pause_event)
+                    elif event.type == RuntimeEventType.DELTA:
+                        content = event.data.get("content")
+                        if isinstance(content, str) and content:
+                            yield _format_sse("delta", {"run_id": str(run_id), "content": content})
                     elif event.type == RuntimeEventType.FINAL:
                         final_status = "completed"
                         final_error = None
+                        yield _format_sse("final", {
+                            "run_id": str(run_id),
+                            "content": str(event.data.get("content") or ""),
+                            "sources": event.data.get("sources") or [],
+                            "attachments": event.data.get("attachments") or [],
+                        })
                     if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
                         tail_id = str(event.data.get("tail_id") or "").strip()
                         if tail_id:
@@ -442,25 +537,6 @@ async def run_sandbox(
                                 tail_finished_early.discard(tail_id)
                             else:
                                 tail_pending.add(tail_id)
-                    # The runtime logger is the sole producer of sandbox
-                    # events.  It persists first and then publishes to this
-                    # run's tail channel; consuming that channel here keeps
-                    # the live inspector identical to the event journal.
-                    try:
-                        message = await asyncio.wait_for(tail_queue.get(), timeout=1.0)
-                    except asyncio.TimeoutError:
-                        for fallback in await _journal_fallback():
-                            yield f"data: {json.dumps(fallback, ensure_ascii=False, default=str)}\n\n"
-                        continue
-                    evt_type, evt_payload = await _handle_tail_event(message)
-                    if evt_payload.get("event_id"):
-                        emitted_event_ids.add(str(evt_payload["event_id"]))
-                    yield f"data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n"
-                    drained_tail = await _drain_tail_events()
-                    for evt_type, evt_payload in drained_tail:
-                        if evt_payload.get("event_id"):
-                            emitted_event_ids.add(str(evt_payload["event_id"]))
-                        yield f"data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n"
 
                 if not str(final_status).startswith("waiting_"):
                     svc_final = SandboxService(stream_db)
@@ -475,29 +551,26 @@ async def run_sandbox(
                             message = await asyncio.wait_for(tail_queue.get(), timeout=timeout)
                         except asyncio.TimeoutError:
                             continue
-                        evt_type, evt_payload = await _handle_tail_event(message)
-                        yield f"data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n"
+                        _evt_type, evt_payload = await _handle_tail_event(message)
+                        frame = _tail_sse_frame(evt_payload)
+                        if frame is not None:
+                            yield frame
                     if tail_pending:
-                        timeout_payload = {
-                            "type": "status",
-                            "run_id": str(run_id),
-                            "stage": "tail_timeout",
-                            "pending_tail_ids": sorted(tail_pending),
-                        }
-                        yield f"data: {json.dumps(timeout_payload, ensure_ascii=False)}\n\n"
+                        logger.warning("sandbox_tail_timeout", extra={"run_id": str(run_id), "pending_tail_ids": sorted(tail_pending)})
 
                 # Redis pub/sub is best effort.  Flush anything persisted while
                 # the pipeline was running before closing the SSE response.
                 for fallback in await _journal_fallback():
-                    yield f"data: {json.dumps(fallback, ensure_ascii=False, default=str)}\n\n"
+                    yield _format_sse("journal", fallback)
 
             except Exception as e:
-                await RuntimeEventLogger(
+                await RuntimeEventJournalFactory.create(
                     context=RuntimeLogContext(run_id=run_id, level=RuntimeLoggingLevel.FULL,
-                        origin="sandbox", tenant_id=t_uuid, user_id=u_uuid, stream=True),
+                        origin="sandbox", tenant_id=t_uuid, user_id=u_uuid,
+                        stream_logs=True, stream_progress=True),
                     session_factory=session_factory,
                 ).error(e, payload={"stage": "sandbox_stream"})
-                yield f"data: {json.dumps({'type': 'error', 'error': str(e), 'run_id': str(run_id)})}\n\n"
+                yield _format_sse("error", {"run_id": str(run_id), "error": "Sandbox execution failed"})
                 try:
                     svc_err = SandboxService(stream_db)
                     await svc_err.finish_run(run_id, "failed", str(e))
@@ -512,7 +585,7 @@ async def run_sandbox(
                     except BaseException:
                         pass
                 await tail_subscriber.unsubscribe()
-                yield f"data: {json.dumps({'type': 'done', 'run_id': str(run_id)})}\n\n"
+                yield _format_sse("done", {"run_id": str(run_id)})
 
     return StreamingResponse(
         event_stream(),
@@ -638,8 +711,8 @@ async def resume_sandbox_run(
         await db.commit()
 
         async def _cancel_gen() -> AsyncGenerator[str, None]:
-            yield f'data: {{"type": "run_paused", "status": "cancelled", "run_id": "{run_id}"}}\n\n'
-            yield f'data: {{"type": "done", "run_id": "{run_id}"}}\n\n'
+            yield _format_sse("final", {"run_id": str(run_id), "status": "cancelled"})
+            yield _format_sse("done", {"run_id": str(run_id)})
 
         return StreamingResponse(_cancel_gen(), media_type="text/event-stream")
 
@@ -665,8 +738,8 @@ async def resume_sandbox_run(
         attachments_meta=attachment_meta
     )
 
-    # Extract agent_run_id for pipeline continuation (internal run ID from paused context)
-    agent_run_id = paused_context.get("run_id") if paused_context else None
+    # Preserve the runtime execution identity for continuation lineage.
+    agent_execution_id = paused_context.get("run_id") if paused_context else None
 
     checkpoint = RuntimeResumeCheckpointService().build(
         run_id=run_id,
@@ -732,6 +805,7 @@ async def resume_sandbox_run(
 
             pipeline_request = PipelineRequest(
                 request_text=request_text,
+                runtime_run_id=str(run_id),
                 chat_id=str(sandbox_chat_id),
                 user_id=str(u_uuid),
                 tenant_id=str(t_uuid),
@@ -747,7 +821,7 @@ async def resume_sandbox_run(
                 },
                 continuation_meta={
                     "resume_checkpoint": checkpoint,
-                    "resumed_from_run_id": agent_run_id,  # Continue same AgentRun, not new one
+                    "resumed_from_run_id": agent_execution_id,
                 },
                 confirmation_tokens=confirmed_fingerprints,
             )
@@ -792,26 +866,13 @@ async def resume_sandbox_run(
                     if event_id in emitted_event_ids:
                         continue
                     emitted_event_ids.add(event_id)
-                    payloads.append({
-                        "type": row.event_type,
-                        "run_id": str(row.run_id),
-                        "event_id": event_id,
-                        "sequence": row.sequence,
-                        "occurred_at": row.occurred_at.isoformat(),
-                        "entity_type": row.entity_type,
-                        "entity_id": row.entity_id,
-                        "parent_entity_type": row.parent_entity_type,
-                        "parent_entity_id": row.parent_entity_id,
-                        "caused_by_event_id": str(row.caused_by_event_id) if row.caused_by_event_id else None,
-                        "duration_ms": row.duration_ms,
-                        **(row.payload or {}),
-                    })
+                    payloads.append(_journal_from_row(row))
                 return payloads
 
             try:
                 await tail_subscriber.subscribe()
 
-                yield f'data: {json.dumps({"type": "stream_connected", "run_id": str(run_id)})}\n\n'
+                yield _format_sse("run_started", {"run_id": str(run_id)})
 
                 async def _tail_listener() -> None:
                     async for message in tail_subscriber.listen():
@@ -819,7 +880,16 @@ async def resume_sandbox_run(
 
                 tail_listener_task = asyncio.create_task(_tail_listener())
 
-                async for event in pipeline.execute(pipeline_request, tool_ctx):
+                async for source, item in _merge_pipeline_and_tail(pipeline.execute(pipeline_request, tool_ctx), tail_queue):
+                    if source == "tail":
+                        _evt_type, evt_payload = await _handle_tail_event(item)
+                        if evt_payload.get("event_id"):
+                            emitted_event_ids.add(str(evt_payload["event_id"]))
+                        frame = _tail_sse_frame(evt_payload)
+                        if frame is not None:
+                            yield frame
+                        continue
+                    event = item
                     terminal = planner_terminal_from_event(event)
                     if terminal is not None:
                         final_status = terminal[0].value
@@ -836,17 +906,26 @@ async def resume_sandbox_run(
                         )
                         await stream_db.commit()
                         pause_event = {
-                            "type": "run_paused",
                             "reason": paused_payload["reason"],
                             "action": paused_payload["action"],
                             "context": paused_payload["context"],
                             "contract_version": paused_payload["contract_version"],
                             "run_id": str(run_id),
                         }
-                        yield f'data: {json.dumps(pause_event, ensure_ascii=False)}\n\n'
+                        yield _format_sse("pause", pause_event)
+                    elif event.type == RuntimeEventType.DELTA:
+                        content = event.data.get("content")
+                        if isinstance(content, str) and content:
+                            yield _format_sse("delta", {"run_id": str(run_id), "content": content})
                     elif event.type == RuntimeEventType.FINAL:
                         final_status = "completed"
                         final_error = None
+                        yield _format_sse("final", {
+                            "run_id": str(run_id),
+                            "content": str(event.data.get("content") or ""),
+                            "sources": event.data.get("sources") or [],
+                            "attachments": event.data.get("attachments") or [],
+                        })
 
                     if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
                         tail_id = str(event.data.get("tail_id") or "").strip()
@@ -855,21 +934,6 @@ async def resume_sandbox_run(
                                 tail_finished_early.discard(tail_id)
                             else:
                                 tail_pending.add(tail_id)
-                    try:
-                        message = await asyncio.wait_for(tail_queue.get(), timeout=1.0)
-                    except asyncio.TimeoutError:
-                        for fallback in await _journal_fallback():
-                            yield f"data: {json.dumps(fallback, ensure_ascii=False, default=str)}\n\n"
-                        continue
-                    evt_type, evt_payload = await _handle_tail_event(message)
-                    if evt_payload.get("event_id"):
-                        emitted_event_ids.add(str(evt_payload["event_id"]))
-                    yield f'data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n'
-                    drained_tail = await _drain_tail_events()
-                    for evt_type, evt_payload in drained_tail:
-                        if evt_payload.get("event_id"):
-                            emitted_event_ids.add(str(evt_payload["event_id"]))
-                        yield f'data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n'
 
                 if not str(final_status).startswith("waiting_"):
                     svc_final = SandboxService(stream_db)
@@ -884,27 +948,24 @@ async def resume_sandbox_run(
                             message = await asyncio.wait_for(tail_queue.get(), timeout=timeout)
                         except asyncio.TimeoutError:
                             continue
-                        evt_type, evt_payload = await _handle_tail_event(message)
-                        yield f'data: {json.dumps(evt_payload, ensure_ascii=False)}\n\n'
+                        _evt_type, evt_payload = await _handle_tail_event(message)
+                        frame = _tail_sse_frame(evt_payload)
+                        if frame is not None:
+                            yield frame
                     if tail_pending:
-                        timeout_payload = {
-                            "type": "status",
-                            "run_id": str(run_id),
-                            "stage": "tail_timeout",
-                            "pending_tail_ids": sorted(tail_pending),
-                        }
-                        yield f'data: {json.dumps(timeout_payload, ensure_ascii=False)}\n\n'
+                        logger.warning("sandbox_tail_timeout", extra={"run_id": str(run_id), "pending_tail_ids": sorted(tail_pending)})
 
                 for fallback in await _journal_fallback():
-                    yield f"data: {json.dumps(fallback, ensure_ascii=False, default=str)}\n\n"
+                    yield _format_sse("journal", fallback)
 
             except Exception as e:
-                await RuntimeEventLogger(
+                await RuntimeEventJournalFactory.create(
                     context=RuntimeLogContext(run_id=run_id, level=RuntimeLoggingLevel.FULL,
-                        origin="sandbox", tenant_id=t_uuid, user_id=u_uuid, stream=True),
+                        origin="sandbox", tenant_id=t_uuid, user_id=u_uuid,
+                        stream_logs=True, stream_progress=True),
                     session_factory=session_factory,
                 ).error(e, payload={"stage": "sandbox_resume_stream"})
-                yield f'data: {json.dumps({"type": "error", "error": str(e), "run_id": str(run_id)})}\n\n'
+                yield _format_sse("error", {"run_id": str(run_id), "error": "Sandbox execution failed"})
                 try:
                     svc_err = SandboxService(stream_db)
                     await svc_err.finish_run(run_id, "failed", str(e))
@@ -920,6 +981,6 @@ async def resume_sandbox_run(
                         pass
                 await tail_subscriber.unsubscribe()
 
-            yield f'data: {json.dumps({"type": "done", "run_id": str(run_id)})}\n\n'
+            yield _format_sse("done", {"run_id": str(run_id)})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

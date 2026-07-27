@@ -169,25 +169,6 @@ class HelperSummaryPayload(BaseModel):
     unresolved_risks: List[str] = Field(default_factory=list)
 
 
-class PlannerStep(BaseModel):
-    """Individual step in planner execution."""
-    step_id: str = Field(default="s1", description="Unique step identifier")
-    title: str = Field(..., description="Step title")
-    kind: str = Field(..., pattern="^(agent|operation|llm|ask_user)$")
-    ref: Optional[str] = Field(None, description="Reference to agent/operation")
-    op: Optional[str] = Field(None, description="Operation to perform")
-    input: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Step input data")
-    requires_confirmation: bool = Field(default=False, description="Whether step requires confirmation")
-    risk_level: str = Field(default="low", pattern="^(low|medium|high|destructive)$")
-    on_fail: str = Field(default="retry", pattern="^(retry|replan|ask_user|abort)$")
-
-
-class PlannerPlan(BaseModel):
-    """Planner execution plan contract."""
-    goal: str = Field(default="", description="Overall goal")
-    steps: List[PlannerStep] = Field(..., description="Execution steps")
-
-
 # === Input Schemas ===
 
 class TriageInput(BaseModel):

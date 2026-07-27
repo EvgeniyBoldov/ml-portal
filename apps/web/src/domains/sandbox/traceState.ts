@@ -1,17 +1,6 @@
-export type RuntimeJournalEvent = {
-  id: string;
-  run_id: string;
-  sequence: number;
-  event_type: string;
-  occurred_at: string;
-  entity_type?: string | null;
-  entity_id?: string | null;
-  parent_entity_type?: string | null;
-  parent_entity_id?: string | null;
-  caused_by_event_id?: string | null;
-  duration_ms?: number | null;
-  payload: Record<string, unknown>;
-};
+import type { RuntimeJournalEvent } from './types';
+
+export type { RuntimeJournalEvent } from './types';
 
 export type TraceEntity = {
   key: string;
@@ -31,12 +20,13 @@ export type SandboxTraceState = {
   eventIdsBySequence: string[];
   entitiesByKey: Record<string, TraceEntity>;
   nextSequence: number | null;
+  pendingBySequence: Record<number, RuntimeJournalEvent>;
   protocolError: string | null;
 };
 
 export const emptySandboxTrace = (): SandboxTraceState => ({
   runId: null, rootEntityKey: null, eventsById: {}, eventIdsBySequence: [],
-  entitiesByKey: {}, nextSequence: null, protocolError: null,
+  entitiesByKey: {}, nextSequence: 1, pendingBySequence: {}, protocolError: null,
 });
 
 const keyOf = (type: string, id: string): string => `${type}:${id}`;
@@ -52,11 +42,17 @@ const isCreate = (type: string): boolean => (
 const isEnd = (type: string): boolean => type.endsWith('_end') || type.endsWith('_finished');
 const isSnapshot = (type: string): boolean => type.endsWith('_snapshot') || type === 'rbac_snapshot' || type === 'limit_snapshot';
 
-export function applyRuntimeJournalEvent(state: SandboxTraceState, event: RuntimeJournalEvent): SandboxTraceState {
-  if (state.eventsById[event.id]) return state;
-  if (state.nextSequence !== null && event.sequence !== state.nextSequence) {
-    return { ...state, protocolError: `Expected sequence ${state.nextSequence}, received ${event.sequence}` };
+function terminalStatus(event: RuntimeJournalEvent): string | undefined {
+  if (event.event_type === 'tool_result') {
+    return event.payload.success === true ? 'completed' : event.payload.success === false ? 'failed' : 'unknown';
   }
+  if (event.event_type === 'llm_response') return typeof event.payload.error_type === 'string' && event.payload.error_type ? 'failed' : 'completed';
+  if (event.event_type === 'question_answer') return 'completed';
+  if (event.event_type === 'error') return 'error';
+  return isEnd(event.event_type) ? String(event.payload.status ?? 'completed') : undefined;
+}
+
+function applyOrderedJournalEvent(state: SandboxTraceState, event: RuntimeJournalEvent): SandboxTraceState {
   const entityType = event.entity_type ?? stringField(event.payload.entity_type);
   const entityId = event.entity_id ?? stringField(event.payload.entity_id);
   if (!entityType || !entityId) {
@@ -96,7 +92,7 @@ export function applyRuntimeJournalEvent(state: SandboxTraceState, event: Runtim
     ...entity,
     parentKey: entity.parentKey ?? parentKey,
     eventIds: [...entity.eventIds, event.id],
-    status: isEnd(event.event_type) ? String(event.payload.status ?? 'completed') : entity.status,
+    status: terminalStatus(event) ?? entity.status,
     snapshotsByKind: isSnapshot(event.event_type)
       ? { ...entity.snapshotsByKind, [event.event_type]: event.id }
       : entity.snapshotsByKind,
@@ -119,8 +115,29 @@ export function applyRuntimeJournalEvent(state: SandboxTraceState, event: Runtim
     eventIdsBySequence: [...state.eventIdsBySequence, event.id],
     entitiesByKey,
     nextSequence: event.sequence + 1,
+    pendingBySequence: state.pendingBySequence,
     protocolError: null,
   };
+}
+
+export function applyRuntimeJournalEvent(state: SandboxTraceState, event: RuntimeJournalEvent): SandboxTraceState {
+  if (state.eventsById[event.id] || state.pendingBySequence[event.sequence]?.id === event.id) return state;
+  const expected = state.nextSequence ?? event.sequence;
+  if (event.sequence < expected) return state;
+  if (event.sequence > expected) {
+    return { ...state, pendingBySequence: { ...state.pendingBySequence, [event.sequence]: event } };
+  }
+
+  let next = applyOrderedJournalEvent(state, event);
+  const pending = { ...next.pendingBySequence };
+  delete pending[event.sequence];
+  next = { ...next, pendingBySequence: pending };
+  while (next.nextSequence !== null && pending[next.nextSequence]) {
+    const queued = pending[next.nextSequence];
+    delete pending[next.nextSequence];
+    next = { ...applyOrderedJournalEvent(next, queued), pendingBySequence: { ...pending } };
+  }
+  return next;
 }
 
 export function replayRuntimeJournal(events: RuntimeJournalEvent[]): SandboxTraceState {

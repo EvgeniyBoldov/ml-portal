@@ -10,6 +10,7 @@ from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from app.schemas.runtime_events import RuntimeJournalEventResponse
 from app.schemas.runtime_trace import RunTraceResponse
 
 
@@ -194,21 +195,6 @@ class SandboxRunDetailResponse(BaseModel):
 
 
 # ── Run Step ─────────────────────────────────────────────────────────────────
-
-class RuntimeJournalEventResponse(BaseModel):
-    id: UUID
-    run_id: UUID
-    sequence: int
-    event_type: str
-    occurred_at: datetime
-    entity_type: Optional[str] = None
-    entity_id: Optional[str] = None
-    parent_entity_type: Optional[str] = None
-    parent_entity_id: Optional[str] = None
-    caused_by_event_id: Optional[UUID] = None
-    duration_ms: Optional[int] = None
-    payload: dict[str, Any] = Field(default_factory=dict)
-
 
 # ── Actions ──────────────────────────────────────────────────────────────────
 

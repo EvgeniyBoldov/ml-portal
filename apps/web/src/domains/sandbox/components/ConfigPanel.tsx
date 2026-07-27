@@ -301,6 +301,7 @@ export function ConfigPanel({
   const selectedTool = selectedItem?.type === 'tool'
     ? catalog?.tools.find((tool) => tool.id === selectedItem.id)
     : undefined;
+  const toolNames = useMemo(() => new Map(catalog?.tools.map((tool) => [tool.slug, tool.name]) ?? []), [catalog?.tools]);
 
   const selectedBaseAgentVersion = selectedAgent?.versions.find((v) => v.id === selectedAgentVersionId);
 
@@ -810,7 +811,7 @@ export function ConfigPanel({
   return (
     <div className={styles.panel}>
       {isEntityInspectorMode ? (
-        <TraceInspector target={traceTarget ?? null} trace={traceState ?? null} />
+        <TraceInspector target={traceTarget ?? null} trace={traceState ?? null} toolNames={toolNames} />
       ) : (
       <>
       <div className={styles.header}>

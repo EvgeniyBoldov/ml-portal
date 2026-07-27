@@ -16,7 +16,7 @@
 
 ## Responsibility Split
 
-- `pipeline.py`: orchestration only (stage order, terminal handling, replay/resume entry points).
+- `pipeline.py`: orchestration only (stage order, terminal handling and resume entry points).
 - `assembler.py`: dependency wiring, cached services, stage factories.
 - `platform_config.py`: load platform snapshot (`policy`, routable agents, config degradation).
 - `orchestrator_contracts.py`: planner/orchestrator/task/result contracts.
@@ -39,12 +39,12 @@ Rule of thumb:
 
 | Concern | Current source | Where to change |
 |---|---|---|
-| Planner prompt | planner prompt builder | `app/runtime/planner/*` |
+| Planner prompt | active `system_llm_roles.planner` row in DB | `SystemLLMRoleService` |
 | Final synthesis prompt | DB role prompt with fallback | `app/runtime/synthesizer.py`, `app/services/system_llm_role_service.py` |
 | Summary/Memory prompts | legacy-compatible services | `app/runtime/summarizer_turn.py`, `app/runtime/memory/*` |
 
 Notes:
-- Planner prompt is code-defined for fast iteration.
+- Planner prompt is compiled exclusively from the active planner role in DB.
 - Final synthesis resolves prompt/model params from DB role config with safe fallback.
 
 ## Tunable Points
@@ -55,7 +55,6 @@ Notes:
 - Resume behavior: `resume.py`.
 - Budget contract: `budget.py` (`RuntimeBudget`, `RuntimeBudgetTracker`).
 - Redaction: `redactor.py` (`RuntimeRedactor`) for trace/prompt/tool/context surfaces.
-- Replay: `replay.py` (trace-pack validation and deterministic replay checks).
 
 Runtime-config keys currently used by orchestrator/agent flows:
 - `required_operation_retry_instruction` — text injected on protocol retry when agent skipped required tool call.
@@ -97,26 +96,15 @@ Rules:
 - System operations must be rendered separately from collection-bound operations.
 - Detailed collection-bound operation contracts must come from `collection.info` results, not from the initial prompt.
 
-## Trace-Pack v2 and Replay
-
-- Trace pack version: `runtime.trace_pack.v2` plus canonical plan/task/attempt lifecycle events. Historical packs remain readable through adapters.
-- Includes: runtime config snapshot, budget policy/consumed, planner IO, policy decisions,
-  memory bundle compact, typed tool errors, model config.
-- Replay CLI:
-
-```bash
-python -m app.runtime.replay path/to/trace_pack.json
-```
-
-By default replay blocks destructive/write operations.
-
 ## Lifecycle Persistence Policy
 
 - Canonical runtime event stream includes lifecycle events:
   `run_start/run_end`, `orchestrator_*`, `planner_iteration_*`,
   `agent_*`, `synthesis_*`.
-- `runtime_execution_events` persists the full sandbox stream and is the only
-  source for live inspection and historical replay.
+- `runtime_execution_events` is the only persisted runtime journal. Chat root
+  runs use level `none`; scoped agent executions persist according to the
+  configured agent level. `RuntimeProgressStreamer` projects safe progress
+  from the same logger admission point without creating a second trace.
 - LLM trace uses `llm_request` and `llm_response` for one stable `llm_call_id`.
 
 ## Tests

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.runtime_observability import RuntimeBudgetCounter, RuntimeBudgetEntry
-from app.services.runtime_observation_writer import RuntimeObservationEvent, RuntimeObservationWriter
+from app.runtime.events import RuntimeEvent, RuntimeEventType
 
 
 @dataclass(frozen=True)
@@ -22,9 +22,9 @@ class BudgetDecision:
 
 
 class RuntimeBudgetService:
-    def __init__(self, session: AsyncSession, observation_writer: Optional[RuntimeObservationWriter] = None) -> None:
+    def __init__(self, session: AsyncSession, event_sink: Optional[object] = None) -> None:
         self.session = session
-        self.observation_writer = observation_writer
+        self.event_sink = event_sink
 
     async def consume(
         self, *, run_id: UUID, owner_type: str, owner_id: str, metric: str,
@@ -50,13 +50,13 @@ class RuntimeBudgetService:
         after = before + amount
         effective_limit = counter.limit_value
         if effective_limit is not None and after > effective_limit:
-            if self.observation_writer is not None:
-                await self.observation_writer.append(RuntimeObservationEvent(
-                    run_id=run_id, event_type="budget_rejected", entity_type=owner_type,
-                    entity_id=owner_id, caused_by_event_id=causation_event_id,
-                    logging_level="errors", payload={"metric": metric, "consumed": before,
-                    "limit": effective_limit, "reason": "budget_exceeded"},
-                ))
+            await self._emit(RuntimeEvent(
+                RuntimeEventType.BUDGET_REJECTED,
+                {"entity_type": owner_type, "entity_id": owner_id,
+                 "caused_by_event_id": str(causation_event_id) if causation_event_id else None,
+                 "metric": metric, "consumed": before, "limit": effective_limit,
+                 "reason": "budget_exceeded"},
+            ))
             return BudgetDecision(False, metric, before, effective_limit, "budget_exceeded")
         counter.consumed = after
         self.session.add(RuntimeBudgetEntry(
@@ -65,11 +65,15 @@ class RuntimeBudgetService:
             limit_value=effective_limit, reason=reason, causation_event_id=causation_event_id,
         ))
         await self.session.flush()
-        if self.observation_writer is not None:
-            await self.observation_writer.append(RuntimeObservationEvent(
-                run_id=run_id, event_type="budget_consumed", entity_type=owner_type,
-                entity_id=owner_id, caused_by_event_id=causation_event_id,
-                logging_level="brief", payload={"metric": metric, "delta": amount,
-                "consumed": after, "limit": effective_limit, "reason": reason},
-            ))
+        await self._emit(RuntimeEvent(
+            RuntimeEventType.BUDGET_CONSUMED,
+            {"entity_type": owner_type, "entity_id": owner_id,
+             "caused_by_event_id": str(causation_event_id) if causation_event_id else None,
+             "metric": metric, "delta": amount, "consumed": after,
+             "limit": effective_limit, "reason": reason},
+        ))
         return BudgetDecision(True, metric, after, effective_limit, reason)
+
+    async def _emit(self, event: RuntimeEvent) -> None:
+        if self.event_sink is not None:
+            await self.event_sink(event)

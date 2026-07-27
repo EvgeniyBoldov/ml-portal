@@ -32,12 +32,14 @@ class ChatTurnService:
         tenant_id: str | uuid.UUID | None = None,
         idempotency_key: Optional[str] = None,
         request_hash: Optional[str] = None,
+        runtime_run_id: Optional[str | uuid.UUID] = None,
     ) -> ChatTurn:
         turn = ChatTurn(
             chat_id=uuid.UUID(str(chat_id)),
             user_id=uuid.UUID(str(user_id)),
             idempotency_key=idempotency_key,
             request_hash=request_hash,
+            runtime_run_id=uuid.UUID(str(runtime_run_id)) if runtime_run_id else None,
             status="started",
         )
         self.session.add(turn)
@@ -65,15 +67,15 @@ class ChatTurnService:
         turn_id: str | uuid.UUID,
         *,
         pause_status: str,
-        agent_run_id: Optional[str | uuid.UUID] = None,
+        runtime_run_id: Optional[str | uuid.UUID] = None,
         paused_action: Optional[dict] = None,
         paused_context: Optional[dict] = None,
     ) -> Optional[ChatTurn]:
         turn = await self.get_by_id(turn_id)
         if not turn:
             return None
-        if agent_run_id:
-            turn.agent_run_id = uuid.UUID(str(agent_run_id))
+        if runtime_run_id:
+            turn.runtime_run_id = uuid.UUID(str(runtime_run_id))
         turn.status = "paused"
         turn.pause_status = pause_status
         turn.paused_action = paused_action
@@ -99,13 +101,10 @@ class ChatTurnService:
         turn_id: str | uuid.UUID,
         *,
         error_message: str,
-        agent_run_id: Optional[str | uuid.UUID] = None,
     ) -> Optional[ChatTurn]:
         turn = await self.get_by_id(turn_id)
         if not turn:
             return None
-        if agent_run_id:
-            turn.agent_run_id = uuid.UUID(str(agent_run_id))
         turn.status = "cancelled"
         turn.error_message = error_message
         turn.completed_at = datetime.now(timezone.utc)
@@ -117,15 +116,12 @@ class ChatTurnService:
         turn_id: str | uuid.UUID,
         *,
         assistant_message_id: Optional[str | uuid.UUID] = None,
-        agent_run_id: Optional[str | uuid.UUID] = None,
     ) -> Optional[ChatTurn]:
         turn = await self.get_by_id(turn_id)
         if not turn:
             return None
         if assistant_message_id:
             turn.assistant_message_id = uuid.UUID(str(assistant_message_id))
-        if agent_run_id:
-            turn.agent_run_id = uuid.UUID(str(agent_run_id))
         turn.status = "completed"
         turn.pause_status = None
         turn.paused_action = None
@@ -140,13 +136,10 @@ class ChatTurnService:
         turn_id: str | uuid.UUID,
         *,
         error_message: str,
-        agent_run_id: Optional[str | uuid.UUID] = None,
     ) -> Optional[ChatTurn]:
         turn = await self.get_by_id(turn_id)
         if not turn:
             return None
-        if agent_run_id:
-            turn.agent_run_id = uuid.UUID(str(agent_run_id))
         turn.status = "failed"
         turn.pause_status = None
         turn.paused_action = None
@@ -161,10 +154,10 @@ class ChatTurnService:
         result = await self.session.execute(select(ChatTurn).where(ChatTurn.id == uuid.UUID(str(turn_id))))
         return result.scalar_one_or_none()
 
-    async def get_by_agent_run_id(self, agent_run_id: str | uuid.UUID) -> Optional[ChatTurn]:
+    async def get_by_runtime_run_id(self, runtime_run_id: str | uuid.UUID) -> Optional[ChatTurn]:
         result = await self.session.execute(
             select(ChatTurn)
-            .where(ChatTurn.agent_run_id == uuid.UUID(str(agent_run_id)))
+            .where(ChatTurn.runtime_run_id == uuid.UUID(str(runtime_run_id)))
             .order_by(ChatTurn.started_at.desc())
             .limit(1)
         )

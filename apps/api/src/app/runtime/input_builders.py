@@ -36,7 +36,7 @@ class PlannerInputBuilder:
             "trigger": request.trigger,
             "plan": request.plan or {},
             "completed_outputs": request.completed_outputs or {},
-            "requirements": request.requirements or [],
+            "needs": request.needs or [],
             "last_failure": request.last_failure,
             "available_agents": agents,
         }

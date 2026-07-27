@@ -131,7 +131,7 @@ class CollectionDocSearchTool(VersionedTool):
         )
         from app.services.collection_service import CollectionService
 
-        log = ctx.tool_logger("collection.doc_search")
+        log = ctx.tool_notes("collection.doc_search")
 
         if not ctx.chat_id:
             return ToolResult.fail("Document search file references require a chat context.", logs=log.entries_dict())

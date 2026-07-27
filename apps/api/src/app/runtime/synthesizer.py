@@ -16,7 +16,7 @@ synthesizer may short-circuit and restream it directly.
 from __future__ import annotations
 
 from typing import AsyncGenerator, Dict, List, Literal, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -118,7 +118,7 @@ class Synthesizer:
             platform_config=platform_config,
             sandbox_overrides=sandbox_overrides,
         )
-        synthesis_run_id = f"{run_id}:synthesis:1"
+        synthesis_run_id = str(uuid4())
         synthesis_status = "completed"
 
         # Load synthesizer role config early for context snapshot
@@ -275,7 +275,7 @@ class Synthesizer:
             answer_brief=resolved_answer_brief,
             system_prompt=system_prompt,
         )
-        llm_call_id = f"{run_id}:synthesis-llm:1"
+        llm_call_id = str(uuid4())
         full = ""
         async for stream_event in self._streaming_call.invoke_stream(
             role=SystemLLMRoleType.SYNTHESIZER,

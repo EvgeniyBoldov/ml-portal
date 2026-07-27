@@ -1,0 +1,5 @@
+.list { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.attachment { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-hover); color: var(--text); font-size: 12px; cursor: pointer; }
+.attachment:hover:not(:disabled) { background: var(--panel); }
+.attachment:disabled { cursor: wait; opacity: .65; }
+.attachment span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

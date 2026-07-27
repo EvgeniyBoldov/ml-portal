@@ -69,7 +69,7 @@ class TemplateGetSchemaTool(VersionedTool):
         description="Get template schema",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("collection.template.get_schema")
+        log = ctx.tool_notes("collection.template.get_schema")
 
         collection_id = str(args.get("collection_id") or "").strip()
         row_id = str(args.get("row_id") or "").strip()

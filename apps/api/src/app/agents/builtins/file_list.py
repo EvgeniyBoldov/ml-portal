@@ -74,7 +74,7 @@ class FileListTool(VersionedTool):
         description="List chat attachments with optional status filter",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("file.list")
+        log = ctx.tool_notes("file.list")
 
         chat_id = ctx.chat_id
         user_id = ctx.user_id

@@ -189,7 +189,7 @@ class CollectionSearchTool(VersionedTool):
         from app.core.db import get_session_factory
         from app.services.collection_service import CollectionService
         
-        log = ctx.tool_logger("collection.search")
+        log = ctx.tool_notes("collection.search")
         
         collection_slug = args.get("collection_slug")
         query = args.get("query")

@@ -1,9 +1,9 @@
-"""RuntimeLoggingResolver — resolve effective runtime logging level."""
+"""Resolve the level configured on the concrete agent."""
 from __future__ import annotations
 
 from typing import Optional, TYPE_CHECKING
 
-from app.agents.runtime.logging import LoggingConfig, LoggingLevel
+from app.services.runtime_event_logger import RuntimeLoggingLevel
 
 if TYPE_CHECKING:
     from app.agents.context import ToolContext
@@ -14,5 +14,6 @@ class RuntimeLoggingResolver:
         self,
         ctx: "ToolContext",
         agent_logging_level: Optional[str] = None,
-    ) -> LoggingLevel:
-        return await LoggingConfig.resolve(ctx, agent_logging_level)
+    ) -> RuntimeLoggingLevel:
+        del ctx
+        return RuntimeLoggingLevel.parse(agent_logging_level)

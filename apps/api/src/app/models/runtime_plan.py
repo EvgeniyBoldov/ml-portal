@@ -43,9 +43,9 @@ class RuntimePlanTask(Base):
     plan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("runtime_plans.id", ondelete="CASCADE"), nullable=False)
     task_id: Mapped[str] = mapped_column(String(255), nullable=False)
     planned_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    title: Mapped[str] = mapped_column(String(512), nullable=False)
-    objective: Mapped[str] = mapped_column(Text, nullable=False)
-    agent_slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    intent: Mapped[str] = mapped_column(String(512), nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    executor: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     inputs: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     expected_outputs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
@@ -67,13 +67,13 @@ class RuntimeTaskDependency(Base):
     depends_on_task_id: Mapped[str] = mapped_column(String(255), nullable=False)
 
 
-class RuntimeTaskRequirement(Base):
-    __tablename__ = "runtime_task_requirements"
-    __table_args__ = (UniqueConstraint("task_row_id", "requirement_key", name="uq_runtime_task_requirement"),)
+class RuntimeTaskNeed(Base):
+    __tablename__ = "runtime_task_needs"
+    __table_args__ = (UniqueConstraint("task_row_id", "need_key", name="uq_runtime_task_need"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_row_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("runtime_plan_tasks.id", ondelete="CASCADE"), nullable=False)
-    requirement_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    need_key: Mapped[str] = mapped_column(String(255), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default="data")
     description: Mapped[str] = mapped_column(Text, nullable=False)
     schema: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
@@ -103,7 +103,7 @@ class RuntimeTaskAttempt(Base):
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="running", index=True)
     error: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
-    agent_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    agent_execution_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

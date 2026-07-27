@@ -14,7 +14,6 @@ from .collections import router as collections_router
 from .tool_instances import router as tool_instances_router
 from .tools import router as tools_router
 from .credentials import router as credentials_router
-from .routing_logs import router as routing_logs_router
 from .rbac import router as rbac_router
 from .platform_settings import router as platform_settings_router
 from .orchestration import router as orchestration_router
@@ -39,7 +38,6 @@ router.include_router(tool_instances_router, prefix="/connectors", tags=["connec
 router.include_router(tool_instances_router, prefix="/tool-instances", tags=["tool-instances"])
 router.include_router(tools_router, prefix="/tools", tags=["tools"])
 router.include_router(credentials_router, prefix="/credentials", tags=["credentials"])
-router.include_router(routing_logs_router, prefix="/routing-logs", tags=["routing-logs"])
 router.include_router(rbac_router, prefix="/rbac", tags=["rbac"])
 router.include_router(platform_settings_router, prefix="/settings", tags=["platform"])
 router.include_router(orchestration_router, prefix="/orchestration", tags=["orchestration"])

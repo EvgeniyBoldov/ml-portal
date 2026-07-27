@@ -3,7 +3,6 @@ Runtime v3 contracts.
 
 Key primitives:
     * PipelineRequest — incoming turn from chat/sandbox
-    * NextStep        — planner decision: call_agent | ask_user | clarify | final | abort
     * PipelineStopReason — terminal reasons (waiting_*, completed, failed...)
     * RuntimeTurnState — canonical turn state (replaces legacy WorkingMemory)
 
@@ -80,52 +79,6 @@ class PipelineRequest(BaseModel):
     confirmation_tokens: List[str] = Field(default_factory=list)
     await_background_tail: bool = True
     execution_mode: ExecutionMode = ExecutionMode.NORMAL
-
-
-# --------------------------------------------------------------------------- #
-# Planner NextStep                                                            #
-# --------------------------------------------------------------------------- #
-
-
-class NextStepKind(str, Enum):
-    # --- non-terminal ---
-    CALL_AGENT = "call_agent"   # delegate to a sub-agent (the only way to touch tools)
-    # --- terminal ---
-    ASK_USER = "ask_user"       # pause for user input (legacy name for CLARIFY)
-    CLARIFY = "clarify"         # ask user a focused question — alias-kind with semantically
-                                # identical handling to ASK_USER; kept separate so planner
-                                # prompts can distinguish "I need a single clarification" from
-                                # "I need the user to fill an entire form".
-    FINAL = "final"             # synthesize and emit final answer (agent work complete)
-    ABORT = "abort"             # give up (non-recoverable planner failure)
-
-
-class NextStep(BaseModel):
-    """Canonical planner decision. LLM must produce JSON matching this schema."""
-
-    kind: NextStepKind
-    rationale: str = Field(..., min_length=1, max_length=2000)
-
-    # --- CALL_AGENT ---
-    agent_slug: Optional[str] = None
-    agent_input: Dict[str, Any] = Field(default_factory=dict)  # {query, phase_id, ...}
-
-    # --- ASK_USER ---
-    question: Optional[str] = None
-
-    # --- FINAL ---
-    final_answer: Optional[str] = None
-    # Explicit strategy: how should synthesizer treat this final step?
-    #   "synthesize" — run LLM synthesis (default)
-    #   "verbatim" — stream final_answer as-is (bypass LLM)
-    #   "use_agent_result" — synthesize from single successful agent result
-    final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize"
-
-    # --- metadata ---
-    phase_id: Optional[str] = None
-    phase_title: Optional[str] = None
-    risk: Literal["low", "medium", "high"] = "low"
-    requires_confirmation: bool = False
 
 
 # --------------------------------------------------------------------------- #

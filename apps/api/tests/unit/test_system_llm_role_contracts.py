@@ -38,7 +38,7 @@ def test_planner_contract_describes_graph_tasks() -> None:
     props = schema["properties"]
 
     assert "tasks" in props
-    assert "Complete task graph mutation" in props["tasks"]["description"]
+    assert "executor" in props["tasks"]["description"]
 
 
 def test_fact_extractor_contract_is_json_from_pydantic() -> None:

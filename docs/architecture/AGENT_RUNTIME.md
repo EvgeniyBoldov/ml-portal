@@ -4,11 +4,11 @@
 
 Текущий runtime построен как многослойный execution pipeline:
 
-`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> PipelineAssembler -> OrchestratorStage -> PlanStore -> TaskExecutionStage -> AgentExecutor -> DirectOperationExecutor`
+`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> PipelineAssembler -> GraphPlanner -> SqlPlanStore -> GraphOrchestrator -> AgentExecutor -> DirectOperationExecutor`
 
 Канонический планировщик теперь возвращает не следующий шаг, а мутацию
 сохраняемого графа: `PlannerGraphOutput -> PlanPatch -> SqlPlanStore`.
-`SqlDeterministicOrchestrator` единолично меняет статусы задач, фиксирует
+`GraphOrchestrator` единолично меняет статусы задач, фиксирует
 попытки, checkpoint и различает технический failure от бизнес-результата
 `unfulfillable`. Выполнение v1 последовательное; зависимости уже являются
 частью контракта и готовы к будущему параллельному scheduler.
@@ -133,12 +133,36 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 ```
 1. `ChatStreamService` или sandbox создаёт `ToolContext`.
 2. `RuntimePipeline` загружает platform snapshot и строит turn memory.
-3. Planner создаёт или изменяет persisted plan через `PlanPatch`.
+3. Planner создаёт или изменяет persisted plan через строгий `PlanPatch`; каждый task содержит `executor`, `intent`, `instructions`, `depends_on` и `needs`.
 4. Orchestrator выбирает одну ready task и создаёт `RuntimeTaskAttempt`.
 5. Для task выполняется `ExecutionPreflight`, затем `AgentExecutor` возвращает строгий `AgentTaskResult`.
 6. Технический сбой сохраняется отдельно и может быть retried; `unfulfillable` является валидным бизнес-результатом.
 7. Checkpoint и outputs открывают зависимости или возобновляют логическую task новым attempt.
 8. FinalizationStage формирует финальный ответ только после terminal plan; sandbox сохраняет и стримит canonical journal events, chat стримит только пользовательский transport.
+
+### Единый journal boundary
+
+`RuntimeEventLogger` создаётся один раз на root run и является единственным
+writer в `runtime_execution_events`. Он назначает DB `event_id` и `sequence`,
+после чего возвращает тот же event для SSE/tail. Planner, orchestrator, task
+executor, agent runtime, tools, budgets и workers получают только scoped sink
+и эмитят `RuntimeEvent`; они не создают logger, sequence, envelope stamper или
+отдельный trace store.
+
+Preflight, operation execution and agent-triggered document extraction are
+also journalled semantic boundaries. Extraction is a child of `tool_call`;
+independent RAG ingestion keeps its own job-status/event contract.
+Entity hierarchy: `run -> plan -> task -> attempt -> agent_execution -> llm_call|tool_call|interaction|error`.
+
+### Progress delivery
+
+The logger is also the only admission point for user-safe execution progress.
+`RuntimeProgressStreamer` projects a bounded intent/fallback description from
+the same canonical event and publishes it through the runtime tail channel.
+Chat consumes only `runtime_progress` projections; deltas remain a separate
+answer-content stream. `stream_logs` and `stream_progress` are independent:
+chat root uses `none/false/true`, sandbox uses `full/true/true`, and agent
+scopes decide detail from their own logging level.
 ```
 
 ## Execution Modes
@@ -203,7 +227,7 @@ Runtime уже должен мыслить не "любой collection один�
 - При `POST /api/v1/chats/runs/{run_id}/resume` формируется `resume_checkpoint`.
 - Source run переводится в статус `resumed`.
 - Checkpoint сохраняется в `chat_turn.paused_context` и continuation metadata.
-- Continuation сохраняет lineage через `continuation_meta`; отдельный AgentRun не создаётся.
+- Continuation сохраняет lineage через `continuation_meta`; отдельная execution-модель не создаётся.
 
 ### Известные проблемы (Chat + Sandbox)
 1. **Песочница вместо resume запуска новый run** — пользователь жмёт "Ответить" на вопрос → создаётся новый `SandboxRun`, рантайм гоняется второй раз с нуля.
@@ -244,11 +268,11 @@ Runtime уже должен мыслить не "любой collection один�
 
 Назначение:
 - прогон эталонных сценариев chat/document/sql/tool-path на уровне trace/event контракта,
-- быстрый регрессионный фильтр до полноценного deterministic replay/trace-pack.
+- быстрый регрессионный фильтр до полноценной deterministic runtime evaluation.
 
 Для admin inspection читается `runtime_execution_events` по самостоятельному
-executor `run_id` или sandbox root `run_id`. Отдельных trace-pack и AgentRun
-read contracts нет.
+executor `run_id` или sandbox root `run_id`. Отдельных legacy read contracts
+нет.
 
 Budget policy visibility:
 - planner и agent runtime публикуют status stage `budget_policy` в event stream,
@@ -256,7 +280,7 @@ Budget policy visibility:
 - `AgentToolRuntime` блокирует исполнение при достижении `max_tool_calls_total`.
 
 Runtime control-plane reads plan state and canonical event journal directly;
-legacy AgentRun control-plane endpoints are removed.
+Legacy control-plane endpoints удалены.
 
 Structured answer contract (backend):
 - assistant messages now persist `meta.answer_contract = answer_blocks.v1`,

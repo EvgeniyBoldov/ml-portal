@@ -1,9 +1,4 @@
-"""Transactional plan state transitions.
-
-The in-memory implementation is intentionally complete and is used by unit
-tests and lightweight runtime adapters.  ``SqlPlanStore`` persists the same
-state through the normalized RuntimePlan tables.
-"""
+"""Transactional state transitions for the persisted runtime task graph."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -20,7 +15,7 @@ from app.models.runtime_plan import (
     RuntimePlanTask,
     RuntimeTaskAttempt,
     RuntimeTaskDependency,
-    RuntimeTaskRequirement,
+    RuntimeTaskNeed,
 )
 from app.runtime.orchestrator_contracts import (
     AgentTaskResult,
@@ -115,7 +110,7 @@ class InMemoryPlanStore:
             "status": PlanStatus.DRAFT.value,
             "revision": 0,
             "tasks": {},
-            "requirements": {},
+            "needs": {},
             "answer_brief": None,
             "last_failure": None,
         }
@@ -135,13 +130,13 @@ class InMemoryPlanStore:
         existing = [
             PlannedTask(
                 task_id=task_id,
-                title=task["title"],
-                objective=task["objective"],
-                agent_slug=task["agent_slug"],
+                intent=task["intent"],
+                instructions=task["instructions"],
+                executor=task["executor"],
                 inputs=task.get("inputs", {}),
                 expected_outputs=task.get("expected_outputs", []),
                 depends_on=task.get("depends_on", []),
-                requirements=task.get("requirements", []),
+                needs=task.get("needs", []),
             )
             for task_id, task in plan["tasks"].items()
             if task_id not in set(patch.remove_task_ids)
@@ -172,10 +167,10 @@ class InMemoryPlanStore:
                 "attempts": old.get("attempts", 0) if old else 0,
                 "planned_order": old.get("planned_order", index) if old else index,
             }
-            for requirement in task.requirements:
-                plan["requirements"][f"{task.task_id}:{requirement.key}"] = {
+            for need in task.needs:
+                plan["needs"][f"{task.task_id}:{need.key}"] = {
                     "task_id": task.task_id,
-                    **requirement.model_dump(mode="json", by_alias=True),
+                    **need.model_dump(mode="json", by_alias=True),
                     "status": RequirementStatus.PENDING.value,
                     "resolved_value": None,
                 }
@@ -240,13 +235,13 @@ class InMemoryPlanStore:
         task["checkpoint"] = dict(result.checkpoint)
         if result.outcome == TaskOutcome.COMPLETED:
             task["status"] = TaskStatus.COMPLETED.value
-            for req in plan["requirements"].values():
+            for req in plan["needs"].values():
                 if req["task_id"] == task_id and req["status"] == RequirementStatus.PENDING.value:
                     req["status"] = RequirementStatus.RESOLVED.value
         elif result.outcome == TaskOutcome.NEEDS_DEPENDENCY:
             task["status"] = TaskStatus.WAITING_DEPENDENCY.value
             for need in result.needs:
-                plan["requirements"][f"{task_id}:{need.key}"] = {
+                plan["needs"][f"{task_id}:{need.key}"] = {
                     "task_id": task_id, **need.model_dump(mode="json", by_alias=True),
                     "status": RequirementStatus.PENDING.value, "resolved_value": None,
                 }
@@ -334,8 +329,8 @@ class SqlPlanStore:
         )).scalars().all()
         existing_ids = {row.task_id for row in existing_rows if row.task_id not in set(patch.remove_task_ids)}
         combined = {row.task_id: PlannedTask(
-            task_id=row.task_id, title=row.title, objective=row.objective,
-            agent_slug=row.agent_slug, inputs=row.inputs or {},
+            task_id=row.task_id, intent=row.intent, instructions=row.instructions,
+            executor=row.executor, inputs=row.inputs or {},
             depends_on=[],
         ) for row in existing_rows if row.task_id in existing_ids}
         combined.update({item.task_id: item for item in patch.tasks})
@@ -368,9 +363,9 @@ class SqlPlanStore:
                 task = RuntimePlanTask(
                     plan_id=plan_id,
                     task_id=item.task_id,
-                    title=item.title,
-                    objective=item.objective,
-                    agent_slug=item.agent_slug,
+                    intent=item.intent,
+                    instructions=item.instructions,
+                    executor=item.executor,
                     inputs=item.inputs,
                     expected_outputs=[output.model_dump(mode="json", by_alias=True) for output in item.expected_outputs],
                     planned_order=index,
@@ -379,9 +374,9 @@ class SqlPlanStore:
                 self.session.add(task)
                 await self.session.flush()
             else:
-                task.title = item.title
-                task.objective = item.objective
-                task.agent_slug = item.agent_slug
+                task.intent = item.intent
+                task.instructions = item.instructions
+                task.executor = item.executor
                 task.inputs = item.inputs
                 task.expected_outputs = [output.model_dump(mode="json", by_alias=True) for output in item.expected_outputs]
                 task.planned_order = index
@@ -393,17 +388,17 @@ class SqlPlanStore:
             )
             for dependency in item.depends_on:
                 self.session.add(RuntimeTaskDependency(plan_id=plan_id, task_id=item.task_id, depends_on_task_id=dependency))
-            for requirement in item.requirements:
-                await self.session.execute(delete(RuntimeTaskRequirement).where(
-                    RuntimeTaskRequirement.task_row_id == task.id,
-                    RuntimeTaskRequirement.requirement_key == requirement.key,
+            for need in item.needs:
+                await self.session.execute(delete(RuntimeTaskNeed).where(
+                    RuntimeTaskNeed.task_row_id == task.id,
+                    RuntimeTaskNeed.need_key == need.key,
                 ))
-                self.session.add(RuntimeTaskRequirement(
+                self.session.add(RuntimeTaskNeed(
                     task_row_id=task.id,
-                    requirement_key=requirement.key,
-                    kind=requirement.kind,
-                    description=requirement.description,
-                    schema=requirement.json_schema,
+                    need_key=need.key,
+                    kind=need.kind,
+                    description=need.description,
+                    schema=need.json_schema,
                 ))
         plan.revision += 1
         plan.status = {
@@ -428,11 +423,15 @@ class SqlPlanStore:
             raise KeyError(str(plan_id))
         task_result = await self.session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id))
         dependency_result = await self.session.execute(select(RuntimeTaskDependency).where(RuntimeTaskDependency.plan_id == plan_id))
+        need_result = await self.session.execute(
+            select(RuntimeTaskNeed).join(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id)
+        )
+        task_rows = task_result.scalars().all()
         tasks = {task.task_id: {
             "task_id": task.task_id,
-            "title": task.title,
-            "objective": task.objective,
-            "agent_slug": task.agent_slug,
+            "intent": task.intent,
+            "instructions": task.instructions,
+            "executor": task.executor,
             "status": task.status,
             "inputs": task.inputs or {},
             "expected_outputs": task.expected_outputs or [],
@@ -440,9 +439,23 @@ class SqlPlanStore:
             "result": task.result,
                 "attempts": task.attempts,
                 "planned_order": task.planned_order,
-        } for task in task_result.scalars().all()}
+        } for task in task_rows}
         for dependency in dependency_result.scalars().all():
             tasks.setdefault(dependency.task_id, {}).setdefault("depends_on", []).append(dependency.depends_on_task_id)
+        task_rows_by_id = {task.id: task.task_id for task in task_rows}
+        for need in need_result.scalars().all():
+            task_id = task_rows_by_id.get(need.task_row_id)
+            if task_id:
+                tasks.setdefault(task_id, {}).setdefault("needs", []).append({
+                    "key": need.need_key,
+                    "kind": need.kind,
+                    "description": need.description,
+                    "schema": need.schema or {},
+                    "required": True,
+                    "status": need.status,
+                    "resolved_value": need.resolved_value,
+                    "resolver_task_id": need.resolver_task_id,
+                })
         return {
             "id": str(plan.id),
             "goal": plan.goal,
@@ -486,6 +499,29 @@ class SqlPlanStore:
     async def claim_ready(self, plan_id: UUID) -> Optional[RuntimePlanTask]:
         return next(iter(await self.claim_ready_batch(plan_id, limit=1)), None)
 
+    async def resume_waiting_tasks(self, plan_id: UUID, *, user_input: str) -> None:
+        """Resume the same persisted plan after a chat continuation."""
+        rows = (await self.session.execute(
+            select(RuntimePlanTask).where(
+                RuntimePlanTask.plan_id == plan_id,
+                RuntimePlanTask.status.in_([
+                    TaskStatus.WAITING_USER.value,
+                    TaskStatus.WAITING_DEPENDENCY.value,
+                    TaskStatus.WAITING_RETRY.value,
+                ]),
+            ).with_for_update()
+        )).scalars().all()
+        for row in rows:
+            checkpoint = dict(row.checkpoint or {})
+            if user_input:
+                checkpoint["user_input"] = user_input
+            row.checkpoint = checkpoint
+            row.status = TaskStatus.PENDING.value
+        plan = await self.session.get(RuntimePlan, plan_id, with_for_update=True)
+        if plan is not None and rows:
+            plan.status = PlanStatus.ACTIVE.value
+        await self.session.flush()
+
     async def _refresh_status(self, plan_id: UUID) -> None:
         plan = await self.session.get(RuntimePlan, plan_id, with_for_update=True)
         if plan is None:
@@ -514,6 +550,19 @@ class SqlPlanStore:
             row.status = TaskStatus.COMPLETED.value
         elif result.outcome == TaskOutcome.NEEDS_DEPENDENCY:
             row.status = TaskStatus.WAITING_DEPENDENCY.value
+            for need in result.needs:
+                await self.session.execute(delete(RuntimeTaskNeed).where(
+                    RuntimeTaskNeed.task_row_id == row.id,
+                    RuntimeTaskNeed.need_key == need.key,
+                ))
+                self.session.add(RuntimeTaskNeed(
+                    task_row_id=row.id,
+                    need_key=need.key,
+                    kind=need.kind,
+                    description=need.description,
+                    schema=need.json_schema,
+                    status=RequirementStatus.PENDING.value,
+                ))
         elif result.outcome == TaskOutcome.NEEDS_USER_INPUT:
             row.status = TaskStatus.WAITING_USER.value
         else:

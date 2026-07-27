@@ -1,6 +1,5 @@
 """Messages: list, SSE stream, resume run."""
 import uuid
-from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -21,8 +20,8 @@ from app.api.deps import (
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.core.security import UserCtx
-from app.models.agent_run import AgentRun
 from app.models.chat import Chats
+from app.models.chat_turn import ChatTurn
 from app.repositories.chats_repo import AsyncChatMessagesRepository
 from app.repositories.factory import AsyncRepositoryFactory
 from app.schemas.chat_events import ChatSSEEventType, ErrorPayload, format_chat_sse, format_chat_sse_done
@@ -33,30 +32,11 @@ from app.services.chat_resume_orchestrator import ChatResumeOrchestrator
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.chat_stream_service import ChatStreamService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
-from app.services.runtime_terminal_status import normalize_run_status_for_storage
 from app.agents.runtime.confirmation import get_confirmation_service
 from app.runtime.contracts import ExecutionMode
 
 router = APIRouter()
 logger = get_logger(__name__)
-
-_NON_RUNTIME_RESOLVABLE_AGENT_SLUGS = {
-    "planner",
-    "synthesizer",
-    "fact_extractor",
-    "summary_compactor",
-    "memory",
-}
-
-
-def _normalize_resume_agent_slug(agent_slug: str | None) -> str | None:
-    if not agent_slug:
-        return None
-    normalized = str(agent_slug).strip()
-    if not normalized or normalized in _NON_RUNTIME_RESOLVABLE_AGENT_SLUGS:
-        return None
-    return normalized
-
 
 @router.get("/{chat_id}/messages")
 async def list_messages(
@@ -231,29 +211,25 @@ async def resume_run(
 
     turn_service = ChatTurnService(session)
     run_result = await session.execute(
-        select(AgentRun).where(
-            AgentRun.id == run_uuid,
-            AgentRun.status.in_(["waiting_confirmation", "waiting_input"]),
+        select(ChatTurn).where(
+            ChatTurn.runtime_run_id == run_uuid,
+            ChatTurn.status == "paused",
         )
     )
-    run = run_result.scalar_one_or_none()
-    if not run:
+    turn = run_result.scalar_one_or_none()
+    if not turn:
         raise HTTPException(status_code=404, detail="Paused run not found")
-    if run.user_id and str(run.user_id) != str(current_user.id):
+    if str(turn.user_id) != str(current_user.id):
         raise HTTPException(status_code=404, detail="Paused run not found")
-
-    turn = await turn_service.get_by_agent_run_id(run_uuid)
-    paused_action = run.paused_action
-    paused_context = run.paused_context
+    tenant_ids = current_user.tenant_ids or []
+    if not tenant_ids:
+        raise HTTPException(status_code=403, detail="No tenant scope available")
+    tenant_uuid_val = uuid.UUID(str(tenant_ids[0]))
+    paused_action = turn.paused_action
+    paused_context = turn.paused_context
 
     if action == "cancel":
-        run.status = normalize_run_status_for_storage("cancelled")
-        run.error = "Cancelled by user"
-        run.finished_at = datetime.now(timezone.utc)
-        run.paused_action = None
-        run.paused_context = None
-        if turn:
-            await turn_service.cancel_turn(turn.id, error_message="Cancelled by user", agent_run_id=run_uuid)
+        await turn_service.cancel_turn(turn.id, error_message="Cancelled by user")
         await session.commit()
         # Return SSE for cancel (single error-like event with status)
         async def _cancel_gen() -> AsyncGenerator[str, None]:
@@ -262,7 +238,6 @@ async def resume_run(
                 ErrorPayload(
                     error="User cancelled",
                     code="cancelled",
-                    details={"run_id": run_id, "status": "cancelled"},
                 ),
             )
             yield format_chat_sse_done()
@@ -276,36 +251,24 @@ async def resume_run(
 
     checkpoint = RuntimeResumeCheckpointService().build(
         run_id=run_uuid,
-        agent_slug=run.agent_slug,
-        tenant_id=run.tenant_id,
-        user_id=run.user_id or current_user.id,
-        chat_id=run.chat_id,
+        agent_slug="",
+        tenant_id=tenant_uuid_val,
+        user_id=turn.user_id,
+        chat_id=turn.chat_id,
         paused_action=paused_action if isinstance(paused_action, dict) else None,
         paused_context=paused_context if isinstance(paused_context, dict) else None,
         resume_action=action,
         user_input=user_input or None,
-        source_context_snapshot=run.context_snapshot if isinstance(run.context_snapshot, dict) else None,
+        source_context_snapshot={},
     )
 
-    run.status = normalize_run_status_for_storage("resumed")
-    run.error = None
-    run.finished_at = None  # Clear finished_at for resumed run
-    snapshot = dict(getattr(run, "context_snapshot", None) or {})
-    snapshot["resume_checkpoint"] = checkpoint
-    run.context_snapshot = snapshot
-    # Keep paused_action/context until pipeline starts and clears them via resume_run
-    if turn:
-        await turn_service.cancel_turn(
-            turn.id,
-            error_message="Turn resumed via continuation flow",
-            agent_run_id=run_uuid,
-        )
+    await turn_service.cancel_turn(turn.id, error_message="Turn resumed via continuation flow")
     await session.commit()
 
-    if not run.chat_id:
+    if not turn.chat_id:
         # No chat_id - can't stream, return error SSE
         async def _no_chat_gen() -> AsyncGenerator[str, None]:
-            yield format_chat_sse(ChatSSEEventType.ERROR, {"run_id": run_id, "status": "error", "reason": "Run has no chat_id"})
+            yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error="Run has no chat_id", code="missing_chat"))
             yield format_chat_sse_done()
         return StreamingResponse(_no_chat_gen(), media_type="text/event-stream")
 
@@ -324,19 +287,18 @@ async def resume_run(
             paused_action if isinstance(paused_action, dict) else None,
             paused_context if isinstance(paused_context, dict) else None,
         )
-        if fingerprint and run.chat_id:
+        if fingerprint and turn.chat_id:
             try:
                 conf_svc = get_confirmation_service()
                 token, _ = conf_svc.issue(
                     fingerprint=fingerprint,
                     user_id=uuid.UUID(str(current_user.id)),
-                    chat_id=uuid.UUID(str(run.chat_id)),
+                    chat_id=uuid.UUID(str(turn.chat_id)),
                 )
                 confirmation_tokens = [token]
             except Exception as _ce:
                 logger.warning("Failed to issue confirmation token on resume: %s", _ce)
 
-    tenant_uuid_val = uuid.UUID(str(run.tenant_id))
     user_uuid_val = uuid.UUID(str(current_user.id))
     chats_repo = AsyncChatsRepository(session, tenant_uuid_val, user_uuid_val)
     messages_repo = AsyncChatMessagesRepository(session, tenant_uuid_val, user_uuid_val)
@@ -351,14 +313,14 @@ async def resume_run(
     async def _resume_gen() -> AsyncGenerator[str, None]:
         try:
             async for event in service.send_message_stream(
-                chat_id=str(run.chat_id),
+                chat_id=str(turn.chat_id),
                 user_id=str(current_user.id),
-                tenant_id=str(run.tenant_id),
+                tenant_id=str(tenant_uuid_val),
                 content=resume_content,
                 attachment_ids=[],
                 idempotency_key=None,
                 model=None,
-                agent_slug=_normalize_resume_agent_slug(run.agent_slug),
+                agent_slug=None,
                 continuation_meta={
                     "resume_checkpoint": checkpoint,
                     "resumed_from_run_id": run_id,

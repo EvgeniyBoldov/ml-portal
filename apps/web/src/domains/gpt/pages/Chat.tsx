@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import styles from './Chat.module.css';
 import { useParams } from 'react-router-dom';
 import { useChatActions, useChatMessagesState } from '@/domains/chat/contexts/ChatContext';
-import { ChatMessage } from '@/domains/chat/components/ChatMessage';
 import { ChatComposer } from '@/domains/chat/components/ChatComposer';
-import type { ExecutionMode } from '@/shared/api/types';
+import { UserMessage } from '@/domains/chat/components/UserMessage';
+import { AssistantMessage } from '@/domains/chat/components/AssistantMessage';
+import { ChatRunStatus } from '@/domains/chat/components/ChatRunStatus';
 import { ConfirmationPrompt } from '@/domains/chat/components/ConfirmationPrompt/ConfirmationPrompt';
 import { Icon } from '@/shared/ui/Icon';
 
@@ -75,20 +76,10 @@ export default function Chat() {
     setStreamError(null);
   }, [chatId, current?.loaded, clearPendingState, setCurrentChat, loadMessages]);
 
-  // Normalize content
-  const normalizeContent = (content: unknown): string => {
-    if (typeof content === 'string') return content;
-    if (content && typeof content === 'object') {
-      const text = (content as { text?: unknown }).text;
-      if (typeof text === 'string') return text;
-    }
-    return String(content || '');
-  };
-
   // Handle send with agent support
   const handleSend = async (
     message: string,
-    options: { agentSlug?: string; executionMode: ExecutionMode; attachments?: File[] }
+    options: { agentSlug?: string; attachments?: File[] }
   ) => {
     if (!chatId) return;
     setBusy(true);
@@ -126,7 +117,6 @@ export default function Chat() {
           setStreamError(friendlyErr);
         },
         options.agentSlug,
-        options.executionMode,
         attachmentIds,
         attachmentMeta
       );
@@ -168,7 +158,7 @@ export default function Chat() {
         );
       } else {
         // Triage clarify path has no resumable run_id; continue as a normal user message.
-        await handleSend(userInput, { executionMode: 'normal' });
+        await handleSend(userInput, {});
       }
       
       if (chatId) {
@@ -184,7 +174,7 @@ export default function Chat() {
           await loadMessages(chatId);
         }
         if (message) {
-          await handleSend(message, { executionMode: 'normal' });
+          await handleSend(message, {});
           return;
         }
       }
@@ -244,10 +234,7 @@ export default function Chat() {
 
   const pendingConfirmation = state.pendingConfirmations[0] || null;
   const isWaitingInput = Boolean(state.pendingInput && !pendingConfirmation);
-  const runtimeAlive = state.isStreaming && !streamError;
-  // Get last message for streaming indicator
-  const lastMessage = messages[messages.length - 1];
-  const isStreaming = lastMessage?.role === 'assistant' && lastMessage?.isOptimistic;
+  const activeRun = state.activeRun;
 
   return (
     <div className={styles.chatContainer}>
@@ -266,20 +253,14 @@ export default function Chat() {
             <p>Начните диалог, отправив сообщение</p>
           </div>
         ) : (
-          messages.map((m, idx) => (
-            <ChatMessage
-              key={m.id}
-              role={m.role}
-              content={normalizeContent(m.content)}
-              createdAt={m.created_at}
-              isStreaming={m.role === 'assistant' && idx === messages.length - 1 && isStreaming}
-              runtimeStages={
-                m.role === 'assistant' && idx === messages.length - 1 && runtimeAlive
-                  ? state.progressEvents.slice(-4).map((item) => item.text)
-                  : undefined
-              }
-              meta={m.meta as Record<string, unknown> | undefined}
-            />
+          messages.map((message) => (
+            <React.Fragment key={message.id}>
+              {message.role === 'user' ? <UserMessage message={message} /> : null}
+              {activeRun?.userMessageId === message.id && <ChatRunStatus run={activeRun} />}
+              {message.role === 'assistant' && (message.content || !message.isOptimistic) && (
+                <AssistantMessage message={message} isStreaming={state.isStreaming && message.isOptimistic} />
+              )}
+            </React.Fragment>
           ))
         )}
 

@@ -1,21 +1,12 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorTextBlock } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorScalar } from '@/shared/ui/Inspector';
+import { HumanPlanView } from './PlanView';
 
-const present = (value: unknown): boolean => value !== null && value !== undefined && value !== '';
 const record = (value: unknown): Record<string, unknown> => (
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 );
 
 export function PlanView({ plan }: { plan: unknown }) {
-  const value = record(plan);
-  const patch = value.patch ?? value.plan ?? value.effective_plan ?? plan;
-  const tasks = Array.isArray(value.tasks) ? value.tasks : undefined;
-  return <InspectorFieldGroup>
-    <InspectorFieldRow label="Ревизия">{present(value.revision) ? String(value.revision) : '—'}</InspectorFieldRow>
-    <InspectorFieldRow label="Режим">{String(value.mode ?? value.trigger ?? '—')}</InspectorFieldRow>
-    <InspectorFieldRow label="Причина">{String(value.reason ?? value.trigger ?? '—')}</InspectorFieldRow>
-    {tasks ? <InspectorFieldRow label="Задач">{String(tasks.length)}</InspectorFieldRow> : null}
-    <InspectorFieldRow label="План"><InspectorJsonBlock value={patch ?? '—'} /></InspectorFieldRow>
-  </InspectorFieldGroup>;
+  return <HumanPlanView plan={plan} />;
 }
 
 export function LimitsView({ snapshot }: { snapshot: unknown }) {
@@ -35,6 +26,8 @@ export function RbacView({ snapshot }: { snapshot: unknown }) {
 }
 
 export function TextValue({ label, value }: { label: string; value: unknown }) {
-  const text = typeof value === 'string' ? value : value === null || value === undefined ? '—' : JSON.stringify(value, null, 2);
-  return <InspectorFieldRow label={label}><InspectorTextBlock text={text} /></InspectorFieldRow>;
+  if (value === null || value === undefined || ['string', 'number', 'boolean'].includes(typeof value)) {
+    return <InspectorFieldRow label={label}><InspectorScalar value={value as string | number | boolean | null | undefined} /></InspectorFieldRow>;
+  }
+  return <InspectorFieldRow label={label}><InspectorJsonBlock value={value} /></InspectorFieldRow>;
 }

@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import os
 import json
-from dataclasses import replace
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 from uuid import uuid4
@@ -27,8 +26,9 @@ from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.memory.writer import MemoryWriter
 from app.runtime.events import RuntimeEvent
+from app.runtime.entity_ids import memory_component_entity_id, memory_orchestrator_id as make_memory_orchestrator_id
 from app.services.system_llm_role_service import SystemLLMRoleService
-from app.services.runtime_event_logger import RuntimeEventLogger, RuntimeLogContext
+from app.services.runtime_event_logger import RuntimeEventJournalFactory
 
 logger = get_logger(__name__)
 
@@ -191,11 +191,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
         payload = MemoryFinalizePayload.model_validate(payload_dict)
         runtime_logger = None
         if payload.runtime_log_context:
-            context = replace(
-                RuntimeLogContext.from_payload(payload.runtime_log_context),
-                origin="worker",
-            )
-            runtime_logger = RuntimeEventLogger(context=context)
+            runtime_logger = RuntimeEventJournalFactory.restore_worker(payload.runtime_log_context)
         metric_keys = ("planner_steps", "agent_steps", "tool_calls", "tokens_in", "tokens_out", "tokens_total", "retries", "wall_time_ms")
 
         async def _publish(event: RuntimeEvent) -> None:
@@ -204,14 +200,9 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
             event_data = dict(event.data or {})
             if payload.tail_id:
                 event_data["tail_id"] = payload.tail_id
-            await runtime_logger.event(
-                event.type.value,
-                payload=event_data,
-                entity_type=event_data.get("entity_type"),
-                entity_id=event_data.get("entity_id"),
-                parent_entity_type=event_data.get("parent_entity_type"),
-                parent_entity_id=event_data.get("parent_entity_id"),
-                duration_ms=event_data.get("duration_ms"),
+            from app.runtime.events import OrchestrationPhase
+            await runtime_logger.append_runtime_event(
+                RuntimeEvent(event.type, event_data), phase=OrchestrationPhase.PIPELINE,
             )
 
         async with get_worker_session() as session:
@@ -225,14 +216,10 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
             
             # Run memory writer
             component_entity_ids = {
-                "facts": f"{payload.runtime_run_id or payload.chat_id}:memory:facts",
-                "conversation": f"{payload.runtime_run_id or payload.chat_id}:memory:conversation",
+                "facts": memory_component_entity_id(payload.runtime_run_id or payload.chat_id or "unknown", "facts", 1),
+                "conversation": memory_component_entity_id(payload.runtime_run_id or payload.chat_id or "unknown", "conversation", 1),
             }
-            memory_orchestrator_id = (
-                f"{payload.runtime_run_id}:memory"
-                if payload.runtime_run_id
-                else f"{payload.chat_id}:memory"
-            )
+            memory_orchestrator_id = make_memory_orchestrator_id(payload.runtime_run_id or payload.chat_id or "unknown")
             component_limits = {
                 "facts": payload.facts_limits,
                 "conversation": payload.conversation_limits,
@@ -261,7 +248,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     RuntimeEvent.budget_snapshot(
                         entity_type=entity_type,
                         entity_id=entity_id,
-                        parent_entity_type="orchestrator" if entity_type == "agent_run" else "run",
+                        parent_entity_type="orchestrator" if entity_type == "agent_execution" else "run",
                         parent_entity_id=parent_entity_id,
                         own=own,
                         limits=limits,
@@ -287,8 +274,8 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 tokens_total = int(llm_payload.get("tokens_total") or (tokens_in + tokens_out))
                 await _publish(
                     RuntimeEvent.llm_response(
-                        llm_call_id=f"{parent_id}:llm:{uuid4().hex[:8]}",
-                        parent_entity_type="agent_run",
+                        llm_call_id=str(uuid4()),
+                        parent_entity_type="agent_execution",
                         parent_entity_id=parent_id,
                         purpose=str(llm_payload.get("role") or component_name),
                         model=llm_payload.get("model"),
@@ -304,7 +291,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     )
                 )
                 await _emit_budget_snapshot(
-                    entity_type="agent_run",
+                    entity_type="agent_execution",
                     entity_id=parent_id,
                     parent_entity_id=memory_orchestrator_id,
                     role=component_name,
@@ -379,7 +366,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 for component_name, component_entity_id in component_entity_ids.items():
                     await _publish(
                         RuntimeEvent.agent_start(
-                            agent_run_id=component_entity_id,
+                            agent_execution_id=component_entity_id,
                             parent_entity_id=memory_orchestrator_id,
                             parent_entity_type="orchestrator",
                             agent_slug=component_name,
@@ -400,7 +387,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                         )
                     )
                     await _emit_budget_snapshot(
-                        entity_type="agent_run",
+                        entity_type="agent_execution",
                         entity_id=component_entity_id,
                         parent_entity_id=memory_orchestrator_id,
                         role=component_name,
@@ -431,7 +418,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     component_name = str(item.get("component_name") or "unknown")
                     component_entity_id = component_entity_ids.get(
                         component_name,
-                        f"{payload.runtime_run_id or payload.chat_id}:memory:{component_name}:{index}",
+                        memory_component_entity_id(payload.runtime_run_id or payload.chat_id or "unknown", component_name, index),
                     )
                     component_status = str(item.get("status") or "completed")
                     lifecycle_status = "failed" if component_status == "failed" else (
@@ -448,7 +435,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             error_code=item.get("error_code"),
                             error_message=item.get("error_message"),
                             duration_ms=item.get("duration_ms", 0),
-                            parent_entity_type="agent_run",
+                            parent_entity_type="agent_execution",
                             parent_entity_id=component_entity_id,
                         )
                     )
@@ -458,7 +445,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                         await _publish(
                             RuntimeEvent.status(
                                 "memory_facts_result",
-                                parent_entity_type="agent_run",
+                                parent_entity_type="agent_execution",
                                 parent_entity_id=component_entity_id,
                                 facts=facts_payload if isinstance(facts_payload, list) else [],
                             )
@@ -489,7 +476,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                         await _publish(
                             RuntimeEvent.status(
                                 "memory_summary_result",
-                                parent_entity_type="agent_run",
+                                parent_entity_type="agent_execution",
                                 parent_entity_id=component_entity_id,
                                 summary=summary,
                             )
@@ -499,7 +486,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                         "wall_time_ms": int(item.get("duration_ms") or 0),
                     }
                     await _emit_budget_snapshot(
-                        entity_type="agent_run",
+                        entity_type="agent_execution",
                         entity_id=component_entity_id,
                         parent_entity_id=memory_orchestrator_id,
                         role=component_name,
@@ -518,7 +505,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     )
                     await _publish(
                         RuntimeEvent.agent_end(
-                            agent_run_id=component_entity_id,
+                            agent_execution_id=component_entity_id,
                             parent_entity_id=memory_orchestrator_id,
                             parent_entity_type="orchestrator",
                             agent_slug=component_name,
@@ -530,7 +517,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 raise
             finally:
                 for entity_id in list(budget_own.keys()):
-                    entity_type = "orchestrator" if entity_id == memory_orchestrator_id else "agent_run"
+                    entity_type = "orchestrator" if entity_id == memory_orchestrator_id else "agent_execution"
                     parent_entity_id = (
                         payload.runtime_run_id or payload.chat_id or memory_orchestrator_id
                         if entity_type == "orchestrator"
@@ -555,7 +542,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                         RuntimeEvent.budget_snapshot(
                             entity_type=entity_type,
                             entity_id=entity_id,
-                            parent_entity_type="orchestrator" if entity_type == "agent_run" else "run",
+                        parent_entity_type="orchestrator" if entity_type == "agent_execution" else "run",
                             parent_entity_id=parent_entity_id,
                             own=own_snapshot,
                             limits=limits,

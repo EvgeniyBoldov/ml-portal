@@ -109,7 +109,7 @@ class CollectionDocumentListTool(VersionedTool):
         description="List document files in a document collection with metadata",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("collection.list_documents")
+        log = ctx.tool_notes("collection.list_documents")
 
         collection_slug = str(args.get("collection_slug") or "").strip()
         if not collection_slug:
