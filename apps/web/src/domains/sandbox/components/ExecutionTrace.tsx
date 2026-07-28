@@ -106,15 +106,21 @@ function ExecutorRunCard({ executor, stage, onSelect, selectedTargetKey }: { exe
   );
 }
 
-function StageCard({ stage, onSelect, selectedTargetKey }: { stage: TraceStage; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null }) {
+function StepCard({ step, onSelect, selectedTargetKey }: { step: ReturnType<typeof stepFor>; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null }) {
+  const { stage } = step;
   return (
     <div className={styles.stageRow}>
-      <button type="button" className={`${styles.stageNumber} ${selectedTargetKey === stepFor(stage).key ? styles.isSelected : ''}`} onClick={() => onSelect?.({ kind: 'step', key: stepFor(stage).key, step: stepFor(stage) })}>{stage.stepNumber || stage.iterationNumber || 1}</button>
+      <button type="button" className={`${styles.stageNumber} ${selectedTargetKey === step.key ? styles.isSelected : ''}`} onClick={() => onSelect?.({ kind: 'step', key: step.key, step })}>{step.number || stage.iterationNumber || 1}</button>
       <div className={styles.stage}>
-        <div className={styles.executorList}>{stage.executorRuns.map((executor) => <ExecutorRunCard key={executor.entity.key} executor={executor} stage={stage} onSelect={onSelect} selectedTargetKey={selectedTargetKey} />)}</div>
+        <div className={styles.executorList}>{step.executorRuns.map((executor) => <ExecutorRunCard key={executor.entity.key} executor={executor} stage={stage} onSelect={onSelect} selectedTargetKey={selectedTargetKey} />)}</div>
       </div>
     </div>
   );
+}
+
+function StageCard({ stage, onSelect, selectedTargetKey }: { stage: TraceStage; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null }) {
+  const steps = stage.steps.length > 0 ? stage.steps : [stepFor(stage)];
+  return <div className={styles.stepList}>{steps.map((step) => <StepCard key={step.key} step={step} onSelect={onSelect} selectedTargetKey={selectedTargetKey} />)}</div>;
 }
 
 export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget, selectedTargetKey }: ExecutionTraceProps) {

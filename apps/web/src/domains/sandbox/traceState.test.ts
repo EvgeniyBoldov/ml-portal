@@ -176,6 +176,26 @@ describe('sandbox trace state', () => {
     expect(stepFor(stage)).toMatchObject({ key: 'step:step-1', title: 'Собрать данные', objective: 'Получить инвентарь', inputs: { site: 'msk' } });
   });
 
+  it('keeps every task step in one planner iteration', () => {
+    let state = emptySandboxTrace();
+    state = applyRuntimeJournalEvent(state, event(1, 'run_start', 'run', 'run-1'));
+    state = applyRuntimeJournalEvent(state, { ...event(2, 'planner_iteration_start', 'planner_iteration', 'iteration-1', ['run', 'run-1']), payload: { iteration: 1, iteration_type: 'decision' } });
+    state = applyRuntimeJournalEvent(state, { ...event(3, 'step_start', 'step', 'step-plan', ['planner_iteration', 'iteration-1']), payload: { step_number: 1, title: 'Сформировать план' } });
+    state = applyRuntimeJournalEvent(state, { ...event(4, 'agent_start', 'agent_execution', 'planner-run', ['step', 'step-plan']), payload: { agent_slug: 'planner', task_title: 'Сформировать план' } });
+    state = applyRuntimeJournalEvent(state, { ...event(5, 'step_start', 'step', 'step-network', ['planner_iteration', 'iteration-1']), payload: { step_number: 2, task_id: 'network', title: 'Проверить сеть' } });
+    state = applyRuntimeJournalEvent(state, { ...event(6, 'agent_start', 'agent_execution', 'network-run', ['step', 'step-network']), payload: { agent_slug: 'net.engineer', task_title: 'Проверить сеть' } });
+    state = applyRuntimeJournalEvent(state, { ...event(7, 'step_start', 'step', 'step-review', ['planner_iteration', 'iteration-1']), payload: { step_number: 3, task_id: 'review', title: 'Проверить результат' } });
+    state = applyRuntimeJournalEvent(state, { ...event(8, 'agent_start', 'agent_execution', 'review-run', ['step', 'step-review']), payload: { agent_slug: 'viewer', task_title: 'Проверить результат' } });
+
+    const [stage] = projectTraceStages(state);
+    expect(stage.steps).toHaveLength(3);
+    expect(stage.steps.map((step) => [step.number, step.title, step.executorRuns[0]?.executorSlug])).toEqual([
+      [1, 'Сформировать план', 'planner'],
+      [2, 'Проверить сеть', 'net.engineer'],
+      [3, 'Проверить результат', 'viewer'],
+    ]);
+  });
+
   it('projects calls from the canonical executor parent link', () => {
     let state = emptySandboxTrace();
     state = applyRuntimeJournalEvent(state, event(1, 'run_start', 'run', 'run-1'));

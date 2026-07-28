@@ -135,12 +135,43 @@ class GraphOrchestrator:
             for key in ("chat_id", "tenant_id", "user_id", "agent_execution_id", "sandbox_overrides")
             if key in planner_kwargs
         }
+        # A planner iteration represents one planner decision and the task
+        # steps executed against that decision.  It is deliberately not a
+        # synonym for one claimed task.
+        active_iteration_id: Optional[str] = None
+        active_iteration_type = "execution"
+        active_step_number = 1
+        iteration_open = False
+
+        def close_active_iteration(*, status: str, outcome: Optional[str] = None) -> Optional[OrchestratorEvent]:
+            nonlocal iteration_open
+            if not iteration_open or active_iteration_id is None:
+                return None
+            iteration_open = False
+            payload: Dict[str, Any] = {
+                "type": "planner_iteration_end",
+                "entity_id": active_iteration_id,
+                "planner_iteration_id": active_iteration_id,
+                "parent_entity_type": "orchestrator",
+                "parent_entity_id": orchestrator_id,
+                "iteration": iteration_number,
+                "iteration_number": iteration_number,
+                "iteration_type": active_iteration_type,
+                "status": status,
+            }
+            if outcome:
+                payload["outcome"] = outcome
+            return OrchestratorEvent(**payload)
 
         async def revise(*, reason: str, last_failure: Optional[Dict[str, Any]] = None) -> None:
-            nonlocal iteration_number
+            nonlocal iteration_number, active_iteration_id, active_iteration_type, active_step_number, iteration_open
             current = await self.store.snapshot(plan_id)
             iteration_number += 1
             iteration_entity_id = make_iteration_id(str(root_run_id), iteration_number)
+            active_iteration_id = iteration_entity_id
+            active_iteration_type = "replan"
+            active_step_number = 2
+            iteration_open = True
             planner_step_id = make_step_id(iteration_entity_id, 1, "replan")
             planner_executor_id = make_agent_execution_id(iteration_entity_id, "planner", iteration_number)
             invocation_id = uuid4()
@@ -187,7 +218,6 @@ class GraphOrchestrator:
                           payload={"kind": "planner", "mode": "replan", "status": "completed", "revision": updated.revision}, trigger=reason)
             await observe("agent_end", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "status": "completed"}, trigger=reason)
             await observe("step_end", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "status": "completed", "outcome": "success"}, trigger=reason)
-            await observe("planner_iteration_end", entity_type="planner_iteration", entity_id=iteration_entity_id, parent_type="orchestrator", parent_id=orchestrator_id, payload={"iteration": iteration_number, "iteration_number": iteration_number, "iteration_type": "replan", "status": "completed"}, trigger=reason)
         if not plan["tasks"]:
             invocation_id = uuid4()
             checkpoint_id = make_checkpoint_id(str(root_run_id), "planner", str(invocation_id))
@@ -201,11 +231,16 @@ class GraphOrchestrator:
             await self.store.session.flush()
             await observe("planner_invocation_started", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id, payload={"trigger": "initial", "revision": plan["revision"]}, trigger="initial")
             iteration_id = make_iteration_id(str(root_run_id), iteration_number)
+            active_iteration_id = iteration_id
+            active_iteration_type = "decision"
+            active_step_number = 2
+            iteration_open = True
             step_id = make_step_id(iteration_id, 1, "plan")
             planner_executor_id = make_agent_execution_id(iteration_id, "planner", 1)
             yield OrchestratorEvent(type="planner_iteration_start", entity_id=iteration_id,
                                     planner_iteration_id=iteration_id, parent_entity_type="orchestrator",
-                                    parent_entity_id=orchestrator_id, iteration=iteration_number, iteration_number=iteration_number, mode="initial")
+                                    parent_entity_id=orchestrator_id, iteration=iteration_number,
+                                    iteration_number=iteration_number, iteration_type="decision", mode="initial")
             yield OrchestratorEvent(type="step_start", entity_id=step_id, entity_type="step",
                                     parent_entity_type="planner_iteration", parent_entity_id=iteration_id,
                                     step_number=1, kind="plan", title="Сформировать план", objective=goal)
@@ -239,24 +274,38 @@ class GraphOrchestrator:
             yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
                                     parent_entity_type="planner_iteration", parent_entity_id=iteration_id,
                                     step_number=1, status="completed", outcome="success", summary="План сформирован")
-            yield OrchestratorEvent(type="planner_iteration_end", entity_id=iteration_id,
-                                    planner_iteration_id=iteration_id, parent_entity_type="orchestrator",
-                                    parent_entity_id=orchestrator_id, iteration=iteration_number, iteration_number=iteration_number, status="completed", mode="initial")
             yield OrchestratorEvent(type="plan_created", entity_type="plan", entity_id=str(plan_id),
                                     parent_entity_type="agent_execution", parent_entity_id=planner_executor_id,
                                     plan_id=str(plan_id), revision=1, mode="initial",
                                     patch=patch.model_dump(mode="json"))
+        else:
+            # A resumed persisted plan has no new planner call in this run,
+            # but its task steps still need one explicit execution iteration.
+            active_iteration_id = make_iteration_id(str(root_run_id), iteration_number)
+            active_iteration_type = "execution"
+            active_step_number = 1
+            iteration_open = True
+            yield OrchestratorEvent(type="planner_iteration_start", entity_id=active_iteration_id,
+                                    planner_iteration_id=active_iteration_id, parent_entity_type="orchestrator",
+                                    parent_entity_id=orchestrator_id, iteration=iteration_number,
+                                    iteration_number=iteration_number, iteration_type="execution", mode="resume")
         for _ in range(max_steps):
             plan = await self.store.snapshot(plan_id)
             if plan["status"] in {"completed", "waiting_input", "failed", "cancelled"}:
+                closed = close_active_iteration(status=plan["status"])
+                if closed is not None:
+                    yield closed
                 yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status=plan["status"])
                 return
-            iteration_number += 1
-            iteration_id = make_iteration_id(str(root_run_id), iteration_number)
             task = await self.store.claim_ready(plan_id)
             if task is None:
+                closed = close_active_iteration(status="stalled")
+                if closed is not None:
+                    yield closed
                 yield OrchestratorEvent(type="plan_stalled", plan_id=str(plan_id))
                 return
+            if active_iteration_id is None:
+                raise RuntimeError("task execution requires an active planner iteration")
             task_id = task.task_id
             snapshot = await self.store.snapshot(plan_id)
             dependencies = {
@@ -268,7 +317,7 @@ class GraphOrchestrator:
                                   needs=snapshot["tasks"].get(task_id, {}).get("needs", []),
                                   checkpoint=task.checkpoint or {}, dependency_outputs=dependencies)
             checkpoint_id = make_checkpoint_id(str(root_run_id), "task", f"{task_id}:{task.attempts}")
-            executor_id = make_agent_execution_id(iteration_id, task_id, task.attempts)
+            executor_id = make_agent_execution_id(active_iteration_id, task_id, task.attempts)
             await observe("orchestrator_checkpoint_started", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                           parent_type="orchestrator", parent_id=orchestrator_id,
                           payload={"kind": "task", "task_id": task_id, "attempt": task.attempts, "executor": task.executor})
@@ -282,14 +331,11 @@ class GraphOrchestrator:
             yield OrchestratorEvent(type="task_started", entity_type="task", entity_id=task_id,
                                     parent_entity_type="plan", parent_entity_id=str(plan_id),
                                     plan_id=str(plan_id), task_id=task_id, attempt=task.attempts)
-            yield OrchestratorEvent(type="planner_iteration_start", entity_id=iteration_id,
-                                    planner_iteration_id=iteration_id, parent_entity_type="orchestrator",
-                                    parent_entity_id=orchestrator_id, iteration=iteration_number, iteration_number=iteration_number,
-                                    mode="execute_tasks")
-            step_id = make_step_id(iteration_id, 1, task_id)
+            step_number = active_step_number
+            step_id = make_step_id(active_iteration_id, step_number, task_id)
             yield OrchestratorEvent(type="step_start", entity_id=step_id, entity_type="step",
-                                    parent_entity_type="planner_iteration", parent_entity_id=iteration_id,
-                                    step_number=1, kind="call_agent", title=task.intent, objective=task.instructions,
+                                    parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
+                                    step_number=step_number, kind="call_agent", title=task.intent, objective=task.instructions,
                                     intent=task.intent, inputs=task.inputs or {})
             yield OrchestratorEvent(type="agent_start", entity_id=executor_id, agent_execution_id=executor_id,
                                     parent_entity_type="step", parent_entity_id=step_id,
@@ -305,7 +351,7 @@ class GraphOrchestrator:
                 task_executor_kwargs["runtime_run_id"] = str(root_run_id)
                 task_executor_kwargs["lifecycle_agent_execution_id"] = executor_id
                 task_executor_kwargs["runtime_log_parent"] = {"entity_type": "step", "entity_id": step_id}
-                task_executor_kwargs["iteration_id"] = iteration_id
+                task_executor_kwargs["iteration_id"] = active_iteration_id
                 result = await self.executor.execute_task(request=request, **task_executor_kwargs)
             except Exception as exc:
                 failure = TaskAttemptFailure(code=type(exc).__name__, message=str(exc) or "task execution failed", retryable=True)
@@ -321,11 +367,15 @@ class GraphOrchestrator:
                                         agent_slug=task.executor, task_id=task_id, status="failed",
                                         task_title=task.intent, task_objective=task.instructions)
                 yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                        parent_entity_type="planner_iteration", parent_entity_id=iteration_id,
-                                        step_number=1, status="failed", outcome="technical_failure", summary=failure.message)
+                                        parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
+                                        step_number=step_number, status="failed", outcome="technical_failure", summary=failure.message)
                 yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id,
                                         error=failure.model_dump(mode="json"))
+                active_step_number += 1
                 if not failure.retryable or task.attempts >= self.max_attempts:
+                    closed = close_active_iteration(status="failed", outcome="technical_failure")
+                    if closed is not None:
+                        yield closed
                     await revise(reason="technical_failure", last_failure=failure.model_dump(mode="json"))
                 continue
             await self.store.apply_result(plan_id, task_id, result)
@@ -343,18 +393,21 @@ class GraphOrchestrator:
                                     outcome=result.outcome.value,
                                     status="completed" if result.outcome.value == "completed" else result.outcome.value)
             yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                    parent_entity_type="planner_iteration", parent_entity_id=iteration_id,
-                                    step_number=1, status="completed" if result.outcome.value == "completed" else result.outcome.value,
+                                    parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
+                                    step_number=step_number, status="completed" if result.outcome.value == "completed" else result.outcome.value,
                                     outcome=result.outcome.value, summary=result.summary,
                                     sufficient_for_phase=result.outcome.value == "completed")
-            yield OrchestratorEvent(type="planner_iteration_end", entity_id=iteration_id,
-                                    planner_iteration_id=iteration_id, parent_entity_type="orchestrator",
-                                    parent_entity_id=orchestrator_id, iteration=iteration_number, iteration_number=iteration_number,
-                                    status="completed" if result.outcome.value == "completed" else result.outcome.value)
             yield OrchestratorEvent(type=("task_completed" if result.outcome.value == "completed" else "task_unfulfillable"),
                                     entity_type="task", entity_id=task_id,
                                     parent_entity_type="plan", parent_entity_id=str(plan_id),
                                     plan_id=str(plan_id), task_id=task_id, outcome=result.outcome.value)
+            active_step_number += 1
             if result.outcome in {TaskOutcome.NEEDS_DEPENDENCY, TaskOutcome.UNFULFILLABLE}:
+                closed = close_active_iteration(status=result.outcome.value, outcome=result.outcome.value)
+                if closed is not None:
+                    yield closed
                 await revise(reason=result.outcome.value)
+        closed = close_active_iteration(status="max_steps")
+        if closed is not None:
+            yield closed
         yield OrchestratorEvent(type="max_steps", plan_id=str(plan_id))

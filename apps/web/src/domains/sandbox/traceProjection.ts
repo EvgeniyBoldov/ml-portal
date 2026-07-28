@@ -32,9 +32,9 @@ export interface TraceStage {
   iterationType: string;
   label: string;
   task: string;
+  /** All canonical steps in this planner iteration, in execution order. */
+  steps: TraceStep[];
   executorRuns: TraceExecutorRun[];
-  stepEntity?: TraceEntity;
-  stepPayload?: Record<string, unknown>;
   metrics: TraceMetrics;
 }
 
@@ -47,6 +47,7 @@ export interface TraceStep {
   objective?: string;
   inputs?: unknown;
   result?: unknown;
+  executorRuns: TraceExecutorRun[];
 }
 
 export type TraceInspectionTarget =
@@ -268,14 +269,17 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
       const directChildren = entity.childKeys
         .map((key) => state.entitiesByKey[key])
         .filter((child): child is TraceEntity => Boolean(child));
-      const stepEntity = directChildren.find((child) => child.type === 'step');
-      const stepStart = stepEntity ? startFor(state, stepEntity) : undefined;
-      const executorEntities = (stepEntity?.childKeys ?? [])
-        .map((key) => state.entitiesByKey[key])
-        .filter((child): child is TraceEntity => Boolean(child));
-      const executorRuns = executorEntities
-        .map((child) => executorFor(state, child))
-        .filter((executor): executor is TraceExecutorRun => Boolean(executor));
+      const stepEntities = directChildren
+        .filter((child) => child.type === 'step')
+        .sort((left, right) => (startFor(state, left)?.sequence ?? 0) - (startFor(state, right)?.sequence ?? 0));
+      const executorRunsByStep = stepEntities.map((stepEntity) => (
+        stepEntity.childKeys
+          .map((key) => state.entitiesByKey[key])
+          .filter((child): child is TraceEntity => Boolean(child))
+          .map((child) => executorFor(state, child))
+          .filter((executor): executor is TraceExecutorRun => Boolean(executor))
+      ));
+      const executorRuns = executorRunsByStep.flat();
       const iterationType = asString(start.payload.iteration_type)
         || (executorRuns.some((executor) => executor.executorSlug === 'planner') ? 'decision' : 'execution');
       const task = iterationType === 'replan'
@@ -284,20 +288,37 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         || asString(start.payload.task_title)
         || asString(start.payload.goal)
         || 'Выполнение задачи';
-      return {
+      const stage: TraceStage = {
         entity,
         start,
         number,
         iterationNumber: number,
-        stepNumber: asNumber(stepStart?.payload.step_number) ?? 0,
+        stepNumber: 0,
         iterationType,
         label: iterationLabel(iterationType, number),
         task,
+        steps: [],
         executorRuns,
-        stepEntity,
-        stepPayload: stepStart?.payload,
         metrics: metricsFor(state, entity),
       };
+      stage.steps = stepEntities.map((stepEntity, index) => {
+        const stepStart = startFor(state, stepEntity);
+        const payload = stepStart?.payload ?? {};
+        const stepExecutors = executorRunsByStep[index];
+        const executor = stepExecutors[0];
+        return {
+          key: stepEntity.key,
+          stage,
+          number: asNumber(payload.step_number) ?? index + 1,
+          taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
+          title: asString(payload.title) || asString(payload.task_title) || asString(payload.task_objective) || executor?.task || stage.task,
+          objective: asString(payload.objective) || asString(payload.task_objective) || undefined,
+          inputs: payload.inputs ?? payload.task_inputs,
+          executorRuns: stepExecutors,
+        };
+      });
+      stage.stepNumber = stage.steps[0]?.number ?? 0;
+      return stage;
     })
     .filter((stage): stage is TraceStage => stage !== null)
     .sort((left, right) => left.start.sequence - right.start.sequence);
@@ -320,7 +341,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         entity, start, number: plannerStages.length + 1, iterationNumber: plannerStages.length + 1,
         stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : 'preparation',
         label: isSynthesis ? 'Подготовка ответа' : 'Сохранение памяти',
-        task: isSynthesis ? 'Подготовка финального ответа' : 'Сохранение фактов и сводки', executorRuns,
+        task: isSynthesis ? 'Подготовка финального ответа' : 'Сохранение фактов и сводки', steps: [], executorRuns,
         metrics: metricsFor(state, entity),
       } satisfies TraceStage;
     })
@@ -329,16 +350,19 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
 }
 
 export function stepFor(stage: TraceStage): TraceStep {
+  const firstStep = stage.steps[0];
+  if (firstStep) return firstStep;
   const executor = stage.executorRuns[0];
-  const payload = stage.stepPayload ?? executor?.start.payload ?? stage.start.payload;
+  const payload = executor?.start.payload ?? stage.start.payload;
   return {
-    key: stage.stepEntity?.key ?? `step:${stage.entity.key}`,
+    key: `step:${stage.entity.key}`,
     stage,
     number: stage.stepNumber,
     taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
     title: asString(payload.title) || asString(payload.task_title) || asString(payload.task_objective) || stage.task,
     objective: asString(payload.objective) || asString(payload.task_objective) || undefined,
     inputs: payload.inputs ?? payload.task_inputs,
+    executorRuns: stage.executorRuns,
   };
 }
 
@@ -349,8 +373,9 @@ export function resolveTraceInspectionTarget(
 ): TraceInspectionTarget | null {
   for (const stage of projectTraceStages(state)) {
     if (stage.entity.key === key) return { kind: 'iteration', key, stage };
-    const step = stepFor(stage);
-    if (step.key === key) return { kind: 'step', key, step };
+    for (const step of stage.steps.length > 0 ? stage.steps : [stepFor(stage)]) {
+      if (step.key === key) return { kind: 'step', key, step };
+    }
     for (const executor of stage.executorRuns) {
       if (executor.entity.key === key) return { kind: 'executor_run', key, executor, stage };
       for (const call of executor.calls) {
