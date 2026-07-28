@@ -1,7 +1,7 @@
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorScalar, InspectorPanel, InspectorHeader, InspectorTabs } from '@/shared/ui/Inspector';
 import type { SandboxTraceState } from '../../traceState';
 import type { TraceInspectionTarget } from '../../traceProjection';
-import { LimitsView, PlanView, RbacView, TextValue } from './TraceDataViews';
+import { ExecutorSnapshotView, LimitsView, PlanView, RbacView, TextValue } from './TraceDataViews';
 import { CallInfoView, LlmRequestView, LlmResponseView, ToolRequestView, ToolResponseView } from './CallViews';
 import { ExecutorResultView, StageResultView } from './ResultViews';
 import { callDisplayName, llmResponseContent, rawCallEvents, toDisplayEntries } from '../../callInspection';
@@ -10,6 +10,20 @@ import { traceStatusLabel, traceStatusTone } from '../../traceStatus';
 
 interface Props { target: TraceInspectionTarget | null; trace: SandboxTraceState | null; toolNames?: ToolNameMap; }
 const eventPayloads = (state: SandboxTraceState | null, ids: string[]) => ids.map((id) => state?.eventsById[id]?.payload).filter(Boolean);
+const latestEntityPayload = (state: SandboxTraceState | null, entityId: string, eventType: string): Record<string, unknown> | undefined => {
+  const entity = state?.entitiesByKey[entityId];
+  if (!entity) return undefined;
+  return [...entity.eventIds].reverse()
+    .map((id) => state?.eventsById[id])
+    .find((event) => event?.event_type === eventType)?.payload;
+};
+const latestExecutorConfigSnapshot = (state: SandboxTraceState | null, entityId: string): Record<string, unknown> | undefined => {
+  const entity = state?.entitiesByKey[entityId];
+  if (!entity) return undefined;
+  return [...entity.eventIds].reverse()
+    .map((id) => state?.eventsById[id]?.payload)
+    .find((payload): payload is Record<string, unknown> => Boolean(payload?.config_snapshot));
+};
 const typedValue = (value: unknown) => value && typeof value === 'object'
   ? <InspectorJsonBlock value={value} />
   : <InspectorScalar value={value as string | number | boolean | null | undefined} />;
@@ -31,6 +45,18 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
   const limitsSnapshot = payloads.find((value) => value && typeof value === 'object' && ('limits' in value || 'runtime_limits' in value)) as Record<string, unknown> | undefined;
   const snapshot = contextSnapshot?.context_snapshot ?? contextSnapshot ?? {};
   const stage = target.kind === 'iteration' ? target.stage : target.kind === 'step' ? target.step.stage : target.stage;
+  const executorBudgetSnapshot = target.kind === 'executor_run'
+    ? latestEntityPayload(trace, target.executor.entity.key, 'budget_snapshot')
+    : undefined;
+  const executorRbacSnapshot = target.kind === 'executor_run'
+    ? latestEntityPayload(trace, target.executor.entity.key, 'rbac_snapshot')
+    : undefined;
+  const executorConfigSnapshot = target.kind === 'executor_run'
+    ? latestExecutorConfigSnapshot(trace, target.executor.entity.key)
+    : undefined;
+  const runBudgetSnapshot = trace?.runId
+    ? latestEntityPayload(trace, `run:${trace.runId}`, 'budget_snapshot')
+    : undefined;
   const plannerExecutorIds = new Set(stage.executorRuns.filter((item) => item.executorSlug === 'planner').map((item) => item.entity.id));
   const journalEvents = Object.values(trace?.eventsById ?? {});
   const stageEndSequence = stage.entity.eventIds
@@ -84,9 +110,9 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'result' && target.kind === 'iteration') return <StageResultView stage={target.stage} trace={trace} />;
     if (tab === 'result' && target.kind === 'step') return <StageResultView stage={target.step.stage} trace={trace} />;
     if (tab === 'result' && target.kind === 'executor_run') return target.executor.executorSlug === 'planner' ? <PlanView plan={plan} /> : <ExecutorResultView executor={target.executor} trace={trace} />;
-    if (tab === 'executor' && target.kind === 'executor_run') return <InspectorFieldGroup><InspectorFieldRow label="Тип">{target.executor.executorType}</InspectorFieldRow><InspectorFieldRow label="Slug">{target.executor.executorSlug}</InspectorFieldRow><TextValue label="Промпт" value={(snapshot as Record<string, unknown>).system_prompt ?? (snapshot as Record<string, unknown>).prompt} /></InspectorFieldGroup>;
-    if (tab === 'limits') return <LimitsView snapshot={limitsSnapshot ?? snapshot} />;
-    if (tab === 'rbac') return <RbacView snapshot={rbacSnapshot ?? snapshot} />;
+    if (tab === 'executor' && target.kind === 'executor_run') return <><InspectorFieldGroup><InspectorFieldRow label="Тип">{target.executor.executorType}</InspectorFieldRow><InspectorFieldRow label="Slug">{target.executor.executorSlug}</InspectorFieldRow></InspectorFieldGroup><ExecutorSnapshotView snapshot={executorConfigSnapshot ?? snapshot} /></>;
+    if (tab === 'limits') return <LimitsView executorSnapshot={executorBudgetSnapshot ?? limitsSnapshot ?? snapshot} runSnapshot={runBudgetSnapshot} />;
+    if (tab === 'rbac') return <RbacView snapshot={executorRbacSnapshot ?? rbacSnapshot ?? snapshot} />;
     if (tab === 'error' && target.kind === 'error') return <InspectorFieldGroup>{toDisplayEntries(target.call.request.payload).map((entry) => <TextValue key={entry.label} label={entry.label} value={entry.value} />)}</InspectorFieldGroup>;
     if (tab === 'context' && target.kind === 'error') return <InspectorFieldGroup><TextValue label="Контекст" value={target.call.request.payload.context ?? 'Нет дополнительного контекста'} /></InspectorFieldGroup>;
     if (tab === 'request' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmRequestView call={target.call} /> : target.call.kind === 'tool' ? <ToolRequestView call={target.call} /> : <InspectorFieldGroup><TextValue label="Запрос" value={target.call.request.payload.question ?? target.call.request.payload.message} /></InspectorFieldGroup>;

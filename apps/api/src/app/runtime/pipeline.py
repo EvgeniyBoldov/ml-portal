@@ -428,6 +428,7 @@ class RuntimePipeline:
             tenant_id=tenant_id,
             available_agents=available_agents,
             platform_config=platform.config,
+            planner_rbac_audit=planner_rbac_audit,
             orchestrator_id=orchestrator_id,
         ):
             yield await emitter.emit(phased.event, phase=phased.phase)

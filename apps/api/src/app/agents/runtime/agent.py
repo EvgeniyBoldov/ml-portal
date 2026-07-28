@@ -53,7 +53,7 @@ from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.agents.runtime.prompt_assembler import filter_prompt_visible_operations
 from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
-from app.runtime.context_snapshot import compact_snapshot
+from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.error_payloads import build_debug_payload
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits
@@ -96,6 +96,8 @@ def _build_budget_snapshot_payload(
         start_time = loop_state.start_time or time.time()
     used_wall_time_ms = int((time.time() - start_time) * 1000)
     return {
+        "entity_type": "agent_execution",
+        "entity_id": owner_id,
         "owner_scope": "agent",
         "owner_id": owner_id,
         "parent_entity_type": "agent_execution",
@@ -192,20 +194,39 @@ class AgentToolRuntime(BaseRuntime):
         )
         ctx.extra["logging_level"] = resolved_logging_level.value
         ctx.extra["trace_enabled"] = resolved_logging_level.value != "none"
+        sandbox_trace = bool((ctx.get_runtime_deps().sandbox_overrides or {}).get("sandbox_run_id"))
+        executor_config_snapshot = compact_snapshot(
+            # Sandbox inspector is an operator-only full trace: preserve the
+            # concrete assembled prompt even if the agent's normal logging
+            # level is brief/none. Chat traces keep the redacted hash.
+            prompt=prompt_snapshot(system_prompt, "full" if sandbox_trace else resolved_logging_level.value),
+            limits={
+                "max_steps": policy.max_steps,
+                "max_tool_calls_total": policy.max_tool_calls_total,
+                "max_wall_time_ms": policy.max_wall_time_ms,
+                "tool_timeout_ms": policy.tool_timeout_ms,
+                "max_retries": policy.max_retries,
+            },
+            meta={
+                "model": gen.model or model,
+                "temperature": gen.temperature,
+                "max_tokens": gen.max_tokens,
+                "streaming_enabled": policy.streaming_enabled,
+                "citations_required": policy.citations_required,
+                "allow_parallel_tool_calls": policy.allow_parallel_tool_calls,
+                "available_operations": serialize_published_operations(available_operations),
+                "available_collections": serialize_published_collections(
+                    exec_request.resolved_data_instances,
+                    available_operations,
+                ),
+            },
+        ) or {}
         run_session = self._create_run_session(
             ctx=ctx,
             agent_slug=agent.slug,
             mode="agent_with_operations",
             logging_level=resolved_logging_level.value,
-            context_snapshot=compact_snapshot(
-                meta={
-                    "available_operations": serialize_published_operations(available_operations),
-                    "available_collections": serialize_published_collections(
-                        exec_request.resolved_data_instances,
-                        available_operations,
-                    ),
-                },
-            ),
+            context_snapshot=executor_config_snapshot,
             enable_logging=enable_logging,
             run_id_override=run_id_override,
         )
@@ -214,6 +235,28 @@ class AgentToolRuntime(BaseRuntime):
             "agent_slug": agent.slug,
             "agent_execution_id": str(run_session.run_id) if run_session.run_id else None,
         }
+        if run_session.run_id:
+            parent = ctx.extra.get("runtime_log_parent") or {}
+            snapshot_parent_type = parent.get("entity_type") or "run"
+            snapshot_parent_id = parent.get("entity_id") or str(ctx.extra.get("runtime_root_run_id") or run_session.run_id)
+            yield RuntimeEvent.status(
+                "executor_config_snapshot",
+                entity_type="agent_execution",
+                entity_id=str(run_session.run_id),
+                parent_entity_type=snapshot_parent_type,
+                parent_entity_id=snapshot_parent_id,
+                config_snapshot=executor_config_snapshot,
+            )
+            yield RuntimeEvent(
+                RuntimeEventType.RBAC_SNAPSHOT,
+                {
+                    "entity_type": "agent_execution",
+                    "entity_id": str(run_session.run_id),
+                    "parent_entity_type": snapshot_parent_type,
+                    "parent_entity_id": snapshot_parent_id,
+                    "rbac": dict(exec_request.rbac_audit or {}),
+                },
+            )
         
         # Add run_id to context for intent logging
         if run_session.run_id:

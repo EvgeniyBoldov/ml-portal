@@ -48,6 +48,7 @@ class GraphPlanningStage:
         tenant_id: UUID,
         available_agents: List[Dict[str, Any]],
         platform_config: Dict[str, Any],
+        planner_rbac_audit: Optional[Dict[str, Any]] = None,
         orchestrator_id: Optional[str] = None,
     ) -> AsyncIterator[PhasedEvent]:
         runtime_sink = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
@@ -83,6 +84,7 @@ class GraphPlanningStage:
             "ctx": ctx,
             "platform_config": platform_config,
             "model": request.model,
+            "planner_rbac_audit": dict(planner_rbac_audit or {}),
         }
         async for event in self._orchestrator.run(
             plan_id=plan.id,

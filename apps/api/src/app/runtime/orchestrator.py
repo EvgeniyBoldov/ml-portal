@@ -130,6 +130,7 @@ class GraphOrchestrator:
             ))
         planner_kwargs = planner_kwargs or {}
         limits = dict(planner_kwargs.get("runtime_limits") or {})
+        planner_rbac_audit = dict(planner_kwargs.get("planner_rbac_audit") or {})
         llm_kwargs = {
             key: planner_kwargs[key]
             for key in ("chat_id", "tenant_id", "user_id", "agent_execution_id", "sandbox_overrides")
@@ -189,6 +190,7 @@ class GraphOrchestrator:
             await observe("planner_iteration_start", entity_type="planner_iteration", entity_id=iteration_entity_id, parent_type="orchestrator", parent_id=orchestrator_id, payload={"iteration": iteration_number, "iteration_number": iteration_number, "iteration_type": "replan", "mode": "replan"}, trigger=reason)
             await observe("step_start", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "kind": "plan", "title": "Перепланировать", "objective": reason}, trigger=reason)
             await observe("agent_start", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "executor_type": "planner", "executor_name": "Планер", "task_title": reason}, trigger=reason)
+            await observe("rbac_snapshot", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"rbac": planner_rbac_audit}, trigger=reason)
             patch = await self.planner.plan(request=PlanRequest(
                 goal=goal,
                 available_agents=available_agents,
@@ -248,6 +250,9 @@ class GraphOrchestrator:
                                     agent_execution_id=planner_executor_id, parent_entity_type="step",
                                     parent_entity_id=step_id, agent_slug="planner", role="planner",
                                     executor_type="planner", executor_name="Планер", task_title=goal)
+            yield OrchestratorEvent(type="rbac_snapshot", entity_type="agent_execution", entity_id=planner_executor_id,
+                                    parent_entity_type="step", parent_entity_id=step_id,
+                                    rbac=planner_rbac_audit)
             patch = await self.planner.plan(request=PlanRequest(
                 goal=goal, available_agents=available_agents, plan=plan,
                 trigger="initial", run_id=root_run_id, plan_id=plan_id,

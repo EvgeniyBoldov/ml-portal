@@ -17,7 +17,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from app.agents.runtime.base import BaseRuntime
-from app.runtime.events import RuntimeEvent
+from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
+from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.core.db import get_session_factory
 from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
@@ -72,15 +73,35 @@ class DirectRuntime(BaseRuntime):
         )
         ctx.extra["logging_level"] = resolved_logging_level.value
         ctx.extra["trace_enabled"] = resolved_logging_level.value != "none"
+        sandbox_trace = bool((ctx.get_runtime_deps().sandbox_overrides or {}).get("sandbox_run_id"))
+        executor_config_snapshot = compact_snapshot(
+            prompt=prompt_snapshot(prompt_bundle.system_prompt, "full" if sandbox_trace else resolved_logging_level.value),
+            meta={
+                "model": gen.model,
+                "temperature": gen.temperature,
+                "max_tokens": gen.max_tokens,
+            },
+        ) or {}
         run_session = self._create_run_session(
             ctx=ctx,
             agent_slug=agent.slug,
             mode="direct",
             logging_level=resolved_logging_level.value,
-            context_snapshot={"model": gen.model},
+            context_snapshot=executor_config_snapshot,
             enable_logging=enable_logging,
         )
         await run_session.start()
+
+        if run_session.run_id:
+            parent = ctx.extra.get("runtime_log_parent") or {}
+            yield RuntimeEvent.status(
+                "executor_config_snapshot",
+                entity_type="agent_execution",
+                entity_id=str(run_session.run_id),
+                parent_entity_type=parent.get("entity_type") or "run",
+                parent_entity_id=parent.get("entity_id") or str(ctx.extra.get("runtime_root_run_id") or run_session.run_id),
+                config_snapshot=executor_config_snapshot,
+            )
 
         yield RuntimeEvent.status("direct_streaming")
 
