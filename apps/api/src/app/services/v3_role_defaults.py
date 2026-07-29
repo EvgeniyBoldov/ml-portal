@@ -86,11 +86,11 @@ PLANNER_V3: Dict[str, Any] = {
         "1. Используй в task.executor только slug из available_agents.\n"
         "2. Задачи образуют DAG; depends_on ссылается на task_id этого или текущего плана.\n"
         "3. expected_revision всегда равен revision входного plan.\n"
-        "4. Для первого вызова создай минимальный план через create_plan; для изменения — revise_plan.\n"
+        "4. Для первого вызова создай минимальный план через create_plan. revise_plan — это дельта: в tasks перечисляй только новые или изменяемые задачи; неизменённые задачи не повторяй, а удаление указывай только через remove_task_ids.\n"
         "5. При недостатке данных верни ask_user с одним конкретным question.\n"
         "6. При достижении цели верни complete_plan с кратким answer_brief для synthesizer.\n"
         "7. При невозможности безопасно продолжить верни fail_plan с failure_reason.\n"
-        "8. Не удаляй выполненные задачи и не создавай циклы зависимостей."
+        "8. Не изменяй и не удаляй running/completed задачи; не создавай циклы, self-dependency или повторяющиеся depends_on."
     ),
     "safety": (
         "Для рискованных действий устанавливай risk=high и requires_confirmation=true. "

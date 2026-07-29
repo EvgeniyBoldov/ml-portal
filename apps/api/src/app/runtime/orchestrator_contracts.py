@@ -118,6 +118,11 @@ class PlanPatch(BaseModel):
         task_ids = [task.task_id for task in self.tasks]
         if len(task_ids) != len(set(task_ids)):
             raise ValueError("plan patch contains duplicate task ids")
+        for task in self.tasks:
+            if len(task.depends_on) != len(set(task.depends_on)):
+                raise ValueError(f"task {task.task_id} contains duplicate dependencies")
+            if task.task_id in task.depends_on:
+                raise ValueError(f"task {task.task_id} cannot depend on itself")
         if set(self.remove_task_ids) & set(task_ids):
             raise ValueError("plan patch cannot create and remove the same task")
         if self.decision == PlannerDecisionKind.CREATE_PLAN and self.expected_revision != 0:

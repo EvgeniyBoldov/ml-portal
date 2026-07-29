@@ -11,7 +11,7 @@ from app.runtime.orchestrator_contracts import (
     TaskOutcome,
     TaskRequest,
 )
-from app.runtime.plan_store import SqlPlanStore
+from app.runtime.plan_store import PlanConflictError, PlanValidationError, SqlPlanStore
 from uuid import UUID, uuid4
 from app.models.runtime_observability import RuntimePlannerInvocation
 from app.runtime.events import RuntimeEvent, RuntimeEventType
@@ -164,7 +164,7 @@ class GraphOrchestrator:
                 payload["outcome"] = outcome
             return OrchestratorEvent(**payload)
 
-        async def revise(*, reason: str, last_failure: Optional[Dict[str, Any]] = None) -> None:
+        async def revise(*, reason: str, last_failure: Optional[Dict[str, Any]] = None) -> Optional[str]:
             nonlocal iteration_number, active_iteration_id, active_iteration_type, active_step_number, iteration_open
             current = await self.store.snapshot(plan_id)
             iteration_number += 1
@@ -210,7 +210,26 @@ class GraphOrchestrator:
             decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason=reason) if self.budget_service else None
             if decision is not None and not decision.allowed:
                 raise RuntimeError("plan revision budget exceeded")
-            updated = await self.store.apply_patch(plan_id, patch, reason=reason, planner_invocation_id=str(invocation_id))
+            try:
+                updated = await self.store.apply_patch(plan_id, patch, reason=reason, planner_invocation_id=str(invocation_id))
+            except (PlanConflictError, PlanValidationError) as exc:
+                failure = {"code": type(exc).__name__, "message": str(exc), "trigger": reason}
+                invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
+                if invocation is not None:
+                    invocation.status, invocation.finished_at = "failed", datetime.now(timezone.utc)
+                await self.store.mark_failed(plan_id, failure)
+                await observe("error", entity_type="error", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_entity_id,
+                              payload={"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}, trigger=reason)
+                await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
+                              parent_type="orchestrator", parent_id=orchestrator_id,
+                              payload={"kind": "planner", "mode": "replan", "status": "failed", "reason": str(exc)}, trigger=reason)
+                await observe("agent_end", entity_type="agent_execution", entity_id=planner_executor_id,
+                              parent_type="step", parent_id=planner_step_id,
+                              payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "status": "failed"}, trigger=reason)
+                await observe("step_end", entity_type="step", entity_id=planner_step_id,
+                              parent_type="planner_iteration", parent_id=iteration_entity_id,
+                              payload={"step_number": 1, "status": "failed", "outcome": "plan_patch_invalid"}, trigger=reason)
+                return str(exc)
             invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
             if invocation:
                 invocation.status, invocation.revision_after, invocation.finished_at = "completed", updated.revision, datetime.now(timezone.utc)
@@ -220,6 +239,7 @@ class GraphOrchestrator:
                           payload={"kind": "planner", "mode": "replan", "status": "completed", "revision": updated.revision}, trigger=reason)
             await observe("agent_end", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "status": "completed"}, trigger=reason)
             await observe("step_end", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "status": "completed", "outcome": "success"}, trigger=reason)
+            return None
         if not plan["tasks"]:
             invocation_id = uuid4()
             checkpoint_id = make_checkpoint_id(str(root_run_id), "planner", str(invocation_id))
@@ -381,7 +401,13 @@ class GraphOrchestrator:
                     closed = close_active_iteration(status="failed", outcome="technical_failure")
                     if closed is not None:
                         yield closed
-                    await revise(reason="technical_failure", last_failure=failure.model_dump(mode="json"))
+                    replan_error = await revise(reason="technical_failure", last_failure=failure.model_dump(mode="json"))
+                    if replan_error:
+                        closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
+                        if closed is not None:
+                            yield closed
+                        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
+                        return
                 continue
             await self.store.apply_result(plan_id, task_id, result)
             result_event = "task_completed" if result.outcome.value == "completed" else "task_unfulfillable" if result.outcome.value == "unfulfillable" else "task_paused"
@@ -411,7 +437,13 @@ class GraphOrchestrator:
                 closed = close_active_iteration(status=result.outcome.value, outcome=result.outcome.value)
                 if closed is not None:
                     yield closed
-                await revise(reason=result.outcome.value)
+                replan_error = await revise(reason=result.outcome.value)
+                if replan_error:
+                    closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
+                    if closed is not None:
+                        yield closed
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
+                    return
         closed = close_active_iteration(status="max_steps")
         if closed is not None:
             yield closed

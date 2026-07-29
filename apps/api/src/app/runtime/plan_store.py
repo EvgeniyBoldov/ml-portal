@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.runtime_plan import (
@@ -58,6 +59,11 @@ def validate_task_graph(tasks: Iterable[PlannedTask]) -> None:
     """Reject unknown dependencies and cycles before touching persistence."""
     task_list = list(tasks)
     ids = {item.task_id for item in task_list}
+    for item in task_list:
+        if len(item.depends_on) != len(set(item.depends_on)):
+            raise PlanValidationError(f"task {item.task_id} contains duplicate dependencies")
+        if item.task_id in item.depends_on:
+            raise PlanValidationError(f"task {item.task_id} cannot depend on itself")
     graph = {item.task_id: set(item.depends_on) for item in task_list}
     for task_id, dependencies in graph.items():
         unknown = dependencies - ids
@@ -195,6 +201,11 @@ class InMemoryPlanStore:
         self.refresh_ready(plan_id)
         return plan
 
+    def mark_failed(self, plan_id: str, failure: Dict[str, Any]) -> None:
+        plan = self.get(plan_id)
+        plan["status"] = PlanStatus.FAILED.value
+        plan["last_failure"] = dict(failure)
+
     def refresh_ready(self, plan_id: str) -> None:
         plan = self.get(plan_id)
         tasks = plan["tasks"]
@@ -327,94 +338,99 @@ class SqlPlanStore:
         existing_rows = (await self.session.execute(
             select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id)
         )).scalars().all()
+        protected_removals = {
+            row.task_id for row in existing_rows
+            if row.task_id in set(patch.remove_task_ids)
+            and row.status in {TaskStatus.RUNNING.value, TaskStatus.COMPLETED.value}
+        }
+        if protected_removals:
+            raise PlanValidationError(f"cannot remove active or completed tasks: {sorted(protected_removals)}")
         existing_ids = {row.task_id for row in existing_rows if row.task_id not in set(patch.remove_task_ids)}
-        combined = {row.task_id: PlannedTask(
-            task_id=row.task_id, intent=row.intent, instructions=row.instructions,
-            executor=row.executor, inputs=row.inputs or {},
-            depends_on=[],
-        ) for row in existing_rows if row.task_id in existing_ids}
-        combined.update({item.task_id: item for item in patch.tasks})
+        dependencies_by_task: Dict[str, List[str]] = {task_id: [] for task_id in existing_ids}
         dep_rows = (await self.session.execute(
             select(RuntimeTaskDependency).where(RuntimeTaskDependency.plan_id == plan_id)
         )).scalars().all()
-        for dep in dep_rows:
-            if dep.task_id in combined:
-                combined[dep.task_id].depends_on.append(dep.depends_on_task_id)
+        for dependency in dep_rows:
+            if dependency.task_id in dependencies_by_task:
+                dependencies_by_task[dependency.task_id].append(dependency.depends_on_task_id)
+        combined = {row.task_id: PlannedTask(
+            task_id=row.task_id, intent=row.intent, instructions=row.instructions,
+            executor=row.executor, inputs=row.inputs or {},
+            depends_on=dependencies_by_task[row.task_id],
+        ) for row in existing_rows if row.task_id in existing_ids}
+        # ``revise_plan`` is a delta: a supplied task replaces its own
+        # definition and dependencies; omitted tasks stay untouched.
+        combined.update({item.task_id: item.model_copy(deep=True) for item in patch.tasks})
         validate_task_graph(combined.values())
-        if patch.remove_task_ids:
-            await self.session.execute(
-                delete(RuntimePlanTask).where(
-                    RuntimePlanTask.plan_id == plan_id,
-                    RuntimePlanTask.task_id.in_(patch.remove_task_ids),
-                    RuntimePlanTask.status.not_in([TaskStatus.RUNNING.value, TaskStatus.COMPLETED.value]),
-                )
-            )
-        for index, item in enumerate(patch.tasks):
-            existing_result = await self.session.execute(
-                select(RuntimePlanTask).where(
-                    RuntimePlanTask.plan_id == plan_id,
-                    RuntimePlanTask.task_id == item.task_id,
-                ).with_for_update()
-            )
-            task = existing_result.scalar_one_or_none()
-            if task is not None and task.status in {TaskStatus.RUNNING.value, TaskStatus.COMPLETED.value}:
-                raise PlanValidationError(f"cannot replace active or completed task {item.task_id}")
-            if task is None:
-                task = RuntimePlanTask(
-                    plan_id=plan_id,
-                    task_id=item.task_id,
-                    intent=item.intent,
-                    instructions=item.instructions,
-                    executor=item.executor,
-                    inputs=item.inputs,
-                    expected_outputs=[output.model_dump(mode="json", by_alias=True) for output in item.expected_outputs],
-                    planned_order=index,
-                    status=TaskStatus.PENDING.value,
-                )
-                self.session.add(task)
+        try:
+            async with self.session.begin_nested():
+                if patch.remove_task_ids:
+                    await self.session.execute(
+                        delete(RuntimePlanTask).where(
+                            RuntimePlanTask.plan_id == plan_id,
+                            RuntimePlanTask.task_id.in_(patch.remove_task_ids),
+                            RuntimePlanTask.status.not_in([TaskStatus.RUNNING.value, TaskStatus.COMPLETED.value]),
+                        )
+                    )
+                for index, item in enumerate(patch.tasks):
+                    existing_result = await self.session.execute(
+                        select(RuntimePlanTask).where(
+                            RuntimePlanTask.plan_id == plan_id,
+                            RuntimePlanTask.task_id == item.task_id,
+                        ).with_for_update()
+                    )
+                    task = existing_result.scalar_one_or_none()
+                    if task is not None and task.status in {TaskStatus.RUNNING.value, TaskStatus.COMPLETED.value}:
+                        raise PlanValidationError(f"cannot replace active or completed task {item.task_id}")
+                    if task is None:
+                        task = RuntimePlanTask(
+                            plan_id=plan_id, task_id=item.task_id, intent=item.intent,
+                            instructions=item.instructions, executor=item.executor, inputs=item.inputs,
+                            expected_outputs=[output.model_dump(mode="json", by_alias=True) for output in item.expected_outputs],
+                            planned_order=index, status=TaskStatus.PENDING.value,
+                        )
+                        self.session.add(task)
+                        await self.session.flush()
+                    else:
+                        task.intent, task.instructions, task.executor = item.intent, item.instructions, item.executor
+                        task.inputs = item.inputs
+                        task.expected_outputs = [output.model_dump(mode="json", by_alias=True) for output in item.expected_outputs]
+                        task.planned_order = index
+                    await self.session.execute(delete(RuntimeTaskDependency).where(
+                        RuntimeTaskDependency.plan_id == plan_id, RuntimeTaskDependency.task_id == item.task_id,
+                    ))
+                    for dependency in item.depends_on:
+                        self.session.add(RuntimeTaskDependency(plan_id=plan_id, task_id=item.task_id, depends_on_task_id=dependency))
+                    for need in item.needs:
+                        await self.session.execute(delete(RuntimeTaskNeed).where(
+                            RuntimeTaskNeed.task_row_id == task.id, RuntimeTaskNeed.need_key == need.key,
+                        ))
+                        self.session.add(RuntimeTaskNeed(
+                            task_row_id=task.id, need_key=need.key, kind=need.kind,
+                            description=need.description, schema=need.json_schema,
+                        ))
+                plan.revision += 1
+                plan.status = {
+                    "ask_user": PlanStatus.WAITING_INPUT.value,
+                    "complete_plan": PlanStatus.COMPLETED.value,
+                    "fail_plan": PlanStatus.FAILED.value,
+                }.get(patch.decision.value, PlanStatus.ACTIVE.value)
+                self.session.add(RuntimePlanRevision(
+                    plan_id=plan_id, revision=plan.revision, reason=reason,
+                    patch=patch.model_dump(mode="json", by_alias=True), planner_invocation_id=planner_invocation_id,
+                ))
                 await self.session.flush()
-            else:
-                task.intent = item.intent
-                task.instructions = item.instructions
-                task.executor = item.executor
-                task.inputs = item.inputs
-                task.expected_outputs = [output.model_dump(mode="json", by_alias=True) for output in item.expected_outputs]
-                task.planned_order = index
-            await self.session.execute(
-                delete(RuntimeTaskDependency).where(
-                    RuntimeTaskDependency.plan_id == plan_id,
-                    RuntimeTaskDependency.task_id == item.task_id,
-                )
-            )
-            for dependency in item.depends_on:
-                self.session.add(RuntimeTaskDependency(plan_id=plan_id, task_id=item.task_id, depends_on_task_id=dependency))
-            for need in item.needs:
-                await self.session.execute(delete(RuntimeTaskNeed).where(
-                    RuntimeTaskNeed.task_row_id == task.id,
-                    RuntimeTaskNeed.need_key == need.key,
-                ))
-                self.session.add(RuntimeTaskNeed(
-                    task_row_id=task.id,
-                    need_key=need.key,
-                    kind=need.kind,
-                    description=need.description,
-                    schema=need.json_schema,
-                ))
-        plan.revision += 1
-        plan.status = {
-            "ask_user": PlanStatus.WAITING_INPUT.value,
-            "complete_plan": PlanStatus.COMPLETED.value,
-            "fail_plan": PlanStatus.FAILED.value,
-        }.get(patch.decision.value, PlanStatus.ACTIVE.value)
-        self.session.add(RuntimePlanRevision(
-            plan_id=plan_id,
-            revision=plan.revision,
-            reason=reason,
-            patch=patch.model_dump(mode="json", by_alias=True),
-            planner_invocation_id=planner_invocation_id,
-        ))
-        await self.session.flush()
+        except IntegrityError as exc:
+            raise PlanValidationError("plan patch violates persistence constraints") from exc
         return plan
+
+    async def mark_failed(self, plan_id: UUID, failure: Dict[str, Any]) -> None:
+        plan = await self.session.get(RuntimePlan, plan_id, with_for_update=True)
+        if plan is None:
+            raise KeyError(str(plan_id))
+        plan.status = PlanStatus.FAILED.value
+        plan.last_failure = dict(failure)
+        await self.session.flush()
 
     async def snapshot(self, plan_id: UUID) -> Dict[str, Any]:
         result = await self.session.execute(select(RuntimePlan).where(RuntimePlan.id == plan_id))
