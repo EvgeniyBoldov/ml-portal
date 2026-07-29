@@ -817,6 +817,7 @@ export interface ExecutionLimits {
   llm_input_tokens_max?: number | null;
   llm_output_tokens_max?: number | null;
   llm_context_window_max?: number | null;
+  llm_timeout_s?: number | null;
   runtime_steps_max?: number | null;
   runtime_tool_calls_max?: number | null;
   runtime_retries_max?: number | null;
@@ -831,6 +832,7 @@ export type ExecutionLimitsUpdate = Partial<Pick<
   | 'llm_input_tokens_max'
   | 'llm_output_tokens_max'
   | 'llm_context_window_max'
+  | 'llm_timeout_s'
   | 'runtime_steps_max'
   | 'runtime_tool_calls_max'
   | 'runtime_retries_max'

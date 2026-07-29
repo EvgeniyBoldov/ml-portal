@@ -29,7 +29,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
-from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
+from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens, resolve_llm_timeout_s
 from app.runtime.events import RuntimeEvent
 from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 from app.services.system_llm_role_service import SystemLLMRoleService
@@ -177,6 +177,7 @@ class StructuredLLMCall:
         role_key = str(role.value).strip().lower()
         role_override = ((sandbox_overrides or {}).get("orchestrator_limits") or {}).get(role_key)
         limits = apply_limits_override(limits, role_override)
+        timeout_s = resolve_llm_timeout_s(configured_timeout_s=timeout_s, limits=limits)
         input_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_message)
         boundary = apply_llm_limits(
             limits=limits,

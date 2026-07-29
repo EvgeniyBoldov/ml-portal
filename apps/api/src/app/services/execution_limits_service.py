@@ -18,6 +18,7 @@ class ExecutionLimitsPayload:
     llm_input_tokens_max: Optional[int] = None
     llm_output_tokens_max: Optional[int] = None
     llm_context_window_max: Optional[int] = None
+    llm_timeout_s: Optional[int] = None
     plan_revisions_max: Optional[int] = None
     task_attempts_total_max: Optional[int] = None
     agent_runs_total_max: Optional[int] = None
@@ -57,7 +58,8 @@ class ExecutionLimitsService:
             llm_input_tokens_max=self._pick(own, platform, "llm_input_tokens_max"),
             llm_output_tokens_max=self._pick(own, platform, "llm_output_tokens_max"),
             llm_context_window_max=self._pick(own, platform, "llm_context_window_max"),
-            **{field: self._pick(own, platform, field) for field in ExecutionLimitsPayload.__dataclass_fields__ if field not in {"llm_input_tokens_max", "llm_output_tokens_max", "llm_context_window_max"}},
+            llm_timeout_s=self._pick(own, platform, "llm_timeout_s"),
+            **{field: self._pick(own, platform, field) for field in ExecutionLimitsPayload.__dataclass_fields__ if field not in {"llm_input_tokens_max", "llm_output_tokens_max", "llm_context_window_max", "llm_timeout_s"}},
         )
 
     async def get_scope(self, *, scope_type: str, scope_ref: Optional[str]) -> Optional[ExecutionLimit]:
@@ -131,5 +133,6 @@ def apply_limits_override(
         llm_input_tokens_max=_coerce(override.get("llm_input_tokens_max")) if "llm_input_tokens_max" in override else base.llm_input_tokens_max,
         llm_output_tokens_max=_coerce(override.get("llm_output_tokens_max")) if "llm_output_tokens_max" in override else base.llm_output_tokens_max,
         llm_context_window_max=_coerce(override.get("llm_context_window_max")) if "llm_context_window_max" in override else base.llm_context_window_max,
-        **{field: _coerce(override[field]) if field in override else getattr(base, field) for field in ExecutionLimitsPayload.__dataclass_fields__ if field not in {"llm_input_tokens_max", "llm_output_tokens_max", "llm_context_window_max"}},
+        llm_timeout_s=_coerce(override.get("llm_timeout_s")) if "llm_timeout_s" in override else base.llm_timeout_s,
+        **{field: _coerce(override[field]) if field in override else getattr(base, field) for field in ExecutionLimitsPayload.__dataclass_fields__ if field not in {"llm_input_tokens_max", "llm_output_tokens_max", "llm_context_window_max", "llm_timeout_s"}},
     )

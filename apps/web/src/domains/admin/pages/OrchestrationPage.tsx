@@ -43,6 +43,7 @@ const LLM_LIMIT_FIELDS: FieldConfig[] = [
   { key: 'llm_input_tokens_max', type: 'number', label: 'LLM input токены', description: 'Лимит токенов входного промпта для одного LLM-вызова.' },
   { key: 'llm_output_tokens_max', type: 'number', label: 'LLM output токены', description: 'Лимит токенов ответа для одного LLM-вызова.' },
   { key: 'llm_context_window_max', type: 'number', label: 'LLM context window', description: 'Лимит input+output токенов в одном LLM-вызове.' },
+  { key: 'llm_timeout_s', type: 'number', label: 'LLM таймаут (сек.)', description: 'Время ожидания ответа одного LLM-вызова.' },
 ];
 
 const RUNTIME_LIMIT_FIELDS: FieldConfig[] = [
@@ -216,6 +217,7 @@ export function OrchestrationPage() {
     llm_input_tokens_max: form.llm_input_tokens_max as number | null | undefined,
     llm_output_tokens_max: form.llm_output_tokens_max as number | null | undefined,
     llm_context_window_max: form.llm_context_window_max as number | null | undefined,
+    llm_timeout_s: form.llm_timeout_s as number | null | undefined,
     runtime_steps_max: form.runtime_steps_max as number | null | undefined,
     runtime_tool_calls_max: form.runtime_tool_calls_max as number | null | undefined,
     runtime_retries_max: form.runtime_retries_max as number | null | undefined,

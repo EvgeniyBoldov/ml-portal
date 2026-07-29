@@ -11,6 +11,7 @@ class ExecutionLimitsBase(BaseModel):
     llm_input_tokens_max: Optional[int] = Field(default=None, ge=1)
     llm_output_tokens_max: Optional[int] = Field(default=None, ge=1)
     llm_context_window_max: Optional[int] = Field(default=None, ge=1)
+    llm_timeout_s: Optional[int] = Field(default=None, ge=1)
     plan_revisions_max: Optional[int] = Field(default=None, ge=1)
     task_attempts_total_max: Optional[int] = Field(default=None, ge=1)
     agent_runs_total_max: Optional[int] = Field(default=None, ge=1)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import traceback
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.budgets import BudgetRegistry
 from app.runtime.error_payloads import build_debug_payload
-from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
+from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens, resolve_llm_timeout_s
 from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 from app.services.system_llm_role_service import SystemLLMRoleService
 
@@ -100,6 +101,7 @@ class RoleStreamingCall:
         role_key = str(role.value).strip().lower()
         role_override = ((sandbox_overrides or {}).get("orchestrator_limits") or {}).get(role_key)
         limits = apply_limits_override(limits, role_override if isinstance(role_override, dict) else None)
+        timeout_s = resolve_llm_timeout_s(configured_timeout_s=_timeout_s, limits=limits)
 
         input_tokens = estimate_tokens(str(messages))
         requested_output_tokens = int(params["max_tokens"]) if params.get("max_tokens") is not None else None
@@ -124,11 +126,12 @@ class RoleStreamingCall:
         stream_traceback: Optional[str] = None
         try:
             stream_iter = self._llm_client.chat_stream(messages, model=model, params=params or None)
-            async for chunk in _collect_stream(stream_iter):
-                if not chunk:
-                    continue
-                buffer.append(chunk)
-                yield StreamDelta(chunk=chunk)
+            async with asyncio.timeout(timeout_s):
+                async for chunk in _collect_stream(stream_iter):
+                    if not chunk:
+                        continue
+                    buffer.append(chunk)
+                    yield StreamDelta(chunk=chunk)
         except LLMLimitExceededError as exc:
             stream_error = exc
         except Exception as exc:  # noqa: BLE001

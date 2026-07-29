@@ -79,6 +79,7 @@ def _limit_fields(prefix: str = "limits") -> List[Dict[str, Any]]:
         _field("llm_input_tokens_max", "LLM input tokens", f"{prefix}.llm_input_tokens_max", field_type="integer", source_key="limits.llm_input_tokens_max"),
         _field("llm_output_tokens_max", "LLM output tokens", f"{prefix}.llm_output_tokens_max", field_type="integer", source_key="limits.llm_output_tokens_max"),
         _field("llm_context_window_max", "LLM context window", f"{prefix}.llm_context_window_max", field_type="integer", source_key="limits.llm_context_window_max"),
+        _field("llm_timeout_s", "LLM timeout (s)", f"{prefix}.llm_timeout_s", field_type="integer", source_key="limits.llm_timeout_s"),
         _field("plan_revisions_max", "Plan revisions", f"{prefix}.plan_revisions_max", field_type="integer", source_key="limits.plan_revisions_max"),
         _field("task_attempts_total_max", "Task attempts", f"{prefix}.task_attempts_total_max", field_type="integer", source_key="limits.task_attempts_total_max"),
         _field("agent_runs_total_max", "Agent runs", f"{prefix}.agent_runs_total_max", field_type="integer", source_key="limits.agent_runs_total_max"),

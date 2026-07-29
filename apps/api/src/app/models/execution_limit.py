@@ -49,6 +49,7 @@ class ExecutionLimit(Base):
     llm_input_tokens_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     llm_output_tokens_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     llm_context_window_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    llm_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

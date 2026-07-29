@@ -389,6 +389,7 @@ class AgentToolRuntime(BaseRuntime):
                             max_tokens=effective_max_tokens,
                             tools=tools_payload,
                             force_tool_choice=loop_state.force_tool_choice,
+                            timeout_s=gen.timeout_s,
                         )
                         loop_state.force_tool_choice = False
                         raw_response = self.llm.normalize_response(raw_response_dict)
@@ -398,6 +399,7 @@ class AgentToolRuntime(BaseRuntime):
                             model=gen.model,
                             temperature=gen.temperature,
                             max_tokens=effective_max_tokens,
+                            timeout_s=gen.timeout_s,
                         )
                 except asyncio.CancelledError:
                     logger.exception(
@@ -1173,6 +1175,7 @@ class AgentToolRuntime(BaseRuntime):
                 model=gen.model,
                 temperature=gen.temperature,
                 max_tokens=gen.max_tokens,
+                timeout_s=gen.timeout_s,
             ):
                 full_content += chunk
                 yield RuntimeEvent.delta(chunk)
@@ -1207,6 +1210,7 @@ class AgentToolRuntime(BaseRuntime):
         async for chunk in self.llm.stream(
             messages=synthesis_messages, model=gen.model,
             temperature=gen.temperature, max_tokens=gen.max_tokens,
+            timeout_s=gen.timeout_s,
         ):
             answer_parts.append(chunk)
             yield RuntimeEvent.delta(chunk)

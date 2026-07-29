@@ -122,6 +122,8 @@ class ExecutionConfigResolver:
 
                 if limits.llm_output_tokens_max is not None:
                     gen.max_tokens = int(limits.llm_output_tokens_max)
+                if limits.llm_timeout_s is not None:
+                    gen.timeout_s = int(limits.llm_timeout_s)
 
                 # model: runtime override -> Agent.model -> orchestration default
                 resolved_model = model
@@ -178,14 +180,16 @@ class ExecutionConfigResolver:
                     gen.model = config.get("executor_model")
                 if temperature is None:
                     gen.temperature = config.get("executor_temperature", 0.7)
-                if gen.max_tokens is None and exec_request.agent:
+                if exec_request.agent:
                     limits_service = ExecutionLimitsService(session)
                     limits = await limits_service.get_effective(
                         scope_type=ExecutionLimitScope.AGENT,
                         scope_ref=str(getattr(exec_request.agent, "slug", "") or "").strip() or None,
                     )
-                    if limits.llm_output_tokens_max is not None:
+                    if gen.max_tokens is None and limits.llm_output_tokens_max is not None:
                         gen.max_tokens = int(limits.llm_output_tokens_max)
+                    if limits.llm_timeout_s is not None:
+                        gen.timeout_s = int(limits.llm_timeout_s)
 
                 gen.model = await self._resolve_model_alias(
                     session,

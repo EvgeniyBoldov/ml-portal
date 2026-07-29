@@ -15,6 +15,7 @@ class GenerationParams:
     model: Optional[str] = None
     temperature: float = 0.7
     max_tokens: Optional[int] = None
+    timeout_s: Optional[int] = None
 
 
 @dataclass

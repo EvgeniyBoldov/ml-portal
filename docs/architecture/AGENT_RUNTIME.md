@@ -193,6 +193,10 @@ Policy gates остаются отдельным runtime enforcement-слоем.
 - `orchestrator_role` scope — лимиты системных ролей (`planner`, `synthesizer`, `fact_extractor`, `summary_compactor`);
 - `agent` scope — лимиты конкретного агента.
 
+`llm_timeout_s` задаёт ожидание одного LLM-вызова. Значение в более узком
+scope замещает platform default; для системных ролей при отсутствии лимита
+используется их role timeout.
+
 Policy gates (`require_confirmation_*`, `forbid_*`) применяются в `PolicyEngine` перед выполнением действия.
 `require_backup_before_write` сейчас хранится как конфиг-флаг, но в enforcement-решениях runtime не участвует.
 

@@ -148,6 +148,7 @@ class DirectRuntime(BaseRuntime):
                 model=gen.model,
                 temperature=gen.temperature,
                 max_tokens=effective_max_tokens,
+                timeout_s=gen.timeout_s,
             ):
                 full_content += chunk
                 yield RuntimeEvent.delta(chunk)

@@ -7,6 +7,7 @@ LLMAdapter — обёртка над LLMClientProtocol для удобной р�
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import uuid
@@ -36,6 +37,7 @@ class LLMAdapter:
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        timeout_s: Optional[int] = None,
     ) -> str:
         """Non-streaming LLM call. Returns plain text response."""
         try:
@@ -44,9 +46,8 @@ class LLMAdapter:
                 params["max_tokens"] = max_tokens
             if tools:
                 params["tools"] = tools
-            response = await self._client.chat(
-                messages=messages, model=model, params=params,
-            )
+            request = self._client.chat(messages=messages, model=model, params=params)
+            response = await asyncio.wait_for(request, timeout=timeout_s) if timeout_s else await request
         except Exception as e:
             fallback = self._coerce_tool_choice_error_to_tool_call(e)
             if fallback is not None:
@@ -67,6 +68,7 @@ class LLMAdapter:
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         force_tool_choice: bool = False,
+        timeout_s: Optional[int] = None,
     ) -> Any:
         """Non-streaming LLM call. Returns raw response dict for native tool_calls parsing.
 
@@ -81,7 +83,8 @@ class LLMAdapter:
             params["tools"] = tools
             params["tool_choice"] = "required" if force_tool_choice else "auto"
         try:
-            return await self._client.chat(messages=messages, model=model, params=params)
+            request = self._client.chat(messages=messages, model=model, params=params)
+            return await asyncio.wait_for(request, timeout=timeout_s) if timeout_s else await request
         except Exception as e:
             fallback = self._coerce_tool_choice_error_to_native_response(e)
             if fallback is not None:
@@ -98,15 +101,22 @@ class LLMAdapter:
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        timeout_s: Optional[int] = None,
     ) -> AsyncGenerator[str, None]:
         """Streaming LLM call. Yields normalized text chunks."""
         params: Dict[str, Any] = {"temperature": temperature}
         if max_tokens:
             params["max_tokens"] = max_tokens
 
-        async for chunk in self._client.chat_stream(
-            messages=messages, model=model, params=params,
-        ):
+        stream = self._client.chat_stream(messages=messages, model=model, params=params)
+        if timeout_s:
+            async with asyncio.timeout(timeout_s):
+                async for chunk in stream:
+                    text = self._normalize_chunk(chunk)
+                    if text:
+                        yield text
+            return
+        async for chunk in stream:
             text = self._normalize_chunk(chunk)
             if text:
                 yield text

@@ -76,6 +76,7 @@ Lifecycle статусы используются для soft/hard delete про
 │ llm_input_tokens_max       │
 │ llm_output_tokens_max      │
 │ llm_context_window_max     │
+│ llm_timeout_s              │ # deadline одного LLM-вызова
 │ runtime_steps_max          │
 │ runtime_tool_calls_max     │
 │ runtime_retries_max        │

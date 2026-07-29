@@ -31,6 +31,13 @@ class LLMBoundary:
     output_tokens: Optional[int]
 
 
+def resolve_llm_timeout_s(*, configured_timeout_s: int, limits: ExecutionLimitsPayload) -> int:
+    """Return the scoped per-call timeout or the role's configured fallback."""
+    if limits.llm_timeout_s is not None:
+        return int(limits.llm_timeout_s)
+    return max(1, int(configured_timeout_s))
+
+
 def apply_llm_limits(
     *,
     limits: ExecutionLimitsPayload,

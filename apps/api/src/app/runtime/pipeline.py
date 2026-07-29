@@ -907,8 +907,8 @@ class RuntimePipeline:
                 conversation_limits=conversation_limits,
                 logging_level=logging_level,
                 runtime_log_context=(
-                    emitter.logger.worker_payload()
-                    if getattr(emitter.logger, "context", None) is not None
+                    emitter.worker_payload()
+                    if getattr(emitter, "context", None) is not None
                     else None
                 ),
             )
