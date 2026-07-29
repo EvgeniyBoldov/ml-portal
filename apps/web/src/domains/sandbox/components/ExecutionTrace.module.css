@@ -17,10 +17,12 @@
   border-bottom: 1px solid var(--border);
   background: transparent;
   color: inherit;
-  cursor: pointer;
-  text-align: left;
 }
-.summary:hover { background: var(--trace-surface-hover); }
+.summaryToggle { display: flex; flex: 1; min-width: 0; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.summaryToggle:hover { background: var(--trace-surface-hover); }
+.download { flex: 0 0 auto; min-height: 30px; margin-right: var(--space-2); padding: 0 var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; font-size: var(--text-xs); white-space: nowrap; }
+.download:hover:not(:disabled) { background: var(--trace-surface-hover); color: var(--text-primary); }
+.download:disabled { cursor: default; opacity: .45; }
 .progress { overflow: hidden; max-width: 42ch; color: var(--text-secondary); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
 .summaryTitle { font-size: var(--text-sm); font-weight: var(--font-weight-semibold); }
 .running { color: var(--info); font-size: var(--text-xs); }
@@ -129,6 +131,7 @@
 .stageNumber.isSelected { color: var(--trace-selected); }
 
 @media (max-width: 700px) {
+  .download { padding: 0 6px; font-size: 10px; }
   .iterations { padding: var(--space-2); }
   .iterationHeader { grid-template-columns: 1fr max-content; }
   .iterationTask { grid-column: 1 / -1; grid-row: 1; }

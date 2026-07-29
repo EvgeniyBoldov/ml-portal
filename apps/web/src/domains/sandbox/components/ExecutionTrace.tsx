@@ -19,6 +19,36 @@ const formatDuration = (ms: number | undefined): string => {
   return `${Math.max(1, Math.round(ms / 1000))} с`;
 };
 
+function downloadTraceLog(trace: SandboxTraceState, progress: RuntimeProgress[], elapsedMs: number | undefined): void {
+  const events = trace.eventIdsBySequence
+    .map((eventId) => trace.eventsById[eventId])
+    .filter(Boolean);
+  const lines = [
+    'TRACE LOG EXPORT',
+    `run_id: ${trace.runId ?? 'unknown'}`,
+    `exported_at: ${new Date().toISOString()}`,
+    `elapsed: ${formatDuration(elapsedMs)}`,
+    `events: ${events.length}`,
+    `progress_items: ${progress.length}`,
+    '',
+    '=== RAW JOURNAL EVENTS ===',
+    ...events.map((event) => JSON.stringify(event, null, 2)),
+    '',
+    '=== RAW PROGRESS ===',
+    ...progress.map((item) => JSON.stringify(item, null, 2)),
+    '',
+  ];
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `trace-${trace.runId ?? 'unknown'}-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function StatusBadge({ status }: { status: string }) {
   const normalizedStatus = normalizeTraceStatus(status);
   const normalized = normalizedStatus === 'completed' ? 'complete' : normalizedStatus === 'failed' || normalizedStatus === 'unfulfillable' ? 'fail' : normalizedStatus;
@@ -134,14 +164,26 @@ export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget
     return () => window.clearInterval(timer);
   }, [isRunning]);
   if (stages.length === 0 && !latestProgress) return null;
+  const elapsedMs = traceElapsedMs(trace, now);
   return (
     <section className={styles.trace}>
-      <button type="button" className={styles.summary} onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
-        <span className={styles.summaryTitle}>Трейс выполнения ({formatDuration(traceElapsedMs(trace, now))})</span>
-        {isRunning && <span className={styles.running}>выполняется</span>}
-        {latestProgress ? <span className={styles.progress}>{latestProgress}</span> : null}
-        <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}>⌄</span>
-      </button>
+      <header className={styles.summary}>
+        <button type="button" className={styles.summaryToggle} onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+          <span className={styles.summaryTitle}>Трейс выполнения ({formatDuration(elapsedMs)})</span>
+          {isRunning && <span className={styles.running}>выполняется</span>}
+          {latestProgress ? <span className={styles.progress}>{latestProgress}</span> : null}
+          <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}>⌄</span>
+        </button>
+        <button
+          type="button"
+          className={styles.download}
+          onClick={() => downloadTraceLog(trace, progress, elapsedMs)}
+          disabled={trace.eventIdsBySequence.length === 0 && progress.length === 0}
+          title="Скачать все raw-события и progress текущего трейса"
+        >
+          ↓ Скачать лог
+        </button>
+      </header>
       {expanded && <div className={styles.iterations}>{stages.map((stage) => (
         <article key={stage.entity.key} className={`${styles.iteration} ${styles[`iteration-${stage.iterationType}`] ?? ''} ${selectedTargetKey === stage.entity.key ? styles.isSelected : ''}`}>
           <header className={styles.iterationHeader}>
