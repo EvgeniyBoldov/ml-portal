@@ -160,9 +160,12 @@ class SystemLLMRoleService:
         default_roles = {}
         
         default_configs = self._get_default_configs()
-        for role_type in SystemLLMRoleType:
+        # Only roles explicitly present in the bootstrap registry can be
+        # created or backfilled here. Planner is intentionally absent: its
+        # prompt is an operator-managed database configuration, not a Python
+        # fallback.
+        for role_type, config in default_configs.items():
             role = await self.repo.get_active_role(role_type)
-            config = default_configs.get(role_type, {})
             if not role:
                 role = SystemLLMRole(
                     role_type=role_type,

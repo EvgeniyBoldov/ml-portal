@@ -2,7 +2,20 @@ export const PLANNER_INPUT_CONTRACT = {
   type: 'object',
   properties: {
     goal: { type: 'string', description: 'Текущая цель текущего плана' },
-    conversation_summary: { type: 'string', description: 'Сжатый контекст диалога' },
+    trigger: { type: ['string', 'null'], description: 'Причина вызова planner: initial или причина репланирования' },
+    plan: {
+      type: 'object',
+      description: 'Текущее сохранённое состояние графа: revision, tasks, outputs и статусы',
+      properties: {
+        revision: { type: 'integer', description: 'Версия плана, обязательная для expected_revision' },
+        tasks: { type: 'object', description: 'Задачи текущего графа' },
+        outputs: { type: 'object', description: 'Результаты задач текущего графа' },
+      },
+      required: ['revision', 'tasks', 'outputs'],
+    },
+    completed_outputs: { type: 'object', description: 'Новые завершённые результаты для решения planner' },
+    needs: { type: 'array', description: 'Незакрытые потребности задач' },
+    last_failure: { type: ['object', 'null'], description: 'Последняя техническая или агентская ошибка' },
     available_agents: {
       type: 'array',
       description: 'Доступные агенты для вызова',
@@ -15,17 +28,8 @@ export const PLANNER_INPUT_CONTRACT = {
         required: ['slug'],
       },
     },
-    execution_outline: {
-      type: ['object', 'null'],
-      description: 'Рекомендуемый план/фазы выполнения',
-    },
-    memory: {
-      type: 'object',
-      description: 'Снимок планировочного состояния и памяти',
-    },
-    policies: { type: 'string', description: 'Текст платформенных политик' },
   },
-  required: ['goal', 'available_agents', 'memory', 'policies'],
+  required: ['goal', 'trigger', 'plan', 'completed_outputs', 'needs', 'last_failure', 'available_agents'],
 };
 
 export const SYNTHESIZER_INPUT_CONTRACT = {

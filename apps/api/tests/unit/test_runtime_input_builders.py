@@ -5,6 +5,7 @@ from uuid import uuid4
 from types import SimpleNamespace
 
 from app.runtime.input_builders import PlannerInputBuilder, SynthesizerInputBuilder
+from app.runtime.orchestrator_contracts import PlanRequest
 from app.runtime.contracts import AttachmentContext, AttachmentRef
 from app.runtime.memory.components import MemoryBundle
 from app.runtime.turn_state import RuntimeTurnState
@@ -54,6 +55,26 @@ def test_planner_input_builder_prefers_runtime_turn_state_snapshot():
             "provides_keys": [],
         }
     ]
+
+
+def test_graph_planner_input_builder_uses_persisted_plan_contract():
+    payload = PlannerInputBuilder().build_graph_request(PlanRequest(
+        goal="Проверить конфигурацию",
+        trigger="technical_failure",
+        plan={"revision": 2, "tasks": {}, "outputs": {}},
+        completed_outputs={"inspect": {"status": "completed"}},
+        needs=[{"key": "credential"}],
+        last_failure={"code": "timeout"},
+        available_agents=[{"slug": "viewer", "description": "Просмотр данных"}],
+    ))
+
+    assert set(payload) == {
+        "goal", "trigger", "plan", "completed_outputs", "needs", "last_failure", "available_agents",
+    }
+    assert payload["plan"]["revision"] == 2
+    assert payload["available_agents"] == [{
+        "slug": "viewer", "description": "Просмотр данных", "tags": [], "provides_keys": [],
+    }]
 
 
 def test_planner_input_builder_includes_structured_continuation():

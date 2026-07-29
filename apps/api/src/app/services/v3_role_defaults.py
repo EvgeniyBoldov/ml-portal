@@ -7,8 +7,9 @@ required for historical Alembic scripts); this module is the live version
 and MUST stay in sync with what the v3 pipeline expects.
 
 Ownership:
-    * TRIAGE / PLANNER — mandatory, the v3 pipeline stages refuse to work
-      against legacy schemas.
+    * TRIAGE — default bootstrap configuration for a mandatory v3 stage.
+    * PLANNER — deliberately excluded: its active prompt is configured only
+      in ``system_llm_roles`` and must never be recreated from Python text.
     * SUMMARY / MEMORY — unchanged from legacy; reproduced here so the
       service keeps a single view of its defaults.
 """
@@ -70,46 +71,6 @@ TRIAGE_V3: Dict[str, Any] = {
     "temperature": 0.3,
     "max_tokens": 1000,
     "timeout_s": 10,
-    "max_retries": 2,
-    "retry_backoff": "linear",
-}
-
-
-PLANNER_V3: Dict[str, Any] = {
-    "model": "llm.llama.maverick",
-    "identity": "Ты — planner-агент корпоративного AI-портала.",
-    "mission": "Построй или скорректируй полный граф задач для оркестратора. Не вызывай агентов и не отвечай пользователю.",
-    "rules": (
-        "На вход приходит goal, trigger, текущий plan с revision/tasks/outputs, completed_outputs, needs, last_failure и available_agents.\n\n"
-        "Выбор decision: create_plan, revise_plan, ask_user, complete_plan или fail_plan.\n"
-        "Правила:\n"
-        "1. Используй в task.executor только slug из available_agents.\n"
-        "2. Задачи образуют DAG; depends_on ссылается на task_id этого или текущего плана.\n"
-        "3. expected_revision всегда равен revision входного plan.\n"
-        "4. Для первого вызова создай минимальный план через create_plan. revise_plan — это дельта: в tasks перечисляй только новые или изменяемые задачи; неизменённые задачи не повторяй, а удаление указывай только через remove_task_ids.\n"
-        "5. При недостатке данных верни ask_user с одним конкретным question.\n"
-        "6. При достижении цели верни complete_plan с кратким answer_brief для synthesizer.\n"
-        "7. При невозможности безопасно продолжить верни fail_plan с failure_reason.\n"
-        "8. Не изменяй и не удаляй running/completed задачи; не создавай циклы, self-dependency или повторяющиеся depends_on."
-    ),
-    "safety": (
-        "Для рискованных действий устанавливай risk=high и requires_confirmation=true. "
-        "Избегай потенциально опасных операций без явной необходимости."
-    ),
-    "output_requirements": (
-        "Верни СТРОГО валидный JSON (без markdown, без ```):\n"
-        "{\n"
-        '  "decision": "create_plan" | "revise_plan" | "ask_user" | "complete_plan" | "fail_plan",\n'
-        '  "expected_revision": <revision входного plan>,\n'
-        '  "rationale": "<кратко>",\n'
-        '  "tasks": [{"task_id": "...", "executor": "...", "intent": "...", "instructions": "...", "depends_on": [], "needs": []}],\n'
-        '  "remove_task_ids": [], "question": null, "answer_brief": null, "failure_reason": null, "trigger": null\n'
-        "}\n\n"
-        "Для complete_plan answer_brief должен быть кратким semantic brief без markdown."
-    ),
-    "temperature": 0.2,
-    "max_tokens": 4096,
-    "timeout_s": 60,
     "max_retries": 2,
     "retry_backoff": "linear",
 }
@@ -285,7 +246,6 @@ SUMMARY_COMPACTOR_V3: Dict[str, Any] = {
 
 V3_ROLE_DEFAULTS: Dict[SystemLLMRoleType, Dict[str, Any]] = {
     SystemLLMRoleType.TRIAGE: TRIAGE_V3,
-    SystemLLMRoleType.PLANNER: PLANNER_V3,
     SystemLLMRoleType.SUMMARY: SUMMARY_V3,
     SystemLLMRoleType.MEMORY: MEMORY_V3,
     SystemLLMRoleType.SYNTHESIZER: SYNTHESIZER_V3,

@@ -64,3 +64,13 @@ async def test_ensure_default_roles_backfills_only_empty_prompt_fields():
     assert isinstance(existing.mission, str) and len(existing.mission) > 0
     assert existing.rules == "custom rules"
 
+
+async def test_ensure_default_roles_does_not_create_planner_from_python_defaults():
+    service = SystemLLMRoleService(session=SimpleNamespace())
+    repo = _RepoStub(existing={})
+    service.repo = repo
+
+    roles = await service.ensure_default_roles()
+
+    assert SystemLLMRoleType.PLANNER not in roles
+    assert all(role.role_type != SystemLLMRoleType.PLANNER for role in repo.created)

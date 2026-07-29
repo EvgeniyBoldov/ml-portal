@@ -45,6 +45,9 @@ Rule of thumb:
 
 Notes:
 - Planner prompt is compiled exclusively from the active planner role in DB.
+  `ensure-defaults` never creates or backfills this role; a missing active
+  planner is an explicit configuration error and must be created/activated by
+  an administrator.
 - Final synthesis resolves prompt/model params from DB role config with safe fallback.
 
 ## Tunable Points
