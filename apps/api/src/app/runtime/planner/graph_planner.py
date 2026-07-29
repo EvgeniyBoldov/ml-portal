@@ -6,32 +6,28 @@ never invokes an agent or a tool itself.
 """
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Literal
+from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 from uuid import UUID
-
-from pydantic import BaseModel, Field
 
 from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
-from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
+from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.events import RuntimeEvent
-from app.runtime.orchestrator_contracts import PlanPatch, PlanRequest, PlannedTask
+from app.runtime.orchestrator_contracts import PlanPatch, PlanRequest
 from app.runtime.input_builders import PlannerInputBuilder
 
 
-class PlannerGraphOutput(BaseModel):
-    """Strict wire format returned by the planner role."""
+class PlannerGraphOutput(PlanPatch):
+    """Planner wire format with the canonical graph-patch invariants.
 
+    Keeping this as a distinct exported type preserves the role-contract
+    surface, while its base class makes semantic errors retryable structured
+    output errors rather than failures after the LLM call has completed.
+    """
+
+    # Keep the public JSON Schema backward compatible: the prompt editor and
+    # its tests consume this enum inline rather than through a $ref.
     decision: Literal["create_plan", "revise_plan", "ask_user", "complete_plan", "fail_plan"]
-    expected_revision: int = Field(..., ge=0)
-    rationale: str = ""
-    goal: Optional[str] = None
-    tasks: List[PlannedTask] = Field(default_factory=list)
-    remove_task_ids: List[str] = Field(default_factory=list)
-    question: Optional[str] = None
-    answer_brief: Optional[str] = None
-    failure_reason: Optional[str] = None
-    trigger: Optional[str] = None
 
 
 class GraphPlanner:
@@ -64,13 +60,7 @@ class GraphPlanner:
             event_sink=event_sink,
             sandbox_overrides=sandbox_overrides,
         )
-        try:
-            return PlanPatch.model_validate(result.value.model_dump(mode="json"))
-        except Exception as exc:  # validation is a planner protocol failure
-            raise StructuredCallError(
-                f"planner returned an invalid graph patch: {exc}",
-                original_exception=exc,
-            ) from exc
+        return result.value
 
     async def create_or_revise(self, *, request: PlanRequest) -> PlanPatch:
         return await self.plan(request=request)

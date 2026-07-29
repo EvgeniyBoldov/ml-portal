@@ -11,7 +11,7 @@ from app.runtime.orchestrator_contracts import (
     TaskOutcome,
     TaskRequest,
 )
-from app.runtime.plan_store import PlanConflictError, PlanValidationError, SqlPlanStore
+from app.runtime.plan_store import SqlPlanStore
 from uuid import UUID, uuid4
 from app.models.runtime_observability import RuntimePlannerInvocation
 from app.runtime.events import RuntimeEvent, RuntimeEventType
@@ -191,28 +191,28 @@ class GraphOrchestrator:
             await observe("step_start", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "kind": "plan", "title": "Перепланировать", "objective": reason}, trigger=reason)
             await observe("agent_start", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "executor_type": "planner", "executor_name": "Планер", "task_title": reason}, trigger=reason)
             await observe("rbac_snapshot", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"rbac": planner_rbac_audit}, trigger=reason)
-            patch = await self.planner.plan(request=PlanRequest(
-                goal=goal,
-                available_agents=available_agents,
-                plan=current,
-                needs=[
-                    {"task_id": task_id, **need}
-                    for task_id, task in current.get("tasks", {}).items()
-                    for need in task.get("needs", [])
-                    if isinstance(need, dict)
-                ],
-                last_failure=last_failure,
-                trigger=reason,
-                run_id=root_run_id,
-                plan_id=plan_id,
-                trace_parent_id=checkpoint_id,
-            ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
-            decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason=reason) if self.budget_service else None
-            if decision is not None and not decision.allowed:
-                raise RuntimeError("plan revision budget exceeded")
             try:
+                patch = await self.planner.plan(request=PlanRequest(
+                    goal=goal,
+                    available_agents=available_agents,
+                    plan=current,
+                    needs=[
+                        {"task_id": task_id, **need}
+                        for task_id, task in current.get("tasks", {}).items()
+                        for need in task.get("needs", [])
+                        if isinstance(need, dict)
+                    ],
+                    last_failure=last_failure,
+                    trigger=reason,
+                    run_id=root_run_id,
+                    plan_id=plan_id,
+                    trace_parent_id=checkpoint_id,
+                ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
+                decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason=reason) if self.budget_service else None
+                if decision is not None and not decision.allowed:
+                    raise RuntimeError("plan revision budget exceeded")
                 updated = await self.store.apply_patch(plan_id, patch, reason=reason, planner_invocation_id=str(invocation_id))
-            except (PlanConflictError, PlanValidationError) as exc:
+            except Exception as exc:
                 failure = {"code": type(exc).__name__, "message": str(exc), "trigger": reason}
                 invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
                 if invocation is not None:
@@ -234,6 +234,9 @@ class GraphOrchestrator:
             if invocation:
                 invocation.status, invocation.revision_after, invocation.finished_at = "completed", updated.revision, datetime.now(timezone.utc)
             await observe("plan_patch_applied", entity_type="plan", entity_id=str(plan_id), parent_type="orchestrator", parent_id=orchestrator_id, payload={"revision": updated.revision, "patch": patch.model_dump(mode="json")}, trigger=reason)
+            if patch.decision.value == "ask_user":
+                await observe("waiting_input", entity_type="interaction", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_entity_id,
+                              payload={"question": patch.question, "interaction_kind": "clarify"}, trigger=reason)
             await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                           parent_type="orchestrator", parent_id=orchestrator_id,
                           payload={"kind": "planner", "mode": "replan", "status": "completed", "revision": updated.revision}, trigger=reason)
@@ -273,23 +276,49 @@ class GraphOrchestrator:
             yield OrchestratorEvent(type="rbac_snapshot", entity_type="agent_execution", entity_id=planner_executor_id,
                                     parent_entity_type="step", parent_entity_id=step_id,
                                     rbac=planner_rbac_audit)
-            patch = await self.planner.plan(request=PlanRequest(
-                goal=goal, available_agents=available_agents, plan=plan,
-                trigger="initial", run_id=root_run_id, plan_id=plan_id,
-                trace_parent_id=iteration_id,
-            ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
-            await self.store.apply_patch(plan_id, patch, reason="initial_plan")
+            try:
+                patch = await self.planner.plan(request=PlanRequest(
+                    goal=goal, available_agents=available_agents, plan=plan,
+                    trigger="initial", run_id=root_run_id, plan_id=plan_id,
+                    trace_parent_id=iteration_id,
+                ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
+                await self.store.apply_patch(plan_id, patch, reason="initial_plan")
+                if self.budget_service is not None:
+                    decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason="initial_plan")
+                    if not decision.allowed:
+                        raise RuntimeError("plan revision budget exceeded")
+            except Exception as exc:
+                failure = {"code": type(exc).__name__, "message": str(exc), "trigger": "initial"}
+                invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
+                if invocation is not None:
+                    invocation.status, invocation.finished_at = "failed", datetime.now(timezone.utc)
+                await self.store.mark_failed(plan_id, failure)
+                await observe("error", entity_type="error", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_id,
+                              payload={"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}, trigger="initial")
+                await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
+                              parent_type="orchestrator", parent_id=orchestrator_id,
+                              payload={"kind": "planner", "mode": "initial", "status": "failed", "reason": str(exc)}, trigger="initial")
+                yield OrchestratorEvent(type="agent_end", entity_id=planner_executor_id,
+                                        agent_execution_id=planner_executor_id, parent_entity_type="step",
+                                        parent_entity_id=step_id, agent_slug="planner", role="planner", status="failed")
+                yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
+                                        parent_entity_type="planner_iteration", parent_entity_id=iteration_id,
+                                        step_number=1, status="failed", outcome="plan_patch_invalid")
+                closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
+                if closed is not None:
+                    yield closed
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=str(exc))
+                return
             invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
             if invocation is not None:
                 invocation.status = "completed"
                 invocation.revision_after = plan["revision"] + 1
                 invocation.finished_at = datetime.now(timezone.utc)
-            if self.budget_service is not None:
-                decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason="initial_plan")
-                if not decision.allowed:
-                    raise RuntimeError("plan revision budget exceeded")
             await observe("plan_created", entity_type="plan", entity_id=str(plan_id), parent_type="agent_execution", parent_id=planner_executor_id,
                           payload={"revision": 1, "mode": "initial", "patch": patch.model_dump(mode="json")}, trigger="initial")
+            if patch.decision.value == "ask_user":
+                await observe("waiting_input", entity_type="interaction", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_id,
+                              payload={"question": patch.question, "interaction_kind": "clarify"}, trigger="initial")
             await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                           parent_type="orchestrator", parent_id=orchestrator_id,
                           payload={"kind": "planner", "mode": "initial", "status": "completed", "revision": 1}, trigger="initial")

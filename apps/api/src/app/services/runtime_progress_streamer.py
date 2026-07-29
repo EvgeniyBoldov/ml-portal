@@ -15,7 +15,6 @@ class RuntimeProgressStreamer:
     _MECHANICAL = {
         RuntimeEventType.RUN_START: "Запускаю выполнение",
         RuntimeEventType.ORCHESTRATOR_START: "Запускаю планирование",
-        RuntimeEventType.PLANNER_ITERATION_START: "Уточняю план выполнения",
         RuntimeEventType.PLAN_CREATED: "План готов",
         RuntimeEventType.PLAN_PATCH_APPLIED: "Обновляю план",
         RuntimeEventType.TASK_STARTED: "Начинаю задачу",
@@ -56,6 +55,16 @@ class RuntimeProgressStreamer:
             candidate = event.data.get("description")
         if isinstance(candidate, str):
             return self._bounded(candidate)
+        if event.type is RuntimeEventType.PLANNER_ITERATION_START:
+            mode = str(event.data.get("mode") or "").lower()
+            iteration_type = str(event.data.get("iteration_type") or "").lower()
+            if mode == "initial":
+                return "Формирую план выполнения"
+            if mode == "replan" or iteration_type == "replan":
+                return "Перепланирую выполнение"
+            if mode == "resume" or iteration_type == "execution":
+                return "Выполняю план"
+            return "Планирую выполнение"
         mechanical = self._MECHANICAL.get(event.type)
         if mechanical is None:
             return None

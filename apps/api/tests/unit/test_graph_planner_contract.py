@@ -3,6 +3,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.runtime.orchestrator_contracts import PlanPatch, PlannedTask
+from app.runtime.planner.graph_planner import PlannerGraphOutput
 
 
 def test_graph_task_accepts_only_canonical_fields() -> None:
@@ -34,4 +35,12 @@ def test_graph_task_rejects_removed_vocabulary() -> None:
             "title": "Prepare request",
             "objective": "Prepare request",
             "agent_slug": "viewer",
+        })
+
+
+def test_planner_output_rejects_create_plan_for_nonzero_revision() -> None:
+    with pytest.raises(ValidationError, match="create_plan is valid only for revision zero"):
+        PlannerGraphOutput.model_validate({
+            "decision": "create_plan",
+            "expected_revision": 1,
         })
