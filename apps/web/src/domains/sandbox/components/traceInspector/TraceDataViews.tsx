@@ -17,7 +17,7 @@ const metricLabels: Record<string, string> = {
   tool_calls: 'Вызовы инструментов', tokens_in: 'Входные токены', tokens_out: 'Выходные токены',
   tokens_total: 'Всего токенов', retries: 'Повторы', wall_time_ms: 'Время выполнения',
 };
-const labelForMetric = (key: string): string => metricLabels[key] ?? key.replaceAll('_', ' ');
+const labelForMetric = (key: string): string => metricLabels[key] ?? key.replace(/_/g, ' ');
 const formatValue = (key: string, value: number | undefined): string => {
   if (value === undefined) return '—';
   if (key === 'wall_time_ms') return value >= 1000 ? `${(value / 1000).toFixed(value % 1000 ? 1 : 0)} с` : `${value} мс`;
