@@ -53,7 +53,7 @@ class RuntimeLoggingLevel(StrEnum):
 
 _BRIEF_EVENTS = frozenset({
     "run_start", "run_end", "orchestrator_start", "orchestrator_end",
-    "planner_iteration_start", "planner_iteration_end", "step_start", "step_end",
+    "planner_iteration_start", "planner_iteration_end", "planner_invocation_started", "planner_invocation_finished", "step_start", "step_end",
     "agent_start", "agent_end", "planner_decision", "plan_created", "plan_patch_applied",
     "plan_waiting_input", "plan_completed", "plan_failed", "task_ready", "task_claimed",
     "task_started", "task_paused", "task_resumed", "task_completed", "task_unfulfillable",
@@ -255,7 +255,7 @@ class RuntimeEventLogger:
         """Admit one semantic event, optionally persist it, and project progress."""
         data = dict(event.data)
         entity_key = (str(data.get("entity_type") or ""), str(data.get("entity_id") or ""))
-        if not data.get("caused_by_event_id") and event.type.value in {"llm_response", "tool_result"}:
+        if not data.get("caused_by_event_id") and event.type.value in {"llm_response", "tool_result", "protocol_retry"}:
             caused_by = self._request_event_ids.get(entity_key)
             if caused_by is not None:
                 data["caused_by_event_id"] = str(caused_by)

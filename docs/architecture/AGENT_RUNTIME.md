@@ -6,8 +6,11 @@
 
 `ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> PipelineAssembler -> GraphPlanner -> SqlPlanStore -> GraphOrchestrator -> AgentExecutor -> DirectOperationExecutor`
 
-Канонический планировщик теперь возвращает не следующий шаг, а мутацию
-сохраняемого графа: `PlannerGraphOutput -> PlanPatch -> SqlPlanStore`.
+Канонический планировщик теперь возвращает не следующий шаг, а смысловую
+мутацию сохраняемого графа: `PlannerGraphOutput -> PlanPatch -> SqlPlanStore`.
+`PlannerGraphOutput` не содержит revision, trigger, goal или идентификаторы:
+runtime добавляет CAS-ревизию из snapshot непосредственно перед транзакционным
+применением `PlanPatch`.
 `GraphOrchestrator` единолично меняет статусы задач, фиксирует
 попытки, checkpoint и различает технический failure от бизнес-результата
 `unfulfillable`. Выполнение v1 последовательное; зависимости уже являются
@@ -133,7 +136,7 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 ```
 1. `ChatStreamService` или sandbox создаёт `ToolContext`.
 2. `RuntimePipeline` загружает platform snapshot и строит turn memory.
-3. Planner создаёт или изменяет persisted plan через строгий `PlanPatch`; каждый task содержит `executor`, `intent`, `instructions`, `depends_on` и `needs`.
+3. Planner генерирует semantic action (`apply_graph`, `ask_user`, `complete` или `fail`); runtime преобразует его в строгий `PlanPatch` с текущей revision. Каждый task содержит `executor`, `intent`, `instructions`, `depends_on` и `needs`.
 4. Orchestrator выбирает одну ready task и создаёт `RuntimeTaskAttempt`.
 5. Для task выполняется `ExecutionPreflight`, затем `AgentExecutor` возвращает строгий `AgentTaskResult`.
 6. Технический сбой сохраняется отдельно и может быть retried; `unfulfillable` является валидным бизнес-результатом.

@@ -23,10 +23,10 @@ def _planner_examples() -> ExamplesV2:
             "needs": [],
         },
         "outputs": {
-            "create": {"decision": "create_plan", "expected_revision": 0, "rationale": "Нужен один discovery task.", "tasks": [{"task_id": "discover", "executor": "viewer", "intent": "Собрать источники", "instructions": "Собрать доступные источники"}]},
-            "ask_user": {"decision": "ask_user", "expected_revision": 1, "question": "Уточните фокус запроса."},
-            "complete": {"decision": "complete_plan", "expected_revision": 1, "answer_brief": "Данных достаточно."},
-            "fail": {"decision": "fail_plan", "expected_revision": 1, "failure_reason": "Нет подходящего агента."},
+            "apply_graph": {"action": "apply_graph", "tasks": [{"task_id": "discover", "executor": "viewer", "intent": "Собрать источники", "instructions": "Собрать доступные источники"}]},
+            "ask_user": {"action": "ask_user", "question": "Уточните фокус запроса."},
+            "complete": {"action": "complete", "answer_brief": "Данных достаточно."},
+            "fail": {"action": "fail", "failure_reason": "Нет подходящего агента."},
         },
     }
 

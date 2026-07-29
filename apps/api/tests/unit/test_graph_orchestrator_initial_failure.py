@@ -1,9 +1,11 @@
 from uuid import uuid4
+from types import SimpleNamespace
 
 import pytest
 
 from app.runtime.llm.structured import StructuredCallError
 from app.runtime.orchestrator import GraphOrchestrator
+from app.runtime.orchestrator_contracts import PlanPatch, PlannerDecisionKind
 
 
 class _Session:
@@ -54,6 +56,41 @@ class _UnusedExecutor:
         raise AssertionError("task execution must not start after planner failure")
 
 
+class _SuccessfulInitialPlanStore(_InitialPlanStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.revision = 0
+        self.status = "draft"
+
+    async def snapshot(self, plan_id):
+        assert plan_id == self.plan_id
+        return {
+            "root_run_id": str(self.root_run_id),
+            "status": self.status,
+            "tasks": {},
+            "revision": self.revision,
+            "last_failure": self.failure,
+        }
+
+    async def apply_patch(self, plan_id, patch, **_kwargs):
+        assert plan_id == self.plan_id
+        assert patch.expected_revision == self.revision
+        self.revision = 7
+        self.status = "active"
+        return SimpleNamespace(revision=self.revision)
+
+    async def claim_ready(self, _plan_id):
+        return None
+
+
+class _SuccessfulPlanner:
+    async def plan(self, **_kwargs):
+        return PlanPatch(
+            expected_revision=0,
+            decision=PlannerDecisionKind.CREATE_PLAN,
+        )
+
+
 @pytest.mark.asyncio
 async def test_initial_planner_failure_closes_trace_and_marks_plan_failed():
     store = _InitialPlanStore()
@@ -89,3 +126,38 @@ async def test_initial_planner_failure_closes_trace_and_marks_plan_failed():
     ]
     assert any(event.type.value == "error" for event in observed)
     assert any(event.type.value == "orchestrator_checkpoint_finished" for event in observed)
+
+
+@pytest.mark.asyncio
+async def test_initial_planner_records_actual_applied_revision():
+    store = _SuccessfulInitialPlanStore()
+    observed = []
+
+    async def sink(event):
+        observed.append(event)
+
+    orchestrator = GraphOrchestrator(
+        store=store,
+        planner=_SuccessfulPlanner(),
+        executor=_UnusedExecutor(),
+        event_sink=sink,
+    )
+
+    events = [
+        event
+        async for event in orchestrator.run(
+            plan_id=store.plan_id,
+            goal="Create a request",
+            available_agents=[],
+        )
+    ]
+
+    invocation = store.session.added[-1]
+    assert invocation.status == "completed"
+    assert invocation.revision_before == 0
+    assert invocation.revision_after == 7
+    created = next(event for event in events if event["type"] == "plan_created")
+    assert created["revision_before"] == 0
+    assert created["revision_after"] == 7
+    finished = next(event for event in observed if event.type.value == "planner_invocation_finished")
+    assert finished.data["revision_after"] == 7

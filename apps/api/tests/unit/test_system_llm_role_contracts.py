@@ -8,14 +8,15 @@ from app.services.system_llm_role_contracts import (
 )
 
 
-def test_planner_contract_has_graph_decision_enum() -> None:
+def test_planner_contract_has_semantic_action_enum() -> None:
     contract = build_response_contract(SystemLLMRoleType.PLANNER)
     assert contract["format"] == "json"
     schema = contract["schema"]
-    assert set(schema["properties"]["decision"]["enum"]) == {
-        "create_plan", "revise_plan", "ask_user", "complete_plan", "fail_plan",
+    assert set(schema["properties"]["action"]["enum"]) == {
+        "apply_graph", "ask_user", "complete", "fail",
     }
-    assert {"decision", "expected_revision"}.issubset(set(schema["required"]))
+    assert "action" in schema["required"]
+    assert "expected_revision" not in schema["properties"]
 
 
 def test_planner_contract_is_aligned_with_runtime_model() -> None:

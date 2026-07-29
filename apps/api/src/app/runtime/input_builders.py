@@ -31,10 +31,18 @@ class PlannerInputBuilder:
                 "tags": list(item.get("tags") or []),
                 "provides_keys": list(item.get("provides_keys") or []),
             })
+        plan = dict(request.plan or {})
+        tasks = plan.get("tasks") if isinstance(plan.get("tasks"), dict) else {}
+        planner_plan = {
+            "has_existing_graph": bool(tasks) or int(plan.get("revision") or 0) > 0,
+            "status": plan.get("status"),
+            "tasks": tasks,
+        }
         return {
             "goal": request.goal,
-            "trigger": request.trigger,
-            "plan": request.plan or {},
+            "mode": "replan" if planner_plan["has_existing_graph"] else "initial",
+            "replan_reason": request.trigger,
+            "plan": planner_plan,
             "completed_outputs": request.completed_outputs or {},
             "needs": request.needs or [],
             "last_failure": request.last_failure,

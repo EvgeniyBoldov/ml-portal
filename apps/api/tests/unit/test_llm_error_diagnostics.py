@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel
 
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.streaming import RoleStreamingCall, StreamError
+from app.runtime.events import RuntimeEventType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
 from app.services.execution_limits_service import ExecutionLimitsPayload
 
@@ -36,6 +38,38 @@ async def test_structured_call_preserves_upstream_exception_and_traceback():
     assert error.error_type == "ConnectionError"
     assert "LiteLLM upstream reset" in str(error)
     assert "ConnectionError" in (error.debug_payload() or {}).get("traceback", "")
+
+
+@pytest.mark.asyncio
+async def test_structured_call_emits_safe_protocol_retry_for_invalid_schema():
+    client = AsyncMock()
+    client.chat = AsyncMock(side_effect=[
+        {"choices": [{"message": {"content": "{}"}}]},
+        {"choices": [{"message": {"content": '{"value": "ok"}'}}]},
+    ])
+    call = StructuredLLMCall(session=AsyncMock(), llm_client=client)
+    call.role_service.get_role_config = AsyncMock(
+        return_value={"model": "llama-3.1", "max_retries": 1, "timeout_s": 1}
+    )
+    call.limits_service.get_effective = AsyncMock(return_value=ExecutionLimitsPayload())
+    events = []
+
+    async def sink(event):
+        events.append(event)
+
+    result = await call.invoke(
+        role=SystemLLMRoleType.PLANNER,
+        payload={"input": "hello"},
+        schema=_Result,
+        agent_execution_id=uuid4(),
+        event_sink=sink,
+    )
+
+    assert result.value.value == "ok"
+    retries = [event for event in events if event.type is RuntimeEventType.PROTOCOL_RETRY]
+    assert len(retries) == 1
+    assert retries[0].data["reason"] == "schema_validation"
+    assert "content" not in retries[0].data
 
 
 async def _failed_stream():

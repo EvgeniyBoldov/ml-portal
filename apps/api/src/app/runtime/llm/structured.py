@@ -30,7 +30,7 @@ from app.core.logging import get_logger
 from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens, resolve_llm_timeout_s
-from app.runtime.events import RuntimeEvent
+from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 from app.services.system_llm_role_service import SystemLLMRoleService
 
@@ -215,6 +215,25 @@ class StructuredLLMCall:
 
         for attempt in range(max_retries + 1):
             llm_call_id = str(uuid4())
+
+            async def emit_protocol_retry(*, reason: str) -> None:
+                if event_sink is None or agent_execution_id is None or attempt >= max_retries:
+                    return
+                await event_sink(RuntimeEvent(
+                    RuntimeEventType.PROTOCOL_RETRY,
+                    {
+                        "entity_type": "llm_call",
+                        "entity_id": llm_call_id,
+                        "parent_entity_type": "agent_execution",
+                        "parent_entity_id": str(agent_execution_id),
+                        "agent_execution_id": str(agent_execution_id),
+                        "agent_slug": role_key,
+                        "attempt": attempt + 1,
+                        "max_attempts": max_retries + 1,
+                        "reason": reason,
+                    },
+                ))
+
             if event_sink is not None and agent_execution_id is not None:
                 await event_sink(RuntimeEvent.llm_request(
                     llm_call_id=llm_call_id,
@@ -239,6 +258,19 @@ class StructuredLLMCall:
                 last_traceback = traceback.format_exc()
                 last_error = f"{type(timeout_exc).__name__}: {timeout_exc} (attempt {attempt + 1})"
                 logger.warning("StructuredLLMCall timeout role=%s attempt=%s", role, attempt + 1)
+                if event_sink is not None and agent_execution_id is not None:
+                    await event_sink(RuntimeEvent.llm_response(
+                        llm_call_id=llm_call_id,
+                        parent_entity_type="agent_execution",
+                        parent_entity_id=str(agent_execution_id),
+                        agent_execution_id=str(agent_execution_id),
+                        agent_slug=role_key,
+                        purpose="planning_decision" if role_key == "planner" else role_key,
+                        model=model,
+                        error_type="TimeoutError",
+                        duration_ms=int((time.time() - start) * 1000),
+                    ))
+                await emit_protocol_retry(reason="timeout")
                 continue
             except LLMLimitExceededError:
                 raise
@@ -247,6 +279,18 @@ class StructuredLLMCall:
                 last_traceback = traceback.format_exc()
                 last_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("StructuredLLMCall error role=%s attempt=%s: %s", role, attempt + 1, exc)
+                if event_sink is not None and agent_execution_id is not None:
+                    await event_sink(RuntimeEvent.llm_response(
+                        llm_call_id=llm_call_id,
+                        parent_entity_type="agent_execution",
+                        parent_entity_id=str(agent_execution_id),
+                        agent_execution_id=str(agent_execution_id),
+                        agent_slug=role_key,
+                        purpose="planning_decision" if role_key == "planner" else role_key,
+                        model=model,
+                        error_type=type(exc).__name__,
+                        duration_ms=int((time.time() - start) * 1000),
+                    ))
                 if self._is_non_retryable_llm_error(exc):
                     logger.warning(
                         "StructuredLLMCall fail-fast role=%s attempt=%s due to non-retryable upstream error",
@@ -254,6 +298,7 @@ class StructuredLLMCall:
                         attempt + 1,
                     )
                     break
+                await emit_protocol_retry(reason="transport_error")
                 continue
 
             # A response starts a new failure mode; do not report a stale
@@ -276,6 +321,7 @@ class StructuredLLMCall:
                 ))
             if not raw_response:
                 last_error = "empty_response"
+                await emit_protocol_retry(reason="empty_response")
                 continue
 
             try:
@@ -286,6 +332,7 @@ class StructuredLLMCall:
                     "StructuredLLMCall schema mismatch role=%s attempt=%s: %s",
                     role, attempt + 1, exc,
                 )
+                await emit_protocol_retry(reason="schema_validation")
                 continue
 
             duration_ms = int((time.time() - start) * 1000)

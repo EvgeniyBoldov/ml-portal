@@ -33,6 +33,7 @@ def test_error_level_is_errors_only() -> None:
 def test_brief_level_contains_lifecycle_and_snapshots_not_io() -> None:
     logger = _logger(RuntimeLoggingLevel.BRIEF)
     assert logger.should_log("agent_start") is True
+    assert logger.should_log("planner_invocation_finished") is True
     assert logger.should_log("budget_snapshot") is True
     assert logger.should_log("tool_call") is False
     assert logger.should_log("llm_response") is False

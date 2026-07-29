@@ -208,6 +208,11 @@ class GraphOrchestrator:
                     plan_id=plan_id,
                     trace_parent_id=checkpoint_id,
                 ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
+                await observe("planner_decision", entity_type="planner_iteration", entity_id=iteration_entity_id,
+                              parent_type="orchestrator", parent_id=orchestrator_id,
+                              payload={"mode": "replan", "decision": patch.decision.value,
+                                       "revision_before": current["revision"], "task_count": len(patch.tasks),
+                                       "remove_task_count": len(patch.remove_task_ids)}, trigger=reason)
                 decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason=reason) if self.budget_service else None
                 if decision is not None and not decision.allowed:
                     raise RuntimeError("plan revision budget exceeded")
@@ -216,8 +221,12 @@ class GraphOrchestrator:
                 failure = {"code": type(exc).__name__, "message": str(exc), "trigger": reason}
                 invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
                 if invocation is not None:
-                    invocation.status, invocation.finished_at = "failed", datetime.now(timezone.utc)
+                    invocation.status = "failed"
+                    invocation.error = str(exc)
+                    invocation.finished_at = datetime.now(timezone.utc)
                 await self.store.mark_failed(plan_id, failure)
+                await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
+                              payload={"status": "failed", "revision_before": current["revision"], "error_code": type(exc).__name__}, trigger=reason)
                 await observe("error", entity_type="error", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_entity_id,
                               payload={"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}, trigger=reason)
                 await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
@@ -233,7 +242,11 @@ class GraphOrchestrator:
             invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
             if invocation:
                 invocation.status, invocation.revision_after, invocation.finished_at = "completed", updated.revision, datetime.now(timezone.utc)
-            await observe("plan_patch_applied", entity_type="plan", entity_id=str(plan_id), parent_type="orchestrator", parent_id=orchestrator_id, payload={"revision": updated.revision, "patch": patch.model_dump(mode="json")}, trigger=reason)
+            await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
+                          payload={"status": "completed", "revision_before": current["revision"], "revision_after": updated.revision}, trigger=reason)
+            await observe("plan_patch_applied", entity_type="plan", entity_id=str(plan_id), parent_type="agent_execution", parent_id=planner_executor_id,
+                          payload={"mode": "replan", "revision_before": current["revision"], "revision_after": updated.revision,
+                                   "decision": patch.decision.value, "patch": patch.model_dump(mode="json")}, trigger=reason)
             if patch.decision.value == "ask_user":
                 await observe("waiting_input", entity_type="interaction", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_entity_id,
                               payload={"question": patch.question, "interaction_kind": "clarify"}, trigger=reason)
@@ -282,17 +295,26 @@ class GraphOrchestrator:
                     trigger="initial", run_id=root_run_id, plan_id=plan_id,
                     trace_parent_id=iteration_id,
                 ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
-                await self.store.apply_patch(plan_id, patch, reason="initial_plan")
+                await observe("planner_decision", entity_type="planner_iteration", entity_id=iteration_id,
+                              parent_type="orchestrator", parent_id=orchestrator_id,
+                              payload={"mode": "initial", "decision": patch.decision.value,
+                                       "revision_before": plan["revision"], "task_count": len(patch.tasks),
+                                       "remove_task_count": len(patch.remove_task_ids)}, trigger="initial")
                 if self.budget_service is not None:
                     decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason="initial_plan")
                     if not decision.allowed:
                         raise RuntimeError("plan revision budget exceeded")
+                updated = await self.store.apply_patch(plan_id, patch, reason="initial_plan", planner_invocation_id=str(invocation_id))
             except Exception as exc:
                 failure = {"code": type(exc).__name__, "message": str(exc), "trigger": "initial"}
                 invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
                 if invocation is not None:
-                    invocation.status, invocation.finished_at = "failed", datetime.now(timezone.utc)
+                    invocation.status = "failed"
+                    invocation.error = str(exc)
+                    invocation.finished_at = datetime.now(timezone.utc)
                 await self.store.mark_failed(plan_id, failure)
+                await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
+                              payload={"status": "failed", "revision_before": plan["revision"], "error_code": type(exc).__name__}, trigger="initial")
                 await observe("error", entity_type="error", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_id,
                               payload={"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}, trigger="initial")
                 await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
@@ -312,16 +334,19 @@ class GraphOrchestrator:
             invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
             if invocation is not None:
                 invocation.status = "completed"
-                invocation.revision_after = plan["revision"] + 1
+                invocation.revision_after = updated.revision
                 invocation.finished_at = datetime.now(timezone.utc)
+            await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
+                          payload={"status": "completed", "revision_before": plan["revision"], "revision_after": updated.revision}, trigger="initial")
             await observe("plan_created", entity_type="plan", entity_id=str(plan_id), parent_type="agent_execution", parent_id=planner_executor_id,
-                          payload={"revision": 1, "mode": "initial", "patch": patch.model_dump(mode="json")}, trigger="initial")
+                          payload={"revision_before": plan["revision"], "revision_after": updated.revision,
+                                   "mode": "initial", "decision": patch.decision.value, "patch": patch.model_dump(mode="json")}, trigger="initial")
             if patch.decision.value == "ask_user":
                 await observe("waiting_input", entity_type="interaction", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_id,
                               payload={"question": patch.question, "interaction_kind": "clarify"}, trigger="initial")
             await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                           parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"kind": "planner", "mode": "initial", "status": "completed", "revision": 1}, trigger="initial")
+                          payload={"kind": "planner", "mode": "initial", "status": "completed", "revision": updated.revision}, trigger="initial")
             yield OrchestratorEvent(type="agent_end", entity_id=planner_executor_id,
                                     agent_execution_id=planner_executor_id, parent_entity_type="step",
                                     parent_entity_id=step_id, agent_slug="planner", role="planner", status="completed")
@@ -330,7 +355,7 @@ class GraphOrchestrator:
                                     step_number=1, status="completed", outcome="success", summary="План сформирован")
             yield OrchestratorEvent(type="plan_created", entity_type="plan", entity_id=str(plan_id),
                                     parent_entity_type="agent_execution", parent_entity_id=planner_executor_id,
-                                    plan_id=str(plan_id), revision=1, mode="initial",
+                                    plan_id=str(plan_id), revision_before=plan["revision"], revision_after=updated.revision, mode="initial",
                                     patch=patch.model_dump(mode="json"))
         else:
             # A resumed persisted plan has no new planner call in this run,

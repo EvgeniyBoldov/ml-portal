@@ -40,7 +40,9 @@ output preview and retry/error classification.
 
 Plan creation and revision events are owned by the planner executor run that
 produced them (and therefore are also contained by its iteration). Their payload
-includes the revision, mode/trigger and redacted plan patch. Task lifecycle rows
+includes `revision_before`, `revision_after`, mode/trigger and redacted plan patch.
+`planner_decision` records the normalized semantic action; `protocol_retry`
+records only retry number and safe error classification. Task lifecycle rows
 keep their plan parent and include the task/attempt references used by the
 corresponding executor run.
 
