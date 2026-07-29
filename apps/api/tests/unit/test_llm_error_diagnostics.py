@@ -17,6 +17,35 @@ class _Result(BaseModel):
     value: str
 
 
+def test_structured_prompt_generates_contract_for_non_synthesizer_roles():
+    prompt = StructuredLLMCall._compile_role_prompt(
+        {
+            "role_type": SystemLLMRoleType.PLANNER.value,
+            "identity": "planner",
+            "output_requirements": "СТАРЫЙ КОНТРАКТ ИЗ БД",
+        },
+        None,
+        schema=_Result,
+    )
+
+    assert "СТАРЫЙ КОНТРАКТ ИЗ БД" not in prompt
+    assert "Верни строго валидный JSON" in prompt
+    assert '"value"' in prompt
+
+
+def test_structured_prompt_keeps_database_requirements_for_synthesizer():
+    prompt = StructuredLLMCall._compile_role_prompt(
+        {
+            "role_type": SystemLLMRoleType.SYNTHESIZER.value,
+            "output_requirements": "Редакторские требования из БД",
+        },
+        None,
+        schema=None,
+    )
+
+    assert "Редакторские требования из БД" in prompt
+
+
 @pytest.mark.asyncio
 async def test_structured_call_preserves_upstream_exception_and_traceback():
     client = AsyncMock()

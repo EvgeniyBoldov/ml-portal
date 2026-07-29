@@ -152,7 +152,11 @@ class StructuredLLMCall:
                 temperature = float(role_override["temperature"])
 
         # Recompile system prompt if prompt parts are overridden
-        system_prompt = system_prompt or self._compile_role_prompt(role_config, role_override)
+        system_prompt = system_prompt or self._compile_role_prompt(
+            role_config,
+            role_override,
+            schema=schema,
+        )
         user_message = json.dumps(payload, ensure_ascii=False, default=str)
         messages = [
             {"role": "system", "content": system_prompt},
@@ -530,19 +534,37 @@ class StructuredLLMCall:
         return any(p in text for p in patterns)
 
     @staticmethod
-    def _compile_role_prompt(role_config: Dict[str, Any], role_override: Optional[Dict[str, Any]]) -> str:
+    def _compile_role_prompt(
+        role_config: Dict[str, Any],
+        role_override: Optional[Dict[str, Any]],
+        *,
+        schema: Optional[Type[BaseModel]] = None,
+    ) -> str:
         """Recompile system prompt from role_config parts + optional sandbox overrides.
 
         Mirrors SystemLLMRole.compiled_prompt logic so overrides to identity/mission/etc.
-        are reflected in the final prompt sent to the LLM.
+        are reflected in the final prompt sent to the LLM. Structured roles get their
+        output contract from the runtime schema; only the synthesizer keeps its
+        operator-editable text requirement from the database.
         """
         parts: list[str] = []
+        role_type = str(role_config.get("role_type") or "").strip().lower()
         for field, heading in _ROLE_PROMPT_SECTIONS:
+            if field == "output_requirements" and role_type != SystemLLMRoleType.SYNTHESIZER.value:
+                continue
             base = role_config.get(field)
             override_val = role_override.get(field) if isinstance(role_override, dict) else None
             val = override_val if override_val is not None else base
             if val:
                 parts.append(f"# {heading}\n{val}")
+
+        if role_type != SystemLLMRoleType.SYNTHESIZER.value and schema is not None:
+            generated_schema = schema.model_json_schema()
+            parts.append(
+                "# OUTPUT REQUIREMENTS\n"
+                "Верни строго валидный JSON по следующей схеме (без markdown и пояснений):\n"
+                f"{json.dumps(generated_schema, ensure_ascii=False, indent=2)}"
+            )
 
         examples = role_config.get("examples")
         override_examples = role_override.get("examples") if isinstance(role_override, dict) else None
