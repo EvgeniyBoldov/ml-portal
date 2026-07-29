@@ -9,11 +9,13 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 from uuid import UUID
 
+from pydantic import model_validator
+
 from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.events import RuntimeEvent
-from app.runtime.orchestrator_contracts import PlanPatch, PlanRequest
+from app.runtime.orchestrator_contracts import PlanPatch, PlanRequest, PlannerDecisionKind
 from app.runtime.input_builders import PlannerInputBuilder
 
 
@@ -28,6 +30,12 @@ class PlannerGraphOutput(PlanPatch):
     # Keep the public JSON Schema backward compatible: the prompt editor and
     # its tests consume this enum inline rather than through a $ref.
     decision: Literal["create_plan", "revise_plan", "ask_user", "complete_plan", "fail_plan"]
+
+    @model_validator(mode="after")
+    def restore_runtime_decision_enum(self) -> "PlannerGraphOutput":
+        """Keep the wire schema inline while preserving the PlanPatch runtime type."""
+        object.__setattr__(self, "decision", PlannerDecisionKind(self.decision))
+        return self
 
 
 class GraphPlanner:
