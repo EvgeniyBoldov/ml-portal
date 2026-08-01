@@ -141,6 +141,7 @@ class PlanRequest(BaseModel):
     available_agents: List[Dict[str, Any]] = Field(default_factory=list)
     plan: Dict[str, Any] = Field(default_factory=dict)
     completed_outputs: Dict[str, Any] = Field(default_factory=dict)
+    available_artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     needs: List[Dict[str, Any]] = Field(default_factory=list)
     last_failure: Optional[Dict[str, Any]] = None
     trigger: Optional[str] = None

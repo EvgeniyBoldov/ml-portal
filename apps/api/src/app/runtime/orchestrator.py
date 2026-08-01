@@ -103,6 +103,7 @@ class GraphOrchestrator:
         self.logging_level = logging_level
 
     async def run(self, *, plan_id: UUID, goal: str, available_agents: list[dict[str, Any]],
+                  available_artifacts: Optional[list[dict[str, Any]]] = None,
                   max_steps: int = 80, planner_kwargs: Optional[Dict[str, Any]] = None) -> AsyncIterator[OrchestratorEvent]:
         plan = await self.store.snapshot(plan_id)
         root_run_id = UUID(str(plan["root_run_id"]))
@@ -196,6 +197,8 @@ class GraphOrchestrator:
                     goal=goal,
                     available_agents=available_agents,
                     plan=current,
+                    completed_outputs=self._completed_outputs(current),
+                    available_artifacts=self._available_artifacts(current, available_artifacts),
                     needs=[
                         {"task_id": task_id, **need}
                         for task_id, task in current.get("tasks", {}).items()
@@ -292,6 +295,8 @@ class GraphOrchestrator:
             try:
                 patch = await self.planner.plan(request=PlanRequest(
                     goal=goal, available_agents=available_agents, plan=plan,
+                    completed_outputs=self._completed_outputs(plan),
+                    available_artifacts=self._available_artifacts(plan, available_artifacts),
                     trigger="initial", run_id=root_run_id, plan_id=plan_id,
                     trace_parent_id=iteration_id,
                 ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
@@ -502,3 +507,47 @@ class GraphOrchestrator:
         if closed is not None:
             yield closed
         yield OrchestratorEvent(type="max_steps", plan_id=str(plan_id))
+
+    @staticmethod
+    def _completed_outputs(plan: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            task_id: dict(task.get("result", {}).get("outputs", {}))
+            for task_id, task in dict(plan.get("tasks") or {}).items()
+            if task.get("status") == "completed" and isinstance(task.get("result"), dict)
+        }
+
+    @staticmethod
+    def _available_artifacts(
+        plan: Dict[str, Any],
+        input_artifacts: Optional[list[dict[str, Any]]] = None,
+    ) -> list[dict[str, Any]]:
+        artifacts: list[dict[str, Any]] = []
+        for item in input_artifacts or []:
+            if not isinstance(item, dict):
+                continue
+            ref = item.get("ref") if isinstance(item.get("ref"), dict) else item
+            artifact_id = str(ref.get("artifact_id") or item.get("artifact_id") or "").strip()
+            if not artifact_id:
+                continue
+            artifacts.append({
+                "artifact_id": artifact_id,
+                "file_name": ref.get("file_name") or item.get("file_name") or "artifact",
+                "content_type": ref.get("content_type") or item.get("content_type"),
+                "size_bytes": ref.get("size_bytes") or item.get("size_bytes"),
+                "snippet": item.get("snippet") or "",
+                "snippet_status": item.get("snippet_status") or "missing",
+                "readable": bool(item.get("readable")),
+                "truncated": bool(item.get("truncated")),
+            })
+        for task in dict(plan.get("tasks") or {}).values():
+            outputs = dict(task.get("result", {}).get("outputs", {})) if isinstance(task.get("result"), dict) else {}
+            for item in [*(outputs.get("artifacts", []) or []), *(outputs.get("attachments", []) or [])]:
+                if isinstance(item, dict) and item.get("artifact_id"):
+                    artifacts.append(dict(item))
+        seen: set[str] = set()
+        return [
+            item for item in artifacts
+            if isinstance(item, dict)
+            and (artifact_id := str(item.get("artifact_id") or "").strip())
+            and not (artifact_id in seen or seen.add(artifact_id))
+        ]

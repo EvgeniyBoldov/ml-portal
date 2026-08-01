@@ -22,6 +22,7 @@ class SandboxRunManager:
         snapshot_id: UUID,
         request_text: str,
         effective_config: Dict[str, Any],
+        input_artifact_ids: Optional[list[str]] = None,
         parent_run_id: Optional[UUID] = None,
     ) -> SandboxRun:
         obj = SandboxRun(
@@ -30,6 +31,7 @@ class SandboxRunManager:
             snapshot_id=snapshot_id,
             request_text=request_text,
             effective_config=effective_config,
+            input_artifact_ids=list(input_artifact_ids or []),
             parent_run_id=parent_run_id,
             status="running",
         )
@@ -44,6 +46,7 @@ class SandboxRunManager:
         branch_id: UUID,
         user_id: UUID,
         request_text: str,
+        input_artifact_ids: Optional[list[str]] = None,
         parent_run_id: Optional[UUID] = None,
     ) -> SandboxRunPreparation:
         snapshot = await self.host.branch_state.create_snapshot(
@@ -61,6 +64,7 @@ class SandboxRunManager:
             branch_id=branch_id,
             snapshot_id=snapshot.id,
             request_text=request_text,
+            input_artifact_ids=input_artifact_ids,
             effective_config=effective_config,
             parent_run_id=parent_run_id,
         )

@@ -1,8 +1,7 @@
 export type ChatRole = 'user' | 'assistant';
 
 export interface ChatAttachmentRef {
-  id: string;
-  fileId: string;
+  artifactId: string;
   fileName: string;
   contentType?: string;
   sizeBytes?: number;

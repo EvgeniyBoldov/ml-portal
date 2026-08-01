@@ -51,6 +51,7 @@ class AgentResultSnippet(BaseModel):
     agent: str
     summary: str
     success: bool = True
+    artifacts: List[dict[str, Any]] = Field(default_factory=list)
 
 
 class KnownFactSnippet(BaseModel):
@@ -95,6 +96,7 @@ class FactExtractor:
         *,
         user_message: str,
         agent_results: Sequence[AgentResultSnippet],
+        artifacts: Sequence[dict[str, Any]] = (),
         known_facts: Sequence[KnownFactSnippet],
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
@@ -108,6 +110,7 @@ class FactExtractor:
         payload = {
             "user_message": (user_message or "").strip(),
             "agent_results": [r.model_dump() for r in agent_results],
+            "artifacts": list(artifacts),
             "known_facts": [k.model_dump() for k in known_facts],
         }
 

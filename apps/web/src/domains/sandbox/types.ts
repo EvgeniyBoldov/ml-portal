@@ -142,7 +142,7 @@ export interface SandboxRunCreate {
   request_text: string;
   branch_id?: string | null;
   parent_run_id?: string | null;
-  attachment_ids?: string[] | null;
+  artifact_ids?: string[] | null;
   execution_mode?: ExecutionMode;
 }
 

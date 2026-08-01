@@ -413,7 +413,7 @@ class Synthesizer:
             item_attachments = item.get("attachments")
             if isinstance(item_attachments, list):
                 for att in item_attachments:
-                    if isinstance(att, dict) and att.get("file_id"):
+                    if isinstance(att, dict) and att.get("artifact_id"):
                         result.append(dict(att))
         return result
 

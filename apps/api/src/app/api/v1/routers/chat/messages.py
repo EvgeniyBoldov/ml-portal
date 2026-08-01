@@ -111,7 +111,7 @@ async def send_message_stream(
     content = body.content
     model = body.model
     agent_slug = body.agent_slug
-    attachment_ids = body.attachment_ids or []
+    artifact_ids = body.artifact_ids or []
     confirmation_tokens = body.confirmation_tokens or []
     execution_mode = ExecutionMode(body.execution_mode or ExecutionMode.NORMAL.value)
 
@@ -138,7 +138,7 @@ async def send_message_stream(
                 user_id=chat_ctx.user_id,
                 tenant_id=chat_ctx.tenant_id,
                 content=content,
-                attachment_ids=attachment_ids,
+                artifact_ids=artifact_ids,
                 confirmation_tokens=confirmation_tokens,
                 execution_mode=execution_mode,
                 idempotency_key=idempotency_key,
@@ -317,7 +317,7 @@ async def resume_run(
                 user_id=str(current_user.id),
                 tenant_id=str(tenant_uuid_val),
                 content=resume_content,
-                attachment_ids=[],
+                artifact_ids=[],
                 idempotency_key=None,
                 model=None,
                 agent_slug=None,

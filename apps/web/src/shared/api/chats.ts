@@ -131,14 +131,3 @@ export async function uploadChatAttachment(chatId: string, file: File) {
     headers: {},
   });
 }
-
-export async function getChatAttachmentDownloadLink(attachmentId: string) {
-  return apiRequest<{
-    id: string;
-    file_id: string;
-    file_name: string;
-    content_type?: string | null;
-    size_bytes: number;
-    download_url: string;
-  }>(`/chats/attachments/${attachmentId}/download`);
-}

@@ -368,6 +368,7 @@ class SandboxRun(Base):
     )
 
     request_text: Mapped[str] = mapped_column(Text, nullable=False)
+    input_artifact_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 
     # running | completed | failed | waiting_confirmation
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="running")

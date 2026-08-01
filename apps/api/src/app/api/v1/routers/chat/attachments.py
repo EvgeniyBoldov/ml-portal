@@ -1,13 +1,12 @@
-"""Attachment endpoints: upload policy, upload, download, file-id."""
+"""Chat artifact upload and metadata endpoints."""
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ChatContext, db_session, get_current_user, resolve_chat_context
 from app.core.security import UserCtx
-from app.schemas.chats import ChatAttachmentDownloadResponse, ChatAttachmentUploadResponse, ChatUploadPolicyResponse
+from app.schemas.chats import ChatAttachmentUploadResponse, ChatUploadPolicyResponse
 from app.core.exceptions import UploadValidationError
 from app.services.chat_attachment_service import ChatAttachmentService
-from app.services.file_delivery_service import FileDeliveryService
 
 router = APIRouter()
 
@@ -51,25 +50,3 @@ async def upload_chat_attachment(
     except Exception:
         await session.rollback()
         raise
-
-
-@router.get("/attachments/{attachment_id}/download", response_model=ChatAttachmentDownloadResponse)
-async def download_chat_attachment(
-    attachment_id: str,
-    session: AsyncSession = Depends(db_session),
-    current_user: UserCtx = Depends(get_current_user),
-):
-    service = ChatAttachmentService(session)
-    download_info = await service.get_download_link(
-        owner_id=str(current_user.id),
-        attachment_id=attachment_id,
-    )
-    return ChatAttachmentDownloadResponse(**download_info)
-
-
-@router.get("/attachments/{attachment_id}/file-id")
-async def get_chat_attachment_file_id(
-    attachment_id: str,
-    _: UserCtx = Depends(get_current_user),
-):
-    return {"file_id": FileDeliveryService.make_chat_attachment_file_id(attachment_id)}

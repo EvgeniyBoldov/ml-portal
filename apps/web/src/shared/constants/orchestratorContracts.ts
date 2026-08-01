@@ -45,13 +45,13 @@ export const SYNTHESIZER_INPUT_CONTRACT = {
       items: {
         type: 'object',
         properties: {
-          file_id: { type: 'string', description: 'Стабильный идентификатор файла' },
+          artifact_id: { type: 'string', description: 'Непрозрачный идентификатор артефакта' },
           file_name: { type: 'string', description: 'Имя файла для показа в ответе' },
           download_url: { type: 'string', description: 'Ссылка на скачивание файла' },
           content_type: { type: 'string', description: 'MIME-тип файла' },
           size_bytes: { type: ['integer', 'null'], description: 'Размер файла в байтах' },
         },
-        required: ['file_id', 'file_name'],
+        required: ['artifact_id', 'file_name'],
       },
     },
     rag_sources: {

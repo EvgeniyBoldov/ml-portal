@@ -44,6 +44,7 @@ class PlannerInputBuilder:
             "replan_reason": request.trigger,
             "plan": planner_plan,
             "completed_outputs": request.completed_outputs or {},
+            "available_artifacts": self._normalize_artifacts(request.available_artifacts or []),
             "needs": request.needs or [],
             "last_failure": request.last_failure,
             "available_agents": agents,
@@ -88,9 +89,7 @@ class PlannerInputBuilder:
             "attachments": [
                 {
                     "file_name": item.ref.file_name,
-                "file_id": item.ref.file_id,
-                    **({"artifact_id": item.ref.artifact_id} if item.ref.artifact_id else {}),
-                "storage_uri": item.ref.storage_uri,
+                    "artifact_id": item.ref.artifact_id,
                     "content_type": item.ref.content_type,
                     "size_bytes": item.ref.size_bytes,
                     "snippet": item.snippet,
@@ -160,6 +159,30 @@ class PlannerInputBuilder:
             return text
         return text[:limit]
 
+    @staticmethod
+    def _normalize_artifacts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            ref = item.get("ref") if isinstance(item.get("ref"), dict) else item
+            artifact_id = str(ref.get("artifact_id") or item.get("artifact_id") or "").strip()
+            if not artifact_id or artifact_id in seen:
+                continue
+            seen.add(artifact_id)
+            result.append({
+                "artifact_id": artifact_id,
+                "file_name": ref.get("file_name") or item.get("file_name") or "artifact",
+                "content_type": ref.get("content_type") or item.get("content_type"),
+                "size_bytes": ref.get("size_bytes") or item.get("size_bytes"),
+                "snippet": item.get("snippet") or "",
+                "snippet_status": item.get("snippet_status") or "missing",
+                "readable": bool(item.get("readable")),
+                "truncated": bool(item.get("truncated")),
+            })
+        return result
+
 
 class SynthesizerInputBuilder:
     """Build user-facing synthesis prompt from runtime state."""
@@ -190,19 +213,8 @@ class SynthesizerInputBuilder:
                         continue
                     generated_files.append(
                         {
-                            "artifact_id": att.get("artifact_id") or att.get("file_id"),
-                            "file_id": att.get("file_id"),
-                            "storage_uri": att.get("storage_uri") or "",
+                            "artifact_id": att.get("artifact_id"),
                             "file_name": att.get("file_name") or att.get("name") or "file",
-                            "download_url": (
-                                att.get("download_url")
-                                or att.get("url")
-                                or (
-                                    f"/api/v1/files/{att.get('artifact_id') or att.get('file_id')}/download"
-                                    if att.get("artifact_id") or att.get("file_id")
-                                    else ""
-                                )
-                            ),
                             "content_type": att.get("content_type") or "",
                             "size_bytes": att.get("size_bytes"),
                         }

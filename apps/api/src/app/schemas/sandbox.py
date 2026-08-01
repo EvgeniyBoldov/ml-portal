@@ -163,7 +163,7 @@ class SandboxRunCreate(BaseModel):
     request_text: str = Field(..., min_length=1)
     branch_id: Optional[UUID] = None
     parent_run_id: Optional[UUID] = None
-    attachment_ids: Optional[list[UUID]] = None
+    artifact_ids: Optional[list[UUID]] = None
     confirmed_fingerprints: Optional[list[str]] = None
     execution_mode: Optional[Literal["normal", "thinking"]] = None
 

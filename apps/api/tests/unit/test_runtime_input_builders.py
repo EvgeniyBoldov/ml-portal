@@ -69,11 +69,39 @@ def test_graph_planner_input_builder_uses_persisted_plan_contract():
     ))
 
     assert set(payload) == {
-        "goal", "trigger", "plan", "completed_outputs", "needs", "last_failure", "available_agents",
+        "goal", "mode", "replan_reason", "plan", "completed_outputs", "available_artifacts",
+        "needs", "last_failure", "available_agents",
     }
-    assert payload["plan"]["revision"] == 2
+    assert payload["mode"] == "replan"
+    assert payload["replan_reason"] == "technical_failure"
+    assert payload["available_artifacts"] == []
     assert payload["available_agents"] == [{
         "slug": "viewer", "description": "Просмотр данных", "tags": [], "provides_keys": [],
+    }]
+
+
+def test_graph_planner_input_builder_normalizes_artifact_contexts():
+    payload = PlannerInputBuilder().build_graph_request(PlanRequest(
+        goal="Прочитать файл",
+        trigger="initial",
+        plan={"revision": 0, "tasks": {}},
+        available_artifacts=[{
+            "ref": {"artifact_id": "artifact-1", "file_name": "notes.txt", "content_type": "text/plain"},
+            "snippet": "hello",
+            "snippet_status": "ready",
+            "readable": True,
+        }],
+    ))
+
+    assert payload["available_artifacts"] == [{
+        "artifact_id": "artifact-1",
+        "file_name": "notes.txt",
+        "content_type": "text/plain",
+        "size_bytes": None,
+        "snippet": "hello",
+        "snippet_status": "ready",
+        "readable": True,
+        "truncated": False,
     }]
 
 
@@ -119,9 +147,7 @@ def test_planner_input_builder_includes_attachment_contexts():
         attachment_contexts=[
             AttachmentContext(
                 ref=AttachmentRef(
-                    id="att-1",
-                    file_id="chatatt_att-1",
-                    storage_uri="s3://bucket/key",
+                    artifact_id="artifact-1",
                     file_name="notes.txt",
                 ),
                 snippet="hello world",
@@ -141,8 +167,7 @@ def test_planner_input_builder_includes_attachment_contexts():
     assert payload["attachments"] == [
         {
             "file_name": "notes.txt",
-            "file_id": "chatatt_att-1",
-            "storage_uri": "s3://bucket/key",
+            "artifact_id": "artifact-1",
             "content_type": None,
             "size_bytes": None,
             "snippet": "hello world",
@@ -171,7 +196,7 @@ def test_synthesizer_input_builder_builds_structured_payload_with_files_and_sour
             "success": True,
             "attachments": [
                 {
-                    "file_id": "chatatt_11111111-1111-1111-1111-111111111111",
+                    "artifact_id": "11111111-1111-1111-1111-111111111111",
                     "file_name": "example.txt",
                     "download_url": "/api/v1/files/chatatt_11111111-1111-1111-1111-111111111111/download",
                 }

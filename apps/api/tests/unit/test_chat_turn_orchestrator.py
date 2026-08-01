@@ -48,7 +48,7 @@ class TestChatTurnOrchestrator:
                 chat_id="chat-1",
                 user_id="user-1",
                 content="Подтверждаю.",
-                attachment_ids=[],
+                artifact_ids=[],
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
@@ -85,7 +85,7 @@ class TestChatTurnOrchestrator:
                 "type": "final_content",
                 "content": "Hello",
                 "sources": [{"source_name": "Doc"}],
-                "attachments": [{"file_id": "chatatt_1", "file_name": "report.txt"}],
+                "attachments": [{"artifact_id": "artifact-1", "file_name": "report.txt"}],
             }
 
         store_idempotency = AsyncMock()
@@ -97,7 +97,7 @@ class TestChatTurnOrchestrator:
                 chat_id="chat-1",
                 user_id="user-1",
                 content="hello",
-                attachment_ids=[],
+                artifact_ids=[],
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key="idem-1",
@@ -116,7 +116,7 @@ class TestChatTurnOrchestrator:
         assert event_types[-1] == "status"
         assert events[-1]["stage"] == "completed"
         final_event = next(event for event in events if event["type"] == "final")
-        assert final_event["attachments"][0]["file_id"] == "chatatt_1"
+        assert final_event["attachments"][0]["artifact_id"] == "artifact-1"
         store_idempotency.assert_awaited_once_with("idem-1", "user-1", "assistant-1")
         orchestrator.turn_service.attach_user_message.assert_awaited_once()
         orchestrator.turn_service.complete_turn.assert_awaited_once()
@@ -124,7 +124,7 @@ class TestChatTurnOrchestrator:
             chat_id="chat-1",
             content="Hello",
             rag_sources=[{"source_name": "Doc"}],
-            attachments=[{"file_id": "chatatt_1", "file_name": "report.txt"}],
+            attachments=[{"artifact_id": "artifact-1", "file_name": "report.txt"}],
             extra_meta=None,
         )
 
@@ -150,7 +150,7 @@ class TestChatTurnOrchestrator:
                 chat_id="00000000-0000-0000-0000-000000000010",
                 user_id="00000000-0000-0000-0000-000000000020",
                 content="hello",
-                attachment_ids=[],
+                artifact_ids=[],
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
@@ -192,7 +192,7 @@ class TestChatTurnOrchestrator:
                 chat_id="chat-1",
                 user_id="user-1",
                 content="hello",
-                attachment_ids=[],
+                artifact_ids=[],
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
@@ -237,7 +237,7 @@ class TestChatTurnOrchestrator:
                 chat_id="chat-1",
                 user_id="user-1",
                 content="hello",
-                attachment_ids=[],
+                artifact_ids=[],
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
@@ -275,7 +275,7 @@ class TestChatTurnOrchestrator:
                 chat_id="chat-1",
                 user_id="user-1",
                 content="hello",
-                attachment_ids=[],
+                artifact_ids=[],
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
@@ -327,7 +327,7 @@ class TestChatTurnOrchestrator:
                 chat_id="chat-1",
                 user_id="user-1",
                 content="hello",
-                attachment_ids=[],
+                artifact_ids=[],
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key="idem-1",
@@ -378,7 +378,7 @@ class TestChatTurnOrchestrator:
                 chat_id="chat-1",
                 user_id="user-1",
                 content="hello",
-                attachment_ids=[],
+                artifact_ids=[],
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,

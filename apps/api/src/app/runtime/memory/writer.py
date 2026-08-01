@@ -229,6 +229,7 @@ class MemoryWriter:
         new_facts = await self._extractor.extract(
             user_message=user_message,
             agent_results=memory.agent_results,
+            artifacts=memory.artifacts,
             known_facts=known,
             user_id=memory.user_id,
             tenant_id=memory.tenant_id,
@@ -276,6 +277,7 @@ class MemoryWriter:
             user_message=user_message,
             assistant_final=assistant_final,
             agent_results=memory.agent_results,
+            artifacts=memory.artifacts,
             turn_number=memory.turn_number,
             chat_id=memory.chat_id,
             user_id=memory.user_id,

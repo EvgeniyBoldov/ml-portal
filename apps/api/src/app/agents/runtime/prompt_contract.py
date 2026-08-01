@@ -128,9 +128,9 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
         notes.append("use this to enumerate available documents when semantic search is not needed")
     if canonical == "collection.document.get":
         notes.append("document_id must come from collection.document.search or collection.document.list")
-        notes.append("use the returned file/storage reference with file.read if the document body is needed")
+        notes.append("use the returned artifact_id with file.read if the document body is needed")
     elif canonical == "collection.template.list":
-        notes.append("use this first to discover row_id and storage_uri")
+        notes.append("use this first to discover row_id and the template artifact")
     elif canonical == "collection.template.search":
         notes.append("use this to find the right template row by meaning before get_schema/fill")
     elif canonical == "collection.template.get_schema":
@@ -141,7 +141,7 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
         notes.append("row_id must come from collection.template.list")
         notes.append("call collection.template.get_schema first and use the exact field keys it returns")
         notes.append("this operation already creates the final downloadable file")
-        notes.append("after success, return download_url/file_id to the user and do not call file.generate")
+        notes.append("after success, return the resulting artifact_id and do not call file.generate")
         notes.append("do not invent row_id")
     elif canonical == "collection.sql.search_objects":
         notes.append("use this before sql execution to discover real tables, views, and columns")

@@ -677,8 +677,17 @@ class RuntimePipeline:
                 agent=str(item.get("agent_slug") or item.get("agent") or ""),
                 summary=str(item.get("summary") or ""),
                 success=bool(item.get("success", True)),
+                artifacts=list(item.get("artifacts") or []),
             )
             for item in runtime_state.agent_results
+        ]
+        turn_mem.artifacts = [
+            item.model_dump(mode="json") for item in runtime_state.attachment_contexts
+        ] + [
+            artifact
+            for item in runtime_state.agent_results
+            for artifact in (item.get("artifacts") or [])
+            if isinstance(artifact, dict)
         ]
         # Sync memory_bundle reference
         runtime_state.memory_bundle = turn_mem.memory_bundle

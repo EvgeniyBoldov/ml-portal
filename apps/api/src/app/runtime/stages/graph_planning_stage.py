@@ -90,6 +90,10 @@ class GraphPlanningStage:
             plan_id=plan.id,
             goal=plan.goal,
             available_agents=available_agents,
+            available_artifacts=[
+                item.model_dump(mode="json")
+                for item in runtime_state.attachment_contexts
+            ],
             max_steps=self._max_steps,
             planner_kwargs=planner_kwargs,
         ):

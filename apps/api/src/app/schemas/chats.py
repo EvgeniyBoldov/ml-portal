@@ -55,15 +55,12 @@ class ChatMessageStreamRequest(BaseModel):
     model: Optional[str] = Field(default=None)
     agent_slug: Optional[str] = Field(default=None)
     execution_mode: Optional[Literal["normal", "thinking"]] = Field(default=None)
-    attachment_ids: Optional[List[str]] = Field(default=None, description="Uploaded chat attachment IDs")
+    artifact_ids: Optional[List[str]] = Field(default=None, description="Chat-scoped artifact IDs")
     confirmation_tokens: Optional[List[str]] = Field(default=None, description="Confirmation tokens for gated operations")
 
 
 class ChatAttachmentUploadResponse(BaseModel):
-    id: str
-    artifact_id: Optional[str] = None
-    file_id: str
-    storage_uri: str
+    artifact_id: str
     file_name: str
     file_ext: str
     content_type: Optional[str] = None
@@ -76,15 +73,6 @@ class ChatUploadPolicyResponse(BaseModel):
     allowed_extensions: List[str]
     allowed_content_types_by_extension: Dict[str, List[str]] = Field(default_factory=dict)
 
-
-class ChatAttachmentDownloadResponse(BaseModel):
-    id: str
-    artifact_id: Optional[str] = None
-    file_id: str
-    file_name: str
-    content_type: Optional[str] = None
-    size_bytes: int
-    download_url: str
 
 class ChatTurnResponse(BaseModel):
     chat_id: Optional[str] = Field(None)

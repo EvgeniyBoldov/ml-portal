@@ -223,6 +223,7 @@ class AgentExecutor:
         buffered_answer: List[str] = []
         sub_sources: List[dict] = []
         attachments: List[Dict[str, Any]] = []
+        artifacts: List[Dict[str, Any]] = []
         final_content = ""
         final_error: Optional[str] = None
         final_error_code: Optional[str] = None
@@ -261,6 +262,9 @@ class AgentExecutor:
                         if isinstance(src, dict):
                             sub_sources.append(dict(src))
 
+                    if bool(runtime_event.data.get("success")):
+                        artifacts.extend(self._extract_artifacts(result_payload))
+
                     # Collect downloadable attachments for downstream synthesis
                     operation_name = str(runtime_event.data.get("tool") or "")
                     if operation_name in (
@@ -270,14 +274,11 @@ class AgentExecutor:
                         "instance.local-template-tools.collection.template.fill",
                     ) and bool(runtime_event.data.get("success")):
                         if isinstance(result_payload, dict):
-                            file_id = result_payload.get("file_id")
-                            if file_id:
-                                download_url = result_payload.get("download_url") or f"/api/v1/files/{file_id}/download"
+                            artifact_id = result_payload.get("artifact_id")
+                            if artifact_id:
                                 attachments.append({
-                                    "file_id": file_id,
-                                    "storage_uri": result_payload.get("storage_uri") or "",
+                                    "artifact_id": artifact_id,
                                     "file_name": result_payload.get("file_name") or result_payload.get("filename") or "file",
-                                    "download_url": download_url,
                                     "content_type": result_payload.get("content_type") or "",
                                     "size_bytes": result_payload.get("size_bytes"),
                                 })
@@ -375,6 +376,7 @@ class AgentExecutor:
                     else None
                 ),
                 "attachments": attachments,
+                "artifacts": self._dedupe_artifacts(artifacts),
             }
         )
         for fact in facts:
@@ -475,10 +477,50 @@ class AgentExecutor:
         return AgentTaskResult(
             outcome=TaskOutcome.COMPLETED,
             summary=str(payload.get("summary") or ""),
-            outputs={"summary": str(payload.get("summary") or ""), "attachments": list(payload.get("attachments") or [])},
+            outputs={
+                "summary": str(payload.get("summary") or ""),
+                "attachments": list(payload.get("attachments") or []),
+                "artifacts": list(payload.get("artifacts") or []),
+            },
         )
 
     # ---------------------------------------------------------------- helpers --
+
+    @staticmethod
+    def _extract_artifacts(payload: Any, *, limit: int = 20) -> List[Dict[str, Any]]:
+        """Extract safe opaque file references from successful tool output."""
+        result: List[Dict[str, Any]] = []
+
+        def visit(value: Any) -> None:
+            if len(result) >= limit:
+                return
+            if isinstance(value, dict):
+                artifact_id = str(value.get("artifact_id") or "").strip()
+                if artifact_id:
+                    result.append({
+                        "artifact_id": artifact_id,
+                        "file_name": value.get("file_name") or value.get("filename") or value.get("name") or value.get("title") or "artifact",
+                        "content_type": value.get("content_type"),
+                        "size_bytes": value.get("size_bytes"),
+                    })
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+
+        visit(payload)
+        return AgentExecutor._dedupe_artifacts(result)[:limit]
+
+    @staticmethod
+    def _dedupe_artifacts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen: set[str] = set()
+        return [
+            item for item in items
+            if isinstance(item, dict)
+            and (artifact_id := str(item.get("artifact_id") or "").strip())
+            and not (artifact_id in seen or seen.add(artifact_id))
+        ]
 
     @staticmethod
     def _build_sub_messages(
@@ -553,12 +595,11 @@ class AgentExecutor:
                     continue
                 ref = item.get("ref") if isinstance(item.get("ref"), dict) else {}
                 file_name = str(ref.get("file_name") or "file").strip()
-                file_id = str(ref.get("artifact_id") or ref.get("file_id") or "").strip()
-                storage_uri = str(ref.get("storage_uri") or "").strip()
+                artifact_id = str(ref.get("artifact_id") or "").strip()
                 snippet_status = str(item.get("snippet_status") or "missing").strip()
                 snippet = str(item.get("snippet") or "").strip()
                 attachment_lines.append(
-                    f"- {file_name} (artifact_id={file_id}; snippet_status={snippet_status})"
+                    f"- {file_name} (artifact_id={artifact_id}; snippet_status={snippet_status})"
                 )
                 if snippet:
                     attachment_lines.append(snippet)

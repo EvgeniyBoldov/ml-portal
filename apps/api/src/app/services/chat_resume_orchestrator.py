@@ -44,7 +44,7 @@ class ChatResumeOrchestrator:
             user_id=user_id,
             tenant_id=tenant_id,
             content=resume_content,
-            attachment_ids=[],
+            artifact_ids=[],
             idempotency_key=None,
             model=None,
             agent_slug=agent_slug,

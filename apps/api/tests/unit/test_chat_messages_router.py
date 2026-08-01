@@ -120,7 +120,7 @@ async def test_send_message_stream_passes_confirmation_tokens(monkeypatch):
             content="hello",
             execution_mode="thinking",
             confirmation_tokens=["tok-1", "tok-2"],
-            attachment_ids=[str(uuid4())],
+            artifact_ids=[str(uuid4())],
             agent_slug="default",
         ),
         request=request,

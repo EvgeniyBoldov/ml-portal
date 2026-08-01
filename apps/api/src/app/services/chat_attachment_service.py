@@ -17,11 +17,14 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.chat_attachment import ChatAttachment
 from app.models.platform_settings import PlatformSettings
-from app.services.file_delivery_service import FileDeliveryService
 from app.core.exceptions import ChatAttachmentNotFoundError
 from app.runtime.contracts import AttachmentContext, AttachmentRef
 from app.services.upload_intake_policy import UploadIntakePolicy
-from app.services.chat_artifact_reference_service import ArtifactTarget, ChatArtifactReferenceService
+from app.services.chat_artifact_reference_service import (
+    ArtifactTarget,
+    ChatArtifactReferenceNotFound,
+    ChatArtifactReferenceService,
+)
 from app.models.chat_artifact_reference import ChatArtifactReference
 from app.storage.paths import calculate_file_checksum
 
@@ -116,7 +119,6 @@ class ChatAttachmentService:
             key=key,
             status="uploaded",
         )
-        result = self._serialize_attachment(row)
         reference = await ChatArtifactReferenceService(self.session).register(
             chat_id=chat_id,
             owner_id=owner_id,
@@ -129,8 +131,7 @@ class ChatAttachmentService:
                 metadata={"status": row.status},
             ),
         )
-        result["artifact_id"] = str(reference.id)
-        return result
+        return self._artifact_metadata(reference)
 
     async def create_generated_attachment(
         self,
@@ -158,6 +159,7 @@ class ChatAttachmentService:
             )
         bucket = self.settings.S3_BUCKET_CHAT_UPLOADS
         await self._ensure_bucket(bucket)
+        supplied_metadata = dict(metadata or {})
         metadata = {"owner_id": owner_id, "checksum": checksum, "generated": "true"}
         if chat_id:
             metadata["chat_id"] = chat_id
@@ -185,7 +187,6 @@ class ChatAttachmentService:
                 key=key,
                 status="generated",
             )
-            result = self._serialize_attachment(row)
             if chat_id:
                 reference = await ChatArtifactReferenceService(self.session).register(
                     chat_id=chat_id,
@@ -196,11 +197,11 @@ class ChatAttachmentService:
                         display_name=row.file_name,
                         content_type=row.content_type,
                         size_bytes=row.size_bytes,
-                        metadata={"status": row.status, **(metadata or {})},
+                        metadata={"status": row.status, **supplied_metadata},
                     ),
                 )
-                result["artifact_id"] = str(reference.id)
-            return result
+                return self._artifact_metadata(reference)
+            raise RuntimeError("Generated artifacts require a chat-scoped artifact reference")
         except Exception:
             # A generated file is only valid once both storage and the
             # chat-scoped artifact reference exist. Remove partial state and
@@ -314,203 +315,113 @@ class ChatAttachmentService:
         await self.session.flush()
         return rows
 
-    async def get_download_link(
+    async def bind_artifacts_to_message(
         self,
         *,
+        chat_id: str,
         owner_id: str,
-        attachment_id: str,
-    ) -> dict[str, Any]:
-        try:
-            att_id = uuid.UUID(attachment_id)
-        except (TypeError, ValueError):
-            raise ChatAttachmentNotFoundError(f"Invalid attachment id: {attachment_id}")
-
-        rows = await self._fetch_rows(
-            select(ChatAttachment).where(
-                and_(
-                    ChatAttachment.id == att_id,
-                    ChatAttachment.owner_id == uuid.UUID(owner_id),
-                )
+        artifact_ids: Iterable[str],
+        message_id: str,
+    ) -> list[ChatAttachment]:
+        references = ChatArtifactReferenceService(self.session)
+        attachment_ids: list[str] = []
+        for artifact_id in artifact_ids:
+            reference = await references.get_reference(
+                artifact_id=str(artifact_id), chat_id=chat_id, owner_id=owner_id,
             )
+            if reference.target_kind == "chat_attachment":
+                attachment_ids.append(reference.target_id)
+        return await self.bind_to_message(
+            chat_id=chat_id,
+            owner_id=owner_id,
+            attachment_ids=attachment_ids,
+            message_id=message_id,
         )
-        if not rows:
-            raise ChatAttachmentNotFoundError("Attachment not found")
-        row = rows[0]
-        reference = await self.session.scalar(
-            select(ChatArtifactReference).where(
-                ChatArtifactReference.target_kind == "chat_attachment",
-                ChatArtifactReference.target_id == str(row.id),
-            )
-        )
-        file_id = FileDeliveryService.make_chat_attachment_file_id(str(row.id))
-        return {
-            "id": str(row.id),
-            "artifact_id": str(reference.id) if reference else None,
-            "file_id": file_id,
-            "storage_uri": FileDeliveryService.make_storage_uri(row.storage_bucket, row.storage_key),
-            "file_name": row.file_name,
-            "content_type": row.content_type,
-            "size_bytes": row.size_bytes,
-            "download_url": f"/api/v1/files/{file_id}/download",
-        }
 
-    @staticmethod
-    def to_meta(attachments: list[ChatAttachment]) -> list[dict[str, Any]]:
-        return [ChatAttachmentService._serialize_attachment(item) for item in attachments]
-
-    async def to_meta_with_references(self, attachments: list[ChatAttachment]) -> list[dict[str, Any]]:
-        """Serialize attachments with canonical chat artifact ids for prompts."""
-        if not attachments:
-            return []
-        ids = [str(item.id) for item in attachments]
-        result = await self.session.execute(
-            select(ChatArtifactReference).where(
-                ChatArtifactReference.target_kind == "chat_attachment",
-                ChatArtifactReference.target_id.in_(ids),
-            )
-        )
-        refs = {str(ref.target_id): str(ref.id) for ref in result.scalars().all()}
-        metadata = self.to_meta(attachments)
-        for item in metadata:
-            artifact_id = refs.get(str(item.get("id")))
-            if artifact_id:
-                item["artifact_id"] = artifact_id
-        return metadata
-
-    @staticmethod
-    def _serialize_attachment(row: ChatAttachment) -> dict[str, Any]:
-        return {
-            "id": str(row.id),
-            "file_id": FileDeliveryService.make_chat_attachment_file_id(str(row.id)),
-            "storage_uri": FileDeliveryService.make_storage_uri(row.storage_bucket, row.storage_key),
-            "file_name": row.file_name,
-            "file_ext": row.file_ext,
-            "content_type": row.content_type,
-            "size_bytes": row.size_bytes,
-            "status": row.status,
-        }
-
-    @staticmethod
-    def dedupe_meta(
-        attachments: Iterable[dict[str, Any]],
+    async def artifact_metadata(
+        self,
+        *,
+        artifact_ids: Iterable[str],
+        chat_id: str,
+        owner_id: str,
     ) -> list[dict[str, Any]]:
-        seen: set[tuple[str, str]] = set()
+        """Return the only file metadata shape allowed outside artifact adapters."""
+        references = ChatArtifactReferenceService(self.session)
         result: list[dict[str, Any]] = []
-        for item in attachments:
-            if not isinstance(item, dict):
-                continue
-            storage_uri = str(item.get("storage_uri") or "").strip()
-            file_id = str(item.get("file_id") or "").strip()
-            file_name = str(item.get("file_name") or "").strip()
-            dedupe_key = (storage_uri, file_id or file_name)
-            if not storage_uri or dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            result.append(item)
+        for raw_id in artifact_ids:
+            try:
+                reference = await references.get_reference(
+                    artifact_id=str(raw_id), chat_id=chat_id, owner_id=owner_id,
+                )
+            except ChatArtifactReferenceNotFound as exc:
+                raise ChatAttachmentNotFoundError(str(exc)) from exc
+            result.append({
+                "artifact_id": str(reference.id),
+                "file_name": reference.display_name or "artifact",
+                "file_ext": self._extension(reference.display_name),
+                "content_type": reference.content_type,
+                "size_bytes": reference.size_bytes,
+                "status": str((reference.metadata_snapshot or {}).get("status") or "ready"),
+            })
         return result
 
-    async def build_prompt_context(
+    async def build_runtime_artifact_contexts(
         self,
         *,
-        attachments: list[ChatAttachment],
-        max_chars_per_file: int = 12000,
-    ) -> str:
-        if not attachments:
-            return ""
-        lines: list[str] = [
-            "User attached files. Use them as primary context when relevant.",
-        ]
-        for item in attachments:
-            file_id = FileDeliveryService.make_chat_attachment_file_id(str(item.id))
-            reference = await self.session.scalar(
-                select(ChatArtifactReference).where(
-                    ChatArtifactReference.target_kind == "chat_attachment",
-                    ChatArtifactReference.target_id == str(item.id),
-                    ChatArtifactReference.chat_id == item.chat_id,
-                )
-            )
-            artifact_id = str(reference.id) if reference else file_id
-            lines.append(
-                f"- artifact_id={artifact_id}; name={item.file_name}; type={item.content_type or 'unknown'}; size={item.size_bytes}"
-            )
-            text_snippet = await self._load_text_content(item, max_chars=max_chars_per_file)
-            if text_snippet:
-                lines.append(f"```file name={item.file_name}")
-                lines.append(text_snippet)
-                lines.append("```")
-            else:
-                lines.append(
-                    "(binary or unsupported text extraction; if needed, ask user to provide text or supported format)"
-                )
-        return "\n".join(lines)
-
-    async def build_prompt_context_from_meta(
-        self,
-        *,
-        attachments_meta: list[dict[str, Any]],
-        max_chars_per_file: int = 12000,
-    ) -> str:
-        deduped = self.dedupe_meta(attachments_meta)
-        if not deduped:
-            return ""
-        rows: list[ChatAttachment] = []
-        for item in deduped:
-            attachment_id = str(item.get("id") or "").strip()
-            if not attachment_id:
-                continue
-            try:
-                row = await self.session.get(ChatAttachment, uuid.UUID(attachment_id))
-            except (TypeError, ValueError):
-                continue
-            if row is not None:
-                rows.append(row)
-        if not rows:
-            return ""
-        return await self.build_prompt_context(
-            attachments=rows,
-            max_chars_per_file=max_chars_per_file,
-        )
-
-    async def build_runtime_attachment_contexts(
-        self,
-        *,
-        attachments: list[ChatAttachment],
+        artifact_ids: Iterable[str],
+        chat_id: str,
+        owner_id: str,
         max_chars_per_file: int = 12000,
     ) -> list[AttachmentContext]:
+        """Resolve opaque artifacts into bounded runtime contexts.
+
+        Source identifiers and storage coordinates stay behind this boundary.
+        """
+        references = ChatArtifactReferenceService(self.session)
         contexts: list[AttachmentContext] = []
-        for item in attachments:
-            snippet = await self._load_text_content(item, max_chars=max_chars_per_file)
+        seen: set[str] = set()
+        for raw_id in artifact_ids:
+            artifact_id = str(raw_id).strip()
+            if not artifact_id or artifact_id in seen:
+                continue
+            seen.add(artifact_id)
+            try:
+                reference = await references.get_reference(
+                    artifact_id=artifact_id, chat_id=chat_id, owner_id=owner_id,
+                )
+            except ChatArtifactReferenceNotFound as exc:
+                raise ChatAttachmentNotFoundError(str(exc)) from exc
+            snippet = ""
             snippet_status = "missing"
             readable = False
             truncated = False
-            if snippet:
-                readable = True
+            if reference.target_kind == "chat_attachment":
+                try:
+                    target_id = uuid.UUID(reference.target_id)
+                except (TypeError, ValueError):
+                    raise ChatAttachmentNotFoundError("Artifact attachment target is invalid")
+                row = await self.session.get(ChatAttachment, target_id)
+                if row is None or str(row.chat_id) != str(chat_id) or str(row.owner_id) != str(owner_id):
+                    raise ChatAttachmentNotFoundError("Artifact attachment was not found or access denied")
+                snippet = await self._load_text_content(row, max_chars=max_chars_per_file) or ""
+                readable = bool(snippet)
                 truncated = snippet.endswith("\n...[truncated]")
-                snippet_status = "truncated" if truncated else "ready"
-            else:
-                payload = await s3_manager.get_object(item.storage_bucket, item.storage_key)
-                snippet_status = "unreadable" if payload else "missing"
-            reference = await self.session.scalar(
-                select(ChatArtifactReference).where(
-                    ChatArtifactReference.target_kind == "chat_attachment",
-                    ChatArtifactReference.target_id == str(item.id),
-                    ChatArtifactReference.chat_id == item.chat_id,
-                )
-            )
+                if readable:
+                    snippet_status = "truncated" if truncated else "ready"
+                else:
+                    payload = await s3_manager.get_object(row.storage_bucket, row.storage_key)
+                    snippet_status = "unreadable" if payload else "missing"
             contexts.append(
                 AttachmentContext(
                     ref=AttachmentRef(
-                        id=str(item.id),
-                        artifact_id=str(reference.id) if reference else None,
-                        file_id=FileDeliveryService.make_chat_attachment_file_id(str(item.id)),
-                        storage_uri=FileDeliveryService.make_storage_uri(item.storage_bucket, item.storage_key),
-                        file_name=item.file_name,
-                        file_ext=item.file_ext,
-                        content_type=item.content_type,
-                        size_bytes=item.size_bytes,
-                        status=item.status,
+                        artifact_id=str(reference.id),
+                        file_name=reference.display_name or "artifact",
+                        file_ext=self._extension(reference.display_name),
+                        content_type=reference.content_type,
+                        size_bytes=reference.size_bytes,
+                        status=str((reference.metadata_snapshot or {}).get("status") or "ready"),
                     ),
-                    snippet=snippet or "",
+                    snippet=snippet,
                     snippet_status=snippet_status,
                     readable=readable,
                     truncated=truncated,
@@ -518,30 +429,22 @@ class ChatAttachmentService:
             )
         return contexts
 
-    async def build_runtime_attachment_contexts_from_meta(
-        self,
-        *,
-        attachments_meta: list[dict[str, Any]],
-        max_chars_per_file: int = 12000,
-    ) -> list[AttachmentContext]:
-        deduped = self.dedupe_meta(attachments_meta)
-        rows: list[ChatAttachment] = []
-        for item in deduped:
-            attachment_id = str(item.get("id") or "").strip()
-            if not attachment_id:
-                continue
-            try:
-                row = await self.session.get(ChatAttachment, uuid.UUID(attachment_id))
-            except (TypeError, ValueError):
-                continue
-            if row is not None:
-                rows.append(row)
-        if not rows:
-            return []
-        return await self.build_runtime_attachment_contexts(
-            attachments=rows,
-            max_chars_per_file=max_chars_per_file,
-        )
+    @staticmethod
+    def _artifact_metadata(reference: ChatArtifactReference) -> dict[str, Any]:
+        return {
+            "artifact_id": str(reference.id),
+            "file_name": reference.display_name or "artifact",
+            "file_ext": ChatAttachmentService._extension(reference.display_name) or "",
+            "content_type": reference.content_type,
+            "size_bytes": reference.size_bytes or 0,
+            "status": str((reference.metadata_snapshot or {}).get("status") or "ready"),
+        }
+
+    @staticmethod
+    def _extension(file_name: Optional[str]) -> Optional[str]:
+        name = str(file_name or "").strip()
+        return name.rsplit(".", 1)[-1].lower() if "." in name else None
+
 
     async def delete_chat_attachments(
         self,

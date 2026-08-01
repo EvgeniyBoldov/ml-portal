@@ -59,7 +59,7 @@ interface ChatActions {
     onChunk: (chunk: string) => void,
     onError: (error: string) => void,
     agentSlug?: string,
-    attachmentIds?: string[],
+    artifactIds?: string[],
     attachmentMeta?: unknown[],
     confirmationTokens?: string[]
   ) => Promise<void>;
@@ -95,11 +95,9 @@ function toAttachments(value: unknown): ChatAttachmentRef[] {
     if (!item || typeof item !== 'object') return [];
     const raw = item as Record<string, unknown>;
     const artifactId = typeof raw.artifact_id === 'string' ? raw.artifact_id : '';
-    const fileId = typeof raw.file_id === 'string' ? raw.file_id : artifactId;
-    const id = typeof raw.id === 'string' ? raw.id : artifactId;
     const fileName = typeof raw.file_name === 'string' ? raw.file_name : '';
-    if (!id || !fileId || !fileName) return [];
-    return [{ id, fileId, fileName, contentType: typeof raw.content_type === 'string' ? raw.content_type : undefined, sizeBytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : undefined }];
+    if (!artifactId || !fileName) return [];
+    return [{ artifactId, fileName, contentType: typeof raw.content_type === 'string' ? raw.content_type : undefined, sizeBytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : undefined }];
   });
 }
 
@@ -238,7 +236,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     onChunk: (chunk: string) => void,
     onError: (error: string) => void,
     agentSlug?: string,
-    attachmentIds?: string[],
+    artifactIds?: string[],
     attachmentMeta?: unknown[],
     confirmationTokens?: string[]
   ) => {
@@ -318,7 +316,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           use_rag: useRag,
           agent_slug: agentSlug,
           execution_mode: 'normal',
-          attachment_ids: attachmentIds ?? [],
+          artifact_ids: artifactIds ?? [],
           confirmation_tokens: confirmationTokens ?? [],
         },
       });

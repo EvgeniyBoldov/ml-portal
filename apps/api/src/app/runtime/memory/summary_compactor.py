@@ -70,6 +70,7 @@ class SummaryCompactor:
         user_message: str,
         assistant_final: str,
         agent_results: Sequence[AgentResultSnippet],
+        artifacts: Sequence[dict[str, Any]] = (),
         turn_number: int,
         chat_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
@@ -94,6 +95,7 @@ class SummaryCompactor:
                 "user_message": user_message,
                 "assistant_final": assistant_final,
                 "agent_results": [r.model_dump() for r in agent_results],
+                "artifacts": list(artifacts),
             },
             "turn_number": turn_number,
         }

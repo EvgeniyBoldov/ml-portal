@@ -147,6 +147,10 @@ class MemoryBuilder:
             summary=summary,
             retrieved_facts=facts,
             memory_bundle=memory_bundle,
+            artifacts=[
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+                for item in (attachments or [])
+            ],
             memory_diagnostics=memory_bundle.compact_view(),
         )
 

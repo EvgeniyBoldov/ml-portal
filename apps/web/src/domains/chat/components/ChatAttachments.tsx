@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { buildFileDownloadUrl } from '@/shared/api/files';
+import { buildArtifactDownloadUrl } from '@/shared/api/files';
 import { Icon } from '@/shared/ui/Icon';
 import type { ChatAttachmentRef } from '../types';
 import styles from './ChatAttachments.module.css';
@@ -14,8 +14,8 @@ export function ChatAttachments({ attachments, variant }: ChatAttachmentsProps) 
   if (!attachments.length) return null;
 
   const openAttachment = (attachment: ChatAttachmentRef) => {
-    setOpeningId(attachment.id);
-    window.open(buildFileDownloadUrl(attachment.fileId), '_blank', 'noopener,noreferrer');
+    setOpeningId(attachment.artifactId);
+    window.open(buildArtifactDownloadUrl(attachment.artifactId), '_blank', 'noopener,noreferrer');
     setOpeningId(null);
   };
 
@@ -24,10 +24,10 @@ export function ChatAttachments({ attachments, variant }: ChatAttachmentsProps) 
       {attachments.map((attachment) => (
         <button
           className={styles.attachment}
-          key={attachment.id}
+          key={attachment.artifactId}
           type="button"
           onClick={() => openAttachment(attachment)}
-          disabled={openingId === attachment.id}
+          disabled={openingId === attachment.artifactId}
           title={variant === 'user' ? 'Открыть прикреплённый файл' : 'Открыть файл результата'}
         >
           <Icon name={variant === 'artifact' ? 'download' : 'file'} size={14} />

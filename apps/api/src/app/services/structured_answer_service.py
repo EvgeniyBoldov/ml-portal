@@ -54,20 +54,18 @@ class StructuredAnswerService:
             )
 
         for att in attachments or []:
-            file_id = att.get("file_id")
-            download_url = att.get("download_url") or att.get("url")
-            if not download_url and file_id:
-                download_url = f"/api/v1/files/{file_id}/download"
+            artifact_id = str(att.get("artifact_id") or "").strip()
+            download_url = f"/api/v1/files/{artifact_id}/download" if artifact_id else None
             name = att.get("file_name") or att.get("name") or "file"
-            if not file_id and not download_url:
+            if not artifact_id:
                 continue
             blocks.append(
                 {
                     "type": "file",
                     "label": "Generated file",
                     "name": name,
-                    "file_id": str(file_id) if file_id else None,
-                    "download_url": str(download_url) if download_url else None,
+                    "artifact_id": artifact_id,
+                    "download_url": download_url,
                     "content_type": att.get("content_type"),
                     "size_bytes": att.get("size_bytes"),
                 }

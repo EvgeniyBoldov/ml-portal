@@ -40,6 +40,7 @@ class TurnMemory:
     summary: SummaryDTO
     retrieved_facts: List[FactDTO] = field(default_factory=list)
     memory_bundle: MemoryBundle = field(default_factory=MemoryBundle)
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
 
     # --- mutated during the turn by the pipeline --------------------------
     agent_results: List[AgentResultSnippet] = field(default_factory=list)

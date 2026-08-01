@@ -45,9 +45,7 @@ export interface ChatMessage {
 }
 
 export interface ChatAttachment {
-  id: string;
-  file_id?: string;
-  storage_uri?: string;
+  artifact_id: string;
   file_name: string;
   file_ext: string;
   content_type?: string | null;
@@ -79,7 +77,7 @@ export interface ChatMessageCreateRequest {
   use_rag?: boolean;
   response_stream?: boolean;
   execution_mode?: ExecutionMode;
-  attachment_ids?: string[];
+  artifact_ids?: string[];
   confirmation_tokens?: string[];
 }
 

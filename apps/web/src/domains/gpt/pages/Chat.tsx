@@ -87,18 +87,16 @@ export default function Chat() {
 
     try {
       scrollToBottom(true);
-      let attachmentIds: string[] = [];
+      let artifactIds: string[] = [];
       let attachmentMeta: Array<Record<string, unknown>> = [];
       if (options.attachments?.length) {
         const { uploadChatAttachment } = await import('@shared/api/chats');
         const uploaded = await Promise.all(
           options.attachments.map((file) => uploadChatAttachment(chatId, file))
         );
-        attachmentIds = uploaded.map((item) => item.id);
+        artifactIds = uploaded.map((item) => item.artifact_id);
         attachmentMeta = uploaded.map((item) => ({
-          id: item.id,
-          file_id: item.file_id,
-          storage_uri: item.storage_uri,
+          artifact_id: item.artifact_id,
           file_name: item.file_name,
           file_ext: item.file_ext,
           content_type: item.content_type ?? undefined,
@@ -117,7 +115,7 @@ export default function Chat() {
           setStreamError(friendlyErr);
         },
         options.agentSlug,
-        attachmentIds,
+        artifactIds,
         attachmentMeta
       );
     } catch (e: unknown) {

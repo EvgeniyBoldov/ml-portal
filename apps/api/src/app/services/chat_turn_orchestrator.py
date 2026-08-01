@@ -39,7 +39,7 @@ class ChatTurnOrchestrator:
         user_id: str,
         tenant_id: Optional[str] = None,
         content: str,
-        attachment_ids: list[str],
+        artifact_ids: list[str],
         confirmation_tokens: Optional[list[str]] = None,
         execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         attachment_meta: list[dict[str, Any]],
@@ -60,7 +60,7 @@ class ChatTurnOrchestrator:
             runtime_run_id = str(uuid.UUID(str(continuation_run_id))) if continuation_run_id else str(uuid.uuid4())
         except (TypeError, ValueError):
             runtime_run_id = str(uuid.uuid4())
-        hash_payload = content if not attachment_ids else f"{content}||attachments:{','.join(sorted(attachment_ids))}"
+        hash_payload = content if not artifact_ids else f"{content}||artifacts:{','.join(sorted(artifact_ids))}"
         persisted_turn = await self.turn_service.start_turn(
             chat_id=chat_id,
             user_id=user_id,
@@ -81,11 +81,11 @@ class ChatTurnOrchestrator:
             )
             user_message_id = user_message.message_id  # cache scalar to survive ORM expiry
             user_message_created_at = user_message.created_at
-            if attachment_ids:
+            if artifact_ids:
                 await bind_attachments(
                     chat_id=chat_id,
                     owner_id=user_id,
-                    attachment_ids=attachment_ids,
+                    artifact_ids=artifact_ids,
                     message_id=user_message_id,
                 )
             await self.turn_service.attach_user_message(turn_id, user_message_id)

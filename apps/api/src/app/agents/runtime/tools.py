@@ -620,14 +620,10 @@ class OperationExecutionFacade:
                     "instance.local-template-tools.collection.template.fill",
                 ):
                     file_name = data.get("file_name") or data.get("filename") or "file"
-                    file_id = data.get("file_id") or ""
-                    download_url = data.get("download_url") or ""
+                    artifact_id = data.get("artifact_id") or ""
                     size_bytes = data.get("size_bytes")
                     size_str = f" ({size_bytes} bytes)" if size_bytes else ""
-                    if download_url:
-                        data_str = f"📎 [{file_name}]({download_url}){size_str} — id: `{file_id}`"
-                    else:
-                        data_str = f"📎 {file_name}{size_str} — id: `{file_id}`"
+                    data_str = f"📎 {file_name}{size_str} — artifact_id: `{artifact_id}`"
                 else:
                     try:
                         data_str = _json.dumps(

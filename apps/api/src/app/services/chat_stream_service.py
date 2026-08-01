@@ -108,10 +108,10 @@ class ChatStreamService:
         chat_id: str,
         user_id: str,
         content: str,
-        attachment_ids: Optional[list[str]] = None,
+        artifact_ids: Optional[list[str]] = None,
     ) -> Optional[Dict[str, str]]:
-        ids = attachment_ids or []
-        hash_payload = content if not ids else f"{content}||attachments:{','.join(sorted(ids))}"
+        ids = artifact_ids or []
+        hash_payload = content if not ids else f"{content}||artifacts:{','.join(sorted(ids))}"
         request_hash = self.chat_turn_service.build_request_hash(hash_payload)
         payload_mismatch = await self.chat_turn_service.has_payload_mismatch(
             chat_id=chat_id,
@@ -162,7 +162,7 @@ class ChatStreamService:
         user_id: str,
         content: str,
         tenant_id: Optional[str] = None,
-        attachment_ids: Optional[list[str]] = None,
+        artifact_ids: Optional[list[str]] = None,
         confirmation_tokens: Optional[list[str]] = None,
         execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         idempotency_key: Optional[str] = None,
@@ -180,7 +180,7 @@ class ChatStreamService:
                 chat_id=chat_id,
                 user_id=user_id,
                 content=content,
-                attachment_ids=attachment_ids,
+                artifact_ids=artifact_ids,
             )
             if turn_cached and turn_cached.get("state") == "conflict":
                 yield _safe_stream_error("idempotency_conflict", "Idempotency key was already used with different request payload")
@@ -235,29 +235,33 @@ class ChatStreamService:
                 yield _safe_stream_error("chat_not_found", "Chat not found")
                 return
 
-            attachment_rows = []
             attachment_contexts = []
-            attachment_ids = attachment_ids or []
+            artifact_ids = artifact_ids or []
+            attachment_meta: list[dict[str, Any]] = []
             context = await self.context_service.load_chat_context(chat_id, limit=12)
-            if attachment_ids:
+            if artifact_ids:
                 try:
-                    attachment_rows = await self.attachment_service.get_owned_attachments(
+                    attachment_meta = await self.attachment_service.artifact_metadata(
                         chat_id=chat_id,
                         owner_id=user_id,
-                        attachment_ids=attachment_ids,
+                        artifact_ids=artifact_ids,
                     )
                 except ChatAttachmentNotFoundError as exc:
                     logger.warning("chat_attachment_not_found: %s", exc)
                     yield _safe_stream_error("attachment_not_found", "Attachment not found or access denied")
                     return
             history_attachment_meta = self._extract_attachment_meta_from_messages(context)
-            merged_attachment_meta = self.attachment_service.dedupe_meta(
-                history_attachment_meta
-                + await self.attachment_service.to_meta_with_references(attachment_rows)
-            )
-            if merged_attachment_meta:
-                attachment_contexts = await self.attachment_service.build_runtime_attachment_contexts_from_meta(
-                    attachments_meta=merged_attachment_meta
+            history_artifact_ids = [
+                str(item.get("artifact_id") or "")
+                for item in history_attachment_meta
+                if isinstance(item, dict) and item.get("artifact_id")
+            ]
+            effective_artifact_ids = [*history_artifact_ids, *artifact_ids]
+            if effective_artifact_ids:
+                attachment_contexts = await self.attachment_service.build_runtime_artifact_contexts(
+                    artifact_ids=effective_artifact_ids,
+                    chat_id=chat_id,
+                    owner_id=user_id,
                 )
 
             async for event in self.turn_orchestrator.execute_turn(
@@ -266,10 +270,10 @@ class ChatStreamService:
                 user_id=user_id,
                 tenant_id=tenant_id,
                 content=content,
-                attachment_ids=attachment_ids,
+                artifact_ids=artifact_ids,
                 confirmation_tokens=confirmation_tokens or [],
                 execution_mode=execution_mode,
-                attachment_meta=await self.attachment_service.to_meta_with_references(attachment_rows),
+                attachment_meta=attachment_meta,
                 attachment_contexts=attachment_contexts,
                 idempotency_key=idempotency_key,
                 model=model,
@@ -278,7 +282,7 @@ class ChatStreamService:
                 persist_user_message=persist_user_message,
                 run_with_router=self._run_with_router,
                 store_idempotency=self.store_idempotency,
-                bind_attachments=self.attachment_service.bind_to_message,
+                bind_attachments=self.attachment_service.bind_artifacts_to_message,
                 preloaded_context=context,
             ):
                 yield event

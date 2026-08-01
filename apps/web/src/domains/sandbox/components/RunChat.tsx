@@ -135,7 +135,7 @@ interface Props {
   isCreatingBranch?: boolean;
   onSelectBranch: (branchId: string) => void;
   onCreateBranchFromMessage: (sourceText: string, parentRunId?: string | null) => Promise<void>;
-  onRun: (text: string, parentRunId?: string | null, attachmentIds?: string[]) => void;
+  onRun: (text: string, parentRunId?: string | null, artifactIds?: string[]) => void;
   onResumeSubmit: (text: string) => void;
   onStop: () => void;
   onSelectRun?: (runId?: string) => void;
@@ -248,14 +248,14 @@ export default function RunChat({
     const text = input.trim();
     if ((!text && attachments.length === 0) || isRunning || isReadOnly || isUploading) return;
 
-    let attachmentIds: string[] = [];
+    let artifactIds: string[] = [];
     if (attachments.length > 0) {
       try {
         setIsUploading(true);
         const uploaded = await Promise.all(
           attachments.map((item) => sandboxApi.uploadAttachment(sessionId, item.file))
         );
-        attachmentIds = uploaded.map((item) => item.id);
+        artifactIds = uploaded.map((item) => item.artifact_id);
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : 'Ошибка загрузки файла');
         setIsUploading(false);
@@ -267,7 +267,7 @@ export default function RunChat({
     setAttachments([]);
     setUploadError(null);
     setIsUploading(false);
-    onRun(text, isWaitingInput ? activeRun.runId : undefined, attachmentIds);
+    onRun(text, isWaitingInput ? activeRun.runId : undefined, artifactIds);
   };
 
   const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {

@@ -6,6 +6,7 @@ import { consumeSse, type SseFrame } from '@/shared/api/sse';
 import { sandboxApi } from '../api';
 import type {
   RuntimeProgress,
+  RuntimeJournalEvent,
   SandboxPause,
   SandboxRunCreate,
   SandboxStreamEvent,
@@ -99,6 +100,50 @@ function decodeSandboxFrame(frame: SseFrame): SandboxStreamEvent | null {
   return null;
 }
 
+/**
+ * Some sandbox streams contain the canonical HITL journal event but do not
+ * contain the legacy `pause` SSE frame. Keep the UI responsive to both forms
+ * of the protocol so clarification/confirmation controls are not lost.
+ */
+export function pauseFromJournalEvent(journal: RuntimeJournalEvent): SandboxPause | null {
+  const reason = journal.event_type === 'waiting_input'
+    ? 'waiting_input'
+    : journal.event_type === 'confirmation_required'
+      ? 'waiting_confirmation'
+      : null;
+  if (!reason) return null;
+
+  const payload = journal.payload;
+  const payloadAction = asRecord(payload.action) ?? {};
+  const payloadContext = asRecord(payload.context) ?? {};
+  const question = asString(payload.question) ?? asString(payloadContext.question) ?? asString(payloadAction.question);
+  const message = asString(payload.message) ?? asString(payloadContext.message) ?? asString(payloadAction.message);
+  const contractVersion = asNumber(payload.contract_version)
+    ?? asNumber(payloadContext.contract_version)
+    ?? asNumber(payloadAction.contract_version)
+    ?? 1;
+
+  return {
+    run_id: journal.run_id,
+    reason,
+    action: {
+      kind: reason === 'waiting_confirmation' ? 'confirm' : 'input',
+      type: 'resume',
+      reason,
+      question,
+      message,
+      ...payloadAction,
+    },
+    context: {
+      ...payloadContext,
+      ...(question ? { question } : {}),
+      ...(message ? { message } : {}),
+      contract_version: contractVersion,
+    },
+    contract_version: contractVersion,
+  };
+}
+
 function appendProgress(items: RuntimeProgress[], progress: RuntimeProgress): RuntimeProgress[] {
   const last = items[items.length - 1];
   if (last?.description === progress.description && last.phase === progress.phase && last.kind === progress.kind) return items;
@@ -125,7 +170,20 @@ export function useSandboxRun(sessionId: string) {
         setActiveRun((prev) => ({ ...prev, progress: appendProgress(prev.progress, event.progress) }));
       } else if (event.type === 'journal') {
         streamedRunId = event.journal.run_id;
-        setActiveRun((prev) => ({ ...prev, trace: applyRuntimeJournalEvent(prev.trace, event.journal) }));
+        const journalPause = pauseFromJournalEvent(event.journal);
+        if (journalPause) {
+          paused = true;
+          setActiveRun((prev) => ({
+            ...prev,
+            trace: applyRuntimeJournalEvent(prev.trace, event.journal),
+            status: journalPause.reason,
+            pendingConfirmation: journalPause,
+            finalContent: '',
+          }));
+          finalContent = '';
+        } else {
+          setActiveRun((prev) => ({ ...prev, trace: applyRuntimeJournalEvent(prev.trace, event.journal) }));
+        }
       } else if (event.type === 'delta') {
         streamedRunId = event.runId;
         finalContent += event.content;
@@ -174,7 +232,7 @@ export function useSandboxRun(sessionId: string) {
     requestText: string,
     parentRunId?: string | null,
     branchId?: string | null,
-    attachmentIds?: string[],
+    artifactIds?: string[],
   ) => {
     abortRef.current?.abort();
     setActiveRun({ ...INITIAL_RUN, requestText, startedAt: new Date().toISOString(), status: 'running' });
@@ -184,7 +242,7 @@ export function useSandboxRun(sessionId: string) {
       const { fetchStreamWithAuth } = await import('@/shared/api/streamAuth');
       const body: SandboxRunCreate = {
         request_text: requestText, branch_id: branchId ?? undefined, parent_run_id: parentRunId ?? undefined,
-        attachment_ids: attachmentIds?.length ? attachmentIds : undefined, execution_mode: 'normal',
+        artifact_ids: artifactIds?.length ? artifactIds : undefined, execution_mode: 'normal',
       };
       const response = await fetchStreamWithAuth(`/sandbox/sessions/${sessionId}/run`, { body, signal: controller.signal });
       if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);

@@ -134,9 +134,9 @@ export default function SandboxSessionPage() {
   const isOwner = user?.id === session?.owner_id;
   const isReadOnly = !isOwner;
 
-  const handleRun = (text: string, parentRunId?: string | null, attachmentIds?: string[]) => {
+  const handleRun = (text: string, parentRunId?: string | null, artifactIds?: string[]) => {
     if (isReadOnly) return;
-    sandboxRun.run(text, parentRunId, activeBranchId || undefined, attachmentIds);
+    sandboxRun.run(text, parentRunId, activeBranchId || undefined, artifactIds);
   };
 
   const handleSelectRun = (runId?: string) => {

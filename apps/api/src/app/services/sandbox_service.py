@@ -337,6 +337,7 @@ class SandboxService:
         snapshot_id: UUID,
         request_text: str,
         effective_config: Dict[str, Any],
+        input_artifact_ids: Optional[list[str]] = None,
         parent_run_id: Optional[UUID] = None,
     ) -> SandboxRun:
         return await self.run_manager.create_run(
@@ -345,6 +346,7 @@ class SandboxService:
             snapshot_id=snapshot_id,
             request_text=request_text,
             effective_config=effective_config,
+            input_artifact_ids=input_artifact_ids,
             parent_run_id=parent_run_id,
         )
 
@@ -355,6 +357,7 @@ class SandboxService:
         branch_id: UUID,
         user_id: UUID,
         request_text: str,
+        input_artifact_ids: Optional[list[str]] = None,
         parent_run_id: Optional[UUID] = None,
     ) -> SandboxRunPreparation:
         """Create snapshot, resolve effective config, and create run in one contract."""
@@ -363,6 +366,7 @@ class SandboxService:
             branch_id=branch_id,
             user_id=user_id,
             request_text=request_text,
+            input_artifact_ids=input_artifact_ids,
             parent_run_id=parent_run_id,
         )
 

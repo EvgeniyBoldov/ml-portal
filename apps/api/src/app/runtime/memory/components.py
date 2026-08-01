@@ -595,7 +595,7 @@ class AttachmentMemoryComponent:
             ref = attachment.ref
             base = (
                 f"{ref.file_name} "
-                f"(file_id={ref.file_id}; storage_uri={ref.storage_uri}; "
+                f"(artifact_id={ref.artifact_id}; "
                 f"type={ref.content_type or 'unknown'}; size={ref.size_bytes or 0})"
             )
             if attachment.snippet:
@@ -606,13 +606,11 @@ class AttachmentMemoryComponent:
                 MemoryItem(
                     text=base,
                     source="chat.attachments",
-                    subject=ref.file_id,
+                    subject=ref.artifact_id,
                     score=0.9 if attachment.readable else 0.5,
                     metadata={
-                        "attachment_id": ref.id,
                         "file_name": ref.file_name,
-                        "file_id": ref.file_id,
-                        "storage_uri": ref.storage_uri,
+                        "artifact_id": ref.artifact_id,
                         "snippet_status": attachment.snippet_status,
                         "readable": attachment.readable,
                         "truncated": attachment.truncated,

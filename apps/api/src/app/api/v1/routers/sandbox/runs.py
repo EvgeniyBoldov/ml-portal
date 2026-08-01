@@ -294,6 +294,7 @@ async def run_sandbox(
         branch_id=branch_id,
         user_id=user_uuid(user),
         request_text=data.request_text,
+        input_artifact_ids=[str(item) for item in (data.artifact_ids or [])],
         parent_run_id=data.parent_run_id,
     )
     await db.commit()
@@ -314,23 +315,17 @@ async def run_sandbox(
     # sandbox chat before it can register generated artifacts against its FK.
     await db.commit()
     attachment_service = ChatAttachmentService(db)
-    attachment_meta: list[dict] = []
     attachment_contexts = []
 
-    if data.attachment_ids:
+    if data.artifact_ids:
         try:
-            rows = await attachment_service.get_owned_attachments_any_chat(
+            attachment_contexts = await attachment_service.build_runtime_artifact_contexts(
+                artifact_ids=[str(item) for item in data.artifact_ids],
+                chat_id=str(sandbox_chat_id),
                 owner_id=str(u_uuid),
-                attachment_ids=[str(item) for item in data.attachment_ids],
             )
         except ChatAttachmentNotFoundError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        attachment_meta = attachment_service.dedupe_meta(
-            await attachment_service.to_meta_with_references(rows)
-        )
-        attachment_contexts = await attachment_service.build_runtime_attachment_contexts_from_meta(
-            attachments_meta=attachment_meta
-        )
 
     # Resolve overrides
     sandbox_resolver = RuntimeSandboxResolver()
@@ -732,10 +727,10 @@ async def resume_sandbox_run(
     )
     await db.commit()
     attachment_service = ChatAttachmentService(db)
-    prior_events = await RuntimeEventJournalService(db).list_run_events(run_id)
-    attachment_meta = _extract_attachment_meta_from_events(list(prior_events))
-    attachment_contexts = await attachment_service.build_runtime_attachment_contexts_from_meta(
-        attachments_meta=attachment_meta
+    attachment_contexts = await attachment_service.build_runtime_artifact_contexts(
+        artifact_ids=list(run.input_artifact_ids or []),
+        chat_id=str(sandbox_chat_id),
+        owner_id=str(u_uuid),
     )
 
     # Preserve the runtime execution identity for continuation lineage.
