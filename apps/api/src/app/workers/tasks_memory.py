@@ -11,7 +11,6 @@ import os
 import json
 from typing import Any, Dict, List, Optional
 from uuid import UUID
-from uuid import uuid4
 
 from celery import shared_task
 from pydantic import BaseModel, Field
@@ -25,7 +24,7 @@ from app.runtime.memory.dto import SummaryDTO, FactDTO
 from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.memory.writer import MemoryWriter
-from app.runtime.events import RuntimeEvent
+from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.entity_ids import memory_component_entity_id, memory_orchestrator_id as make_memory_orchestrator_id
 from app.services.system_llm_role_service import SystemLLMRoleService
 from app.services.runtime_event_logger import RuntimeEventJournalFactory
@@ -258,10 +257,23 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     )
                 )
 
-            async def _on_llm_event(component_name: str, llm_payload: dict[str, Any]) -> None:
-                parent_id = component_entity_ids.get(component_name, memory_orchestrator_id)
-                messages = llm_payload.get("messages")
-                response_text = llm_payload.get("response")
+            llm_token_inputs: dict[str, int] = {}
+
+            async def _on_llm_event(component_name: str, event: RuntimeEvent) -> None:
+                event_data = dict(event.data or {})
+                llm_call_id = str(event_data.get("llm_call_id") or "")
+                if event.type == RuntimeEventType.LLM_REQUEST:
+                    messages = event_data.get("messages")
+                    request_text = "\n".join(
+                        str((message or {}).get("content") or "")
+                        for message in (messages or [])
+                        if isinstance(message, dict)
+                    )
+                    llm_token_inputs[llm_call_id] = max(0, len(request_text) // 4)
+                    await _publish(event)
+                    return
+
+                response_text = event_data.get("response")
                 if isinstance(response_text, str) and response_text.strip():
                     try:
                         parsed = json.loads(response_text)
@@ -269,26 +281,16 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             llm_structured_result[component_name] = parsed
                     except Exception:
                         pass
-                tokens_in = int(llm_payload.get("tokens_in") or 0)
-                tokens_out = int(llm_payload.get("tokens_out") or 0)
-                tokens_total = int(llm_payload.get("tokens_total") or (tokens_in + tokens_out))
+                tokens_in = llm_token_inputs.pop(llm_call_id, 0)
+                tokens_out = max(0, len(str(response_text or "")) // 4)
+                tokens_total = tokens_in + tokens_out
+                event_data.update(
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    tokens_total=tokens_total,
+                )
                 await _publish(
-                    RuntimeEvent.llm_response(
-                        llm_call_id=str(uuid4()),
-                        parent_entity_type="agent_execution",
-                        parent_entity_id=parent_id,
-                        purpose=str(llm_payload.get("role") or component_name),
-                        model=llm_payload.get("model"),
-                        temperature=(llm_payload.get("params") or {}).get("temperature"),
-                        max_tokens=(llm_payload.get("params") or {}).get("max_tokens"),
-                        messages=messages if isinstance(messages, list) else None,
-                        content=str(response_text) if isinstance(response_text, str) else None,
-                        response=str(response_text) if isinstance(response_text, str) else None,
-                        duration_ms=llm_payload.get("duration_ms"),
-                        tokens_in=tokens_in,
-                        tokens_out=tokens_out,
-                        tokens_total=tokens_total,
-                    )
+                    RuntimeEvent(event.type, event_data)
                 )
                 await _emit_budget_snapshot(
                     entity_type="agent_execution",
@@ -320,7 +322,8 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
             writer = MemoryWriter(
                 session=session,
                 llm_client=llm_client,
-                llm_event_callback=_on_llm_event,
+                llm_event_sink=_on_llm_event,
+                component_execution_ids=component_entity_ids,
             )
             component_prompts = await _load_memory_prompts(session)
             
@@ -421,9 +424,11 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                         memory_component_entity_id(payload.runtime_run_id or payload.chat_id or "unknown", component_name, index),
                     )
                     component_status = str(item.get("status") or "completed")
-                    lifecycle_status = "failed" if component_status == "failed" else (
-                        "paused" if component_status in {"degraded", "skipped"} else "completed"
-                    )
+                    # A skipped/degraded memory component is a completed
+                    # post-response attempt with a non-fatal result.  It is
+                    # not a HITL pause and must not put the trace stage on
+                    # hold in the UI.
+                    lifecycle_status = "failed" if component_status == "failed" else "completed"
                     await _publish(
                         RuntimeEvent.status(
                             "memory_component_result",
@@ -510,6 +515,14 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             parent_entity_type="orchestrator",
                             agent_slug=component_name,
                             status=lifecycle_status,
+                            outcome=component_status,
+                            summary=(
+                                f"Новых фактов: {int(item.get('inserted_count') or 0)}"
+                                if component_name == "facts"
+                                else "Сводка диалога обновлена"
+                                if component_name == "conversation" and component_status == "ok"
+                                else None
+                            ),
                         )
                     )
             except Exception:

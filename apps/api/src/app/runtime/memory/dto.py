@@ -31,8 +31,10 @@ class FactDTO:
     # Optional scoping context — required-ness depends on scope and is
     # enforced by FactStore.upsert_with_supersede, not here.
     tenant_id: Optional[UUID] = None
-    user_id: Optional[UUID] = None
-    chat_id: Optional[UUID] = None
+    owner_type: Optional[str] = None
+    owner_id: Optional[UUID] = None
+    kind: str = "fact"
+    metadata: Dict[str, object] = field(default_factory=dict)
 
     confidence: float = 1.0
     source_ref: Optional[str] = None
@@ -53,12 +55,12 @@ class FactDTO:
         """
         if self.scope != other.scope or self.subject != other.subject:
             return False
-        if self.scope == FactScope.CHAT:
-            return self.chat_id == other.chat_id
         if self.scope == FactScope.USER:
-            return self.user_id == other.user_id
+            return self.owner_id == other.owner_id
         if self.scope == FactScope.TENANT:
-            return self.tenant_id == other.tenant_id
+            return self.owner_id == other.owner_id
+        if self.scope == FactScope.PROJECT:
+            return self.owner_type == other.owner_type and self.owner_id == other.owner_id
         return False
 
 

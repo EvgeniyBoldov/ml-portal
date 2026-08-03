@@ -30,8 +30,9 @@ from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.summary_compactor import SummaryCompactor
 from app.runtime.memory.summary_store import SummaryStore
 from app.runtime.memory.transport import TurnMemory
-from app.runtime.memory.user_facts_service import LongTermFactsService
+from app.runtime.memory.service import MemoryService
 from app.runtime.contracts import PipelineStopReason
+from app.runtime.events import RuntimeEvent
 
 logger = get_logger(__name__)
 
@@ -93,14 +94,17 @@ class MemoryWriter:
         *,
         session: AsyncSession,
         llm_client: LLMClientProtocol,
-        llm_event_callback: Optional[Callable[[str, dict[str, Any]], Awaitable[None]]] = None,
+        llm_event_sink: Optional[Callable[[str, RuntimeEvent], Awaitable[None]]] = None,
+        component_execution_ids: Optional[dict[str, str]] = None,
     ) -> None:
         self._session = session
         self._fact_store = FactStore(session)
+        self._memory_service = MemoryService(fact_store=self._fact_store)
         self._summary_store = SummaryStore(session)
         self._extractor = FactExtractor(session=session, llm_client=llm_client)
         self._compactor = SummaryCompactor(session=session, llm_client=llm_client)
-        self._llm_event_callback = llm_event_callback
+        self._llm_event_sink = llm_event_sink
+        self._component_execution_ids = dict(component_execution_ids or {})
         # Single AsyncSession is not concurrency-safe for writes.
         # We still parallelize LLM-heavy component logic and serialize DB writes.
         self._db_write_lock = asyncio.Lock()
@@ -235,28 +239,22 @@ class MemoryWriter:
             tenant_id=memory.tenant_id,
             chat_id=memory.chat_id,
             sandbox_overrides=sandbox_overrides,
-            llm_event_callback=(
-                (lambda payload: self._llm_event_callback("facts", payload))
-                if self._llm_event_callback
+            llm_event_sink=(
+                (lambda event: self._llm_event_sink("facts", event))
+                if self._llm_event_sink
                 else None
             ),
-        )
-        long_term = LongTermFactsService(
-            fact_store=self._fact_store,
-            user_id=memory.user_id,
-            tenant_id=memory.tenant_id,
+            agent_execution_id=self._component_execution_ids.get("facts"),
         )
         if memory.chat_id is None or not persist_chat_scoped:
             if branch_id is not None:
                 await self._write_branch_facts(branch_id=branch_id, facts=new_facts)
             return len(new_facts)
         async with self._db_write_lock:
-            long_term_saved = await long_term.save_for_runtime(facts=new_facts)
-            for fact in new_facts:
-                if fact.scope in (FactScope.USER, FactScope.TENANT):
-                    continue
-                await self._fact_store.upsert_with_supersede(fact)
-        return max(long_term_saved, len(new_facts))
+            saved = await self._memory_service.write_extracted(
+                facts=new_facts, user_id=memory.user_id, tenant_id=memory.tenant_id
+            )
+        return saved
 
     # -------------------------------------------------------------- summary
 
@@ -283,11 +281,12 @@ class MemoryWriter:
             user_id=memory.user_id,
             tenant_id=memory.tenant_id,
             sandbox_overrides=sandbox_overrides,
-            llm_event_callback=(
-                (lambda payload: self._llm_event_callback("conversation", payload))
-                if self._llm_event_callback
+            llm_event_sink=(
+                (lambda event: self._llm_event_sink("conversation", event))
+                if self._llm_event_sink
                 else None
             ),
+            agent_execution_id=self._component_execution_ids.get("conversation"),
         )
         # Maintain raw_tail locally — the LLM is explicitly told not to
         # touch it. We append user+assistant pair to the existing tail
@@ -450,7 +449,7 @@ def _resolve_sandbox_branch_id(sandbox_overrides: Optional[dict]) -> Optional[UU
 
 
 def _fact_to_artifact_row(fact: Any) -> dict[str, Any]:
-    scope_value = getattr(fact, "scope", FactScope.CHAT)
+    scope_value = getattr(fact, "scope", FactScope.USER)
     if hasattr(scope_value, "value"):
         scope_value = scope_value.value
     source_value = getattr(fact, "source", "user_utterance")

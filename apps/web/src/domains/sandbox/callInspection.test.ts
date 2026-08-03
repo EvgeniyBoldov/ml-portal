@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { callDisplayName, llmResponseContent, llmResponseStatus, parseCallContent, sanitizeDisplay, toDisplayEntries, toolResult } from './callInspection';
+import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, parseCallContent, sanitizeDisplay, toDisplayEntries, toolResult } from './callInspection';
 
 describe('call inspection projection', () => {
   it('parses fenced tool calls into structured data', () => {
@@ -34,5 +34,13 @@ describe('call inspection projection', () => {
     expect(llmResponseContent({ parsed_response: {}, response: '{"answer":"ok"}', content: 'ignored' })).toBe('{"answer":"ok"}');
     expect(llmResponseStatus({ parsed_response: {}, response: '' })).toBe('empty');
     expect(llmResponseStatus({ content: 'answer', error_type: 'ProviderError' })).toBe('error');
+  });
+
+  it('classifies LLM outcomes by returned action instead of text presence', () => {
+    expect(llmOutcome({ content: '' }, 2)).toEqual({ kind: 'tools', label: 'Инструменты', count: 2 });
+    expect(llmOutcome({ purpose: 'planning_decision', content: '{"action":"apply_graph","tasks":[{},{}]}' })).toEqual({ kind: 'plan', label: 'План', count: 2 });
+    expect(llmOutcome({ purpose: 'planning_decision', content: '{"action":"ask_user"}' })).toEqual({ kind: 'clarify', label: 'Уточнение' });
+    expect(llmOutcome({ purpose: 'planning_decision', content: '{"action":"complete"}' })).toEqual({ kind: 'complete', label: 'Готово' });
+    expect(llmOutcome({ content: '' })).toEqual({ kind: 'empty', label: 'Пусто' });
   });
 });

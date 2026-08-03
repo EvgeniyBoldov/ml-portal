@@ -49,6 +49,10 @@ from app.agents.runtime.published_capabilities import (
     serialize_published_collections,
     serialize_published_operations,
 )
+from app.agents.runtime.llm_errors import (
+    LLMRequestTooLargeError,
+    LLMToolCallingUnsupportedError,
+)
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.agents.runtime.prompt_assembler import filter_prompt_visible_operations
 from app.core.logging import get_logger
@@ -327,6 +331,7 @@ class AgentToolRuntime(BaseRuntime):
         tools_payload = build_tools_payload(prompt_visible_operations) if native_tool_calling else None
         tool_ledger = ctx.extra.get("runtime_tool_ledger")
         reuse_enabled = bool(ctx.extra.get("runtime_tool_reuse_enabled", True))
+        seen_native_tool_calls: set[tuple[str, str]] = set()
 
         try:
             for step in range(policy.max_steps):
@@ -380,6 +385,20 @@ class AgentToolRuntime(BaseRuntime):
                     return
                 effective_max_tokens = boundary.output_tokens if boundary.output_tokens is not None else gen.max_tokens
                 raw_response_dict: Optional[Dict[str, Any]] = None
+                yield RuntimeEvent.llm_request(
+                    llm_call_id=llm_call_id,
+                    model=gen.model,
+                    temperature=gen.temperature,
+                    max_tokens=effective_max_tokens,
+                    messages=llm_messages,
+                    parent_entity_type="agent_execution",
+                    parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
+                    agent_slug=agent.slug,
+                    purpose="tool_decision_or_answer",
+                    actor_type="agent",
+                    actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                )
                 try:
                     if native_tool_calling and tools_payload:
                         raw_response_dict = await self.llm.call_raw(
@@ -410,6 +429,46 @@ class AgentToolRuntime(BaseRuntime):
                         gen.model,
                     )
                     raise
+                except LLMToolCallingUnsupportedError as exc:
+                    if native_tool_calling:
+                        native_tool_calling = False
+                        tools_payload = None
+                        loop_state.force_tool_choice = False
+                        await run_session.record_event(
+                            "protocol_retry",
+                            {
+                                "step": step + 1,
+                                "reason": "native_tool_calling_unsupported",
+                                "fallback": "plaintext_tool_call_protocol",
+                            },
+                        )
+                        yield RuntimeEvent(
+                            RuntimeEventType.PROTOCOL_RETRY,
+                            {
+                                "reason": "native_tool_calling_unsupported",
+                                "fallback": "plaintext_tool_call_protocol",
+                            },
+                        )
+                        continue
+                    raise
+                except LLMRequestTooLargeError as exc:
+                    message = str(exc)
+                    yield RuntimeEvent.error(
+                        message,
+                        recoverable=False,
+                        error_code=exc.code,
+                        retryable=False,
+                        user_message=exc.user_message,
+                        operator_message=message,
+                        source="llm",
+                        error_type=type(exc).__name__,
+                        parent_entity_type="agent_execution",
+                        parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                        agent_slug=agent.slug,
+                        agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
+                    )
+                    await run_session.finish("failed", message)
+                    return
                 except Exception as exc:
                     logger.exception(
                         "Agent LLM call failed run_id=%s agent=%s step=%s model=%s exception_type=%s",
@@ -426,7 +485,7 @@ class AgentToolRuntime(BaseRuntime):
                         recoverable=True,
                         error_code="agent_llm_call_error",
                         retryable=True,
-                        user_message="The language model request failed. Please try again.",
+                        user_message="Модель не смогла обработать запрос. Попробуйте повторить позже.",
                         operator_message=message,
                         source="llm",
                         error_type=type(exc).__name__,
@@ -477,20 +536,6 @@ class AgentToolRuntime(BaseRuntime):
                     "actor_type": "agent",
                     "actor_entity_id": str(run_session.run_id) if run_session.run_id else None,
                 }, duration_ms=llm_duration, tokens_in=max(0, prompt_tokens), tokens_out=max(0, completion_tokens))
-                yield RuntimeEvent.llm_request(
-                    llm_call_id=llm_call_id,
-                    model=gen.model,
-                    temperature=gen.temperature,
-                    max_tokens=effective_max_tokens,
-                    messages=llm_messages,
-                    parent_entity_type="agent_execution",
-                    parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                    agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
-                    agent_slug=agent.slug,
-                    purpose="tool_decision_or_answer",
-                    actor_type="agent",
-                    actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                )
                 yield RuntimeEvent.llm_response(
                     llm_call_id=llm_call_id,
                     step=step + 1,
@@ -518,7 +563,10 @@ class AgentToolRuntime(BaseRuntime):
                 strict_protocol = bool(platform_config.get("strict_operation_protocol", False))
                 parsed = None
                 if native_tool_calling and raw_response_dict is not None:
-                    parsed = parse_native_tool_calls(raw_response_dict)
+                    parsed = parse_native_tool_calls(
+                        raw_response_dict,
+                        seen_tools=seen_native_tool_calls,
+                    )
                 if parsed is None:
                     parsed = parse_llm_response(raw_response, strict=strict_protocol)
 
@@ -1151,21 +1199,23 @@ class AgentToolRuntime(BaseRuntime):
         sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """Handle case when agent decides not to call tools."""
-        if all_operation_outputs:
-            async for ev in self._synthesize_answer(
-                exec_request, original_messages,
-                all_operation_outputs, all_sources, gen, run_session, sandbox_overrides,
-            ):
-                yield ev
-        elif parsed.text.strip():
-            # Stream the agent's text response directly
+        if parsed.text.strip():
+            # A non-tool response is already the agent's final answer.  Do not
+            # discard it and invoke another synthesis model call merely because
+            # earlier steps produced tool outputs.
             yield RuntimeEvent.status("generating_answer")
             yield RuntimeEvent.delta(parsed.text)
             yield RuntimeEvent.final(
                 parsed.text,
                 all_sources,
-                run_id=str(exec_request.run_id),
+                run_id=str(run_session.run_id or exec_request.run_id),
             )
+        elif all_operation_outputs:
+            async for ev in self._synthesize_answer(
+                exec_request, original_messages,
+                all_operation_outputs, all_sources, gen, run_session, sandbox_overrides,
+            ):
+                yield ev
         else:
             # Empty response fallback — re-stream
             yield RuntimeEvent.status("generating_answer")
@@ -1182,7 +1232,7 @@ class AgentToolRuntime(BaseRuntime):
             yield RuntimeEvent.final(
                 full_content,
                 all_sources,
-                run_id=str(exec_request.run_id),
+                run_id=str(run_session.run_id or exec_request.run_id),
             )
 
     async def _synthesize_answer(
@@ -1206,6 +1256,22 @@ class AgentToolRuntime(BaseRuntime):
         )
 
         yield RuntimeEvent.status("generating_answer")
+        llm_call_id = str(uuid4())
+        llm_start = time.time()
+        yield RuntimeEvent.llm_request(
+            llm_call_id=llm_call_id,
+            model=gen.model,
+            temperature=gen.temperature,
+            max_tokens=gen.max_tokens,
+            messages=synthesis_messages,
+            parent_entity_type="agent_execution",
+            parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+            agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
+            agent_slug=exec_request.agent.slug,
+            purpose="final_answer",
+            actor_type="agent",
+            actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
+        )
         answer_parts: List[str] = []
         async for chunk in self.llm.stream(
             messages=synthesis_messages, model=gen.model,
@@ -1216,8 +1282,31 @@ class AgentToolRuntime(BaseRuntime):
             yield RuntimeEvent.delta(chunk)
 
         full_answer = "".join(answer_parts)
+        llm_duration = int((time.time() - llm_start) * 1000)
+        prompt_tokens = _estimate_tokens(json.dumps(synthesis_messages, ensure_ascii=False, default=str))
+        completion_tokens = _estimate_tokens(full_answer)
+        yield RuntimeEvent.llm_response(
+            llm_call_id=llm_call_id,
+            model=gen.model,
+            temperature=gen.temperature,
+            max_tokens=gen.max_tokens,
+            messages=synthesis_messages,
+            content=full_answer,
+            response_length=len(full_answer),
+            tokens_in=prompt_tokens,
+            tokens_out=completion_tokens,
+            tokens_total=prompt_tokens + completion_tokens,
+            duration_ms=llm_duration,
+            parent_entity_type="agent_execution",
+            parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+            agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
+            agent_slug=exec_request.agent.slug,
+            purpose="final_answer",
+            actor_type="agent",
+            actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
+        )
         yield RuntimeEvent.final(
             full_answer,
             sources,
-            run_id=str(exec_request.run_id),
+            run_id=str(run_session.run_id or exec_request.run_id),
         )

@@ -10,4 +10,13 @@ describe('ChatAttachments', () => {
     expect(open).toHaveBeenCalledWith(expect.stringContaining('/api/v1/files/'), '_blank', 'noopener,noreferrer');
     open.mockRestore();
   });
+
+  it('uses the download URL supplied by the backend', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(<ChatAttachments variant="artifact" attachments={[{ artifactId: 'artifact-1', fileName: 'result.xlsx', downloadUrl: '/api/v1/files/artifact-1/download' }]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /result.xlsx/i }));
+    expect(open).toHaveBeenCalledWith('/api/v1/files/artifact-1/download', '_blank', 'noopener,noreferrer');
+    open.mockRestore();
+  });
 });

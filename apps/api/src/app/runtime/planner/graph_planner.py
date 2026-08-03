@@ -1,8 +1,7 @@
 """LLM-backed graph planner.
 
 This is deliberately a small decision engine: it proposes a complete graph
-mutation, while the orchestrator validates and executes that mutation.  It
-never invokes an agent or a tool itself.
+mutation, while the orchestrator validates and executes that mutation.
 """
 from __future__ import annotations
 
@@ -46,6 +45,14 @@ class PlannerGraphOutput(BaseModel):
         if not isinstance(value, dict):
             return value
         normalized = dict(value)
+        # Some OpenAI-compatible models serialize optional collection fields
+        # as JSON null even though the runtime contract exposes them as lists.
+        # Treat null as the empty collection before Pydantic validation. This
+        # prevents StructuredLLMCall from spending all retries on the same
+        # harmless protocol mismatch.
+        for field_name in ("tasks", "remove_task_ids"):
+            if normalized.get(field_name) is None:
+                normalized[field_name] = []
         legacy_action = normalized.get("action") or normalized.get("decision")
         mapping = {
             "create_plan": "apply_graph",

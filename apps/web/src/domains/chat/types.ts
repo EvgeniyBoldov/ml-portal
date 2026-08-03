@@ -3,6 +3,7 @@ export type ChatRole = 'user' | 'assistant';
 export interface ChatAttachmentRef {
   artifactId: string;
   fileName: string;
+  downloadUrl?: string;
   contentType?: string;
   sizeBytes?: number;
 }
@@ -41,6 +42,11 @@ export interface ChatRuntimeProgress {
   description: string;
   status?: string;
   createdAt: string;
+  // Reserved for future safe runtime projections. These fields must only be
+  // populated from the public chat SSE contract, never from a raw trace.
+  title?: string;
+  objective?: string;
+  summary?: string;
 }
 
 export interface ActiveChatRun {

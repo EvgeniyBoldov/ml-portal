@@ -143,6 +143,7 @@ class InMemoryPlanStore:
                 expected_outputs=task.get("expected_outputs", []),
                 depends_on=task.get("depends_on", []),
                 needs=task.get("needs", []),
+                on_success=task.get("on_success", "continue"),
             )
             for task_id, task in plan["tasks"].items()
             if task_id not in set(patch.remove_task_ids)
@@ -191,6 +192,8 @@ class InMemoryPlanStore:
             plan["status"] = PlanStatus.FAILED.value
         else:
             plan["status"] = PlanStatus.ACTIVE.value
+        if patch.answer_brief is not None:
+            plan["answer_brief"] = patch.answer_brief
         self.revisions[plan_id].append({
             "revision": plan["revision"],
             "reason": reason,
@@ -256,9 +259,6 @@ class InMemoryPlanStore:
                     "task_id": task_id, **need.model_dump(mode="json", by_alias=True),
                     "status": RequirementStatus.PENDING.value, "resolved_value": None,
                 }
-        elif result.outcome == TaskOutcome.NEEDS_USER_INPUT:
-            task["status"] = TaskStatus.WAITING_USER.value
-            plan["status"] = PlanStatus.WAITING_INPUT.value
         else:
             task["status"] = TaskStatus.UNFULFILLABLE.value
         self.refresh_ready(plan_id)
@@ -357,6 +357,7 @@ class SqlPlanStore:
             task_id=row.task_id, intent=row.intent, instructions=row.instructions,
             executor=row.executor, inputs=row.inputs or {},
             depends_on=dependencies_by_task[row.task_id],
+            on_success=row.on_success,
         ) for row in existing_rows if row.task_id in existing_ids}
         # ``revise_plan`` is a delta: a supplied task replaces its own
         # definition and dependencies; omitted tasks stay untouched.
@@ -387,6 +388,7 @@ class SqlPlanStore:
                             plan_id=plan_id, task_id=item.task_id, intent=item.intent,
                             instructions=item.instructions, executor=item.executor, inputs=item.inputs,
                             expected_outputs=[output.model_dump(mode="json", by_alias=True) for output in item.expected_outputs],
+                            on_success=item.on_success.value,
                             planned_order=index, status=TaskStatus.PENDING.value,
                         )
                         self.session.add(task)
@@ -395,6 +397,7 @@ class SqlPlanStore:
                         task.intent, task.instructions, task.executor = item.intent, item.instructions, item.executor
                         task.inputs = item.inputs
                         task.expected_outputs = [output.model_dump(mode="json", by_alias=True) for output in item.expected_outputs]
+                        task.on_success = item.on_success.value
                         task.planned_order = index
                     await self.session.execute(delete(RuntimeTaskDependency).where(
                         RuntimeTaskDependency.plan_id == plan_id, RuntimeTaskDependency.task_id == item.task_id,
@@ -415,6 +418,8 @@ class SqlPlanStore:
                     "complete_plan": PlanStatus.COMPLETED.value,
                     "fail_plan": PlanStatus.FAILED.value,
                 }.get(patch.decision.value, PlanStatus.ACTIVE.value)
+                if patch.answer_brief is not None:
+                    plan.answer_brief = patch.answer_brief
                 self.session.add(RuntimePlanRevision(
                     plan_id=plan_id, revision=plan.revision, reason=reason,
                     patch=patch.model_dump(mode="json", by_alias=True), planner_invocation_id=planner_invocation_id,
@@ -451,6 +456,7 @@ class SqlPlanStore:
             "status": task.status,
             "inputs": task.inputs or {},
             "expected_outputs": task.expected_outputs or [],
+            "on_success": task.on_success,
             "checkpoint": task.checkpoint or {},
             "result": task.result,
                 "attempts": task.attempts,
@@ -538,6 +544,20 @@ class SqlPlanStore:
             plan.status = PlanStatus.ACTIVE.value
         await self.session.flush()
 
+    async def resume_planner_pause(self, plan_id: UUID) -> None:
+        """Reactivate a plan paused by the planner's ``ask_user`` decision.
+
+        Planner pauses do not belong to a task, so task-level resume cannot
+        make progress.  The continuation is handled by a new planner replan.
+        """
+        plan = await self.session.get(RuntimePlan, plan_id, with_for_update=True)
+        if plan is None:
+            raise KeyError(str(plan_id))
+        if plan.status != PlanStatus.WAITING_INPUT.value:
+            raise PlanValidationError(f"plan {plan_id} is not waiting for planner input")
+        plan.status = PlanStatus.ACTIVE.value
+        await self.session.flush()
+
     async def _refresh_status(self, plan_id: UUID) -> None:
         plan = await self.session.get(RuntimePlan, plan_id, with_for_update=True)
         if plan is None:
@@ -579,8 +599,6 @@ class SqlPlanStore:
                     schema=need.json_schema,
                     status=RequirementStatus.PENDING.value,
                 ))
-        elif result.outcome == TaskOutcome.NEEDS_USER_INPUT:
-            row.status = TaskStatus.WAITING_USER.value
         else:
             row.status = TaskStatus.UNFULFILLABLE.value
         await self._refresh_status(plan_id)

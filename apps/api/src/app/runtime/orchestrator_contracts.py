@@ -54,8 +54,14 @@ class AttemptStatus(str, Enum):
 class TaskOutcome(str, Enum):
     COMPLETED = "completed"
     NEEDS_DEPENDENCY = "needs_dependency"
-    NEEDS_USER_INPUT = "needs_user_input"
     UNFULFILLABLE = "unfulfillable"
+
+
+class TaskSuccessAction(str, Enum):
+    """What the orchestrator does after a successfully completed task."""
+
+    CONTINUE = "continue"
+    REPLAN = "replan"
 
 
 class PlannerDecisionKind(str, Enum):
@@ -95,6 +101,7 @@ class PlannedTask(BaseModel):
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
     depends_on: List[str] = Field(default_factory=list)
     needs: List[NeedSpec] = Field(default_factory=list)
+    on_success: TaskSuccessAction = TaskSuccessAction.CONTINUE
 
     model_config = {"extra": "forbid"}
 
@@ -131,8 +138,8 @@ class PlanPatch(BaseModel):
             raise ValueError("ask_user requires a question")
         if self.decision == PlannerDecisionKind.FAIL_PLAN and not self.failure_reason:
             raise ValueError("fail_plan requires failure_reason")
-        if self.decision == PlannerDecisionKind.COMPLETE_PLAN and self.tasks:
-            raise ValueError("complete_plan cannot add tasks")
+        if self.decision == PlannerDecisionKind.COMPLETE_PLAN and (self.tasks or self.remove_task_ids):
+            raise ValueError("complete_plan cannot mutate tasks")
         return self
 
 
@@ -144,6 +151,8 @@ class PlanRequest(BaseModel):
     available_artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     needs: List[Dict[str, Any]] = Field(default_factory=list)
     last_failure: Optional[Dict[str, Any]] = None
+    user_response: Optional[str] = None
+    memory_context: List[Dict[str, Any]] = Field(default_factory=list)
     trigger: Optional[str] = None
     run_id: Optional[UUID] = None
     plan_id: Optional[UUID] = None
@@ -159,6 +168,7 @@ class TaskRequest(BaseModel):
     needs: List[NeedSpec] = Field(default_factory=list)
     checkpoint: Dict[str, Any] = Field(default_factory=dict)
     dependency_outputs: Dict[str, Any] = Field(default_factory=dict)
+    memory_context: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentTaskResult(BaseModel):
@@ -173,7 +183,6 @@ class AgentTaskResult(BaseModel):
     outputs: Dict[str, Any] = Field(default_factory=dict)
     checkpoint: Dict[str, Any] = Field(default_factory=dict)
     needs: List[NeedSpec] = Field(default_factory=list)
-    question: Optional[str] = None
     reason_code: Optional[str] = None
     evidence: Dict[str, Any] = Field(default_factory=dict)
 
@@ -183,8 +192,6 @@ class AgentTaskResult(BaseModel):
             raise ValueError("completed task cannot contain unresolved needs")
         if self.outcome == TaskOutcome.NEEDS_DEPENDENCY and not self.needs:
             raise ValueError("needs_dependency requires at least one need")
-        if self.outcome == TaskOutcome.NEEDS_USER_INPUT and not self.question:
-            raise ValueError("needs_user_input requires a question")
         return self
 
 

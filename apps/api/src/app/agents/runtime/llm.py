@@ -15,6 +15,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
+from app.agents.runtime.llm_errors import classify_provider_error
 
 logger = get_logger(__name__)
 
@@ -49,12 +50,9 @@ class LLMAdapter:
             request = self._client.chat(messages=messages, model=model, params=params)
             response = await asyncio.wait_for(request, timeout=timeout_s) if timeout_s else await request
         except Exception as e:
-            fallback = self._coerce_tool_choice_error_to_tool_call(e)
-            if fallback is not None:
-                logger.warning(
-                    "LLM returned tool_use_failed/tool_choice mismatch; coercing failed_generation to tool_call block",
-                )
-                return fallback
+            classified = classify_provider_error(e)
+            if classified is not None:
+                raise classified from e
             logger.error(f"LLM call failed: {e}", exc_info=True)
             raise
 
@@ -86,12 +84,9 @@ class LLMAdapter:
             request = self._client.chat(messages=messages, model=model, params=params)
             return await asyncio.wait_for(request, timeout=timeout_s) if timeout_s else await request
         except Exception as e:
-            fallback = self._coerce_tool_choice_error_to_native_response(e)
-            if fallback is not None:
-                logger.warning(
-                    "LLM returned tool_use_failed/tool_choice mismatch on raw path; coercing failed_generation to native tool_calls",
-                )
-                return fallback
+            classified = classify_provider_error(e)
+            if classified is not None:
+                raise classified from e
             logger.error(f"LLM call_raw failed: {e}", exc_info=True)
             raise
 

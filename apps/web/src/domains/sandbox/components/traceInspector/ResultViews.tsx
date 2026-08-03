@@ -8,7 +8,7 @@ import styles from './ResultViews.module.css';
 
 function tone(status: ExecutorResultViewModel['status']): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
   if (status === 'completed') return 'success';
-  if (status === 'failed' || status === 'aborted') return 'danger';
+  if (status === 'failed' || status === 'unfulfillable' || status === 'aborted') return 'danger';
   if (status === 'waiting' || status === 'paused') return 'warn';
   return 'info';
 }

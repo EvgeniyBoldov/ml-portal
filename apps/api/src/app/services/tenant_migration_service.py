@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.collection import Collection
 from app.models.credential_set import Credential
-from app.models.memory import Fact
+from app.runtime.memory.fact_store import FactStore
+from app.runtime.memory.service import MemoryService
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, Source
 from app.models.tenant import UserTenants
@@ -171,10 +172,6 @@ class TenantMigrationService:
         return len(rows)
 
     async def _bulk_reassign_fact_tenant(self, *, from_tenant_id: uuid.UUID, to_tenant_id: uuid.UUID) -> int:
-        rows = (
-            await self.session.execute(select(Fact).where(Fact.tenant_id == from_tenant_id))
-        ).scalars().all()
-        for row in rows:
-            row.tenant_id = to_tenant_id
-        await self.session.flush()
-        return len(rows)
+        return await MemoryService(fact_store=FactStore(self.session)).reassign_tenant_context(
+            from_tenant_id=from_tenant_id, to_tenant_id=to_tenant_id
+        )

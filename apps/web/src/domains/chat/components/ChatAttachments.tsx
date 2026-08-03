@@ -15,7 +15,7 @@ export function ChatAttachments({ attachments, variant }: ChatAttachmentsProps) 
 
   const openAttachment = (attachment: ChatAttachmentRef) => {
     setOpeningId(attachment.artifactId);
-    window.open(buildArtifactDownloadUrl(attachment.artifactId), '_blank', 'noopener,noreferrer');
+    window.open(attachment.downloadUrl || buildArtifactDownloadUrl(attachment.artifactId), '_blank', 'noopener,noreferrer');
     setOpeningId(null);
   };
 

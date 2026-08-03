@@ -10,6 +10,7 @@ export interface TraceCall {
   kind: TraceCallKind;
   title: string;
   summary?: string;
+  toolCallCount?: number;
 }
 
 export interface TraceExecutorRun {
@@ -120,6 +121,12 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
         event.event_type === 'question_answer' && event.id !== request.id
   ));
   const interactionKind = request.event_type === 'confirmation_required' ? 'confirm' : 'clarify';
+  const toolCallCount = isLlm
+    ? Object.values(state.eventsById).filter((event) => (
+      event.event_type === 'tool_call'
+      && asString(event.payload.llm_call_id) === entity.id
+    )).length
+    : undefined;
   return {
     entity,
     request,
@@ -147,6 +154,7 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
           return undefined;
         })()
       : undefined,
+    toolCallCount,
   };
 }
 

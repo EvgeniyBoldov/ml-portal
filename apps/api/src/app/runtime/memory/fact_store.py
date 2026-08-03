@@ -41,9 +41,8 @@ class FactStore:
         *,
         scope: FactScope,
         subject: str,
-        user_id: Optional[UUID] = None,
-        tenant_id: Optional[UUID] = None,
-        chat_id: Optional[UUID] = None,
+        owner_type: str,
+        owner_id: UUID,
     ) -> Optional[FactDTO]:
         """Return the single active fact that owns this (scope, subject, owner)
         slot, or None. Uses the `ix_facts_scope_subject_active` partial index.
@@ -53,10 +52,7 @@ class FactStore:
             Fact.subject == subject,
             Fact.superseded_by.is_(None),
         )
-        stmt = self._apply_owner_filter(
-            stmt, scope=scope, user_id=user_id,
-            tenant_id=tenant_id, chat_id=chat_id,
-        )
+        stmt = stmt.where(Fact.owner_type == owner_type, Fact.owner_id == owner_id)
         result = await self._session.execute(stmt.limit(1))
         row = result.scalar_one_or_none()
         return _orm_to_dto(row) if row else None
@@ -65,9 +61,8 @@ class FactStore:
         self,
         *,
         scopes: Sequence[FactScope],
-        user_id: Optional[UUID] = None,
-        tenant_id: Optional[UUID] = None,
-        chat_id: Optional[UUID] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[UUID] = None,
         subject_prefix: Optional[str] = None,
         sources: Optional[Sequence[FactSource]] = None,
         source_ref_contains: Optional[str] = None,
@@ -88,35 +83,9 @@ class FactStore:
             Fact.superseded_by.is_(None),
         )
 
-        # Per-scope ownership. The query gets split into OR'd blocks so we
-        # don't cross-contaminate (e.g. a USER fact for the current user
-        # shouldn't be filtered out because its tenant_id is NULL).
-        ownership_clauses = []
-        if FactScope.CHAT in scopes and chat_id is not None:
-            ownership_clauses.append(
-                (Fact.scope == FactScope.CHAT.value)
-                & (Fact.chat_id == chat_id)
-            )
-        if FactScope.USER in scopes and user_id is not None:
-            ownership_clauses.append(
-                (Fact.scope == FactScope.USER.value)
-                & (Fact.user_id == user_id)
-            )
-        if FactScope.TENANT in scopes:
-            if tenant_id is None:
-                ownership_clauses.append(
-                    (Fact.scope == FactScope.TENANT.value)
-                    & (Fact.tenant_id.is_(None))
-                )
-            else:
-                ownership_clauses.append(
-                    (Fact.scope == FactScope.TENANT.value)
-                    & (Fact.tenant_id == tenant_id)
-                )
-        if not ownership_clauses:
+        if owner_type is None or owner_id is None:
             return []
-        from sqlalchemy import or_
-        stmt = stmt.where(or_(*ownership_clauses))
+        stmt = stmt.where(Fact.owner_type == owner_type, Fact.owner_id == owner_id)
 
         if subject_prefix:
             stmt = stmt.where(Fact.subject.like(f"{subject_prefix}%"))
@@ -140,7 +109,8 @@ class FactStore:
         stmt = (
             select(Fact)
             .where(
-                Fact.user_id == user_id,
+                Fact.owner_type == "user",
+                Fact.owner_id == user_id,
                 Fact.superseded_by.is_(None),
                 Fact.user_visible.is_(True),
             )
@@ -158,8 +128,10 @@ class FactStore:
         row = Fact(
             id=dto.id,
             tenant_id=dto.tenant_id,
-            user_id=dto.user_id,
-            chat_id=dto.chat_id,
+            owner_type=dto.owner_type,
+            owner_id=dto.owner_id,
+            kind=dto.kind,
+            entry_metadata=dto.metadata or None,
             scope=dto.scope.value,
             subject=dto.subject,
             value=dto.value,
@@ -196,6 +168,22 @@ class FactStore:
         )
         await self._session.execute(stmt)
 
+    async def forget_owned(self, *, owner_type: str, owner_id: UUID, fact_ids: Sequence[UUID]) -> int:
+        result = await self._session.execute(
+            update(Fact).where(
+                Fact.id.in_(fact_ids), Fact.owner_type == owner_type,
+                Fact.owner_id == owner_id, Fact.user_visible.is_(True),
+                Fact.superseded_by.is_(None),
+            ).values(superseded_by=Fact.id)
+        )
+        return int(result.rowcount or 0)
+
+    async def reassign_tenant_context(self, *, from_tenant_id: UUID, to_tenant_id: UUID) -> int:
+        result = await self._session.execute(
+            update(Fact).where(Fact.tenant_id == from_tenant_id).values(tenant_id=to_tenant_id)
+        )
+        return int(result.rowcount or 0)
+
     async def upsert_with_supersede(self, new: FactDTO) -> FactDTO:
         """High-level write: apply a new fact against the current active
         slot.
@@ -217,9 +205,8 @@ class FactStore:
         existing = await self.get_active_by_key(
             scope=new.scope,
             subject=new.subject,
-            user_id=new.user_id,
-            tenant_id=new.tenant_id,
-            chat_id=new.chat_id,
+            owner_type=new.owner_type or "",
+            owner_id=new.owner_id or UUID(int=0),
         )
 
         if existing is None:
@@ -243,8 +230,10 @@ class FactStore:
                 value=existing.value,
                 source=existing.source,
                 tenant_id=existing.tenant_id,
-                user_id=existing.user_id,
-                chat_id=existing.chat_id,
+                owner_type=existing.owner_type,
+                owner_id=existing.owner_id,
+                kind=existing.kind,
+                metadata=existing.metadata,
                 confidence=max(existing.confidence, new.confidence),
                 source_ref=existing.source_ref,
                 observed_at=new.observed_at,
@@ -260,17 +249,6 @@ class FactStore:
 
     # --------------------------------------------------------- misc ---
 
-    @staticmethod
-    def _apply_owner_filter(stmt, *, scope, user_id, tenant_id, chat_id):
-        if scope == FactScope.CHAT:
-            return stmt.where(Fact.chat_id == chat_id)
-        if scope == FactScope.USER:
-            return stmt.where(Fact.user_id == user_id)
-        if scope == FactScope.TENANT:
-            return stmt.where(Fact.tenant_id == tenant_id)
-        return stmt
-
-
 # ------------------------------------------------------ ORM → DTO ---
 
 
@@ -281,8 +259,10 @@ def _orm_to_dto(row: Fact) -> FactDTO:
         value=row.value,
         source=FactSource(row.source),
         tenant_id=row.tenant_id,
-        user_id=row.user_id,
-        chat_id=row.chat_id,
+        owner_type=row.owner_type,
+        owner_id=row.owner_id,
+        kind=row.kind or "fact",
+        metadata=dict(row.entry_metadata or {}),
         confidence=row.confidence,
         source_ref=row.source_ref,
         observed_at=row.observed_at,

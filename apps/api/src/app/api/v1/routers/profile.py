@@ -19,8 +19,9 @@ from app.models.api_token import ApiToken
 from app.models.credential_set import Credential
 from app.models.tool_instance import ToolInstance
 from app.models.tool import Tool
-from app.models.memory import Fact
-from sqlalchemy import select, update
+from app.runtime.memory.fact_store import FactStore
+from app.runtime.memory.service import MemoryService
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -231,29 +232,15 @@ async def list_user_facts(
 
     session_factory = get_session_factory()
     async with session_factory() as session:
-        result = await session.execute(
-            select(Fact)
-            .where(
-                Fact.user_id == user_id,
-                Fact.user_visible.is_(True),
-                Fact.superseded_by.is_(None),
-            )
-            .order_by(Fact.observed_at.desc())
-            .offset(safe_offset)
-            .limit(safe_limit)
+        rows = await MemoryService(fact_store=FactStore(session)).list_user_visible(
+            user_id=user_id, limit=safe_limit, offset=safe_offset
         )
-        rows = result.scalars().all()
 
     return [
         UserFactResponse(
-            id=str(row.id),
-            scope=row.scope,
-            subject=row.subject,
-            value=row.value,
-            confidence=row.confidence,
-            source=row.source,
-            observed_at=row.observed_at,
-            created_at=row.created_at,
+            id=str(row.id), scope=row.scope.value, subject=row.subject, value=row.value,
+            confidence=row.confidence, source=row.source.value,
+            observed_at=row.observed_at, created_at=row.observed_at,
         )
         for row in rows
     ]
@@ -271,20 +258,12 @@ async def delete_user_facts(
     user_id = UUID(current_user.id)
     session_factory = get_session_factory()
     async with session_factory() as session:
-        stmt = (
-            update(Fact)
-            .where(
-                Fact.id.in_(payload.ids),
-                Fact.user_id == user_id,
-                Fact.user_visible.is_(True),
-                Fact.superseded_by.is_(None),
-            )
-            .values(superseded_by=Fact.id)
+        deleted = await MemoryService(fact_store=FactStore(session)).forget_user_entries(
+            user_id=user_id, fact_ids=payload.ids
         )
-        result = await session.execute(stmt)
         await session.commit()
 
-    return FactsDeleteResponse(deleted=result.rowcount or 0)
+    return FactsDeleteResponse(deleted=deleted)
 
 
 @router.post("/password")

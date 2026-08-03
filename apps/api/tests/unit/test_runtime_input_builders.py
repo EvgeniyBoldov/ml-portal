@@ -215,6 +215,7 @@ def test_synthesizer_input_builder_builds_structured_payload_with_files_and_sour
     payload = json.loads(messages[1]["content"])
     assert payload["answer_brief"] == "brief"
     assert payload["generated_files"][0]["file_name"] == "example.txt"
+    assert "download_url" not in payload["generated_files"][0]
     assert payload["rag_sources"][0]["source_name"] == "Doc One"
     assert payload["language_hint"] is None
     assert payload["style_constraints"]["concise"] is True

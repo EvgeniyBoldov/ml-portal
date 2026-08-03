@@ -181,6 +181,14 @@ export interface SandboxPause {
   contract_version: number;
 }
 
+export interface SandboxFinalAttachment {
+  artifactId: string;
+  fileName: string;
+  downloadUrl?: string;
+  contentType?: string;
+  sizeBytes?: number;
+}
+
 export type SandboxSSEEvent = SandboxPause;
 
 export type SandboxStreamEvent =
@@ -188,7 +196,7 @@ export type SandboxStreamEvent =
   | { type: 'progress'; progress: RuntimeProgress }
   | { type: 'journal'; journal: RuntimeJournalEvent }
   | { type: 'delta'; runId: string; content: string }
-  | { type: 'final'; runId: string; content: string }
+  | { type: 'final'; runId: string; content: string; attachments: SandboxFinalAttachment[] }
   | { type: 'pause'; pause: SandboxPause }
   | { type: 'error'; runId: string; error: string }
   | { type: 'done'; runId: string };

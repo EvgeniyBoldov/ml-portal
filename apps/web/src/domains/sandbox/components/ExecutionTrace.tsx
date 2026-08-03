@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SandboxTraceState } from '../traceState';
 import type { RuntimeProgress } from '../types';
 import { projectTraceStages, stepFor, traceElapsedMs, type TraceCall, type TraceExecutorRun, type TraceInspectionTarget, type TraceMetrics, type TraceStage } from '../traceProjection';
-import { llmResponseStatus, toolResult } from '../callInspection';
+import { llmOutcome, toolResult } from '../callInspection';
 import { normalizeTraceStatus, traceStatusLabel } from '../traceStatus';
 import styles from './ExecutionTrace.module.css';
 
@@ -84,20 +84,19 @@ function CallCard({ call, executor, stage, onSelect, selected }: { call: TraceCa
     error: 'ОШИБКА',
   }[call.kind];
   const toolFailed = call.kind === 'tool' && call.response ? toolResult(call.response.payload).success === false : false;
-  const llmOutcome = call.kind === 'llm' && call.response ? llmResponseStatus(call.response.payload) : undefined;
-  const llmFailed = llmOutcome === 'error';
-  const llmEmpty = llmOutcome === 'empty';
+  const outcome = call.kind === 'llm' && call.response ? llmOutcome(call.response.payload, call.toolCallCount) : undefined;
+  const llmFailed = outcome?.kind === 'error';
   const statusLabel = call.kind === 'error' || toolFailed || llmFailed
     ? 'Ошибка'
     : call.response
-      ? (call.kind === 'llm' ? (llmEmpty ? 'Пустой ответ' : 'Ответ') : call.kind === 'tool' ? 'Результат' : 'Ответ получен')
+      ? (call.kind === 'llm' ? outcome?.label ?? 'Ответ' : call.kind === 'tool' ? 'Результат' : 'Ответ получен')
       : call.kind === 'clarify' ? 'Ожидает ответ' : call.kind === 'confirm' ? 'Ожидает решения' : 'Выполняется';
   return (
     <div className={styles.callWrap}>
       <button type="button" className={`${styles.call} ${styles[`call-${call.kind}`]} ${selected ? styles.isSelected : ''}`} onClick={() => onSelect?.(call.kind === 'error' ? { kind: 'error', key: call.entity.key, call, executor, stage } : { kind: 'call', key: call.entity.key, call, executor, stage })}>
         <span className={styles.callType}><i className={styles.typeMarker} />{typeLabel}</span>
         <span className={styles.callTitle}>{call.title}{call.summary ? <small>{call.summary}</small> : null}</span>
-        <span className={`${styles.callStatus} ${call.kind === 'error' || toolFailed || llmFailed ? styles.callStatusError : call.response ? styles.callStatusComplete : styles.callStatusRunning}`}>{statusLabel}</span>
+        <span className={`${styles.callStatus} ${call.kind === 'error' || toolFailed || llmFailed ? styles.callStatusError : outcome?.kind === 'empty' ? styles.callStatusWarning : call.response ? styles.callStatusComplete : styles.callStatusRunning}`}><span>{statusLabel}</span>{outcome?.count ? <span className={styles.callStatusCount}>· {outcome.count}</span> : null}</span>
       </button>
     </div>
   );

@@ -6,7 +6,7 @@ from app.services.file_formats import FileCodecRegistry
 
 
 def test_supported_generation_formats_are_stable() -> None:
-    assert FileCodecRegistry.supported_formats() == ("csv", "docx", "json", "md", "txt")
+    assert FileCodecRegistry.supported_formats() == ("csv", "docx", "json", "md", "py", "txt")
 
 
 def test_json_codec_rejects_invalid_content() -> None:

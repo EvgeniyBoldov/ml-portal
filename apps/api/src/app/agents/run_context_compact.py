@@ -37,8 +37,6 @@ def _action_signature(action: NextAction) -> str:
         parts.append(hashlib.md5(input_str.encode()).hexdigest()[:8])
     elif action.type == ActionType.AGENT_CALL and action.agent:
         parts.append(action.agent.agent_slug)
-    elif action.type == ActionType.ASK_USER and action.ask_user:
-        parts.append(hashlib.md5(action.ask_user.question.encode()).hexdigest()[:8])
     return "|".join(parts)
 
 

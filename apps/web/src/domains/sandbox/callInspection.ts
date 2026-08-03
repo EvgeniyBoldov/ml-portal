@@ -3,6 +3,8 @@ import type { RuntimeJournalEvent } from './traceState';
 export type DisplayEntry = { label: string; value: unknown };
 export type ParsedContent = { text?: string; data?: unknown; kind: 'text' | 'json' | 'tool_call' };
 export type ToolNameMap = ReadonlyMap<string, string>;
+export type LlmOutcomeKind = 'tools' | 'answer' | 'clarify' | 'plan' | 'complete' | 'empty' | 'error';
+export type LlmOutcome = { kind: LlmOutcomeKind; label: string; count?: number };
 
 const HIDDEN_KEYS = new Set([
   '_envelope', 'entity_id', 'entity_type', 'parent_entity_id', 'parent_entity_type',
@@ -84,6 +86,26 @@ export function llmResponseContent(payload: Record<string, unknown>): unknown {
 export function llmResponseStatus(payload: Record<string, unknown>): 'answered' | 'empty' | 'error' {
   if (typeof payload.error_type === 'string' && payload.error_type.trim()) return 'error';
   return hasContent(llmResponseContent(payload)) ? 'answered' : 'empty';
+}
+
+export function llmOutcome(payload: Record<string, unknown>, toolCallCount = 0): LlmOutcome {
+  if (typeof payload.error_type === 'string' && payload.error_type.trim()) return { kind: 'error', label: 'Ошибка' };
+  if (toolCallCount > 0) return { kind: 'tools', label: 'Инструменты', count: toolCallCount };
+
+  const content = llmResponseContent(payload);
+  if (!hasContent(content)) return { kind: 'empty', label: 'Пусто' };
+
+  const parsed = parseCallContent(content);
+  const data = asRecord(parsed.data);
+  const action = String(data.action ?? data.decision ?? '').trim();
+  const isPlanningDecision = payload.purpose === 'planning_decision';
+  if (isPlanningDecision && (action === 'ask_user' || action === 'clarify')) return { kind: 'clarify', label: 'Уточнение' };
+  if (isPlanningDecision && (action === 'apply_graph' || action === 'create_plan' || action === 'revise_plan')) {
+    const tasks = Array.isArray(data.tasks) ? data.tasks.length : 0;
+    return { kind: 'plan', label: 'План', count: tasks || undefined };
+  }
+  if (isPlanningDecision && (action === 'complete' || action === 'complete_plan')) return { kind: 'complete', label: 'Готово' };
+  return { kind: 'answer', label: 'Ответ' };
 }
 
 export function llmMessages(payload: Record<string, unknown>): Array<{ role: string; content: ParsedContent }> {

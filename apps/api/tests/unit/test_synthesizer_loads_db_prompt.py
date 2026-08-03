@@ -67,12 +67,46 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     call = llm.calls[0]
     assert call["model"] == "gpt-test"
     assert call["params"] == {"temperature": 0.15, "max_tokens": 321}
-    assert call["messages"][0]["content"] == "SYNTH-PROMPT"
+    assert call["messages"][0]["content"].startswith("SYNTH-PROMPT")
+    assert "Сгенерированные файлы доставляются интерфейсом отдельными вложениями" in call["messages"][0]["content"]
     assert events[0].type.value == "synthesis_start"
     assert any(ev.type.value == "status" for ev in events)
     assert events[-2].type.value == "final"
     assert events[-1].type.value == "synthesis_end"
     assert state.final_answer == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_finalizes_deduplicated_attachment_download_urls():
+    synth = Synthesizer(session=SimpleNamespace(), llm_client=_LLMClientProbe([]))
+    state = _runtime_state()
+    state.agent_results = [{
+        "success": True,
+        "summary": "Файл готов",
+        "attachments": [
+            {"artifact_id": "artifact-1", "file_name": "result.txt"},
+            {"artifact_id": "artifact-1", "file_name": "result.txt"},
+        ],
+    }]
+
+    events = [
+        event
+        async for event in synth.stream(
+            runtime_state=state,
+            run_id=state.run_id,
+            answer_brief="Файл готов",
+            final_answer_strategy="use_agent_result",
+        )
+    ]
+
+    final = next(event for event in events if event.type.value == "final")
+    assert final.data["attachments"] == [{
+        "artifact_id": "artifact-1",
+        "file_name": "result.txt",
+        "download_url": "/api/v1/files/artifact-1/download",
+        "content_type": "",
+        "size_bytes": None,
+    }]
 
 
 @pytest.mark.asyncio

@@ -49,6 +49,7 @@ class RuntimePlanTask(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     inputs: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     expected_outputs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    on_success: Mapped[str] = mapped_column(String(32), nullable=False, default="continue")
     checkpoint: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

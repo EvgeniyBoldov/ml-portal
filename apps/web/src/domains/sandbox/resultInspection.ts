@@ -2,7 +2,7 @@ import type { SandboxTraceState } from './traceState';
 import type { TraceExecutorRun, TraceStage } from './traceProjection';
 import { parseCallContent, sanitizeDisplay } from './callInspection';
 
-export type ResultStatus = 'running' | 'completed' | 'failed' | 'aborted' | 'paused' | 'waiting' | 'unknown';
+export type ResultStatus = 'running' | 'completed' | 'failed' | 'unfulfillable' | 'aborted' | 'paused' | 'waiting' | 'unknown';
 
 export type ExecutorResultViewModel = {
   name: string;
@@ -21,6 +21,7 @@ const statusOf = (value: unknown): ResultStatus => {
   const status = String(value ?? '').toLowerCase();
   if (['completed', 'success', 'succeeded'].includes(status)) return 'completed';
   if (['failed', 'error'].includes(status)) return 'failed';
+  if (status === 'unfulfillable') return 'unfulfillable';
   if (['aborted', 'cancelled', 'canceled'].includes(status)) return 'aborted';
   if (['paused'].includes(status)) return 'paused';
   if (['waiting', 'waiting_input'].includes(status)) return 'waiting';
@@ -29,7 +30,7 @@ const statusOf = (value: unknown): ResultStatus => {
 
 export function resultStatusLabel(status: ResultStatus): string {
   return ({
-    completed: 'Готово', failed: 'Ошибка', aborted: 'Прервано', paused: 'На паузе',
+    completed: 'Готово', failed: 'Ошибка', unfulfillable: 'Неисполнимо', aborted: 'Прервано', paused: 'На паузе',
     waiting: 'Ожидает данных', running: 'Выполняется', unknown: 'Нет результата',
   } as Record<ResultStatus, string>)[status];
 }

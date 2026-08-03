@@ -24,6 +24,7 @@ def test_build_effective_platform_settings_payload_uses_fallbacks_when_missing()
 def test_build_platform_runtime_config_uses_same_fallbacks():
     config = build_platform_runtime_config(SimpleNamespace())
 
+    assert config["native_tool_calling"] is True
     assert config["required_operation_retry_instruction"] == PLATFORM_REQUIRED_OPERATION_RETRY_INSTRUCTION
     assert config["operations_rules_text"] == PLATFORM_OPERATION_RULES_TEXT
     assert config["intent_messages"] == PLATFORM_INTENT_MESSAGES

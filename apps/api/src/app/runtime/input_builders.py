@@ -38,7 +38,7 @@ class PlannerInputBuilder:
             "status": plan.get("status"),
             "tasks": tasks,
         }
-        return {
+        payload = {
             "goal": request.goal,
             "mode": "replan" if planner_plan["has_existing_graph"] else "initial",
             "replan_reason": request.trigger,
@@ -47,8 +47,13 @@ class PlannerInputBuilder:
             "available_artifacts": self._normalize_artifacts(request.available_artifacts or []),
             "needs": request.needs or [],
             "last_failure": request.last_failure,
+            "memory_context": request.memory_context or [],
             "available_agents": agents,
         }
+        user_response = str(getattr(request, "user_response", "") or "").strip()
+        if user_response:
+            payload["user_response"] = user_response
+        return payload
 
     def build(
         self,
@@ -220,6 +225,15 @@ class SynthesizerInputBuilder:
                         }
                     )
 
+        unique_files: List[Dict[str, Any]] = []
+        seen_artifacts: set[str] = set()
+        for item in generated_files:
+            artifact_id = str(item.get("artifact_id") or "").strip()
+            if not artifact_id or artifact_id in seen_artifacts:
+                continue
+            seen_artifacts.add(artifact_id)
+            unique_files.append(item)
+
         # Build task journal summary for synthesizer
         task_journal_summary = []
         for t in state.task_journal:
@@ -233,7 +247,7 @@ class SynthesizerInputBuilder:
 
         payload: Dict[str, Any] = {
             "answer_brief": str(answer_brief or state.answer_brief or "").strip(),
-            "generated_files": generated_files[-10:],
+            "generated_files": unique_files[-10:],
             "rag_sources": rag_sources[:20],
             "task_journal": task_journal_summary,
             "language_hint": self._detect_language_hint(state.current_user_query or state.goal or ""),

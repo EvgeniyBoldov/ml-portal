@@ -14,8 +14,8 @@ from app.models.memory import FactScope
 from app.runtime.contracts import AttachmentContext
 from app.runtime.memory.dto import FactDTO, SummaryDTO
 from app.runtime.memory.fact_selection import FactSelectionPolicy, LexicalFactRanker
-from app.runtime.memory.fact_store import FactStore
-from app.runtime.memory.user_facts_service import LongTermFactsService
+from app.runtime.memory.service import MemoryService
+from app.runtime.memory.service import MemorySnapshot
 
 
 DEFAULT_TOTAL_MEMORY_BUDGET_CHARS = 8_000
@@ -124,6 +124,7 @@ class MemoryQueryContext:
     platform_config: Dict[str, Any] = field(default_factory=dict)
     tool_ledger_entries: List[Dict[str, Any]] = field(default_factory=list)
     recent_agent_runs: List[Dict[str, Any]] = field(default_factory=list)
+    durable_snapshot: Optional[MemorySnapshot] = None
 
 
 @dataclass(frozen=True)
@@ -416,20 +417,18 @@ class FactMemoryComponent:
     def __init__(
         self,
         *,
-        fact_store: FactStore,
+        memory_service: MemoryService,
         fact_limit: int,
     ) -> None:
-        self._fact_store = fact_store
+        self._memory_service = memory_service
         self._fact_limit = fact_limit
 
     async def collect(self, ctx: MemoryQueryContext) -> MemorySection:
-        service = LongTermFactsService(
-            fact_store=self._fact_store,
-            user_id=ctx.user_id,
-            tenant_id=ctx.tenant_id,
-        )
         pool_limit = max(self._fact_limit, ctx.budget.max_items_per_section) * FACT_RETRIEVAL_POOL_MULTIPLIER
-        facts = await service.load_for_runtime(limit=pool_limit)
+        snapshot = ctx.durable_snapshot or await self._memory_service.read_snapshot(
+            user_id=ctx.user_id, tenant_id=ctx.tenant_id, limit=pool_limit
+        )
+        facts = list(snapshot.entries)
         facts_cfg = ((ctx.platform_config or {}).get("memory") or {}).get("facts")
         ranker_name = "lexical"
         if isinstance(facts_cfg, dict):

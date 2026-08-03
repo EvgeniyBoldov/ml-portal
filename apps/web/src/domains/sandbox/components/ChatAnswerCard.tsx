@@ -1,14 +1,17 @@
 import MarkdownRenderer from '@/shared/ui/MarkdownRenderer';
+import { ChatAttachments } from '@/domains/chat/components/ChatAttachments';
+import type { ChatAttachmentRef } from '@/domains/chat/types';
 import styles from './ChatAnswerCard.module.css';
 
 interface Props {
   text: string;
   isRunning: boolean;
+  attachments?: ChatAttachmentRef[];
 }
 
-export default function ChatAnswerCard({ text, isRunning }: Props) {
+export default function ChatAnswerCard({ text, isRunning, attachments = [] }: Props) {
   const hasContent = text.length > 0;
-  if (!hasContent && !isRunning) return null;
+  if (!hasContent && !isRunning && attachments.length === 0) return null;
 
   return (
     <article className={`${styles.card} ${isRunning ? styles.streaming : ''}`}>
@@ -30,6 +33,7 @@ export default function ChatAnswerCard({ text, isRunning }: Props) {
         )}
         {isRunning && hasContent && <span className={styles.cursor}>▊</span>}
       </div>
+      <ChatAttachments attachments={attachments} variant="artifact" />
     </article>
   );
 }

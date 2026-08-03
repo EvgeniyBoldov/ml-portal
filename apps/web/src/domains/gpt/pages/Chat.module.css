@@ -200,6 +200,18 @@
   background: var(--panel);
 }
 
+.composerSlot {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-color);
+  background: var(--panel);
+}
+
+.composerSlot .clarifyBox {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
 .noMessages {
   display: flex;
   flex-direction: column;

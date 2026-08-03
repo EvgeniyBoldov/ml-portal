@@ -3,10 +3,11 @@ import MarkdownRenderer from '@/shared/ui/MarkdownRenderer';
 import { Icon } from '@/shared/ui/Icon';
 import RAGSources from './RAGSources';
 import { ChatAttachments } from './ChatAttachments';
-import type { ChatTimelineMessage } from '../types';
+import { ChatRunStatus } from './ChatRunStatus';
+import type { ActiveChatRun, ChatTimelineMessage } from '../types';
 import styles from './Message.module.css';
 
-export function AssistantMessage({ message, isStreaming }: { message: ChatTimelineMessage; isStreaming: boolean }) {
+export function AssistantMessage({ message, isStreaming, run }: { message: ChatTimelineMessage; isStreaming: boolean; run?: ActiveChatRun }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     await navigator.clipboard.writeText(message.content);
@@ -20,8 +21,13 @@ export function AssistantMessage({ message, isStreaming }: { message: ChatTimeli
     <article className={`${styles.message} ${styles.assistant}`} aria-label="Ответ ассистента">
       <div className={styles.avatar}><Icon name="bot" size={20} /></div>
       <div className={styles.content}>
-        <div className={styles.header}><span>Ассистент</span><time>{time}</time></div>
-        <div className={styles.assistantBody}><MarkdownRenderer content={message.content} /></div>
+        <div className={styles.header}>
+          <span>Ассистент</span>
+          <time>{time}</time>
+          {run && <span className={styles.statusLabel}>{run.status === 'running' ? 'Выполняется' : run.status === 'waiting_confirmation' ? 'Ожидает подтверждения' : 'Ожидает ответа'}</span>}
+        </div>
+        {run && <ChatRunStatus run={run} />}
+        {message.content && <div className={styles.assistantBody}><MarkdownRenderer content={message.content} /></div>}
         <ChatAttachments attachments={message.meta?.attachments ?? []} variant="artifact" />
         {(message.meta?.ragSources?.length ?? 0) > 0 && <RAGSources sources={message.meta!.ragSources!} />}
         {!isStreaming && message.content && (

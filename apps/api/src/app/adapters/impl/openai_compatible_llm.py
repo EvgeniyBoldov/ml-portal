@@ -227,7 +227,12 @@ class OpenAICompatibleLLM:
                 raise
             
             # Extract the response
-            content = response.choices[0].message.content
+            message = response.choices[0].message
+            content = message.content or ""
+            tool_calls = [
+                call.model_dump(exclude_none=True)
+                for call in (message.tool_calls or [])
+            ]
             usage = response.usage.model_dump() if response.usage else {}
             
             logger.info(f"Received response: {len(content)} characters, tokens={usage.get('total_tokens', 0)}")
@@ -236,7 +241,18 @@ class OpenAICompatibleLLM:
                 "content": content,
                 "model": response.model,
                 "usage": usage,
-                "finish_reason": response.choices[0].finish_reason
+                "finish_reason": response.choices[0].finish_reason,
+                "tool_calls": tool_calls,
+                # Keep the OpenAI/LiteLLM response shape for native tool
+                # parsing while retaining the legacy flattened fields above.
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                        "tool_calls": tool_calls,
+                    },
+                    "finish_reason": response.choices[0].finish_reason,
+                }],
             }
             
         except asyncio.CancelledError:

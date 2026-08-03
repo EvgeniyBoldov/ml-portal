@@ -42,6 +42,17 @@
 - Цель: «думающий модуль» (пред-планер) использует эти факты для переформулировки цели и лучшего понимания контекста запроса.
 - Связано с `PLAN_AGENT_NEEDS_CONTRACT.md` (раздел «Думающий модуль» вне MVP-скоупа).
 
+## Runtime memory — deferred chat and project lifecycle
+
+- Добавить durable chat memory и отдельный compactor contract после того, как
+  будет введен canonical `MemoryEntry` read-path (`docs/architecture/RUNTIME_MEMORY.md`).
+- Реализовать authoring и RAG extraction для user/tenant/project memory; не
+  делать extractor прямым writer-ом active memory.
+- Добавить project-memory lifecycle: source refresh, retention/cleanup,
+  устаревание правил и controlled removal.
+- Реализовать conflict detection и review/merge workflow для противоречащих
+  project/process rules; только approved revision становится active.
+
 ## Lifecycle отмена удаления с зависимостями
 
 - Проработать единый механизм отмены удаления для `agent`, `collection`, `tenant`, `user` и связанных сущностей.

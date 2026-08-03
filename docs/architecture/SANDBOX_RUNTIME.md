@@ -139,6 +139,15 @@ Bad group boundaries:
 5. Resolve the same routing, policy, and execution layers.
 6. Emit the same trace primitives as production, with higher visibility.
 
+Paused-run rule:
+- `waiting_input` and `waiting_confirmation` are persisted sandbox-run states,
+  not completed runs. Their pause action/context remain available until the
+  run is resumed or cancelled.
+- Resume continues the same sandbox run and clears the persisted pause only
+  after its immutable resume checkpoint has been constructed.
+- A paused run is cancelled through its dedicated sandbox cancel endpoint;
+  aborting a browser stream is not a cancellation signal.
+
 Snapshot rule:
 - the run must use the immutable snapshot produced from the branch resolver state,
 - the snapshot must include both resolver shape fingerprint and branch override payload,

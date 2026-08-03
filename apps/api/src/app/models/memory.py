@@ -59,13 +59,12 @@ from app.models.base import Base
 class FactScope(str, Enum):
     """Where a fact is authoritative.
 
-    * CHAT   — the fact matters only inside this chat
     * USER   — the fact is about this user across chats
     * TENANT — the fact is shared within a tenant (department)
     """
-    CHAT = "chat"
     USER = "user"
     TENANT = "tenant"
+    PROJECT = "project"
 
 
 class FactSource(str, Enum):
@@ -88,12 +87,11 @@ class Fact(Base):
         # (`"what is user.name for user X?"`). Keep it cheap.
         Index("ix_facts_scope_subject_active", "scope", "subject",
               postgresql_where="superseded_by IS NULL"),
-        Index("ix_facts_user_scope", "user_id", "scope",
-              postgresql_where="superseded_by IS NULL"),
-        Index("ix_facts_chat_observed", "chat_id", "observed_at"),
         Index("ix_facts_tenant_scope", "tenant_id", "scope"),
+        Index("ix_facts_owner_subject_active", "owner_type", "owner_id", "subject",
+              postgresql_where="superseded_by IS NULL"),
         CheckConstraint(
-            "scope IN ('chat', 'user', 'tenant')",
+            "scope IN ('user', 'tenant', 'project')",
             name="ck_facts_scope",
         ),
         CheckConstraint(
@@ -120,17 +118,13 @@ class Fact(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=True,
     )
-    user_id: Mapped[Optional[UUID]] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    chat_id: Mapped[Optional[UUID]] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("chats.id", ondelete="CASCADE"),
-        nullable=True,
-    )
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Generic ownership is the canonical contract for new rows. Legacy
+    # user_id/tenant_id/chat_id remain during the compatibility transition.
+    owner_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    owner_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    entry_metadata: Mapped[Optional[Dict[str, Any]]] = mapped_column("metadata", JSONB, nullable=True)
 
     # --- payload ------------------------------------------------------------
     subject: Mapped[str] = mapped_column(

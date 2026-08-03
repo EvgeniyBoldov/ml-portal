@@ -21,6 +21,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
+from app.runtime.events import RuntimeEvent
 from app.runtime.memory.dto import SummaryDTO
 from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.services.system_llm_role_service import SystemLLMRoleService
@@ -76,7 +77,8 @@ class SummaryCompactor:
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
         sandbox_overrides: Optional[dict] = None,
-        llm_event_callback: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
+        llm_event_sink: Optional[Callable[[RuntimeEvent], Awaitable[None]]] = None,
+        agent_execution_id: Optional[str] = None,
     ) -> SummaryDTO:
         """Return a NEW SummaryDTO. On any failure returns a conservative
         fallback that keeps previous structured fields and just bumps
@@ -109,6 +111,8 @@ class SummaryCompactor:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 sandbox_overrides=sandbox_overrides,
+                event_sink=llm_event_sink,
+                agent_execution_id=agent_execution_id,
                 fallback_factory=lambda _raw: _LLMSummaryOutput(),
             )
             out = result.value
@@ -118,32 +122,6 @@ class SummaryCompactor:
         except Exception as exc:  # noqa: BLE001 — never break the turn
             logger.warning("SummaryCompactor unexpected error: %s", exc)
             return self._fallback(previous, turn_number)
-        if llm_event_callback is not None:
-            try:
-                response_text = str(result.raw_response or "")
-                request_text = "\n".join(
-                    str((message or {}).get("content") or "")
-                    for message in (result.request_messages or [])
-                    if isinstance(message, dict)
-                )
-                tokens_in = max(0, len(request_text) // 4)
-                tokens_out = max(0, len(response_text) // 4)
-                await llm_event_callback(
-                    {
-                        "role": SystemLLMRoleType.SUMMARY_COMPACTOR.value,
-                        "model": result.model,
-                        "messages": result.request_messages,
-                        "params": result.request_params,
-                        "response": result.raw_response,
-                        "duration_ms": result.duration_ms,
-                        "tokens_in": tokens_in,
-                        "tokens_out": tokens_out,
-                        "tokens_total": tokens_in + tokens_out,
-                    }
-                )
-            except Exception:
-                logger.debug("SummaryCompactor llm_event_callback failed", exc_info=True)
-
         role_extras: dict = {}
         try:
             role_config = await self._role_service.get_role_config(SystemLLMRoleType.SUMMARY_COMPACTOR)

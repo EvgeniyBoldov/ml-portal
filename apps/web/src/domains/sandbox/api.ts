@@ -177,6 +177,18 @@ export const sandboxApi = {
     });
   },
 
+  cancelRun: async (
+    sessionId: string,
+    runId: string,
+    signal?: AbortSignal,
+  ): Promise<Response> => {
+    const { fetchStreamWithAuth } = await import('@/shared/api/streamAuth');
+    return fetchStreamWithAuth(`${BASE}/sessions/${sessionId}/runs/${runId}/cancel`, {
+      body: {},
+      signal,
+    });
+  },
+
   uploadAttachment: async (sessionId: string, file: File): Promise<ChatAttachment> => {
     const form = new FormData();
     form.append('file', file);

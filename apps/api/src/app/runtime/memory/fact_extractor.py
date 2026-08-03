@@ -22,6 +22,7 @@ from app.core.logging import get_logger
 from app.models.memory import FactScope, FactSource
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
+from app.runtime.events import RuntimeEvent
 from app.runtime.memory.dto import FactDTO
 from app.services.system_llm_role_service import SystemLLMRoleService
 
@@ -102,7 +103,8 @@ class FactExtractor:
         tenant_id: Optional[UUID] = None,
         chat_id: Optional[UUID] = None,
         sandbox_overrides: Optional[dict] = None,
-        llm_event_callback: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
+        llm_event_sink: Optional[Callable[[RuntimeEvent], Awaitable[None]]] = None,
+        agent_execution_id: Optional[str] = None,
     ) -> List[FactDTO]:
         """Run the extractor. On any failure returns [] and logs a warning —
         memory extraction must never break a chat turn.
@@ -123,6 +125,8 @@ class FactExtractor:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 sandbox_overrides=sandbox_overrides,
+                event_sink=llm_event_sink,
+                agent_execution_id=agent_execution_id,
                 fallback_factory=lambda _raw: _LLMFactOutput(facts=[]),
             )
         except StructuredCallError as exc:
@@ -131,32 +135,6 @@ class FactExtractor:
         except Exception as exc:  # noqa: BLE001 — extractor must never raise
             logger.warning("FactExtractor unexpected error: %s", exc)
             return []
-        if llm_event_callback is not None:
-            try:
-                response_text = str(result.raw_response or "")
-                request_text = "\n".join(
-                    str((message or {}).get("content") or "")
-                    for message in (result.request_messages or [])
-                    if isinstance(message, dict)
-                )
-                tokens_in = max(0, len(request_text) // 4)
-                tokens_out = max(0, len(response_text) // 4)
-                await llm_event_callback(
-                    {
-                        "role": SystemLLMRoleType.FACT_EXTRACTOR.value,
-                        "model": result.model,
-                        "messages": result.request_messages,
-                        "params": result.request_params,
-                        "response": result.raw_response,
-                        "duration_ms": result.duration_ms,
-                        "tokens_in": tokens_in,
-                        "tokens_out": tokens_out,
-                        "tokens_total": tokens_in + tokens_out,
-                    }
-                )
-            except Exception:
-                logger.debug("FactExtractor llm_event_callback failed", exc_info=True)
-
         role_extras: dict[str, Any] = {}
         try:
             role_config = await self._role_service.get_role_config(SystemLLMRoleType.FACT_EXTRACTOR)
@@ -224,7 +202,7 @@ class FactExtractor:
                 continue
             if scope == FactScope.TENANT and tenant_id is None:
                 continue
-            if scope == FactScope.CHAT and chat_id is None:
+            if scope == FactScope.PROJECT:
                 continue
 
             confidence = max(0.0, min(1.0, float(cand.confidence)))
@@ -252,9 +230,7 @@ class FactExtractor:
                         user_message=user_message,
                         agent_summaries=agent_summaries,
                     ),
-                    user_id=user_id if scope != FactScope.TENANT else None,
                     tenant_id=tenant_id,
-                    chat_id=chat_id if scope == FactScope.CHAT else None,
                     confidence=confidence,
                 )
             )

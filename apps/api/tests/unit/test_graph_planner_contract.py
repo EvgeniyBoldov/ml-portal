@@ -73,17 +73,44 @@ def test_planner_output_uses_revise_for_existing_plan() -> None:
     assert patch.expected_revision == 3
 
 
-def test_planner_output_rejects_terminal_task_mutation() -> None:
-    with pytest.raises(ValidationError, match="complete cannot mutate tasks"):
-        PlannerGraphOutput.model_validate({
-            "action": "complete",
-            "tasks": [{
-                "task_id": "task-1",
-                "intent": "Task",
-                "instructions": "Do task",
-                "executor": "viewer",
-            }],
+def test_planner_output_normalizes_null_collection_fields() -> None:
+    output = PlannerGraphOutput.model_validate({
+        "action": "apply_graph",
+        "tasks": None,
+        "remove_task_ids": None,
+    })
+
+    assert output.tasks == []
+    assert output.remove_task_ids == []
+
+
+def test_planner_output_allows_explicit_completion_without_mutation() -> None:
+    patch = PlannerGraphOutput.model_validate({"action": "complete"}).to_plan_patch(
+        plan={"revision": 1, "tasks": {"reader": {}}}
+    )
+
+    assert patch.decision is PlannerDecisionKind.COMPLETE_PLAN
+
+
+def test_complete_plan_rejects_graph_mutation() -> None:
+    with pytest.raises(ValidationError):
+        PlanPatch.model_validate({
+            "expected_revision": 1,
+            "decision": "complete_plan",
+            "tasks": [{"task_id": "extra", "executor": "reader", "intent": "x", "instructions": "x"}],
         })
+
+
+def test_graph_task_can_request_replan_after_success() -> None:
+    task = PlannedTask.model_validate({
+        "task_id": "reader",
+        "executor": "context_reader",
+        "intent": "Read the document",
+        "instructions": "Return bounded findings",
+        "on_success": "replan",
+    })
+
+    assert task.on_success.value == "replan"
 
 
 def test_planner_input_hides_persistence_fields() -> None:
@@ -99,13 +126,18 @@ def test_planner_input_hides_persistence_fields() -> None:
             "tasks": {"inspect": {"task_id": "inspect", "status": "completed"}},
         },
         "completed_outputs": {},
+        "available_artifacts": [],
         "needs": [],
         "last_failure": None,
+        "user_response": "blue",
         "available_agents": [],
+        "memory_context": [{"scope": "user", "subject": "role", "value": "engineer"}],
     })())
 
     assert payload["mode"] == "replan"
     assert payload["replan_reason"] == "technical_failure"
+    assert payload["user_response"] == "blue"
+    assert payload["memory_context"] == [{"scope": "user", "subject": "role", "value": "engineer"}]
     assert payload["plan"] == {
         "has_existing_graph": True,
         "status": "active",

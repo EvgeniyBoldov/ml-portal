@@ -231,15 +231,7 @@ async def resume_run(
     if action == "cancel":
         await turn_service.cancel_turn(turn.id, error_message="Cancelled by user")
         await session.commit()
-        # Return SSE for cancel (single error-like event with status)
         async def _cancel_gen() -> AsyncGenerator[str, None]:
-            yield format_chat_sse(
-                ChatSSEEventType.ERROR,
-                ErrorPayload(
-                    error="User cancelled",
-                    code="cancelled",
-                ),
-            )
             yield format_chat_sse_done()
         return StreamingResponse(_cancel_gen(), media_type="text/event-stream")
 

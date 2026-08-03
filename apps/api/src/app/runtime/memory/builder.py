@@ -34,6 +34,7 @@ from app.runtime.memory.components import (
 )
 from app.runtime.memory.dto import FactDTO, SummaryDTO
 from app.runtime.memory.fact_store import FactStore
+from app.runtime.memory.service import MemoryService
 from app.runtime.memory.summary_store import SummaryStore
 from app.runtime.memory.transport import TurnMemory
 
@@ -61,6 +62,7 @@ class MemoryBuilder:
     ) -> None:
         self._session = session
         self._fact_store = FactStore(session)
+        self._memory_service = MemoryService(fact_store=self._fact_store)
         self._summary_store = SummaryStore(session)
         self._fact_limit = fact_limit
         self._memory_budget = memory_budget or MemoryBudget()
@@ -68,7 +70,7 @@ class MemoryBuilder:
             components=[
                 ConversationMemoryComponent(),
                 FactMemoryComponent(
-                    fact_store=self._fact_store,
+                    memory_service=self._memory_service,
                     fact_limit=fact_limit,
                 ),
                 ToolLedgerMemoryComponent(),
@@ -109,6 +111,11 @@ class MemoryBuilder:
             base=self._memory_budget,
             platform_config=platform_config,
         )
+        durable_snapshot = await self._memory_service.read_snapshot(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            limit=max(self._fact_limit, effective_budget.max_items_per_section) * 4,
+        )
         memory_bundle = await self._memory_assembler.assemble(
             MemoryQueryContext(
                 goal=goal,
@@ -128,6 +135,7 @@ class MemoryBuilder:
                 platform_config=dict(platform_config or {}),
                 tool_ledger_entries=list(tool_ledger_entries or []),
                 recent_agent_runs=list(recent_agent_runs or []),
+                durable_snapshot=durable_snapshot,
             )
         )
         if sandbox_branch_id is not None:
@@ -147,6 +155,8 @@ class MemoryBuilder:
             summary=summary,
             retrieved_facts=facts,
             memory_bundle=memory_bundle,
+            planner_memory_context=durable_snapshot.planner_context(limit=self._fact_limit),
+            durable_snapshot=durable_snapshot,
             artifacts=[
                 item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
                 for item in (attachments or [])
@@ -230,9 +240,9 @@ class MemoryBuilder:
             value = str(raw.get("value") or "").strip()
             if not subject or not value:
                 continue
-            scope_raw = str(raw.get("scope") or FactScope.CHAT.value)
+            scope_raw = str(raw.get("scope") or FactScope.USER.value)
             source_raw = str(raw.get("source") or FactSource.USER.value)
-            scope = FactScope(scope_raw) if scope_raw in {v.value for v in FactScope} else FactScope.CHAT
+            scope = FactScope(scope_raw) if scope_raw in {v.value for v in FactScope} else FactScope.USER
             source = FactSource(source_raw) if source_raw in {v.value for v in FactSource} else FactSource.USER_UTTERANCE
             fact = FactDTO(
                 scope=scope,

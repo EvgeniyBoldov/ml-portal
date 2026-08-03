@@ -421,6 +421,7 @@ async def run_sandbox(
                 agent_version_id=str(agent_version_id) if agent_version_id else None,
                 sandbox_overrides=sandbox_overrides,
                 execution_mode=ExecutionMode(data.execution_mode or ExecutionMode.NORMAL.value),
+                await_background_tail=False,
             )
             final_status = "completed"
             final_error: Optional[str] = None
@@ -489,13 +490,10 @@ async def run_sandbox(
                             yield frame
                         continue
                     event = item
-                    terminal = planner_terminal_from_event(event)
-                    if terminal is not None:
-                        final_status = terminal[0].value
-                        final_error = terminal[1]
-
                     if event.type == RuntimeEventType.STOP:
                         paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(dict(event.data or {}))
+                        final_status = str(paused_payload["reason"])
+                        final_error = None
                         svc_pause = SandboxService(stream_db)
                         await svc_pause.pause_run(
                             run_id=run_id,
@@ -517,14 +515,20 @@ async def run_sandbox(
                         if isinstance(content, str) and content:
                             yield _format_sse("delta", {"run_id": str(run_id), "content": content})
                     elif event.type == RuntimeEventType.FINAL:
-                        final_status = "completed"
-                        final_error = None
-                        yield _format_sse("final", {
-                            "run_id": str(run_id),
-                            "content": str(event.data.get("content") or ""),
-                            "sources": event.data.get("sources") or [],
-                            "attachments": event.data.get("attachments") or [],
-                        })
+                        if not str(final_status).startswith("waiting_"):
+                            final_status = "completed"
+                            final_error = None
+                            yield _format_sse("final", {
+                                "run_id": str(run_id),
+                                "content": str(event.data.get("content") or ""),
+                                "sources": event.data.get("sources") or [],
+                                "attachments": event.data.get("attachments") or [],
+                            })
+                    else:
+                        terminal = planner_terminal_from_event(event)
+                        if terminal is not None:
+                            final_status = terminal[0].value
+                            final_error = terminal[1]
                     if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
                         tail_id = str(event.data.get("tail_id") or "").strip()
                         if tail_id:
@@ -537,21 +541,6 @@ async def run_sandbox(
                     svc_final = SandboxService(stream_db)
                     await svc_final.finish_run(run_id, final_status, final_error)
                     await stream_db.commit()
-
-                if tail_pending:
-                    deadline = asyncio.get_event_loop().time() + 90.0
-                    while tail_pending and asyncio.get_event_loop().time() < deadline:
-                        timeout = min(1.0, max(0.0, deadline - asyncio.get_event_loop().time()))
-                        try:
-                            message = await asyncio.wait_for(tail_queue.get(), timeout=timeout)
-                        except asyncio.TimeoutError:
-                            continue
-                        _evt_type, evt_payload = await _handle_tail_event(message)
-                        frame = _tail_sse_frame(evt_payload)
-                        if frame is not None:
-                            yield frame
-                    if tail_pending:
-                        logger.warning("sandbox_tail_timeout", extra={"run_id": str(run_id), "pending_tail_ids": sorted(tail_pending)})
 
                 # Redis pub/sub is best effort.  Flush anything persisted while
                 # the pipeline was running before closing the SSE response.
@@ -749,8 +738,9 @@ async def resume_sandbox_run(
         source_context_snapshot=None,
     )
 
-    # Update run to resumed state
-    await svc.finish_run(run_id, "resumed", None)
+    # The resume checkpoint is now copied in memory; clear the persisted pause
+    # state and make the same sandbox run active again.
+    await svc.resume_run(run_id)
     await db.commit()
 
     # Get branch info
@@ -819,6 +809,7 @@ async def resume_sandbox_run(
                     "resumed_from_run_id": agent_execution_id,
                 },
                 confirmation_tokens=confirmed_fingerprints,
+                await_background_tail=False,
             )
 
             final_status = "completed"
@@ -885,13 +876,10 @@ async def resume_sandbox_run(
                             yield frame
                         continue
                     event = item
-                    terminal = planner_terminal_from_event(event)
-                    if terminal is not None:
-                        final_status = terminal[0].value
-                        final_error = terminal[1]
-
                     if event.type == RuntimeEventType.STOP:
                         paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(dict(event.data or {}))
+                        final_status = str(paused_payload["reason"])
+                        final_error = None
                         svc_pause = SandboxService(stream_db)
                         await svc_pause.pause_run(
                             run_id=run_id,
@@ -913,14 +901,20 @@ async def resume_sandbox_run(
                         if isinstance(content, str) and content:
                             yield _format_sse("delta", {"run_id": str(run_id), "content": content})
                     elif event.type == RuntimeEventType.FINAL:
-                        final_status = "completed"
-                        final_error = None
-                        yield _format_sse("final", {
-                            "run_id": str(run_id),
-                            "content": str(event.data.get("content") or ""),
-                            "sources": event.data.get("sources") or [],
-                            "attachments": event.data.get("attachments") or [],
-                        })
+                        if not str(final_status).startswith("waiting_"):
+                            final_status = "completed"
+                            final_error = None
+                            yield _format_sse("final", {
+                                "run_id": str(run_id),
+                                "content": str(event.data.get("content") or ""),
+                                "sources": event.data.get("sources") or [],
+                                "attachments": event.data.get("attachments") or [],
+                            })
+                    else:
+                        terminal = planner_terminal_from_event(event)
+                        if terminal is not None:
+                            final_status = terminal[0].value
+                            final_error = terminal[1]
 
                     if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
                         tail_id = str(event.data.get("tail_id") or "").strip()
@@ -934,21 +928,6 @@ async def resume_sandbox_run(
                     svc_final = SandboxService(stream_db)
                     await svc_final.finish_run(run_id, final_status, final_error)
                     await stream_db.commit()
-
-                if tail_pending:
-                    deadline = asyncio.get_event_loop().time() + 90.0
-                    while tail_pending and asyncio.get_event_loop().time() < deadline:
-                        timeout = min(1.0, max(0.0, deadline - asyncio.get_event_loop().time()))
-                        try:
-                            message = await asyncio.wait_for(tail_queue.get(), timeout=timeout)
-                        except asyncio.TimeoutError:
-                            continue
-                        _evt_type, evt_payload = await _handle_tail_event(message)
-                        frame = _tail_sse_frame(evt_payload)
-                        if frame is not None:
-                            yield frame
-                    if tail_pending:
-                        logger.warning("sandbox_tail_timeout", extra={"run_id": str(run_id), "pending_tail_ids": sorted(tail_pending)})
 
                 for fallback in await _journal_fallback():
                     yield _format_sse("journal", fallback)
@@ -979,3 +958,30 @@ async def resume_sandbox_run(
             yield _format_sse("done", {"run_id": str(run_id)})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/sessions/{session_id}/runs/{run_id}/cancel")
+async def cancel_sandbox_run(
+    session_id: uuid.UUID,
+    run_id: uuid.UUID,
+    db: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(require_admin),
+) -> StreamingResponse:
+    """Cancel a sandbox run paused for clarification or confirmation."""
+    svc = SandboxService(db)
+    await check_session_owner(svc, session_id, user)
+
+    run = await svc.get_run(run_id)
+    if not run or run.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status not in ("waiting_confirmation", "waiting_input"):
+        raise HTTPException(status_code=400, detail="Run is not waiting for cancellation")
+
+    await svc.finish_run(run_id, "cancelled", "Cancelled by user")
+    await db.commit()
+
+    async def _cancel_gen() -> AsyncGenerator[str, None]:
+        yield _format_sse("final", {"run_id": str(run_id), "status": "cancelled"})
+        yield _format_sse("done", {"run_id": str(run_id)})
+
+    return StreamingResponse(_cancel_gen(), media_type="text/event-stream")

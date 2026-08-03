@@ -11,6 +11,7 @@ import { Tooltip } from '@/shared/ui';
 import { qk } from '@/shared/api/keys';
 import type { ActiveRun } from '../hooks/useSandboxRun';
 import type { SandboxBranchListItem, SandboxRunListItem, RuntimeJournalEvent } from '../types';
+import type { ChatAttachmentRef } from '@/domains/chat/types';
 import { replayRuntimeJournal } from '../traceState';
 import { sandboxApi } from '../api';
 import ChatQuestionCard from './ChatQuestionCard';
@@ -43,6 +44,30 @@ function extractFinalContent(
     }
   }
   return result;
+}
+
+function extractFinalAttachments(events: RuntimeJournalEvent[]): ChatAttachmentRef[] {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const rawAttachments = events[i].payload.attachments;
+    if (!Array.isArray(rawAttachments)) continue;
+    const seen = new Set<string>();
+    return rawAttachments.flatMap((item) => {
+      if (!item || typeof item !== 'object') return [];
+      const record = item as Record<string, unknown>;
+      const artifactId = typeof record.artifact_id === 'string' ? record.artifact_id : '';
+      const fileName = typeof record.file_name === 'string' ? record.file_name : '';
+      if (!artifactId || !fileName || seen.has(artifactId)) return [];
+      seen.add(artifactId);
+      return [{
+        artifactId,
+        fileName,
+        downloadUrl: typeof record.download_url === 'string' ? record.download_url : undefined,
+        contentType: typeof record.content_type === 'string' ? record.content_type : undefined,
+        sizeBytes: typeof record.size_bytes === 'number' ? record.size_bytes : undefined,
+      }];
+    });
+  }
+  return [];
 }
 
 // ── HistoricalRunItem ───────────────────────────────────────────────────────
@@ -78,6 +103,7 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
   });
 
   const finalContent = runDetail ? extractFinalContent(runDetail.events) : '';
+  const finalAttachments = runDetail ? extractFinalAttachments(runDetail.events) : [];
   const isFailed = run.status === 'failed';
 
   const trace = useMemo(
@@ -102,6 +128,7 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
           <ChatAnswerCard
             text={isFailed ? (runDetail.error ?? 'Ошибка выполнения') : finalContent}
             isRunning={false}
+            attachments={finalAttachments}
           />
         ) : (
           <div className={styles['answer-loading']}>Загрузка ответа...</div>
@@ -136,7 +163,8 @@ interface Props {
   onSelectBranch: (branchId: string) => void;
   onCreateBranchFromMessage: (sourceText: string, parentRunId?: string | null) => Promise<void>;
   onRun: (text: string, parentRunId?: string | null, artifactIds?: string[]) => void;
-  onResumeSubmit: (text: string) => void;
+  onResumeSubmit: (text: string) => Promise<boolean>;
+  onCancelPausedRun: () => Promise<boolean>;
   onStop: () => void;
   onSelectRun?: (runId?: string) => void;
   onSelectTraceTarget?: (target: TraceInspectionTarget, trace: ReturnType<typeof replayRuntimeJournal>) => void;
@@ -159,6 +187,7 @@ export default function RunChat({
   onCreateBranchFromMessage,
   onRun,
   onResumeSubmit,
+  onCancelPausedRun,
   onStop,
   onSelectRun,
   onSelectTraceTarget,
@@ -327,11 +356,12 @@ export default function RunChat({
     void handleSubmit();
   };
 
-  const handleClarifySubmit = () => {
+  const handleClarifySubmit = async () => {
     const text = input.trim();
     if (!text) return;
-    setInput('');
-    onResumeSubmit(text);
+    if (await onResumeSubmit(text)) {
+      setInput('');
+    }
   };
 
   const handleComposerKeyDown = (e: KeyboardEvent) => {
@@ -367,7 +397,7 @@ export default function RunChat({
   const hasActiveRun = activeRun.status !== 'idle';
   const hasHistory = historicalRuns.length > 0;
   const isPaused = activeRun.status === 'waiting_input' || activeRun.status === 'waiting_confirmation';
-  const showActiveAnswerCard = !isPaused && (isRunning || activeRun.finalContent.trim().length > 0);
+  const showActiveAnswerCard = !isPaused && (isRunning || activeRun.finalContent.trim().length > 0 || activeRun.finalAttachments.length > 0);
   const latestClarifyQuestion = useMemo(
     () => extractClarifyQuestion(activeRun.pendingConfirmation?.context),
     [activeRun.pendingConfirmation],
@@ -422,7 +452,7 @@ export default function RunChat({
 
             <div className={styles['answer-row']}>
               {showActiveAnswerCard && (
-                <ChatAnswerCard text={activeAssistantMessage} isRunning={isRunning} />
+                <ChatAnswerCard text={activeAssistantMessage} isRunning={isRunning} attachments={activeRun.finalAttachments} />
               )}
               {!isReadOnly && !isRunning && activeRun.finalContent && (
                 <button
@@ -458,12 +488,16 @@ export default function RunChat({
                   />
                   <Button
                     size="sm"
-                    onClick={handleClarifySubmit}
+                  onClick={() => { void handleClarifySubmit(); }}
                     disabled={!input.trim() || isRunning || attachments.length > 0}
                   >
                     Ответить
                   </Button>
+                  <Button size="sm" variant="danger" onClick={() => { void onCancelPausedRun(); }} disabled={isRunning}>
+                    Отменить
+                  </Button>
                 </div>
+                {activeRun.error && <div className={styles['upload-error']}>{activeRun.error}</div>}
               </div>
             )}
           </div>
@@ -526,7 +560,7 @@ export default function RunChat({
             ) : (
               <Button
                 size="sm"
-                onClick={isWaitingInput ? handleClarifySubmit : handleSubmitVoid}
+                onClick={isWaitingInput ? () => { void handleClarifySubmit(); } : handleSubmitVoid}
                 disabled={isWaitingInput ? !input.trim() : (!input.trim() && attachments.length === 0) || isUploading}
               >
                 {isUploading ? 'Загрузка...' : (isWaitingInput ? 'Ответить' : 'Запуск')}

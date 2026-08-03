@@ -1,6 +1,6 @@
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorScalar, InspectorTextBlock } from '@/shared/ui/Inspector';
 import type { TraceCall } from '../../traceProjection';
-import { callDisplayName, llmMessages, llmResponseContent, llmResponseStatus, parseCallContent, purposeLabel, toDisplayEntries, toolResult, type DisplayEntry, type ToolNameMap } from '../../callInspection';
+import { callDisplayName, llmMessages, llmOutcome, llmResponseContent, llmResponseStatus, parseCallContent, purposeLabel, toDisplayEntries, toolResult, type DisplayEntry, type ToolNameMap } from '../../callInspection';
 import styles from './CallViews.module.css';
 
 function Value({ value, structured = false }: { value: unknown; structured?: boolean }) {
@@ -20,10 +20,10 @@ export function CallInfoView({ call, toolNames }: { call: TraceCall; toolNames?:
   const request = call.request.payload;
   const response = call.response?.payload ?? {};
   const toolOutcome = call.kind === 'tool' && call.response ? toolResult(response) : undefined;
-  const llmOutcome = call.kind === 'llm' && call.response ? llmResponseStatus(response) : undefined;
+  const semanticOutcome = call.kind === 'llm' && call.response ? llmOutcome(response, call.toolCallCount) : undefined;
   const entries = call.kind === 'llm'
     ? [
-        { label: 'Статус', value: !call.response ? 'Ожидается' : llmOutcome === 'error' ? 'Ошибка' : llmOutcome === 'empty' ? 'Пустой ответ' : 'Получен ответ' },
+        { label: 'Статус', value: !call.response ? 'Ожидается' : semanticOutcome?.count ? `${semanticOutcome.label} · ${semanticOutcome.count}` : semanticOutcome?.label },
         { label: 'Назначение', value: purposeLabel(request.purpose) },
         { label: 'Модель', value: request.model ?? response.model },
         { label: 'Сообщений', value: Array.isArray(request.messages) ? request.messages.length : undefined },
@@ -50,7 +50,8 @@ export function LlmResponseView({ call, toolNames }: { call: TraceCall; toolName
   if (!payload) return <InspectorFieldGroup><InspectorFieldRow label="Статус">Ожидается</InspectorFieldRow></InspectorFieldGroup>;
   const responseStatus = llmResponseStatus(payload);
   if (responseStatus === 'error') return <InspectorFieldGroup><InspectorFieldRow label="Статус">Ошибка</InspectorFieldRow><InspectorFieldRow label="Тип ошибки">{String(payload.error_type)}</InspectorFieldRow></InspectorFieldGroup>;
-  if (responseStatus === 'empty') return <InspectorFieldGroup><InspectorFieldRow label="Статус">Пустой ответ</InspectorFieldRow></InspectorFieldGroup>;
+  const semanticOutcome = llmOutcome(payload, call.toolCallCount);
+  if (semanticOutcome.kind === 'tools' || responseStatus === 'empty') return <InspectorFieldGroup><InspectorFieldRow label="Статус">{semanticOutcome.count ? `${semanticOutcome.label} · ${semanticOutcome.count}` : semanticOutcome.label}</InspectorFieldRow></InspectorFieldGroup>;
   const parsed = parseCallContent(llmResponseContent(payload));
   if (parsed.kind === 'tool_call') {
     const toolCall = parsed.data as Record<string, unknown>;

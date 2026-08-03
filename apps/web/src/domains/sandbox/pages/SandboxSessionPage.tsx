@@ -302,6 +302,7 @@ export default function SandboxSessionPage() {
           onCreateBranchFromMessage={handleCreateBranchFromMessage}
           onRun={handleRun}
           onResumeSubmit={(text) => sandboxRun.confirmAction(true, text)}
+          onCancelPausedRun={sandboxRun.cancelPausedRun}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
           onSelectTraceTarget={(target, trace) => { setSelectedTraceTarget(target); setSelectedTraceState(trace); }}

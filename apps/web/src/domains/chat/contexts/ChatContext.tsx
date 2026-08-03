@@ -69,7 +69,7 @@ interface ChatActions {
     input: string,
     onChunk: (chunk: string) => void,
     onError: (error: string) => void,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 }
 
 const ChatActionsContext = createContext<ChatActions | null>(null);
@@ -97,7 +97,13 @@ function toAttachments(value: unknown): ChatAttachmentRef[] {
     const artifactId = typeof raw.artifact_id === 'string' ? raw.artifact_id : '';
     const fileName = typeof raw.file_name === 'string' ? raw.file_name : '';
     if (!artifactId || !fileName) return [];
-    return [{ artifactId, fileName, contentType: typeof raw.content_type === 'string' ? raw.content_type : undefined, sizeBytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : undefined }];
+    return [{
+      artifactId,
+      fileName,
+      downloadUrl: typeof raw.download_url === 'string' ? raw.download_url : undefined,
+      contentType: typeof raw.content_type === 'string' ? raw.content_type : undefined,
+      sizeBytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : undefined,
+    }];
   });
 }
 
@@ -127,6 +133,26 @@ function toRenderableMessage(message: ChatMessage): Message | null {
     createdAt: message.created_at ?? new Date().toISOString(),
     meta: toMessageMeta(message.meta),
   };
+}
+
+function toRuntimeProgress(value: unknown): ChatRuntimeProgress | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const description = typeof raw.description === 'string' ? raw.description.trim() : '';
+  if (!description) return null;
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    runId: typeof raw.run_id === 'string' ? raw.run_id : '',
+    phase: typeof raw.phase === 'string' ? raw.phase : '',
+    kind: typeof raw.kind === 'string' ? raw.kind : '',
+    description,
+    status: typeof raw.status === 'string' ? raw.status : undefined,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function appendRuntimeProgress(current: ChatRuntimeProgress[], progress: ChatRuntimeProgress) {
+  return current.at(-1)?.description === progress.description ? current : [...current, progress].slice(-10);
 }
 
 export function ChatProvider({ children }: { children: ReactNode }) {
@@ -345,6 +371,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
       let realUserId: string | null = null;
       let realAssistantId: string | null = null;
+      let paused = false;
 
       const flushAssistantContent = () => {
         setMessagesByChat(prev => {
@@ -462,21 +489,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             try {
               const parsed = JSON.parse(data) as { stage?: unknown; progress?: Record<string, unknown> };
               if (parsed.stage !== 'runtime_progress' || !parsed.progress) continue;
-              const description = typeof parsed.progress.description === 'string' ? parsed.progress.description.trim() : '';
-              if (description) {
-                const progress: ChatRuntimeProgress = {
-                  id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                  runId: typeof parsed.progress.run_id === 'string' ? parsed.progress.run_id : '',
-                  phase: typeof parsed.progress.phase === 'string' ? parsed.progress.phase : '',
-                  kind: typeof parsed.progress.kind === 'string' ? parsed.progress.kind : '',
-                  description,
-                  status: typeof parsed.progress.status === 'string' ? parsed.progress.status : undefined,
-                  createdAt: new Date().toISOString(),
-                };
+              const progress = toRuntimeProgress(parsed.progress);
+              if (progress) {
                 setActiveRun((current) => current ? {
                   ...current,
                   runId: progress.runId || current.runId,
-                  progress: current.progress.at(-1)?.description === progress.description ? current.progress : [...current.progress, progress].slice(-10),
+                  progress: appendRuntimeProgress(current.progress, progress),
                 } : current);
               }
             } catch {
@@ -506,6 +524,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               }
               pendingRenderedContent = assistantContent;
               flushAssistantContent();
+              setActiveRun((current) => current?.assistantMessageId === tempAssistantId
+                ? { ...current, assistantMessageId: realAssistantId! }
+                : current);
               setMessagesByChat(prev => {
                 const current = prev[chatId];
                 if (!current) return prev;
@@ -546,6 +567,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 message: typeof context.message === 'string' ? context.message : undefined,
                 action: parsed.action && typeof parsed.action === 'object' ? parsed.action as Record<string, unknown> : {},
               });
+              paused = true;
             } catch {
               onError('Некорректное событие паузы');
             }
@@ -577,8 +599,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Progress is live-only and never becomes part of persisted history.
-      setActiveRun(null);
+      // Progress is live-only. Keep it while this run is paused so the
+      // assistant card remains the stable place for the user interaction.
+      if (!paused) setActiveRun(null);
       setPendingConfirmationTokens([]);
       if (flushTimer) {
         clearTimeout(flushTimer);
@@ -615,13 +638,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   ) => {
     if (!runId) {
       onError('Run ID is required');
-      return;
+      return false;
     }
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setError(null);
     setIsStreaming(true);
+    setActiveRun((current) => current ? { ...current, runId, status: 'running' } : current);
+    let pausedAgain = false;
+    let completed = false;
 
     try {
       const { resumeRunStream } = await import('@shared/api/chats');
@@ -643,7 +669,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       await consumeSse(response, ({ event, data }) => {
         if (data === '[DONE]' || event === 'done') {
-          clearPendingState();
+          if (!pausedAgain) clearPendingState();
           return;
         }
         if (event === 'delta') {
@@ -651,7 +677,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (event === 'final') {
-          clearPendingState();
+          completed = true;
+          return;
+        }
+        if (event === 'status') {
+          const payload = JSON.parse(data) as { stage?: unknown; progress?: unknown };
+          if (payload.stage !== 'runtime_progress') return;
+          const progress = toRuntimeProgress(payload.progress);
+          if (!progress) return;
+          setActiveRun((current) => current ? {
+            ...current,
+            runId: progress.runId || current.runId,
+            progress: appendRuntimeProgress(current.progress, progress),
+          } : current);
           return;
         }
         if (event === 'error') {
@@ -668,7 +706,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           message: typeof context.message === 'string' ? context.message : undefined,
           action: payload.action && typeof payload.action === 'object' ? payload.action as Record<string, unknown> : {},
         });
+        pausedAgain = true;
       });
+      return completed || pausedAgain || action === 'cancel';
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         setActiveRun(null);
@@ -677,6 +717,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setError(errorMsg);
         onError(errorMsg);
       }
+      return false;
     } finally {
       setIsStreaming(false);
       abortControllerRef.current = null;

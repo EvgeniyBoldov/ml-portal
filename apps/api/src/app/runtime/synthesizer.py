@@ -45,6 +45,11 @@ _FALLBACK_SYSTEM_PROMPT = (
     "Преобразуй answer_brief в точный и лаконичный ответ для пользователя, "
     "не меняя смысл и не добавляя новые факты."
 )
+_FILE_DELIVERY_RULE = (
+    "Сгенерированные файлы доставляются интерфейсом отдельными вложениями. "
+    "Не добавляй в текст markdown-ссылки, URL или списки файлов; при необходимости "
+    "можно кратко упомянуть имя готового файла."
+)
 
 _ROLE_PROMPT_SECTIONS = [
     ("identity", "IDENTITY"),
@@ -130,6 +135,7 @@ class Synthesizer:
             if role_override.get("temperature") is not None:
                 synth_role_cfg["temperature"] = float(role_override["temperature"])
         synth_prompt = _compile_role_prompt(synth_role_cfg, role_override if isinstance(role_override, dict) else None)
+        synth_prompt = f"{synth_prompt}\n\n# FILE DELIVERY\n{_FILE_DELIVERY_RULE}"
 
         if budget_registry is not None:
             synthesis_limits = None
@@ -409,12 +415,22 @@ class Synthesizer:
     ) -> List[Dict[str, Any]]:
         """Collect file.generate attachments from all agent results."""
         result: List[Dict[str, Any]] = []
+        seen_artifact_ids: set[str] = set()
         for item in runtime_state.agent_results:
             item_attachments = item.get("attachments")
             if isinstance(item_attachments, list):
                 for att in item_attachments:
-                    if isinstance(att, dict) and att.get("artifact_id"):
-                        result.append(dict(att))
+                    artifact_id = str(att.get("artifact_id") or "").strip() if isinstance(att, dict) else ""
+                    if not artifact_id or artifact_id in seen_artifact_ids:
+                        continue
+                    seen_artifact_ids.add(artifact_id)
+                    result.append({
+                        "artifact_id": artifact_id,
+                        "file_name": att.get("file_name") or att.get("name") or "file",
+                        "download_url": att.get("download_url") or f"/api/v1/files/{artifact_id}/download",
+                        "content_type": att.get("content_type") or "",
+                        "size_bytes": att.get("size_bytes"),
+                    })
         return result
 
     @staticmethod

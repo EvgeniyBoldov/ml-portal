@@ -9,10 +9,11 @@ from uuid import UUID
 from app.agents.context import ToolContext
 from app.runtime.contracts import PipelineRequest, PipelineStopReason
 from app.runtime.envelope import PhasedEvent
-from app.runtime.events import OrchestrationPhase, RuntimeEvent
+from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.orchestrator import GraphOrchestrator
 from app.runtime.plan_store import SqlPlanStore
 from app.runtime.turn_state import RuntimeTurnState
+from app.runtime.memory.service import MemorySnapshot
 
 
 class GraphPlanningOutcomeKind(str, Enum):
@@ -26,6 +27,7 @@ class GraphPlanningOutcome:
     kind: GraphPlanningOutcomeKind
     stop_reason: PipelineStopReason
     answer_brief: Optional[str] = None
+    pause_question: Optional[str] = None
     final_answer_strategy: str = "synthesize"
 
 
@@ -49,11 +51,17 @@ class GraphPlanningStage:
         available_agents: List[Dict[str, Any]],
         platform_config: Dict[str, Any],
         planner_rbac_audit: Optional[Dict[str, Any]] = None,
+        planner_memory_context: Optional[List[Dict[str, Any]]] = None,
+        durable_memory_snapshot: Optional[MemorySnapshot] = None,
         orchestrator_id: Optional[str] = None,
     ) -> AsyncIterator[PhasedEvent]:
+        pause_question: Optional[str] = None
         runtime_sink = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
         if runtime_sink is not None:
             async def emit_planner_event(event: RuntimeEvent) -> None:
+                nonlocal pause_question
+                if event.type == RuntimeEventType.WAITING_INPUT:
+                    pause_question = str(event.data.get("question") or "").strip() or None
                 await runtime_sink.emit(event, phase=OrchestrationPhase.PLANNER)
 
             self._orchestrator.event_sink = emit_planner_event
@@ -68,11 +76,10 @@ class GraphPlanningStage:
                 tenant_id=tenant_id,
                 chat_id=UUID(request.chat_id) if request.chat_id else None,
             )
-        elif plan.status == "waiting_input":
-            await self._store.resume_waiting_tasks(
-                plan.id,
-                user_input=str(request.request_text or "").strip(),
-            )
+        resume_user_response: Optional[str] = None
+        if plan.status == "waiting_input":
+            resume_user_response = str(request.request_text or "").strip()
+            await self._store.resume_planner_pause(plan.id)
         planner_kwargs = {
             "chat_id": UUID(request.chat_id) if request.chat_id else None,
             "tenant_id": tenant_id,
@@ -85,6 +92,10 @@ class GraphPlanningStage:
             "platform_config": platform_config,
             "model": request.model,
             "planner_rbac_audit": dict(planner_rbac_audit or {}),
+            "planner_memory_context": list(planner_memory_context or []),
+            "durable_memory_snapshot": durable_memory_snapshot,
+            "force_replan": resume_user_response is not None,
+            "resume_user_response": resume_user_response,
         }
         async for event in self._orchestrator.run(
             plan_id=plan.id,
@@ -97,7 +108,10 @@ class GraphPlanningStage:
             max_steps=self._max_steps,
             planner_kwargs=planner_kwargs,
         ):
-            yield PhasedEvent(event.to_runtime_event(), OrchestrationPhase.PLANNER)
+            runtime_event = event.to_runtime_event()
+            if runtime_event.type == RuntimeEventType.WAITING_INPUT:
+                pause_question = str(runtime_event.data.get("question") or "").strip() or None
+            yield PhasedEvent(runtime_event, OrchestrationPhase.PLANNER)
         snapshot = await self._store.snapshot(plan.id)
         status = str(snapshot["status"])
         if status == "completed":
@@ -110,6 +124,7 @@ class GraphPlanningStage:
             self.outcome = GraphPlanningOutcome(
                 kind=GraphPlanningOutcomeKind.PAUSED,
                 stop_reason=PipelineStopReason.WAITING_INPUT,
+                pause_question=pause_question,
             )
         else:
             self.outcome = GraphPlanningOutcome(

@@ -319,6 +319,17 @@ class RuntimePipeline:
         emitter = root_logger
         orchestrator_id = planner_orchestrator_id(run_id_str)
         ctx.extra["runtime_logging_level"] = run_logging_level
+        yield await emitter.emit(
+            RuntimeEvent.status(
+                "memory_snapshot_loaded",
+                user_entries=len(turn_mem.durable_snapshot.user_facts),
+                tenant_entries=len(turn_mem.durable_snapshot.tenant_facts),
+                planner_entries=len(turn_mem.planner_memory_context),
+                parent_entity_type="run",
+                parent_entity_id=run_id_str,
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
 
         # Load planner role config for context snapshot
         role_service = SystemLLMRoleService(self._session)
@@ -429,6 +440,8 @@ class RuntimePipeline:
             available_agents=available_agents,
             platform_config=platform.config,
             planner_rbac_audit=planner_rbac_audit,
+            planner_memory_context=turn_mem.planner_memory_context,
+            durable_memory_snapshot=turn_mem.durable_snapshot,
             orchestrator_id=orchestrator_id,
         ):
             yield await emitter.emit(phased.event, phase=phased.phase)
@@ -452,45 +465,27 @@ class RuntimePipeline:
             )
             if planning_outcome.kind == GraphPlanningOutcomeKind.PAUSED:
                 # A paused run must stop the user-visible stream immediately.
-                # Memory side effects may continue, but never in the same SSE
-                # stream after STOP/run_paused.
-                await self._consume_memory_finalize_background(
-                    turn_mem=turn_mem,
-                    runtime_state=runtime_state,
-                    request=request,
-                    stop_reason=planning_outcome.stop_reason,
-                    emitter=emitter,
-                    budget_resolver=budget_resolver,
-                    logging_level=run_logging_level,
+                # There is no synthesized response to persist yet.
+                yield await emitter.emit(
+                    RuntimeEvent.stop(
+                        reason=terminal_status,
+                        run_id=run_id_str,
+                        question=planning_outcome.pause_question,
+                    ),
+                    phase=OrchestrationPhase.PIPELINE,
                 )
             elif await_background_tail:
-                # Sandbox/trace mode consumes the full runtime tail, including
-                # memory writeback lifecycle, after non-paused terminal states.
-                async for memory_ev in self._finalize_memory(
-                    turn_mem=turn_mem,
-                    runtime_state=runtime_state,
-                    request=request,
-                    stop_reason=planning_outcome.stop_reason,
-                    emitter=emitter,
-                    budget_resolver=budget_resolver,
-                    logging_level=run_logging_level,
-                ):
-                    yield memory_ev
+                # There is no user-facing response yet: planning failed before
+                # the synthesizer. Memory writeback is post-response work and
+                # must not be started for this terminal path.
                 yield await emitter.emit(
                     RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
                     phase=OrchestrationPhase.PIPELINE,
                 )
             else:
-                # Chat mode should stop streaming immediately after pause/error.
-                await self._consume_memory_finalize_background(
-                    turn_mem=turn_mem,
-                    runtime_state=runtime_state,
-                    request=request,
-                    stop_reason=planning_outcome.stop_reason,
-                    emitter=emitter,
-                    budget_resolver=budget_resolver,
-                    logging_level=run_logging_level,
-                )
+                # Chat mode should stop streaming immediately after pause/error;
+                # memory is intentionally not finalized without a synthesizer.
+                pass
             return
 
         # --- Finalization -----------------------------------------------
@@ -549,6 +544,13 @@ class RuntimePipeline:
                 emitter=emitter,
                 budget_resolver=budget_resolver,
                 logging_level=run_logging_level,
+            )
+            yield await emitter.emit(
+                RuntimeEvent.run_end(
+                    run_id=run_id_str,
+                    status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
+                ),
+                phase=OrchestrationPhase.PIPELINE,
             )
 
     @staticmethod
@@ -754,9 +756,9 @@ class RuntimePipeline:
                         _memory_component_entity_id(str(runtime_state.run_id), component_name, index),
                     )
                     component_status = str(item.get("status") or "completed")
-                    lifecycle_status = "failed" if component_status == "failed" else (
-                        "paused" if component_status in {"degraded", "skipped"} else "completed"
-                    )
+                    # Memory degradation/skipping is a completed best-effort
+                    # post-response component, not a user-interaction pause.
+                    lifecycle_status = "failed" if component_status == "failed" else "completed"
                     yield await emitter.emit(
                         RuntimeEvent.status(
                             "memory_component_result",

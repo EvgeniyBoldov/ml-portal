@@ -560,6 +560,13 @@ class StructuredLLMCall:
 
         if role_type != SystemLLMRoleType.SYNTHESIZER.value and schema is not None:
             generated_schema = schema.model_json_schema()
+            if role_type == SystemLLMRoleType.PLANNER.value:
+                parts.append(
+                    "# PLANNER RUNTIME CONTRACT\n"
+                    "Планер не формирует пользовательский ответ и не завершает план напрямую. "
+                    "Для любого ответа, включая простой, добавь задачу с executor из available_agents; "
+                    "завершённый граф передаётся synthesizer-у оркестратором."
+                )
             parts.append(
                 "# OUTPUT REQUIREMENTS\n"
                 "Верни строго валидный JSON по следующей схеме (без markdown и пояснений):\n"

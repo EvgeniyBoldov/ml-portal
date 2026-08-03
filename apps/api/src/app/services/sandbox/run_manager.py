@@ -123,6 +123,7 @@ class SandboxRunManager:
                 "status": status,
                 "paused_action": paused_action,
                 "paused_context": paused_context,
+                "finished_at": None,
             },
         )
 
@@ -136,6 +137,7 @@ class SandboxRunManager:
                 "status": "running",
                 "paused_action": None,
                 "paused_context": None,
+                "finished_at": None,
             },
         )
 

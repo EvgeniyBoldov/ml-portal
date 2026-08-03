@@ -114,10 +114,21 @@ chat and never participates in journal replay. A `journal` frame has exactly
 the persisted row schema; no flattened payload or synthetic step format is
 permitted.
 
+`final` and `done` end the user-facing sandbox stream. Post-turn memory
+writeback is dispatched after finalization and continues independently in the
+same journal; its later facts/summary events are obtained by refreshing the
+run detail, not by holding the answer stream open for `tail_finished`.
+
 Chat SSE is limited to `user_message`, `chat_title`, `status` (only
 `runtime_progress`), `delta`, `pause`, `final`, `cached`, `error`, and `done`.
 `pause` is the sole HITL transport frame and carries
 `run_id`, `reason`, `action`, `context`, and `contract_version`.
+
+The terminal `final` frame may carry deduplicated generated-file `attachments`.
+Each attachment contains `artifact_id`, `file_name`, `download_url`,
+`content_type`, and `size_bytes`. `download_url` is a relative API delivery
+route that is authorized when opened; clients render these as attachment UI
+below the answer and do not require the synthesizer to emit markdown links.
 
 ## Calls, snapshots and workers
 

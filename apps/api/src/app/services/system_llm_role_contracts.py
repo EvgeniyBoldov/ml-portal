@@ -86,7 +86,7 @@ def _enrich_schema_with_contract_metadata(schema: Dict[str, Any], role: SystemLL
         items = schema.get("properties", {}).get("facts", {}).get("items", {})
         if items and "properties" in items:
             scope_prop = items["properties"].get("scope", {})
-            scope_prop["enum"] = ["user", "chat", "tenant"]
+            scope_prop["enum"] = ["user", "tenant"]
 
     elif role == SystemLLMRoleType.SUMMARY_COMPACTOR:
         # entities is dict in model, but contract expects array of strings

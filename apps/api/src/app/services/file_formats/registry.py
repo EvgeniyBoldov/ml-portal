@@ -78,6 +78,7 @@ class FileCodecRegistry:
 
     _codecs: Dict[str, FileCodec] = {
         "txt": _TextCodec(FileFormat("txt", "txt", "text/plain")),
+        "py": _TextCodec(FileFormat("py", "py", "text/x-python")),
         "md": _TextCodec(FileFormat("md", "md", "text/markdown")),
         "json": _JsonCodec(FileFormat("json", "json", "application/json")),
         "csv": _CsvCodec(FileFormat("csv", "csv", "text/csv")),

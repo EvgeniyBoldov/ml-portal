@@ -27,6 +27,7 @@ PLATFORM_DEFAULT_MAX_ITERS = 25
 PLATFORM_SYNTH_CHUNK_SIZE = 20
 
 PLATFORM_FALLBACK_SETTINGS: Dict[str, Any] = {
+    "native_tool_calling": True,
     "required_operation_retry_instruction": PLATFORM_REQUIRED_OPERATION_RETRY_INSTRUCTION,
     "operations_rules_text": PLATFORM_OPERATION_RULES_TEXT,
     "intent_messages": PLATFORM_INTENT_MESSAGES,
@@ -49,6 +50,7 @@ def _settings_to_dict(settings: Any) -> Dict[str, Any]:
         for key in (
             "id",
             "policies_text",
+            "native_tool_calling",
             "require_confirmation_for_write",
             "require_confirmation_for_destructive",
             "forbid_destructive",
@@ -80,6 +82,7 @@ def build_effective_platform_settings_payload(settings: Any) -> Dict[str, Any]:
 def build_platform_runtime_config(settings: Any) -> Dict[str, Any]:
     effective = build_effective_platform_settings_payload(settings)
     return {
+        "native_tool_calling": bool(effective.get("native_tool_calling", True)),
         "policies_text": effective.get("policies_text"),
         "require_confirmation_for_write": bool(effective.get("require_confirmation_for_write") or False),
         "require_confirmation_for_destructive": bool(effective.get("require_confirmation_for_destructive") or False),

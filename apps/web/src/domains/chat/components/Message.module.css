@@ -6,6 +6,7 @@
 .user .content { display: flex; flex-direction: column; align-items: flex-end; max-width: min(76%, 760px); }
 .header { display: flex; gap: 8px; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--text); }
 .header time { color: var(--muted); font-weight: 400; }
+.statusLabel { padding: 1px 6px; border-radius: 999px; background: var(--bg-secondary); color: var(--text-secondary); font-size: 11px; font-weight: 500; }
 .user .header { flex-direction: row-reverse; }
 .userBody { padding: 10px 14px; border-radius: 14px 14px 4px; background: var(--primary); color: white; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistantBody { line-height: 1.5; overflow-wrap: anywhere; }

@@ -25,7 +25,6 @@ def _planner_examples() -> ExamplesV2:
         "outputs": {
             "apply_graph": {"action": "apply_graph", "tasks": [{"task_id": "discover", "executor": "viewer", "intent": "Собрать источники", "instructions": "Собрать доступные источники"}]},
             "ask_user": {"action": "ask_user", "question": "Уточните фокус запроса."},
-            "complete": {"action": "complete", "answer_brief": "Данных достаточно."},
             "fail": {"action": "fail", "failure_reason": "Нет подходящего агента."},
         },
     }
@@ -82,9 +81,8 @@ def _fact_extractor_examples() -> ExamplesV2:
         "outputs": {
             "default": {
                 "facts": [
-                    {"scope": "chat", "subject": "requested_collection", "value": "reglament", "confidence": 0.95},
-                    {"scope": "chat", "subject": "collection_rows", "value": "7", "confidence": 0.88},
-                    {"scope": "user", "subject": "intent", "value": "inspect_data_sources", "confidence": 0.84},
+                    {"scope": "tenant", "subject": "collection.regulations", "value": "available", "confidence": 0.95},
+                    {"scope": "user", "subject": "work.intent", "value": "inspect_data_sources", "confidence": 0.84},
                 ],
             },
         },

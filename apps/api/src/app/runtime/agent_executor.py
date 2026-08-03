@@ -279,6 +279,7 @@ class AgentExecutor:
                                 attachments.append({
                                     "artifact_id": artifact_id,
                                     "file_name": result_payload.get("file_name") or result_payload.get("filename") or "file",
+                                    "download_url": f"/api/v1/files/{artifact_id}/download",
                                     "content_type": result_payload.get("content_type") or "",
                                     "size_bytes": result_payload.get("size_bytes"),
                                 })
@@ -348,7 +349,22 @@ class AgentExecutor:
         )
 
         outcome = "completed" if success else "failed"
-        result_summary = summary_preview or ("no_output" if success else (final_error or "failed"))
+        if summary_preview:
+            result_summary = summary_preview
+        elif success and attachments:
+            names = [
+                str(item.get("file_name") or "file")
+                for item in attachments[:5]
+                if isinstance(item, dict)
+            ]
+            result_summary = "Создан файл: " + ", ".join(names)
+        else:
+            result_summary = "no_output" if success else (final_error or "failed")
+
+        # A reused tool result may be observed more than once when a model
+        # repeats an already completed native tool call. Keep one attachment
+        # per artifact so synthesis and the final event stay deterministic.
+        attachments = self._dedupe_artifacts(attachments)
 
         state.add_agent_result(
             {
@@ -586,6 +602,32 @@ class AgentExecutor:
             final_query = "\n\n".join(parts)
         else:
             final_query = str(query)
+
+        if task.dependency_outputs:
+            dependency_lines = ["[Dependency outputs]"]
+            remaining = 8000
+            for task_id, output in list(task.dependency_outputs.items())[:8]:
+                rendered = str(output).strip()
+                if rendered:
+                    rendered = rendered[: min(4000, remaining)]
+                    dependency_lines.append(f"- {task_id}: {rendered}")
+                    remaining -= len(rendered)
+                    if remaining <= 0:
+                        break
+            if len(dependency_lines) > 1:
+                final_query = "\n\n".join(["\n".join(dependency_lines), final_query])
+
+        if task.memory_context:
+            memory_lines = ["[Relevant durable memory]"]
+            for item in task.memory_context[:12]:
+                if not isinstance(item, dict):
+                    continue
+                subject = str(item.get("subject") or "").strip()
+                value = str(item.get("value") or "").strip()
+                if subject and value:
+                    memory_lines.append(f"- [{item.get('scope', 'memory')}] {subject}: {value}")
+            if len(memory_lines) > 1:
+                final_query = "\n\n".join(["\n".join(memory_lines), final_query])
 
         attachment_items = list(attachments or [])
         if attachment_items:

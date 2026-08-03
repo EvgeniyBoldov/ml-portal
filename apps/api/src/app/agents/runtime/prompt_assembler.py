@@ -121,6 +121,13 @@ class PromptAssembler:
             system_prompt_override=system_prompt_override,
             sandbox_overrides=sandbox_overrides,
         )
+        # Older published agent versions may still mention the removed
+        # ``file.create`` name. Keep the prompt aligned with the canonical
+        # operation surface while those versions are being republished.
+        if resolved_operations and "file.generate" in {
+            str(getattr(op, "operation_slug", "")) for op in resolved_operations
+        }:
+            base_prompt = base_prompt.replace("file.create", "file.generate")
         capability_prompt = ""
         collection_prompt = self.assemble_collection_prompt(
             exec_request.resolved_data_instances,

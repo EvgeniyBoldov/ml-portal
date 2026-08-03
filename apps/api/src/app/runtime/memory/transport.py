@@ -23,6 +23,7 @@ from uuid import UUID
 from app.runtime.memory.dto import FactDTO, SummaryDTO
 from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.runtime.memory.components import MemoryBundle
+from app.runtime.memory.service import MemorySnapshot
 
 
 @dataclass
@@ -40,6 +41,8 @@ class TurnMemory:
     summary: SummaryDTO
     retrieved_facts: List[FactDTO] = field(default_factory=list)
     memory_bundle: MemoryBundle = field(default_factory=MemoryBundle)
+    planner_memory_context: List[Dict[str, Any]] = field(default_factory=list)
+    durable_snapshot: MemorySnapshot = field(default_factory=MemorySnapshot)
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
 
     # --- mutated during the turn by the pipeline --------------------------

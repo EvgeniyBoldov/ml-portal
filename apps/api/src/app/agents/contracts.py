@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 class ActionType(str, Enum):
     OPERATION_CALL = "operation_call"
     AGENT_CALL = "agent_call"
-    ASK_USER = "ask_user"
     FINAL = "final"
 
 
@@ -37,10 +36,6 @@ class AgentActionPayload(BaseModel):
     input: Dict[str, Any] = Field(default_factory=dict)
 
 
-class AskUserPayload(BaseModel):
-    question: str = Field(..., min_length=1)
-
-
 class FinalPayload(BaseModel):
     answer: str = Field(..., min_length=1)
 
@@ -58,7 +53,6 @@ class NextAction(BaseModel):
     type: ActionType
     operation: Optional[OperationActionPayload] = None
     agent: Optional[AgentActionPayload] = None
-    ask_user: Optional[AskUserPayload] = None
     final: Optional[FinalPayload] = None
     meta: Optional[ActionMeta] = None
 

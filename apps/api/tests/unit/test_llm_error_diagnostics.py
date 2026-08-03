@@ -29,6 +29,7 @@ def test_structured_prompt_generates_contract_for_non_synthesizer_roles():
     )
 
     assert "СТАРЫЙ КОНТРАКТ ИЗ БД" not in prompt
+    assert "Планер не формирует пользовательский ответ" in prompt
     assert "Верни строго валидный JSON" in prompt
     assert '"value"' in prompt
 

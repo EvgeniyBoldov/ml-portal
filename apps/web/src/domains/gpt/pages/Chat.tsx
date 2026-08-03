@@ -5,7 +5,6 @@ import { useChatActions, useChatMessagesState } from '@/domains/chat/contexts/Ch
 import { ChatComposer } from '@/domains/chat/components/ChatComposer';
 import { UserMessage } from '@/domains/chat/components/UserMessage';
 import { AssistantMessage } from '@/domains/chat/components/AssistantMessage';
-import { ChatRunStatus } from '@/domains/chat/components/ChatRunStatus';
 import { ConfirmationPrompt } from '@/domains/chat/components/ConfirmationPrompt/ConfirmationPrompt';
 import { Icon } from '@/shared/ui/Icon';
 
@@ -132,51 +131,57 @@ export default function Chat() {
     setStreamError(null);
     try {
       const userInput = clarifyInput.trim();
-      setClarifyInput('');
-      // Close input window immediately after sending
-      clearPendingState();
-      
+      let resumed = false;
       if (pendingConfirmation && state.pausedRunId) {
-        // Handle confirmation with user input
-        await resumeStream(
+        resumed = await resumeStream(
           state.pausedRunId,
           'confirm',
           userInput,
-          () => {}, // No chunk handler
+          () => {},
           (err: string) => setStreamError(_friendlyError(err)),
         );
       } else if (state.pausedRunId) {
-        // Handle clarify input
-        await resumeStream(
+        resumed = await resumeStream(
           state.pausedRunId,
           'input',
           userInput,
-          () => {}, // No chunk handler for clarify
+          () => {},
           (err: string) => setStreamError(_friendlyError(err)),
         );
       } else {
-        // Triage clarify path has no resumable run_id; continue as a normal user message.
         await handleSend(userInput, {});
+        resumed = true;
       }
-      
-      if (chatId) {
+      if (resumed) {
+        setClarifyInput('');
+      }
+      if (chatId && resumed) {
         await loadMessages(chatId);
       }
     } catch (e: unknown) {
       const rawError = e instanceof Error ? e.message : 'Ошибка отправки';
-      if (rawError.includes('Paused run not found')) {
-        const message = clarifyInput.trim();
-        clearPendingState();
-        setClarifyInput('');
-        if (chatId) {
-          await loadMessages(chatId);
-        }
-        if (message) {
-          await handleSend(message, {});
-          return;
-        }
-      }
       setStreamError(_friendlyError(rawError));
+    } finally {
+      setClarifyBusy(false);
+    }
+  };
+
+  const handleInteractionCancel = async () => {
+    const runId = String(state.pausedRunId || pendingConfirmation?.runId || '').trim();
+    if (!runId || clarifyBusy) return;
+    setClarifyBusy(true);
+    setStreamError(null);
+    try {
+      const cancelled = await resumeStream(
+        runId,
+        'cancel',
+        '',
+        () => {},
+        (err: string) => setStreamError(_friendlyError(err)),
+      );
+      if (cancelled) {
+        setClarifyInput('');
+      }
     } finally {
       setClarifyBusy(false);
     }
@@ -254,9 +259,12 @@ export default function Chat() {
           messages.map((message) => (
             <React.Fragment key={message.id}>
               {message.role === 'user' ? <UserMessage message={message} /> : null}
-              {activeRun?.userMessageId === message.id && <ChatRunStatus run={activeRun} />}
-              {message.role === 'assistant' && (message.content || !message.isOptimistic) && (
-                <AssistantMessage message={message} isStreaming={Boolean(state.isStreaming && message.isOptimistic)} />
+              {message.role === 'assistant' && (
+                <AssistantMessage
+                  message={message}
+                  isStreaming={Boolean(state.isStreaming && message.isOptimistic)}
+                  run={activeRun?.assistantMessageId === message.id ? activeRun : undefined}
+                />
               )}
             </React.Fragment>
           ))
@@ -285,80 +293,58 @@ export default function Chat() {
         </button>
       )}
 
-      {pendingConfirmation && (
-        <ConfirmationPrompt
-          item={pendingConfirmation}
-          onCancel={() => {
-            clearPendingState();
-            setStreamError(null);
-            setBusy(false);
-          }}
-          onConfirm={async () => {
-            if (!chatId || busy) return;
-            setBusy(true);
-            setStreamError(null);
-            // Close confirmation window immediately after sending
-            clearPendingState();
-            try {
+      <div className={styles.composerSlot}>
+        {pendingConfirmation ? (
+          <ConfirmationPrompt
+            item={pendingConfirmation}
+            onCancel={() => { void handleInteractionCancel(); }}
+            onConfirm={async () => {
+              if (clarifyBusy) return;
               const runId = String(pendingConfirmation.runId || state.pausedRunId || '').trim();
               if (!runId) {
-                throw new Error('Paused run not found');
+                setStreamError('Сессия ожидания уже завершена или устарела.');
+                return;
               }
-              await resumeStream(
-                runId,
-                'confirm',
-                '',
-                () => {}, // No chunk handler for confirm
-                (err: string) => setStreamError(_friendlyError(err)),
-              );
-              if (chatId) {
-                await loadMessages(chatId);
+              setClarifyBusy(true);
+              setStreamError(null);
+              try {
+                const resumed = await resumeStream(runId, 'confirm', '', () => {}, (err: string) => setStreamError(_friendlyError(err)));
+                if (resumed && chatId) await loadMessages(chatId);
+              } finally {
+                setClarifyBusy(false);
               }
-            } catch (e) {
-              console.error('Failed to confirm operation', e);
-              setStreamError(_friendlyError(e instanceof Error ? e.message : 'Не удалось подтвердить операцию'));
-            } finally {
-              setBusy(false);
-            }
-          }}
-        />
-      )}
-
-      {/* Waiting for user input block */}
-      {isWaitingInput && (
-        <div className={styles.clarifyBox}>
-          <div className={styles.waitingInputText}>
-            <Icon name="help-circle" size={16} />
-            <span>{state.pendingInput?.question || state.pendingInput?.reason || 'Агент ожидает вашего ответа'}</span>
+            }}
+          />
+        ) : isWaitingInput ? (
+          <div className={styles.clarifyBox}>
+            <div className={styles.waitingInputText}>
+              <Icon name="help-circle" size={16} />
+              <span>{state.pendingInput?.question || state.pendingInput?.reason || 'Агент ожидает вашего ответа'}</span>
+            </div>
+            <div className={styles.clarifyRow}>
+              <textarea
+                className={styles.clarifyInput}
+                placeholder="Введите уточнение для продолжения..."
+                value={clarifyInput}
+                onChange={(e) => setClarifyInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleClarifySubmit();
+                  }
+                }}
+                rows={2}
+                disabled={clarifyBusy}
+              />
+              <button className={`${styles.confirmBtn} ${styles.confirmBtnApprove}`} onClick={handleClarifySubmit} disabled={!clarifyInput.trim() || clarifyBusy}>
+                {clarifyBusy ? 'Отправка...' : 'Ответить'}
+              </button>
+              <button className={styles.confirmBtn} onClick={() => { void handleInteractionCancel(); }} disabled={clarifyBusy}>
+                Отменить
+              </button>
+            </div>
           </div>
-          <div className={styles.clarifyRow}>
-            <textarea
-              className={styles.clarifyInput}
-              placeholder="Введите уточнение для продолжения..."
-              value={clarifyInput}
-              onChange={(e) => setClarifyInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleClarifySubmit();
-                }
-              }}
-              rows={2}
-              disabled={clarifyBusy}
-            />
-            <button
-              className={`${styles.confirmBtn} ${styles.confirmBtnApprove}`}
-              onClick={handleClarifySubmit}
-              disabled={!clarifyInput.trim() || clarifyBusy}
-            >
-              {clarifyBusy ? 'Отправка...' : 'Ответить'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Composer */}
-      {!isWaitingInput && (
+        ) : (
         <ChatComposer
           onSend={handleSend}
           disabled={busy && !state.isStreaming}
@@ -369,7 +355,8 @@ export default function Chat() {
           }}
           placeholder="Напишите сообщение..."
         />
-      )}
+        )}
+      </div>
     </div>
   );
 }

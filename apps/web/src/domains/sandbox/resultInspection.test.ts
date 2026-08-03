@@ -5,6 +5,7 @@ describe('result inspection projection', () => {
   it('uses user-facing labels for terminal runtime states', () => {
     expect(resultStatusLabel('completed')).toBe('Готово');
     expect(resultStatusLabel('failed')).toBe('Ошибка');
+    expect(resultStatusLabel('unfulfillable')).toBe('Неисполнимо');
     expect(resultStatusLabel('aborted')).toBe('Прервано');
   });
 });

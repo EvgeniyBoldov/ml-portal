@@ -10,6 +10,7 @@ from app.runtime.orchestrator_contracts import (
     TaskAttemptFailure,
     TaskOutcome,
     TaskRequest,
+    TaskSuccessAction,
 )
 from app.runtime.plan_store import SqlPlanStore
 from uuid import UUID, uuid4
@@ -130,6 +131,8 @@ class GraphOrchestrator:
                 },
             ))
         planner_kwargs = planner_kwargs or {}
+        force_replan = bool(planner_kwargs.get("force_replan"))
+        resume_user_response = str(planner_kwargs.get("resume_user_response") or "").strip() or None
         limits = dict(planner_kwargs.get("runtime_limits") or {})
         planner_rbac_audit = dict(planner_kwargs.get("planner_rbac_audit") or {})
         llm_kwargs = {
@@ -206,6 +209,8 @@ class GraphOrchestrator:
                         if isinstance(need, dict)
                     ],
                     last_failure=last_failure,
+                    user_response=resume_user_response if reason == "user_input" else None,
+                    memory_context=list(planner_kwargs.get("planner_memory_context") or []),
                     trigger=reason,
                     run_id=root_run_id,
                     plan_id=plan_id,
@@ -259,7 +264,17 @@ class GraphOrchestrator:
             await observe("agent_end", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "status": "completed"}, trigger=reason)
             await observe("step_end", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "status": "completed", "outcome": "success"}, trigger=reason)
             return None
-        if not plan["tasks"]:
+        if force_replan:
+            replan_error = await revise(reason="user_input")
+            if replan_error:
+                closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
+                if closed is not None:
+                    yield closed
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
+                return
+            plan = await self.store.snapshot(plan_id)
+
+        if not plan["tasks"] and not force_replan:
             invocation_id = uuid4()
             checkpoint_id = make_checkpoint_id(str(root_run_id), "planner", str(invocation_id))
             await observe("orchestrator_checkpoint_started", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
@@ -296,6 +311,7 @@ class GraphOrchestrator:
                 patch = await self.planner.plan(request=PlanRequest(
                     goal=goal, available_agents=available_agents, plan=plan,
                     completed_outputs=self._completed_outputs(plan),
+                    memory_context=list(planner_kwargs.get("planner_memory_context") or []),
                     available_artifacts=self._available_artifacts(plan, available_artifacts),
                     trigger="initial", run_id=root_run_id, plan_id=plan_id,
                     trace_parent_id=iteration_id,
@@ -362,7 +378,7 @@ class GraphOrchestrator:
                                     parent_entity_type="agent_execution", parent_entity_id=planner_executor_id,
                                     plan_id=str(plan_id), revision_before=plan["revision"], revision_after=updated.revision, mode="initial",
                                     patch=patch.model_dump(mode="json"))
-        else:
+        elif not force_replan:
             # A resumed persisted plan has no new planner call in this run,
             # but its task steps still need one explicit execution iteration.
             active_iteration_id = make_iteration_id(str(root_run_id), iteration_number)
@@ -392,14 +408,27 @@ class GraphOrchestrator:
                 raise RuntimeError("task execution requires an active planner iteration")
             task_id = task.task_id
             snapshot = await self.store.snapshot(plan_id)
-            dependencies = {
-                dep: snapshot["tasks"].get(dep, {}).get("result", {}).get("outputs", {})
-                for dep in snapshot["tasks"].get(task_id, {}).get("depends_on", [])
-            }
+            dependencies = {}
+            for dep in snapshot["tasks"].get(task_id, {}).get("depends_on", []):
+                result_data = snapshot["tasks"].get(dep, {}).get("result", {})
+                if not isinstance(result_data, dict):
+                    continue
+                dependencies[dep] = {
+                    "summary": result_data.get("summary", ""),
+                    "outputs": result_data.get("outputs", {}),
+                    "evidence": result_data.get("evidence", {}),
+                }
             request = TaskRequest(task_id=task_id, intent=task.intent, instructions=task.instructions,
                                   executor=task.executor, inputs=task.inputs or {},
                                   needs=snapshot["tasks"].get(task_id, {}).get("needs", []),
-                                  checkpoint=task.checkpoint or {}, dependency_outputs=dependencies)
+                                  checkpoint=task.checkpoint or {}, dependency_outputs=dependencies,
+                                  memory_context=(
+                                      planner_kwargs["durable_memory_snapshot"].agent_context(
+                                          query=f"{task.intent} {task.instructions}"
+                                      )
+                                      if planner_kwargs.get("durable_memory_snapshot") is not None
+                                      else []
+                                  ))
             checkpoint_id = make_checkpoint_id(str(root_run_id), "task", f"{task_id}:{task.attempts}")
             executor_id = make_agent_execution_id(active_iteration_id, task_id, task.attempts)
             await observe("orchestrator_checkpoint_started", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
@@ -469,7 +498,7 @@ class GraphOrchestrator:
                         return
                 continue
             await self.store.apply_result(plan_id, task_id, result)
-            result_event = "task_completed" if result.outcome.value == "completed" else "task_unfulfillable" if result.outcome.value == "unfulfillable" else "task_paused"
+            result_event = "task_completed" if result.outcome.value == "completed" else "status"
             await observe(result_event, entity_type="task", entity_id=task_id, parent_type="plan", parent_id=str(plan_id), payload={"outcome": result.outcome.value, "summary": result.summary, "outputs": result.outputs}, trigger=result.outcome.value)
             await observe("attempt_succeeded", entity_type="attempt", entity_id=attempt_entity_id, parent_type="task", parent_id=task_id, payload={"outcome": result.outcome.value, "attempt_number": task.attempts})
             await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
@@ -492,6 +521,22 @@ class GraphOrchestrator:
                                     parent_entity_type="plan", parent_entity_id=str(plan_id),
                                     plan_id=str(plan_id), task_id=task_id, outcome=result.outcome.value)
             active_step_number += 1
+            success_action = getattr(task, "on_success", TaskSuccessAction.CONTINUE.value)
+            if (
+                result.outcome == TaskOutcome.COMPLETED
+                and str(getattr(success_action, "value", success_action)) == TaskSuccessAction.REPLAN.value
+            ):
+                closed = close_active_iteration(status="completed", outcome="replan")
+                if closed is not None:
+                    yield closed
+                replan_error = await revise(reason="task_completed")
+                if replan_error:
+                    closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
+                    if closed is not None:
+                        yield closed
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
+                    return
+                continue
             if result.outcome in {TaskOutcome.NEEDS_DEPENDENCY, TaskOutcome.UNFULFILLABLE}:
                 closed = close_active_iteration(status=result.outcome.value, outcome=result.outcome.value)
                 if closed is not None:

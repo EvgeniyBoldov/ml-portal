@@ -35,6 +35,35 @@ async def test_pause_run_uses_provided_status():
     assert updated["obj"] is run_obj
     assert updated["data"]["status"] == "waiting_input"
     assert updated["data"]["paused_action"] == {"kind": "input"}
+    assert updated["data"]["finished_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_resume_run_reopens_paused_run_and_clears_checkpoint():
+    run_id = uuid4()
+    run_obj = SimpleNamespace(id=run_id)
+    updated = {}
+
+    class _RunsRepo:
+        async def get_by_id(self, _rid):
+            return run_obj
+
+        async def update(self, obj, data):
+            updated["obj"] = obj
+            updated["data"] = data
+            return obj
+
+    manager = SandboxRunManager(SimpleNamespace(runs=_RunsRepo()))
+
+    await manager.resume_run(run_id)
+
+    assert updated["obj"] is run_obj
+    assert updated["data"] == {
+        "status": "running",
+        "paused_action": None,
+        "paused_context": None,
+        "finished_at": None,
+    }
 
 
 @pytest.mark.asyncio
