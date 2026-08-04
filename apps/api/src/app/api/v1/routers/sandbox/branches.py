@@ -17,11 +17,20 @@ from app.schemas.sandbox import (
     SandboxBranchOverrideResponse,
     SandboxBranchOverrideUpsert,
     SandboxSnapshotResponse,
+    SandboxFactOverrideUpsert,
+)
+from app.runtime.memory.fact_store import FactStore
+from app.runtime.memory.service import MemoryService
+from app.runtime.memory.sandbox_overlays import (
+    OVERLAY_DELETED,
+    OVERLAY_SET,
+    fact_to_payload,
+    inspector_payload,
 )
 from app.services.sandbox_service import SandboxService
 from app.services.sandbox_override_resolver import SandboxOverrideResolver
 
-from .helpers import check_session_owner, user_uuid
+from .helpers import check_session_owner, tenant_uuid, user_uuid
 
 router = APIRouter()
 
@@ -158,11 +167,83 @@ async def get_branch_facts_artifact(
     branch = await svc.get_branch_artifacts(branch_id)
     if not branch or branch.session_id != session_id:
         raise HTTPException(status_code=404, detail="Branch not found")
+    snapshot = await MemoryService(fact_store=FactStore(db)).read_snapshot(
+        user_id=user_uuid(user),
+        tenant_id=await tenant_uuid(db, user),
+        limit=100,
+    )
+    view = inspector_payload(snapshot.entries, branch.fact_overrides_json)
+    effective = view["effective"]
     return SandboxBranchFactsArtifactResponse(
         branch_id=branch.id,
-        facts=list(branch.facts_artifact_json or []),
+        base=view["base"],
+        overrides=view["overrides"],
+        effective=effective,
+        facts=[*effective.get("user", []), *effective.get("tenant", [])],
         updated_at=branch.artifacts_updated_at,
     )
+
+
+@router.put(
+    "/sessions/{session_id}/branches/{branch_id}/artifacts/facts/{scope}/{subject}",
+    response_model=SandboxBranchFactsArtifactResponse,
+)
+async def upsert_fact_override(
+    session_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    scope: str,
+    subject: str,
+    data: SandboxFactOverrideUpsert,
+    db: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(require_admin),
+):
+    if scope not in {"user", "tenant"} or not subject.strip():
+        raise HTTPException(status_code=422, detail="Fact scope and subject are invalid")
+    if data.state == OVERLAY_SET and not (data.value or "").strip():
+        raise HTTPException(status_code=422, detail="A set fact override requires a value")
+    svc = SandboxService(db)
+    await check_session_owner(svc, session_id, user)
+    branch = await svc.get_branch(branch_id)
+    if not branch or branch.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    entry = {"state": data.state}
+    if data.state == OVERLAY_SET:
+        entry["fact"] = {
+            "scope": scope,
+            "subject": subject.strip(),
+            "value": data.value.strip() if data.value else "",
+            "source": data.source,
+            "confidence": data.confidence,
+            "source_ref": data.source_ref,
+        }
+    await svc.upsert_fact_override(
+        branch_id=branch_id,
+        scope=scope,
+        subject=subject.strip(),
+        entry=entry,
+    )
+    await db.commit()
+    return await get_branch_facts_artifact(session_id, branch_id, db, user)
+
+
+@router.delete("/sessions/{session_id}/branches/{branch_id}/artifacts/facts/{scope}/{subject}", status_code=204)
+async def reset_fact_override(
+    session_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    scope: str,
+    subject: str,
+    db: AsyncSession = Depends(db_session),
+    user: UserCtx = Depends(require_admin),
+):
+    if scope not in {"user", "tenant"}:
+        raise HTTPException(status_code=422, detail="Fact scope is invalid")
+    svc = SandboxService(db)
+    await check_session_owner(svc, session_id, user)
+    branch = await svc.get_branch(branch_id)
+    if not branch or branch.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    await svc.delete_fact_override(branch_id=branch_id, scope=scope, subject=subject)
+    await db.commit()
 
 
 @router.get(

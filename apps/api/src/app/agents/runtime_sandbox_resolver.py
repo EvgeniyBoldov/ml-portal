@@ -50,7 +50,11 @@ class RuntimeSandboxResolver:
         agent_version: Optional[Any] = None,
     ) -> Dict[str, Any]:
         resolver = SandboxOverrideResolver(effective_config)
-        return resolver.to_runtime_overrides(agent_version=agent_version)
+        overrides = resolver.to_runtime_overrides(agent_version=agent_version)
+        # Fact overlays are stored in the immutable sandbox snapshot, not in
+        # generic resolver rows. Preserve them verbatim for MemoryBuilder.
+        overrides["fact_overrides"] = dict(effective_config.get("fact_overrides") or {})
+        return overrides
 
     async def resolve_sandbox_agent(
         self,

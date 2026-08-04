@@ -765,7 +765,17 @@ async def resume_sandbox_run(
             )
             runtime_deps = tool_ctx.get_runtime_deps()
             runtime_deps.session_factory = session_factory
-            runtime_deps.sandbox_overrides = {"logging_level": "full", "sandbox_run_id": str(run_id)}
+            resumed_overrides = RuntimeSandboxResolver.sandbox_runtime_overrides(
+                effective_config,
+                agent_version=None,
+            )
+            resumed_overrides.update({
+                "logging_level": "full",
+                "sandbox_run_id": str(run_id),
+                "sandbox_branch_id": str(branch.id),
+                "sandbox_session_id": str(session_id),
+            })
+            runtime_deps.sandbox_overrides = resumed_overrides
             tool_ctx.set_runtime_deps(runtime_deps)
 
             pipeline = RuntimePipeline(
@@ -798,12 +808,7 @@ async def resume_sandbox_run(
                 attachments=attachment_contexts,
                 agent_slug=resumed_agent_slug,
                 agent_version_id=str(resumed_agent_version_id) if resumed_agent_version_id else None,
-                sandbox_overrides={
-                    "logging_level": "full",
-                    "sandbox_run_id": str(run_id),
-                    "sandbox_branch_id": str(branch.id),
-                    "sandbox_session_id": str(session_id),
-                },
+                sandbox_overrides=resumed_overrides,
                 continuation_meta={
                     "resume_checkpoint": checkpoint,
                     "resumed_from_run_id": agent_execution_id,

@@ -62,6 +62,12 @@ def is_tool_calling_unsupported_error(exc: Exception) -> bool:
             "tool_calls are not supported",
             "does not support tool calling",
             "unsupported tool calling",
+            # vLLM rejects ``tool_choice=auto`` when the server was not
+            # started with native tool-calling support and a parser.  This is
+            # a capability mismatch, not an agent failure: the runtime can
+            # continue with its textual tool_call protocol.
+            "auto tool choice requires --enable-auto-tool-choice",
+            "enable-auto-tool-choice and --tool-call-parser",
         )
     )
 

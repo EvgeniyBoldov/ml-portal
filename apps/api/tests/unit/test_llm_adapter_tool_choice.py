@@ -50,6 +50,22 @@ def test_classifies_tool_choice_mismatch_for_plaintext_fallback() -> None:
     assert classified.code == "llm_tool_calling_unsupported"
 
 
+def test_classifies_vllm_auto_tool_choice_configuration_error() -> None:
+    error = SimpleNamespace(
+        body={
+            "error": {
+                "type": "BadRequestError",
+                "message": "\"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set",
+            }
+        },
+        __str__=lambda self: "vLLM rejected tool_choice=auto",
+    )
+
+    classified = classify_provider_error(error)
+
+    assert isinstance(classified, LLMToolCallingUnsupportedError)
+
+
 def test_classifies_provider_token_limit_without_retry() -> None:
     error = SimpleNamespace(
         body={"error": {"code": "rate_limit_exceeded", "message": "Requested 11283 tokens per minute"}},

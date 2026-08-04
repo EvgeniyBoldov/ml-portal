@@ -89,8 +89,19 @@ class SandboxBranchArtifactsMetaResponse(BaseModel):
 
 class SandboxBranchFactsArtifactResponse(BaseModel):
     branch_id: UUID
+    base: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    overrides: dict[str, dict[str, dict[str, Any]]] = Field(default_factory=dict)
+    effective: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     facts: list[dict[str, Any]] = []
     updated_at: Optional[datetime] = None
+
+
+class SandboxFactOverrideUpsert(BaseModel):
+    state: Literal["set", "deleted"]
+    value: Optional[str] = Field(default=None, max_length=500)
+    source: Literal["user_utterance", "agent_result", "system"] = "user_utterance"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    source_ref: Optional[str] = Field(default=None, max_length=128)
 
 
 class SandboxBranchSummaryArtifactResponse(BaseModel):

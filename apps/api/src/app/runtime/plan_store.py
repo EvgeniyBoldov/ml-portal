@@ -162,15 +162,28 @@ class InMemoryPlanStore:
                 **task.model_dump(mode="json", by_alias=True),
                 "status": (
                     TaskStatus.PENDING.value
-                    if old and old.get("status") in {
-                        TaskStatus.WAITING_DEPENDENCY.value,
-                        TaskStatus.WAITING_USER.value,
-                        TaskStatus.WAITING_RETRY.value,
+                    if old and old.get("status") not in {
+                        TaskStatus.RUNNING.value,
+                        TaskStatus.COMPLETED.value,
                     }
                     else old.get("status", TaskStatus.PENDING.value) if old else TaskStatus.PENDING.value
                 ),
-                "checkpoint": old.get("checkpoint", {}) if old else {},
-                "result": old.get("result") if old else None,
+                "checkpoint": (
+                    {}
+                    if old and old.get("status") not in {
+                        TaskStatus.RUNNING.value,
+                        TaskStatus.COMPLETED.value,
+                    }
+                    else old.get("checkpoint", {}) if old else {}
+                ),
+                "result": (
+                    None
+                    if old and old.get("status") not in {
+                        TaskStatus.RUNNING.value,
+                        TaskStatus.COMPLETED.value,
+                    }
+                    else old.get("result") if old else None
+                ),
                 "attempts": old.get("attempts", 0) if old else 0,
                 "planned_order": old.get("planned_order", index) if old else index,
             }
@@ -399,6 +412,14 @@ class SqlPlanStore:
                         task.expected_outputs = [output.model_dump(mode="json", by_alias=True) for output in item.expected_outputs]
                         task.on_success = item.on_success.value
                         task.planned_order = index
+                        # A replan may replace a failed/unfulfillable task
+                        # with another executor.  The new definition must be
+                        # executable; retaining the terminal status would
+                        # make the scheduler report ``plan_stalled`` without
+                        # ever claiming the replacement.
+                        task.status = TaskStatus.PENDING.value
+                        task.result = None
+                        task.checkpoint = {}
                     await self.session.execute(delete(RuntimeTaskDependency).where(
                         RuntimeTaskDependency.plan_id == plan_id, RuntimeTaskDependency.task_id == item.task_id,
                     ))

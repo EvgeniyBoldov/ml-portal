@@ -483,8 +483,11 @@ export function ConfigPanel({
       discovered_tool: selectedToolBase as Record<string, unknown>,
       router: ({ ...(selectedRouter?.config ?? {}), limits: orchestratorLimits ?? {} }) as Record<string, unknown>,
       platform: ({ ...(platformSettings ?? {}), limits: platformLimits ?? {} }) as Record<string, unknown>,
-      branch_facts: ({ facts: branchFactsArtifact?.facts ?? [] }) as Record<string, unknown>,
-      branch_summary: ({ ...(branchSummaryArtifact?.summary ?? {}) }) as Record<string, unknown>,
+      branch_facts: ({
+        base: branchFactsArtifact?.base ?? { user: [], tenant: [] },
+        overrides: branchFactsArtifact?.overrides ?? { user: {}, tenant: {} },
+        effective: branchFactsArtifact?.effective ?? { user: [], tenant: [] },
+      }) as Record<string, unknown>,
     };
 
     const source = sourceByKey[selectedBlueprint.key] ?? {};

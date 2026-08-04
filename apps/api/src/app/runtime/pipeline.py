@@ -712,7 +712,6 @@ class RuntimePipeline:
             memory_orchestrator = _memory_orchestrator_id(str(runtime_state.run_id))
             component_ids = {
                 "facts": _memory_component_entity_id(str(runtime_state.run_id), "facts", 1),
-                "conversation": _memory_component_entity_id(str(runtime_state.run_id), "conversation", 1),
             }
             yield await emitter.emit(
                 RuntimeEvent.orchestrator_start(
@@ -892,9 +891,7 @@ class RuntimePipeline:
                         subject=f.subject,
                         value=f.value,
                         source=f.source.value if f.source else "USER_UTTERANCE",
-                        user_id=str(f.user_id) if f.user_id else None,
                         tenant_id=str(f.tenant_id) if f.tenant_id else None,
-                        chat_id=str(f.chat_id) if f.chat_id else None,
                         confidence=f.confidence,
                     )
                     for f in (turn_mem.retrieved_facts or [])

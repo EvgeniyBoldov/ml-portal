@@ -273,6 +273,34 @@ class SandboxService:
             summary=summary,
         )
 
+    async def upsert_fact_override(
+        self,
+        *,
+        branch_id: UUID,
+        scope: str,
+        subject: str,
+        entry: Dict[str, Any],
+    ) -> Optional[SandboxBranch]:
+        return await self.branch_state.upsert_fact_override(
+            branch_id=branch_id,
+            scope=scope,
+            subject=subject,
+            entry=entry,
+        )
+
+    async def delete_fact_override(
+        self,
+        *,
+        branch_id: UUID,
+        scope: str,
+        subject: str,
+    ) -> bool:
+        return await self.branch_state.delete_fact_override(
+            branch_id=branch_id,
+            scope=scope,
+            subject=subject,
+        )
+
     async def create_snapshot(
         self,
         session_id: UUID,

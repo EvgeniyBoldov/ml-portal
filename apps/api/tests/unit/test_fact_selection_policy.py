@@ -23,8 +23,9 @@ def _fact(
         subject=subject,
         value=value,
         source=FactSource.SYSTEM,
-        user_id=user_id,
         tenant_id=tenant_id,
+        owner_type="user" if scope == FactScope.USER else "tenant",
+        owner_id=user_id if scope == FactScope.USER else tenant_id,
         observed_at=observed_at,
         confidence=confidence,
     )

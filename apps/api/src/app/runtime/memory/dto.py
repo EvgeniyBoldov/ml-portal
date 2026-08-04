@@ -59,8 +59,6 @@ class FactDTO:
             return self.owner_id == other.owner_id
         if self.scope == FactScope.TENANT:
             return self.owner_id == other.owner_id
-        if self.scope == FactScope.PROJECT:
-            return self.owner_type == other.owner_type and self.owner_id == other.owner_id
         return False
 
 

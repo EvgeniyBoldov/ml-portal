@@ -202,9 +202,6 @@ class FactExtractor:
                 continue
             if scope == FactScope.TENANT and tenant_id is None:
                 continue
-            if scope == FactScope.PROJECT:
-                continue
-
             confidence = max(0.0, min(1.0, float(cand.confidence)))
             if confidence < confidence_min:
                 continue

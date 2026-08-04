@@ -139,6 +139,23 @@ export const sandboxApi = {
   getBranchFactsArtifact: (sessionId: string, branchId: string): Promise<SandboxBranchFactsArtifact> =>
     apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/facts`),
 
+  upsertFactOverride: (
+    sessionId: string,
+    branchId: string,
+    scope: 'user' | 'tenant',
+    subject: string,
+    data: { state: 'set' | 'deleted'; value?: string; source?: 'user_utterance' | 'agent_result' | 'system'; confidence?: number; source_ref?: string | null },
+  ): Promise<SandboxBranchFactsArtifact> =>
+    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/facts/${encodeURIComponent(scope)}/${encodeURIComponent(subject)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  resetFactOverride: (sessionId: string, branchId: string, scope: 'user' | 'tenant', subject: string): Promise<void> =>
+    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/facts/${encodeURIComponent(scope)}/${encodeURIComponent(subject)}`, {
+      method: 'DELETE',
+    }),
+
   getBranchSummaryArtifact: (sessionId: string, branchId: string): Promise<SandboxBranchSummaryArtifact> =>
     apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/summary`),
 

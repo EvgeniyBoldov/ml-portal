@@ -71,6 +71,22 @@ The resolver must be able to expose, for every relevant field:
 
 This makes reset/diff/preview behavior deterministic and keeps the UI and runtime aligned.
 
+## Fact memory overlay
+
+Durable runtime facts have only two scopes: `user` and `tenant`. Chat writes
+them to the canonical `facts` table. Sandbox never writes that table: each
+branch stores only an overlay keyed by `(scope, subject)` in its branch state.
+
+- `set` replaces a durable fact for the branch or adds a branch-only fact;
+- `deleted` is a tombstone that hides the durable fact for the branch;
+- reset removes the overlay entry and restores the durable value.
+
+The sandbox fact inspector exposes grouped `base`, `overrides`, and `effective`
+views for both scopes. Fact overlays are included in the immutable run snapshot;
+the runtime must resolve memory from that snapshot rather than mutable branch
+state. Conversation summary storage remains for compatibility but is currently
+disabled as a runtime memory component.
+
 The sandbox may store overrides in branch-scoped persistence, but it should interact with the resolver as a structured tree, not as a flat form over database rows.
 
 For tools, the resolver should treat `published` as an overrideable runtime-safe flag within the sandbox branch overlay:

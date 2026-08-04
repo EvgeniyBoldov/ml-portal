@@ -36,7 +36,6 @@ async def test_memory_service_reads_one_snapshot_and_writes_generic_user_tenant_
         facts=[
             FactDTO(scope=FactScope.USER, subject="role", value="engineer", source=FactSource.USER_UTTERANCE),
             FactDTO(scope=FactScope.TENANT, subject="term", value="portal", source=FactSource.USER_UTTERANCE),
-            FactDTO(scope=FactScope.PROJECT, subject="rule", value="review", source=FactSource.USER_UTTERANCE),
         ],
     )
 

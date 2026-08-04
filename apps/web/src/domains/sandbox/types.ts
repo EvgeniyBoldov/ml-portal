@@ -100,6 +100,9 @@ export interface SandboxBranchArtifactsMeta {
 
 export interface SandboxBranchFactsArtifact {
   branch_id: string;
+  base: Record<'user' | 'tenant', Record<string, unknown>[]>;
+  overrides: Record<'user' | 'tenant', Record<string, Record<string, unknown>>>;
+  effective: Record<'user' | 'tenant', Record<string, unknown>[]>;
   facts: Record<string, unknown>[];
   updated_at: string | null;
 }

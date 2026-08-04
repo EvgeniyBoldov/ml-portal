@@ -6,7 +6,7 @@ Failure policy: write-side failures must not break user turn completion.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from time import monotonic
 from typing import Any, Awaitable, Callable, List, Optional, Protocol
@@ -29,6 +29,7 @@ from app.runtime.memory.fact_extractor import (
 from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.summary_compactor import SummaryCompactor
 from app.runtime.memory.summary_store import SummaryStore
+from app.runtime.memory.sandbox_overlays import merge_extracted
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.memory.service import MemoryService
 from app.runtime.contracts import PipelineStopReason
@@ -100,6 +101,8 @@ class MemoryWriter:
         self._session = session
         self._fact_store = FactStore(session)
         self._memory_service = MemoryService(fact_store=self._fact_store)
+        # Retained for compatibility with stored summaries; no component calls
+        # these helpers while conversation memory is disabled.
         self._summary_store = SummaryStore(session)
         self._extractor = FactExtractor(session=session, llm_client=llm_client)
         self._compactor = SummaryCompactor(session=session, llm_client=llm_client)
@@ -110,7 +113,6 @@ class MemoryWriter:
         self._db_write_lock = asyncio.Lock()
         self._components: List[MemoryWriteComponent] = [
             _FactMemoryWriteComponent(self),
-            _ConversationMemoryWriteComponent(self),
         ]
 
     async def finalize(
@@ -130,11 +132,20 @@ class MemoryWriter:
             skip_llm_helpers=self._should_skip_llm_helpers(
                 memory, user_message, terminal_reason
             ),
-            persist_chat_scoped=await self._chat_exists(memory.chat_id),
+            persist_chat_scoped=False,
             sandbox_branch_id=_resolve_sandbox_branch_id(sandbox_overrides),
             terminal_reason=terminal_reason,
             sandbox_overrides=sandbox_overrides,
             raw_tail_max_chars=_resolve_raw_tail_max_chars(sandbox_overrides),
+        )
+        # Sandbox upload chats are real ``chats`` rows for artifact ownership,
+        # but they must never turn a sandbox memory write into durable user or
+        # tenant memory.
+        context = replace(
+            context,
+            persist_chat_scoped=(
+                context.sandbox_branch_id is None and await self._chat_exists(memory.chat_id)
+            ),
         )
         if not context.persist_chat_scoped and context.sandbox_branch_id is None:
             return
@@ -318,7 +329,7 @@ class MemoryWriter:
         branch = row.scalar_one_or_none()
         if branch is None:
             return
-        branch.facts_artifact_json = [_fact_to_artifact_row(item) for item in facts]
+        branch.fact_overrides_json = merge_extracted(branch.fact_overrides_json, facts)
         branch.artifacts_updated_at = datetime.now(timezone.utc)
         self._session.add(branch)
         await self._session.flush()

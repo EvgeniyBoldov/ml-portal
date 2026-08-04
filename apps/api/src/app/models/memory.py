@@ -64,7 +64,6 @@ class FactScope(str, Enum):
     """
     USER = "user"
     TENANT = "tenant"
-    PROJECT = "project"
 
 
 class FactSource(str, Enum):
@@ -91,7 +90,7 @@ class Fact(Base):
         Index("ix_facts_owner_subject_active", "owner_type", "owner_id", "subject",
               postgresql_where="superseded_by IS NULL"),
         CheckConstraint(
-            "scope IN ('user', 'tenant', 'project')",
+            "scope IN ('user', 'tenant')",
             name="ck_facts_scope",
         ),
         CheckConstraint(

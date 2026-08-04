@@ -7,7 +7,7 @@ compatibility during the runtime helpers transition.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.memory import FactScope, FactSource
+from app.models.memory import FactScope
 from app.models.sandbox import SandboxBranch
 from app.runtime.memory.components import (
     AgentExecutionMemoryComponent,
@@ -36,6 +36,7 @@ from app.runtime.memory.dto import FactDTO, SummaryDTO
 from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.service import MemoryService
 from app.runtime.memory.summary_store import SummaryStore
+from app.runtime.memory.sandbox_overlays import apply_overrides
 from app.runtime.memory.transport import TurnMemory
 
 logger = get_logger(__name__)
@@ -68,7 +69,6 @@ class MemoryBuilder:
         self._memory_budget = memory_budget or MemoryBudget()
         self._memory_registry = MemoryComponentRegistry(
             components=[
-                ConversationMemoryComponent(),
                 FactMemoryComponent(
                     memory_service=self._memory_service,
                     fact_limit=fact_limit,
@@ -102,11 +102,9 @@ class MemoryBuilder:
         sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> TurnMemory:
         sandbox_branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
-        summary = await self._load_summary(
-            chat_id,
-            sandbox_branch_id=sandbox_branch_id,
-            sandbox_overrides=sandbox_overrides,
-        )
+        # Conversation summary is retained in storage for compatibility but is
+        # deliberately not part of runtime memory at this stage.
+        summary = SummaryDTO.empty(chat_id or uuid4())
         effective_budget = MemoryBudget.from_platform_config(
             base=self._memory_budget,
             platform_config=platform_config,
@@ -116,6 +114,11 @@ class MemoryBuilder:
             tenant_id=tenant_id,
             limit=max(self._fact_limit, effective_budget.max_items_per_section) * 4,
         )
+        if sandbox_branch_id is not None:
+            durable_snapshot = self._apply_snapshot_fact_overrides(
+                durable_snapshot,
+                sandbox_overrides=sandbox_overrides,
+            )
         memory_bundle = await self._memory_assembler.assemble(
             MemoryQueryContext(
                 goal=goal,
@@ -138,12 +141,6 @@ class MemoryBuilder:
                 durable_snapshot=durable_snapshot,
             )
         )
-        if sandbox_branch_id is not None:
-            memory_bundle = await self._inject_branch_facts(
-                memory_bundle=memory_bundle,
-                branch_id=sandbox_branch_id,
-                sandbox_overrides=sandbox_overrides,
-            )
         facts = self._load_selected_facts_from_bundle(memory_bundle)
 
         return TurnMemory(
@@ -219,64 +216,19 @@ class MemoryBuilder:
                 selected.append(item.private_payload)
         return selected
 
-    async def _inject_branch_facts(
-        self,
+    @staticmethod
+    def _apply_snapshot_fact_overrides(
+        durable_snapshot,
         *,
-        memory_bundle: MemoryBundle,
-        branch_id: UUID,
         sandbox_overrides: Optional[Dict[str, Any]],
-    ) -> MemoryBundle:
-        row = await self._session.execute(select(SandboxBranch).where(SandboxBranch.id == branch_id))
-        branch = row.scalar_one_or_none()
-        if branch is None:
-            return memory_bundle
-        raw_facts = list(branch.facts_artifact_json or [])
-        raw_facts = _apply_branch_facts_overrides(raw_facts, sandbox_overrides)
-        items: list[MemoryItem] = []
-        for raw in raw_facts[: self._fact_limit]:
-            if not isinstance(raw, dict):
-                continue
-            subject = str(raw.get("subject") or "").strip()
-            value = str(raw.get("value") or "").strip()
-            if not subject or not value:
-                continue
-            scope_raw = str(raw.get("scope") or FactScope.USER.value)
-            source_raw = str(raw.get("source") or FactSource.USER.value)
-            scope = FactScope(scope_raw) if scope_raw in {v.value for v in FactScope} else FactScope.USER
-            source = FactSource(source_raw) if source_raw in {v.value for v in FactSource} else FactSource.USER_UTTERANCE
-            fact = FactDTO(
-                scope=scope,
-                subject=subject,
-                value=value,
-                source=source,
-                confidence=float(raw.get("confidence") or 1.0),
-                observed_at=datetime.now(timezone.utc),
-            )
-            items.append(
-                MemoryItem(
-                    text=f"{subject}: {value}",
-                    source="sandbox_branch",
-                    subject=subject,
-                    score=1.0,
-                    metadata={"artifact_scope": "branch"},
-                    private_payload=fact,
-                )
-            )
-        section = MemorySection(
-            name="facts",
-            priority=40,
-            items=items,
-            omitted_count=max(0, len(raw_facts) - len(items)),
-            budget_used_chars=sum(len(item.text or "") for item in items),
-            selection_reason="sandbox_branch_artifacts",
+    ):
+        raw = (sandbox_overrides or {}).get("fact_overrides")
+        effective = apply_overrides(durable_snapshot.entries, raw)
+        return replace(
+            durable_snapshot,
+            user_facts=tuple(item for item in effective if item.scope == FactScope.USER),
+            tenant_facts=tuple(item for item in effective if item.scope == FactScope.TENANT),
         )
-        sections = [sec for sec in memory_bundle.sections if sec.name != "facts"]
-        sections.append(section)
-        sections.sort(key=lambda sec: (sec.priority, sec.name))
-        used = sum(sec.budget_used_chars for sec in sections)
-        diagnostics = dict(memory_bundle.diagnostics or {})
-        diagnostics["sandbox_branch_facts_count"] = len(items)
-        return MemoryBundle(sections=sections, total_budget_used_chars=used, diagnostics=diagnostics)
 
 
 def _resolve_sandbox_branch_id(sandbox_overrides: Optional[Dict[str, Any]]) -> Optional[UUID]:
@@ -287,19 +239,6 @@ def _resolve_sandbox_branch_id(sandbox_overrides: Optional[Dict[str, Any]]) -> O
         return UUID(str(raw))
     except (TypeError, ValueError):
         return None
-
-
-def _apply_branch_facts_overrides(
-    facts: List[Dict[str, Any]],
-    sandbox_overrides: Optional[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    overrides = (sandbox_overrides or {}).get("branch_facts_overrides")
-    if not isinstance(overrides, dict):
-        return facts
-    raw = overrides.get("facts")
-    if isinstance(raw, list):
-        return [dict(item) for item in raw if isinstance(item, dict)]
-    return facts
 
 
 def _apply_branch_summary_overrides(

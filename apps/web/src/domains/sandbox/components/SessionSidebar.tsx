@@ -656,7 +656,7 @@ export default function SessionSidebar({
         )}
       </AccordionSection>
 
-      <AccordionSection title="Артефакты" count={2}>
+      <AccordionSection title="Артефакты" count={1}>
         <div className={styles['nav-list']}>
           <button
             type="button"
@@ -670,20 +670,6 @@ export default function SessionSidebar({
             <span className={styles['nav-name']}>Факты</span>
             <span className={styles['nav-desc']}>
               {typeof branchArtifacts?.facts_count === 'number' ? `${branchArtifacts.facts_count} шт.` : '—'}
-            </span>
-          </button>
-          <button
-            type="button"
-            className={`${styles['nav-item']} ${
-              selectedItem?.type === 'artifact' && selectedItem.artifactKind === 'summary'
-                ? styles['nav-item-active']
-                : ''
-            }`}
-            onClick={() => onSelectItem({ type: 'artifact', id: 'branch-summary', name: 'Саммари', artifactKind: 'summary' })}
-          >
-            <span className={styles['nav-name']}>Саммари</span>
-            <span className={styles['nav-desc']}>
-              {branchArtifacts?.summary_present ? 'Есть' : 'Пусто'}
             </span>
           </button>
         </div>
