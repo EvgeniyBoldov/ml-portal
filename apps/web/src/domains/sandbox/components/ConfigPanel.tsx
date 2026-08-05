@@ -312,7 +312,7 @@ export function ConfigPanel({
   });
   const { data: platformLimits } = useQuery({
     queryKey: ['admin', 'execution-limits', 'platform'],
-    queryFn: () => executionLimitsApi.getPlatform(),
+    queryFn: () => executionLimitsApi.getRuntime(),
     staleTime: 30_000,
   });
 
