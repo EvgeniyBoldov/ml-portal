@@ -81,6 +81,12 @@ class Model(Base):
     
     # Configuration
     extra_config: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="Provider-specific config (temperature, dimensions, etc.)")
+    # LLM invocation policy.  These are deliberately typed instead of being
+    # hidden in provider-specific JSON: every LLM caller resolves them from
+    # the selected model deployment.
+    max_output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    request_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     # Status
     status: Mapped[ModelStatus] = mapped_column(

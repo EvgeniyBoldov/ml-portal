@@ -10,12 +10,12 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
-from app.models.execution_limit import ExecutionLimitScope
+from app.adapters.interfaces.llm import LLMCallOptions, LLMProviderError
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.budgets import BudgetRegistry
 from app.runtime.error_payloads import build_debug_payload
-from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens, resolve_llm_timeout_s
-from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
+from app.runtime.llm.limits import estimate_tokens
+from app.services.model_call_config_service import ModelCallConfigService
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 
@@ -48,6 +48,7 @@ class StreamError:
     message: str = ""
     recoverable: bool = True
     error_type: Optional[str] = None
+    retry_after_ms: Optional[int] = None
     debug: Optional[Dict[str, Any]] = None
 
 
@@ -65,7 +66,7 @@ class RoleStreamingCall:
     ) -> None:
         self._llm_client = llm_client
         self._role_service = SystemLLMRoleService(session)
-        self._limits_service = ExecutionLimitsService(session)
+        self._model_call_config_service = ModelCallConfigService(session)
 
     async def invoke_stream(
         self,
@@ -82,42 +83,31 @@ class RoleStreamingCall:
     ) -> AsyncIterator[StreamEvent]:
         role_cfg = role_config or await self._role_service.get_role_config(role)
         model = model_override if model_override is not None else role_cfg.get("model")
-        _timeout_s = int(role_cfg.get("timeout_s") or 30)
+        model_call_config = await self._model_call_config_service.resolve(model)
+        _timeout_s = model_call_config.request_timeout_s
         params: Dict[str, Any] = {}
         if role_cfg.get("temperature") is not None:
             params["temperature"] = role_cfg["temperature"]
-        if role_cfg.get("max_tokens") is not None:
-            params["max_tokens"] = role_cfg["max_tokens"]
+        configured_max_tokens = model_call_config.max_output_tokens
+        if configured_max_tokens is None and role_cfg.get("max_tokens") is not None:
+            configured_max_tokens = int(role_cfg["max_tokens"])
+        if configured_max_tokens is not None:
+            params["max_tokens"] = configured_max_tokens
         if isinstance(params_override, dict):
             params.update(params_override)
 
-        try:
-            limits = await self._limits_service.get_effective(
-                scope_type=ExecutionLimitScope.ORCHESTRATOR_ROLE,
-                scope_ref=str(role.value).strip().lower(),
-            )
-        except Exception:
-            limits = ExecutionLimitsPayload()
-        role_key = str(role.value).strip().lower()
-        role_override = ((sandbox_overrides or {}).get("orchestrator_limits") or {}).get(role_key)
-        limits = apply_limits_override(limits, role_override if isinstance(role_override, dict) else None)
-        timeout_s = resolve_llm_timeout_s(configured_timeout_s=_timeout_s, limits=limits)
+        timeout_s = _timeout_s
 
         input_tokens = estimate_tokens(str(messages))
         requested_output_tokens = int(params["max_tokens"]) if params.get("max_tokens") is not None else None
-        try:
-            boundary = apply_llm_limits(
-                limits=limits,
-                input_tokens=input_tokens,
-                requested_output_tokens=requested_output_tokens,
+        if configured_max_tokens is not None:
+            params["max_tokens"] = min(
+                requested_output_tokens or configured_max_tokens,
+                configured_max_tokens,
             )
-        except LLMLimitExceededError as exc:
-            yield StreamError(code=exc.code, message=str(exc), recoverable=False)
-            return
-        if boundary.output_tokens is not None:
-            params["max_tokens"] = int(boundary.output_tokens)
 
         if budget_registry is not None and budget_entity_id:
+            budget_registry.consume(budget_entity_id, "llm_calls", 1, reason="llm_call")
             budget_registry.consume(budget_entity_id, "tokens_in", input_tokens, reason="llm_input")
 
         buffer: List[str] = []
@@ -125,15 +115,16 @@ class RoleStreamingCall:
         stream_error: Optional[Exception] = None
         stream_traceback: Optional[str] = None
         try:
-            stream_iter = self._llm_client.chat_stream(messages, model=model, params=params or None)
+            stream_iter = self._llm_client.chat_stream(
+                messages, model=model, params=params or None,
+                options=LLMCallOptions(timeout_s=timeout_s),
+            )
             async with asyncio.timeout(timeout_s):
                 async for chunk in _collect_stream(stream_iter):
                     if not chunk:
                         continue
                     buffer.append(chunk)
                     yield StreamDelta(chunk=chunk)
-        except LLMLimitExceededError as exc:
-            stream_error = exc
         except Exception as exc:  # noqa: BLE001
             stream_error = exc
             stream_traceback = traceback.format_exc()
@@ -152,19 +143,18 @@ class RoleStreamingCall:
                 budget_registry.consume(budget_entity_id, "wall_time_ms", duration_ms, reason="llm_time")
 
         if stream_error is not None and not content:
-            if isinstance(stream_error, LLMLimitExceededError):
-                yield StreamError(code=stream_error.code, message=str(stream_error), recoverable=False)
-            else:
-                yield StreamError(
-                    code="llm_stream_error",
-                    message=f"{type(stream_error).__name__}: {stream_error}",
-                    recoverable=True,
-                    error_type=type(stream_error).__name__,
-                    debug=build_debug_payload(
-                        exc=stream_error,
-                        traceback_text=stream_traceback,
-                    ),
-                )
+            provider_error = stream_error if isinstance(stream_error, LLMProviderError) else None
+            yield StreamError(
+                code=provider_error.code.value if provider_error is not None else "llm_stream_error",
+                message=provider_error.safe_message if provider_error is not None else "LLM stream failed",
+                recoverable=provider_error.retryable if provider_error is not None else True,
+                error_type=type(stream_error).__name__,
+                retry_after_ms=provider_error.retry_after_ms if provider_error is not None else None,
+                debug=build_debug_payload(
+                    exc=stream_error,
+                    traceback_text=stream_traceback,
+                ),
+            )
             return
 
         yield StreamTurn(

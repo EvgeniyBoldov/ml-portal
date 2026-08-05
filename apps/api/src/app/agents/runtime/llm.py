@@ -14,6 +14,7 @@ import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.core.http.clients import LLMClientProtocol
+from app.adapters.interfaces.llm import LLMCallOptions
 from app.core.logging import get_logger
 from app.agents.runtime.llm_errors import classify_provider_error
 
@@ -47,7 +48,8 @@ class LLMAdapter:
                 params["max_tokens"] = max_tokens
             if tools:
                 params["tools"] = tools
-            request = self._client.chat(messages=messages, model=model, params=params)
+            request = self._client.chat(messages=messages, model=model, params=params,
+                                        options=LLMCallOptions(timeout_s=timeout_s))
             response = await asyncio.wait_for(request, timeout=timeout_s) if timeout_s else await request
         except Exception as e:
             classified = classify_provider_error(e)
@@ -81,7 +83,8 @@ class LLMAdapter:
             params["tools"] = tools
             params["tool_choice"] = "required" if force_tool_choice else "auto"
         try:
-            request = self._client.chat(messages=messages, model=model, params=params)
+            request = self._client.chat(messages=messages, model=model, params=params,
+                                        options=LLMCallOptions(timeout_s=timeout_s))
             return await asyncio.wait_for(request, timeout=timeout_s) if timeout_s else await request
         except Exception as e:
             classified = classify_provider_error(e)
@@ -103,7 +106,8 @@ class LLMAdapter:
         if max_tokens:
             params["max_tokens"] = max_tokens
 
-        stream = self._client.chat_stream(messages=messages, model=model, params=params)
+        stream = self._client.chat_stream(messages=messages, model=model, params=params,
+                                          options=LLMCallOptions(timeout_s=timeout_s))
         if timeout_s:
             async with asyncio.timeout(timeout_s):
                 async for chunk in stream:

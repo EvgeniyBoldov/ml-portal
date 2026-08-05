@@ -16,13 +16,9 @@ import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adm
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { usePlatformSettings, useUpdatePlatformSettings, useFillPlatformSettingsDefaults, usePlatformExecutionLimits, useUpdatePlatformExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';
+import { usePlatformSettings, useUpdatePlatformSettings, useFillPlatformSettingsDefaults, usePlatformExecutionLimits, useUpdatePlatformExecutionLimits, useAgentDefaultExecutionLimits, useUpdateAgentDefaultExecutionLimits, useOrchestratorDefaultExecutionLimits, useUpdateOrchestratorDefaultExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';
 import { useState } from 'react';
 import ConfirmDialog from '@/shared/ui/ConfirmDialog';
-import {
-  EXEC_DEFAULTS_BLOCK_TITLE,
-  EXEC_DEFAULTS_TOOLTIP,
-} from './platformLimitsTooltips';
 
 /* ─── Field configs ─── */
 
@@ -103,7 +99,7 @@ const FALLBACK_NUMERIC_FIELDS: FieldConfig[] = [
     key: 'default_max_iters',
     type: 'number',
     label: 'Max iters по умолчанию',
-    description: 'Используется, если execution limits не задали runtime_steps_max.',
+    description: 'Используется, если execution limits не задали лимит шагов агента.',
   },
   {
     key: 'synth_chunk_size',
@@ -114,19 +110,22 @@ const FALLBACK_NUMERIC_FIELDS: FieldConfig[] = [
   },
 ];
 
-const LLM_LIMIT_FIELDS: FieldConfig[] = [
-  { key: 'llm_input_tokens_max', type: 'number', label: 'LLM input токены', description: 'Лимит токенов входного промпта для одного LLM-вызова.' },
-  { key: 'llm_output_tokens_max', type: 'number', label: 'LLM output токены', description: 'Лимит токенов ответа для одного LLM-вызова.' },
-  { key: 'llm_context_window_max', type: 'number', label: 'LLM context window', description: 'Лимит input+output токенов в одном LLM-вызове.' },
-  { key: 'llm_timeout_s', type: 'number', label: 'LLM таймаут (сек.)', description: 'Время ожидания ответа одного LLM-вызова.' },
+const RUN_LIMIT_FIELDS: FieldConfig[] = [
+  { key: 'wall_time_ms_max', type: 'number', label: 'Wall time (ms)', description: 'Максимальное время выполнения run.' },
+  { key: 'max_parallel_tasks', type: 'number', label: 'Параллельные задачи', description: 'Максимум одновременно исполняемых задач.' },
+  { key: 'max_replans', type: 'number', label: 'Перепланирования', description: 'Максимум перепланирований после первоначального плана.' },
+  { key: 'max_task_executions', type: 'number', label: 'Запуски задач', description: 'Максимум фактических запусков задач, включая повторы.' },
 ];
 
-const EXEC_DEFAULTS_FIELDS: FieldConfig[] = [
-  { key: 'runtime_steps_max', type: 'number', label: 'Runtime шаги', description: 'Лимит шагов рантайма.' },
-  { key: 'runtime_tool_calls_max', type: 'number', label: 'Runtime вызовы инструментов', description: 'Лимит числа tool-вызовов за ран.' },
-  { key: 'runtime_retries_max', type: 'number', label: 'Runtime ретраи', description: 'Лимит повторных попыток.' },
-  { key: 'runtime_wall_time_ms_max', type: 'number', label: 'Runtime wall time (ms)', description: 'Лимит общего времени выполнения в мс.' },
-  { key: 'runtime_tokens_total_max', type: 'number', label: 'Runtime total токены', description: 'Лимит суммарных токенов рантайма.' },
+const AGENT_LIMIT_FIELDS: FieldConfig[] = [
+  { key: 'llm_calls_max', type: 'number', label: 'LLM-вызовы', description: 'Default на один запуск агента.' },
+  { key: 'tool_calls_max', type: 'number', label: 'Tool-вызовы', description: 'Default на один запуск агента.' },
+  { key: 'wall_time_ms_max', type: 'number', label: 'Wall time (ms)', description: 'Default на один запуск агента.' },
+];
+
+const ORCHESTRATOR_LIMIT_FIELDS: FieldConfig[] = [
+  { key: 'llm_calls_max', type: 'number', label: 'LLM-вызовы', description: 'Default на один запуск роли.' },
+  { key: 'wall_time_ms_max', type: 'number', label: 'Wall time (ms)', description: 'Default на один запуск роли.' },
 ];
 
 const CHAT_UPLOAD_FIELDS: FieldConfig[] = [
@@ -229,6 +228,8 @@ export function PlatformSettingsPage() {
   // Limits tab — execution limits
   const [limitsMode, setLimitsMode] = useState<'view' | 'edit'>('view');
   const [limitsForm, setLimitsForm] = useState<Record<string, unknown>>({});
+  const [agentDefaultsForm, setAgentDefaultsForm] = useState<Record<string, unknown>>({});
+  const [orchestratorDefaultsForm, setOrchestratorDefaultsForm] = useState<Record<string, unknown>>({});
 
   // ─── Queries ───────────────────────────────────────────────────────
 
@@ -245,6 +246,10 @@ export function PlatformSettingsPage() {
 
   const { data: platformLimits } = usePlatformExecutionLimits();
   const updatePlatformLimits = useUpdatePlatformExecutionLimits();
+  const { data: agentDefaultLimits } = useAgentDefaultExecutionLimits();
+  const updateAgentDefaultLimits = useUpdateAgentDefaultExecutionLimits();
+  const { data: orchestratorDefaultLimits } = useOrchestratorDefaultExecutionLimits();
+  const updateOrchestratorDefaultLimits = useUpdateOrchestratorDefaultExecutionLimits();
 
   // Credentials query
   const { data: credentials = [] } = useQuery({
@@ -424,24 +429,21 @@ export function PlatformSettingsPage() {
         />
       </Tab>
 
-      {/* ── Tab 4: Лимиты платформы (execution_limits) ── */}
+      {/* ── Tab 4: Runtime guards ── */}
       <Tab
-        title="Лимиты"
+        title="Лимиты runtime"
         layout="grid"
         id="limits"
         actions={
           limitsMode === 'view' ? [
-            <Button key="edit" onClick={() => { setLimitsForm({ ...(platformSettings || {}), ...(platformLimits || {}) }); setLimitsMode('edit'); }}>{ADMIN_ACTION_LABELS.edit}</Button>,
+            <Button key="edit" onClick={() => { setLimitsForm({ ...(platformLimits || {}) }); setLimitsMode('edit'); }}>{ADMIN_ACTION_LABELS.edit}</Button>,
           ] : [
             <Button
               key="save"
               onClick={async () => {
-                const llmKeys = LLM_LIMIT_FIELDS.map(f => f.key);
-                const defaultsKeys = EXEC_DEFAULTS_FIELDS.map(f => f.key);
-                const llmUpdate = Object.fromEntries(llmKeys.map(k => [k, limitsForm[k]]));
-                const defaultsUpdate = Object.fromEntries(defaultsKeys.map(k => [k, limitsForm[k]]));
-                await updatePlatformLimits.mutateAsync(llmUpdate);
-                await updatePlatformLimits.mutateAsync(defaultsUpdate);
+                await updatePlatformLimits.mutateAsync(
+                  Object.fromEntries(RUN_LIMIT_FIELDS.map(field => [field.key, limitsForm[field.key]])),
+                );
                 setLimitsMode('view');
               }}
               disabled={updatePlatformLimits.isPending}
@@ -453,27 +455,37 @@ export function PlatformSettingsPage() {
         }
       >
         <Block
-          title="Лимиты LLM"
-          icon="zap"
-          iconVariant="warning"
-          width="1/2"
-          fields={LLM_LIMIT_FIELDS}
-          data={limitsMode === 'edit' ? limitsForm : { ...(platformLimits || {}) }}
-          editable={limitsMode === 'edit'}
-          onChange={limitsMode === 'edit' ? (k, v) => setLimitsForm(prev => ({ ...prev, [k]: v })) : undefined}
-        />
-
-        <Block
-          title={EXEC_DEFAULTS_BLOCK_TITLE}
+          title="Лимиты run"
           icon="settings"
           iconVariant="info"
           width="1/2"
-          tooltip={EXEC_DEFAULTS_TOOLTIP}
-          fields={EXEC_DEFAULTS_FIELDS}
+          tooltip="Ограничения, общие для одного выполнения графа."
+          fields={RUN_LIMIT_FIELDS}
           data={limitsMode === 'edit' ? limitsForm : { ...(platformLimits || {}) }}
           editable={limitsMode === 'edit'}
           onChange={limitsMode === 'edit' ? (k, v) => setLimitsForm(prev => ({ ...prev, [k]: v })) : undefined}
         />
+      </Tab>
+
+      <Tab
+        title="Лимиты по умолчанию"
+        layout="grid"
+        id="default-limits"
+        actions={[
+          <Button key="save-defaults" onClick={async () => {
+            await Promise.all([
+              updateAgentDefaultLimits.mutateAsync(agentDefaultsForm),
+              updateOrchestratorDefaultLimits.mutateAsync(orchestratorDefaultsForm),
+            ]);
+          }}>Сохранить</Button>,
+        ]}
+      >
+        <Block title="Агенты" icon="bot" iconVariant="info" width="1/2" fields={AGENT_LIMIT_FIELDS}
+          data={Object.keys(agentDefaultsForm).length ? agentDefaultsForm : (agentDefaultLimits?.effective || {})} editable
+          onChange={(key, value) => setAgentDefaultsForm(prev => ({ ...(Object.keys(prev).length ? prev : (agentDefaultLimits?.effective || {})), [key]: value }))} />
+        <Block title="Оркестраторы" icon="route" iconVariant="info" width="1/2" fields={ORCHESTRATOR_LIMIT_FIELDS}
+          data={Object.keys(orchestratorDefaultsForm).length ? orchestratorDefaultsForm : (orchestratorDefaultLimits?.effective || {})} editable
+          onChange={(key, value) => setOrchestratorDefaultsForm(prev => ({ ...(Object.keys(prev).length ? prev : (orchestratorDefaultLimits?.effective || {})), [key]: value }))} />
       </Tab>
 
       <Tab

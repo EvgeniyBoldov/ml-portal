@@ -7,6 +7,8 @@ from uuid import uuid4
 import pytest
 
 from app.runtime.memory.components import MemoryBundle
+from app.runtime.events import RuntimeEventType
+from app.runtime.llm.streaming import StreamError, StreamTurn
 from app.runtime.synthesizer import Synthesizer
 from app.runtime.turn_state import RuntimeTurnState
 
@@ -16,12 +18,13 @@ class _LLMClientProbe:
         self.chunks = chunks
         self.calls: list[dict] = []
 
-    async def chat_stream(self, messages, model=None, params=None):
+    async def chat_stream(self, messages, model=None, params=None, options=None):
         self.calls.append(
             {
                 "messages": messages,
                 "model": model,
                 "params": params,
+                "options": options,
             }
         )
         for chunk in self.chunks:
@@ -56,6 +59,15 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
                 "max_tokens": 321,
             }
         ),
+    ), patch(
+        "app.services.model_call_config_service.ModelCallConfigService.resolve",
+        new=AsyncMock(
+            return_value=SimpleNamespace(
+                max_output_tokens=None,
+                request_timeout_s=30,
+                max_retries=2,
+            )
+        ),
     ):
         events = [event async for event in synth.stream(
             runtime_state=state,
@@ -67,6 +79,7 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     call = llm.calls[0]
     assert call["model"] == "gpt-test"
     assert call["params"] == {"temperature": 0.15, "max_tokens": 321}
+    assert call["options"].timeout_s == 30
     assert call["messages"][0]["content"].startswith("SYNTH-PROMPT")
     assert "Сгенерированные файлы доставляются интерфейсом отдельными вложениями" in call["messages"][0]["content"]
     assert events[0].type.value == "synthesis_start"
@@ -129,10 +142,68 @@ async def test_synthesizer_falls_back_when_db_role_load_fails():
     call = llm.calls[0]
     assert call["model"] is None
     assert call["params"] == {"temperature": 0.3, "max_tokens": 2000}
+    assert call["options"].timeout_s == 30
     assert call["messages"][0]["content"]  # fallback prompt is non-empty
     assert events[-2].type.value == "final"
     assert events[-2].data["content"] == "fallback answer"
     assert events[-1].type.value == "synthesis_end"
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_retries_retryable_stream_error_before_fallback():
+    synth = Synthesizer(session=SimpleNamespace(), llm_client=_LLMClientProbe([]))
+    state = _runtime_state()
+    calls = 0
+
+    async def stream_once(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            yield StreamError(
+                code="llm_rate_limited",
+                message="LLM provider rate limit reached",
+                recoverable=True,
+                error_type="LLMProviderError",
+                retry_after_ms=1,
+            )
+            return
+        yield StreamTurn(
+            llm_call_id="retry-call",
+            model="gpt-test",
+            content="retry answer",
+            response_length=12,
+        )
+
+    synth._streaming_call.invoke_stream = stream_once
+    with (
+        patch(
+            "app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
+            new=AsyncMock(return_value={"prompt": "SYNTH-PROMPT", "model": "gpt-test"}),
+        ),
+        patch(
+            "app.services.model_call_config_service.ModelCallConfigService.resolve",
+            new=AsyncMock(return_value=SimpleNamespace(max_retries=1)),
+        ),
+        patch("app.runtime.synthesizer.asyncio.sleep", new=AsyncMock()),
+    ):
+        events = [
+            event
+            async for event in synth.stream(
+                runtime_state=state,
+                run_id=state.run_id,
+                answer_brief="force full synthesis path",
+            )
+        ]
+
+    assert calls == 2
+    assert len([event for event in events if event.type is RuntimeEventType.LLM_REQUEST]) == 2
+    retry = next(event for event in events if event.type is RuntimeEventType.PROTOCOL_RETRY)
+    assert retry.data["reason"] == "transport_error"
+    assert retry.data["retry_after_ms"] == 1
+    assert not any(event.type is RuntimeEventType.ERROR for event in events)
+    assert events[-2].type is RuntimeEventType.FINAL
+    assert events[-2].data["content"] == "retry answer"
+    assert events[-1].data["status"] == "completed"
 
 
 @pytest.mark.asyncio

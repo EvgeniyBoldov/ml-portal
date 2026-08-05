@@ -15,8 +15,9 @@ import {
   type SynthesizerRoleUpdate,
   type FactExtractorRoleUpdate,
   type SummaryCompactorRoleUpdate,
-  type ExecutionLimits,
-  type ExecutionLimitsUpdate,
+  type ActorLimits,
+  type ActorLimitsResolution,
+  type RuntimeLimits,
 } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
@@ -85,8 +86,8 @@ export function useFillPlatformSettingsDefaults() {
 
 export function usePlatformExecutionLimits() {
   return useQuery({
-    queryKey: ['admin', 'execution-limits', 'platform'],
-    queryFn: () => executionLimitsApi.getPlatform(),
+    queryKey: ['admin', 'execution-limits', 'runtime'],
+    queryFn: () => executionLimitsApi.getRuntime(),
     staleTime: 30_000,
   });
 }
@@ -97,13 +98,36 @@ export function useUpdatePlatformExecutionLimits() {
   const showSuccess = useSuccessToast();
 
   return useMutation({
-    mutationFn: (data: ExecutionLimitsUpdate): Promise<ExecutionLimits> =>
-      executionLimitsApi.updatePlatform(data),
+    mutationFn: (data: RuntimeLimits): Promise<RuntimeLimits> => executionLimitsApi.updateRuntime(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'execution-limits', 'platform'] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'execution-limits', 'runtime'] });
       showSuccess('Лимиты платформы обновлены');
     },
     onError: (err: Error) => showError(err.message),
+  });
+}
+
+export function useAgentDefaultExecutionLimits() {
+  return useQuery({ queryKey: ['admin', 'execution-limits', 'defaults', 'agents'], queryFn: () => executionLimitsApi.getAgentDefaults(), staleTime: 30_000 });
+}
+
+export function useUpdateAgentDefaultExecutionLimits() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: ActorLimits) => executionLimitsApi.updateAgentDefaults(data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'execution-limits', 'defaults', 'agents'] }),
+  });
+}
+
+export function useOrchestratorDefaultExecutionLimits() {
+  return useQuery({ queryKey: ['admin', 'execution-limits', 'defaults', 'orchestrators'], queryFn: () => executionLimitsApi.getOrchestratorDefaults(), staleTime: 30_000 });
+}
+
+export function useUpdateOrchestratorDefaultExecutionLimits() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: ActorLimits) => executionLimitsApi.updateOrchestratorDefaults(data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'execution-limits', 'defaults', 'orchestrators'] }),
   });
 }
 
@@ -122,7 +146,7 @@ export function useUpdateAgentExecutionLimits(agentSlug?: string) {
   const showSuccess = useSuccessToast();
 
   return useMutation({
-    mutationFn: (data: ExecutionLimitsUpdate): Promise<ExecutionLimits> => {
+    mutationFn: (data: ActorLimits): Promise<ActorLimitsResolution> => {
       if (!agentSlug) {
         return Promise.reject(new Error('agent slug is required'));
       }
@@ -151,7 +175,7 @@ export function useUpdateOrchestratorExecutionLimits(role?: string) {
   const showSuccess = useSuccessToast();
 
   return useMutation({
-    mutationFn: (data: ExecutionLimitsUpdate): Promise<ExecutionLimits> => {
+    mutationFn: (data: ActorLimits): Promise<ActorLimitsResolution> => {
       if (!role) {
         return Promise.reject(new Error('orchestrator role is required'));
       }

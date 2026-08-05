@@ -41,7 +41,13 @@ from .chat_turn import ChatTurn
 from .sandbox import SandboxSession, SandboxOverride, SandboxRun
 from .discovered_tool import DiscoveredTool
 from .memory import Fact, FactScope, FactSource, DialogueSummary
-from .execution_limit import ExecutionLimit, ExecutionLimitScope
+from .execution_limit import (
+    ActorExecutionLimit,
+    ActorExecutionLimitScope,
+    ExecutionLimit,
+    ExecutionLimitScope,
+    RuntimeExecutionLimits,
+)
 from .periodic_task import PeriodicTask
 from .runtime_observability import RuntimeBudgetCounter, RuntimeBudgetEntry, RuntimeExecutionEvent, RuntimeEventSequence, RuntimePlannerInvocation
 
@@ -111,6 +117,9 @@ __all__ = [
     "DialogueSummary",
     "ExecutionLimit",
     "ExecutionLimitScope",
+    "ActorExecutionLimit",
+    "ActorExecutionLimitScope",
+    "RuntimeExecutionLimits",
     "PeriodicTask",
     "RuntimeBudgetCounter",
     "RuntimeBudgetEntry",

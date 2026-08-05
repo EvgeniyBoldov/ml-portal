@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 
-import type { ExecutionLimitsUpdate, Model, ResponseContract, SystemLLMRole, SystemLLMRoleUpdate } from '@/shared/api/admin';
+import type { ActorLimits, Model, ResponseContract, SystemLLMRole, SystemLLMRoleUpdate } from '@/shared/api/admin';
 import { useModels } from '@/shared/api/hooks/useAdmin';
 import {
   useActiveFactExtractorRole,
@@ -39,19 +39,9 @@ const DEFAULT_ROLE_FORM: RoleFormData = {
   temperature: 0.2,
 };
 
-const LLM_LIMIT_FIELDS: FieldConfig[] = [
-  { key: 'llm_input_tokens_max', type: 'number', label: 'LLM input токены', description: 'Лимит токенов входного промпта для одного LLM-вызова.' },
-  { key: 'llm_output_tokens_max', type: 'number', label: 'LLM output токены', description: 'Лимит токенов ответа для одного LLM-вызова.' },
-  { key: 'llm_context_window_max', type: 'number', label: 'LLM context window', description: 'Лимит input+output токенов в одном LLM-вызове.' },
-  { key: 'llm_timeout_s', type: 'number', label: 'LLM таймаут (сек.)', description: 'Время ожидания ответа одного LLM-вызова.' },
-];
-
-const RUNTIME_LIMIT_FIELDS: FieldConfig[] = [
-  { key: 'runtime_steps_max', type: 'number', label: 'Runtime шаги', description: 'Лимит шагов рантайма роли.' },
-  { key: 'runtime_tool_calls_max', type: 'number', label: 'Runtime вызовы инструментов', description: 'Лимит числа tool-вызовов за ран.' },
-  { key: 'runtime_retries_max', type: 'number', label: 'Runtime ретраи', description: 'Лимит повторных попыток.' },
-  { key: 'runtime_wall_time_ms_max', type: 'number', label: 'Runtime wall time (ms)', description: 'Лимит общего времени выполнения в мс.' },
-  { key: 'runtime_tokens_total_max', type: 'number', label: 'Runtime total токены', description: 'Лимит суммарных токенов рантайма.' },
+const ORCHESTRATOR_LIMIT_FIELDS: FieldConfig[] = [
+  { key: 'llm_calls_max', type: 'number', label: 'LLM-вызовы', description: 'Пустое поле наследует platform default.' },
+  { key: 'wall_time_ms_max', type: 'number', label: 'Wall time (ms)', description: 'Пустое поле наследует platform default.' },
 ];
 
 const roleFields = (
@@ -213,16 +203,9 @@ export function OrchestrationPage() {
     model: 'LLM-модель summary compactor.',
   }, summaryCompactorRole?.response_contract ?? null, SUMMARY_COMPACTOR_INPUT_CONTRACT), [modelOptions, summaryCompactorRole?.response_contract]);
 
-  const toLimitsUpdate = (form: Record<string, unknown>): ExecutionLimitsUpdate => ({
-    llm_input_tokens_max: form.llm_input_tokens_max as number | null | undefined,
-    llm_output_tokens_max: form.llm_output_tokens_max as number | null | undefined,
-    llm_context_window_max: form.llm_context_window_max as number | null | undefined,
-    llm_timeout_s: form.llm_timeout_s as number | null | undefined,
-    runtime_steps_max: form.runtime_steps_max as number | null | undefined,
-    runtime_tool_calls_max: form.runtime_tool_calls_max as number | null | undefined,
-    runtime_retries_max: form.runtime_retries_max as number | null | undefined,
-    runtime_wall_time_ms_max: form.runtime_wall_time_ms_max as number | null | undefined,
-    runtime_tokens_total_max: form.runtime_tokens_total_max as number | null | undefined,
+  const toLimitsUpdate = (form: Record<string, unknown>): ActorLimits => ({
+    llm_calls_max: form.llm_calls_max as number | null | undefined,
+    wall_time_ms_max: form.wall_time_ms_max as number | null | undefined,
   });
 
   return (
@@ -245,7 +228,7 @@ export function OrchestrationPage() {
             labels: { edit: 'Изменить' },
             onEdit: () => {
               setPlannerForm(mapRoleToFields(plannerRole));
-              setPlannerLimitsForm({ ...(plannerLimits || {}) });
+              setPlannerLimitsForm({ ...(plannerLimits?.own || {}) });
               setPlannerMode('edit');
             },
             onSave: async () => {
@@ -263,8 +246,7 @@ export function OrchestrationPage() {
           {canEditOutputRequirements(plannerRole?.response_contract) ? (
             <Block title="Критерии ответа" icon="code" iconVariant="warning" width="full" fields={resolvedPlannerFields.filter((f) => f.key === 'output_requirements')} data={plannerMode === 'edit' ? plannerForm : mapRoleToFields(plannerRole)} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => setPlannerForm((p) => ({ ...p, [k]: v })) : undefined} />
           ) : null}
-          <Block title="Лимиты LLM" icon="zap" iconVariant="warning" width="1/2" fields={LLM_LIMIT_FIELDS} data={plannerMode === 'edit' ? plannerLimitsForm : (plannerLimits || {})} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => setPlannerLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Лимиты Runtime" icon="settings" iconVariant="info" width="1/2" fields={RUNTIME_LIMIT_FIELDS} data={plannerMode === 'edit' ? plannerLimitsForm : (plannerLimits || {})} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => setPlannerLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Лимиты исполнения" icon="zap" iconVariant="warning" width="1/2" fields={ORCHESTRATOR_LIMIT_FIELDS} data={plannerMode === 'edit' ? plannerLimitsForm : (plannerLimits?.effective || {})} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => setPlannerLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
 
         <Tab
@@ -275,7 +257,7 @@ export function OrchestrationPage() {
             saving: updateSynthesizerRole.isPending || updateSynthLimits.isPending,
             tone: 'default',
             labels: { edit: 'Изменить' },
-            onEdit: () => { setSynthForm(mapRoleToFields(synthesizerRole)); setSynthLimitsForm({ ...(synthLimits || {}) }); setSynthMode('edit'); },
+            onEdit: () => { setSynthForm(mapRoleToFields(synthesizerRole)); setSynthLimitsForm({ ...(synthLimits?.own || {}) }); setSynthMode('edit'); },
             onSave: async () => {
               await Promise.all([
                 updateSynthesizerRole.mutateAsync(synthForm),
@@ -291,8 +273,7 @@ export function OrchestrationPage() {
           {canEditOutputRequirements(synthesizerRole?.response_contract) ? (
             <Block title="Критерии ответа" icon="code" iconVariant="warning" width="full" fields={resolvedSynthesizerFields.filter((f) => f.key === 'output_requirements')} data={synthMode === 'edit' ? synthForm : mapRoleToFields(synthesizerRole)} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => setSynthForm((p) => ({ ...p, [k]: v })) : undefined} />
           ) : null}
-          <Block title="Лимиты LLM" icon="zap" iconVariant="warning" width="1/2" fields={LLM_LIMIT_FIELDS} data={synthMode === 'edit' ? synthLimitsForm : (synthLimits || {})} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => setSynthLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Лимиты Runtime" icon="settings" iconVariant="info" width="1/2" fields={RUNTIME_LIMIT_FIELDS} data={synthMode === 'edit' ? synthLimitsForm : (synthLimits || {})} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => setSynthLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Лимиты исполнения" icon="zap" iconVariant="warning" width="1/2" fields={ORCHESTRATOR_LIMIT_FIELDS} data={synthMode === 'edit' ? synthLimitsForm : (synthLimits?.effective || {})} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => setSynthLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
 
         <Tab
@@ -303,7 +284,7 @@ export function OrchestrationPage() {
             saving: updateFactExtractorRole.isPending || updateFactLimits.isPending,
             tone: 'default',
             labels: { edit: 'Изменить' },
-            onEdit: () => { setFactForm(mapRoleToFields(factExtractorRole)); setFactLimitsForm({ ...(factLimits || {}) }); setFactMode('edit'); },
+            onEdit: () => { setFactForm(mapRoleToFields(factExtractorRole)); setFactLimitsForm({ ...(factLimits?.own || {}) }); setFactMode('edit'); },
             onSave: async () => {
               await Promise.all([
                 updateFactExtractorRole.mutateAsync(factForm),
@@ -319,8 +300,7 @@ export function OrchestrationPage() {
           {canEditOutputRequirements(factExtractorRole?.response_contract) ? (
             <Block title="Критерии ответа" icon="code" iconVariant="warning" width="full" fields={resolvedFactExtractorFields.filter((f) => f.key === 'output_requirements')} data={factMode === 'edit' ? factForm : mapRoleToFields(factExtractorRole)} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactForm((p) => ({ ...p, [k]: v })) : undefined} />
           ) : null}
-          <Block title="Лимиты LLM" icon="zap" iconVariant="warning" width="1/2" fields={LLM_LIMIT_FIELDS} data={factMode === 'edit' ? factLimitsForm : (factLimits || {})} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Лимиты Runtime" icon="settings" iconVariant="info" width="1/2" fields={RUNTIME_LIMIT_FIELDS} data={factMode === 'edit' ? factLimitsForm : (factLimits || {})} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Лимиты исполнения" icon="zap" iconVariant="warning" width="1/2" fields={ORCHESTRATOR_LIMIT_FIELDS} data={factMode === 'edit' ? factLimitsForm : (factLimits?.effective || {})} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
 
         <Tab
@@ -331,7 +311,7 @@ export function OrchestrationPage() {
             saving: updateSummaryCompactorRole.isPending || updateCompactLimits.isPending,
             tone: 'default',
             labels: { edit: 'Изменить' },
-            onEdit: () => { setCompactForm(mapRoleToFields(summaryCompactorRole)); setCompactLimitsForm({ ...(compactLimits || {}) }); setCompactMode('edit'); },
+            onEdit: () => { setCompactForm(mapRoleToFields(summaryCompactorRole)); setCompactLimitsForm({ ...(compactLimits?.own || {}) }); setCompactMode('edit'); },
             onSave: async () => {
               await Promise.all([
                 updateSummaryCompactorRole.mutateAsync(compactForm),
@@ -347,8 +327,7 @@ export function OrchestrationPage() {
           {canEditOutputRequirements(summaryCompactorRole?.response_contract) ? (
             <Block title="Критерии ответа" icon="code" iconVariant="warning" width="full" fields={resolvedSummaryCompactorFields.filter((f) => f.key === 'output_requirements')} data={compactMode === 'edit' ? compactForm : mapRoleToFields(summaryCompactorRole)} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactForm((p) => ({ ...p, [k]: v })) : undefined} />
           ) : null}
-          <Block title="Лимиты LLM" icon="zap" iconVariant="warning" width="1/2" fields={LLM_LIMIT_FIELDS} data={compactMode === 'edit' ? compactLimitsForm : (compactLimits || {})} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Лимиты Runtime" icon="settings" iconVariant="info" width="1/2" fields={RUNTIME_LIMIT_FIELDS} data={compactMode === 'edit' ? compactLimitsForm : (compactLimits || {})} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Лимиты исполнения" icon="zap" iconVariant="warning" width="1/2" fields={ORCHESTRATOR_LIMIT_FIELDS} data={compactMode === 'edit' ? compactLimitsForm : (compactLimits?.effective || {})} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
       </EntityPageV2>
 

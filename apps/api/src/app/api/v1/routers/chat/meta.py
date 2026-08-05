@@ -72,7 +72,7 @@ async def chat(
     params: Dict[str, Any] = payload.get("params", {})
     model: Optional[str] = payload.get("model")
     try:
-        result = await llm.chat(messages, model=model, **params)
+        result = await llm.chat(messages, model=model, params=params or None)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     return JSONResponse(result)

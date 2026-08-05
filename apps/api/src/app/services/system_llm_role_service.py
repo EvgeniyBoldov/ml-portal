@@ -146,9 +146,9 @@ class SystemLLMRoleService:
             'extras': role.extras or {},
             'model': role.model,
             'temperature': role.temperature,
+            # Compatibility fallback for roles created before call settings
+            # moved to the model deployment.
             'max_tokens': role.max_tokens,
-            'timeout_s': role.timeout_s,
-            'max_retries': role.max_retries,
             'retry_backoff': role.retry_backoff,
         }
         

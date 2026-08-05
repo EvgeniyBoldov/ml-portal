@@ -95,9 +95,7 @@ async def readiness_check_endpoint(session: AsyncSession = Depends(db_session)):
             test_resp = await llm.chat(
                 messages=[{"role": "user", "content": "ping"}],
                 model=None,
-                stream=False,
-                max_tokens=1,
-                temperature=0,
+                params={"max_tokens": 1, "temperature": 0},
             )
             app_services["llm"] = "ready" if test_resp else "not_ready"
         except Exception as e:

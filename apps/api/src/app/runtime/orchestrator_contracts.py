@@ -203,6 +203,28 @@ class TaskAttemptFailure(BaseModel):
     details: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TaskExecutionError(RuntimeError):
+    """Technical task failure which the orchestrator may safely retry.
+
+    A valid ``AgentTaskResult`` represents a completed business decision.  A
+    provider outage, timeout, or transport failure is not such a decision and
+    must remain on the task-attempt failure path.
+    """
+
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        retryable: bool,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.details = dict(details or {})
+
+
 def parse_agent_task_result(content: str) -> AgentTaskResult:
     """Parse the exact JSON protocol; prose and markdown are rejected."""
     text = str(content or "").strip()

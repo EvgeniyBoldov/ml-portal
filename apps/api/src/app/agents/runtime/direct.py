@@ -19,12 +19,8 @@ from uuid import uuid4
 from app.agents.runtime.base import BaseRuntime
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.events import RuntimeEvent, RuntimeEventType
-from app.core.db import get_session_factory
 from app.core.logging import get_logger
-from app.models.execution_limit import ExecutionLimitScope
 from app.runtime.error_payloads import build_debug_payload
-from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens
-from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService
 
 if TYPE_CHECKING:
     from app.agents.context import ToolContext
@@ -111,34 +107,7 @@ class DirectRuntime(BaseRuntime):
         )
 
         llm_call_id = str(uuid4())
-        llm_limits = ExecutionLimitsPayload()
-        runtime_deps = ctx.get_runtime_deps()
-        session_factory = runtime_deps.session_factory or get_session_factory()
-        if session_factory:
-            async with session_factory() as session:
-                llm_limits = await ExecutionLimitsService(session).get_effective(
-                    scope_type=ExecutionLimitScope.AGENT,
-                    scope_ref=str(getattr(agent, "slug", "") or "").strip() or None,
-                )
-        try:
-            boundary = apply_llm_limits(
-                limits=llm_limits,
-                input_tokens=estimate_tokens(json.dumps(llm_messages, ensure_ascii=False, default=str)),
-                requested_output_tokens=gen.max_tokens,
-            )
-        except LLMLimitExceededError as exc:
-            yield RuntimeEvent.error(
-                str(exc),
-                recoverable=False,
-                error_code=exc.code,
-                retryable=False,
-                user_message=str(exc),
-                operator_message=str(exc),
-                source="llm",
-            )
-            await run_session.finish("failed", str(exc))
-            return
-        effective_max_tokens = boundary.output_tokens if boundary.output_tokens is not None else gen.max_tokens
+        effective_max_tokens = gen.max_tokens
 
         full_content = ""
         llm_start = time.time()

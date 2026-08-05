@@ -25,8 +25,7 @@ from app.schemas.sandbox import (
 from app.services.sandbox_override_resolver import SandboxOverrideResolver
 from app.services.sandbox_service import SandboxService
 from app.services.system_llm_role_contracts import build_response_contract
-from app.services.execution_limits_service import ExecutionLimitsService, PLATFORM_SCOPE_REF
-from app.models.execution_limit import ExecutionLimitScope
+from app.services.runtime_limits_service import RuntimeLimitsService
 
 from .helpers import tenant_uuid
 
@@ -205,24 +204,18 @@ async def get_sandbox_catalog(
             "output_requirements": role.output_requirements,
             "model": role.model,
             "temperature": role.temperature,
-            "max_tokens": role.max_tokens,
-            "timeout_s": role.timeout_s,
-            "max_retries": role.max_retries,
             "retry_backoff": role.retry_backoff,
         }
 
-    limits_service = ExecutionLimitsService(db)
-    _platform_limits = await limits_service.get_effective(
-        scope_type=ExecutionLimitScope.PLATFORM,
-        scope_ref=PLATFORM_SCOPE_REF,
-    )
+    limits_service = RuntimeLimitsService(db)
     role_limits: dict[str, dict] = {}
     for role_key in ("planner", "synthesizer", "fact_extractor", "summary_compactor"):
-        limits = await limits_service.get_effective(
-            scope_type=ExecutionLimitScope.ORCHESTRATOR_ROLE,
-            scope_ref=role_key,
-        )
-        role_limits[role_key] = limits.__dict__
+        limits = await limits_service.resolve_orchestrator(role_key)
+        role_limits[role_key] = {
+            "own": limits.own.__dict__,
+            "effective": limits.effective.__dict__,
+            "sources": dict(limits.sources),
+        }
 
     system_routers = [
         SandboxCatalogRouterItem(

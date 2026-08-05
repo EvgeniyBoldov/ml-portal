@@ -56,13 +56,11 @@ from app.agents.runtime.llm_errors import (
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.agents.runtime.prompt_assembler import filter_prompt_visible_operations
 from app.core.logging import get_logger
-from app.models.execution_limit import ExecutionLimitScope
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.error_payloads import build_debug_payload
 from app.runtime.events import RuntimeEvent, RuntimeEventType
-from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits
+from app.adapters.interfaces.llm import LLMProviderError
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
-from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
 from app.services.platform_settings_defaults import (
     PLATFORM_INTENT_MESSAGES,
     PLATFORM_REQUIRED_OPERATION_RETRY_INSTRUCTION,
@@ -109,8 +107,8 @@ def _build_budget_snapshot_payload(
         "snapshot": {
             "agent_steps": {
                 "used": step,
-                "limit": policy.max_steps,
-                "remaining": max(0, policy.max_steps - step),
+                "limit": policy.max_llm_calls,
+                "remaining": max(0, policy.max_llm_calls - step),
             },
             "tool_calls": {
                 "used": loop_state.tool_calls_total,
@@ -163,7 +161,7 @@ class AgentToolRuntime(BaseRuntime):
         agent = exec_request.agent
 
         # Resolve config
-        policy, gen, platform_config = await self.config_resolver.resolve(
+        policy, gen, platform_config, resolved_limits = await self.config_resolver.resolve(
             exec_request, ctx, model,
         )
 
@@ -205,11 +203,14 @@ class AgentToolRuntime(BaseRuntime):
             # level is brief/none. Chat traces keep the redacted hash.
             prompt=prompt_snapshot(system_prompt, "full" if sandbox_trace else resolved_logging_level.value),
             limits={
-                "max_steps": policy.max_steps,
+                "max_llm_calls": policy.max_llm_calls,
                 "max_tool_calls_total": policy.max_tool_calls_total,
                 "max_wall_time_ms": policy.max_wall_time_ms,
                 "tool_timeout_ms": policy.tool_timeout_ms,
                 "max_retries": policy.max_retries,
+                "llm_timeout_s": gen.timeout_s,
+                "llm_output_tokens_max": gen.max_tokens,
+                "sources": dict(resolved_limits.sources),
             },
             meta={
                 "model": gen.model or model,
@@ -273,11 +274,13 @@ class AgentToolRuntime(BaseRuntime):
         })
 
         budget_payload = {
-            "max_steps": policy.max_steps,
+            "max_llm_calls": policy.max_llm_calls,
             "max_tool_calls_total": policy.max_tool_calls_total,
             "max_wall_time_ms": policy.max_wall_time_ms,
             "tool_timeout_ms": policy.tool_timeout_ms,
             "max_retries": policy.max_retries,
+            "llm_timeout_s": gen.timeout_s,
+            "llm_output_tokens_max": gen.max_tokens,
         }
         budget_owner_id = str(run_session.run_id) if run_session.run_id else f"agent:{agent.slug}"
         init_budget_snapshot = _build_budget_snapshot_payload(
@@ -313,8 +316,6 @@ class AgentToolRuntime(BaseRuntime):
         llm_messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ] + list(messages)
-        llm_limits = await self._resolve_llm_limits_for_agent(ctx=ctx, agent_slug=agent.slug)
-
         loop_state = AgentLoopState()
         loop_state.start_time = time.time()  # Start clock after all setup is complete
         max_steps_without_success = int(
@@ -334,7 +335,7 @@ class AgentToolRuntime(BaseRuntime):
         seen_native_tool_calls: set[tuple[str, str]] = set()
 
         try:
-            for step in range(policy.max_steps):
+            for step in range(policy.max_llm_calls):
                 llm_call_id = str(uuid4())
                 elapsed_ms = (time.time() - loop_state.start_time) * 1000
                 global_remaining = policy.max_wall_time_ms - elapsed_ms
@@ -365,31 +366,14 @@ class AgentToolRuntime(BaseRuntime):
 
                 # Non-streaming LLM call to let agent decide
                 llm_start = time.time()
-                try:
-                    boundary = apply_llm_limits(
-                        limits=llm_limits,
-                        input_tokens=_estimate_tokens(json.dumps(llm_messages, ensure_ascii=False, default=str)),
-                        requested_output_tokens=gen.max_tokens,
-                    )
-                except LLMLimitExceededError as exc:
-                    yield RuntimeEvent.error(
-                        str(exc),
-                        recoverable=False,
-                        error_code=exc.code,
-                        retryable=False,
-                        user_message=str(exc),
-                        operator_message=str(exc),
-                        source="llm",
-                    )
-                    await run_session.finish("failed", str(exc))
-                    return
-                effective_max_tokens = boundary.output_tokens if boundary.output_tokens is not None else gen.max_tokens
+                effective_max_tokens = gen.max_tokens
                 raw_response_dict: Optional[Dict[str, Any]] = None
                 yield RuntimeEvent.llm_request(
                     llm_call_id=llm_call_id,
                     model=gen.model,
                     temperature=gen.temperature,
                     max_tokens=effective_max_tokens,
+                    timeout_s=gen.timeout_s,
                     messages=llm_messages,
                     parent_entity_type="agent_execution",
                     parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
@@ -470,22 +454,89 @@ class AgentToolRuntime(BaseRuntime):
                     await run_session.finish("failed", message)
                     return
                 except Exception as exc:
-                    logger.exception(
-                        "Agent LLM call failed run_id=%s agent=%s step=%s model=%s exception_type=%s",
-                        run_session.run_id,
-                        agent.slug,
-                        step + 1,
-                        gen.model,
-                        type(exc).__name__,
+                    provider_error = exc if isinstance(exc, LLMProviderError) else None
+                    message = (
+                        f"Agent LLM call failed: {provider_error.code.value}"
+                        if provider_error is not None
+                        else f"Agent LLM call failed: {type(exc).__name__}: {exc}"
                     )
+                    retryable = provider_error.retryable if provider_error is not None else True
+                    retry_after_ms = provider_error.retry_after_ms if provider_error is not None else None
+                    will_retry = retryable and loop_state.retry_count < policy.max_retries
+                    if will_retry:
+                        logger.warning(
+                            "Agent LLM call will retry run_id=%s agent=%s step=%s model=%s "
+                            "error_code=%s retry_after_ms=%s attempt=%s/%s",
+                            run_session.run_id,
+                            agent.slug,
+                            step + 1,
+                            gen.model,
+                            provider_error.code.value if provider_error is not None else "agent_llm_call_error",
+                            retry_after_ms,
+                            loop_state.retry_count + 1,
+                            policy.max_retries + 1,
+                        )
+                    else:
+                        logger.exception(
+                            "Agent LLM call failed permanently run_id=%s agent=%s step=%s model=%s exception_type=%s",
+                            run_session.run_id,
+                            agent.slug,
+                            step + 1,
+                            gen.model,
+                            type(exc).__name__,
+                        )
+                    yield RuntimeEvent.llm_response(
+                        llm_call_id=llm_call_id,
+                        model=gen.model,
+                        error_type=type(exc).__name__,
+                        error_code=(provider_error.code.value if provider_error is not None else "agent_llm_call_error"),
+                        retryable=retryable,
+                        status_code=(provider_error.status_code if provider_error is not None else None),
+                        provider_code=(provider_error.provider_code if provider_error is not None else None),
+                        retry_after_ms=retry_after_ms,
+                        duration_ms=int((time.time() - llm_start) * 1000),
+                        parent_entity_type="agent_execution",
+                        parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                        agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
+                        agent_slug=agent.slug,
+                        purpose="tool_decision_or_answer",
+                        actor_type="agent",
+                        actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                    )
+                    if will_retry:
+                        retry_delay_ms = self._retry_delay_ms(
+                            retry_count=loop_state.retry_count,
+                            retry_after_ms=retry_after_ms,
+                        )
+                        loop_state.retry_count += 1
+                        retry_payload = {
+                            "step": step + 1,
+                            "reason": "transport_error",
+                            "attempt": loop_state.retry_count,
+                            "max_attempts": policy.max_retries + 1,
+                            "retry_delay_ms": retry_delay_ms,
+                        }
+                        if retry_after_ms is not None:
+                            retry_payload["retry_after_ms"] = retry_after_ms
+                        await run_session.record_event("protocol_retry", retry_payload)
+                        yield RuntimeEvent(
+                            RuntimeEventType.PROTOCOL_RETRY,
+                            retry_payload,
+                        )
+                        await asyncio.sleep(retry_delay_ms / 1000)
+                        continue
                     debug = build_debug_payload(exc=exc, traceback_text=traceback.format_exc())
-                    message = f"Agent LLM call failed: {type(exc).__name__}: {exc}"
                     yield RuntimeEvent.error(
                         message,
-                        recoverable=True,
-                        error_code="agent_llm_call_error",
-                        retryable=True,
-                        user_message="Модель не смогла обработать запрос. Попробуйте повторить позже.",
+                        recoverable=retryable,
+                        error_code=provider_error.code.value if provider_error is not None else "agent_llm_call_error",
+                        retryable=retryable,
+                        retry_after_ms=retry_after_ms,
+                        user_message=(
+                            "Модель временно недоступна. Попробуйте повторить позже."
+                            if provider_error is None or provider_error.retryable
+                            else "Модель не смогла выполнить этот запрос из-за ограничений провайдера."
+                        ),
                         operator_message=message,
                         source="llm",
                         error_type=type(exc).__name__,
@@ -597,7 +648,7 @@ class AgentToolRuntime(BaseRuntime):
                             ))
                             await run_session.finish("failed", limit_message)
                             return
-                        if step + 1 >= policy.max_steps:
+                        if step + 1 >= policy.max_llm_calls:
                             yield RuntimeEvent.error(
                                 "Agent failed to call required operations before answering",
                                 recoverable=False,
@@ -864,12 +915,12 @@ class AgentToolRuntime(BaseRuntime):
                 })
             else:
                 yield RuntimeEvent.error(
-                    f"Maximum agent steps ({policy.max_steps}) reached without result",
+                    f"Maximum agent LLM calls ({policy.max_llm_calls}) reached without result",
                     recoverable=True,
                     error_code=RuntimeErrorCode.AGENT_NO_SUCCESSFUL_OPERATION_RESULT,
                     retryable=True,
-                    user_message=f"Maximum agent steps ({policy.max_steps}) reached without result",
-                    operator_message=f"Maximum agent steps ({policy.max_steps}) reached without result",
+                    user_message=f"Maximum agent LLM calls ({policy.max_llm_calls}) reached without result",
+                    operator_message=f"Maximum agent LLM calls ({policy.max_llm_calls}) reached without result",
                     source="runtime",
                 )
             await run_session.finish("completed" if loop_state.tool_outputs else "failed")
@@ -887,23 +938,6 @@ class AgentToolRuntime(BaseRuntime):
                 debug=build_debug_payload(exc=e, traceback_text=traceback.format_exc()),
             )
             await run_session.finish("failed", str(e))
-
-    async def _resolve_llm_limits_for_agent(self, *, ctx: "ToolContext", agent_slug: str) -> ExecutionLimitsPayload:
-        deps = ctx.get_runtime_deps()
-        session_factory = deps.session_factory
-        if session_factory is None:
-            return ExecutionLimitsPayload()
-        try:
-            async with session_factory() as session:
-                service = ExecutionLimitsService(session)
-                base = await service.get_effective(
-                    scope_type=ExecutionLimitScope.AGENT,
-                    scope_ref=agent_slug,
-                )
-                sandbox_ov = deps.sandbox_overrides if isinstance(deps.sandbox_overrides, dict) else {}
-                return apply_limits_override(base, sandbox_ov.get("agent_limits"))
-        except Exception:
-            return ExecutionLimitsPayload()
 
     async def _execute_single_operation_call(
         self,
@@ -1310,3 +1344,11 @@ class AgentToolRuntime(BaseRuntime):
             sources,
             run_id=str(run_session.run_id or exec_request.run_id),
         )
+
+    @staticmethod
+    def _retry_delay_ms(*, retry_count: int, retry_after_ms: Optional[int]) -> int:
+        """Bound retry delay and prefer a provider-supplied Retry-After hint."""
+        backoff_ms = min(30_000, 500 * (2 ** max(0, retry_count)))
+        if isinstance(retry_after_ms, int) and retry_after_ms > 0:
+            return min(30_000, retry_after_ms)
+        return backoff_ms

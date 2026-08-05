@@ -136,6 +136,50 @@ runtime_event_duration_ms = Histogram(
     registry=_registry,
 )
 
+# LLM adapter metrics intentionally use low-cardinality connector and outcome
+# labels. Model aliases, tenant ids, prompts and provider messages are kept out.
+llm_adapter_requests_total = Counter(
+    "llm_adapter_requests_total",
+    "LLM adapter requests by connector, call kind and outcome",
+    ["connector", "call_kind", "outcome", "error_code"],
+    registry=_registry,
+)
+
+llm_adapter_duration_seconds = Histogram(
+    "llm_adapter_duration_seconds",
+    "LLM adapter request duration by connector and call kind",
+    ["connector", "call_kind", "outcome"],
+    registry=_registry,
+)
+
+llm_adapter_tokens_total = Counter(
+    "llm_adapter_tokens_total",
+    "LLM adapter token usage by connector and token direction",
+    ["connector", "direction", "source"],
+    registry=_registry,
+)
+
+
+def record_llm_adapter_call(
+    *, connector: str, call_kind: str, outcome: str, error_code: str,
+    duration_ms: int, usage: Optional[dict] = None,
+) -> None:
+    llm_adapter_requests_total.labels(
+        connector=connector or "unknown", call_kind=call_kind,
+        outcome=outcome, error_code=error_code or "none",
+    ).inc()
+    llm_adapter_duration_seconds.labels(
+        connector=connector or "unknown", call_kind=call_kind, outcome=outcome,
+    ).observe(max(0, duration_ms) / 1000)
+    if not isinstance(usage, dict):
+        return
+    for direction, key in (("input", "prompt_tokens"), ("output", "completion_tokens"), ("total", "total_tokens")):
+        value = usage.get(key)
+        if isinstance(value, int) and value >= 0:
+            llm_adapter_tokens_total.labels(
+                connector=connector or "unknown", direction=direction, source="provider",
+            ).inc(value)
+
 
 def record_runtime_journal_event(*, event_type: str, origin: str, duration_ms: Optional[int]) -> None:
     runtime_journal_events_total.labels(event_type=event_type, origin=origin).inc()

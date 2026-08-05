@@ -19,64 +19,6 @@ class BudgetGuardResult:
 
 class PlannerBudgetGuard:
     @staticmethod
-    def consume_step(
-        *,
-        planner_registry: Optional[BudgetRegistry],
-        orchestrator_id: str,
-        run_id: str,
-    ) -> BudgetGuardResult:
-        if planner_registry is None:
-            return BudgetGuardResult(ok=True)
-        try:
-            planner_registry.consume(
-                orchestrator_id,
-                "planner_steps",
-                1,
-                reason="step",
-            )
-        except BudgetExceededError as exc:
-            return BudgetGuardResult(
-                ok=False,
-                error_message=str(exc),
-                final_error=f"budget_exceeded: {exc.metric}",
-                error_event=PhasedEvent(
-                    RuntimeEvent.error(
-                        f"Planner budget exceeded: {exc.metric}",
-                        recoverable=False,
-                        user_message=f"Planner budget exceeded: {exc.metric}",
-                        operator_message=str(exc),
-                        source="runtime",
-                        parent_entity_type="orchestrator",
-                        parent_entity_id=orchestrator_id,
-                    ),
-                    OrchestrationPhase.PLANNER,
-                ),
-            )
-        planner_payload = planner_registry.emit_snapshot(
-            orchestrator_id,
-            reason="step",
-            delta={"planner_steps": 1},
-        ) or {}
-        return BudgetGuardResult(
-            ok=True,
-            snapshot_event=PhasedEvent(
-                RuntimeEvent.budget_snapshot(
-                    entity_type="orchestrator",
-                    entity_id=orchestrator_id,
-                    parent_entity_type="run",
-                    parent_entity_id=run_id,
-                    role="planner",
-                    own=planner_payload.get("own", {}),
-                    limits=planner_payload.get("limits"),
-                    delta={"planner_steps": 1},
-                    reason="step",
-                    at_ms=planner_payload.get("at_ms"),
-                ),
-                OrchestrationPhase.PLANNER,
-            ),
-        )
-
-    @staticmethod
     def consume_planner_llm_trace(
         *,
         planner_registry: Optional[BudgetRegistry],
@@ -87,6 +29,7 @@ class PlannerBudgetGuard:
         if planner_registry is None:
             return BudgetGuardResult(ok=True)
         try:
+            planner_registry.consume(orchestrator_id, "llm_calls", 1, reason="llm_call")
             if llm_trace.tokens_in > 0:
                 planner_registry.consume(
                     orchestrator_id,
@@ -134,7 +77,7 @@ class PlannerBudgetGuard:
                 ),
             )
 
-        delta: Dict[str, int] = {}
+        delta: Dict[str, int] = {"llm_calls": 1}
         if llm_trace.tokens_in > 0:
             delta["tokens_in"] = llm_trace.tokens_in
         if llm_trace.tokens_out > 0:

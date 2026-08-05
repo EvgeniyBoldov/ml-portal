@@ -161,15 +161,9 @@ const AGENT_EXEC_FIELDS: FieldConfig[] = [
 ];
 
 const AGENT_LIMIT_FIELDS: FieldConfig[] = [
-  { key: 'llm_input_tokens_max', type: 'number', label: 'LLM input токены', description: 'Лимит токенов входного промпта для одного LLM-вызова.' },
-  { key: 'llm_output_tokens_max', type: 'number', label: 'LLM output токены', description: 'Лимит токенов ответа для одного LLM-вызова.' },
-  { key: 'llm_context_window_max', type: 'number', label: 'LLM context window', description: 'Лимит input+output токенов в одном LLM-вызове.' },
-  { key: 'llm_timeout_s', type: 'number', label: 'LLM таймаут (сек.)', description: 'Время ожидания ответа одного LLM-вызова.' },
-  { key: 'runtime_steps_max', type: 'number', label: 'Runtime шаги', description: 'Лимит шагов агентского рантайма.' },
-  { key: 'runtime_tool_calls_max', type: 'number', label: 'Runtime вызовы инструментов', description: 'Лимит числа tool-вызовов за ран.' },
-  { key: 'runtime_retries_max', type: 'number', label: 'Runtime ретраи', description: 'Лимит повторных попыток.' },
-  { key: 'runtime_wall_time_ms_max', type: 'number', label: 'Runtime wall time (ms)', description: 'Лимит общего времени выполнения в мс.' },
-  { key: 'runtime_tokens_total_max', type: 'number', label: 'Runtime total токены', description: 'Лимит суммарных токенов рантайма.' },
+  { key: 'llm_calls_max', type: 'number', label: 'LLM-вызовы', description: 'Пустое поле наследует platform default.' },
+  { key: 'tool_calls_max', type: 'number', label: 'Tool-вызовы', description: 'Пустое поле наследует platform default.' },
+  { key: 'wall_time_ms_max', type: 'number', label: 'Wall time (ms)', description: 'Пустое поле наследует platform default.' },
 ];
 
 const INFO_FIELDS: FieldConfig[] = [
@@ -507,7 +501,7 @@ export function AgentPage() {
             saving: updateAgentLimits.isPending,
             tone: 'default',
             onEdit: () => {
-              setLimitsForm({ ...(agentLimits || {}) });
+              setLimitsForm({ ...(agentLimits?.own || {}) });
               setLimitsMode('edit');
             },
             onSave: async () => {
@@ -526,7 +520,7 @@ export function AgentPage() {
             iconVariant="warning"
             width="full"
             fields={AGENT_LIMIT_FIELDS}
-            data={limitsMode === 'edit' ? limitsForm : (agentLimits || {})}
+            data={limitsMode === 'edit' ? limitsForm : (agentLimits?.effective || {})}
             editable={limitsMode === 'edit'}
             onChange={limitsMode === 'edit' ? (key, value) => setLimitsForm((prev) => ({ ...prev, [key]: value })) : undefined}
           />

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.models.model_registry import Model
-from app.adapters.impl.llm_client import LLMClient
+from app.core.di import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class LLMService:
     
     def __init__(self, db: Optional[AsyncSession] = None):
         self.db = db
-        self.llm_client = LLMClient()
+        self.llm_client = get_llm_client()
     
     async def generate_version_content(
         self,
@@ -43,7 +43,7 @@ class LLMService:
         
         # Вызвать LLM
         try:
-            response = await self.llm_client.complete(
+            response = await self.llm_client.chat(
                 messages=[
                     {
                         "role": "system",
@@ -54,12 +54,11 @@ class LLMService:
                         "content": prompt
                     }
                 ],
-                temperature=0.3,
-                max_tokens=2000
+                params={"temperature": 0.3, "max_tokens": 2000},
             )
             
             # Распарсить JSON
-            content = response.content.strip()
+            content = str(response.get("content") or "").strip()
             
             # Извлечь JSON из ответа
             if "```json" in content:
@@ -121,7 +120,7 @@ class LLMService:
 """
         
         try:
-            response = await self.llm_client.complete(
+            response = await self.llm_client.chat(
                 messages=[
                     {
                         "role": "system",
@@ -132,11 +131,10 @@ class LLMService:
                         "content": prompt
                     }
                 ],
-                temperature=0.5,
-                max_tokens=500
+                params={"temperature": 0.5, "max_tokens": 500},
             )
             
-            content = response.content.strip()
+            content = str(response.get("content") or "").strip()
             
             # Извлечь JSON массив
             if "```json" in content:

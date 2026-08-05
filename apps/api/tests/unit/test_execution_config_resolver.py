@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app.agents.execution_config_resolver import ExecutionConfigResolver
+from app.agents.runtime.policy import GenerationParams
 
 
 class _FakeModelResolver:
@@ -46,3 +48,16 @@ async def test_resolve_model_alias_keeps_resolved_provider_name(monkeypatch):
         default_alias="llm.good",
     )
     assert resolved == "meta-llama/llama-4-scout-17b-16e-instruct"
+
+
+def test_agent_generation_uses_explicit_adapter_defaults(monkeypatch):
+    monkeypatch.setattr(
+        "app.agents.execution_config_resolver.get_settings",
+        lambda: SimpleNamespace(LLM_TIMEOUT=75, LLM_DEFAULT_MAX_TOKENS=2048),
+    )
+    generation = GenerationParams()
+
+    ExecutionConfigResolver._apply_adapter_defaults(generation)
+
+    assert generation.timeout_s == 75
+    assert generation.max_tokens == 2048

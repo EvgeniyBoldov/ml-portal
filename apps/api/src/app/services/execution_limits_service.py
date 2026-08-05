@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional
 import inspect
 
 from sqlalchemy import select
@@ -11,6 +11,35 @@ from app.models.execution_limit import ExecutionLimit, ExecutionLimitScope
 
 
 PLATFORM_SCOPE_REF = "global"
+
+
+# Last-resort values for an incomplete database.  The platform/global row is
+# the operator-owned default; these values only make a new or partially
+# migrated installation safe until that row is configured.
+CODE_DEFAULT_EXECUTION_LIMITS = {
+    "llm_input_tokens_max": 16_000,
+    "llm_output_tokens_max": 4_096,
+    "llm_context_window_max": 16_384,
+    "llm_timeout_s": 30,
+    "plan_revisions_max": 25,
+    "task_attempts_total_max": 3,
+    "agent_runs_total_max": 25,
+    "llm_calls_total_max": 100,
+    "tool_calls_total_max": 50,
+    "tokens_total_max": 32_000,
+    "execution_wall_time_ms_max": 300_000,
+    "run_ttl_ms": 600_000,
+    "planner_llm_calls_max": 12,
+    "planner_retries_max": 3,
+    "planner_tokens_total_max": 12_000,
+    "planner_execution_wall_time_ms_max": 300_000,
+    "agent_attempts_max": 3,
+    "agent_llm_calls_max": 10,
+    "agent_tool_calls_max": 50,
+    "agent_tokens_total_max": 16_000,
+    "agent_execution_wall_time_ms_max": 300_000,
+    "max_parallel_tasks": 1,
+}
 
 
 @dataclass(frozen=True)
@@ -39,6 +68,14 @@ class ExecutionLimitsPayload:
     max_parallel_tasks: Optional[int] = None
 
 
+@dataclass(frozen=True)
+class ResolvedExecutionLimits:
+    """Effective limits plus the origin of every value for operator traces."""
+
+    values: ExecutionLimitsPayload
+    sources: Mapping[str, str]
+
+
 class ExecutionLimitsService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -49,17 +86,47 @@ class ExecutionLimitsService:
         scope_type: str,
         scope_ref: Optional[str],
     ) -> ExecutionLimitsPayload:
+        return (await self.resolve(scope_type=scope_type, scope_ref=scope_ref)).values
+
+    async def resolve(
+        self,
+        *,
+        scope_type: str,
+        scope_ref: Optional[str],
+        override: Optional[dict] = None,
+    ) -> ResolvedExecutionLimits:
         own = await self._get_scope(scope_type=scope_type, scope_ref=scope_ref)
         platform = await self._get_scope(
             scope_type=ExecutionLimitScope.PLATFORM,
             scope_ref=PLATFORM_SCOPE_REF,
         )
-        return ExecutionLimitsPayload(
-            llm_input_tokens_max=self._pick(own, platform, "llm_input_tokens_max"),
-            llm_output_tokens_max=self._pick(own, platform, "llm_output_tokens_max"),
-            llm_context_window_max=self._pick(own, platform, "llm_context_window_max"),
-            llm_timeout_s=self._pick(own, platform, "llm_timeout_s"),
-            **{field: self._pick(own, platform, field) for field in ExecutionLimitsPayload.__dataclass_fields__ if field not in {"llm_input_tokens_max", "llm_output_tokens_max", "llm_context_window_max", "llm_timeout_s"}},
+        values: dict[str, int] = {}
+        sources: dict[str, str] = {}
+        for field in ExecutionLimitsPayload.__dataclass_fields__:
+            own_value = self._positive_value(getattr(own, field, None) if own is not None else None)
+            platform_value = self._positive_value(
+                getattr(platform, field, None) if platform is not None else None
+            )
+            if own_value is not None:
+                values[field] = own_value
+                sources[field] = "entity"
+            elif platform_value is not None:
+                values[field] = platform_value
+                sources[field] = "platform"
+            else:
+                values[field] = CODE_DEFAULT_EXECUTION_LIMITS[field]
+                sources[field] = "code"
+
+        for field, raw_value in (override or {}).items():
+            if field not in values:
+                continue
+            value = self._positive_value(raw_value)
+            if value is not None:
+                values[field] = value
+                sources[field] = "sandbox"
+        return ResolvedExecutionLimits(
+            values=ExecutionLimitsPayload(**values),
+            sources=sources,
         )
 
     async def get_scope(self, *, scope_type: str, scope_ref: Optional[str]) -> Optional[ExecutionLimit]:
@@ -71,13 +138,14 @@ class ExecutionLimitsService:
         scope_type: str,
         scope_ref: Optional[str],
         payload: ExecutionLimitsPayload,
+        fields: Optional[set[str]] = None,
     ) -> ExecutionLimit:
         normalized_ref = self._normalize_scope_ref(scope_type, scope_ref)
         row = await self._get_scope(scope_type=scope_type, scope_ref=normalized_ref)
         if row is None:
             row = ExecutionLimit(scope_type=scope_type, scope_ref=normalized_ref)
             self.session.add(row)
-        for field in payload.__dataclass_fields__.keys():
+        for field in fields or set(payload.__dataclass_fields__.keys()):
             setattr(row, field, getattr(payload, field))
         await self.session.flush()
         return row
@@ -106,11 +174,12 @@ class ExecutionLimitsService:
         return str(scope_ref or "").strip()
 
     @staticmethod
-    def _pick(own: Optional[ExecutionLimit], platform: Optional[ExecutionLimit], field: str) -> Optional[int]:
-        own_val = getattr(own, field, None) if own is not None else None
-        if own_val is not None:
-            return own_val
-        return getattr(platform, field, None) if platform is not None else None
+    def _positive_value(value: object) -> Optional[int]:
+        try:
+            normalized = int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+        return normalized if normalized is not None and normalized > 0 else None
 
 
 def apply_limits_override(
@@ -120,19 +189,11 @@ def apply_limits_override(
     if not isinstance(override, dict) or not override:
         return base
 
-    def _coerce(value: object) -> Optional[int]:
-        if value is None:
-            return None
-        try:
-            n = int(value)
-            return n if n > 0 else None
-        except (TypeError, ValueError):
-            return None
-
-    return ExecutionLimitsPayload(
-        llm_input_tokens_max=_coerce(override.get("llm_input_tokens_max")) if "llm_input_tokens_max" in override else base.llm_input_tokens_max,
-        llm_output_tokens_max=_coerce(override.get("llm_output_tokens_max")) if "llm_output_tokens_max" in override else base.llm_output_tokens_max,
-        llm_context_window_max=_coerce(override.get("llm_context_window_max")) if "llm_context_window_max" in override else base.llm_context_window_max,
-        llm_timeout_s=_coerce(override.get("llm_timeout_s")) if "llm_timeout_s" in override else base.llm_timeout_s,
-        **{field: _coerce(override[field]) if field in override else getattr(base, field) for field in ExecutionLimitsPayload.__dataclass_fields__ if field not in {"llm_input_tokens_max", "llm_output_tokens_max", "llm_context_window_max", "llm_timeout_s"}},
-    )
+    values = dict(base.__dict__)
+    for field, raw_value in override.items():
+        if field not in values:
+            continue
+        value = ExecutionLimitsService._positive_value(raw_value)
+        if value is not None:
+            values[field] = value
+    return ExecutionLimitsPayload(**values)

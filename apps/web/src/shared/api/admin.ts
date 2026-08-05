@@ -296,6 +296,9 @@ export interface Model {
   instance_id?: string | null;
   instance_name?: string | null;
   extra_config?: Record<string, any> | null;
+  max_output_tokens?: number | null;
+  request_timeout_s?: number | null;
+  max_retries?: number | null;
   status: ModelStatus;
   enabled: boolean;
   is_system: boolean;
@@ -321,6 +324,9 @@ export interface ModelCreate {
   base_url?: string;
   instance_id?: string;
   extra_config?: Record<string, any>;
+  max_output_tokens?: number;
+  request_timeout_s?: number;
+  max_retries?: number;
   status?: ModelStatus;
   enabled?: boolean;
   default_for_type?: boolean;
@@ -336,6 +342,9 @@ export interface ModelUpdate {
   base_url?: string;
   instance_id?: string;
   extra_config?: Record<string, any>;
+  max_output_tokens?: number;
+  request_timeout_s?: number;
+  max_retries?: number;
   status?: ModelStatus;
   enabled?: boolean;
   default_for_type?: boolean;
@@ -383,7 +392,6 @@ export interface ModelProbeInfoResponse {
   model_type?: 'llm_chat' | 'embedding' | 'reranker';
   health_status?: 'healthy' | 'degraded' | 'unavailable';
   raw?: Record<string, unknown>;
-  important_params?: Record<string, unknown>;
 }
 
 export interface ModelProbeInfoRequest {
@@ -633,7 +641,7 @@ export const adminApi = {
     });
   },
 
-  async verifyModel(id: string): Promise<Model & { manifest?: Record<string, unknown>; resolved_type_from_manifest?: string | null; important_params?: Record<string, unknown> }> {
+  async verifyModel(id: string): Promise<Model & { manifest?: Record<string, unknown>; resolved_type_from_manifest?: string | null }> {
     return apiRequest(`/admin/models/${id}/verify`, {
       method: 'POST',
     });
@@ -810,48 +818,40 @@ export const platformSettingsApi = {
     apiRequest('/admin/settings/fill-defaults', { method: 'POST' }),
 };
 
-export interface ExecutionLimits {
-  id?: string | null;
-  scope_type: 'platform' | 'agent' | 'orchestrator_role';
-  scope_ref: string;
-  llm_input_tokens_max?: number | null;
-  llm_output_tokens_max?: number | null;
-  llm_context_window_max?: number | null;
-  llm_timeout_s?: number | null;
-  runtime_steps_max?: number | null;
-  runtime_tool_calls_max?: number | null;
-  runtime_retries_max?: number | null;
-  runtime_wall_time_ms_max?: number | null;
-  runtime_tokens_total_max?: number | null;
-  created_at?: string | null;
-  updated_at?: string | null;
+export interface RuntimeLimits {
+  wall_time_ms_max?: number | null;
+  max_parallel_tasks?: number | null;
+  max_replans?: number | null;
+  max_task_executions?: number | null;
+  sources?: Record<string, string>;
 }
 
-export type ExecutionLimitsUpdate = Partial<Pick<
-  ExecutionLimits,
-  | 'llm_input_tokens_max'
-  | 'llm_output_tokens_max'
-  | 'llm_context_window_max'
-  | 'llm_timeout_s'
-  | 'runtime_steps_max'
-  | 'runtime_tool_calls_max'
-  | 'runtime_retries_max'
-  | 'runtime_wall_time_ms_max'
-  | 'runtime_tokens_total_max'
->>;
+export interface ActorLimits {
+  llm_calls_max?: number | null;
+  tool_calls_max?: number | null;
+  wall_time_ms_max?: number | null;
+}
+
+export interface ActorLimitsResolution {
+  own: ActorLimits;
+  effective: ActorLimits;
+  sources: Record<string, string>;
+}
 
 export const executionLimitsApi = {
-  getPlatform: (): Promise<ExecutionLimits> =>
-    apiRequest('/admin/execution-limits/platform', { method: 'GET' }),
-  updatePlatform: (data: ExecutionLimitsUpdate): Promise<ExecutionLimits> =>
-    apiRequest('/admin/execution-limits/platform', { method: 'PATCH', body: JSON.stringify(data) }),
-  getAgent: (agentSlug: string): Promise<ExecutionLimits> =>
+  getRuntime: (): Promise<RuntimeLimits> => apiRequest('/admin/execution-limits/runtime', { method: 'GET' }),
+  updateRuntime: (data: RuntimeLimits): Promise<RuntimeLimits> => apiRequest('/admin/execution-limits/runtime', { method: 'PATCH', body: JSON.stringify(data) }),
+  getAgentDefaults: (): Promise<ActorLimitsResolution> => apiRequest('/admin/execution-limits/defaults/agents', { method: 'GET' }),
+  updateAgentDefaults: (data: ActorLimits): Promise<ActorLimitsResolution> => apiRequest('/admin/execution-limits/defaults/agents', { method: 'PATCH', body: JSON.stringify(data) }),
+  getOrchestratorDefaults: (): Promise<ActorLimitsResolution> => apiRequest('/admin/execution-limits/defaults/orchestrators', { method: 'GET' }),
+  updateOrchestratorDefaults: (data: ActorLimits): Promise<ActorLimitsResolution> => apiRequest('/admin/execution-limits/defaults/orchestrators', { method: 'PATCH', body: JSON.stringify(data) }),
+  getAgent: (agentSlug: string): Promise<ActorLimitsResolution> =>
     apiRequest(`/admin/execution-limits/agents/${encodeURIComponent(agentSlug)}`, { method: 'GET' }),
-  updateAgent: (agentSlug: string, data: ExecutionLimitsUpdate): Promise<ExecutionLimits> =>
+  updateAgent: (agentSlug: string, data: ActorLimits): Promise<ActorLimitsResolution> =>
     apiRequest(`/admin/execution-limits/agents/${encodeURIComponent(agentSlug)}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  getOrchestrator: (role: string): Promise<ExecutionLimits> =>
+  getOrchestrator: (role: string): Promise<ActorLimitsResolution> =>
     apiRequest(`/admin/execution-limits/orchestrators/${encodeURIComponent(role)}`, { method: 'GET' }),
-  updateOrchestrator: (role: string, data: ExecutionLimitsUpdate): Promise<ExecutionLimits> =>
+  updateOrchestrator: (role: string, data: ActorLimits): Promise<ActorLimitsResolution> =>
     apiRequest(`/admin/execution-limits/orchestrators/${encodeURIComponent(role)}`, { method: 'PATCH', body: JSON.stringify(data) }),
 };
 

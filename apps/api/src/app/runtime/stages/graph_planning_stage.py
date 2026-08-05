@@ -54,6 +54,7 @@ class GraphPlanningStage:
         planner_memory_context: Optional[List[Dict[str, Any]]] = None,
         durable_memory_snapshot: Optional[MemorySnapshot] = None,
         orchestrator_id: Optional[str] = None,
+        runtime_limits: Optional[Dict[str, int]] = None,
     ) -> AsyncIterator[PhasedEvent]:
         pause_question: Optional[str] = None
         runtime_sink = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
@@ -80,6 +81,10 @@ class GraphPlanningStage:
         if plan.status == "waiting_input":
             resume_user_response = str(request.request_text or "").strip()
             await self._store.resume_planner_pause(plan.id)
+        effective_runtime_limits = dict(runtime_limits or {})
+        task_attempts_limit = effective_runtime_limits.get("task_attempts")
+        if isinstance(task_attempts_limit, int) and task_attempts_limit > 0:
+            self._orchestrator.max_attempts = task_attempts_limit
         planner_kwargs = {
             "chat_id": UUID(request.chat_id) if request.chat_id else None,
             "tenant_id": tenant_id,
@@ -96,6 +101,7 @@ class GraphPlanningStage:
             "durable_memory_snapshot": durable_memory_snapshot,
             "force_replan": resume_user_response is not None,
             "resume_user_response": resume_user_response,
+            "runtime_limits": effective_runtime_limits,
         }
         async for event in self._orchestrator.run(
             plan_id=plan.id,

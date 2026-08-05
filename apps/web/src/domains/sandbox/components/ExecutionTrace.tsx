@@ -58,7 +58,7 @@ function StatusBadge({ status }: { status: string }) {
 
 function statusClass(status: string): string {
   if (status === 'completed' || status === 'complete') return styles.executorComplete;
-  if (status === 'failed' || status === 'fail' || status === 'error' || status === 'unfulfillable') return styles.executorFailed;
+  if (status === 'failed' || status === 'fail' || status === 'error' || status === 'unfulfillable' || status === 'stalled') return styles.executorFailed;
   if (status === 'waiting' || status === 'waiting_input') return styles.executorWaiting;
   if (status === 'paused') return styles.executorWaiting;
   return styles.executorRunning;
@@ -110,7 +110,7 @@ function CallSummary({ calls }: { calls: TraceCall[] }) {
 
 function ExecutorRunCard({ executor, stage, onSelect, selectedTargetKey }: { executor: TraceExecutorRun; stage: TraceStage; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null }) {
   const [expanded, setExpanded] = useState(false);
-  const isTerminal = ['completed', 'complete', 'failed', 'fail', 'error'].includes(executor.entity.status);
+  const isTerminal = ['completed', 'complete', 'failed', 'fail', 'error', 'stalled'].includes(executor.entity.status);
   return (
     <article className={`${styles.executor} ${statusClass(executor.entity.status)} ${selectedTargetKey === executor.entity.key ? styles.isSelected : ''}`}>
       <div className={styles.executorBody}>

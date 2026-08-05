@@ -58,6 +58,9 @@ class ModelBase(BaseModel):
     base_url: Optional[str] = Field(None, max_length=500, description="Direct endpoint URL for local or standalone model connectors")
     instance_id: Optional[str] = Field(None, description="FK to tool_instances (provider connection)")
     extra_config: Optional[Dict[str, Any]] = Field(None, description="Provider-specific config (JSON)")
+    max_output_tokens: Optional[int] = Field(None, ge=1)
+    request_timeout_s: Optional[int] = Field(None, ge=1)
+    max_retries: Optional[int] = Field(None, ge=0)
     status: ModelStatusEnum = Field(default=ModelStatusEnum.AVAILABLE, description="Availability status")
     enabled: bool = Field(default=True, description="Is model enabled")
     is_system: bool = Field(default=False, description="System model (cannot be deleted)")
@@ -89,6 +92,9 @@ class ModelUpdate(BaseModel):
     provider_model_name: Optional[str] = Field(None, min_length=1, max_length=255)
     instance_id: Optional[str] = Field(None, description="FK to tool_instances")
     extra_config: Optional[Dict[str, Any]] = None
+    max_output_tokens: Optional[int] = Field(None, ge=1)
+    request_timeout_s: Optional[int] = Field(None, ge=1)
+    max_retries: Optional[int] = Field(None, ge=0)
     status: Optional[ModelStatusEnum] = None
     enabled: Optional[bool] = None
     default_for_type: Optional[bool] = None

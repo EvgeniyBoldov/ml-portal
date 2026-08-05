@@ -26,6 +26,9 @@ from app.core.http.tls import outbound_http_verify
 from app.core.logging import get_logger
 from app.services.credential_service import CredentialService, CredentialError
 from app.services.model_connector_profiles import build_model_auth_headers, get_healthcheck_paths
+from app.core.di import get_llm_client
+from app.adapters.interfaces.llm import LLMProviderError
+from app.adapters.interfaces.llm import LLMCallOptions
 
 logger = get_logger(__name__)
 
@@ -147,57 +150,20 @@ class ModelHealthChecker:
             )
     
     async def _check_llm(self, model: Model, session: Optional[AsyncSession] = None) -> Tuple[bool, dict]:
-        """Check LLM model by sending minimal completion request"""
-        base_url = self._resolve_base_url(model)
-        if not base_url:
-            return False, {"error": "No base URL configured (no instance linked)"}
-        
-        api_key = await self._resolve_api_key(model, session)
-        
-        headers = {"Content-Type": "application/json"}
-        headers.update(
-            build_model_auth_headers(
-                model.connector,
-                api_key,
-                extra_config=model.extra_config,
+        """Probe via the canonical adapter so auth, timeout and metrics match runtime."""
+        try:
+            response = await get_llm_client().chat(
+                [{"role": "user", "content": "Hi"}],
+                model=model.alias or model.provider_model_name,
+                params={"max_tokens": 1},
+                options=LLMCallOptions(timeout_s=self.timeout),
             )
-        )
-        
-        # Minimal request - just check if model responds
-        payload = {
-            "model": model.provider_model_name,
-            "messages": [{"role": "user", "content": "Hi"}],
-            "max_tokens": 1,
-            "stream": False
-        }
-        
-        url = f"{base_url.rstrip('/')}/chat/completions"
-        
-        async with httpx.AsyncClient(timeout=self.timeout, verify=outbound_http_verify()) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            
-            if response.status_code == 200:
-                data = response.json()
-                return True, {
-                    "model": data.get("model"),
-                    "usage": data.get("usage", {})
-                }
-            elif response.status_code == 401:
-                return False, {"error": "Authentication failed - check API key"}
-            elif response.status_code == 403:
-                return False, {"error": "Access forbidden - check permissions"}
-            elif response.status_code == 404:
-                return False, {"error": f"Model '{model.provider_model_name}' not found"}
-            elif response.status_code == 429:
-                # Rate limited but API is working
-                return True, {"warning": "Rate limited", "status_code": 429}
-            else:
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get("error", {}).get("message", response.text[:200])
-                except Exception:
-                    error_msg = response.text[:200]
-                return False, {"error": f"HTTP {response.status_code}: {error_msg}"}
+            return True, {"model": response.get("model"), "usage": response.get("usage", {})}
+        except LLMProviderError as exc:
+            # A 429 verifies that the route, model and credentials are valid.
+            if exc.code.value == "llm_rate_limited":
+                return True, {"warning": exc.safe_message, "status_code": exc.status_code}
+            return False, {"error": exc.safe_message, "error_code": exc.code.value}
     
     async def _check_embedding(self, model: Model, session: Optional[AsyncSession] = None) -> Tuple[bool, dict]:
         """Check embedding model by sending minimal embed request"""

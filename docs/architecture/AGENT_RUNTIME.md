@@ -196,9 +196,25 @@ Policy gates остаются отдельным runtime enforcement-слоем.
 - `orchestrator_role` scope — лимиты системных ролей (`planner`, `synthesizer`, `fact_extractor`, `summary_compactor`);
 - `agent` scope — лимиты конкретного агента.
 
+`ExecutionLimitsService.resolve` применяет эту иерархию к каждому полю:
+entity scope → `platform/global` → code fallback. Поэтому effective profile не
+может быть пустым даже при неполной или ещё не мигрированной БД. Sandbox
+override применяется последним и не может обнулить значение. Agent execution
+snapshot хранит также источник каждого resolved поля (`entity`, `platform`,
+`sandbox`, `code`).
+
 `llm_timeout_s` задаёт ожидание одного LLM-вызова. Значение в более узком
 scope замещает platform default; для системных ролей при отсутствии лимита
 используется их role timeout.
+
+LLM transport uses the single OpenAI-compatible SDK adapter for vLLM,
+LiteLLM and compatible providers. Callers resolve the effective entity limit
+before the call and pass it to the adapter as the per-request SDK timeout;
+cached clients do not freeze a role timeout. SDK retries are disabled: runtime
+is the sole owner of semantic retry, budget accounting and `protocol_retry`.
+Provider failures are normalized into safe stable codes (timeout, connection,
+authentication, rate limit, context/request limit, tool/structured-output
+capability and upstream failure) before they reach runtime stages.
 
 Policy gates (`require_confirmation_*`, `forbid_*`) применяются в `PolicyEngine` перед выполнением действия.
 `require_backup_before_write` сейчас хранится как конфиг-флаг, но в enforcement-решениях runtime не участвует.

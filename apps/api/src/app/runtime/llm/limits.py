@@ -33,8 +33,9 @@ class LLMBoundary:
 
 def resolve_llm_timeout_s(*, configured_timeout_s: int, limits: ExecutionLimitsPayload) -> int:
     """Return the scoped per-call timeout or the role's configured fallback."""
-    if limits.llm_timeout_s is not None:
-        return int(limits.llm_timeout_s)
+    timeout = getattr(limits, "llm_timeout_s", None)
+    if timeout is not None:
+        return int(timeout)
     return max(1, int(configured_timeout_s))
 
 
@@ -45,40 +46,43 @@ def apply_llm_limits(
     requested_output_tokens: Optional[int],
 ) -> LLMBoundary:
     output_cap = requested_output_tokens
-    if limits.llm_output_tokens_max is not None:
+    output_limit = getattr(limits, "llm_output_tokens_max", None)
+    input_limit = getattr(limits, "llm_input_tokens_max", None)
+    context_limit = getattr(limits, "llm_context_window_max", None)
+    if output_limit is not None:
         if output_cap is None:
-            output_cap = int(limits.llm_output_tokens_max)
+            output_cap = int(output_limit)
         else:
-            output_cap = min(int(output_cap), int(limits.llm_output_tokens_max))
+            output_cap = min(int(output_cap), int(output_limit))
 
-    if limits.llm_input_tokens_max is not None and input_tokens > int(limits.llm_input_tokens_max):
+    if input_limit is not None and input_tokens > int(input_limit):
         raise LLMLimitExceededError(
             code=LLMLimitErrorCode.INPUT_EXCEEDED,
             message=(
                 f"LLM input token limit exceeded: used={input_tokens}, "
-                f"limit={int(limits.llm_input_tokens_max)}"
+                f"limit={int(input_limit)}"
             ),
         )
 
     if (
-        limits.llm_context_window_max is not None
+        context_limit is not None
         and output_cap is not None
-        and (input_tokens + int(output_cap)) > int(limits.llm_context_window_max)
+        and (input_tokens + int(output_cap)) > int(context_limit)
     ):
         raise LLMLimitExceededError(
             code=LLMLimitErrorCode.CONTEXT_WINDOW_EXCEEDED,
             message=(
                 f"LLM context window exceeded: used={input_tokens + int(output_cap)}, "
-                f"limit={int(limits.llm_context_window_max)}"
+                f"limit={int(context_limit)}"
             ),
         )
 
     if (
-        limits.llm_output_tokens_max is not None
+        output_limit is not None
         and requested_output_tokens is not None
-        and int(requested_output_tokens) > int(limits.llm_output_tokens_max)
+        and int(requested_output_tokens) > int(output_limit)
     ):
         # Not fatal since we clamp, but expose explicit signal for debugging callsites.
-        output_cap = int(limits.llm_output_tokens_max)
+        output_cap = int(output_limit)
 
     return LLMBoundary(input_tokens=input_tokens, output_tokens=output_cap)

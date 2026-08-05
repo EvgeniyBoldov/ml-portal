@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_session, get_current_user, get_llm_client
 from app.core.security import UserCtx
 from app.core.http.clients import LLMClientProtocol
+from app.adapters.interfaces.llm import LLMProviderError
 from app.models.model_registry import Model, ModelType
 
 logger = get_logger(__name__)
@@ -115,7 +116,7 @@ async def _sync_response(
     import uuid
     
     try:
-        result = await llm.chat(messages, model=model, **kwargs)
+        result = await llm.chat(messages, model=model, params=kwargs or None)
         
         # Extract content from result
         if isinstance(result, dict):
@@ -142,9 +143,12 @@ async def _sync_response(
         
         return JSONResponse(content=response.model_dump())
         
-    except Exception as e:
-        logger.error(f"LLM proxy error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except LLMProviderError as exc:
+        logger.warning("LLM proxy failed error_code=%s status_code=%s", exc.code.value, exc.status_code)
+        raise HTTPException(status_code=502, detail={"code": exc.code.value, "message": exc.safe_message}) from exc
+    except Exception:
+        logger.exception("LLM proxy failed")
+        raise HTTPException(status_code=502, detail={"code": "llm_proxy_error", "message": "LLM request failed"})
 
 
 async def _stream_response(
@@ -162,7 +166,7 @@ async def _stream_response(
     
     async def generate() -> AsyncGenerator[str, None]:
         try:
-            async for chunk in llm.chat_stream(messages, model=model, **kwargs):
+            async for chunk in llm.chat_stream(messages, model=model, params=kwargs or None):
                 if chunk:
                     # Format as OpenAI SSE
                     data = {
@@ -197,9 +201,13 @@ async def _stream_response(
             yield f"data: {json.dumps(final_data)}\n\n"
             yield "data: [DONE]\n\n"
             
-        except Exception as e:
-            logger.error(f"LLM streaming error: {e}", exc_info=True)
-            error_data = {"error": {"message": str(e), "type": "server_error"}}
+        except LLMProviderError as exc:
+            logger.warning("LLM proxy stream failed error_code=%s status_code=%s", exc.code.value, exc.status_code)
+            error_data = {"error": {"message": exc.safe_message, "type": exc.code.value}}
+            yield f"data: {json.dumps(error_data)}\n\n"
+        except Exception:
+            logger.exception("LLM proxy stream failed")
+            error_data = {"error": {"message": "LLM request failed", "type": "server_error"}}
             yield f"data: {json.dumps(error_data)}\n\n"
     
     return StreamingResponse(

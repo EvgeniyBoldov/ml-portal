@@ -26,12 +26,12 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
+from app.adapters.interfaces.llm import LLMCallOptions, LLMProviderError
 from app.core.logging import get_logger
-from app.models.execution_limit import ExecutionLimitScope
 from app.models.system_llm_role import SystemLLMRoleType
-from app.runtime.llm.limits import LLMLimitExceededError, apply_llm_limits, estimate_tokens, resolve_llm_timeout_s
+from app.runtime.llm.limits import estimate_tokens
 from app.runtime.events import RuntimeEvent, RuntimeEventType
-from app.services.execution_limits_service import ExecutionLimitsPayload, ExecutionLimitsService, apply_limits_override
+from app.services.model_call_config_service import ModelCallConfigService
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
@@ -105,7 +105,7 @@ class StructuredLLMCall:
         self.session = session
         self.llm_client = llm_client
         self.role_service = SystemLLMRoleService(session)
-        self.limits_service = ExecutionLimitsService(session)
+        self.model_call_config_service = ModelCallConfigService(session)
         # Trace logging deferred: v3 pipeline will use a dedicated RuntimeTrace
         # service (see TODO in runtime/__init__.py). For now traces are skipped
         # and trace_id is returned as None.
@@ -163,33 +163,34 @@ class StructuredLLMCall:
             {"role": "user", "content": user_message},
         ]
 
-        timeout_s = int(role_config.get("timeout_s") or 30)
-        max_retries = int(role_config.get("max_retries") or 2)
-        max_tokens = role_config.get("max_tokens")
+        model_call_config = await self.model_call_config_service.resolve(model)
+        configured_timeout_s = model_call_config.request_timeout_s
+        timeout_s = configured_timeout_s
+        max_retries = model_call_config.max_retries
+        max_tokens = model_call_config.max_output_tokens
+        if max_tokens is None and role_config.get("max_tokens") is not None:
+            max_tokens = int(role_config["max_tokens"])
         params: Dict[str, Any] = {}
         if temperature is not None:
             params["temperature"] = temperature
         if max_tokens is not None:
             params["max_tokens"] = max_tokens
-        try:
-            limits = await self.limits_service.get_effective(
-                scope_type=ExecutionLimitScope.ORCHESTRATOR_ROLE,
-                scope_ref=str(role.value).strip().lower(),
-            )
-        except Exception:
-            limits = ExecutionLimitsPayload()
         role_key = str(role.value).strip().lower()
-        role_override = ((sandbox_overrides or {}).get("orchestrator_limits") or {}).get(role_key)
-        limits = apply_limits_override(limits, role_override)
-        timeout_s = resolve_llm_timeout_s(configured_timeout_s=timeout_s, limits=limits)
         input_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_message)
-        boundary = apply_llm_limits(
-            limits=limits,
-            input_tokens=input_tokens,
-            requested_output_tokens=(int(max_tokens) if max_tokens is not None else None),
+        # The adapter owns the actual SDK request timeout. Keeping the limit
+        # here as well bounds callers that use a test/different implementation.
+
+        logger.info(
+            "Structured LLM effective limits role=%s model=%s configured_timeout_s=%s "
+            "effective_timeout_s=%s max_retries=%s max_tokens=%s input_tokens_estimate=%s",
+            role_key,
+            model,
+            configured_timeout_s,
+            timeout_s,
+            max_retries,
+            params.get("max_tokens"),
+            input_tokens,
         )
-        if boundary.output_tokens is not None:
-            params["max_tokens"] = int(boundary.output_tokens)
 
         # JSON schema enforcement: constrain LLM output to the Pydantic schema.
         # Works with OpenAI, Groq, and other providers supporting response_format.
@@ -219,8 +220,23 @@ class StructuredLLMCall:
 
         for attempt in range(max_retries + 1):
             llm_call_id = str(uuid4())
+            attempt_started = time.monotonic()
 
-            async def emit_protocol_retry(*, reason: str) -> None:
+            logger.info(
+                "Structured LLM attempt started role=%s model=%s attempt=%s/%s "
+                "timeout_s=%s max_tokens=%s llm_call_id=%s",
+                role_key,
+                model,
+                attempt + 1,
+                max_retries + 1,
+                timeout_s,
+                params.get("max_tokens"),
+                llm_call_id,
+            )
+
+            async def emit_protocol_retry(
+                *, reason: str, retry_after_ms: Optional[int] = None
+            ) -> None:
                 if event_sink is None or agent_execution_id is None or attempt >= max_retries:
                     return
                 await event_sink(RuntimeEvent(
@@ -235,8 +251,25 @@ class StructuredLLMCall:
                         "attempt": attempt + 1,
                         "max_attempts": max_retries + 1,
                         "reason": reason,
+                        "retry_delay_ms": self._retry_delay_ms(
+                            attempt=attempt,
+                            retry_after_ms=retry_after_ms,
+                        ),
                     },
                 ))
+
+            async def wait_before_retry(*, retry_after_ms: Optional[int] = None) -> None:
+                if attempt >= max_retries:
+                    return
+                retry_delay_ms = self._retry_delay_ms(
+                    attempt=attempt,
+                    retry_after_ms=retry_after_ms,
+                )
+                logger.info(
+                    "Structured LLM retry scheduled role=%s attempt=%s/%s delay_ms=%s retry_after_ms=%s",
+                    role_key, attempt + 1, max_retries + 1, retry_delay_ms, retry_after_ms,
+                )
+                await asyncio.sleep(retry_delay_ms / 1000)
 
             if event_sink is not None and agent_execution_id is not None:
                 await event_sink(RuntimeEvent.llm_request(
@@ -253,15 +286,43 @@ class StructuredLLMCall:
                 ))
             try:
                 response = await asyncio.wait_for(
-                    self.llm_client.chat(messages, model=model, params=params or None),
+                    self.llm_client.chat(messages, model=model, params=params or None,
+                                         options=LLMCallOptions(timeout_s=timeout_s)),
                     timeout=timeout_s,
                 )
+            except asyncio.CancelledError:
+                logger.warning(
+                    "Structured LLM attempt cancelled role=%s model=%s attempt=%s/%s "
+                    "timeout_s=%s attempt_elapsed_ms=%s total_elapsed_ms=%s task_cancelling=%s "
+                    "llm_call_id=%s",
+                    role_key,
+                    model,
+                    attempt + 1,
+                    max_retries + 1,
+                    timeout_s,
+                    int((time.monotonic() - attempt_started) * 1000),
+                    int((time.monotonic() - start) * 1000),
+                    asyncio.current_task().cancelling() if asyncio.current_task() else None,
+                    llm_call_id,
+                )
+                raise
             except asyncio.TimeoutError:
                 timeout_exc = asyncio.TimeoutError(f"llm_timeout after {timeout_s}s")
                 last_exception = timeout_exc
                 last_traceback = traceback.format_exc()
                 last_error = f"{type(timeout_exc).__name__}: {timeout_exc} (attempt {attempt + 1})"
-                logger.warning("StructuredLLMCall timeout role=%s attempt=%s", role, attempt + 1)
+                logger.warning(
+                    "Structured LLM attempt timeout role=%s model=%s attempt=%s/%s "
+                    "timeout_s=%s attempt_elapsed_ms=%s total_elapsed_ms=%s llm_call_id=%s",
+                    role_key,
+                    model,
+                    attempt + 1,
+                    max_retries + 1,
+                    timeout_s,
+                    int((time.monotonic() - attempt_started) * 1000),
+                    int((time.monotonic() - start) * 1000),
+                    llm_call_id,
+                )
                 if event_sink is not None and agent_execution_id is not None:
                     await event_sink(RuntimeEvent.llm_response(
                         llm_call_id=llm_call_id,
@@ -272,12 +333,13 @@ class StructuredLLMCall:
                         purpose="planning_decision" if role_key == "planner" else role_key,
                         model=model,
                         error_type="TimeoutError",
+                        error_code="llm_timeout",
+                        retryable=True,
                         duration_ms=int((time.time() - start) * 1000),
                     ))
                 await emit_protocol_retry(reason="timeout")
+                await wait_before_retry()
                 continue
-            except LLMLimitExceededError:
-                raise
             except Exception as exc:  # network / upstream failure
                 last_exception = exc
                 last_traceback = traceback.format_exc()
@@ -293,16 +355,25 @@ class StructuredLLMCall:
                         purpose="planning_decision" if role_key == "planner" else role_key,
                         model=model,
                         error_type=type(exc).__name__,
+                        error_code=(exc.code.value if isinstance(exc, LLMProviderError) else "llm_unknown_error"),
+                        retryable=(exc.retryable if isinstance(exc, LLMProviderError) else True),
+                        status_code=(exc.status_code if isinstance(exc, LLMProviderError) else None),
+                        provider_code=(exc.provider_code if isinstance(exc, LLMProviderError) else None),
+                        retry_after_ms=(exc.retry_after_ms if isinstance(exc, LLMProviderError) else None),
                         duration_ms=int((time.time() - start) * 1000),
                     ))
-                if self._is_non_retryable_llm_error(exc):
+                if (isinstance(exc, LLMProviderError) and not exc.retryable) or self._is_non_retryable_llm_error(exc):
                     logger.warning(
                         "StructuredLLMCall fail-fast role=%s attempt=%s due to non-retryable upstream error",
                         role,
                         attempt + 1,
                     )
                     break
-                await emit_protocol_retry(reason="transport_error")
+                retry_after_ms = exc.retry_after_ms if isinstance(exc, LLMProviderError) else None
+                await emit_protocol_retry(
+                    reason="transport_error", retry_after_ms=retry_after_ms
+                )
+                await wait_before_retry(retry_after_ms=retry_after_ms)
                 continue
 
             # A response starts a new failure mode; do not report a stale
@@ -326,6 +397,7 @@ class StructuredLLMCall:
             if not raw_response:
                 last_error = "empty_response"
                 await emit_protocol_retry(reason="empty_response")
+                await wait_before_retry()
                 continue
 
             try:
@@ -337,6 +409,7 @@ class StructuredLLMCall:
                     role, attempt + 1, exc,
                 )
                 await emit_protocol_retry(reason="schema_validation")
+                await wait_before_retry()
                 continue
 
             duration_ms = int((time.time() - start) * 1000)
@@ -532,6 +605,14 @@ class StructuredLLMCall:
             "tokens per minute",
         )
         return any(p in text for p in patterns)
+
+    @staticmethod
+    def _retry_delay_ms(*, attempt: int, retry_after_ms: Optional[int]) -> int:
+        """Bound retries and honour the provider's rate-limit hint when present."""
+        exponential_ms = min(10_000, 500 * (2 ** max(0, attempt)))
+        if retry_after_ms is None:
+            return exponential_ms
+        return min(30_000, max(exponential_ms, max(0, retry_after_ms)))
 
     @staticmethod
     def _compile_role_prompt(

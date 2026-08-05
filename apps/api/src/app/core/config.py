@@ -63,6 +63,10 @@ class Settings(BaseSettings):
 
     # LLM runtime connection is resolved from model registry + connector credentials.
     LLM_TIMEOUT: int = Field(default=30, description="Request timeout in seconds")
+    LLM_DEFAULT_MAX_TOKENS: int = Field(
+        default=1000,
+        description="Default completion-token cap when an agent has no scoped LLM output limit",
+    )
     
     # Embedding runtime behavior flags.
     EMB_OFFLINE: bool = Field(default=True, description="Disallow network downloads for embedding models")

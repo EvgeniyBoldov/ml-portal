@@ -234,7 +234,7 @@ class PromptAssembler:
         budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
         blocks: List[str] = []
         runtime_lines = [
-            f"- {self._label(labels, 'max_steps_label', 'Макс. шагов')}: {policy_limits.max_steps}",
+            f"- {self._label(labels, 'max_llm_calls_label', 'Макс. LLM-вызовов')}: {policy_limits.max_llm_calls}",
             f"- {self._label(labels, 'max_tool_calls_label', 'Макс. вызовов операций')}: {policy_limits.max_tool_calls_total}",
             f"- {self._label(labels, 'max_wall_time_label', 'Макс. время выполнения (ms)')}: {policy_limits.max_wall_time_ms}",
             f"- {self._label(labels, 'tool_timeout_label', 'Таймаут операции (ms)')}: {policy_limits.tool_timeout_ms}",

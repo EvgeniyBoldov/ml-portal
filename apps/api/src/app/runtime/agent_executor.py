@@ -30,7 +30,12 @@ from app.agents.runtime.agent import AgentToolRuntime
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.contracts import AgentAnswerStatus, NeedSpec
-from app.runtime.orchestrator_contracts import AgentTaskResult, TaskOutcome, TaskRequest
+from app.runtime.orchestrator_contracts import (
+    AgentTaskResult,
+    TaskExecutionError,
+    TaskOutcome,
+    TaskRequest,
+)
 from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.error_payloads import build_debug_payload
 from app.agents.runtime.published_capabilities import (
@@ -228,6 +233,7 @@ class AgentExecutor:
         final_error: Optional[str] = None
         final_error_code: Optional[str] = None
         final_retryable: Optional[bool] = None
+        final_retry_after_ms: Optional[int] = None
         success = True
 
         try:
@@ -301,6 +307,9 @@ class AgentExecutor:
                         final_retryable = bool(runtime_event.data.get("retryable"))
                     elif "recoverable" in runtime_event.data:
                         final_retryable = bool(runtime_event.data.get("recoverable"))
+                    raw_retry_after_ms = runtime_event.data.get("retry_after_ms")
+                    if isinstance(raw_retry_after_ms, int) and raw_retry_after_ms > 0:
+                        final_retry_after_ms = raw_retry_after_ms
         except Exception as exc:
             # NOTE(4.8): exc_info может содержать sensitive данные.
             # RuntimeRedactor применяется на уровне logging handler в проде.
@@ -383,6 +392,7 @@ class AgentExecutor:
                 "error": final_error,
                 "error_code": final_error_code,
                 "retryable": final_retryable,
+                "retry_after_ms": final_retry_after_ms,
                 "user_safe_error": (
                     build_user_safe_error_message(
                         retryable=final_retryable,
@@ -485,10 +495,26 @@ class AgentExecutor:
                 needs=task_needs,
             )
         if not bool(payload.get("success", False)):
+            retryable = bool(payload.get("retryable"))
+            error_code = str(payload.get("error_code") or "agent_failed")
+            summary = str(payload.get("summary") or "Task execution failed")
+            if retryable:
+                retry_after_ms = payload.get("retry_after_ms")
+                details = (
+                    {"retry_after_ms": retry_after_ms}
+                    if isinstance(retry_after_ms, int) and retry_after_ms > 0
+                    else {}
+                )
+                raise TaskExecutionError(
+                    code=error_code,
+                    message=summary,
+                    retryable=True,
+                    details=details,
+                )
             return AgentTaskResult(
                 outcome=TaskOutcome.UNFULFILLABLE,
-                summary=str(payload.get("summary") or "Task execution failed"),
-                reason_code=str(payload.get("error_code") or "agent_failed"),
+                summary=summary,
+                reason_code=error_code,
             )
         return AgentTaskResult(
             outcome=TaskOutcome.COMPLETED,

@@ -134,6 +134,10 @@ below the answer and do not require the synthesizer to emit markdown links.
 
 - LLM/tool calls are a request event and a response/result event. The latter
   contains duration and `caused_by_event_id` of the request.
+- Every LLM provider failure still closes its `llm_call` with an
+  `llm_response` containing a safe `error_code`, `retryable` and provider
+  status where available, followed by the canonical runtime `error`. Raw
+  provider bodies and tracebacks remain application-log diagnostics.
 - RBAC, budget, limit, plan and checkpoint state are snapshots owned by the
   entity making the decision.
 - Worker boundaries transport JSON `RuntimeLogContext`, never a live logger or

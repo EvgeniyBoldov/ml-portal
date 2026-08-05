@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator, Dict, Optional, Protocol
 from app.runtime.orchestrator_contracts import (
     AgentTaskResult,
     PlanRequest,
+    TaskExecutionError,
     TaskAttemptFailure,
     TaskOutcome,
     TaskRequest,
@@ -467,9 +468,25 @@ class GraphOrchestrator:
                 task_executor_kwargs["iteration_id"] = active_iteration_id
                 result = await self.executor.execute_task(request=request, **task_executor_kwargs)
             except Exception as exc:
-                failure = TaskAttemptFailure(code=type(exc).__name__, message=str(exc) or "task execution failed", retryable=True)
+                if isinstance(exc, TaskExecutionError):
+                    failure = TaskAttemptFailure(
+                        code=exc.code,
+                        message=str(exc) or "task execution failed",
+                        retryable=exc.retryable,
+                        details=exc.details,
+                    )
+                else:
+                    failure = TaskAttemptFailure(
+                        code=type(exc).__name__,
+                        message=str(exc) or "task execution failed",
+                        retryable=True,
+                    )
+                retry_after_ms = failure.details.get("retry_after_ms")
+                retry_delay = self.retry_delay_seconds
+                if isinstance(retry_after_ms, int) and retry_after_ms > 0:
+                    retry_delay = max(1, min(30, (retry_after_ms + 999) // 1000))
                 await self.store.record_failure(plan_id, task_id, failure,
-                    retry_at=datetime.now(timezone.utc) + timedelta(seconds=self.retry_delay_seconds),
+                    retry_at=datetime.now(timezone.utc) + timedelta(seconds=retry_delay),
                     max_attempts=self.max_attempts)
                 await observe("attempt_failed", entity_type="attempt", entity_id=attempt_entity_id, parent_type="task", parent_id=task_id, payload={"error": failure.model_dump(mode="json")}, trigger="technical_failure")
                 await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,

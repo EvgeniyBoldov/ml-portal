@@ -161,6 +161,8 @@ const PARAMS_FIELDS: FieldConfig[] = [
     label: 'Макс. токенов',
     placeholder: '512',
   },
+  { key: 'request_timeout_s', type: 'number', label: 'Timeout запроса (сек.)', placeholder: '30' },
+  { key: 'max_retries', type: 'number', label: 'Повторы запроса', placeholder: '2' },
   {
     key: 'vector_dim',
     type: 'number',
@@ -173,7 +175,6 @@ const OTHER_PARAMS_FIELDS: FieldConfig[] = [
   { key: 'modality', type: 'text', label: 'Modality', editable: false },
   { key: 'description', type: 'text', label: 'Description', editable: false },
   { key: 'dimensions', type: 'text', label: 'Dimensions', editable: false },
-  { key: 'important_params_count', type: 'text', label: 'HF params count', editable: false },
 ];
 
 const HEALTH_FIELDS: FieldConfig[] = [
@@ -217,9 +218,10 @@ const META_FIELDS: FieldConfig[] = [
 export function ModelPage() {
   const [vectorDim, setVectorDim] = useState<string>('');
   const [maxTokens, setMaxTokens] = useState<string>('');
+  const [requestTimeout, setRequestTimeout] = useState<string>('');
+  const [maxRetries, setMaxRetries] = useState<string>('');
   const [probingInfo, setProbingInfo] = useState(false);
   const [manifestRaw, setManifestRaw] = useState<Record<string, unknown>>({});
-  const [importantParams, setImportantParams] = useState<Record<string, unknown>>({});
   const [healthBadge, setHealthBadge] = useState<string>('unknown');
   const [showMigrationModal, setShowMigrationModal] = useState(false);
   const [migrationTargetModelId, setMigrationTargetModelId] = useState<string>('');
@@ -296,9 +298,9 @@ export function ModelPage() {
       if (m?.extra_config?.vector_dim) {
         setVectorDim(String(m.extra_config.vector_dim));
       }
-      if (m?.extra_config?.max_tokens) {
-        setMaxTokens(String(m.extra_config.max_tokens));
-      }
+      setMaxTokens(String(m?.max_output_tokens ?? m?.extra_config?.max_tokens ?? ''));
+      setRequestTimeout(String(m?.request_timeout_s ?? ''));
+      setMaxRetries(String(m?.max_retries ?? ''));
       const connectorRaw = m?.connector ?? 'openai_http';
       const isLocalBackendConnector = String(connectorRaw).startsWith('local_');
       const uiProtocol: ModelConnector = isLocalBackendConnector ? 'openai_http' : connectorRaw;
@@ -329,7 +331,6 @@ export function ModelPage() {
       if (data.type === 'embedding' && vectorDim) {
         extra_config.vector_dim = parseInt(vectorDim, 10);
       }
-      if (maxTokens) extra_config.max_tokens = parseInt(maxTokens, 10);
       return {
         ...data,
         connector: resolvedConnector,
@@ -338,6 +339,9 @@ export function ModelPage() {
         model_version: data.model_version || undefined,
         description: data.description || undefined,
         extra_config: Object.keys(extra_config).length > 0 ? extra_config : undefined,
+        ...(maxTokens ? { max_output_tokens: parseInt(maxTokens, 10) } : {}),
+        ...(requestTimeout ? { request_timeout_s: parseInt(requestTimeout, 10) } : {}),
+        ...(maxRetries ? { max_retries: parseInt(maxRetries, 10) } : {}),
       } as ModelCreate;
     },
     transformUpdate: (data) => {
@@ -350,7 +354,6 @@ export function ModelPage() {
       if (data.type === 'embedding' && vectorDim) {
         extra_config.vector_dim = parseInt(vectorDim, 10);
       }
-      if (maxTokens) extra_config.max_tokens = parseInt(maxTokens, 10);
       return {
         name: data.name,
         connector: resolvedConnector,
@@ -362,6 +365,9 @@ export function ModelPage() {
         default_for_type: data.default_for_type,
         model_version: data.model_version,
         description: data.description,
+        ...(maxTokens ? { max_output_tokens: parseInt(maxTokens, 10) } : {}),
+        ...(requestTimeout ? { request_timeout_s: parseInt(requestTimeout, 10) } : {}),
+        ...(maxRetries ? { max_retries: parseInt(maxRetries, 10) } : {}),
         ...(data.type === 'embedding' ? { extra_config } : {}),
       } as ModelUpdate;
     },
@@ -422,13 +428,14 @@ export function ModelPage() {
     model_version: blockData.model_version,
     type: blockData.type,
     max_tokens: maxTokens,
+    request_timeout_s: requestTimeout,
+    max_retries: maxRetries,
     vector_dim: vectorDim,
   };
   const otherParamsData = {
     modality: String(manifestRaw.modality || '—'),
     description: String(manifestRaw.description || '—'),
     dimensions: String(manifestRaw.dimensions ?? '—'),
-    important_params_count: String(Object.keys(importantParams).length || '0'),
   };
   const isEmbedding = (isEditable ? formData.type : model?.type) === 'embedding';
   const migrationModelOptions = (embeddingModelsData?.items || [])
@@ -449,11 +456,8 @@ export function ModelPage() {
       : undefined;
     if (manifest && typeof manifest === 'object') {
       setManifestRaw(manifest as Record<string, unknown>);
-      const parsed = (manifest as Record<string, unknown>).important_params;
-      setImportantParams(parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {});
     } else {
       setManifestRaw({});
-      setImportantParams({});
     }
   }, [model?.id, model?.health_status]);
 
@@ -514,7 +518,6 @@ export function ModelPage() {
         model_type?: string;
         health_status?: string;
         raw?: Record<string, unknown>;
-        important_params?: Record<string, unknown>;
       };
       if (!isNew && model?.id) {
         const verified = await adminApi.verifyModel(model.id);
@@ -524,7 +527,6 @@ export function ModelPage() {
           model_type: (verified.resolved_type_from_manifest as string) || verified.type,
           health_status: verified.health_status || undefined,
           raw: (verified.manifest || {}) as Record<string, unknown>,
-          important_params: (verified.important_params || {}) as Record<string, unknown>,
         };
       } else {
         const current = String((isEditable ? formData.base_url : viewData.base_url) || '').trim();
@@ -549,8 +551,6 @@ export function ModelPage() {
       if (info.health_status) setHealthBadge(info.health_status);
       const raw = (info.raw || {}) as Record<string, unknown>;
       setManifestRaw(raw);
-      const params = raw.important_params ?? info.important_params;
-      setImportantParams(params && typeof params === 'object' ? (params as Record<string, unknown>) : {});
       const vector = raw.dimensions;
       const maxTok = raw.max_tokens;
       if (typeof vector === 'number' && Number.isFinite(vector)) setVectorDim(String(vector));
@@ -625,6 +625,8 @@ export function ModelPage() {
             editable
             onChange={(key, value) => {
               if (key === 'max_tokens') setMaxTokens(String(value ?? ''));
+              else if (key === 'request_timeout_s') setRequestTimeout(String(value ?? ''));
+              else if (key === 'max_retries') setMaxRetries(String(value ?? ''));
               else if (key === 'vector_dim') setVectorDim(String(value ?? ''));
               else handleFieldChange(key, value);
             }}
@@ -727,6 +729,8 @@ export function ModelPage() {
             editable={isEditable}
             onChange={(key, value) => {
               if (key === 'max_tokens') setMaxTokens(String(value ?? ''));
+              else if (key === 'request_timeout_s') setRequestTimeout(String(value ?? ''));
+              else if (key === 'max_retries') setMaxRetries(String(value ?? ''));
               else if (key === 'vector_dim') setVectorDim(String(value ?? ''));
               else handleFieldChange(key, value);
             }}
@@ -739,18 +743,6 @@ export function ModelPage() {
             fields={OTHER_PARAMS_FIELDS}
             data={otherParamsData}
           />
-          <Block
-            title="HF параметры"
-            icon="file"
-            iconVariant="primary"
-            width="1/2"
-          >
-            <pre className={styles.rawJson}>
-              {Object.keys(importantParams).length
-                ? JSON.stringify(importantParams, null, 2)
-                : 'Параметры не найдены'}
-            </pre>
-          </Block>
           <Block
             title="Метаданные"
             icon="database"

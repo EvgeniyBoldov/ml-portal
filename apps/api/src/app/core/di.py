@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import Optional
 from .http.clients import LLMClientProtocol
-from .http.resolving_llm import ResolvingLLMClient
 from ..adapters.impl.openai_compatible_llm import OpenAICompatibleLLM
 
 _llm_client: Optional[LLMClientProtocol] = None
@@ -15,10 +14,7 @@ def get_llm_client() -> LLMClientProtocol:
     """
     global _llm_client
     if _llm_client is None:
-        # Single runtime path: model connector resolution from DB.
-        inner: LLMClientProtocol = OpenAICompatibleLLM()
-        # Single choke-point: resolve slug → provider_model_name on every call.
-        _llm_client = ResolvingLLMClient(inner)
+        _llm_client = OpenAICompatibleLLM()
     return _llm_client
 
 def reset_llm_client() -> None:
@@ -30,9 +26,8 @@ def reset_llm_client() -> None:
     """
     global _llm_client
     if _llm_client is not None:
-        inner = getattr(_llm_client, "_inner", None)
-        if inner is not None and hasattr(inner, "clear_client_cache"):
-            inner.clear_client_cache()
+        if hasattr(_llm_client, "clear_client_cache"):
+            _llm_client.clear_client_cache()
     _llm_client = None
 
 

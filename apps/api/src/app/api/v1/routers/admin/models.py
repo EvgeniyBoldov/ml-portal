@@ -204,6 +204,9 @@ def serialize_model(model: Model) -> Dict[str, Any]:
         "provider": model.provider,
         "connector": _resolve_connector(model),
         "provider_model_name": model.provider_model_name,
+        "max_output_tokens": model.max_output_tokens,
+        "request_timeout_s": model.request_timeout_s,
+        "max_retries": model.max_retries,
         "base_url": _resolve_base_url(model),
         "instance_id": str(model.instance_id) if model.instance_id else None,
         "instance_name": instance_name,
@@ -399,6 +402,11 @@ async def verify_model(
             api_key=api_key,
             extra_config=model.extra_config,
         )
+        # `important_params` was a legacy HF-specific presentation field. Keep
+        # the provider manifest diagnostic, but do not persist or expose its
+        # derived UI-only section through the generic model API.
+        manifest = dict(manifest)
+        manifest.pop("important_params", None)
         model_type = _map_modality_to_model_type(str(manifest.get("modality") or ""))
         update_data: Dict[str, Any] = {
             "provider_model_name": str(manifest.get("alias") or manifest.get("name") or model.provider_model_name),

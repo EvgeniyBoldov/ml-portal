@@ -212,52 +212,36 @@ class TestLLMHealthAdapter:
     
     @pytest.fixture
     def adapter(self):
-        return LLMHealthAdapter()
+        client = AsyncMock()
+        client.chat = AsyncMock(return_value={"model": "provider/test"})
+        return LLMHealthAdapter(client)
     
     @pytest.fixture
     def llm_model(self):
         model = MagicMock(spec=Model)
         model.id = "test-id"
         model.alias = "test-llm"
-        model.endpoint = "http://localhost:8083"
         return model
     
     @pytest.mark.asyncio
     async def test_probe_success(self, adapter, llm_model):
         """Test successful LLM probe."""
-        with patch('httpx.AsyncClient') as mock_client:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            
-            mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
-            
-            result = await adapter.probe(llm_model)
-            
-            assert result.status == HealthStatus.HEALTHY
-            assert result.latency_ms is not None
-            assert result.details["model"] == "test-llm"
-            assert result.details["endpoint"] == "http://localhost:8083"
-    
-    @pytest.mark.asyncio
-    async def test_probe_no_endpoint(self, adapter, llm_model):
-        """Test LLM probe with no endpoint."""
-        llm_model.endpoint = None
-        
         result = await adapter.probe(llm_model)
-        
-        assert result.status == HealthStatus.UNHEALTHY
-        assert "no endpoint configured" in result.error
+
+        assert result.status == HealthStatus.HEALTHY
+        assert result.latency_ms is not None
+        assert result.details["model"] == "test-llm"
+        assert result.details["provider_model"] == "provider/test"
     
     @pytest.mark.asyncio
-    async def test_probe_http_error(self, adapter, llm_model):
-        """Test LLM probe with HTTP error."""
-        with patch('httpx.AsyncClient') as mock_client:
-            mock_response = MagicMock()
-            mock_response.status_code = 503
-            
-            mock_client.return_value.__aenter__.return_value.get.return_value = mock_response
-            
-            result = await adapter.probe(llm_model)
-            
-            assert result.status == HealthStatus.UNHEALTHY
-            assert "status 503" in result.error
+    async def test_probe_provider_error(self, adapter, llm_model):
+        """Test normalized provider failure."""
+        from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
+        adapter._llm_client.chat.side_effect = LLMProviderError(
+            code=LLMErrorCode.UPSTREAM, safe_message="LLM provider is unavailable", retryable=True, status_code=503,
+        )
+
+        result = await adapter.probe(llm_model)
+
+        assert result.status == HealthStatus.UNHEALTHY
+        assert result.details["error_code"] == "llm_upstream_error"

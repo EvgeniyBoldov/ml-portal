@@ -51,9 +51,10 @@ User message: {message}"""
             response = await self.llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
                 model=None,
-                stream=False,
-                max_tokens=self.TITLE_MAX_TOKENS,
-                temperature=self.TITLE_TEMPERATURE,
+                params={
+                    "max_tokens": self.TITLE_MAX_TOKENS,
+                    "temperature": self.TITLE_TEMPERATURE,
+                },
             )
 
             title = response.get("content", "").strip().strip('"\'')

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
 
 
 class LLMToolCallingUnsupportedError(RuntimeError):
@@ -87,6 +88,12 @@ def is_request_too_large_error(exc: Exception) -> bool:
 
 
 def classify_provider_error(exc: Exception) -> Optional[RuntimeError]:
+    if isinstance(exc, LLMProviderError):
+        if exc.code is LLMErrorCode.TOOL_CALLING_UNSUPPORTED:
+            return LLMToolCallingUnsupportedError(exc.safe_message)
+        if exc.code is LLMErrorCode.REQUEST_TOO_LARGE:
+            return LLMRequestTooLargeError(exc.safe_message)
+        return exc
     if isinstance(exc, (LLMToolCallingUnsupportedError, LLMRequestTooLargeError)):
         return exc
     if is_tool_calling_unsupported_error(exc):

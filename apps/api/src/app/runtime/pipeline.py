@@ -429,7 +429,9 @@ class RuntimePipeline:
 
         # --- Planning (single decision engine) --------------------------
         planning_stage = self._assembler.build_graph_planning_stage(
-            max_steps=platform.policy.max_steps,
+            # One initial plan plus the configured number of replans. This is
+            # a loop guard, not a graph-size/task-count limit.
+            max_steps=run_limits_v2.plan_revisions or 1,
         )
         async for phased in planning_stage.run(
             runtime_state=runtime_state,
@@ -443,6 +445,7 @@ class RuntimePipeline:
             planner_memory_context=turn_mem.planner_memory_context,
             durable_memory_snapshot=turn_mem.durable_snapshot,
             orchestrator_id=orchestrator_id,
+            runtime_limits=serialize_limits(run_limits_v2.as_entity_limits()),
         ):
             yield await emitter.emit(phased.event, phase=phased.phase)
 

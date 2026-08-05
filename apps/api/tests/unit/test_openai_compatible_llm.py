@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.adapters.impl.openai_compatible_llm import OpenAICompatibleLLM
+from app.adapters.interfaces.llm import LLMErrorCode
+from app.services.llm_connection_resolver import RegistryLLMConnectionResolver
 from app.services.model_resolver import ModelResolver, _cache
 from app.services.model_connector_profiles import build_model_auth_headers, get_healthcheck_paths
 
@@ -63,11 +65,21 @@ def test_get_or_create_client_uses_profiled_auth_headers():
     )
 
     assert client.auth_headers == {"x-litellm-api-key": "secret"}
+    assert client.max_retries == 0
+
+
+def test_normalize_error_classifies_timeout_and_context_limit():
+    timeout = OpenAICompatibleLLM._normalize_error(TimeoutError("request timeout"))
+    oversized = OpenAICompatibleLLM._normalize_error(RuntimeError("maximum context length exceeded"))
+
+    assert timeout.code is LLMErrorCode.TIMEOUT
+    assert timeout.retryable is True
+    assert oversized.code is LLMErrorCode.REQUEST_TOO_LARGE
+    assert oversized.retryable is False
 
 
 @pytest.mark.asyncio
-async def test_resolve_model_connection_strips_model_selector(monkeypatch: pytest.MonkeyPatch):
-    llm = OpenAICompatibleLLM()
+async def test_connection_resolver_strips_model_selector(monkeypatch: pytest.MonkeyPatch):
 
     model = SimpleNamespace(
         provider_model_name="  openai/gemma-test  ",
@@ -95,15 +107,13 @@ async def test_resolve_model_connection_strips_model_selector(monkeypatch: pytes
         lambda: lambda: _SessionContext(),
     )
 
-    base_url, api_key, resolved_model_name, connector, extra_config = await llm._resolve_model_connection(
-        "  gemma-test  "
-    )
+    connection = await RegistryLLMConnectionResolver().resolve("  gemma-test  ")
 
-    assert base_url == "http://litellm:4000/v1"
-    assert api_key is None
-    assert resolved_model_name == "openai/gemma-test"
-    assert connector == "litellm_http"
-    assert extra_config == {}
+    assert connection.base_url == "http://litellm:4000/v1"
+    assert connection.api_key is None
+    assert connection.provider_model_name == "openai/gemma-test"
+    assert connection.connector == "litellm_http"
+    assert connection.extra_config == {}
 
 
 @pytest.mark.asyncio

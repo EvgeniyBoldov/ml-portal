@@ -22,7 +22,7 @@ class GenerationParams:
 class PolicyLimits:
     """Extracted execution constraints for runtime enforcement."""
 
-    max_steps: int = 20
+    max_llm_calls: int = 20
     max_tool_calls_total: int = 50
     max_wall_time_ms: int = 600_000
     tool_timeout_ms: int = 60_000
@@ -51,7 +51,10 @@ class PolicyLimits:
         lim = limit or {}
 
         return cls(
-            max_steps=lim.get("max_steps", execution.get("max_steps", 10)),
+            # Legacy policy JSON used max_steps for exactly one model turn in
+            # the agent loop.  The public execution-limit model calls it what
+            # it is: max_llm_calls.
+            max_llm_calls=lim.get("max_llm_calls", lim.get("max_steps", execution.get("max_llm_calls", execution.get("max_steps", 10)))),
             max_tool_calls_total=lim.get(
                 "max_tool_calls", execution.get("max_tool_calls_total", 50),
             ),

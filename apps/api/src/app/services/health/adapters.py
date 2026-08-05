@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import inspect
 from typing import Any, Dict, Optional
 
 from app.models.model_registry import Model
@@ -11,6 +12,7 @@ from app.services.mcp_jsonrpc_client import mcp_initialize
 from app.adapters.interfaces.embeddings import EmbeddingInterface
 from app.adapters.embeddings import EmbeddingServiceFactory
 from app.adapters.interfaces.llm import LLMClient
+from app.adapters.interfaces.llm import LLMProviderError
 from app.agents.runtime.rerank_client import rerank_scores
 from app.core.logging import get_logger
 
@@ -82,6 +84,8 @@ class EmbeddingHealthAdapter(HealthCheckAdapter):
             
             # Minimal embedding request
             result = service.embed_text(self._test_text)
+            if inspect.isawaitable(result):
+                result = await result
             
             latency_ms = int((time.time() - start_time) * 1000)
             
@@ -169,47 +173,41 @@ class RerankHealthAdapter(HealthCheckAdapter):
 class LLMHealthAdapter(HealthCheckAdapter):
     """Health check adapter for LLM models."""
     
-    def __init__(self):
+    def __init__(self, llm_client: LLMClient | None = None):
         self._test_messages = [{"role": "user", "content": "hi"}]
+        self._llm_client = llm_client
     
     async def probe(self, target: Model) -> HealthProbeResult:
         """Probe LLM model with minimal request (max_tokens=1)."""
         start_time = time.time()
         
         try:
-            # For now, use a simple HTTP health check to the LLM endpoint
-            # Full LLM client integration requires more complex setup
-            import httpx
-            
-            if not target.endpoint:
-                return HealthProbeResult(
-                    status=HealthStatus.UNHEALTHY,
-                    error="LLM model has no endpoint configured"
-                )
-            
-            # Simple health check - try to reach the endpoint
-            health_url = f"{target.endpoint.rstrip('/')}/health"
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(health_url)
-                
+            if self._llm_client is None:
+                from app.core.di import get_llm_client
+                self._llm_client = get_llm_client()
+            response = await self._llm_client.chat(
+                self._test_messages,
+                model=str(target.alias),
+                params={"max_tokens": 1},
+            )
             latency_ms = int((time.time() - start_time) * 1000)
-            
-            if response.status_code == 200:
+            if response:
                 return HealthProbeResult(
                     status=HealthStatus.HEALTHY,
                     latency_ms=latency_ms,
                     details={
                         "model": target.alias,
-                        "endpoint": target.endpoint
+                        "provider_model": response.get("model"),
                     }
                 )
-            else:
-                return HealthProbeResult(
-                    status=HealthStatus.UNHEALTHY,
-                    latency_ms=latency_ms,
-                    error=f"Health check failed with status {response.status_code}"
-                )
-                
+            return HealthProbeResult(status=HealthStatus.UNHEALTHY, latency_ms=latency_ms, error="Empty LLM response")
+        except LLMProviderError as exc:
+            return HealthProbeResult(
+                status=HealthStatus.UNHEALTHY,
+                latency_ms=int((time.time() - start_time) * 1000),
+                error=exc.safe_message,
+                details={"error_code": exc.code.value, "status_code": exc.status_code},
+            )
         except Exception as e:
             latency_ms = int((time.time() - start_time) * 1000)
             logger.warning(f"LLM health check failed for {target.alias}: {e}")
