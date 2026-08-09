@@ -273,6 +273,12 @@ class AgentExecutor:
 
                     # Collect downloadable attachments for downstream synthesis
                     operation_name = str(runtime_event.data.get("tool") or "")
+                    if (
+                        operation_name in ("file.delete", "file_delete")
+                        and bool(runtime_event.data.get("success"))
+                        and isinstance(result_payload, dict)
+                    ):
+                        state.mark_artifact_deleted(str(result_payload.get("artifact_id") or ""))
                     if operation_name in (
                         "file.generate",
                         "file_generate",
@@ -337,6 +343,9 @@ class AgentExecutor:
 
         # Parse structured needs from agent output if present
         needs = self._parse_needs_from_content(raw_summary)
+        structured = self._parse_structured_response(raw_summary)
+        structured_outputs = structured.get("outputs") if isinstance(structured.get("outputs"), dict) else {}
+        structured_evidence = structured.get("evidence") if isinstance(structured.get("evidence"), dict) else {}
         missing_inputs = [n.key for n in needs]
 
         # Determine status/completion_kind based on success and needs
@@ -374,6 +383,14 @@ class AgentExecutor:
         # repeats an already completed native tool call. Keep one attachment
         # per artifact so synthesis and the final event stay deterministic.
         attachments = self._dedupe_artifacts(attachments)
+        attachments = [
+            item for item in attachments
+            if str(item.get("artifact_id") or "") not in state.deleted_artifact_ids
+        ]
+        artifacts = [
+            item for item in self._dedupe_artifacts(artifacts)
+            if str(item.get("artifact_id") or "") not in state.deleted_artifact_ids
+        ]
 
         state.add_agent_result(
             {
@@ -389,6 +406,12 @@ class AgentExecutor:
                 "sufficient_for_phase": sufficient_for_phase,
                 "missing_inputs": missing_inputs,
                 "needs": [n.model_dump() for n in needs],
+                "outputs": {
+                    **structured_outputs,
+                    "attachments": attachments,
+                    "artifacts": artifacts,
+                },
+                "evidence": structured_evidence,
                 "error": final_error,
                 "error_code": final_error_code,
                 "retryable": final_retryable,
@@ -402,7 +425,7 @@ class AgentExecutor:
                     else None
                 ),
                 "attachments": attachments,
-                "artifacts": self._dedupe_artifacts(artifacts),
+                "artifacts": artifacts,
             }
         )
         for fact in facts:
@@ -484,15 +507,22 @@ class AgentExecutor:
             if not isinstance(item, dict):
                 continue
             task_needs.append({
+                "ref": str(item.get("ref") or item.get("key") or "need"),
                 "key": str(item.get("key") or "need"),
                 "kind": str(item.get("kind") or "data"),
                 "description": str(item.get("description") or item.get("key") or "Need additional input"),
+                "schema": dict(item.get("schema") or {}),
+                "required": bool(item.get("required", True)),
+                "context": dict(item.get("context") or {}),
             })
         if task_needs:
             return AgentTaskResult(
                 outcome=TaskOutcome.NEEDS_DEPENDENCY,
                 summary=str(payload.get("summary") or ""),
+                outputs=dict(payload.get("outputs") or {}),
+                checkpoint=dict(payload.get("checkpoint") or {}),
                 needs=task_needs,
+                evidence=dict(payload.get("evidence") or {}),
             )
         if not bool(payload.get("success", False)):
             retryable = bool(payload.get("retryable"))
@@ -520,10 +550,12 @@ class AgentExecutor:
             outcome=TaskOutcome.COMPLETED,
             summary=str(payload.get("summary") or ""),
             outputs={
+                **dict(payload.get("outputs") or {}),
                 "summary": str(payload.get("summary") or ""),
                 "attachments": list(payload.get("attachments") or []),
                 "artifacts": list(payload.get("artifacts") or []),
             },
+            evidence=dict(payload.get("evidence") or {}),
         )
 
     # ---------------------------------------------------------------- helpers --
@@ -633,7 +665,10 @@ class AgentExecutor:
             dependency_lines = ["[Dependency outputs]"]
             remaining = 8000
             for task_id, output in list(task.dependency_outputs.items())[:8]:
-                rendered = str(output).strip()
+                try:
+                    rendered = json.dumps(output, ensure_ascii=False, default=str)
+                except (TypeError, ValueError):
+                    rendered = str(output).strip()
                 if rendered:
                     rendered = rendered[: min(4000, remaining)]
                     dependency_lines.append(f"- {task_id}: {rendered}")
@@ -656,6 +691,22 @@ class AgentExecutor:
                 final_query = "\n\n".join(["\n".join(memory_lines), final_query])
 
         attachment_items = list(attachments or [])
+        for dependency in task.dependency_outputs.values():
+            if not isinstance(dependency, dict):
+                continue
+            output = dependency.get("outputs")
+            if not isinstance(output, dict):
+                continue
+            for artifact in [*(output.get("artifacts") or []), *(output.get("attachments") or [])]:
+                if isinstance(artifact, dict) and artifact.get("artifact_id"):
+                    attachment_items.append({
+                        "ref": {
+                            "artifact_id": artifact.get("artifact_id"),
+                            "file_name": artifact.get("file_name") or artifact.get("name") or "artifact",
+                        },
+                        "snippet_status": artifact.get("snippet_status") or "missing",
+                        "snippet": artifact.get("snippet") or "",
+                    })
         if attachment_items:
             attachment_lines = ["[Available attachments]"]
             for item in attachment_items:
@@ -722,6 +773,22 @@ class AgentExecutor:
             if title:
                 facts.append(f"source: {title[:120]}")
         return facts
+
+    @staticmethod
+    def _parse_structured_response(raw: str) -> Dict[str, Any]:
+        """Read the bounded agent result envelope without treating prose as data."""
+        text = (raw or "").strip()
+        candidates = [text]
+        if "```json" in text:
+            candidates.append(text.split("```json", 1)[1].split("```", 1)[0].strip())
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return {}
 
     @staticmethod
     def _parse_needs_from_content(raw: str) -> List[NeedSpec]:

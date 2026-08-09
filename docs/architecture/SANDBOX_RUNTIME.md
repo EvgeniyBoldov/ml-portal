@@ -122,15 +122,21 @@ Each tool item should indicate publication state:
 The right panel should show the selected effective tool release or draft candidate, including the publish toggle and semantic/runtime-safe fields.
 
 Run inspector contract:
-- right panel for selected step is tabbed by data direction:
-  - `Summary`
-  - `Input`
-  - `Output`
-  - `Context`
-  - `Raw`
-- each tab renders parameters as accordions (parameter-level drill-down),
-- field rendering is typed (`datetime`, `duration`, `label`, `labels`, `json`, `string`, `bigstring`, `number`, `boolean`),
-- UUID-only payloads are considered low-quality observability; backend step payloads should include human-readable refs where possible.
+- inspector selects an entity and compact semantic tabs; reusable domain Viewers
+  render prepared plan, request, response, result, limits and access models;
+- LLM and tool calls use `Info`, `Request`, `Result` or `Error`, `RAW`; result
+  and error are mutually exclusive;
+- planner uses `Info`, `Plan`, optional `Limits and access`, `RAW`; agent uses
+  `Info`, `Task`, `Result`, optional `Limits and access`, `RAW`; synthesizer
+  uses `Info`, `Result`, optional `Limits and access`, `RAW`;
+- the executor configuration/prompt snapshot is shown as effective context in
+  its LLM request, not in a catch-all executor Context tab;
+- `LimitsViewer` and `RbacViewer` are independent and the combined access tab
+  is absent when neither snapshot is present;
+- fields are typed (`datetime`, `duration`, status label, json, text, number,
+  boolean). RAW renders one source journal event per read-only JSON field;
+- UUID-only payloads and technical timestamps are noise in ordinary tabs;
+  backend event payloads must provide human-readable operator fields.
 
 Good group boundaries:
 - agent version,

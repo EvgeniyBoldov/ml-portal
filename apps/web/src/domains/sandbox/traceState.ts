@@ -1,4 +1,5 @@
 import type { RuntimeJournalEvent } from './types';
+import { llmResponseStatus, toolResult } from './callInspection';
 
 export type { RuntimeJournalEvent } from './types';
 
@@ -39,16 +40,29 @@ const CREATE_EVENT_TYPES = new Set([
 const isCreate = (type: string): boolean => (
   type.endsWith('_start') || type.endsWith('_started') || CREATE_EVENT_TYPES.has(type)
 );
-const isEnd = (type: string): boolean => type.endsWith('_end') || type.endsWith('_finished');
+const isEnd = (type: string): boolean => type.endsWith('_end') || type.endsWith('_finished') || type.endsWith('_completed') || type.endsWith('_failed');
 const isSnapshot = (type: string): boolean => type.endsWith('_snapshot') || type === 'rbac_snapshot' || type === 'limit_snapshot';
 
 function terminalStatus(event: RuntimeJournalEvent): string | undefined {
+  if (event.event_type === 'protocol_retry') return 'waiting_retry';
+  if (event.event_type === 'llm_request' || event.event_type === 'tool_call') return 'running';
   if (event.event_type === 'tool_result') {
-    return event.payload.success === true ? 'completed' : event.payload.success === false ? 'failed' : 'unknown';
+    const success = toolResult(event.payload).success;
+    return success === true ? 'completed' : success === false ? 'failed' : 'unknown';
   }
-  if (event.event_type === 'llm_response') return typeof event.payload.error_type === 'string' && event.payload.error_type ? 'failed' : 'completed';
+  if (event.event_type === 'llm_response') {
+    const declared = stringField(event.payload.status).toLowerCase();
+    if (declared === 'running' || declared === 'waiting_retry' || declared === 'failed' || declared === 'completed') {
+      return declared;
+    }
+    if (llmResponseStatus(event.payload) === 'error') {
+      return event.payload.retryable === true ? 'waiting_retry' : 'failed';
+    }
+    return 'completed';
+  }
   if (event.event_type === 'question_answer') return 'completed';
   if (event.event_type === 'error') return 'error';
+  if (event.event_type.endsWith('_failed')) return 'failed';
   return isEnd(event.event_type) ? String(event.payload.status ?? 'completed') : undefined;
 }
 

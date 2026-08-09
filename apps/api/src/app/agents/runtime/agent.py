@@ -333,10 +333,18 @@ class AgentToolRuntime(BaseRuntime):
         tool_ledger = ctx.extra.get("runtime_tool_ledger")
         reuse_enabled = bool(ctx.extra.get("runtime_tool_reuse_enabled", True))
         seen_native_tool_calls: set[tuple[str, str]] = set()
+        # A later agent step after tool execution is a new decision and
+        # receives a new call id.  All retries before that action reuse the
+        # same call id so one user-visible request remains one journal entity.
+        pending_llm_call_id: Optional[str] = None
+        pending_logical_llm_call_id: Optional[str] = None
 
         try:
             for step in range(policy.max_llm_calls):
-                llm_call_id = str(uuid4())
+                llm_call_id = pending_llm_call_id or str(uuid4())
+                logical_llm_call_id = pending_logical_llm_call_id or str(uuid4())
+                pending_llm_call_id = None
+                pending_logical_llm_call_id = None
                 elapsed_ms = (time.time() - loop_state.start_time) * 1000
                 global_remaining = policy.max_wall_time_ms - elapsed_ms
                 if elapsed_ms > policy.max_wall_time_ms or global_remaining <= 0:
@@ -370,6 +378,7 @@ class AgentToolRuntime(BaseRuntime):
                 raw_response_dict: Optional[Dict[str, Any]] = None
                 yield RuntimeEvent.llm_request(
                     llm_call_id=llm_call_id,
+                    logical_llm_call_id=logical_llm_call_id,
                     model=gen.model,
                     temperature=gen.temperature,
                     max_tokens=effective_max_tokens,
@@ -405,7 +414,7 @@ class AgentToolRuntime(BaseRuntime):
                             timeout_s=gen.timeout_s,
                         )
                 except asyncio.CancelledError:
-                    logger.exception(
+                    logger.warning(
                         "Agent LLM call cancelled run_id=%s agent=%s step=%s model=%s",
                         run_session.run_id,
                         agent.slug,
@@ -415,24 +424,47 @@ class AgentToolRuntime(BaseRuntime):
                     raise
                 except LLMToolCallingUnsupportedError as exc:
                     if native_tool_calling:
+                        # The agent continues through the plaintext protocol;
+                        # keep the request entity in its retry state so the
+                        # trace does not report a false terminal failure.
+                        yield RuntimeEvent.llm_response(
+                            llm_call_id=llm_call_id,
+                            logical_llm_call_id=logical_llm_call_id,
+                            model=gen.model,
+                            error_type=type(exc).__name__,
+                            error_code=exc.code,
+                            retryable=exc.retryable,
+                            status="waiting_retry",
+                            duration_ms=int((time.time() - llm_start) * 1000),
+                            parent_entity_type="agent_execution",
+                            parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                            agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
+                            agent_slug=agent.slug,
+                            purpose="tool_decision_or_answer",
+                            actor_type="agent",
+                            actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                        )
                         native_tool_calling = False
                         tools_payload = None
                         loop_state.force_tool_choice = False
-                        await run_session.record_event(
-                            "protocol_retry",
-                            {
-                                "step": step + 1,
-                                "reason": "native_tool_calling_unsupported",
-                                "fallback": "plaintext_tool_call_protocol",
-                            },
-                        )
+                        retry_payload = {
+                            "step": step + 1,
+                            "reason": "native_tool_calling_unsupported",
+                            "fallback": "plaintext_tool_call_protocol",
+                            "logical_llm_call_id": logical_llm_call_id,
+                            "llm_call_id": llm_call_id,
+                            "entity_type": "llm_call",
+                            "entity_id": llm_call_id,
+                            "parent_entity_type": "agent_execution",
+                            "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
+                        }
+                        await run_session.record_event("protocol_retry", retry_payload)
                         yield RuntimeEvent(
                             RuntimeEventType.PROTOCOL_RETRY,
-                            {
-                                "reason": "native_tool_calling_unsupported",
-                                "fallback": "plaintext_tool_call_protocol",
-                            },
+                            retry_payload,
                         )
+                        pending_llm_call_id = llm_call_id
+                        pending_logical_llm_call_id = logical_llm_call_id
                         continue
                     raise
                 except LLMRequestTooLargeError as exc:
@@ -487,6 +519,7 @@ class AgentToolRuntime(BaseRuntime):
                         )
                     yield RuntimeEvent.llm_response(
                         llm_call_id=llm_call_id,
+                        logical_llm_call_id=logical_llm_call_id,
                         model=gen.model,
                         error_type=type(exc).__name__,
                         error_code=(provider_error.code.value if provider_error is not None else "agent_llm_call_error"),
@@ -494,6 +527,7 @@ class AgentToolRuntime(BaseRuntime):
                         status_code=(provider_error.status_code if provider_error is not None else None),
                         provider_code=(provider_error.provider_code if provider_error is not None else None),
                         retry_after_ms=retry_after_ms,
+                        status="waiting_retry" if will_retry else "failed",
                         duration_ms=int((time.time() - llm_start) * 1000),
                         parent_entity_type="agent_execution",
                         parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
@@ -515,6 +549,12 @@ class AgentToolRuntime(BaseRuntime):
                             "attempt": loop_state.retry_count,
                             "max_attempts": policy.max_retries + 1,
                             "retry_delay_ms": retry_delay_ms,
+                            "logical_llm_call_id": logical_llm_call_id,
+                            "llm_call_id": llm_call_id,
+                            "entity_type": "llm_call",
+                            "entity_id": llm_call_id,
+                            "parent_entity_type": "agent_execution",
+                            "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
                         }
                         if retry_after_ms is not None:
                             retry_payload["retry_after_ms"] = retry_after_ms
@@ -523,6 +563,8 @@ class AgentToolRuntime(BaseRuntime):
                             RuntimeEventType.PROTOCOL_RETRY,
                             retry_payload,
                         )
+                        pending_llm_call_id = llm_call_id
+                        pending_logical_llm_call_id = logical_llm_call_id
                         await asyncio.sleep(retry_delay_ms / 1000)
                         continue
                     debug = build_debug_payload(exc=exc, traceback_text=traceback.format_exc())
@@ -576,6 +618,7 @@ class AgentToolRuntime(BaseRuntime):
                     "response_length": len(raw_response),
                     "native_tool_calling": native_tool_calling,
                     "llm_call_id": llm_call_id,
+                    "logical_llm_call_id": logical_llm_call_id,
                     "parent_entity_type": "agent_execution",
                     "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
                     "agent_execution_id": str(run_session.run_id) if run_session.run_id else None,
@@ -589,6 +632,7 @@ class AgentToolRuntime(BaseRuntime):
                 }, duration_ms=llm_duration, tokens_in=max(0, prompt_tokens), tokens_out=max(0, completion_tokens))
                 yield RuntimeEvent.llm_response(
                     llm_call_id=llm_call_id,
+                    logical_llm_call_id=logical_llm_call_id,
                     step=step + 1,
                     model=gen.model,
                     temperature=gen.temperature,
@@ -676,15 +720,25 @@ class AgentToolRuntime(BaseRuntime):
                         )
                         if native_tool_calling:
                             loop_state.force_tool_choice = True
+                        retry_payload = {
+                            "step": step + 1,
+                            "reason": "no_tool_call_before_answer",
+                            "available_operations": serialize_published_operations(available_operations),
+                            "llm_call_id": llm_call_id,
+                            "logical_llm_call_id": logical_llm_call_id,
+                            "entity_type": "llm_call",
+                            "entity_id": llm_call_id,
+                            "parent_entity_type": "agent_execution",
+                            "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
+                        }
                         await run_session.record_event(
                             "protocol_retry",
-                            {
-                                "step": step + 1,
-                                "reason": "no_tool_call_before_answer",
-                                "available_operations": serialize_published_operations(available_operations),
-                            },
+                            retry_payload,
                         )
+                        yield RuntimeEvent(RuntimeEventType.PROTOCOL_RETRY, retry_payload)
                         loop_state.retry_count += 1
+                        pending_llm_call_id = llm_call_id
+                        pending_logical_llm_call_id = logical_llm_call_id
                         continue
 
                     # No operation calls — agent decided to answer directly
@@ -732,26 +786,31 @@ class AgentToolRuntime(BaseRuntime):
                     )
                     llm_messages.append({"role": "assistant", "content": raw_response})
                     llm_messages.append({"role": "user", "content": retry_message})
+                    retry_payload = {
+                        "step": step + 1,
+                        "reason": "invalid_operation_slug",
+                        "invalid_operation_slugs": invalid_operation_slugs[:10],
+                        "available_operations": serialize_published_operations(available_operations),
+                        "llm_call_id": llm_call_id,
+                        "logical_llm_call_id": logical_llm_call_id,
+                        "entity_type": "llm_call",
+                        "entity_id": llm_call_id,
+                        "parent_entity_type": "agent_execution",
+                        "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
+                    }
                     await run_session.record_event(
                         "protocol_retry",
-                        {
-                            "step": step + 1,
-                            "reason": "invalid_operation_slug",
-                            "invalid_operation_slugs": invalid_operation_slugs[:10],
-                            "available_operations": serialize_published_operations(available_operations),
-                        },
+                        retry_payload,
                     )
                     loop_state.retry_count += 1
                     if native_tool_calling:
                         loop_state.force_tool_choice = True
                     yield RuntimeEvent(
                         RuntimeEventType.PROTOCOL_RETRY,
-                        {
-                            "reason": "invalid_operation_slug",
-                            "invalid_operation_slugs": invalid_operation_slugs[:10],
-                            "available_operations": serialize_published_operations(available_operations),
-                        },
+                        retry_payload,
                     )
+                    pending_llm_call_id = llm_call_id
+                    pending_logical_llm_call_id = logical_llm_call_id
                     continue
                 operation_calls_total_ref = [loop_state.tool_calls_total]
                 for operation_call in parsed.tool_calls:
@@ -1121,7 +1180,10 @@ class AgentToolRuntime(BaseRuntime):
             "retryable": result.metadata.get("retryable"),
         })
         all_sources.extend(sources)
-        result_text = self.tools.format_result_for_context(result)
+        result_text = self.tools.format_result_for_context(
+            result,
+            operation_slug=operation_call.tool_name,
+        )
         operation_results_for_context.append((operation_call, result_text))
 
     @staticmethod

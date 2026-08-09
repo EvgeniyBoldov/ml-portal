@@ -1,6 +1,9 @@
 export interface PlanTaskViewModel {
+  taskId: string;
   title: string;
+  intent?: string;
   objective?: string;
+  instructions?: string;
   executor?: string;
   status?: string;
   dependencies: string[];
@@ -45,6 +48,36 @@ export function taskStatusLabel(value: unknown): string | undefined {
   return ({ pending: 'Ожидает', ready: 'Готова к запуску', running: 'Выполняется', completed: 'Готово', failed: 'Ошибка', unfulfillable: 'Невыполнима', waiting_user: 'Ожидает пользователя', waiting_dependency: 'Ожидает зависимость' } as Record<string, string>)[status] ?? status;
 }
 
+function dependencyValues(value: unknown, taskNames?: Map<string, string>): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    const id = String(item);
+    return taskNames?.get(id) ?? id;
+  });
+}
+
+export function projectPlanTask(value: unknown, fallbackTaskId = 'task'): PlanTaskViewModel {
+  const task = record(value);
+  const taskId = text(task.task_id ?? task.id) ?? fallbackTaskId;
+  const intent = text(task.intent);
+  const objective = text(task.objective ?? task.description ?? task.task_objective);
+  const title = text(task.title ?? task.name ?? intent ?? objective ?? taskId) ?? 'Задача без названия';
+  return {
+    taskId,
+    title,
+    intent,
+    objective,
+    instructions: text(task.instructions ?? task.task_instructions),
+    executor: text(task.executor ?? task.agent_slug ?? task.assigned_agent),
+    status: taskStatusLabel(task.status),
+    dependencies: dependencyValues(task.depends_on ?? task.dependencies),
+    expectedOutputs: Array.isArray(task.expected_outputs)
+      ? task.expected_outputs.map((item) => text(record(item).description ?? record(item).key) ?? '').filter(Boolean)
+      : [],
+    inputs: task.inputs ?? task.task_inputs,
+  };
+}
+
 export function projectPlan(value: unknown): PlanViewModel {
   const event = record(value);
   const patch = record(event.patch ?? event.plan ?? event.effective_plan ?? value);
@@ -57,17 +90,13 @@ export function projectPlan(value: unknown): PlanViewModel {
     goal: text(patch.goal ?? event.goal),
     rationale: text(patch.rationale ?? event.rationale),
     trigger: text(patch.trigger ?? event.trigger ?? event.mode),
-    tasks: taskRecords.map((task) => ({
-      title: text(task.title) ?? 'Задача без названия',
-      objective: text(task.objective ?? task.description),
-      executor: text(task.agent_slug ?? task.assigned_agent),
-      status: taskStatusLabel(task.status),
-      dependencies: Array.isArray(task.depends_on) ? task.depends_on.map(taskById) : [],
-      expectedOutputs: Array.isArray(task.expected_outputs)
-        ? task.expected_outputs.map((item) => text(record(item).description ?? record(item).key) ?? '').filter(Boolean)
-        : [],
-      inputs: task.inputs,
-    })),
+    tasks: taskRecords.map((task) => {
+      const projected = projectPlanTask(task);
+      return {
+        ...projected,
+        dependencies: dependencyValues(task.depends_on ?? task.dependencies, taskNames),
+      };
+    }),
     removedTasks: Array.isArray(patch.remove_task_ids) ? patch.remove_task_ids.map(taskById) : [],
   };
 }

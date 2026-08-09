@@ -28,8 +28,14 @@ function ExecutorResultCard({ result }: { result: ExecutorResultViewModel }) {
   return <article className={styles.card}>
     <div className={styles.cardHeader}><span className={styles.name}>{result.name}</span><Badge size="small" tone={tone(result.status)}>{result.statusLabel}</Badge></div>
     {operations.total ? <div className={styles.operations}>Операции: {operations.total}, успешно: {operations.succeeded}, с ошибкой: {operations.failed}</div> : null}
+    {result.completionKind ? <InspectorFieldGroup><InspectorFieldRow label="Тип завершения"><InspectorScalar value={result.completionKind} /></InspectorFieldRow>
+      {result.sufficientForPhase !== undefined ? <InspectorFieldRow label="Достаточно для этапа"><InspectorScalar value={result.sufficientForPhase ? 'Да' : 'Нет'} /></InspectorFieldRow> : null}
+    </InspectorFieldGroup> : null}
     {result.message ? <div className={styles.message}><InspectorTextBlock text={result.message} /></div> : null}
     {result.output !== undefined ? <div className={styles.output}><Output value={result.output} /></div> : null}
+    {result.missingInputs !== undefined ? <InspectorFieldGroup><InspectorFieldRow label="Недостающие входные данные"><Output value={result.missingInputs} /></InspectorFieldRow></InspectorFieldGroup> : null}
+    {result.needs !== undefined ? <InspectorFieldGroup><InspectorFieldRow label="Потребности"><Output value={result.needs} /></InspectorFieldRow></InspectorFieldGroup> : null}
+    {result.artifacts !== undefined ? <InspectorFieldGroup><InspectorFieldRow label="Артефакты"><Output value={result.artifacts} /></InspectorFieldRow></InspectorFieldGroup> : null}
     {!result.message && result.output === undefined && !operations.total ? <div className={styles.empty}>Исполнитель не записал содержательный результат.</div> : null}
   </article>;
 }
@@ -37,6 +43,9 @@ function ExecutorResultCard({ result }: { result: ExecutorResultViewModel }) {
 export function ExecutorResultView({ executor, trace }: { executor: TraceExecutorRun; trace: SandboxTraceState | null }) {
   return <ExecutorResultCard result={projectExecutorResult(executor, trace)} />;
 }
+
+export const AgentResultViewer = ExecutorResultView;
+export const SynthesizerResultViewer = ExecutorResultView;
 
 export function StageResultView({ stage, trace }: { stage: TraceStage; trace: SandboxTraceState | null }) {
   const results = projectStageResults(stage, trace);

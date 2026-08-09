@@ -75,11 +75,16 @@ class PlannerDecisionKind(str, Enum):
 
 
 class NeedSpec(BaseModel):
+    ref: str = Field(default="", description="Stable local reference for this need")
     key: str = Field(..., min_length=1)
     kind: Literal["data", "artifact", "decision"] = "data"
     description: str = Field(..., min_length=1)
     json_schema: Dict[str, Any] = Field(default_factory=dict, alias="schema")
     required: bool = True
+    context: Dict[str, Any] = Field(default_factory=dict)
+    resolved_value: Optional[Any] = None
+    resolved_by: Optional[str] = None
+    resolved_at_iteration: Optional[int] = None
 
     model_config = {"populate_by_name": True}
 
@@ -88,6 +93,7 @@ class TaskOutputSpec(BaseModel):
     key: str = Field(..., min_length=1)
     description: str = Field(..., min_length=1)
     json_schema: Dict[str, Any] = Field(default_factory=dict, alias="schema")
+    required: bool = True
 
     model_config = {"populate_by_name": True}
 

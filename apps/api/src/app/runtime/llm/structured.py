@@ -48,10 +48,12 @@ class StructuredCallError(RuntimeError):
         *,
         original_exception: Optional[BaseException] = None,
         traceback_text: Optional[str] = None,
+        llm_call_id: Optional[str] = None,
     ) -> None:
         super().__init__(message)
         self.original_exception = original_exception
         self.traceback_text = traceback_text
+        self.llm_call_id = llm_call_id
 
     @property
     def error_type(self) -> Optional[str]:
@@ -180,23 +182,11 @@ class StructuredLLMCall:
         # The adapter owns the actual SDK request timeout. Keeping the limit
         # here as well bounds callers that use a test/different implementation.
 
-        logger.info(
-            "Structured LLM effective limits role=%s model=%s configured_timeout_s=%s "
-            "effective_timeout_s=%s max_retries=%s max_tokens=%s input_tokens_estimate=%s",
-            role_key,
-            model,
-            configured_timeout_s,
-            timeout_s,
-            max_retries,
-            params.get("max_tokens"),
-            input_tokens,
-        )
-
         # JSON schema enforcement: constrain LLM output to the Pydantic schema.
         # Works with OpenAI, Groq, and other providers supporting response_format.
         if schema is not None:
             try:
-                json_schema = schema.model_json_schema()
+                json_schema = self._compact_response_schema(schema.model_json_schema())
                 params["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
@@ -212,15 +202,59 @@ class StructuredLLMCall:
                 )
                 params["response_format"] = {"type": "json_object"}
 
+        request_bytes = len(json.dumps(
+            {"messages": messages, "params": params},
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        ).encode("utf-8"))
+        response_schema_bytes = len(json.dumps(
+            params.get("response_format") or {},
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        ).encode("utf-8"))
+        logger.info(
+            "Structured LLM effective limits role=%s model=%s configured_timeout_s=%s "
+            "effective_timeout_s=%s max_retries=%s max_tokens=%s input_tokens_estimate=%s "
+            "request_bytes=%s response_schema_bytes=%s",
+            role_key,
+            model,
+            configured_timeout_s,
+            timeout_s,
+            max_retries,
+            params.get("max_tokens"),
+            input_tokens,
+            request_bytes,
+            response_schema_bytes,
+        )
+
         last_error: Optional[str] = None
         last_exception: Optional[BaseException] = None
         last_traceback: Optional[str] = None
         raw_response = ""
-        start = time.time()
+        start = time.monotonic()
+        # A structured invocation may retry at the provider, but it remains
+        # one user-visible request.  Reuse one call id for every request and
+        # response in that retry chain; the logical id remains available for
+        # compatibility with consumers that group historical traces.
+        logical_llm_call_id = str(uuid4())
+        llm_call_id = str(uuid4())
 
         for attempt in range(max_retries + 1):
-            llm_call_id = str(uuid4())
             attempt_started = time.monotonic()
+            attempt_request_bytes = len(json.dumps(
+                {"messages": messages, "params": params},
+                ensure_ascii=False,
+                default=str,
+                separators=(",", ":"),
+            ).encode("utf-8"))
+            attempt_response_schema_bytes = len(json.dumps(
+                params.get("response_format") or {},
+                ensure_ascii=False,
+                default=str,
+                separators=(",", ":"),
+            ).encode("utf-8"))
 
             logger.info(
                 "Structured LLM attempt started role=%s model=%s attempt=%s/%s "
@@ -244,6 +278,7 @@ class StructuredLLMCall:
                     {
                         "entity_type": "llm_call",
                         "entity_id": llm_call_id,
+                        "logical_llm_call_id": logical_llm_call_id,
                         "parent_entity_type": "agent_execution",
                         "parent_entity_id": str(agent_execution_id),
                         "agent_execution_id": str(agent_execution_id),
@@ -274,6 +309,7 @@ class StructuredLLMCall:
             if event_sink is not None and agent_execution_id is not None:
                 await event_sink(RuntimeEvent.llm_request(
                     llm_call_id=llm_call_id,
+                    logical_llm_call_id=logical_llm_call_id,
                     parent_entity_type="agent_execution",
                     parent_entity_id=str(agent_execution_id),
                     agent_execution_id=str(agent_execution_id),
@@ -282,6 +318,9 @@ class StructuredLLMCall:
                     model=model,
                     temperature=temperature,
                     max_tokens=params.get("max_tokens"),
+                    input_tokens_estimate=input_tokens,
+                    request_bytes=attempt_request_bytes,
+                    response_schema_bytes=attempt_response_schema_bytes,
                     messages=messages,
                 ))
             try:
@@ -326,6 +365,7 @@ class StructuredLLMCall:
                 if event_sink is not None and agent_execution_id is not None:
                     await event_sink(RuntimeEvent.llm_response(
                         llm_call_id=llm_call_id,
+                        logical_llm_call_id=logical_llm_call_id,
                         parent_entity_type="agent_execution",
                         parent_entity_id=str(agent_execution_id),
                         agent_execution_id=str(agent_execution_id),
@@ -335,7 +375,11 @@ class StructuredLLMCall:
                         error_type="TimeoutError",
                         error_code="llm_timeout",
                         retryable=True,
-                        duration_ms=int((time.time() - start) * 1000),
+                        status="waiting_retry" if attempt < max_retries else "failed",
+                        terminal=attempt >= max_retries,
+                        attempt=attempt + 1,
+                        max_attempts=max_retries + 1,
+                        duration_ms=int((time.monotonic() - start) * 1000),
                     ))
                 await emit_protocol_retry(reason="timeout")
                 await wait_before_retry()
@@ -345,9 +389,22 @@ class StructuredLLMCall:
                 last_traceback = traceback.format_exc()
                 last_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("StructuredLLMCall error role=%s attempt=%s: %s", role, attempt + 1, exc)
+                provider_retryable = exc.retryable if isinstance(exc, LLMProviderError) else True
+                adaptive_retry = (
+                    isinstance(exc, LLMProviderError)
+                    and exc.code.value == "llm_request_too_large"
+                    and attempt < max_retries
+                    and self._shrink_request_for_provider_limit(params)
+                )
+                fail_fast = (
+                    (isinstance(exc, LLMProviderError) and not exc.retryable)
+                    or self._is_non_retryable_llm_error(exc)
+                )
+                will_retry = adaptive_retry or (provider_retryable and not fail_fast and attempt < max_retries)
                 if event_sink is not None and agent_execution_id is not None:
                     await event_sink(RuntimeEvent.llm_response(
                         llm_call_id=llm_call_id,
+                        logical_llm_call_id=logical_llm_call_id,
                         parent_entity_type="agent_execution",
                         parent_entity_id=str(agent_execution_id),
                         agent_execution_id=str(agent_execution_id),
@@ -356,13 +413,18 @@ class StructuredLLMCall:
                         model=model,
                         error_type=type(exc).__name__,
                         error_code=(exc.code.value if isinstance(exc, LLMProviderError) else "llm_unknown_error"),
-                        retryable=(exc.retryable if isinstance(exc, LLMProviderError) else True),
+                        safe_message=(exc.safe_message if isinstance(exc, LLMProviderError) else "LLM request failed"),
+                        retryable=will_retry,
                         status_code=(exc.status_code if isinstance(exc, LLMProviderError) else None),
                         provider_code=(exc.provider_code if isinstance(exc, LLMProviderError) else None),
                         retry_after_ms=(exc.retry_after_ms if isinstance(exc, LLMProviderError) else None),
-                        duration_ms=int((time.time() - start) * 1000),
+                        status="waiting_retry" if will_retry else "failed",
+                        terminal=not will_retry,
+                        attempt=attempt + 1,
+                        max_attempts=max_retries + 1,
+                        duration_ms=int((time.monotonic() - start) * 1000),
                     ))
-                if (isinstance(exc, LLMProviderError) and not exc.retryable) or self._is_non_retryable_llm_error(exc):
+                if fail_fast and not adaptive_retry:
                     logger.warning(
                         "StructuredLLMCall fail-fast role=%s attempt=%s due to non-retryable upstream error",
                         role,
@@ -371,7 +433,8 @@ class StructuredLLMCall:
                     break
                 retry_after_ms = exc.retry_after_ms if isinstance(exc, LLMProviderError) else None
                 await emit_protocol_retry(
-                    reason="transport_error", retry_after_ms=retry_after_ms
+                    reason="reduce_request_size" if adaptive_retry else "transport_error",
+                    retry_after_ms=retry_after_ms,
                 )
                 await wait_before_retry(retry_after_ms=retry_after_ms)
                 continue
@@ -384,6 +447,7 @@ class StructuredLLMCall:
             if event_sink is not None and agent_execution_id is not None:
                 await event_sink(RuntimeEvent.llm_response(
                     llm_call_id=llm_call_id,
+                    logical_llm_call_id=logical_llm_call_id,
                     parent_entity_type="agent_execution",
                     parent_entity_id=str(agent_execution_id),
                     agent_execution_id=str(agent_execution_id),
@@ -392,7 +456,11 @@ class StructuredLLMCall:
                     model=model,
                     response=raw_response,
                     content=raw_response,
-                    duration_ms=int((time.time() - start) * 1000),
+                    status="running",
+                    terminal=False,
+                    attempt=attempt + 1,
+                    max_attempts=max_retries + 1,
+                    duration_ms=int((time.monotonic() - start) * 1000),
                 ))
             if not raw_response:
                 last_error = "empty_response"
@@ -412,7 +480,26 @@ class StructuredLLMCall:
                 await wait_before_retry()
                 continue
 
-            duration_ms = int((time.time() - start) * 1000)
+            duration_ms = int((time.monotonic() - start) * 1000)
+            if event_sink is not None and agent_execution_id is not None:
+                await event_sink(RuntimeEvent.llm_response(
+                    llm_call_id=llm_call_id,
+                    logical_llm_call_id=logical_llm_call_id,
+                    parent_entity_type="agent_execution",
+                    parent_entity_id=str(agent_execution_id),
+                    agent_execution_id=str(agent_execution_id),
+                    agent_slug=role_key,
+                    purpose="planning_decision" if role_key == "planner" else role_key,
+                    model=model,
+                    response=raw_response,
+                    content=raw_response,
+                    result_kind="plan" if role_key == "planner" else "answer",
+                    status="completed",
+                    terminal=True,
+                    attempt=attempt + 1,
+                    max_attempts=max_retries + 1,
+                    duration_ms=duration_ms,
+                ))
             return StructuredCallResult(
                 value=parsed,
                 trace_id=None,
@@ -424,7 +511,7 @@ class StructuredLLMCall:
             )
 
         # All attempts failed — try fallback factory if provided.
-        duration_ms = int((time.time() - start) * 1000)
+        duration_ms = int((time.monotonic() - start) * 1000)
         if fallback_factory is not None:
             try:
                 fallback = fallback_factory(raw_response)
@@ -445,9 +532,68 @@ class StructuredLLMCall:
             f"{max_retries + 1} attempts: {last_error}",
             original_exception=last_exception,
             traceback_text=last_traceback,
+            llm_call_id=llm_call_id,
         )
 
     # --------------------------------------------------------------- helpers --
+
+    @staticmethod
+    def _compact_response_schema(value: Any) -> Any:
+        """Project a JSON Schema to the validation keywords needed by an LLM.
+
+        Local Pydantic validation remains authoritative.  Titles, defaults
+        and descriptions are useful to humans, but duplicate the prompt and
+        can make an otherwise valid provider request exceed its body limit.
+        """
+        if isinstance(value, list):
+            return [StructuredLLMCall._compact_response_schema(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        # These are maps whose keys are user-defined schema names, not JSON
+        # Schema keywords. Preserve each name and compact only its value.
+        if set(value).isdisjoint({"type", "properties", "items", "$ref", "anyOf", "oneOf", "allOf", "enum", "required"}):
+            return {
+                key: StructuredLLMCall._compact_response_schema(item)
+                for key, item in value.items()
+            }
+        allowed = {
+            "$defs", "$ref", "type", "properties", "required", "items",
+            "additionalProperties", "enum", "const", "anyOf", "oneOf", "allOf",
+            "format", "pattern", "minLength", "maxLength", "minimum", "maximum",
+            "minItems", "maxItems", "minProperties", "maxProperties",
+        }
+        result: Dict[str, Any] = {}
+        for key, item in value.items():
+            if key not in allowed:
+                continue
+            if key in {"properties", "$defs"} and isinstance(item, dict):
+                result[key] = {
+                    name: StructuredLLMCall._compact_response_schema(child)
+                    for name, child in item.items()
+                }
+            else:
+                result[key] = StructuredLLMCall._compact_response_schema(item)
+        return result
+
+    @staticmethod
+    def _shrink_request_for_provider_limit(params: Dict[str, Any]) -> bool:
+        """Prepare one bounded adaptive retry after an HTTP 413.
+
+        ``max_tokens`` is a ceiling, so lowering it after a provider rejects
+        the whole request does not change the requested semantics.  The first
+        retry also removes the optional JSON Schema transport envelope; the
+        local Pydantic validator still enforces the same contract.
+        """
+        changed = False
+        response_format = params.get("response_format")
+        if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
+            params["response_format"] = {"type": "json_object"}
+            changed = True
+        current = params.get("max_tokens")
+        if isinstance(current, int) and current > 256:
+            params["max_tokens"] = max(256, current // 2)
+            changed = True
+        return changed
 
     @staticmethod
     def _extract_text(response: Any) -> str:
@@ -640,7 +786,7 @@ class StructuredLLMCall:
                 parts.append(f"# {heading}\n{val}")
 
         if role_type != SystemLLMRoleType.SYNTHESIZER.value and schema is not None:
-            generated_schema = schema.model_json_schema()
+            generated_schema = StructuredLLMCall._compact_response_schema(schema.model_json_schema())
             if role_type == SystemLLMRoleType.PLANNER.value:
                 parts.append(
                     "# PLANNER RUNTIME CONTRACT\n"

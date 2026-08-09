@@ -292,13 +292,17 @@ class Synthesizer:
             # used by ModelCallConfigService in that degraded mode.
             logger.warning("Failed to resolve synthesizer model retry policy: %s", exc)
             max_retries = 2
+        # One synthesis request may retry internally, but the frontend must
+        # see one request/response entity until the final answer is produced.
+        llm_call_id = str(uuid4())
+        logical_llm_call_id = str(uuid4())
         for attempt in range(max_retries + 1):
-            llm_call_id = str(uuid4())
             retry_scheduled = False
             # Emit before opening the stream so a provider timeout/error still has
             # a stable LLM child in the sandbox journal.
             yield RuntimeEvent.llm_request(
                 llm_call_id=llm_call_id,
+                logical_llm_call_id=logical_llm_call_id,
                 model=effective_model or "unknown",
                 messages=messages,
                 parent_entity_type="synthesis_run",
@@ -325,10 +329,15 @@ class Synthesizer:
                 if isinstance(stream_event, StreamError):
                     yield RuntimeEvent.llm_response(
                         llm_call_id=llm_call_id,
+                        logical_llm_call_id=logical_llm_call_id,
                         model=effective_model or "unknown",
                         error_type=stream_event.error_type,
                         error_code=stream_event.code,
                         retryable=stream_event.recoverable,
+                        status=("waiting_retry" if stream_event.recoverable and attempt < max_retries else "failed"),
+                        terminal=not (stream_event.recoverable and attempt < max_retries),
+                        attempt=attempt + 1,
+                        max_attempts=max_retries + 1,
                         retry_after_ms=stream_event.retry_after_ms,
                         parent_entity_type="synthesis_run",
                         parent_entity_id=synthesis_run_id,
@@ -349,6 +358,10 @@ class Synthesizer:
                                 "max_attempts": max_retries + 1,
                                 "retry_delay_ms": retry_delay_ms,
                                 "retry_after_ms": stream_event.retry_after_ms,
+                                "llm_call_id": llm_call_id,
+                                "logical_llm_call_id": logical_llm_call_id,
+                                "entity_type": "llm_call",
+                                "entity_id": llm_call_id,
                                 "parent_entity_type": "synthesis_run",
                                 "parent_entity_id": synthesis_run_id,
                             },
@@ -408,10 +421,13 @@ class Synthesizer:
                             )
                     yield RuntimeEvent.llm_response(
                         llm_call_id=stream_event.llm_call_id,
+                        logical_llm_call_id=logical_llm_call_id,
                         model=effective_model or stream_event.model or "unknown",
                         content=full, response_length=stream_event.response_length,
                         tokens_in=stream_event.tokens_in, tokens_out=stream_event.tokens_out,
                         tokens_total=stream_event.tokens_total, duration_ms=stream_event.duration_ms,
+                        result_kind="answer", status="completed", terminal=True,
+                        attempt=attempt + 1, max_attempts=max_retries + 1,
                         parent_entity_type="synthesis_run", parent_entity_id=synthesis_run_id,
                         purpose="final_answer", actor_type="synthesizer", actor_entity_id=synthesis_run_id,
                     )
@@ -471,7 +487,12 @@ class Synthesizer:
             if isinstance(item_attachments, list):
                 for att in item_attachments:
                     artifact_id = str(att.get("artifact_id") or "").strip() if isinstance(att, dict) else ""
-                    if not artifact_id or artifact_id in seen_artifact_ids:
+                    if (
+                        not artifact_id
+                        or isinstance(att, dict) and att.get("status") == "deleted"
+                        or artifact_id in runtime_state.deleted_artifact_ids
+                        or artifact_id in seen_artifact_ids
+                    ):
                         continue
                     seen_artifact_ids.add(artifact_id)
                     result.append({

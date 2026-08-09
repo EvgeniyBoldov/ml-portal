@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { projectPlan } from './planInspection';
+import { projectPlan, projectPlanTask } from './planInspection';
 
 describe('plan inspection projection', () => {
-  it('projects planner patch into task cards without exposing task ids', () => {
+  it('projects planner patch into stable task cards', () => {
     expect(projectPlan({ revision: 2, patch: {
       decision: 'revise_plan', goal: 'Подготовить заявку', rationale: 'Первая попытка не удалась',
       tasks: [
@@ -17,10 +17,31 @@ describe('plan inspection projection', () => {
       rationale: 'Первая попытка не удалась',
       trigger: undefined,
       tasks: [
-        { title: 'Найти шаблон', objective: 'Выбрать готовый шаблон', executor: 'viewer', status: 'Готово', dependencies: [], expectedOutputs: [], inputs: undefined },
-        { title: 'Заполнить шаблон', objective: 'Создать файл', executor: 'net.enginer', status: undefined, dependencies: ['Найти шаблон'], expectedOutputs: ['Готовый файл'], inputs: undefined },
+        { taskId: 'discover', title: 'Найти шаблон', intent: undefined, objective: 'Выбрать готовый шаблон', instructions: undefined, executor: 'viewer', status: 'Готово', dependencies: [], expectedOutputs: [], inputs: undefined },
+        { taskId: 'fill', title: 'Заполнить шаблон', intent: undefined, objective: 'Создать файл', instructions: undefined, executor: 'net.enginer', status: undefined, dependencies: ['Найти шаблон'], expectedOutputs: ['Готовый файл'], inputs: undefined },
       ],
       removedTasks: ['obsolete'],
+    });
+  });
+
+  it('normalizes one agent task into the same model as a plan item', () => {
+    expect(projectPlanTask({
+      task_id: 'fill',
+      intent: 'fill_template',
+      instructions: 'Заполнить выбранный шаблон',
+      executor: 'net.enginer',
+      task_inputs: { row_id: 'template-1' },
+    })).toEqual({
+      taskId: 'fill',
+      title: 'fill_template',
+      intent: 'fill_template',
+      objective: undefined,
+      instructions: 'Заполнить выбранный шаблон',
+      executor: 'net.enginer',
+      status: undefined,
+      dependencies: [],
+      expectedOutputs: [],
+      inputs: { row_id: 'template-1' },
     });
   });
 });

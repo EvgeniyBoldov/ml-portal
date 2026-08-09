@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SandboxTraceState } from '../traceState';
 import type { RuntimeProgress } from '../types';
 import { projectTraceStages, stepFor, traceElapsedMs, type TraceCall, type TraceExecutorRun, type TraceInspectionTarget, type TraceMetrics, type TraceStage } from '../traceProjection';
-import { llmOutcome, toolResult } from '../callInspection';
+import { callPresentation, callStatusPresentation } from '../callPresentation';
 import { normalizeTraceStatus, traceStatusLabel } from '../traceStatus';
 import styles from './ExecutionTrace.module.css';
 
@@ -23,19 +23,30 @@ function downloadTraceLog(trace: SandboxTraceState, progress: RuntimeProgress[],
   const events = trace.eventIdsBySequence
     .map((eventId) => trace.eventsById[eventId])
     .filter(Boolean);
+  const embeddedProgress = events
+    .map((event) => event.payload._progress)
+    .filter((item): item is RuntimeProgress => Boolean(item && typeof item === 'object' && 'description' in item))
+    .map((item) => ({
+      run_id: String(item.run_id ?? trace.runId ?? ''),
+      phase: String(item.phase ?? ''),
+      kind: String(item.kind ?? ''),
+      description: String(item.description ?? ''),
+      status: typeof item.status === 'string' ? item.status : null,
+    }));
+  const exportedProgress = progress.length ? progress : embeddedProgress;
   const lines = [
     'TRACE LOG EXPORT',
     `run_id: ${trace.runId ?? 'unknown'}`,
     `exported_at: ${new Date().toISOString()}`,
     `elapsed: ${formatDuration(elapsedMs)}`,
     `events: ${events.length}`,
-    `progress_items: ${progress.length}`,
+    `progress_items: ${exportedProgress.length}`,
     '',
     '=== RAW JOURNAL EVENTS ===',
     ...events.map((event) => JSON.stringify(event, null, 2)),
     '',
     '=== RAW PROGRESS ===',
-    ...progress.map((item) => JSON.stringify(item, null, 2)),
+    ...exportedProgress.map((item) => JSON.stringify(item, null, 2)),
     '',
   ];
   const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
@@ -65,9 +76,12 @@ function statusClass(status: string): string {
 }
 
 function Metrics({ metrics, hideElapsed }: { metrics: TraceMetrics; hideElapsed?: boolean }) {
-  if ((!metrics.elapsedMs || hideElapsed) && !metrics.tokens && !metrics.retries) return null;
+  if ((!metrics.elapsedMs || hideElapsed) && !metrics.tokens && !metrics.retries && !metrics.calls) return null;
   return (
     <div className={styles.metrics}>
+      {metrics.calls ? <span>calls: {metrics.calls}</span> : null}
+      {metrics.successfulCalls ? <span>ok: {metrics.successfulCalls}</span> : null}
+      {metrics.failedCalls ? <span>errors: {metrics.failedCalls}</span> : null}
       {metrics.tokens ? <span>tokens: {metrics.tokens}</span> : null}
       {!hideElapsed && metrics.elapsedMs ? <span>time: {formatDuration(metrics.elapsedMs)}</span> : null}
       {metrics.retries ? <span>retry: {metrics.retries}</span> : null}
@@ -83,20 +97,18 @@ function CallCard({ call, executor, stage, onSelect, selected }: { call: TraceCa
     confirm: 'ПОДТВЕРЖДЕНИЕ',
     error: 'ОШИБКА',
   }[call.kind];
-  const toolFailed = call.kind === 'tool' && call.response ? toolResult(call.response.payload).success === false : false;
-  const outcome = call.kind === 'llm' && call.response ? llmOutcome(call.response.payload, call.toolCallCount) : undefined;
-  const llmFailed = outcome?.kind === 'error';
-  const statusLabel = call.kind === 'error' || toolFailed || llmFailed
-    ? 'Ошибка'
-    : call.response
-      ? (call.kind === 'llm' ? outcome?.label ?? 'Ответ' : call.kind === 'tool' ? 'Результат' : 'Ответ получен')
-      : call.kind === 'clarify' ? 'Ожидает ответ' : call.kind === 'confirm' ? 'Ожидает решения' : 'Выполняется';
+  const presentation = callPresentation(call);
+  const status = call.kind === 'clarify' && presentation.status === 'running'
+    ? { label: 'Ожидает ответ', tone: 'warn' as const }
+    : call.kind === 'confirm' && presentation.status === 'running'
+      ? { label: 'Ожидает решения', tone: 'warn' as const }
+      : callStatusPresentation(presentation.status);
   return (
     <div className={styles.callWrap}>
       <button type="button" className={`${styles.call} ${styles[`call-${call.kind}`]} ${selected ? styles.isSelected : ''}`} onClick={() => onSelect?.(call.kind === 'error' ? { kind: 'error', key: call.entity.key, call, executor, stage } : { kind: 'call', key: call.entity.key, call, executor, stage })}>
         <span className={styles.callType}><i className={styles.typeMarker} />{typeLabel}</span>
         <span className={styles.callTitle}>{call.title}{call.summary ? <small>{call.summary}</small> : null}</span>
-        <span className={`${styles.callStatus} ${call.kind === 'error' || toolFailed || llmFailed ? styles.callStatusError : outcome?.kind === 'empty' ? styles.callStatusWarning : call.response ? styles.callStatusComplete : styles.callStatusRunning}`}><span>{statusLabel}</span>{outcome?.count ? <span className={styles.callStatusCount}>· {outcome.count}</span> : null}</span>
+        <span className={`${styles.callStatus} ${presentation.status === 'error' ? styles.callStatusError : presentation.status === 'ok' ? styles.callStatusComplete : presentation.status === 'waiting_retry' ? styles.callStatusWarning : styles.callStatusRunning}`}><span>{status.label}</span>{presentation.outcome?.count ? <span className={styles.callStatusCount}>· {presentation.outcome.count}</span> : null}</span>
       </button>
     </div>
   );
@@ -192,6 +204,7 @@ export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget
             <span className={styles.iterationTask}>{stage.task}</span>
             <StatusBadge status={stage.entity.status} />
           </header>
+          <Metrics metrics={stage.metrics} />
           <div className={styles.iterationBody}><StageCard stage={stage} onSelect={onSelectTarget} selectedTargetKey={selectedTargetKey} /></div>
         </article>
       ))}</div>}

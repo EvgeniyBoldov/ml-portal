@@ -77,6 +77,44 @@ def _document_search_operation(*, schema: dict) -> ResolvedOperation:
     )
 
 
+def _template_fill_operation() -> ResolvedOperation:
+    target = ProviderExecutionTarget(
+        operation_slug="instance.templates.collection.template.fill",
+        provider_type="local",
+        provider_instance_id=str(uuid4()),
+        provider_instance_slug="template-runtime",
+        provider_url=None,
+        data_instance_id=str(uuid4()),
+        data_instance_slug="templates",
+        handler_slug="collection.template_fill",
+        timeout_s=20,
+    )
+    return ResolvedOperation(
+        operation_slug=target.operation_slug,
+        operation="collection.template.fill",
+        name="Fill Template",
+        description="Fill template",
+        input_schema={
+            "type": "object",
+            "required": ["collection_id", "row_id", "values"],
+            "properties": {
+                "collection_id": {"type": "string"},
+                "row_id": {"type": "string"},
+                "values": {"type": "object"},
+                "filename": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        data_instance_id=target.data_instance_id,
+        data_instance_slug=target.data_instance_slug,
+        collection_slug="templates",
+        provider_instance_id=target.provider_instance_id,
+        provider_instance_slug=target.provider_instance_slug,
+        source="local",
+        target=target,
+    )
+
+
 def _ctx() -> ToolContext:
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
     deps = RuntimeDependencies(
@@ -86,6 +124,76 @@ def _ctx() -> ToolContext:
     )
     ctx.set_runtime_deps(deps)
     return ctx
+
+
+@pytest.mark.asyncio
+async def test_template_fill_wraps_flattened_values_before_validation():
+    operation = _template_fill_operation()
+    executor_impl = AsyncMock(return_value=ToolResult.ok({"artifact_id": "artifact-1"}))
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
+    ctx.set_runtime_deps(
+        RuntimeDependencies(operation_executor=SimpleNamespace(execute=executor_impl))
+    )
+    call = ToolCall(
+        id="template-flat",
+        tool_name=operation.operation_slug,
+        arguments={
+            "row_id": "row-1",
+            "author": {"name": "Alice"},
+            "network": {"source": {"ip": "10.0.0.1"}},
+        },
+    )
+
+    result, _ = await ToolExecutor().execute(call, ctx, [operation])
+
+    assert result.success is True
+    forwarded_call = executor_impl.await_args.args[0]
+    assert forwarded_call.arguments == {
+        "row_id": "row-1",
+        "values": {
+            "author": {"name": "Alice"},
+            "network": {"source": {"ip": "10.0.0.1"}},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_template_fill_parses_values_json_object_before_validation():
+    operation = _template_fill_operation()
+    executor_impl = AsyncMock(return_value=ToolResult.ok({"artifact_id": "artifact-1"}))
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
+    ctx.set_runtime_deps(
+        RuntimeDependencies(operation_executor=SimpleNamespace(execute=executor_impl))
+    )
+    call = ToolCall(
+        id="template-json-string",
+        tool_name=operation.operation_slug,
+        arguments={
+            "row_id": "row-1",
+            "values": '{"author": {"name": "Alice"}}',
+        },
+    )
+
+    result, _ = await ToolExecutor().execute(call, ctx, [operation])
+
+    assert result.success is True
+    forwarded_call = executor_impl.await_args.args[0]
+    assert forwarded_call.arguments["values"] == {"author": {"name": "Alice"}}
+
+
+@pytest.mark.asyncio
+async def test_template_fill_keeps_invalid_values_string_for_schema_error():
+    operation = _template_fill_operation()
+    call = ToolCall(
+        id="template-invalid-values",
+        tool_name=operation.operation_slug,
+        arguments={"row_id": "row-1", "values": "not-json"},
+    )
+
+    result, _ = await ToolExecutor().execute(call, _ctx(), [operation])
+
+    assert result.success is False
+    assert result.metadata.get("field_path") == "$.values"
 
 
 @pytest.mark.asyncio

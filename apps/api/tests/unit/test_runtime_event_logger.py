@@ -146,6 +146,31 @@ def test_chat_root_progress_is_visible_without_root_persistence() -> None:
     assert logger.should_publish_progress("tool_call") is False
 
 
+def test_sandbox_root_progress_exposes_call_lifecycle() -> None:
+    logger = RuntimeEventLogger(context=RuntimeLogContext(
+        run_id=uuid4(), level=RuntimeLoggingLevel.FULL, origin="sandbox",
+        entity_type="run", stream_logs=True, stream_progress=True,
+    ))
+
+    assert logger.should_publish_progress("llm_request") is True
+    assert logger.should_publish_progress("llm_response") is True
+    assert logger.should_publish_progress("protocol_retry") is True
+    assert logger.should_publish_progress("tool_result") is True
+
+
+def test_llm_response_cannot_publish_waiting_for_non_retryable_error() -> None:
+    event = RuntimeEvent.llm_response(
+        llm_call_id="llm-1",
+        error_code="llm_request_too_large",
+        retryable=False,
+        status="waiting_retry",
+        terminal=False,
+    )
+
+    assert event.data["status"] == "failed"
+    assert event.data["terminal"] is True
+
+
 def test_agent_none_hides_agent_progress() -> None:
     logger = RuntimeEventLogger(context=RuntimeLogContext(
         run_id=uuid4(), level=RuntimeLoggingLevel.NONE, origin="chat",

@@ -87,6 +87,7 @@ class RuntimeTurnState(BaseModel):
     answer_brief: Optional[str] = None
     final_answer: Optional[str] = None
     final_error: Optional[str] = None
+    deleted_artifact_ids: List[str] = Field(default_factory=list)
 
     @field_validator("memory_bundle", mode="before")
     @classmethod
@@ -245,6 +246,11 @@ class RuntimeTurnState(BaseModel):
             success=success,
             data=data,
         )
+
+    def mark_artifact_deleted(self, artifact_id: str) -> None:
+        artifact_id = str(artifact_id or "").strip()
+        if artifact_id and artifact_id not in self.deleted_artifact_ids:
+            self.deleted_artifact_ids.append(artifact_id)
 
     def get_or_create_task(self, task_id: str, **defaults: Any) -> TaskJournalEntry:
         for t in self.task_journal:

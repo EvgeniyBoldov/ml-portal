@@ -1,5 +1,3 @@
-import type { RuntimeJournalEvent } from './traceState';
-
 export type DisplayEntry = { label: string; value: unknown };
 export type ParsedContent = { text?: string; data?: unknown; kind: 'text' | 'json' | 'tool_call' };
 export type ToolNameMap = ReadonlyMap<string, string>;
@@ -26,6 +24,8 @@ const LABELS: Record<string, string> = {
   description: 'Описание', total: 'Всего', field_count: 'Полей', template_version: 'Версия',
   contract_version: 'Версия контракта', status: 'Статус', filename: 'Имя файла', limit: 'Лимит',
   query: 'Запрос', score: 'Релевантность', collection: 'Коллекция', purpose_label: 'Назначение',
+  status_code: 'HTTP-статус', provider_code: 'Код провайдера', retry_after_ms: 'Повтор через',
+  error_type: 'Тип ошибки', timeout_s: 'Тайм-аут', format: 'Формат',
 };
 
 const asRecord = (value: unknown): Record<string, unknown> => (
@@ -41,11 +41,22 @@ export function purposeLabel(purpose: unknown): string {
   return ({ planning_decision: 'Принятие решения по плану', tool_decision_or_answer: 'Выбор действия или ответ', final_answer: 'Финальный ответ' } as Record<string, string>)[value] ?? (value || '—');
 }
 
+export function formatFieldLabel(key: string): string {
+  const known = LABELS[key];
+  if (known) return known;
+  const text = key
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+    .replace(/[_.-]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+  return text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : key;
+}
+
 export function toDisplayEntries(value: unknown): DisplayEntry[] {
   return Object.entries(asRecord(value))
     .filter(([key, raw]) => !HIDDEN_KEYS.has(key) && !key.endsWith('_id') && raw !== null && raw !== undefined && raw !== '')
     .map(([key, raw]) => ({
-      label: LABELS[key] ?? key.split('_').join(' '),
+      label: formatFieldLabel(key),
       value: key === 'purpose' ? purposeLabel(raw) : key === 'tool' || key === 'operation_slug' ? callDisplayName(String(raw)) : sanitizeDisplay(raw),
     }));
 }
@@ -84,27 +95,44 @@ export function llmResponseContent(payload: Record<string, unknown>): unknown {
 }
 
 export function llmResponseStatus(payload: Record<string, unknown>): 'answered' | 'empty' | 'error' {
-  if (typeof payload.error_type === 'string' && payload.error_type.trim()) return 'error';
+  if ((typeof payload.error_type === 'string' && payload.error_type.trim())
+    || (typeof payload.error_code === 'string' && payload.error_code.trim() && !hasContent(llmResponseContent(payload)))) return 'error';
   return hasContent(llmResponseContent(payload)) ? 'answered' : 'empty';
 }
 
 export function llmOutcome(payload: Record<string, unknown>, toolCallCount = 0): LlmOutcome {
   if (typeof payload.error_type === 'string' && payload.error_type.trim()) return { kind: 'error', label: 'Ошибка' };
-  if (toolCallCount > 0) return { kind: 'tools', label: 'Инструменты', count: toolCallCount };
+  if (toolCallCount > 0) return { kind: 'tools', label: 'Вызов инструментов', count: toolCallCount };
+
+  const resultKind = typeof payload.result_kind === 'string' ? payload.result_kind : '';
+  const resultLabels: Record<string, LlmOutcome> = {
+    plan: { kind: 'plan', label: 'План' },
+    tool_calls: { kind: 'tools', label: 'Вызов инструментов' },
+    answer: { kind: 'answer', label: 'Ответ' },
+    clarification: { kind: 'clarify', label: 'Уточнение' },
+    empty: { kind: 'empty', label: 'Пусто' },
+    error: { kind: 'error', label: 'Ошибка' },
+  };
+  if (resultLabels[resultKind]) return resultLabels[resultKind];
 
   const content = llmResponseContent(payload);
   if (!hasContent(content)) return { kind: 'empty', label: 'Пусто' };
 
   const parsed = parseCallContent(content);
+  if (parsed.kind === 'tool_call') return { kind: 'tools', label: 'Вызов инструментов', count: 1 };
   const data = asRecord(parsed.data);
-  const action = String(data.action ?? data.decision ?? '').trim();
+  const nestedPlan = asRecord(data.plan);
+  const planData = Object.keys(nestedPlan).length ? nestedPlan : data;
+  const action = String(planData.action ?? planData.decision ?? data.action ?? data.decision ?? '').trim();
+  const hasTasks = Array.isArray(planData.tasks);
+  const isPlanAction = action === 'apply_graph' || action === 'create_plan' || action === 'revise_plan';
   const isPlanningDecision = payload.purpose === 'planning_decision';
   if (isPlanningDecision && (action === 'ask_user' || action === 'clarify')) return { kind: 'clarify', label: 'Уточнение' };
-  if (isPlanningDecision && (action === 'apply_graph' || action === 'create_plan' || action === 'revise_plan')) {
-    const tasks = Array.isArray(data.tasks) ? data.tasks.length : 0;
-    return { kind: 'plan', label: 'План', count: tasks || undefined };
+  if (hasTasks && (isPlanAction || isPlanningDecision || Object.keys(nestedPlan).length > 0)) {
+    const tasks = Array.isArray(planData.tasks) ? planData.tasks.length : 0;
+    return { kind: 'plan', label: action === 'revise_plan' ? 'Корректировка плана' : 'План', count: tasks || undefined };
   }
-  if (isPlanningDecision && (action === 'complete' || action === 'complete_plan')) return { kind: 'complete', label: 'Готово' };
+  if (isPlanningDecision && (action === 'complete' || action === 'complete_plan')) return { kind: 'complete', label: 'Ответ' };
   return { kind: 'answer', label: 'Ответ' };
 }
 
@@ -131,18 +159,4 @@ export function toolResult(payload: Record<string, unknown>): { success?: boolea
       safe_message: message,
     }),
   };
-}
-
-export function rawCallEvents(request: RuntimeJournalEvent, response?: RuntimeJournalEvent): unknown[] {
-  return [request, ...(response ? [response] : [])].map((event) => ({
-    sequence: event.sequence,
-    event_type: event.event_type,
-    occurred_at: event.occurred_at,
-    entity_type: event.entity_type,
-    entity_id: event.entity_id,
-    parent_entity_type: event.parent_entity_type,
-    parent_entity_id: event.parent_entity_id,
-    duration_ms: event.duration_ms,
-    payload: event.payload,
-  }));
 }

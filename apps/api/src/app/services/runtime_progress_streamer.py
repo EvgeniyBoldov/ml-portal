@@ -20,7 +20,10 @@ class RuntimeProgressStreamer:
         RuntimeEventType.TASK_STARTED: "Начинаю задачу",
         RuntimeEventType.AGENT_START: "Запускаю агента",
         RuntimeEventType.LLM_REQUEST: "Анализирую задачу",
+        RuntimeEventType.LLM_RESPONSE: "Получен ответ модели",
         RuntimeEventType.TOOL_CALL: "Выполняю инструмент",
+        RuntimeEventType.TOOL_RESULT: "Получен результат инструмента",
+        RuntimeEventType.PROTOCOL_RETRY: "Ожидаю повтор вызова",
         RuntimeEventType.PREFLIGHT_STARTED: "Проверяю доступные возможности",
         RuntimeEventType.EXTRACTION_STARTED: "Извлекаю содержимое файла",
         RuntimeEventType.CONFIRMATION_REQUIRED: "Ожидаю подтверждение",
@@ -72,6 +75,13 @@ class RuntimeProgressStreamer:
             return f"{mechanical}: {event.data['agent_slug']}"
         if event.type is RuntimeEventType.TOOL_CALL and event.data.get("tool"):
             return f"{mechanical}: {event.data['tool']}"
+        if event.type is RuntimeEventType.PROTOCOL_RETRY:
+            reason = event.data.get("reason")
+            delay = event.data.get("retry_delay_ms")
+            suffix = f" ({reason})" if isinstance(reason, str) and reason else ""
+            if isinstance(delay, int) and delay > 0:
+                suffix += f", повтор через {delay / 1000:g} с"
+            return self._bounded(f"{mechanical}{suffix}")
         if event.type is RuntimeEventType.TASK_STARTED and event.data.get("intent"):
             return f"{mechanical}: {event.data['intent']}"
         if event.type is RuntimeEventType.AGENT_END and isinstance(event.data.get("summary"), str):

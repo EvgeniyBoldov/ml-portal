@@ -80,6 +80,7 @@ class GraphPlanningStage:
         resume_user_response: Optional[str] = None
         if plan.status == "waiting_input":
             resume_user_response = str(request.request_text or "").strip()
+            await self._store.resolve_waiting_need(plan.id, user_input=resume_user_response)
             await self._store.resume_planner_pause(plan.id)
         effective_runtime_limits = dict(runtime_limits or {})
         task_attempts_limit = effective_runtime_limits.get("task_attempts")
@@ -110,6 +111,7 @@ class GraphPlanningStage:
             available_artifacts=[
                 item.model_dump(mode="json")
                 for item in runtime_state.attachment_contexts
+                if item.ref.artifact_id not in runtime_state.deleted_artifact_ids
             ],
             max_steps=self._max_steps,
             planner_kwargs=planner_kwargs,

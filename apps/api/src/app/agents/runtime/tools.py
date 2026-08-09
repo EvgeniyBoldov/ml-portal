@@ -39,6 +39,15 @@ from app.runtime.operation_errors import (
 logger = get_logger(__name__)
 
 
+# The full operation result remains in the canonical journal and observation
+# output. These limits only govern the follow-up prompt used to choose the
+# next operation.
+MAX_TOOL_CONTEXT_CHARS = 4_000
+MAX_COLLECTION_INFO_TOOLS = 12
+MAX_COLLECTION_INFO_TEXT_CHARS = 320
+MAX_COLLECTION_INFO_WORKFLOW_ITEMS = 6
+
+
 class ConfirmationRequiredError(RuntimeError):
     def __init__(self, payload: Dict[str, Any]) -> None:
         super().__init__(str(payload.get("summary") or "Operation requires confirmation"))
@@ -190,7 +199,9 @@ class OperationExecutionFacade:
                 ), []
 
             previous_call_id = ctx.extra.get("runtime_active_tool_call_id")
+            previous_tool_slug = ctx.extra.get("runtime_active_tool_slug")
             ctx.extra["runtime_active_tool_call_id"] = operation_call.id
+            ctx.extra["runtime_active_tool_slug"] = operation_call.tool_name
             try:
                 if timeout_s is not None:
                     result = await asyncio.wait_for(
@@ -203,6 +214,10 @@ class OperationExecutionFacade:
                     ctx.extra.pop("runtime_active_tool_call_id", None)
                 else:
                     ctx.extra["runtime_active_tool_call_id"] = previous_call_id
+                if previous_tool_slug is None:
+                    ctx.extra.pop("runtime_active_tool_slug", None)
+                else:
+                    ctx.extra["runtime_active_tool_slug"] = previous_tool_slug
 
             sources: List[dict] = []
             if result.success and result.metadata.get("sources"):
@@ -442,10 +457,62 @@ class OperationExecutionFacade:
         operation: ResolvedOperation,
         arguments: Dict[str, Any],
     ) -> Dict[str, Any]:
+        arguments = OperationExecutionFacade._normalize_template_fill_args(
+            operation,
+            arguments,
+        )
         schema = build_prompt_input_schema(operation)
         if not schema or not isinstance(arguments, dict):
             return arguments
         return OperationExecutionFacade._strip_optional_nulls(arguments, schema)
+
+    @staticmethod
+    def _normalize_template_fill_args(
+        operation: ResolvedOperation,
+        arguments: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Preserve the template-fill envelope when an LLM flattens its values.
+
+        ``collection.template.fill`` has operation arguments (``row_id`` and
+        optional ``filename``) and a template-specific ``values`` object.  The
+        latter can be deeply nested and native tool calling models sometimes
+        put its keys at the operation root.  Restore the canonical envelope
+        before schema validation; collection binding remains the executor's
+        responsibility.
+        """
+        if (
+            operation.operation != "collection.template.fill"
+            or not isinstance(arguments, dict)
+        ):
+            return arguments
+
+        normalized = dict(arguments)
+        values = normalized.get("values")
+        if isinstance(values, str):
+            try:
+                parsed_values = json.loads(values)
+            except json.JSONDecodeError:
+                parsed_values = None
+            if isinstance(parsed_values, dict):
+                normalized["values"] = parsed_values
+            return normalized
+
+        if "values" in normalized:
+            return normalized
+
+        reserved_keys = {"row_id", "filename", "collection_id", "collection_slug"}
+        flattened_values = {
+            key: value
+            for key, value in normalized.items()
+            if key not in reserved_keys
+        }
+        if not flattened_values:
+            return normalized
+
+        for key in flattened_values:
+            normalized.pop(key, None)
+        normalized["values"] = flattened_values
+        return normalized
 
     @staticmethod
     def _strip_optional_nulls(
@@ -590,17 +657,105 @@ class OperationExecutionFacade:
         return _validate(arguments, schema, "$")
 
     @staticmethod
-    def format_result_for_context(result: ToolResult) -> str:
-        """Format tool result as text for LLM context."""
+    def format_result_for_context(
+        result: ToolResult,
+        *,
+        operation_slug: Optional[str] = None,
+    ) -> str:
+        """Format a bounded, action-oriented tool result for the next LLM turn.
+
+        ``collection.info`` is intentionally projected rather than blindly
+        serialized: its raw result includes inspection-only schema and runtime
+        metadata which is useful in the journal but needlessly crowds out the
+        next tool decision. The projection preserves the collection identity,
+        readiness, callable operations and workflow contract needed to
+        continue execution.
+        """
         import json as _json
 
         if result.success:
             raw_output = result.data or {}
+            is_collection_info = (
+                str(operation_slug or "").strip() == "collection.info"
+                or str(operation_slug or "").strip().endswith(".collection.info")
+            )
+            if (
+                is_collection_info
+                and isinstance(raw_output, dict)
+                and isinstance(raw_output.get("collection"), dict)
+            ):
+                raw_output = OperationExecutionFacade._compact_collection_info_for_context(
+                    raw_output,
+                )
             try:
-                return _json.dumps(raw_output, ensure_ascii=False, default=str)[:4000]
+                return _json.dumps(raw_output, ensure_ascii=False, default=str)[
+                    :MAX_TOOL_CONTEXT_CHARS
+                ]
             except Exception:
-                return str(raw_output)[:4000]
+                return str(raw_output)[:MAX_TOOL_CONTEXT_CHARS]
         return f"Error: {result.error or 'unknown'}"
+
+    @staticmethod
+    def _compact_collection_info_for_context(raw_output: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the minimum collection.info contract required by an agent."""
+
+        def text(value: Any, limit: int = MAX_COLLECTION_INFO_TEXT_CHARS) -> str:
+            normalized = str(value or "").strip()
+            return normalized[:limit]
+
+        collection = raw_output.get("collection") or {}
+        readiness = raw_output.get("readiness") or {}
+        tools = raw_output.get("tools") or []
+        contracts = raw_output.get("contracts") or {}
+
+        compact_tools: List[Dict[str, Any]] = []
+        if isinstance(tools, list):
+            for item in tools[:MAX_COLLECTION_INFO_TOOLS]:
+                if not isinstance(item, dict):
+                    continue
+                compact_tools.append(
+                    {
+                        key: value
+                        for key, value in {
+                            "tool_name": text(item.get("tool_name")),
+                            "invoke_as": text(item.get("invoke_as")),
+                            "description": text(item.get("description")),
+                            "arguments": item.get("arguments")
+                            if isinstance(item.get("arguments"), list)
+                            else [],
+                        }.items()
+                        if value not in ("", [])
+                    }
+                )
+
+        workflow = contracts.get("workflow") if isinstance(contracts, dict) else []
+        return {
+            "collection": {
+                key: value
+                for key, value in {
+                    "id": text(collection.get("id")),
+                    "slug": text(collection.get("slug")),
+                    "name": text(collection.get("name")),
+                    "type": text(collection.get("type")),
+                    "description": text(collection.get("description")),
+                }.items()
+                if value
+            },
+            "readiness": {
+                key: value
+                for key, value in {
+                    "status": text(readiness.get("status")),
+                    "schema_freshness": text(readiness.get("schema_freshness")),
+                    "operations_count": readiness.get("operations_count"),
+                }.items()
+                if value not in ("", None)
+            },
+            "tools": compact_tools,
+            "workflow": [
+                text(item) for item in workflow[:MAX_COLLECTION_INFO_WORKFLOW_ITEMS]
+                if text(item)
+            ] if isinstance(workflow, list) else [],
+        }
 
     @staticmethod
     def format_observation_text(tool_outputs: List[Dict[str, Any]]) -> str:

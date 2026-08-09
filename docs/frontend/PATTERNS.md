@@ -160,3 +160,13 @@ const handleChange = (field: keyof FormState, value: string) => {
 - hardcoded query keys
 - shared CSS между admin pages
 - бесконечные «временные» EditorPage без плана миграции
+
+## 9) Trace inspector Viewer
+
+Для sandbox trace используем цепочку `trace projection -> Viewer -> Inspector`.
+Проекция читает канонические journal relations и создаёт типизированную модель;
+Viewer показывает только эту модель в едином стиле; Inspector выбирает сущность и
+набор табов. Viewer не выполняет поиск событий, не получает данные и не выбирает
+табы. Сложные представления (`PlanViewer`, `LimitsViewer`, `RbacViewer`,
+`PromptViewer`, request/response/result viewers) живут в sandbox domain и
+переиспользуются между инспекторами. RAW остаётся отдельным read-only табом.

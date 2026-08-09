@@ -96,6 +96,24 @@
   box-sizing: border-box;
 }
 
+.readonlyCode {
+  display: block;
+  width: 100%;
+  min-height: 92px;
+  max-height: 420px;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: var(--radius-sm, 4px);
+  padding: var(--space-2, 8px);
+  background: var(--bg-active, #f3f4f6);
+  color: var(--text-primary, #1a1a1a);
+  font: inherit;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+}
+
 .jsonActions {
   display: flex;
   justify-content: flex-end;

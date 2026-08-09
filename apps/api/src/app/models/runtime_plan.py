@@ -78,6 +78,7 @@ class RuntimeTaskNeed(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default="data")
     description: Mapped[str] = mapped_column(Text, nullable=False)
     schema: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    need_metadata: Mapped[Dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     resolved_value: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)
     resolver_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

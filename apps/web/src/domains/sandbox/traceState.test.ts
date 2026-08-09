@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyRuntimeJournalEvent, emptySandboxTrace } from './traceState';
-import { projectTraceStages, stepFor } from './traceProjection';
+import { projectTraceStages, resolveTraceInspectionTarget, stepFor } from './traceProjection';
 
 const event = (sequence: number, type: string, entityType: string, entityId: string, parent?: [string, string]) => ({
   id: `event-${sequence}`, run_id: 'run-1', sequence, event_type: type,
@@ -82,6 +82,22 @@ describe('sandbox trace state', () => {
     });
 
     expect(state.entitiesByKey['tool_call:tool-1'].status).toBe('failed');
+  });
+
+  it('keeps extraction as a canonical child of its tool call', () => {
+    let state = emptySandboxTrace();
+    state = applyRuntimeJournalEvent(state, event(1, 'run_start', 'run', 'run-1'));
+    state = applyRuntimeJournalEvent(state, event(2, 'planner_iteration_start', 'planner_iteration', 'iteration-1', ['run', 'run-1']));
+    state = applyRuntimeJournalEvent(state, event(3, 'step_start', 'step', 'step-1', ['planner_iteration', 'iteration-1']));
+    state = applyRuntimeJournalEvent(state, { ...event(4, 'agent_start', 'agent_execution', 'agent-1', ['step', 'step-1']), payload: { agent_slug: 'reader' } });
+    state = applyRuntimeJournalEvent(state, event(5, 'tool_call', 'tool_call', 'tool-1', ['agent_execution', 'agent-1']));
+    state = applyRuntimeJournalEvent(state, event(6, 'extraction_started', 'extraction', 'extract-1', ['tool_call', 'tool-1']));
+    state = applyRuntimeJournalEvent(state, event(7, 'extraction_completed', 'extraction', 'extract-1', ['tool_call', 'tool-1']));
+    state = applyRuntimeJournalEvent(state, { ...event(8, 'tool_result', 'tool_call', 'tool-1', ['agent_execution', 'agent-1']), payload: { success: true } });
+
+    const call = projectTraceStages(state)[0].executorRuns[0].calls[0];
+    expect(call.extraction?.entity.key).toBe('extraction:extract-1');
+    expect(call.extraction?.entity.status).toBe('completed');
   });
 
   it('does not turn a tool result without success into a success', () => {
@@ -207,5 +223,49 @@ describe('sandbox trace state', () => {
 
     const [stage] = projectTraceStages(state);
     expect(stage.executorRuns[0].calls.map((call) => call.title)).toEqual(['qwen']);
+  });
+
+  it('keeps timeout retries and an unfinished call visible as an incomplete execution', () => {
+    let state = emptySandboxTrace();
+    state = applyRuntimeJournalEvent(state, event(1, 'run_start', 'run', 'run-1'));
+    state = applyRuntimeJournalEvent(state, { ...event(2, 'planner_iteration_start', 'planner_iteration', 'iteration-1', ['run', 'run-1']), payload: { iteration: 1, iteration_type: 'decision' } });
+    state = applyRuntimeJournalEvent(state, { ...event(3, 'step_start', 'step', 'step-1', ['planner_iteration', 'iteration-1']), payload: { title: 'Сформировать план' } });
+    state = applyRuntimeJournalEvent(state, { ...event(4, 'agent_start', 'agent_execution', 'planner-run', ['step', 'step-1']), payload: { agent_slug: 'planner', task_title: 'Сформировать план' } });
+    state = applyRuntimeJournalEvent(state, { ...event(5, 'llm_request', 'llm_call', 'llm-1', ['agent_execution', 'planner-run']), payload: { model: 'gemma', logical_llm_call_id: 'logical-1' } });
+    state = applyRuntimeJournalEvent(state, { ...event(6, 'llm_response', 'llm_call', 'llm-1', ['agent_execution', 'planner-run']), payload: { error_type: 'TimeoutError', error_code: 'llm_timeout', logical_llm_call_id: 'logical-1' } });
+    state = applyRuntimeJournalEvent(state, { ...event(7, 'protocol_retry', 'llm_call', 'llm-1', ['agent_execution', 'planner-run']), payload: { reason: 'timeout', attempt: 1, llm_call_id: 'llm-1', logical_llm_call_id: 'logical-1' } });
+    state = applyRuntimeJournalEvent(state, { ...event(8, 'llm_request', 'llm_call', 'llm-2', ['agent_execution', 'planner-run']), payload: { model: 'gemma', logical_llm_call_id: 'logical-1' } });
+
+    const [stage] = projectTraceStages(state);
+    const executor = stage.executorRuns[0];
+    expect(executor.entity.status).toBe('running');
+    expect(executor.metrics).toMatchObject({ calls: 1, failedCalls: 0, retries: 1 });
+    expect(executor.calls[0].attempts).toHaveLength(2);
+    expect(executor.calls[0].response).toBeUndefined();
+    expect(executor.calls[0].retryEvents.map((item) => item.event_type)).toEqual(['protocol_retry']);
+    expect(executor.calls[0].events.map((item) => item.id)).toHaveLength(3);
+    expect(resolveTraceInspectionTarget(state, executor.calls[0].entity.key)).toMatchObject({ kind: 'call' });
+  });
+
+  it('keeps a native-tool fallback and plaintext retry under one LLM call id', () => {
+    let state = emptySandboxTrace();
+    state = applyRuntimeJournalEvent(state, event(1, 'run_start', 'run', 'run-1'));
+    state = applyRuntimeJournalEvent(state, { ...event(2, 'planner_iteration_start', 'planner_iteration', 'iteration-1', ['run', 'run-1']), payload: { iteration: 1 } });
+    state = applyRuntimeJournalEvent(state, { ...event(3, 'step_start', 'step', 'step-1', ['planner_iteration', 'iteration-1']), payload: { title: 'Выполнить задачу' } });
+    state = applyRuntimeJournalEvent(state, { ...event(4, 'agent_start', 'agent_execution', 'agent-1', ['step', 'step-1']), payload: { agent_slug: 'worker' } });
+    state = applyRuntimeJournalEvent(state, { ...event(5, 'llm_request', 'llm_call', 'llm-native', ['agent_execution', 'agent-1']), payload: { model: 'qwen', logical_llm_call_id: 'logical-1' } });
+    state = applyRuntimeJournalEvent(state, { ...event(6, 'llm_response', 'llm_call', 'llm-native', ['agent_execution', 'agent-1']), payload: { error_type: 'LLMToolCallingUnsupportedError', error_code: 'llm_tool_calling_unsupported', logical_llm_call_id: 'logical-1' } });
+    state = applyRuntimeJournalEvent(state, { ...event(7, 'protocol_retry', 'llm_call', 'llm-native', ['agent_execution', 'agent-1']), payload: { reason: 'native_tool_calling_unsupported', llm_call_id: 'llm-native', logical_llm_call_id: 'logical-1' } });
+    state = applyRuntimeJournalEvent(state, { ...event(8, 'llm_request', 'llm_call', 'llm-native', ['agent_execution', 'agent-1']), payload: { model: 'qwen', logical_llm_call_id: 'logical-1' } });
+    state = applyRuntimeJournalEvent(state, { ...event(9, 'llm_response', 'llm_call', 'llm-native', ['agent_execution', 'agent-1']), payload: { logical_llm_call_id: 'logical-1', content: 'готово' } });
+
+    const executor = projectTraceStages(state)[0].executorRuns[0];
+    expect(executor.entity.status).not.toBe('running');
+    expect(executor.calls).toHaveLength(1);
+    expect(executor.calls[0]).toMatchObject({ logicalLlmCallId: 'logical-1' });
+    expect(executor.calls[0].entity.id).toBe('llm-native');
+    expect(executor.calls[0].events).toHaveLength(5);
+    expect(executor.calls[0].retryEvents).toHaveLength(1);
+    expect(executor.calls[0].response?.payload.content).toBe('готово');
   });
 });

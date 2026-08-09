@@ -1,16 +1,35 @@
 import type { RuntimeJournalEvent, SandboxTraceState, TraceEntity } from './traceState';
-import { callDisplayName, purposeLabel, toolResult } from './callInspection';
+import { callDisplayName, llmResponseStatus, purposeLabel, toolResult } from './callInspection';
 
 export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
 
 export interface TraceCall {
   entity: TraceEntity;
+  /** Canonical journal rows owned by this call entity. */
+  events: RuntimeJournalEvent[];
   request: RuntimeJournalEvent;
   response?: RuntimeJournalEvent;
+  /** Retry rows explicitly correlated with this LLM call id. */
+  retryEvents: RuntimeJournalEvent[];
+  /** Tool calls explicitly linked to this LLM call through llm_call_id. */
+  linkedToolCalls: RuntimeJournalEvent[];
   kind: TraceCallKind;
   title: string;
   summary?: string;
   toolCallCount?: number;
+  extraction?: TraceExtraction;
+  /** Logical compatibility id for historical retry rows. */
+  logicalLlmCallId?: string;
+  /** Legacy attempts, present only when historical rows used separate IDs. */
+  attempts?: TraceCall[];
+}
+
+/** Canonical document-extraction subrun owned by a tool call. */
+export interface TraceExtraction {
+  entity: TraceEntity;
+  events: RuntimeJournalEvent[];
+  start?: RuntimeJournalEvent;
+  end?: RuntimeJournalEvent;
 }
 
 export interface TraceExecutorRun {
@@ -62,6 +81,9 @@ export interface TraceMetrics {
   elapsedMs?: number;
   tokens?: number;
   retries?: number;
+  calls?: number;
+  successfulCalls?: number;
+  failedCalls?: number;
 }
 
 const asString = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
@@ -92,12 +114,31 @@ function metricsFor(state: SandboxTraceState, entity: TraceEntity): TraceMetrics
   );
   let tokens: number | undefined;
   let retries = 0;
+  let calls = 0;
+  let successfulCalls = 0;
+  let failedCalls = 0;
   for (const event of events) {
     const total = asNumber(event.payload.tokens_total) ?? asNumber(event.payload.tokens);
     if (total !== undefined) tokens = Math.max(tokens ?? 0, total);
-    if (event.event_type === 'protocol_retry') retries += 1;
+    if (event.event_type === 'llm_request' || event.event_type === 'tool_call') calls += 1;
+    if (event.event_type === 'llm_response' && llmResponseStatus(event.payload) !== 'error') successfulCalls += 1;
+    if (event.event_type === 'tool_result' && event.payload.success === true) successfulCalls += 1;
+    if ((event.event_type === 'llm_response' && llmResponseStatus(event.payload) === 'error') || (event.event_type === 'tool_result' && toolResult(event.payload).success === false)) failedCalls += 1;
   }
-  return { elapsedMs: elapsedMs && elapsedMs > 0 ? elapsedMs : undefined, tokens, retries: retries || undefined };
+  const startSequence = events[0]?.sequence ?? -Infinity;
+  const endSequence = events[events.length - 1]?.sequence ?? Infinity;
+  retries = state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .filter((event) => event.event_type === 'protocol_retry' && event.sequence >= startSequence && event.sequence <= endSequence)
+    .length;
+  return {
+    elapsedMs: elapsedMs && elapsedMs > 0 ? elapsedMs : undefined,
+    tokens,
+    retries: retries || undefined,
+    calls: calls || undefined,
+    successfulCalls: successfulCalls || undefined,
+    failedCalls: failedCalls || undefined,
+  };
 }
 
 function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | null {
@@ -115,7 +156,10 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
             || (event.event_type === 'planner_step' && ['clarify', 'ask_user'].includes(asString(event.payload.kind)))
   ));
   if (!request) return null;
-  const response = events.find((event) => (
+  // A retry-chain may intentionally reuse one llm_call entity.  The latest
+  // response is the terminal state of that user-visible request; selecting
+  // the first response would keep a recovered call red after a retry.
+  const response = [...events].reverse().find((event) => (
     isLlm ? event.event_type === 'llm_response' :
       isTool ? event.event_type === 'tool_result' :
         event.event_type === 'question_answer' && event.id !== request.id
@@ -127,10 +171,39 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
       && asString(event.payload.llm_call_id) === entity.id
     )).length
     : undefined;
+  const logicalLlmCallId = isLlm ? asString(request.payload.logical_llm_call_id) || undefined : undefined;
+  const retryEvents = (isLlm || isTool)
+    ? state.eventIdsBySequence
+      .map((id) => state.eventsById[id])
+      .filter((event) => event.event_type === 'protocol_retry'
+        && (asString(event.payload.llm_call_id) === entity.id
+          || (isTool && asString(event.entity_id ?? event.payload.entity_id) === entity.id)))
+    : [];
+  const linkedToolCalls = isLlm
+    ? Object.values(state.eventsById)
+      .filter((event) => event.event_type === 'tool_call'
+        && asString(event.payload.llm_call_id) === entity.id)
+      .sort((left, right) => left.sequence - right.sequence)
+    : [];
+  const extractionEntity = isTool
+    ? entity.childKeys.map((key) => state.entitiesByKey[key]).find((child): child is TraceEntity => Boolean(child) && child.type === 'extraction')
+    : undefined;
+  const extraction = extractionEntity ? (() => {
+    const extractionEvents = eventsFor(state, extractionEntity);
+    return {
+      entity: extractionEntity,
+      events: extractionEvents,
+      start: extractionEvents.find((event) => event.event_type === 'extraction_started'),
+      end: [...extractionEvents].reverse().find((event) => event.event_type === 'extraction_completed' || event.event_type === 'extraction_failed'),
+    } satisfies TraceExtraction;
+  })() : undefined;
   return {
     entity,
+    events,
     request,
     response,
+    retryEvents,
+    linkedToolCalls,
     kind: isLlm ? 'llm' : isTool ? 'tool' : isError ? 'error' : interactionKind,
     title: isLlm
       ? (asString(request.payload.purpose) ? purposeLabel(request.payload.purpose) : asString(request.payload.model) || 'LLM')
@@ -155,7 +228,51 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
         })()
       : undefined,
     toolCallCount,
+    extraction,
+    logicalLlmCallId,
   };
+}
+
+/**
+ * Collapse only historical retry chains that the runtime explicitly
+ * correlated. Current runtime retries already share one llm_call entity.
+ */
+function groupLogicalLlmCalls(calls: TraceCall[]): TraceCall[] {
+  const groups = new Map<string, TraceCall[]>();
+  const ordered: Array<TraceCall | string> = [];
+  for (const call of calls) {
+    if (call.kind !== 'llm' || !call.logicalLlmCallId) {
+      ordered.push(call);
+      continue;
+    }
+    const existing = groups.get(call.logicalLlmCallId);
+    if (existing) {
+      existing.push(call);
+    } else {
+      groups.set(call.logicalLlmCallId, [call]);
+      ordered.push(call.logicalLlmCallId);
+    }
+  }
+  return ordered.map((item) => {
+    if (typeof item !== 'string') return item;
+    const attempts = groups.get(item) ?? [];
+    if (attempts.length <= 1) return attempts[0];
+    const last = attempts[attempts.length - 1];
+    const events = attempts.flatMap((attempt) => attempt.events);
+    const retryEvents = attempts.flatMap((attempt) => attempt.retryEvents);
+    const linkedToolCalls = attempts.flatMap((attempt) => attempt.linkedToolCalls);
+    return {
+      ...last,
+      entity: attempts[0].entity,
+      events,
+      request: attempts[0].request,
+      response: last.response,
+      retryEvents,
+      linkedToolCalls,
+      toolCallCount: linkedToolCalls.length,
+      attempts,
+    } satisfies TraceCall;
+  });
 }
 
 function syntheticCallEntity(event: RuntimeJournalEvent, type?: 'question_answer' | 'error'): TraceEntity {
@@ -242,19 +359,63 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
   const directCalls = iteration
     ? directCallsFor(state, entity, iteration, childEventIds)
     : directCallsFor(state, entity, entity, childEventIds);
-  const calls = [...childCalls, ...directCalls].sort((left, right) => left.request.sequence - right.request.sequence);
-  return { entity, start, task, executorType, executorName, executorSlug: slug, calls, metrics: metricsFor(state, entity) };
+  const calls = groupLogicalLlmCalls([...childCalls, ...directCalls]
+    .sort((left, right) => left.request.sequence - right.request.sequence));
+  const baseMetrics = metricsFor(state, entity);
+  const callMetrics = calls.reduce((result, call) => {
+    const failed = call.kind === 'error'
+      || (call.kind === 'llm' && call.response && llmResponseStatus(call.response.payload) === 'error')
+      || (call.kind === 'tool' && call.response && toolResult(call.response.payload).success === false);
+    return {
+      calls: result.calls + 1,
+      successfulCalls: result.successfulCalls + (call.response && !failed ? 1 : 0),
+      failedCalls: result.failedCalls + (failed ? 1 : 0),
+    };
+  }, { calls: 0, successfulCalls: 0, failedCalls: 0 });
+  const terminalSequence = entity.eventIds
+    .map((id) => state.eventsById[id]?.sequence ?? 0)
+    .reduce((max, sequence) => Math.max(max, sequence), start.sequence);
+  const nextExecutorSequence = iteration?.childKeys
+    .map((key) => state.entitiesByKey[key])
+    .filter((candidate): candidate is TraceEntity => Boolean(candidate) && candidate.key !== entity.key)
+    .map((candidate) => startFor(state, candidate)?.sequence ?? Infinity)
+    .filter((sequence) => sequence > start.sequence)
+    .sort((left, right) => left - right)[0] ?? Infinity;
+  const retryEndSequence = Math.min(
+    terminalSequence > start.sequence ? terminalSequence : state.nextSequence ?? terminalSequence,
+    nextExecutorSequence - 1,
+  );
+  const retriesAfterStart = state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .filter((event) => event.event_type === 'protocol_retry' && event.sequence >= start.sequence && event.sequence <= retryEndSequence)
+    .length;
+  return {
+    entity,
+    start,
+    task,
+    executorType,
+    executorName,
+    executorSlug: slug,
+    calls,
+    metrics: {
+      ...baseMetrics,
+      retries: retriesAfterStart || baseMetrics.retries,
+      calls: callMetrics.calls || baseMetrics.calls,
+      successfulCalls: callMetrics.successfulCalls || baseMetrics.successfulCalls,
+      failedCalls: callMetrics.failedCalls || baseMetrics.failedCalls,
+    },
+  };
 }
 
 function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecutorRun | null {
   if (entity.type !== 'synthesis_run') return null;
   const start = startFor(state, entity);
   if (!start) return null;
-  const calls = entity.childKeys
+  const calls = groupLogicalLlmCalls(entity.childKeys
     .map((key) => state.entitiesByKey[key])
     .filter((child): child is TraceEntity => Boolean(child))
     .map((child) => callFor(state, child))
-    .filter((call): call is TraceCall => Boolean(call));
+    .filter((call): call is TraceCall => Boolean(call)));
   return {
     entity,
     start,

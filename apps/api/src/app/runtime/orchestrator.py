@@ -236,8 +236,11 @@ class GraphOrchestrator:
                 await self.store.mark_failed(plan_id, failure)
                 await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
                               payload={"status": "failed", "revision_before": current["revision"], "error_code": type(exc).__name__}, trigger=reason)
+                terminal_error = {"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}
+                if getattr(exc, "llm_call_id", None):
+                    terminal_error["llm_call_id"] = str(exc.llm_call_id)
                 await observe("error", entity_type="error", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_entity_id,
-                              payload={"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}, trigger=reason)
+                              payload=terminal_error, trigger=reason)
                 await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                               parent_type="orchestrator", parent_id=orchestrator_id,
                               payload={"kind": "planner", "mode": "replan", "status": "failed", "reason": str(exc)}, trigger=reason)
@@ -337,8 +340,11 @@ class GraphOrchestrator:
                 await self.store.mark_failed(plan_id, failure)
                 await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
                               payload={"status": "failed", "revision_before": plan["revision"], "error_code": type(exc).__name__}, trigger="initial")
+                terminal_error = {"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}
+                if getattr(exc, "llm_call_id", None):
+                    terminal_error["llm_call_id"] = str(exc.llm_call_id)
                 await observe("error", entity_type="error", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_id,
-                              payload={"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}, trigger="initial")
+                              payload=terminal_error, trigger="initial")
                 await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                               parent_type="orchestrator", parent_id=orchestrator_id,
                               payload={"kind": "planner", "mode": "initial", "status": "failed", "reason": str(exc)}, trigger="initial")
@@ -400,6 +406,28 @@ class GraphOrchestrator:
                 return
             task = await self.store.claim_ready(plan_id)
             if task is None:
+                pending_needs = [
+                    {
+                        "task_id": task_id,
+                        **need,
+                    }
+                    for task_id, task_data in plan.get("tasks", {}).items()
+                    for need in task_data.get("needs", [])
+                    if need.get("required", True)
+                    and need.get("status") != "resolved"
+                ]
+                if pending_needs:
+                    closed = close_active_iteration(status="needs_dependency", outcome="needs_dependency")
+                    if closed is not None:
+                        yield closed
+                    replan_error = await revise(reason="pending_need")
+                    if replan_error:
+                        closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
+                        if closed is not None:
+                            yield closed
+                        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
+                        return
+                    continue
                 closed = close_active_iteration(status="stalled")
                 if closed is not None:
                     yield closed
@@ -420,7 +448,19 @@ class GraphOrchestrator:
                     "evidence": result_data.get("evidence", {}),
                 }
             request = TaskRequest(task_id=task_id, intent=task.intent, instructions=task.instructions,
-                                  executor=task.executor, inputs=task.inputs or {},
+                                  executor=task.executor, inputs={
+                                      **(task.inputs or {}),
+                                      "resolved_needs": [
+                                          {
+                                              "ref": need.get("ref") or need.get("key"),
+                                              "key": need.get("key"),
+                                              "value": need.get("resolved_value"),
+                                              "resolver_task_id": need.get("resolver_task_id"),
+                                          }
+                                          for need in snapshot["tasks"].get(task_id, {}).get("needs", [])
+                                          if need.get("status") == "resolved"
+                                      ],
+                                  },
                                   needs=snapshot["tasks"].get(task_id, {}).get("needs", []),
                                   checkpoint=task.checkpoint or {}, dependency_outputs=dependencies,
                                   memory_context=(
@@ -589,7 +629,7 @@ class GraphOrchestrator:
                 continue
             ref = item.get("ref") if isinstance(item.get("ref"), dict) else item
             artifact_id = str(ref.get("artifact_id") or item.get("artifact_id") or "").strip()
-            if not artifact_id:
+            if not artifact_id or str(ref.get("status") or item.get("status") or "active") == "deleted":
                 continue
             artifacts.append({
                 "artifact_id": artifact_id,
@@ -604,7 +644,7 @@ class GraphOrchestrator:
         for task in dict(plan.get("tasks") or {}).values():
             outputs = dict(task.get("result", {}).get("outputs", {})) if isinstance(task.get("result"), dict) else {}
             for item in [*(outputs.get("artifacts", []) or []), *(outputs.get("attachments", []) or [])]:
-                if isinstance(item, dict) and item.get("artifact_id"):
+                if isinstance(item, dict) and item.get("artifact_id") and item.get("status") != "deleted":
                     artifacts.append(dict(item))
         seen: set[str] = set()
         return [

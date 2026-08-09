@@ -33,10 +33,25 @@ one `llm_call` entity; `tool_call`/`tool_result` share one `tool_call` entity.
 Both call entities are direct children of the executor run that initiated them.
 This is an explicit journal contract, not a frontend inference rule.
 
+Each user-visible LLM request has one stable `llm_call_id` from its initial
+`llm_request` through the terminal response with an action or answer. Retries
+reuse that ID and retain the same LLM parent; their `protocol_retry` payload
+also carries the ID and the `logical_llm_call_id`. A later agent decision after
+a tool result starts a new request and receives a new ID. Consumers must not
+reconstruct retry chains from adjacent sequence numbers, timestamps, or a
+shared executor parent. Historical rows that used a different ID per retry
+remain compatible through their explicit shared `logical_llm_call_id`.
+
+When native tool calling is unavailable, the failed native attempt still emits
+a terminal `llm_response`; the plaintext-protocol fallback emits a correlated
+`protocol_retry` and reuses the same call ID. A fallback must never leave its
+`llm_request` in a running state.
+
 Every started iteration, step and executor has a terminal event. Step start
 contains goal/intent, inputs and risk; step end contains outcome, summary and
-sufficiency. Executor end contains a safe result summary, needs, attachments,
-output preview and retry/error classification.
+sufficiency. Executor end contains a safe result summary, `completion_kind`,
+`sufficient_for_phase`, missing inputs/needs, attachments/artifacts, output
+preview and retry/error classification.
 
 Plan creation and revision events are owned by the planner executor run that
 produced them (and therefore are also contained by its iteration). Their payload
@@ -51,6 +66,13 @@ Preflight is represented by `preflight_started`, terminal
 snapshot. An agent-triggered extraction has `extraction_started`, terminal
 `extraction_completed`/`extraction_failed`, and is a child of its `tool_call`.
 Standalone RAG ingest events are not runtime journal children.
+
+The synthesizer owns a `synthesis_run`. Its final operator result is the
+`final_answer_marker` whose parent is that synthesis run; the following
+transport `final` frame is not a second journal result. This also applies to
+verbatim and agent-result short-circuits. Frontend projection follows these
+explicit parent links only and must not select nearby plan, extraction or final
+events by sequence range.
 
 ## Levels
 
@@ -134,6 +156,17 @@ below the answer and do not require the synthesizer to emit markdown links.
 
 - LLM/tool calls are a request event and a response/result event. The latter
   contains duration and `caused_by_event_id` of the request.
+- Call payloads expose the operator lifecycle status: `running` while waiting
+  for the provider/operation, `waiting_retry` during a scheduled retry,
+  `failed` for a terminal error, and `completed` for a terminal result.
+- A retry keeps the same `llm_call_id` or `tool_call` id. Its attempt metadata
+  (`attempt`, `max_attempts`, `terminal`, `retryable`, `retry_after_ms` and
+  `duration_ms`) is attached to the request/result and the corresponding
+  `protocol_retry` event. Intermediate retryable errors are historical
+  failures, not the final call status.
+- Terminal LLM responses may include `result_kind`: `plan`, `tool_calls`,
+  `answer`, `clarification`, `empty` or `error`. A `tool_calls` result means
+  the LLM call completed; each linked tool call has its own lifecycle.
 - Every LLM provider failure still closes its `llm_call` with an
   `llm_response` containing a safe `error_code`, `retryable` and provider
   status where available, followed by the canonical runtime `error`. Raw

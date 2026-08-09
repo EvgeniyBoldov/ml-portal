@@ -375,6 +375,7 @@ class RuntimeEvent:
         data = dict(payload)
         data.setdefault("entity_type", "llm_call")
         data.setdefault("entity_id", data.get("llm_call_id"))
+        data.setdefault("status", "running")
         return cls(RuntimeEventType.LLM_REQUEST, data)
 
     @classmethod
@@ -382,6 +383,14 @@ class RuntimeEvent:
         data = dict(payload)
         data.setdefault("entity_type", "llm_call")
         data.setdefault("entity_id", data.get("llm_call_id"))
+        # A provider marked as non-retryable can never be in the retry wait
+        # state. Keep the invariant at the canonical event boundary so stale
+        # callers cannot publish a contradictory trace.
+        if data.get("retryable") is False and data.get("status") == "waiting_retry":
+            data["status"] = "failed"
+            data["terminal"] = True
+        if "status" not in data:
+            data["status"] = "failed" if data.get("error_type") or data.get("error_code") else "completed"
         return cls(RuntimeEventType.LLM_RESPONSE, data)
 
     @classmethod
@@ -402,6 +411,7 @@ class RuntimeEvent:
         payload: Dict[str, Any] = {
             "entity_type": "tool_call", "entity_id": call_id,
             "tool": tool, "call_id": call_id, "arguments": arguments,
+            "status": "running",
         }
         if parent_entity_type is not None:
             payload["parent_entity_type"] = parent_entity_type
@@ -453,6 +463,7 @@ class RuntimeEvent:
             "tool": tool,
             "call_id": call_id,
             "success": success,
+            "status": "completed" if success else "failed",
             "data": data,
         }
         if sources is not None:

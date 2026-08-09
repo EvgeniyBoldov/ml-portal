@@ -13,7 +13,7 @@ from app.api.deps import db_session, get_current_user_sse, require_admin
 from app.agents import ToolContext
 from app.agents.runtime_sandbox_resolver import RuntimeSandboxResolver
 from app.core.db import get_session_factory
-from app.runtime import PipelineRequest, RuntimeEventType, RuntimePipeline
+from app.runtime import OrchestrationPhase, PipelineRequest, RuntimeEvent, RuntimeEventType, RuntimePipeline
 from app.runtime.contracts import ExecutionMode
 from app.core.di import get_llm_client
 from app.core.http.clients import LLMClientProtocol
@@ -547,6 +547,41 @@ async def run_sandbox(
                 for fallback in await _journal_fallback():
                     yield _format_sse("journal", fallback)
 
+            except asyncio.CancelledError:
+                # The SSE client may disappear because the user pressed Stop,
+                # navigated away, or refreshed the page.  CancelledError does
+                # not inherit from Exception, so it must close the sandbox
+                # lifecycle explicitly before propagating cancellation.
+                try:
+                    current_run = await SandboxService(stream_db).get_run(run_id)
+                    was_running = current_run is not None and current_run.status == "running"
+                    if was_running:
+                        await SandboxService(stream_db).finish_run(
+                            run_id,
+                            "cancelled",
+                            "Sandbox stream cancelled",
+                        )
+                        await stream_db.commit()
+                    if was_running:
+                        cancel_logger = RuntimeEventJournalFactory.create(
+                            context=RuntimeLogContext(
+                                run_id=run_id,
+                                level=RuntimeLoggingLevel.FULL,
+                                origin="sandbox",
+                                tenant_id=t_uuid,
+                                user_id=u_uuid,
+                                stream_logs=True,
+                                stream_progress=True,
+                            ),
+                            session_factory=session_factory,
+                        )
+                        await cancel_logger.emit(
+                            RuntimeEvent.run_end(run_id=str(run_id), status="cancelled"),
+                            phase=OrchestrationPhase.PIPELINE,
+                        )
+                except Exception:
+                    logger.exception("Failed to persist cancelled sandbox run run_id=%s", run_id)
+                raise
             except Exception as e:
                 await RuntimeEventJournalFactory.create(
                     context=RuntimeLogContext(run_id=run_id, level=RuntimeLoggingLevel.FULL,
@@ -979,8 +1014,8 @@ async def cancel_sandbox_run(
     run = await svc.get_run(run_id)
     if not run or run.session_id != session_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.status not in ("waiting_confirmation", "waiting_input"):
-        raise HTTPException(status_code=400, detail="Run is not waiting for cancellation")
+    if run.status not in ("running", "waiting_confirmation", "waiting_input"):
+        raise HTTPException(status_code=400, detail="Run is not active")
 
     await svc.finish_run(run_id, "cancelled", "Cancelled by user")
     await db.commit()

@@ -181,12 +181,18 @@ class RuntimeEventLogger:
         # generic lifecycle visible to the user. Agent scopes below it obey
         # their configured observation level.
         if self.context.entity_type == "run":
-            return event_type in {
+            root_events = {
                 "run_start", "orchestrator_start", "planner_iteration_start",
                 "plan_created", "plan_patch_applied", "task_started",
                 "task_completed", "plan_completed", "confirmation_required",
                 "waiting_input", "error",
             }
+            if self.context.origin == "sandbox":
+                root_events.update({
+                    "llm_request", "llm_response", "tool_call", "tool_result",
+                    "protocol_retry",
+                })
+            return event_type in root_events
         return self.should_log(event_type)
 
     async def event(

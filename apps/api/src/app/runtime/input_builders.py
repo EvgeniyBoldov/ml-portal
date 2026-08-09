@@ -229,7 +229,12 @@ class SynthesizerInputBuilder:
         seen_artifacts: set[str] = set()
         for item in generated_files:
             artifact_id = str(item.get("artifact_id") or "").strip()
-            if not artifact_id or artifact_id in seen_artifacts:
+            if (
+                not artifact_id
+                or item.get("status") == "deleted"
+                or artifact_id in state.deleted_artifact_ids
+                or artifact_id in seen_artifacts
+            ):
                 continue
             seen_artifacts.add(artifact_id)
             unique_files.append(item)

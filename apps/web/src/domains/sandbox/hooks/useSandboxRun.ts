@@ -14,7 +14,7 @@ import type {
 } from '../types';
 import { applyRuntimeJournalEvent, emptySandboxTrace, replayRuntimeJournal, type SandboxTraceState } from '../traceState';
 
-type RunStatus = 'idle' | 'running' | 'completed' | 'error' | 'waiting_confirmation' | 'waiting_input';
+type RunStatus = 'idle' | 'running' | 'completed' | 'cancelled' | 'error' | 'waiting_confirmation' | 'waiting_input';
 
 export interface ActiveRun {
   runId: string | null;
@@ -355,9 +355,16 @@ export function useSandboxRun(sessionId: string) {
   }, [activeRun.runId, consumeRunStream, invalidate, reconcileTrace, sessionId]);
 
   const stop = useCallback(() => {
+    const runId = activeRun.runId;
+    // Persist cancellation before closing SSE. The backend also handles a
+    // transport-level CancelledError, but this makes an explicit Stop
+    // distinguishable from an accidental browser disconnect.
+    if (runId) {
+      void sandboxApi.cancelRun(sessionId, runId).catch(() => undefined);
+    }
     abortRef.current?.abort();
-    setActiveRun((prev) => ({ ...prev, status: prev.status === 'running' ? 'completed' : prev.status }));
-  }, []);
+    setActiveRun((prev) => ({ ...prev, status: prev.status === 'running' ? 'cancelled' : prev.status }));
+  }, [activeRun.runId, sessionId]);
   const reset = useCallback(() => { abortRef.current?.abort(); setActiveRun(INITIAL_RUN); }, []);
 
   return {

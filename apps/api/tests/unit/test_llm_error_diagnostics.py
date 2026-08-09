@@ -11,11 +11,7 @@ from app.runtime.llm.streaming import RoleStreamingCall, StreamError
 from app.runtime.events import RuntimeEventType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
 from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
-from app.services.execution_limits_service import ExecutionLimitsPayload, ResolvedExecutionLimits
-
-
-def _empty_resolution() -> ResolvedExecutionLimits:
-    return ResolvedExecutionLimits(values=ExecutionLimitsPayload(), sources={})
+from app.services.model_call_config_service import ModelCallConfig
 
 
 class _Result(BaseModel):
@@ -66,7 +62,9 @@ async def test_structured_call_preserves_upstream_exception_and_traceback():
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "llama-3.1", "max_retries": 0, "timeout_s": 1}
     )
-    call.limits_service.resolve = AsyncMock(return_value=_empty_resolution())
+    call.model_call_config_service.resolve = AsyncMock(
+        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=0)
+    )
 
     with pytest.raises(StructuredCallError) as raised:
         await call.invoke(
@@ -92,7 +90,9 @@ async def test_structured_call_emits_safe_protocol_retry_for_invalid_schema():
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "llama-3.1", "max_retries": 1, "timeout_s": 1}
     )
-    call.limits_service.resolve = AsyncMock(return_value=_empty_resolution())
+    call.model_call_config_service.resolve = AsyncMock(
+        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=1)
+    )
     events = []
 
     async def sink(event):
@@ -111,6 +111,18 @@ async def test_structured_call_emits_safe_protocol_retry_for_invalid_schema():
     assert len(retries) == 1
     assert retries[0].data["reason"] == "schema_validation"
     assert "content" not in retries[0].data
+    requests = [event for event in events if event.type is RuntimeEventType.LLM_REQUEST]
+    assert len(requests) == 2
+    assert len({event.data["llm_call_id"] for event in requests}) == 1
+    responses = [event for event in events if event.type is RuntimeEventType.LLM_RESPONSE]
+    # One raw response is recorded before schema validation, then the
+    # validated terminal response closes the same logical call.
+    assert len(responses) == 3
+    assert {event.data["llm_call_id"] for event in responses} == {requests[0].data["llm_call_id"]}
+    assert responses[-1].data["status"] == "completed"
+    logical_call_ids = {event.data["logical_llm_call_id"] for event in requests}
+    assert len(logical_call_ids) == 1
+    assert retries[0].data["logical_llm_call_id"] in logical_call_ids
 
 
 @pytest.mark.asyncio
@@ -126,7 +138,9 @@ async def test_structured_call_preserves_normalized_error_code_in_trace():
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "qwen", "max_retries": 1, "timeout_s": 20}
     )
-    call.limits_service.resolve = AsyncMock(return_value=_empty_resolution())
+    call.model_call_config_service.resolve = AsyncMock(
+        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=20, max_retries=0)
+    )
     events = []
 
     async def sink(event):
@@ -154,11 +168,8 @@ async def test_structured_planner_uses_resolved_retry_limit():
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "qwen", "max_retries": 0, "timeout_s": 1}
     )
-    call.limits_service.resolve = AsyncMock(
-        return_value=ResolvedExecutionLimits(
-            values=ExecutionLimitsPayload(planner_retries_max=1),
-            sources={"planner_retries_max": "platform"},
-        )
+    call.model_call_config_service.resolve = AsyncMock(
+        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=1)
     )
 
     with pytest.raises(StructuredCallError):
@@ -181,7 +192,9 @@ async def test_streaming_error_preserves_exception_type_and_traceback():
     client = AsyncMock()
     client.chat_stream = lambda *args, **kwargs: _failed_stream()
     call = RoleStreamingCall(session=AsyncMock(), llm_client=client)
-    call._limits_service.resolve = AsyncMock(return_value=_empty_resolution())
+    call._model_call_config_service.resolve = AsyncMock(
+        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=0)
+    )
 
     events = [
         event

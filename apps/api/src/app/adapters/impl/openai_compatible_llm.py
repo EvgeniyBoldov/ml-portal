@@ -350,6 +350,8 @@ class OpenAICompatibleLLM:
             code, safe, retryable = LLMErrorCode.CONNECTION, "LLM provider connection failed", True
         else:
             code, safe, retryable = LLMErrorCode.UNKNOWN, "LLM request failed", True
+        if not retryable:
+            retry_after_ms = None
         return LLMProviderError(code=code, safe_message=safe, retryable=retryable,
                                 status_code=status_code, provider_type=type(exc).__name__,
                                 provider_code=provider_code, retry_after_ms=retry_after_ms)

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import Badge from '@/shared/ui/Badge';
 import { SmartViewer } from '@/shared/ui/SmartViewer';
 import { SmartViewerModal } from '@/shared/ui/SmartViewer';
 import styles from '../Inspector.module.css';
@@ -24,6 +25,34 @@ export function InspectorScalar({ value }: { value: string | number | boolean | 
       ? value ? 'Да' : 'Нет'
       : String(value);
   return <span className={styles.scalar}>{text}</span>;
+}
+
+export function InspectorStatus({
+  label,
+  tone = 'neutral',
+}: {
+  label: string;
+  tone?: 'neutral' | 'success' | 'warn' | 'danger' | 'info';
+}) {
+  return <Badge size="small" tone={tone}>{label}</Badge>;
+}
+
+export function InspectorDate({ value }: { value: string | null | undefined }) {
+  if (!value) return <InspectorScalar value={undefined} />;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return <InspectorScalar value={value} />;
+  return <InspectorScalar value={date.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'medium' })} />;
+}
+
+export function InspectorReadonlyBlock({ value }: { value: unknown }) {
+  const text = typeof value === 'string' ? value : (() => {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  })();
+  return <textarea className={styles.readonlyCode} value={text} readOnly spellCheck={false} aria-label="Только для чтения" />;
 }
 
 export function InspectorJsonBlock({ value }: { value: unknown }) {

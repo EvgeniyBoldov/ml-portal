@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.http.tls import outbound_http_verify
 from app.services.mcp_credential_broker_service import MCPCredentialBrokerService
 from app.services.mcp_jsonrpc_client import parse_mcp_response as _parse_mcp_response_body
+from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 
 
 @dataclass(slots=True)
@@ -107,7 +108,7 @@ class DirectOperationExecutor:
         if target.provider_type == "local":
             return await self._invoke_local_as_mcp(call, ctx)
         if target.provider_type == "mcp":
-            return await self._invoke_remote_mcp(call)
+            return await self._invoke_remote_mcp(call, ctx)
         raise ValueError(f"Unsupported provider type '{target.provider_type}'")
 
     async def _invoke_local_as_mcp(self, call: _UnifiedToolCall, ctx: ToolContext) -> Dict[str, Any]:
@@ -125,7 +126,7 @@ class DirectOperationExecutor:
             "content": [{"type": "text", "text": result.error or "Tool execution failed"}],
         }
 
-    async def _invoke_remote_mcp(self, call: _UnifiedToolCall) -> Dict[str, Any]:
+    async def _invoke_remote_mcp(self, call: _UnifiedToolCall, ctx: ToolContext) -> Dict[str, Any]:
         target = call.target
         if not target.provider_instance_slug:
             raise ValueError(f"MCP provider slug missing for '{target.operation_slug}'")
@@ -157,6 +158,7 @@ class DirectOperationExecutor:
             headers=headers,
             payload=payload,
             timeout_s=timeout,
+            ctx=ctx,
         )
         if response.status_code in {400, 401, 403, 410}:
             self._mcp_sessions.pop(provider_url, None)
@@ -170,6 +172,7 @@ class DirectOperationExecutor:
                 headers=headers,
                 payload=payload,
                 timeout_s=timeout,
+                ctx=ctx,
             )
         if response.status_code >= 400:
             raise ValueError(
@@ -439,6 +442,7 @@ class DirectOperationExecutor:
         headers: Dict[str, str],
         payload: Dict[str, Any],
         timeout_s: int,
+        ctx: Optional[ToolContext] = None,
     ) -> tuple[httpx.Response, int]:
         max_attempts = self._http_max_retries + 1
         last_response: Optional[httpx.Response] = None
@@ -455,13 +459,48 @@ class DirectOperationExecutor:
                 if not self._is_retryable_exception(exc) or attempt == max_attempts:
                     raise
 
-            await asyncio.sleep(self._retry_delay_seconds(attempt))
+            delay_ms = int(self._retry_delay_seconds(attempt) * 1000)
+            await self._emit_retry(ctx, attempt=attempt, max_attempts=max_attempts, delay_ms=delay_ms)
+            await asyncio.sleep(delay_ms / 1000)
 
         if last_response is not None:
             return last_response, max_attempts
         if last_exception is not None:
             raise last_exception
         raise RuntimeError("MCP request failed without response")
+
+    async def _emit_retry(
+        self,
+        ctx: Optional[ToolContext],
+        *,
+        attempt: int,
+        max_attempts: int,
+        delay_ms: int,
+    ) -> None:
+        if ctx is None:
+            return
+        sink = ctx.extra.get("runtime_event_logger")
+        call_id = ctx.extra.get("runtime_active_tool_call_id")
+        if sink is None or not call_id:
+            return
+        await sink.emit(
+            RuntimeEvent(
+                RuntimeEventType.PROTOCOL_RETRY,
+                {
+                    "entity_type": "tool_call",
+                    "entity_id": str(call_id),
+                    "call_id": str(call_id),
+                    "tool": str(ctx.extra.get("runtime_active_tool_slug") or "operation"),
+                    "parent_entity_type": "agent_execution",
+                    "parent_entity_id": str(ctx.extra.get("run_id") or ""),
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "reason": "provider_retry",
+                    "retry_delay_ms": delay_ms,
+                },
+            ),
+            phase=OrchestrationPhase.AGENT,
+        )
 
     def _retry_delay_seconds(self, attempt: int) -> float:
         return (self._retry_base_delay_ms * (2 ** (attempt - 1))) / 1000.0
