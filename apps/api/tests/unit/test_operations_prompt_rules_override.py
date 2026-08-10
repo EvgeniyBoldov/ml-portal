@@ -285,3 +285,16 @@ def test_prompt_assembler_operation_schemas_keep_only_collection_info_and_system
 
     visible_names = [item.operation_slug for item in filter_prompt_visible_operations(operations)]
     assert visible_names == ["instance.template.collection.info", "file.read"]
+
+    activated_names = [
+        item.operation_slug
+        for item in filter_prompt_visible_operations(
+            operations,
+            active_collection_operation_slugs={"instance.template.collection.template.search"},
+        )
+    ]
+    assert activated_names == [
+        "instance.template.collection.info",
+        "instance.template.collection.template.search",
+        "file.read",
+    ]

@@ -379,14 +379,27 @@ def _text(value: Any) -> str:
 
 def filter_prompt_visible_operations(
     resolved_operations: Sequence["ResolvedOperation"],
+    *,
+    active_collection_operation_slugs: Optional[set[str]] = None,
 ) -> List["ResolvedOperation"]:
+    """Expose collection tools only after their collection was inspected.
+
+    ``collection.info`` is the discovery gateway.  The agent runtime passes
+    the operation slugs returned by successful info calls on later turns;
+    callers that omit the argument retain the safe initial surface.
+    """
+    active_slugs = active_collection_operation_slugs or set()
     visible_operations: List["ResolvedOperation"] = []
     for op in resolved_operations:
         canonical_name = (
             _text(getattr(getattr(op, "published", None), "canonical_name", None))
             or _text(getattr(op, "operation", None))
         )
-        if op.scope == "system" or canonical_name == "collection.info":
+        if (
+            op.scope == "system"
+            or canonical_name == "collection.info"
+            or op.operation_slug in active_slugs
+        ):
             visible_operations.append(op)
     return visible_operations
 

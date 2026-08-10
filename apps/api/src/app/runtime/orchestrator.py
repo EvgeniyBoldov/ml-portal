@@ -104,6 +104,42 @@ class GraphOrchestrator:
         self.budget_service = budget_service
         self.logging_level = logging_level
 
+    @staticmethod
+    def _has_declared_resolvers(
+        plan: Dict[str, Any], pending_needs: list[Dict[str, Any]]
+    ) -> bool:
+        """Return whether every pending runtime need has a graph producer.
+
+        ``needs`` are discovered by executors, never declared by the planner.
+        A replan is therefore useful only when it adds (or connects) a task
+        that explicitly promises the missing output.  Without this check a
+        planner can re-emit an unchanged graph until the revision budget is
+        exhausted.
+        """
+        tasks = plan.get("tasks", {})
+        if not isinstance(tasks, dict):
+            return False
+        for need in pending_needs:
+            task = tasks.get(need.get("task_id"))
+            if not isinstance(task, dict):
+                return False
+            key = need.get("key")
+            if not isinstance(key, str) or not key:
+                return False
+            for producer_id in task.get("depends_on", []):
+                producer = tasks.get(producer_id)
+                if not isinstance(producer, dict):
+                    continue
+                outputs = producer.get("expected_outputs", [])
+                if any(
+                    isinstance(output, dict) and output.get("key") == key
+                    for output in outputs
+                ):
+                    break
+            else:
+                return False
+        return True
+
     async def run(self, *, plan_id: UUID, goal: str, available_agents: list[dict[str, Any]],
                   available_artifacts: Optional[list[dict[str, Any]]] = None,
                   max_steps: int = 80, planner_kwargs: Optional[Dict[str, Any]] = None) -> AsyncIterator[OrchestratorEvent]:
@@ -426,6 +462,44 @@ class GraphOrchestrator:
                         if closed is not None:
                             yield closed
                         yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
+                        return
+                    revised_plan = await self.store.snapshot(plan_id)
+                    if revised_plan["status"] == "active" and not self._has_declared_resolvers(
+                        revised_plan, pending_needs
+                    ):
+                        failure = {
+                            "code": "unresolvable_dependency",
+                            "message": "planner did not declare a producer or request user input for pending needs",
+                            "needs": [
+                                {"task_id": need["task_id"], "key": need["key"]}
+                                for need in pending_needs
+                            ],
+                        }
+                        await self.store.mark_failed(plan_id, failure)
+                        await observe(
+                            "error",
+                            entity_type="error",
+                            entity_id=str(uuid4()),
+                            parent_type="planner_iteration",
+                            parent_id=active_iteration_id,
+                            payload={
+                                "error": failure["message"],
+                                "error_code": failure["code"],
+                                "recoverable": False,
+                            },
+                            trigger="pending_need",
+                        )
+                        closed = close_active_iteration(
+                            status="failed", outcome="unresolvable_dependency"
+                        )
+                        if closed is not None:
+                            yield closed
+                        yield OrchestratorEvent(
+                            type="plan_terminal",
+                            plan_id=str(plan_id),
+                            status="failed",
+                            error=failure["message"],
+                        )
                         return
                     continue
                 closed = close_active_iteration(status="stalled")

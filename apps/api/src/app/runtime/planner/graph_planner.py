@@ -14,8 +14,48 @@ from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.events import RuntimeEvent
-from app.runtime.orchestrator_contracts import PlanPatch, PlanRequest, PlannedTask, PlannerDecisionKind
+from app.runtime.orchestrator_contracts import (
+    PlanPatch,
+    PlanRequest,
+    PlannedTask,
+    PlannerDecisionKind,
+    TaskOutputSpec,
+    TaskSuccessAction,
+)
 from app.runtime.input_builders import PlannerInputBuilder
+
+
+class PlannerPlannedTask(BaseModel):
+    """Planner-facing task contract.
+
+    Runtime needs are produced by executors when they discover a genuine
+    missing dependency.  A planner may resolve pending needs by adding
+    producer tasks, but must never manufacture new needs itself.
+    """
+
+    task_id: str = Field(..., min_length=1)
+    executor: str = Field(..., min_length=1)
+    intent: str = Field(..., min_length=1)
+    instructions: str = Field(..., min_length=1)
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
+    depends_on: List[str] = Field(default_factory=list)
+    on_success: TaskSuccessAction = TaskSuccessAction.CONTINUE
+
+    model_config = {"extra": "forbid"}
+
+    def to_runtime_task(self) -> PlannedTask:
+        return PlannedTask(
+            task_id=self.task_id,
+            executor=self.executor,
+            intent=self.intent,
+            instructions=self.instructions,
+            inputs=self.inputs,
+            expected_outputs=self.expected_outputs,
+            depends_on=self.depends_on,
+            needs=[],
+            on_success=self.on_success,
+        )
 
 
 class PlannerGraphOutput(BaseModel):
@@ -27,7 +67,7 @@ class PlannerGraphOutput(BaseModel):
     """
 
     action: Literal["apply_graph", "ask_user", "complete", "fail"]
-    tasks: List[PlannedTask] = Field(default_factory=list)
+    tasks: List[PlannerPlannedTask] = Field(default_factory=list)
     remove_task_ids: List[str] = Field(default_factory=list)
     question: Optional[str] = None
     answer_brief: Optional[str] = None
@@ -102,7 +142,7 @@ class PlannerGraphOutput(BaseModel):
         return PlanPatch(
             expected_revision=revision,
             decision=decision,
-            tasks=self.tasks,
+            tasks=[task.to_runtime_task() for task in self.tasks],
             remove_task_ids=self.remove_task_ids,
             question=self.question,
             answer_brief=self.answer_brief,

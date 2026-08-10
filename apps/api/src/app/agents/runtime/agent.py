@@ -34,6 +34,8 @@ class AgentLoopState:
     tokens_total: int = 0
     start_time: float = 0.0
     force_tool_choice: bool = False
+    active_collection_operation_slugs: set[str] = field(default_factory=set)
+    opened_collections: set[str] = field(default_factory=set)
 
 
 from app.agents.protocol import (
@@ -328,8 +330,11 @@ class AgentToolRuntime(BaseRuntime):
         native_tool_calling = bool(
             platform_config.get("native_tool_calling", False)
         ) and bool(available_operations)
-        prompt_visible_operations = filter_prompt_visible_operations(available_operations)
-        tools_payload = build_tools_payload(prompt_visible_operations) if native_tool_calling else None
+        ctx.extra["collection_interaction_state"] = {
+            "enabled": True,
+            "active_operation_slugs": loop_state.active_collection_operation_slugs,
+            "opened_collections": loop_state.opened_collections,
+        }
         tool_ledger = ctx.extra.get("runtime_tool_ledger")
         reuse_enabled = bool(ctx.extra.get("runtime_tool_reuse_enabled", True))
         seen_native_tool_calls: set[tuple[str, str]] = set()
@@ -393,6 +398,13 @@ class AgentToolRuntime(BaseRuntime):
                     actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
                 )
                 try:
+                    tools_payload = None
+                    if native_tool_calling:
+                        prompt_visible_operations = filter_prompt_visible_operations(
+                            available_operations,
+                            active_collection_operation_slugs=loop_state.active_collection_operation_slugs,
+                        )
+                        tools_payload = build_tools_payload(prompt_visible_operations)
                     if native_tool_calling and tools_payload:
                         raw_response_dict = await self.llm.call_raw(
                             messages=llm_messages,
@@ -837,6 +849,7 @@ class AgentToolRuntime(BaseRuntime):
                         run_session=run_session,
                         all_operation_outputs=loop_state.tool_outputs,
                         all_sources=loop_state.sources,
+                        loop_state=loop_state,
                         operation_results_for_context=operation_results_for_context,
                         operation_calls_total_ref=operation_calls_total_ref,
                     ):
@@ -1011,6 +1024,7 @@ class AgentToolRuntime(BaseRuntime):
         run_session: Any,
         all_operation_outputs: List[Dict[str, Any]],
         all_sources: List[dict],
+        loop_state: AgentLoopState,
         operation_results_for_context: List[tuple],
         operation_calls_total_ref: List[int],
     ) -> AsyncGenerator[RuntimeEvent, None]:
@@ -1173,6 +1187,12 @@ class AgentToolRuntime(BaseRuntime):
         })
 
         raw_output = result.data or {}
+        self._activate_collection_tools(
+            operation_call=operation_call,
+            result=result,
+            available_operations=available_operations,
+            loop_state=loop_state,
+        )
         all_operation_outputs.append({
             "tool": operation_call.tool_name, "success": result.success,
             "data": raw_output, "error": result.error,
@@ -1185,6 +1205,47 @@ class AgentToolRuntime(BaseRuntime):
             operation_slug=operation_call.tool_name,
         )
         operation_results_for_context.append((operation_call, result_text))
+
+    @staticmethod
+    def _activate_collection_tools(
+        *,
+        operation_call: Any,
+        result: Any,
+        available_operations: List[Any],
+        loop_state: AgentLoopState,
+    ) -> None:
+        """Activate only tools returned by a successful collection.info call."""
+        if not result.success:
+            return
+        from app.agents.runtime.tools import OperationExecutionFacade
+
+        operation, _ = OperationExecutionFacade._find_operation(
+            operation_call.tool_name,
+            operation_call.arguments if isinstance(operation_call.arguments, dict) else {},
+            available_operations,
+        )
+        if operation is None or operation.operation != "collection.info":
+            return
+        payload = result.data if isinstance(result.data, dict) else {}
+        collection = payload.get("collection") if isinstance(payload.get("collection"), dict) else {}
+        collection_slug = str(collection.get("slug") or operation.collection_slug or "").strip()
+        if not collection_slug or collection_slug != str(operation.collection_slug or "").strip():
+            return
+        tools = payload.get("tools") if isinstance(payload.get("tools"), list) else []
+        returned_slugs = {
+            str(item.get("invoke_as") or "").strip()
+            for item in tools
+            if isinstance(item, dict) and str(item.get("invoke_as") or "").strip()
+        }
+        active_slugs = {
+            op.operation_slug
+            for op in available_operations
+            if str(getattr(op, "collection_slug", "") or "").strip() == collection_slug
+            and op.operation_slug in returned_slugs
+            and getattr(op, "operation", None) != "collection.info"
+        }
+        loop_state.opened_collections.add(collection_slug)
+        loop_state.active_collection_operation_slugs.update(active_slugs)
 
     @staticmethod
     def _is_allowed_operation_call(

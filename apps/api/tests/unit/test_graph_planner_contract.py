@@ -84,6 +84,38 @@ def test_planner_output_normalizes_null_collection_fields() -> None:
     assert output.remove_task_ids == []
 
 
+def test_planner_output_rejects_runtime_needs() -> None:
+    with pytest.raises(ValidationError, match="needs"):
+        PlannerGraphOutput.model_validate({
+            "action": "apply_graph",
+            "tasks": [{
+                "task_id": "reader",
+                "executor": "viewer",
+                "intent": "Read source",
+                "instructions": "Read the source",
+                "needs": [{"key": "source", "description": "Source text"}],
+            }],
+        })
+
+
+def test_planner_schema_hides_runtime_needs_but_runtime_patch_keeps_contract() -> None:
+    schema = PlannerGraphOutput.model_json_schema()
+    planner_task_schema = schema["$defs"]["PlannerPlannedTask"]
+    assert "needs" not in planner_task_schema["properties"]
+
+    patch = PlannerGraphOutput.model_validate({
+        "action": "apply_graph",
+        "tasks": [{
+            "task_id": "reader",
+            "executor": "viewer",
+            "intent": "Read source",
+            "instructions": "Read the source",
+        }],
+    }).to_plan_patch(plan={"revision": 0, "tasks": {}})
+
+    assert patch.tasks[0].needs == []
+
+
 def test_planner_output_allows_explicit_completion_without_mutation() -> None:
     patch = PlannerGraphOutput.model_validate({"action": "complete"}).to_plan_patch(
         plan={"revision": 1, "tasks": {"reader": {}}}

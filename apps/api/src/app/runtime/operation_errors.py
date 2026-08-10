@@ -13,6 +13,8 @@ class RuntimeErrorCode(str, Enum):
     OPERATION_TIMEOUT = "operation_timeout"
     OPERATION_EXECUTION_FAILED = "operation_execution_failed"
     OPERATION_CONFIRMATION_REQUIRED = "operation_confirmation_required"
+    COLLECTION_INFO_REQUIRED = "collection_info_required"
+    COLLECTION_OPERATION_NOT_ACTIVATED = "collection_operation_not_activated"
     AGENT_WALL_TIME_EXCEEDED = "agent_wall_time_exceeded"
     AGENT_REQUIRED_OPERATION_CALL_MISSING = "agent_required_operation_call_missing"
     AGENT_MAX_TOOL_CALLS_EXCEEDED = "agent_max_tool_calls_exceeded"

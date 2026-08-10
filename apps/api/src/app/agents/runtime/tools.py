@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
@@ -45,7 +46,7 @@ logger = get_logger(__name__)
 MAX_TOOL_CONTEXT_CHARS = 4_000
 MAX_COLLECTION_INFO_TOOLS = 12
 MAX_COLLECTION_INFO_TEXT_CHARS = 320
-MAX_COLLECTION_INFO_WORKFLOW_ITEMS = 6
+MAX_COLLECTION_INFO_RULES_CHARS = 1_200
 
 
 class ConfirmationRequiredError(RuntimeError):
@@ -112,6 +113,21 @@ class OperationExecutionFacade:
                 tool_name=operation.operation_slug,
                 arguments=operation_call.arguments,
             )
+
+        collection_gate_error = self._validate_collection_interaction(
+            operation=operation,
+            ctx=ctx,
+        )
+        if collection_gate_error is not None:
+            return ToolResult.fail(
+                collection_gate_error.message,
+                **{
+                    **collection_gate_error.to_metadata(),
+                    "user_message": collection_gate_error.message,
+                    "operator_message": collection_gate_error.message,
+                    "source": "runtime",
+                },
+            ), []
 
         if (
             original_operation_slug == "collection.info"
@@ -467,6 +483,39 @@ class OperationExecutionFacade:
         return OperationExecutionFacade._strip_optional_nulls(arguments, schema)
 
     @staticmethod
+    def _validate_collection_interaction(
+        *,
+        operation: ResolvedOperation,
+        ctx: ToolContext,
+    ) -> Optional[OperationValidationError]:
+        """Require a successful ``collection.info`` before collection use.
+
+        AgentRuntime opts into this gate for every execution.  Keeping the
+        state on ``ToolContext`` makes the check apply to both native and text
+        tool calls, while preserving compatibility for non-agent callers.
+        """
+        state = ctx.extra.get("collection_interaction_state")
+        if not isinstance(state, dict) or not state.get("enabled"):
+            return None
+        if operation.scope != "collection" or operation.operation == "collection.info":
+            return None
+        active_slugs = state.get("active_operation_slugs") or set()
+        if operation.operation_slug in active_slugs:
+            return None
+        collection_slug = str(getattr(operation, "collection_slug", "") or "").strip()
+        message = (
+            f"Call collection.info for collection '{collection_slug}' before using this operation."
+            if collection_slug
+            else "Call collection.info before using this collection operation."
+        )
+        code = (
+            RuntimeErrorCode.COLLECTION_OPERATION_NOT_ACTIVATED
+            if state.get("opened_collections")
+            else RuntimeErrorCode.COLLECTION_INFO_REQUIRED
+        )
+        return OperationValidationError(code=code, message=message, retryable=True)
+
+    @staticmethod
     def _normalize_template_fill_args(
         operation: ResolvedOperation,
         arguments: Dict[str, Any],
@@ -492,7 +541,13 @@ class OperationExecutionFacade:
             try:
                 parsed_values = json.loads(values)
             except json.JSONDecodeError:
-                parsed_values = None
+                # Some native tool adapters stringify Python dicts instead of
+                # emitting JSON (single quotes, True/False/None).  Accept
+                # only a literal container here; never execute the string.
+                try:
+                    parsed_values = ast.literal_eval(values)
+                except (ValueError, SyntaxError):
+                    parsed_values = None
             if isinstance(parsed_values, dict):
                 normalized["values"] = parsed_values
             return normalized
@@ -668,8 +723,8 @@ class OperationExecutionFacade:
         serialized: its raw result includes inspection-only schema and runtime
         metadata which is useful in the journal but needlessly crowds out the
         next tool decision. The projection preserves the collection identity,
-        readiness, callable operations and workflow contract needed to
-        continue execution.
+        its administrator-authored usage rules, readiness and callable
+        operations needed to continue execution.
         """
         import json as _json
 
@@ -706,7 +761,6 @@ class OperationExecutionFacade:
         collection = raw_output.get("collection") or {}
         readiness = raw_output.get("readiness") or {}
         tools = raw_output.get("tools") or []
-        contracts = raw_output.get("contracts") or {}
 
         compact_tools: List[Dict[str, Any]] = []
         if isinstance(tools, list):
@@ -728,7 +782,6 @@ class OperationExecutionFacade:
                     }
                 )
 
-        workflow = contracts.get("workflow") if isinstance(contracts, dict) else []
         return {
             "collection": {
                 key: value
@@ -738,6 +791,10 @@ class OperationExecutionFacade:
                     "name": text(collection.get("name")),
                     "type": text(collection.get("type")),
                     "description": text(collection.get("description")),
+                    "usage_rules": text(
+                        collection.get("usage_rules"),
+                        MAX_COLLECTION_INFO_RULES_CHARS,
+                    ),
                 }.items()
                 if value
             },
@@ -751,10 +808,6 @@ class OperationExecutionFacade:
                 if value not in ("", None)
             },
             "tools": compact_tools,
-            "workflow": [
-                text(item) for item in workflow[:MAX_COLLECTION_INFO_WORKFLOW_ITEMS]
-                if text(item)
-            ] if isinstance(workflow, list) else [],
         }
 
     @staticmethod

@@ -182,6 +182,33 @@ async def test_template_fill_parses_values_json_object_before_validation():
 
 
 @pytest.mark.asyncio
+async def test_template_fill_parses_values_python_literal_before_validation():
+    operation = _template_fill_operation()
+    executor_impl = AsyncMock(return_value=ToolResult.ok({"artifact_id": "artifact-1"}))
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
+    ctx.set_runtime_deps(
+        RuntimeDependencies(operation_executor=SimpleNamespace(execute=executor_impl))
+    )
+    call = ToolCall(
+        id="template-python-literal",
+        tool_name=operation.operation_slug,
+        arguments={
+            "row_id": "row-1",
+            "values": "{'author': {'name': 'Alice'}, 'ports': '443, 123'}",
+        },
+    )
+
+    result, _ = await ToolExecutor().execute(call, ctx, [operation])
+
+    assert result.success is True
+    forwarded_call = executor_impl.await_args.args[0]
+    assert forwarded_call.arguments["values"] == {
+        "author": {"name": "Alice"},
+        "ports": "443, 123",
+    }
+
+
+@pytest.mark.asyncio
 async def test_template_fill_keeps_invalid_values_string_for_schema_error():
     operation = _template_fill_operation()
     call = ToolCall(
@@ -194,6 +221,47 @@ async def test_template_fill_keeps_invalid_values_string_for_schema_error():
 
     assert result.success is False
     assert result.metadata.get("field_path") == "$.values"
+
+
+@pytest.mark.asyncio
+async def test_collection_operation_requires_successful_collection_info_activation():
+    operation = _template_fill_operation()
+    ctx = _ctx()
+    ctx.extra["collection_interaction_state"] = {
+        "enabled": True,
+        "active_operation_slugs": set(),
+        "opened_collections": set(),
+    }
+    call = ToolCall(
+        id="template-before-info",
+        tool_name=operation.operation_slug,
+        arguments={"row_id": "row-1", "values": {"author": "Alice"}},
+    )
+
+    result, _ = await ToolExecutor().execute(call, ctx, [operation])
+
+    assert result.success is False
+    assert result.metadata["error_code"] == RuntimeErrorCode.COLLECTION_INFO_REQUIRED.value
+
+
+@pytest.mark.asyncio
+async def test_collection_operation_runs_after_collection_info_activation():
+    operation = _template_fill_operation()
+    ctx = _ctx()
+    ctx.extra["collection_interaction_state"] = {
+        "enabled": True,
+        "active_operation_slugs": {operation.operation_slug},
+        "opened_collections": {"templates"},
+    }
+    call = ToolCall(
+        id="template-after-info",
+        tool_name=operation.operation_slug,
+        arguments={"row_id": "row-1", "values": {"author": "Alice"}},
+    )
+
+    result, _ = await ToolExecutor().execute(call, ctx, [operation])
+
+    assert result.success is True
 
 
 @pytest.mark.asyncio

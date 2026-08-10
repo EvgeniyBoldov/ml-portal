@@ -11,6 +11,7 @@ def test_collection_info_context_projection_keeps_next_operation_contract():
                 "name": "Templates",
                 "type": "template",
                 "description": "Template library",
+                "usage_rules": "Find a template, inspect its schema, then fill it.",
                 "storage_uri": "must-not-enter-context",
             },
             "readiness": {
@@ -28,10 +29,7 @@ def test_collection_info_context_projection_keeps_next_operation_contract():
                     "schema": {"a": "large inspection-only schema"},
                 }
             ],
-            "contracts": {
-                "workflow": ["List a template before requesting its schema"],
-                "identifier_rules": ["inspection-only duplicate"],
-            },
+            "contracts": {"workflow": ["type-derived guidance"]},
             "schema": {"fields": [{"name": "large inspection-only field list"}]},
         }
     )
@@ -43,7 +41,8 @@ def test_collection_info_context_projection_keeps_next_operation_contract():
 
     assert "collection.template.list" in context
     assert "instance.template.list" in context
-    assert "List a template before requesting its schema" in context
+    assert "Find a template, inspect its schema, then fill it." in context
+    assert "type-derived guidance" not in context
     assert "must-not-enter-context" not in context
     assert "large inspection-only field list" not in context
     assert "inspection-only duplicate" not in context

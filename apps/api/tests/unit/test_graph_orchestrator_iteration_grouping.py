@@ -46,6 +46,28 @@ class FakeExecutor:
         return AgentTaskResult(outcome=TaskOutcome.COMPLETED, summary=f"{request.task_id} done")
 
 
+def test_pending_needs_require_a_declared_output_producer() -> None:
+    pending_needs = [{"task_id": "consumer", "key": "regulation_content"}]
+    unchanged = {
+        "tasks": {
+            "consumer": {"depends_on": [], "expected_outputs": []},
+        }
+    }
+    resolved_by_graph = {
+        "tasks": {
+            "consumer": {"depends_on": ["reader"], "expected_outputs": []},
+            "reader": {
+                "expected_outputs": [
+                    {"key": "regulation_content", "description": "Regulation text"}
+                ]
+            },
+        }
+    }
+
+    assert not GraphOrchestrator._has_declared_resolvers(unchanged, pending_needs)
+    assert GraphOrchestrator._has_declared_resolvers(resolved_by_graph, pending_needs)
+
+
 @pytest.mark.asyncio
 async def test_groups_ready_tasks_under_one_execution_iteration():
     store = FakeStore()
