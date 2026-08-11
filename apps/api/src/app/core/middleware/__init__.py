@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 import uuid
 from typing import Optional
@@ -50,6 +51,10 @@ class TimeoutMiddleware(BaseHTTPMiddleware):
     """Cancel non-streaming requests that exceed configured timeout."""
 
     _STREAM_PATHS = ("/stream", "/sse", "/events")
+    _SANDBOX_STREAM_PATHS = (
+        re.compile(r"^/api/v1/sandbox/sessions/[^/]+/run$"),
+        re.compile(r"^/api/v1/sandbox/sessions/[^/]+/runs/[^/]+/resume$"),
+    )
 
     def __init__(self, app, timeout_seconds: float | None = None) -> None:
         super().__init__(app)
@@ -58,7 +63,10 @@ class TimeoutMiddleware(BaseHTTPMiddleware):
         )
 
     def _is_streaming(self, path: str) -> bool:
-        return any(seg in path for seg in self._STREAM_PATHS)
+        return (
+            any(seg in path for seg in self._STREAM_PATHS)
+            or any(pattern.fullmatch(path) for pattern in self._SANDBOX_STREAM_PATHS)
+        )
 
     async def dispatch(self, request: Request, call_next):
         if self._is_streaming(request.url.path):

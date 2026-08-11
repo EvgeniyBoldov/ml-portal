@@ -2,7 +2,7 @@
 import asyncio
 import json
 import uuid
-from typing import Any, AsyncGenerator, AsyncIterator, Optional
+from typing import Any, AsyncGenerator, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -13,7 +13,7 @@ from app.api.deps import db_session, get_current_user_sse, require_admin
 from app.agents import ToolContext
 from app.agents.runtime_sandbox_resolver import RuntimeSandboxResolver
 from app.core.db import get_session_factory
-from app.runtime import OrchestrationPhase, PipelineRequest, RuntimeEvent, RuntimeEventType, RuntimePipeline
+from app.runtime import PipelineRequest
 from app.runtime.contracts import ExecutionMode
 from app.core.di import get_llm_client
 from app.core.http.clients import LLMClientProtocol
@@ -41,9 +41,10 @@ from app.services.sandbox_service import SandboxService
 from app.services.runtime_event_journal_service import RuntimeEventJournalService
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.chat_router_event_mapper import build_resume_content
-from app.services.runtime_terminal_status import planner_terminal_from_event
 from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
-from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
+from app.services.runtime_tail_event_bus import RuntimeRunControlBus, RuntimeTailSubscriber
+from app.services.sandbox.runtime_runner import SandboxRuntimeCommand, sandbox_runtime_runner
+from app.core.config import get_settings
 
 from .helpers import check_session_owner, tenant_uuid, user_uuid
 
@@ -114,36 +115,92 @@ def _tail_sse_frame(message: dict) -> str | None:
     return _format_sse("journal", journal) if journal is not None else None
 
 
-async def _merge_pipeline_and_tail(
-    pipeline_events: AsyncIterator[Any],
-    tail_queue: asyncio.Queue[dict],
-) -> AsyncGenerator[tuple[str, Any], None]:
-    """Yield journal events while the pipeline is awaiting an LLM, tool, or worker."""
-    iterator = pipeline_events.__aiter__()
-    pipeline_task: asyncio.Task[Any] | None = asyncio.create_task(anext(iterator))
-    tail_task: asyncio.Task[dict] | None = asyncio.create_task(tail_queue.get())
+async def _observe_sandbox_runner(
+    *,
+    run_id: uuid.UUID,
+    command: SandboxRuntimeCommand,
+    llm_client: LLMClientProtocol,
+    session_factory: Any,
+    stream_db: AsyncSession,
+) -> AsyncGenerator[str, None]:
+    """Stream canonical tail/journal data without owning runtime execution."""
+    subscriber = RuntimeTailSubscriber(stream_key=str(run_id))
+    queue: asyncio.Queue[dict] = asyncio.Queue()
+    emitted_event_ids: set[str] = set()
+    listener_task: Optional[asyncio.Task] = None
+    heartbeat_seconds = get_settings().SANDBOX_SSE_HEARTBEAT_SECONDS
+
+    async def listen() -> None:
+        async for message in subscriber.listen():
+            await queue.put(message)
+
+    def frame_for(message: dict) -> str | None:
+        if message.get("type") == "delta":
+            return _format_sse("delta", {"run_id": str(run_id), "content": str(message.get("content") or "")})
+        if message.get("type") == "final":
+            return _format_sse("final", {
+                "run_id": str(run_id),
+                "content": str(message.get("content") or ""),
+                "sources": message.get("sources") or [],
+                "attachments": message.get("attachments") or [],
+            })
+        if message.get("type") == "pause":
+            return _format_sse("pause", {
+                "run_id": str(run_id),
+                "reason": message.get("reason"),
+                "action": message.get("action"),
+                "context": message.get("context"),
+                "contract_version": message.get("contract_version"),
+            })
+        return _tail_sse_frame(message)
+
     try:
-        while pipeline_task is not None:
-            pending = {pipeline_task}
-            if tail_task is not None:
-                pending.add(tail_task)
-            done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            if tail_task is not None and tail_task in done:
-                yield "tail", tail_task.result()
-                tail_task = asyncio.create_task(tail_queue.get())
-            if pipeline_task in done:
-                try:
-                    event = pipeline_task.result()
-                except StopAsyncIteration:
-                    pipeline_task = None
-                    continue
-                yield "pipeline", event
-                pipeline_task = asyncio.create_task(anext(iterator))
+        await subscriber.subscribe()
+        listener_task = asyncio.create_task(listen())
+        runner_task = await sandbox_runtime_runner.start(
+            command=command,
+            llm_client=llm_client,
+            session_factory=session_factory,
+        )
+        yield _format_sse("run_started", {"run_id": str(run_id)})
+        while not runner_task.done():
+            try:
+                message = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+            except asyncio.TimeoutError:
+                yield ": ping\n\n"
+                continue
+            if message.get("event_id"):
+                emitted_event_ids.add(str(message["event_id"]))
+            frame = frame_for(message)
+            if frame is not None:
+                yield frame
+
+        while not queue.empty():
+            message = queue.get_nowait()
+            if message.get("event_id"):
+                emitted_event_ids.add(str(message["event_id"]))
+            frame = frame_for(message)
+            if frame is not None:
+                yield frame
+
+        rows = await RuntimeEventJournalService(stream_db).list_run_events(run_id)
+        for row in rows:
+            event_id = str(row.id)
+            if event_id in emitted_event_ids:
+                continue
+            emitted_event_ids.add(event_id)
+            yield _format_sse("journal", _journal_from_row(row))
+        current_run = await SandboxService(stream_db).get_run(run_id)
+        if current_run is not None and current_run.status == "failed":
+            yield _format_sse("error", {"run_id": str(run_id), "error": "Sandbox execution failed"})
+        elif current_run is not None and current_run.status == "cancelled":
+            yield _format_sse("final", {"run_id": str(run_id), "status": "cancelled"})
     finally:
-        for task in (pipeline_task, tail_task):
-            if task is not None and not task.done():
-                task.cancel()
-        await asyncio.gather(*(task for task in (pipeline_task, tail_task) if task is not None), return_exceptions=True)
+        if listener_task is not None:
+            listener_task.cancel()
+            await asyncio.gather(listener_task, return_exceptions=True)
+        await subscriber.unsubscribe()
+        yield _format_sse("done", {"run_id": str(run_id)})
 
 def _extract_attachment_meta_from_events(events: list) -> list[dict]:
     for event in reversed(events):
@@ -402,11 +459,6 @@ async def run_sandbox(
             runtime_deps.sandbox_overrides = sandbox_overrides
             tool_ctx.set_runtime_deps(runtime_deps)
 
-            pipeline = RuntimePipeline(
-                session=stream_db,
-                llm_client=llm_client,
-            )
-
             messages = [{"role": "user", "content": data.request_text}]
 
             pipeline_request = PipelineRequest(
@@ -423,188 +475,20 @@ async def run_sandbox(
                 execution_mode=ExecutionMode(data.execution_mode or ExecutionMode.NORMAL.value),
                 await_background_tail=False,
             )
-            final_status = "completed"
-            final_error: Optional[str] = None
-            tail_pending: set[str] = set()
-            tail_finished_early: set[str] = set()
-            emitted_event_ids: set[str] = set()
-            tail_subscriber = RuntimeTailSubscriber(stream_key=str(run_id))
-            tail_queue: asyncio.Queue[dict] = asyncio.Queue()
-            tail_listener_task: Optional[asyncio.Task] = None
-
-            async def _handle_tail_event(message: dict) -> tuple[str, dict]:
-                evt_type = str(message.get("type") or "status")
-                yield_payload = dict(message)
-                if evt_type == "status" and str(yield_payload.get("stage")) == "tail_finished":
-                    tail_id = str(yield_payload.get("tail_id") or "").strip()
-                    if tail_id and tail_id in tail_pending:
-                        tail_pending.discard(tail_id)
-                    elif tail_id:
-                        tail_finished_early.add(tail_id)
-                return evt_type, yield_payload
-
-            async def _drain_tail_events(max_items: int = 100) -> list[tuple[str, dict]]:
-                drained = 0
-                out: list[tuple[str, dict]] = []
-                while drained < max_items:
-                    try:
-                        message = tail_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                    out.append(await _handle_tail_event(message))
-                    drained += 1
-                return out
-
-            async def _journal_fallback() -> list[dict]:
-                rows = await RuntimeEventJournalService(stream_db).list_run_events(run_id)
-                payloads: list[dict] = []
-                for row in rows:
-                    event_id = str(row.id)
-                    if event_id in emitted_event_ids:
-                        continue
-                    emitted_event_ids.add(event_id)
-                    payloads.append(_journal_from_row(row))
-                return payloads
-
-            try:
-                await tail_subscriber.subscribe()
-
-                yield _format_sse("run_started", {"run_id": str(run_id)})
-
-                # Confirm the HTTP/SSE connection immediately.  Runtime work
-                # can spend several seconds inside an LLM/tool call before the
-                # pipeline emits its first high-level event.
-                async def _tail_listener() -> None:
-                    async for message in tail_subscriber.listen():
-                        await tail_queue.put(message)
-
-                tail_listener_task = asyncio.create_task(_tail_listener())
-
-                async for source, item in _merge_pipeline_and_tail(pipeline.execute(pipeline_request, tool_ctx), tail_queue):
-                    if source == "tail":
-                        _evt_type, evt_payload = await _handle_tail_event(item)
-                        if evt_payload.get("event_id"):
-                            emitted_event_ids.add(str(evt_payload["event_id"]))
-                        frame = _tail_sse_frame(evt_payload)
-                        if frame is not None:
-                            yield frame
-                        continue
-                    event = item
-                    if event.type == RuntimeEventType.STOP:
-                        paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(dict(event.data or {}))
-                        final_status = str(paused_payload["reason"])
-                        final_error = None
-                        svc_pause = SandboxService(stream_db)
-                        await svc_pause.pause_run(
-                            run_id=run_id,
-                            status=paused_payload["reason"],
-                            paused_action=paused_payload["action"],
-                            paused_context=paused_payload["context"],
-                        )
-                        await stream_db.commit()
-                        pause_event = {
-                            "reason": paused_payload["reason"],
-                            "action": paused_payload["action"],
-                            "context": paused_payload["context"],
-                            "contract_version": paused_payload["contract_version"],
-                            "run_id": str(run_id),
-                        }
-                        yield _format_sse("pause", pause_event)
-                    elif event.type == RuntimeEventType.DELTA:
-                        content = event.data.get("content")
-                        if isinstance(content, str) and content:
-                            yield _format_sse("delta", {"run_id": str(run_id), "content": content})
-                    elif event.type == RuntimeEventType.FINAL:
-                        if not str(final_status).startswith("waiting_"):
-                            final_status = "completed"
-                            final_error = None
-                            yield _format_sse("final", {
-                                "run_id": str(run_id),
-                                "content": str(event.data.get("content") or ""),
-                                "sources": event.data.get("sources") or [],
-                                "attachments": event.data.get("attachments") or [],
-                            })
-                    else:
-                        terminal = planner_terminal_from_event(event)
-                        if terminal is not None:
-                            final_status = terminal[0].value
-                            final_error = terminal[1]
-                    if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
-                        tail_id = str(event.data.get("tail_id") or "").strip()
-                        if tail_id:
-                            if tail_id in tail_finished_early:
-                                tail_finished_early.discard(tail_id)
-                            else:
-                                tail_pending.add(tail_id)
-
-                if not str(final_status).startswith("waiting_"):
-                    svc_final = SandboxService(stream_db)
-                    await svc_final.finish_run(run_id, final_status, final_error)
-                    await stream_db.commit()
-
-                # Redis pub/sub is best effort.  Flush anything persisted while
-                # the pipeline was running before closing the SSE response.
-                for fallback in await _journal_fallback():
-                    yield _format_sse("journal", fallback)
-
-            except asyncio.CancelledError:
-                # The SSE client may disappear because the user pressed Stop,
-                # navigated away, or refreshed the page.  CancelledError does
-                # not inherit from Exception, so it must close the sandbox
-                # lifecycle explicitly before propagating cancellation.
-                try:
-                    current_run = await SandboxService(stream_db).get_run(run_id)
-                    was_running = current_run is not None and current_run.status == "running"
-                    if was_running:
-                        await SandboxService(stream_db).finish_run(
-                            run_id,
-                            "cancelled",
-                            "Sandbox stream cancelled",
-                        )
-                        await stream_db.commit()
-                    if was_running:
-                        cancel_logger = RuntimeEventJournalFactory.create(
-                            context=RuntimeLogContext(
-                                run_id=run_id,
-                                level=RuntimeLoggingLevel.FULL,
-                                origin="sandbox",
-                                tenant_id=t_uuid,
-                                user_id=u_uuid,
-                                stream_logs=True,
-                                stream_progress=True,
-                            ),
-                            session_factory=session_factory,
-                        )
-                        await cancel_logger.emit(
-                            RuntimeEvent.run_end(run_id=str(run_id), status="cancelled"),
-                            phase=OrchestrationPhase.PIPELINE,
-                        )
-                except Exception:
-                    logger.exception("Failed to persist cancelled sandbox run run_id=%s", run_id)
-                raise
-            except Exception as e:
-                await RuntimeEventJournalFactory.create(
-                    context=RuntimeLogContext(run_id=run_id, level=RuntimeLoggingLevel.FULL,
-                        origin="sandbox", tenant_id=t_uuid, user_id=u_uuid,
-                        stream_logs=True, stream_progress=True),
-                    session_factory=session_factory,
-                ).error(e, payload={"stage": "sandbox_stream"})
-                yield _format_sse("error", {"run_id": str(run_id), "error": "Sandbox execution failed"})
-                try:
-                    svc_err = SandboxService(stream_db)
-                    await svc_err.finish_run(run_id, "failed", str(e))
-                    await stream_db.commit()
-                except Exception:
-                    pass
-            finally:
-                if tail_listener_task is not None:
-                    tail_listener_task.cancel()
-                    try:
-                        await tail_listener_task
-                    except BaseException:
-                        pass
-                await tail_subscriber.unsubscribe()
-                yield _format_sse("done", {"run_id": str(run_id)})
+            async for frame in _observe_sandbox_runner(
+                run_id=run_id,
+                command=SandboxRuntimeCommand(
+                    run_id=run_id,
+                    user_id=u_uuid,
+                    tenant_id=t_uuid,
+                    pipeline_request=pipeline_request,
+                    tool_context=tool_ctx,
+                ),
+                llm_client=llm_client,
+                session_factory=session_factory,
+                stream_db=stream_db,
+            ):
+                yield frame
 
     return StreamingResponse(
         event_stream(),
@@ -813,11 +697,6 @@ async def resume_sandbox_run(
             runtime_deps.sandbox_overrides = resumed_overrides
             tool_ctx.set_runtime_deps(runtime_deps)
 
-            pipeline = RuntimePipeline(
-                session=stream_db,
-                llm_client=llm_client,
-            )
-
             # Build request from paused state context
             original_goal = ""
             if paused_context and isinstance(paused_context.get("inputs"), dict):
@@ -851,151 +730,20 @@ async def resume_sandbox_run(
                 confirmation_tokens=confirmed_fingerprints,
                 await_background_tail=False,
             )
-
-            final_status = "completed"
-            final_error: Optional[str] = None
-            tail_pending: set[str] = set()
-            tail_finished_early: set[str] = set()
-            emitted_event_ids: set[str] = set()
-            tail_subscriber = RuntimeTailSubscriber(stream_key=str(run_id))
-            tail_queue: asyncio.Queue[dict] = asyncio.Queue()
-            tail_listener_task: Optional[asyncio.Task] = None
-
-            async def _handle_tail_event(message: dict) -> tuple[str, dict]:
-                evt_type = str(message.get("type") or "status")
-                yield_payload = dict(message)
-                if evt_type == "status" and str(yield_payload.get("stage")) == "tail_finished":
-                    tail_id = str(yield_payload.get("tail_id") or "").strip()
-                    if tail_id and tail_id in tail_pending:
-                        tail_pending.discard(tail_id)
-                    elif tail_id:
-                        tail_finished_early.add(tail_id)
-                return evt_type, yield_payload
-
-            async def _drain_tail_events(max_items: int = 100) -> list[tuple[str, dict]]:
-                drained = 0
-                out: list[tuple[str, dict]] = []
-                while drained < max_items:
-                    try:
-                        message = tail_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                    out.append(await _handle_tail_event(message))
-                    drained += 1
-                return out
-
-            async def _journal_fallback() -> list[dict]:
-                rows = await RuntimeEventJournalService(stream_db).list_run_events(run_id)
-                payloads: list[dict] = []
-                for row in rows:
-                    event_id = str(row.id)
-                    if event_id in emitted_event_ids:
-                        continue
-                    emitted_event_ids.add(event_id)
-                    payloads.append(_journal_from_row(row))
-                return payloads
-
-            try:
-                await tail_subscriber.subscribe()
-
-                yield _format_sse("run_started", {"run_id": str(run_id)})
-
-                async def _tail_listener() -> None:
-                    async for message in tail_subscriber.listen():
-                        await tail_queue.put(message)
-
-                tail_listener_task = asyncio.create_task(_tail_listener())
-
-                async for source, item in _merge_pipeline_and_tail(pipeline.execute(pipeline_request, tool_ctx), tail_queue):
-                    if source == "tail":
-                        _evt_type, evt_payload = await _handle_tail_event(item)
-                        if evt_payload.get("event_id"):
-                            emitted_event_ids.add(str(evt_payload["event_id"]))
-                        frame = _tail_sse_frame(evt_payload)
-                        if frame is not None:
-                            yield frame
-                        continue
-                    event = item
-                    if event.type == RuntimeEventType.STOP:
-                        paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(dict(event.data or {}))
-                        final_status = str(paused_payload["reason"])
-                        final_error = None
-                        svc_pause = SandboxService(stream_db)
-                        await svc_pause.pause_run(
-                            run_id=run_id,
-                            status=paused_payload["reason"],
-                            paused_action=paused_payload["action"],
-                            paused_context=paused_payload["context"],
-                        )
-                        await stream_db.commit()
-                        pause_event = {
-                            "reason": paused_payload["reason"],
-                            "action": paused_payload["action"],
-                            "context": paused_payload["context"],
-                            "contract_version": paused_payload["contract_version"],
-                            "run_id": str(run_id),
-                        }
-                        yield _format_sse("pause", pause_event)
-                    elif event.type == RuntimeEventType.DELTA:
-                        content = event.data.get("content")
-                        if isinstance(content, str) and content:
-                            yield _format_sse("delta", {"run_id": str(run_id), "content": content})
-                    elif event.type == RuntimeEventType.FINAL:
-                        if not str(final_status).startswith("waiting_"):
-                            final_status = "completed"
-                            final_error = None
-                            yield _format_sse("final", {
-                                "run_id": str(run_id),
-                                "content": str(event.data.get("content") or ""),
-                                "sources": event.data.get("sources") or [],
-                                "attachments": event.data.get("attachments") or [],
-                            })
-                    else:
-                        terminal = planner_terminal_from_event(event)
-                        if terminal is not None:
-                            final_status = terminal[0].value
-                            final_error = terminal[1]
-
-                    if event.type == RuntimeEventType.STATUS and str(event.data.get("stage")) == "memory_write_dispatched":
-                        tail_id = str(event.data.get("tail_id") or "").strip()
-                        if tail_id:
-                            if tail_id in tail_finished_early:
-                                tail_finished_early.discard(tail_id)
-                            else:
-                                tail_pending.add(tail_id)
-
-                if not str(final_status).startswith("waiting_"):
-                    svc_final = SandboxService(stream_db)
-                    await svc_final.finish_run(run_id, final_status, final_error)
-                    await stream_db.commit()
-
-                for fallback in await _journal_fallback():
-                    yield _format_sse("journal", fallback)
-
-            except Exception as e:
-                await RuntimeEventJournalFactory.create(
-                    context=RuntimeLogContext(run_id=run_id, level=RuntimeLoggingLevel.FULL,
-                        origin="sandbox", tenant_id=t_uuid, user_id=u_uuid,
-                        stream_logs=True, stream_progress=True),
-                    session_factory=session_factory,
-                ).error(e, payload={"stage": "sandbox_resume_stream"})
-                yield _format_sse("error", {"run_id": str(run_id), "error": "Sandbox execution failed"})
-                try:
-                    svc_err = SandboxService(stream_db)
-                    await svc_err.finish_run(run_id, "failed", str(e))
-                    await stream_db.commit()
-                except Exception:
-                    pass
-            finally:
-                if tail_listener_task and not tail_listener_task.done():
-                    tail_listener_task.cancel()
-                    try:
-                        await tail_listener_task
-                    except asyncio.CancelledError:
-                        pass
-                await tail_subscriber.unsubscribe()
-
-            yield _format_sse("done", {"run_id": str(run_id)})
+            async for frame in _observe_sandbox_runner(
+                run_id=run_id,
+                command=SandboxRuntimeCommand(
+                    run_id=run_id,
+                    user_id=u_uuid,
+                    tenant_id=t_uuid,
+                    pipeline_request=pipeline_request,
+                    tool_context=tool_ctx,
+                ),
+                llm_client=llm_client,
+                session_factory=session_factory,
+                stream_db=stream_db,
+            ):
+                yield frame
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -1007,21 +755,34 @@ async def cancel_sandbox_run(
     db: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(require_admin),
 ) -> StreamingResponse:
-    """Cancel a sandbox run paused for clarification or confirmation."""
+    """Request cancellation through the runner that owns live execution."""
     svc = SandboxService(db)
     await check_session_owner(svc, session_id, user)
 
     run = await svc.get_run(run_id)
     if not run or run.session_id != session_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.status not in ("running", "waiting_confirmation", "waiting_input"):
+    if run.status not in ("running", "cancelling", "waiting_confirmation", "waiting_input"):
         raise HTTPException(status_code=400, detail="Run is not active")
 
-    await svc.finish_run(run_id, "cancelled", "Cancelled by user")
-    await db.commit()
+    if run.status == "running":
+        await svc.request_cancel(run_id)
+        await db.commit()
+        await sandbox_runtime_runner.cancel_local(run_id)
+        try:
+            await RuntimeRunControlBus().publish_cancel(str(run_id))
+        except Exception:  # noqa: BLE001
+            logger.warning("sandbox_cancel_control_publish_failed run_id=%s", run_id)
+        status = "cancelling"
+    elif run.status == "cancelling":
+        status = "cancelling"
+    else:
+        await svc.finish_run(run_id, "cancelled", "Cancelled by user")
+        await db.commit()
+        status = "cancelled"
 
     async def _cancel_gen() -> AsyncGenerator[str, None]:
-        yield _format_sse("final", {"run_id": str(run_id), "status": "cancelled"})
+        yield _format_sse("final", {"run_id": str(run_id), "status": status})
         yield _format_sse("done", {"run_id": str(run_id)})
 
     return StreamingResponse(_cancel_gen(), media_type="text/event-stream")

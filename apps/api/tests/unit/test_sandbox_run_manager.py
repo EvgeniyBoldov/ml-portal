@@ -67,6 +67,46 @@ async def test_resume_run_reopens_paused_run_and_clears_checkpoint():
 
 
 @pytest.mark.asyncio
+async def test_request_cancel_marks_only_running_run_as_cancelling():
+    run_id = uuid4()
+    run_obj = SimpleNamespace(id=run_id, status="running")
+    updated = {}
+
+    class _RunsRepo:
+        async def get_by_id(self, _rid):
+            return run_obj
+
+        async def update(self, obj, data):
+            updated["obj"] = obj
+            updated["data"] = data
+            return obj
+
+    manager = SandboxRunManager(SimpleNamespace(runs=_RunsRepo()))
+
+    await manager.request_cancel(run_id)
+
+    assert updated["obj"] is run_obj
+    assert updated["data"] == {"status": "cancelling"}
+
+
+@pytest.mark.asyncio
+async def test_request_cancel_is_idempotent_for_non_running_run():
+    run_id = uuid4()
+    run_obj = SimpleNamespace(id=run_id, status="waiting_input")
+
+    class _RunsRepo:
+        async def get_by_id(self, _rid):
+            return run_obj
+
+        async def update(self, _obj, _data):
+            raise AssertionError("terminal/paused state must not be overwritten")
+
+    manager = SandboxRunManager(SimpleNamespace(runs=_RunsRepo()))
+
+    assert await manager.request_cancel(run_id) is run_obj
+
+
+@pytest.mark.asyncio
 async def test_get_next_run_step_order_appends_after_existing_steps():
     run_id = uuid4()
 

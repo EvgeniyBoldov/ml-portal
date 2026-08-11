@@ -461,6 +461,9 @@ class SandboxService:
     async def resume_run(self, run_id: UUID) -> Optional[SandboxRun]:
         return await self.run_manager.resume_run(run_id)
 
+    async def request_cancel(self, run_id: UUID) -> Optional[SandboxRun]:
+        return await self.run_manager.request_cancel(run_id)
+
     async def update_run_context(
         self,
         run_id: UUID,

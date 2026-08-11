@@ -141,6 +141,15 @@ class SandboxRunManager:
             },
         )
 
+    async def request_cancel(self, run_id: UUID) -> Optional[SandboxRun]:
+        """Persist an explicit cancellation request for a live runner."""
+        obj = await self.host.runs.get_by_id(run_id)
+        if not obj:
+            return None
+        if obj.status != "running":
+            return obj
+        return await self.host.runs.update(obj, {"status": "cancelling"})
+
     async def update_run_context(
         self,
         run_id: UUID,

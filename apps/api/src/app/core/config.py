@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     HTTP_TIMEOUT_SECONDS: int = Field(default=30)
     HTTP_MAX_RETRIES: int = Field(default=2)
     TIMEOUT_SECONDS: int = Field(default=30)
+    SANDBOX_SSE_HEARTBEAT_SECONDS: int = Field(default=15, ge=1)
     DB_SLOW_QUERY_LOG_ENABLED: bool = Field(default=True)
     DB_SLOW_QUERY_THRESHOLD_MS: int = Field(default=500)
     DB_SLOW_QUERY_TEXT_MAX_LEN: int = Field(default=1200)

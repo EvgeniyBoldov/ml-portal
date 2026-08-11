@@ -295,7 +295,7 @@ class SandboxRunRepository:
             .where(
                 and_(
                     SandboxRun.session_id == session_id,
-                    SandboxRun.status == "running",
+                    SandboxRun.status.in_(("running", "cancelling")),
                     SandboxRun.started_at < cutoff,
                 )
             )
