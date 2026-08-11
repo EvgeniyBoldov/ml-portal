@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import re
 import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import UUID
@@ -279,12 +280,7 @@ class AgentExecutor:
                         and isinstance(result_payload, dict)
                     ):
                         state.mark_artifact_deleted(str(result_payload.get("artifact_id") or ""))
-                    if operation_name in (
-                        "file.generate",
-                        "file_generate",
-                        "collection.template.fill",
-                        "instance.local-template-tools.collection.template.fill",
-                    ) and bool(runtime_event.data.get("success")):
+                    if self._creates_downloadable_artifact(operation_name) and bool(runtime_event.data.get("success")):
                         if isinstance(result_payload, dict):
                             artifact_id = result_payload.get("artifact_id")
                             if artifact_id:
@@ -367,7 +363,17 @@ class AgentExecutor:
         )
 
         outcome = "completed" if success else "failed"
-        if summary_preview:
+        if success and attachments and self._is_url_only_response(summary_preview):
+            # Artifact delivery is a structured transport concern.  Do not
+            # promote an agent-invented storage URL to the user-facing answer;
+            # the final event carries the canonical download URL separately.
+            names = [
+                str(item.get("file_name") or "file")
+                for item in attachments[:5]
+                if isinstance(item, dict)
+            ]
+            result_summary = "Создан файл: " + ", ".join(names)
+        elif summary_preview:
             result_summary = summary_preview
         elif success and attachments:
             names = [
@@ -546,19 +552,46 @@ class AgentExecutor:
                 summary=summary,
                 reason_code=error_code,
             )
+        outputs = {
+            **dict(payload.get("outputs") or {}),
+            "summary": str(payload.get("summary") or ""),
+            "attachments": list(payload.get("attachments") or []),
+            "artifacts": list(payload.get("artifacts") or []),
+        }
+        # Agents that fill or generate files naturally return an artifact
+        # attachment, while the planner may have named that result
+        # semantically (for example ``completed_request``).  Bind missing
+        # required output keys to the produced artifact so the graph contract
+        # remains usable by downstream tasks and finalization.
+        attachments = outputs["attachments"] or outputs["artifacts"]
+        if attachments:
+            value: Any = attachments[0] if len(attachments) == 1 else attachments
+            for spec in request.expected_outputs:
+                key = spec.key
+                if spec.required and key not in outputs:
+                    outputs[key] = value
         return AgentTaskResult(
             outcome=TaskOutcome.COMPLETED,
             summary=str(payload.get("summary") or ""),
-            outputs={
-                **dict(payload.get("outputs") or {}),
-                "summary": str(payload.get("summary") or ""),
-                "attachments": list(payload.get("attachments") or []),
-                "artifacts": list(payload.get("artifacts") or []),
-            },
+            outputs=outputs,
             evidence=dict(payload.get("evidence") or {}),
         )
 
     # ---------------------------------------------------------------- helpers --
+
+    @staticmethod
+    def _creates_downloadable_artifact(operation_name: str) -> bool:
+        """Whether a canonical operation result represents a newly created file."""
+        normalized = str(operation_name or "").strip()
+        return normalized in {"file.generate", "file_generate", "collection.template.fill"} or (
+            normalized.endswith(".file.generate")
+            or normalized.endswith(".collection.template.fill")
+        )
+
+    @staticmethod
+    def _is_url_only_response(content: str) -> bool:
+        """Detect an artifact-only agent response without trusting its URL."""
+        return bool(re.fullmatch(r"https?://[^\r\n]+", str(content or "").strip().strip("`")))
 
     @staticmethod
     def _extract_artifacts(payload: Any, *, limit: int = 20) -> List[Dict[str, Any]]:

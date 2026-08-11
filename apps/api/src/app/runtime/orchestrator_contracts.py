@@ -175,6 +175,7 @@ class TaskRequest(BaseModel):
     checkpoint: Dict[str, Any] = Field(default_factory=dict)
     dependency_outputs: Dict[str, Any] = Field(default_factory=dict)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
+    expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
 
 
 class AgentTaskResult(BaseModel):

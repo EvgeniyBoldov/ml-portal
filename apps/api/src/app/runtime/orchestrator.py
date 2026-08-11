@@ -543,7 +543,7 @@ class GraphOrchestrator:
                                       )
                                       if planner_kwargs.get("durable_memory_snapshot") is not None
                                       else []
-                                  ))
+                                  ), expected_outputs=list(task.expected_outputs or []))
             checkpoint_id = make_checkpoint_id(str(root_run_id), "task", f"{task_id}:{task.attempts}")
             executor_id = make_agent_execution_id(active_iteration_id, task_id, task.attempts)
             await observe("orchestrator_checkpoint_started", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,

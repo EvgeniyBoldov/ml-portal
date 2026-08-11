@@ -9,6 +9,7 @@ from app.agents.runtime.agent import AgentToolRuntime
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.events import RuntimeEvent
 from app.runtime.orchestrator_contracts import (
+    TaskOutputSpec,
     TaskExecutionError,
     TaskOutcome,
     TaskRequest,
@@ -97,3 +98,46 @@ def test_agent_retry_delay_respects_provider_hint() -> None:
     assert AgentToolRuntime._retry_delay_ms(retry_count=0, retry_after_ms=None) == 500
     assert AgentToolRuntime._retry_delay_ms(retry_count=2, retry_after_ms=2_000) == 2_000
     assert AgentToolRuntime._retry_delay_ms(retry_count=0, retry_after_ms=60_000) == 30_000
+
+
+def test_artifact_producing_operation_names_are_recognized_canonically() -> None:
+    assert AgentExecutor._creates_downloadable_artifact("file.generate")
+    assert AgentExecutor._creates_downloadable_artifact("instance.local-system-tools.file.generate")
+    assert AgentExecutor._creates_downloadable_artifact(
+        "instance.local-template-tools.collection.template.fill"
+    )
+    assert not AgentExecutor._creates_downloadable_artifact("file.read")
+
+
+def test_artifact_only_response_detects_unencoded_file_names() -> None:
+    assert AgentExecutor._is_url_only_response(
+        "https://storage.cloud.local/artifacts/artifact-1/filled_Заявка на сетевую связность (6).xlsx"
+    )
+
+
+@pytest.mark.asyncio
+async def test_artifact_binds_semantic_expected_output_key() -> None:
+    executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
+    request = _request()
+    request.expected_outputs = [TaskOutputSpec(key="completed_request", description="Filled form")]
+
+    async def emit_success(*, runtime_state, **_kwargs):
+        runtime_state.agent_results.append({
+            "success": True,
+            "summary": "form filled",
+            "attachments": [{"artifact_id": "artifact-1", "file_name": "request.xlsx"}],
+        })
+        yield RuntimeEvent.status("done")
+
+    executor.execute = emit_success  # type: ignore[method-assign]
+    state = SimpleNamespace(agent_results=[])
+    result = await executor.execute_task(
+        request=request,
+        runtime_state=state,
+        messages=[],
+        ctx=SimpleNamespace(extra={}),
+        user_id=AsyncMock(),
+        tenant_id=AsyncMock(),
+    )
+
+    assert result.outputs["completed_request"] == result.outputs["attachments"][0]
