@@ -852,6 +852,7 @@ class AgentToolRuntime(BaseRuntime):
                         loop_state=loop_state,
                         operation_results_for_context=operation_results_for_context,
                         operation_calls_total_ref=operation_calls_total_ref,
+                        include_operation_contracts=not native_tool_calling,
                     ):
                         yield ev
                         if ev.type in (
@@ -1027,6 +1028,7 @@ class AgentToolRuntime(BaseRuntime):
         loop_state: AgentLoopState,
         operation_results_for_context: List[tuple],
         operation_calls_total_ref: List[int],
+        include_operation_contracts: bool,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """Execute one operation call: budget check → tool → SSE events → logging → collect."""
         # Keep the operation cap local to the current agent run.
@@ -1203,7 +1205,7 @@ class AgentToolRuntime(BaseRuntime):
         result_text = self.tools.format_result_for_context(
             result,
             operation_slug=operation_call.tool_name,
-            include_operation_contracts=not native_tool_calling,
+            include_operation_contracts=include_operation_contracts,
         )
         operation_results_for_context.append((operation_call, result_text))
 
