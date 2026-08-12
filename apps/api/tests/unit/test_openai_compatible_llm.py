@@ -78,6 +78,49 @@ def test_normalize_error_classifies_timeout_and_context_limit():
     assert oversized.retryable is False
 
 
+def test_rejection_diagnostics_describe_tool_protocol_without_content():
+    shape = OpenAICompatibleLLM._request_shape_for_diagnostics(
+        {
+            "model": "gemma-provider",
+            "messages": [
+                {"role": "system", "content": "secret prompt"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "function": {"name": "collection.template.fill", "arguments": "{\"secret\":1}"},
+                    }],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "private result"},
+            ],
+            "tools": [{"function": {"name": "collection.template.fill"}}],
+            "tool_choice": "auto",
+            "max_tokens": 1000,
+            "temperature": 0.1,
+        }
+    )
+
+    rendered = str(shape)
+    assert "secret prompt" not in rendered
+    assert "private result" not in rendered
+    assert "secret" not in rendered
+    assert shape["messages"][1]["tool_calls"][0]["id_present"] is True
+    assert shape["messages"][2]["tool_call_id_present"] is True
+
+
+def test_provider_detail_diagnostics_is_bounded_and_filtered():
+    error = SimpleNamespace(
+        body={"error": {"message": "bad request", "code": "invalid", "prompt": "secret"}}
+    )
+
+    detail = OpenAICompatibleLLM._provider_detail_for_diagnostics(error)
+
+    assert "bad request" in detail
+    assert "invalid" in detail
+    assert "secret" not in detail
+
+
 @pytest.mark.asyncio
 async def test_connection_resolver_strips_model_selector(monkeypatch: pytest.MonkeyPatch):
 

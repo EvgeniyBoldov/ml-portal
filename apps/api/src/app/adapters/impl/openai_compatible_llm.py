@@ -5,6 +5,7 @@ Supports: OpenAI, Groq, Azure OpenAI, LocalAI, vLLM, Ollama, etc.
 from __future__ import annotations
 import asyncio
 import hashlib
+import json
 import time
 from typing import Any, AsyncIterator, Mapping, Optional
 import httpx
@@ -216,6 +217,16 @@ class OpenAICompatibleLLM:
                 connector, request_model, effective_timeout_s, normalized.code.value,
                 normalized.status_code, normalized.provider_code, normalized.retry_after_ms, duration_ms,
             )
+            if normalized.status_code is not None and normalized.status_code >= 400:
+                logger.warning(
+                    "LLM provider rejection diagnostics model=%s status_code=%s "
+                    "provider_code=%s request=%s provider_detail=%s",
+                    request_model,
+                    normalized.status_code,
+                    normalized.provider_code,
+                    self._request_shape_for_diagnostics(request_params),
+                    self._provider_detail_for_diagnostics(e),
+                )
             raise normalized from e
     
     async def chat_stream(
@@ -355,6 +366,69 @@ class OpenAICompatibleLLM:
         return LLMProviderError(code=code, safe_message=safe, retryable=retryable,
                                 status_code=status_code, provider_type=type(exc).__name__,
                                 provider_code=provider_code, retry_after_ms=retry_after_ms)
+
+    @staticmethod
+    def _request_shape_for_diagnostics(request_params: Mapping[str, Any]) -> dict[str, Any]:
+        """Describe a rejected request without logging prompts or tool arguments."""
+        messages = request_params.get("messages") or []
+        shapes: list[dict[str, Any]] = []
+        for message in messages[:40]:
+            if not isinstance(message, Mapping):
+                shapes.append({"type": type(message).__name__})
+                continue
+            shape: dict[str, Any] = {"role": message.get("role")}
+            if "content" in message:
+                content = message.get("content")
+                shape["content_type"] = type(content).__name__
+                shape["content_length"] = len(content) if isinstance(content, str) else None
+            if "tool_calls" in message:
+                calls = message.get("tool_calls") or []
+                shape["tool_calls"] = [
+                    {
+                        "id_present": bool(call.get("id")),
+                        "function_name": (call.get("function") or {}).get("name"),
+                        "arguments_length": len((call.get("function") or {}).get("arguments") or ""),
+                    }
+                    for call in calls[:20]
+                    if isinstance(call, Mapping)
+                ]
+            if "tool_call_id" in message:
+                shape["tool_call_id_present"] = bool(message.get("tool_call_id"))
+            shapes.append(shape)
+        tools = request_params.get("tools") or []
+        return {
+            "model": request_params.get("model"),
+            "message_count": len(messages),
+            "messages": shapes,
+            "tool_count": len(tools),
+            "tool_names": [
+                ((tool.get("function") or {}).get("name"))
+                for tool in tools[:40]
+                if isinstance(tool, Mapping)
+            ],
+            "tool_choice": request_params.get("tool_choice"),
+            "max_tokens": request_params.get("max_tokens"),
+            "temperature": request_params.get("temperature"),
+        }
+
+    @staticmethod
+    def _provider_detail_for_diagnostics(exc: Exception) -> str:
+        """Extract bounded provider error text, excluding request payloads."""
+        body = getattr(exc, "body", None)
+        detail: Any = body.get("error") if isinstance(body, Mapping) else body
+        if isinstance(detail, Mapping):
+            detail = {key: value for key, value in detail.items()
+                      if key in {"message", "type", "code", "param"}}
+        if detail is None:
+            response = getattr(exc, "response", None)
+            detail = getattr(response, "text", None) if response is not None else None
+        if detail is None:
+            detail = str(exc)
+        try:
+            rendered = json.dumps(detail, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            rendered = str(detail)
+        return rendered[:2000]
 
     @staticmethod
     def _record_call(*, connector: str, call_kind: str, outcome: str, duration_ms: int,
