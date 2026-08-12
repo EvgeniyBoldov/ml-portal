@@ -298,3 +298,19 @@ def test_prompt_assembler_operation_schemas_keep_only_collection_info_and_system
         "instance.template.collection.template.search",
         "file.read",
     ]
+
+
+def test_prompt_assembler_omits_text_tool_contract_for_native_tool_calling():
+    assembler = PromptAssembler()
+    assembly = assembler.assemble(
+        type("Request", (), {"policy_data": {}, "limit_data": {}, "resolved_data_instances": []})(),
+        system_prompt_override="base prompt",
+        resolved_operations=[],
+        operation_schemas=[
+            {"type": "function", "function": {"name": "file.read", "parameters": {}}}
+        ],
+        platform_config={"native_tool_calling": True},
+    )
+
+    assert assembly.operations_prompt == ""
+    assert "Список инструментов:" not in assembly.system_prompt

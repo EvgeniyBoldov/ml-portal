@@ -47,6 +47,9 @@ MAX_TOOL_CONTEXT_CHARS = 4_000
 MAX_COLLECTION_INFO_TOOLS = 12
 MAX_COLLECTION_INFO_TEXT_CHARS = 320
 MAX_COLLECTION_INFO_RULES_CHARS = 1_200
+MAX_TEMPLATE_SEARCH_HITS = 8
+MAX_TEMPLATE_SEARCH_TITLE_CHARS = 240
+MAX_TEMPLATE_SEARCH_FRAGMENT_CHARS = 320
 
 
 class ConfirmationRequiredError(RuntimeError):
@@ -716,32 +719,33 @@ class OperationExecutionFacade:
         result: ToolResult,
         *,
         operation_slug: Optional[str] = None,
+        include_operation_contracts: bool = True,
     ) -> str:
         """Format a bounded, action-oriented tool result for the next LLM turn.
 
-        ``collection.info`` is intentionally projected rather than blindly
-        serialized: its raw result includes inspection-only schema and runtime
-        metadata which is useful in the journal but needlessly crowds out the
-        next tool decision. The projection preserves the collection identity,
-        its administrator-authored usage rules, readiness and callable
-        operations needed to continue execution.
+        Each operation may publish a compact LLM projection which is distinct
+        from its complete result. Full results remain in the canonical journal
+        and ``AgentLoopState.tool_outputs``. This avoids asking the operation
+        loop to infer which arbitrary fields are safe to discard while keeping
+        the next tool decision supplied with its declared contract.
         """
         import json as _json
 
         if result.success:
             raw_output = result.data or {}
-            is_collection_info = (
-                str(operation_slug or "").strip() == "collection.info"
-                or str(operation_slug or "").strip().endswith(".collection.info")
-            )
-            if (
-                is_collection_info
-                and isinstance(raw_output, dict)
-                and isinstance(raw_output.get("collection"), dict)
-            ):
-                raw_output = OperationExecutionFacade._compact_collection_info_for_context(
-                    raw_output,
-                )
+            canonical_operation = OperationExecutionFacade._canonical_operation_name(operation_slug)
+            if isinstance(raw_output, dict):
+                if canonical_operation == "collection.info":
+                    raw_output = OperationExecutionFacade._compact_collection_info_for_context(
+                        raw_output,
+                        include_operation_contracts=include_operation_contracts,
+                    )
+                elif canonical_operation == "collection.template.search":
+                    raw_output = OperationExecutionFacade._compact_template_search_for_context(raw_output)
+                elif canonical_operation == "collection.template.get_schema":
+                    raw_output = OperationExecutionFacade._compact_template_schema_for_context(raw_output)
+                elif canonical_operation == "collection.template.fill":
+                    raw_output = OperationExecutionFacade._compact_template_fill_for_context(raw_output)
             try:
                 return _json.dumps(raw_output, ensure_ascii=False, default=str)[
                     :MAX_TOOL_CONTEXT_CHARS
@@ -751,7 +755,19 @@ class OperationExecutionFacade:
         return f"Error: {result.error or 'unknown'}"
 
     @staticmethod
-    def _compact_collection_info_for_context(raw_output: Dict[str, Any]) -> Dict[str, Any]:
+    def _canonical_operation_name(operation_slug: Optional[str]) -> str:
+        normalized = str(operation_slug or "").strip()
+        if normalized.startswith("instance."):
+            _, _, normalized = normalized.partition(".")
+            _, _, normalized = normalized.partition(".")
+        return normalized
+
+    @staticmethod
+    def _compact_collection_info_for_context(
+        raw_output: Dict[str, Any],
+        *,
+        include_operation_contracts: bool,
+    ) -> Dict[str, Any]:
         """Return the minimum collection.info contract required by an agent."""
 
         def text(value: Any, limit: int = MAX_COLLECTION_INFO_TEXT_CHARS) -> str:
@@ -782,7 +798,7 @@ class OperationExecutionFacade:
                     }
                 )
 
-        return {
+        projection = {
             "collection": {
                 key: value
                 for key, value in {
@@ -807,7 +823,54 @@ class OperationExecutionFacade:
                 }.items()
                 if value not in ("", None)
             },
-            "tools": compact_tools,
+        }
+        # A native tools payload is the authoritative operation contract. The
+        # list below is required only by the plaintext tool-call protocol.
+        if include_operation_contracts:
+            projection["tools"] = compact_tools
+        return projection
+
+    @staticmethod
+    def _compact_template_search_for_context(raw_output: Dict[str, Any]) -> Dict[str, Any]:
+        """Publish template identities, not their repeated row schemas."""
+        hits: List[Dict[str, Any]] = []
+        for item in (raw_output.get("hits") or [])[:MAX_TEMPLATE_SEARCH_HITS]:
+            if not isinstance(item, dict):
+                continue
+            row_data = item.get("row_data") if isinstance(item.get("row_data"), dict) else {}
+            row_id = str(item.get("row_id") or row_data.get("id") or "").strip()
+            if not row_id:
+                continue
+            title = str(row_data.get("title") or item.get("title") or "").strip()
+            fragment = str(item.get("primary_fragment") or "").strip()
+            entry: Dict[str, Any] = {"row_id": row_id}
+            if title:
+                entry["title"] = title[:MAX_TEMPLATE_SEARCH_TITLE_CHARS]
+            if isinstance(item.get("score"), (int, float)):
+                entry["score"] = item["score"]
+            if fragment:
+                entry["match"] = fragment[:MAX_TEMPLATE_SEARCH_FRAGMENT_CHARS]
+            hits.append(entry)
+        return {
+            "collection": raw_output.get("collection"),
+            "hits": hits,
+            "total": len(hits),
+        }
+
+    @staticmethod
+    def _compact_template_schema_for_context(raw_output: Dict[str, Any]) -> Dict[str, Any]:
+        """The fill input schema is the sole schema needed by the next call."""
+        schema = raw_output.get("template_schema")
+        return {"template_schema": schema if isinstance(schema, dict) else {}}
+
+    @staticmethod
+    def _compact_template_fill_for_context(raw_output: Dict[str, Any]) -> Dict[str, Any]:
+        """Expose only the artifact reference and its delivery metadata."""
+        allowed = ("artifact_id", "file_name", "content_type", "size_bytes", "format")
+        return {
+            key: raw_output[key]
+            for key in allowed
+            if raw_output.get(key) not in (None, "")
         }
 
     @staticmethod

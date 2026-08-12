@@ -1203,6 +1203,7 @@ class AgentToolRuntime(BaseRuntime):
         result_text = self.tools.format_result_for_context(
             result,
             operation_slug=operation_call.tool_name,
+            include_operation_contracts=not native_tool_calling,
         )
         operation_results_for_context.append((operation_call, result_text))
 

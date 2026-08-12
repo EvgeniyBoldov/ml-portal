@@ -154,6 +154,15 @@ class PromptAssembler:
             platform_config=platform_config,
             sandbox_overrides=sandbox_overrides,
         )
+        # Native function calling carries the operation names, descriptions and
+        # JSON Schemas in the provider's ``tools`` field on every request. Do
+        # not mirror that same contract in the system prompt: it is redundant
+        # and needlessly consumes the context window. The textual contract is
+        # retained for providers using the plaintext tool-call protocol.
+        native_tool_calling = bool(
+            isinstance(platform_config, dict)
+            and platform_config.get("native_tool_calling", False)
+        )
         operations_prompt = (
             build_tools_prompt(
                 operation_schemas,
@@ -161,7 +170,7 @@ class PromptAssembler:
                 prompt_labels=prompt_labels,
                 prompt_budgets=prompt_budgets,
             )
-            if operation_schemas
+            if operation_schemas and not native_tool_calling
             else ""
         )
         sections = [

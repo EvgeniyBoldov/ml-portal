@@ -2,8 +2,9 @@
 Collection Text Search Tool — векторный поиск по коллекциям с retrieval-enabled text fields.
 
 Ищет в Qdrant-коллекции, привязанной к конкретной collection-коллекции
-(collection.qdrant_collection_name). Возвращает найденные строки
-с полными данными из SQL-таблицы.
+(collection.qdrant_collection_name). Полный результат сохраняет найденные
+строки с SQL-обогащением; LLM получает компактную проекцию для следующего
+tool call.
 """
 from __future__ import annotations
 
@@ -99,7 +100,9 @@ class CollectionTextSearchTool(VersionedTool):
     Такие коллекции могут иметь text-поля с `used_in_retrieval=true`.
     Эти поля векторизуются и хранятся в отдельной Qdrant-коллекции.
 
-    Результаты обогащаются полными данными из SQL-таблицы.
+    Результаты обогащаются полными данными из SQL-таблицы для журнала и
+    серверной обработки. В LLM-контекст попадают только идентификатор строки
+    и данные, нужные для выбора следующей операции.
     """
 
     tool_slug: ClassVar[str] = "collection.template.search"
@@ -108,7 +111,7 @@ class CollectionTextSearchTool(VersionedTool):
     description: ClassVar[str] = (
         "Semantic search within a template collection that has retrieval-enabled text fields. "
         "Use it to find the right template row by meaning before calling collection.template.get_schema "
-        "or collection.template.fill. Returns matched text, relevance score, and full row data."
+        "or collection.template.fill. Returns template row identifiers, titles, scores, and short matching excerpts."
     )
 
     @tool_version(
