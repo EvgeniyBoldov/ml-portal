@@ -12,9 +12,10 @@ import {
   type OrchestrationSettings,
   type ExecutorSettingsUpdate,
   type PlannerRoleUpdate,
+  type MemoryRoleUpdate,
   type SynthesizerRoleUpdate,
   type FactExtractorRoleUpdate,
-  type SummaryCompactorRoleUpdate,
+  type FactCompactorRoleUpdate,
   type ActorLimits,
   type ActorLimitsResolution,
   type RuntimeLimits,
@@ -193,8 +194,16 @@ export function useUpdateOrchestratorExecutionLimits(role?: string) {
 
 export function useActivePlannerRole() {
   return useQuery({
-    queryKey: ['system-llm-roles', 'active', 'planner'],
+    queryKey: qk.admin.systemLlmRoles.active('planner'),
     queryFn: () => systemLLMRolesApi.getActive('planner'),
+    staleTime: 30_000,
+  });
+}
+
+export function useActiveMemoryRole() {
+  return useQuery({
+    queryKey: qk.admin.systemLlmRoles.active('memory'),
+    queryFn: () => systemLLMRolesApi.getActive('memory'),
     staleTime: 30_000,
   });
 }
@@ -206,10 +215,25 @@ export function useUpdatePlannerRole() {
   const showSuccess = useSuccessToast();
 
   return useMutation({
-    mutationFn: (data: PlannerRoleUpdate) => systemLLMRolesApi.updatePlanner(data),
+    mutationFn: (data: PlannerRoleUpdate) => systemLLMRolesApi.updateActive('planner', data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['system-llm-roles', 'active', 'planner'] });
+      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('planner') });
       showSuccess('Настройки Planner обновлены');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+}
+
+export function useUpdateMemoryRole() {
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+
+  return useMutation({
+    mutationFn: (data: MemoryRoleUpdate) => systemLLMRolesApi.updateActive('memory', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('memory') });
+      showSuccess('Настройки Memory обновлены');
     },
     onError: (err: Error) => showError(err.message),
   });
@@ -231,10 +255,10 @@ export function useActiveFactExtractorRole() {
   });
 }
 
-export function useActiveSummaryCompactorRole() {
+export function useActiveFactCompactorRole() {
   return useQuery({
-    queryKey: qk.admin.systemLlmRoles.active('summary_compactor'),
-    queryFn: () => systemLLMRolesApi.getActive('summary_compactor'),
+    queryKey: qk.admin.systemLlmRoles.active('fact_compactor'),
+    queryFn: () => systemLLMRolesApi.getActive('fact_compactor'),
     staleTime: 30_000,
   });
 }
@@ -245,7 +269,7 @@ export function useUpdateSynthesizerRole() {
   const showSuccess = useSuccessToast();
 
   return useMutation({
-    mutationFn: (data: SynthesizerRoleUpdate) => systemLLMRolesApi.updateSynthesizer(data),
+    mutationFn: (data: SynthesizerRoleUpdate) => systemLLMRolesApi.updateActive('synthesizer', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('synthesizer') });
       showSuccess('Настройки Synthesizer обновлены');
@@ -260,7 +284,7 @@ export function useUpdateFactExtractorRole() {
   const showSuccess = useSuccessToast();
 
   return useMutation({
-    mutationFn: (data: FactExtractorRoleUpdate) => systemLLMRolesApi.updateFactExtractor(data),
+    mutationFn: (data: FactExtractorRoleUpdate) => systemLLMRolesApi.updateActive('fact_extractor', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('fact_extractor') });
       showSuccess('Настройки Fact Extractor обновлены');
@@ -269,16 +293,16 @@ export function useUpdateFactExtractorRole() {
   });
 }
 
-export function useUpdateSummaryCompactorRole() {
+export function useUpdateFactCompactorRole() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
   return useMutation({
-    mutationFn: (data: SummaryCompactorRoleUpdate) => systemLLMRolesApi.updateSummaryCompactor(data),
+    mutationFn: (data: FactCompactorRoleUpdate) => systemLLMRolesApi.updateActive('fact_compactor', data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('summary_compactor') });
-      showSuccess('Настройки Summary Compactor обновлены');
+      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('fact_compactor') });
+      showSuccess('Настройки Fact Compactor обновлены');
     },
     onError: (err: Error) => showError(err.message),
   });

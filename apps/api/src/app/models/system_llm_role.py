@@ -1,5 +1,5 @@
 """
-SystemLLMRole model — structured LLM roles for triage, planner, and summary.
+SystemLLMRole model — structured runtime LLM roles.
 
 Stores prompt parts and execution configuration for system-level LLM roles.
 Each role type has strict contracts and structured input.
@@ -20,13 +20,10 @@ from app.models.base import Base
 
 class SystemLLMRoleType(str, Enum):
     """System LLM role types."""
-    TRIAGE = "triage"
     PLANNER = "planner"
-    SUMMARY = "summary"
     MEMORY = "memory"
     SYNTHESIZER = "synthesizer"
     FACT_EXTRACTOR = "fact_extractor"
-    SUMMARY_COMPACTOR = "summary_compactor"
     FACT_COMPACTOR = "fact_compactor"
 
 
@@ -41,7 +38,7 @@ class SystemLLMRole(Base):
     """
     System LLM role configuration.
     
-    Stores structured prompt parts and execution settings for triage, planner, and summary roles.
+    Stores structured prompt parts and execution settings for runtime roles.
     """
     __tablename__ = "system_llm_roles"
 
@@ -52,9 +49,9 @@ class SystemLLMRole(Base):
     # === Role Identification ===
     role_type: Mapped[str] = mapped_column(
         String(20),
-        CheckConstraint("role_type IN ('triage', 'planner', 'summary', 'memory', 'synthesizer', 'fact_extractor', 'summary_compactor', 'fact_compactor')", name="check_system_llm_role_type"),
+        CheckConstraint("role_type IN ('planner', 'memory', 'synthesizer', 'fact_extractor', 'fact_compactor')", name="check_system_llm_role_type"),
         nullable=False,
-        comment="Role type: triage | planner | summary | memory"
+        comment="Role type: planner | memory | synthesizer | fact_extractor | fact_compactor"
     )
     
     # === Prompt Parts ===
@@ -136,7 +133,7 @@ class SystemLLMRole(Base):
     )
 
     def __repr__(self):
-        return f"<SystemLLMRole {self.role_type.value} active={self.is_active}>"
+        return f"<SystemLLMRole {self.role_type} active={self.is_active}>"
 
     @property
     def compiled_prompt(self) -> str:

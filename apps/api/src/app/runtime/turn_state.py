@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 
 from app.runtime.memory.components import MemoryBundle, MemorySection
 from app.runtime.memory.tool_ledger import ToolLedger
+from app.runtime.project_memory_candidates import ProjectMemoryCandidate
 from app.runtime.contracts import (
     AgentAnswerStatus,
     AttachmentContext,
@@ -75,6 +76,7 @@ class RuntimeTurnState(BaseModel):
     agent_results: List[Dict[str, Any]] = Field(default_factory=list)
     iteration_results: List[PlannerIterationResult] = Field(default_factory=list)
     runtime_facts: List[RuntimeFact] = Field(default_factory=list)
+    project_memory_candidates: List[ProjectMemoryCandidate] = Field(default_factory=list)
     tool_ledger: ToolLedger = Field(default_factory=ToolLedger)
     open_questions: List[str] = Field(default_factory=list)
     task_journal: List[TaskJournalEntry] = Field(default_factory=list)

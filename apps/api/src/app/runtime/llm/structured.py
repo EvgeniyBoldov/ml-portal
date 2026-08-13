@@ -167,11 +167,12 @@ class StructuredLLMCall:
 
         model_call_config = await self.model_call_config_service.resolve(model)
         configured_timeout_s = model_call_config.request_timeout_s
-        timeout_s = configured_timeout_s
-        max_retries = model_call_config.max_retries
-        max_tokens = model_call_config.max_output_tokens
-        if max_tokens is None and role_config.get("max_tokens") is not None:
-            max_tokens = int(role_config["max_tokens"])
+        timeout_s = int(role_config.get("timeout_s") or configured_timeout_s)
+        max_retries = int(role_config.get("max_retries") if role_config.get("max_retries") is not None else model_call_config.max_retries)
+        retry_backoff = str(role_config.get("retry_backoff") or "exp")
+        max_tokens = role_config.get("max_tokens")
+        if max_tokens is None:
+            max_tokens = model_call_config.max_output_tokens
         params: Dict[str, Any] = {}
         if temperature is not None:
             params["temperature"] = temperature
@@ -289,6 +290,7 @@ class StructuredLLMCall:
                         "retry_delay_ms": self._retry_delay_ms(
                             attempt=attempt,
                             retry_after_ms=retry_after_ms,
+                            strategy=retry_backoff,
                         ),
                     },
                 ))
@@ -299,6 +301,7 @@ class StructuredLLMCall:
                 retry_delay_ms = self._retry_delay_ms(
                     attempt=attempt,
                     retry_after_ms=retry_after_ms,
+                    strategy=retry_backoff,
                 )
                 logger.info(
                     "Structured LLM retry scheduled role=%s attempt=%s/%s delay_ms=%s retry_after_ms=%s",
@@ -753,12 +756,19 @@ class StructuredLLMCall:
         return any(p in text for p in patterns)
 
     @staticmethod
-    def _retry_delay_ms(*, attempt: int, retry_after_ms: Optional[int]) -> int:
+    def _retry_delay_ms(
+        *, attempt: int, retry_after_ms: Optional[int], strategy: str = "exp"
+    ) -> int:
         """Bound retries and honour the provider's rate-limit hint when present."""
-        exponential_ms = min(10_000, 500 * (2 ** max(0, attempt)))
+        if strategy == "none":
+            base_ms = 0
+        elif strategy == "linear":
+            base_ms = min(10_000, 500 * (attempt + 1))
+        else:
+            base_ms = min(10_000, 500 * (2 ** max(0, attempt)))
         if retry_after_ms is None:
-            return exponential_ms
-        return min(30_000, max(exponential_ms, max(0, retry_after_ms)))
+            return base_ms
+        return min(30_000, max(base_ms, max(0, retry_after_ms)))
 
     @staticmethod
     def _compile_role_prompt(
@@ -770,15 +780,13 @@ class StructuredLLMCall:
         """Recompile system prompt from role_config parts + optional sandbox overrides.
 
         Mirrors SystemLLMRole.compiled_prompt logic so overrides to identity/mission/etc.
-        are reflected in the final prompt sent to the LLM. Structured roles get their
-        output contract from the runtime schema; only the synthesizer keeps its
-        operator-editable text requirement from the database.
+        are reflected in the final prompt sent to the LLM. The database keeps the
+        operator-authored output requirements; structured roles additionally receive
+        the non-editable runtime schema that the parser enforces.
         """
         parts: list[str] = []
         role_type = str(role_config.get("role_type") or "").strip().lower()
         for field, heading in _ROLE_PROMPT_SECTIONS:
-            if field == "output_requirements" and role_type != SystemLLMRoleType.SYNTHESIZER.value:
-                continue
             base = role_config.get(field)
             override_val = role_override.get(field) if isinstance(role_override, dict) else None
             val = override_val if override_val is not None else base
@@ -798,10 +806,14 @@ class StructuredLLMCall:
                     "Если во входе есть pending needs, разреши каждую из них только одним способом: "
                     "добавь задачу-производитель с expected_outputs, содержащим тот же key, и свяжи её "
                     "с ожидающей задачей через depends_on; либо верни ask_user с одним конкретным вопросом; "
-                    "либо верни fail. Не повторяй неизменный граф при pending needs."
+                    "либо верни fail. Не повторяй неизменный граф при pending needs.\n"
+                    "Для project knowledge используй только ключ проекта из memory_context.type=project. "
+                    "Если проект для знания нужен, но ключ отсутствует или контекст неоднозначен, верни ask_user "
+                    "с одним вопросом вместо догадки. Когда вызываешь executor=knowledge, передай точный project_key "
+                    "в task.inputs."
                 )
             parts.append(
-                "# OUTPUT REQUIREMENTS\n"
+                "# RUNTIME RESPONSE CONTRACT\n"
                 "Верни строго валидный JSON по следующей схеме (без markdown и пояснений):\n"
                 f"{json.dumps(generated_schema, ensure_ascii=False, indent=2)}"
             )

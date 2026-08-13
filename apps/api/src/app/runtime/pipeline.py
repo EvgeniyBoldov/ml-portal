@@ -5,16 +5,14 @@ Responsibilities (and NOTHING else):
     1. Resolve tenant/user/chat ids from the incoming request.
     2. Load the platform snapshot (config + routable agents + policy).
     3. Ask `MemoryBuilder` to assemble the turn's memory from the
-       persisted FactStore + SummaryStore.
+       persisted FactStore.
     4. Initialize `RuntimeTurnState` as the single source of truth.
     5. Run the persisted graph planning stage until the plan pauses or reaches
        a terminal state.
     6. Run FinalizationStage for NEEDS_FINAL outcomes (synthesizer).
-    7. Hand off to `MemoryWriter.finalize` to persist extracted facts
-       and the updated DialogueSummary for next-turn memory.
+    7. Hand off to `MemoryWriter.finalize` to persist extracted facts.
 
-Triage is gone. The planner absorbs clarify. The
-rolling summary job is delegated to MemoryWriter + SummaryCompactor.
+Triage is gone. The planner absorbs clarify.
 """
 from __future__ import annotations
 
@@ -577,18 +575,30 @@ class RuntimePipeline:
                     ),
                     phase=OrchestrationPhase.PIPELINE,
                 )
-            elif await_background_tail:
-                # There is no user-facing response yet: planning failed before
-                # the synthesizer. Memory writeback is post-response work and
-                # must not be started for this terminal path.
+            else:
+                # A failed graph has no FINAL event. Emit an explicit safe
+                # transport error so chat clients do not observe a silent EOF.
+                yield await emitter.emit(
+                    RuntimeEvent.error(
+                        "Runtime execution failed",
+                        recoverable=True,
+                        error_code="runtime_execution_failed",
+                        retryable=True,
+                        user_message=(
+                            "Во время выполнения запроса возникли временные проблемы. "
+                            "Попробуйте повторить запрос позже."
+                        ),
+                        source="runtime",
+                        parent_entity_type="run",
+                        parent_entity_id=run_id_str,
+                    ),
+                    phase=OrchestrationPhase.PIPELINE,
+                )
+            if await_background_tail:
                 yield await emitter.emit(
                     RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
                     phase=OrchestrationPhase.PIPELINE,
                 )
-            else:
-                # Chat mode should stop streaming immediately after pause/error;
-                # memory is intentionally not finalized without a synthesizer.
-                pass
             return
 
         # --- Finalization -----------------------------------------------
@@ -806,6 +816,7 @@ class RuntimePipeline:
             for entry in runtime_state.tool_ledger.entries
             if entry.status == "succeeded" and entry.result_data is not None
         ]
+        turn_mem.project_memory_candidates = list(runtime_state.project_memory_candidates)
         # Sync memory_bundle reference
         runtime_state.memory_bundle = turn_mem.memory_bundle
         assistant_final = runtime_state.final_answer or ""
@@ -955,6 +966,7 @@ class RuntimePipeline:
                 SummaryPayload,
                 AgentResultPayload,
                 FactEvidencePayload,
+                ProjectMemoryCandidatePayload,
             )
             memory_limits: Optional[dict[str, int]] = None
             facts_limits: Optional[dict[str, int]] = None
@@ -1024,6 +1036,10 @@ class RuntimePipeline:
                     for r in turn_mem.agent_results
                 ],
                 fact_evidence=[FactEvidencePayload(**item.model_dump()) for item in turn_mem.fact_evidence],
+                project_memory_candidates=[
+                    ProjectMemoryCandidatePayload(**item.model_dump())
+                    for item in turn_mem.project_memory_candidates
+                ],
                 skip_llm_helpers=False,
                 terminal_reason=stop_reason.value if stop_reason else None,
                 sandbox_overrides=request.sandbox_overrides,

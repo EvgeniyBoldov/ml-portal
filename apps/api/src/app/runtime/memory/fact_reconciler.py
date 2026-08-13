@@ -72,6 +72,7 @@ class FactReconciler:
         await self.ensure_projects(candidates)
         changed = 0
         for candidate in candidates:
+            compaction_action = str(candidate.metadata.get("compaction_action") or "add")
             owner_type, owner_id, project_id = await self._owner_for(candidate, user_id=user_id, tenant_id=tenant_id)
             if owner_id is None and project_id is None:
                 continue
@@ -85,7 +86,7 @@ class FactReconciler:
                     owner_type=owner_type,
                     owner_id=owner_id,
                     kind=candidate.kind,
-                    entry_metadata={"project_key": candidate.metadata.get("project_key")} if candidate.metadata.get("project_key") else None,
+                    entry_metadata=_persisted_metadata(candidate.metadata),
                     scope=candidate.scope.value,
                     subject=candidate.subject,
                     value=candidate.value,
@@ -100,13 +101,17 @@ class FactReconciler:
                 )
                 self._session.add(existing)
                 await self._session.flush()
-                await self._demote_conflicts(existing)
+                if compaction_action in {"rewrite", "supersede"}:
+                    await self._supersede_targets(existing, candidate.metadata.get("compaction_target_ids") or [])
             added = await self._add_observations(existing, candidate.metadata.get("evidence") or [])
             if not added:
                 continue
             existing.support_count += added
             existing.observed_at = datetime.now(timezone.utc)
-            if sandbox or existing.scope == FactScope.USER:
+            marked_project_fact = bool(candidate.metadata.get("project_memory_marked"))
+            if compaction_action == "mark_conflict":
+                existing.status = FactStatus.UNCONFIRMED.value
+            elif sandbox or existing.scope == FactScope.USER or marked_project_fact:
                 existing.status = FactStatus.CONFIRMED.value
                 existing.first_confirmed_at = existing.first_confirmed_at or datetime.now(timezone.utc)
                 existing.last_confirmed_at = datetime.now(timezone.utc)
@@ -170,6 +175,28 @@ class FactReconciler:
         ).values(status=FactStatus.UNCONFIRMED.value)
         stmt = stmt.where(Fact.project_id == inserted.project_id) if inserted.project_id else stmt.where(Fact.owner_type == inserted.owner_type, Fact.owner_id == inserted.owner_id)
         await self._session.execute(stmt)
+
+    async def _supersede_targets(self, replacement: Fact, raw_ids: Sequence[object]) -> None:
+        """Apply an LLM-selected semantic replacement without key heuristics."""
+        ids: list[UUID] = []
+        for raw in raw_ids:
+            try:
+                parsed = UUID(str(raw))
+            except (TypeError, ValueError):
+                continue
+            if parsed != replacement.id:
+                ids.append(parsed)
+        if not ids:
+            return
+        stmt = update(Fact).where(
+            Fact.id.in_(ids),
+            Fact.superseded_by.is_(None),
+            Fact.scope == replacement.scope,
+        )
+        stmt = stmt.where(Fact.project_id == replacement.project_id) if replacement.project_id else stmt.where(
+            Fact.owner_type == replacement.owner_type, Fact.owner_id == replacement.owner_id,
+        )
+        await self._session.execute(stmt.values(superseded_by=replacement.id))
 
     async def _add_observations(self, fact: Fact, raw: Sequence[dict[str, Any]]) -> int:
         added = 0
@@ -246,4 +273,26 @@ def _normalized(value: str) -> str:
 
 def _dto(row: Fact) -> FactDTO:
     from app.models.memory import FactSource
-    return FactDTO(scope=FactScope(row.scope), subject=row.subject, value=row.value, source=FactSource(row.source), tenant_id=row.tenant_id, project_id=row.project_id, owner_type=row.owner_type, owner_id=row.owner_id)
+    return FactDTO(
+        scope=FactScope(row.scope),
+        subject=row.subject,
+        value=row.value,
+        source=FactSource(row.source),
+        tenant_id=row.tenant_id,
+        project_id=row.project_id,
+        owner_type=row.owner_type,
+        owner_id=row.owner_id,
+        kind=row.kind or "fact",
+        metadata=dict(row.entry_metadata or {}),
+        confidence=row.confidence,
+    )
+
+
+def _persisted_metadata(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    """Keep routing/conflict metadata, while observations retain provenance."""
+    result = {
+        key: metadata[key]
+        for key in ("project_key", "project_aliases", "aliases", "compaction_action")
+        if metadata.get(key) not in (None, "", [])
+    }
+    return result or None

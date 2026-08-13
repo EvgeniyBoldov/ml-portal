@@ -24,6 +24,7 @@ from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.memory.dto import SummaryDTO, FactDTO
 from app.runtime.memory.fact_extractor import AgentResultSnippet, FactEvidence
 from app.runtime.memory.transport import TurnMemory
+from app.runtime.project_memory_candidates import ProjectMemoryCandidate
 from app.runtime.memory.writer import MemoryWriter
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.entity_ids import memory_component_entity_id, memory_orchestrator_id as make_memory_orchestrator_id
@@ -71,6 +72,14 @@ class FactEvidencePayload(BaseModel):
     label: Optional[str] = None
 
 
+class ProjectMemoryCandidatePayload(BaseModel):
+    project_key: str
+    subject: str
+    value: str
+    evidence_call_ids: List[str] = Field(default_factory=list)
+    aliases: List[str] = Field(default_factory=list)
+
+
 class MemoryFinalizePayload(BaseModel):
     """
     Serializable payload for memory finalization task.
@@ -89,6 +98,7 @@ class MemoryFinalizePayload(BaseModel):
     retrieved_facts: List[FactPayload] = Field(default_factory=list)
     agent_results: List[AgentResultPayload] = Field(default_factory=list)
     fact_evidence: List[FactEvidencePayload] = Field(default_factory=list)
+    project_memory_candidates: List[ProjectMemoryCandidatePayload] = Field(default_factory=list)
     
     # Control flags
     skip_llm_helpers: bool = False
@@ -156,6 +166,10 @@ def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
         FactEvidence(**item.model_dump()) for item in payload.fact_evidence
     ]
     memory.fact_run_ref = payload.runtime_run_id
+    memory.project_memory_candidates = [
+        ProjectMemoryCandidate(**item.model_dump())
+        for item in payload.project_memory_candidates
+    ]
     
     return memory
 
@@ -187,8 +201,8 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
     Background task to finalize memory writeback.
     
-    This runs FactExtractor + SummaryCompactor in parallel and persists
-    the results without blocking the main SSE stream.
+    This runs FactExtractor followed by FactCompactor and persists the
+    results without blocking the main SSE stream.
     
     Args:
         payload_dict: Serialized MemoryFinalizePayload

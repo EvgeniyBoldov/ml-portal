@@ -38,8 +38,10 @@ class _LLMFactCandidate(BaseModel):
     subject: str
     value: str
     confidence: float = 1.0
+    kind: str = "fact"  # fact | glossary
     project_key: Optional[str] = None
     project_aliases: List[str] = Field(default_factory=list)
+    aliases: List[str] = Field(default_factory=list)
     evidence_source_ids: List[str] = Field(default_factory=list)
 
 
@@ -218,6 +220,11 @@ class FactExtractor:
                 continue
             if scope == FactScope.TENANT and tenant_id is None:
                 continue
+            kind = (cand.kind or "fact").strip().lower()
+            if kind not in {"fact", "glossary"}:
+                continue
+            if kind == "glossary" and scope != FactScope.TENANT:
+                continue
             confidence = max(0.0, min(1.0, float(cand.confidence)))
             if confidence < confidence_min:
                 continue
@@ -239,7 +246,9 @@ class FactExtractor:
                 continue
             if scope == FactScope.USER and not any(item.source_type == "user_message" for item in matched_evidence):
                 continue
-            if scope == FactScope.PROJECT and not (cand.project_key or "").strip():
+            # Project knowledge is accepted only from explicit in-run markers;
+            # this extractor owns user/tenant facts and terminology.
+            if scope == FactScope.PROJECT:
                 continue
 
             out_list.append(
@@ -249,10 +258,12 @@ class FactExtractor:
                     value=value,
                     source=(FactSource.USER_UTTERANCE if matched_evidence[0].source_type == "user_message" else FactSource.TOOL_RESULT),
                     tenant_id=tenant_id,
+                    kind=kind,
                     confidence=confidence,
                     metadata={
                         "project_key": (cand.project_key or "").strip().lower() or None,
                         "project_aliases": _normalize_project_aliases(cand.project_aliases),
+                        "aliases": _normalize_project_aliases(cand.aliases),
                         "evidence": [item.model_dump() for item in matched_evidence],
                     },
                 )

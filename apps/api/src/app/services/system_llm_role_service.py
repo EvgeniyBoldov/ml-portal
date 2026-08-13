@@ -16,8 +16,8 @@ from app.models.system_llm_role import SystemLLMRole, SystemLLMRoleType
 from app.repositories.system_llm_role_repository import SystemLLMRoleRepository
 from app.schemas.system_llm_roles import (
     SystemLLMRoleCreate, SystemLLMRoleUpdate,
-    TriageRoleUpdate, PlannerRoleUpdate, SummaryRoleUpdate, MemoryRoleUpdate,
-    SynthesizerRoleUpdate, FactExtractorRoleUpdate, SummaryCompactorRoleUpdate,
+    PlannerRoleUpdate, MemoryRoleUpdate, SynthesizerRoleUpdate,
+    FactExtractorRoleUpdate, FactCompactorRoleUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ class SystemLLMRoleService:
     async def _update_role_by_type(
         self,
         role_type: SystemLLMRoleType,
-        data: TriageRoleUpdate,
+        data: SystemLLMRoleUpdate,
     ) -> Optional[SystemLLMRole]:
         """Update the active role of the given type. Creates if not found."""
         role = await self.repo.get_active_role(role_type)
@@ -88,33 +88,35 @@ class SystemLLMRoleService:
 
         return await self.repo.update(role)
 
-    async def update_triage_role(self, data: TriageRoleUpdate) -> Optional[SystemLLMRole]:
-        """Update the active Triage role."""
-        return await self._update_role_by_type(SystemLLMRoleType.TRIAGE, data)
+    async def update_active_role(
+        self,
+        role_type: SystemLLMRoleType,
+        data: SystemLLMRoleUpdate,
+    ) -> SystemLLMRole:
+        """Update or create the active configuration for a supported role."""
+        role = await self._update_role_by_type(role_type, data)
+        assert role is not None
+        return role
 
     async def update_planner_role(self, data: PlannerRoleUpdate) -> Optional[SystemLLMRole]:
         """Update the active Planner role."""
-        return await self._update_role_by_type(SystemLLMRoleType.PLANNER, data)
-
-    async def update_summary_role(self, data: SummaryRoleUpdate) -> Optional[SystemLLMRole]:
-        """Update the active Summary role."""
-        return await self._update_role_by_type(SystemLLMRoleType.SUMMARY, data)
+        return await self.update_active_role(SystemLLMRoleType.PLANNER, data)
 
     async def update_memory_role(self, data: MemoryRoleUpdate) -> Optional[SystemLLMRole]:
         """Update the active Memory role."""
-        return await self._update_role_by_type(SystemLLMRoleType.MEMORY, data)
+        return await self.update_active_role(SystemLLMRoleType.MEMORY, data)
 
     async def update_synthesizer_role(self, data: SynthesizerRoleUpdate) -> Optional[SystemLLMRole]:
         """Update the active Synthesizer role."""
-        return await self._update_role_by_type(SystemLLMRoleType.SYNTHESIZER, data)
+        return await self.update_active_role(SystemLLMRoleType.SYNTHESIZER, data)
 
     async def update_fact_extractor_role(self, data: FactExtractorRoleUpdate) -> Optional[SystemLLMRole]:
         """Update the active Fact Extractor role."""
-        return await self._update_role_by_type(SystemLLMRoleType.FACT_EXTRACTOR, data)
+        return await self.update_active_role(SystemLLMRoleType.FACT_EXTRACTOR, data)
 
-    async def update_summary_compactor_role(self, data: SummaryCompactorRoleUpdate) -> Optional[SystemLLMRole]:
-        """Update the active Summary Compactor role."""
-        return await self._update_role_by_type(SystemLLMRoleType.SUMMARY_COMPACTOR, data)
+    async def update_fact_compactor_role(self, data: FactCompactorRoleUpdate) -> Optional[SystemLLMRole]:
+        """Update the active Fact Compactor role."""
+        return await self.update_active_role(SystemLLMRoleType.FACT_COMPACTOR, data)
 
     async def delete_role(self, role_id: UUID) -> bool:
         """Delete a role."""
@@ -149,6 +151,8 @@ class SystemLLMRoleService:
             # Compatibility fallback for roles created before call settings
             # moved to the model deployment.
             'max_tokens': role.max_tokens,
+            'timeout_s': role.timeout_s,
+            'max_retries': role.max_retries,
             'retry_backoff': role.retry_backoff,
         }
         

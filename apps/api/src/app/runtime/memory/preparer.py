@@ -15,14 +15,6 @@ from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.memory.dto import FactDTO
 
 
-MEMORY_PREPARATION_PROMPT = """Ты готовишь короткий контекст памяти для планера.
-У тебя нет tools, ты не отвечаешь пользователю и не строишь план.
-Выбери только факты user/tenant, прямо полезные для текущего запроса. Выбирай
-проекты только если пользователь явно упомянул их название или alias. Не
-добавляй project facts, правила проекта или новые знания. Верни JSON строго
-по схеме; используй только индексы, полученные на входе."""
-
-
 class _PreparationOutput(BaseModel):
     fact_indexes: list[int] = Field(default_factory=list)
     project_indexes: list[int] = Field(default_factory=list)
@@ -71,7 +63,6 @@ class MemoryPreparer:
         try:
             result = await self._structured.invoke(
                 role=SystemLLMRoleType.MEMORY,
-                system_prompt=MEMORY_PREPARATION_PROMPT,
                 payload=payload,
                 schema=_PreparationOutput,
                 user_id=user_id,
@@ -80,7 +71,6 @@ class MemoryPreparer:
                 sandbox_overrides=sandbox_overrides,
                 event_sink=event_sink,
                 agent_execution_id=agent_execution_id,
-                fallback_factory=lambda _raw: _PreparationOutput(),
             )
         except Exception:  # memory preparation is optional
             return PreparedMemoryContext(items=[], selected_fact_count=0, selected_project_count=0, ambiguities=[], fallback=True)

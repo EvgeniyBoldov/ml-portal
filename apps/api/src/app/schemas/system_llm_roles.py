@@ -30,6 +30,10 @@ class SystemLLMRoleBase(BaseModel):
     # === Execution Configuration ===
     model: Optional[str] = Field(None, description="Model alias for this role")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature for LLM calls")
+    max_tokens: Optional[int] = Field(None, ge=1, description="Maximum LLM output tokens")
+    timeout_s: Optional[int] = Field(None, ge=1, description="LLM request timeout in seconds")
+    max_retries: Optional[int] = Field(None, ge=0, description="Maximum retry attempts")
+    retry_backoff: Optional[Literal["none", "linear", "exp"]] = Field(None, description="Retry backoff strategy")
     
     # === Status ===
     is_active: Optional[bool] = Field(True, description="Whether this role configuration is active")
@@ -92,6 +96,10 @@ class SystemLLMRoleUpdate(BaseModel):
     
     model: Optional[str] = Field(None, description="Model alias for this role")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature for LLM calls")
+    max_tokens: Optional[int] = Field(None, ge=1, description="Maximum LLM output tokens")
+    timeout_s: Optional[int] = Field(None, ge=1, description="LLM request timeout in seconds")
+    max_retries: Optional[int] = Field(None, ge=0, description="Maximum retry attempts")
+    retry_backoff: Optional[Literal["none", "linear", "exp"]] = Field(None, description="Retry backoff strategy")
     
     is_active: Optional[bool] = Field(None, description="Whether this role configuration is active")
 
@@ -106,17 +114,13 @@ class SystemLLMRoleResponse(SystemLLMRoleBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# TriageRoleUpdate, PlannerRoleUpdate, SummaryRoleUpdate, MemoryRoleUpdate removed.
-# All role-specific PATCH endpoints now use SystemLLMRoleUpdate directly
-# with real DB column names: identity, mission, rules, safety, output_requirements.
-# Backward compat aliases for imports:
-TriageRoleUpdate = SystemLLMRoleUpdate
+# All role-specific PATCH endpoints use SystemLLMRoleUpdate with real DB column
+# names. Aliases keep the public service signatures readable.
 PlannerRoleUpdate = SystemLLMRoleUpdate
-SummaryRoleUpdate = SystemLLMRoleUpdate
 MemoryRoleUpdate = SystemLLMRoleUpdate
 SynthesizerRoleUpdate = SystemLLMRoleUpdate
 FactExtractorRoleUpdate = SystemLLMRoleUpdate
-SummaryCompactorRoleUpdate = SystemLLMRoleUpdate
+FactCompactorRoleUpdate = SystemLLMRoleUpdate
 
 
 # === Contract Schemas ===

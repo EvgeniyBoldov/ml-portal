@@ -41,7 +41,7 @@ Rule of thumb:
 |---|---|---|
 | Planner prompt | active `system_llm_roles.planner` row in DB | `SystemLLMRoleService` |
 | Final synthesis prompt | DB role prompt with fallback | `app/runtime/synthesizer.py`, `app/services/system_llm_role_service.py` |
-| Summary/Memory prompts | legacy-compatible services | `app/runtime/summarizer_turn.py`, `app/runtime/memory/*` |
+| Memory preparation and fact prompts | DB-backed runtime roles | `app/runtime/memory/preparer.py`, `fact_extractor.py`, `fact_compactor.py` |
 
 Notes:
 - Planner prompt is compiled exclusively from the active planner role in DB.

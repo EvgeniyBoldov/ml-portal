@@ -89,17 +89,18 @@ export const FACT_EXTRACTOR_INPUT_CONTRACT = {
   type: 'object',
   properties: {
     user_message: { type: 'string', description: 'Текущее сообщение пользователя' },
-    agent_results: {
+    evidence: {
       type: 'array',
-      description: 'Итоги агентских вызовов',
+      description: 'Первичные источники: сообщение пользователя или результат инструмента',
       items: {
         type: 'object',
         properties: {
-          agent: { type: 'string', description: 'Название агента' },
-          summary: { type: 'string', description: 'Краткий итог' },
-          success: { type: 'boolean', description: 'Успешность' },
+          source_id: { type: 'string', description: 'Идентификатор первичного источника' },
+          source_type: { type: 'string', description: 'user_message или tool_result' },
+          source_ref: { type: 'string', description: 'Ссылка на источник в runtime' },
+          text: { type: 'string', description: 'Текст доказательства' },
         },
-        required: ['agent', 'summary'],
+        required: ['source_id', 'source_type', 'source_ref', 'text'],
       },
     },
     known_facts: {
@@ -115,21 +116,32 @@ export const FACT_EXTRACTOR_INPUT_CONTRACT = {
       },
     },
   },
-  required: ['user_message', 'agent_results', 'known_facts'],
+  required: ['user_message', 'evidence', 'known_facts'],
 };
 
-export const SUMMARY_COMPACTOR_INPUT_CONTRACT = {
+export const MEMORY_INPUT_CONTRACT = {
   type: 'object',
   properties: {
-    previous: {
-      type: 'object',
-      description: 'Предыдущий summary-снимок',
+    request: { type: 'string', description: 'Текущий запрос пользователя' },
+    facts: {
+      type: 'array',
+      description: 'Долговременные факты с индексами для отбора',
+      items: { type: 'object' },
     },
-    turn_delta: {
-      type: 'object',
-      description: 'Изменения текущего хода',
+    projects: {
+      type: 'array',
+      description: 'Проекты и aliases с индексами для отбора',
+      items: { type: 'object' },
     },
-    turn_number: { type: 'integer', description: 'Номер хода' },
   },
-  required: ['previous', 'turn_delta', 'turn_number'],
+  required: ['request', 'facts', 'projects'],
+};
+
+export const FACT_COMPACTOR_INPUT_CONTRACT = {
+  type: 'object',
+  properties: {
+    candidates: { type: 'array', description: 'Новые кандидаты фактов с индексами' },
+    current_facts: { type: 'array', description: 'Текущие подтверждённые факты' },
+  },
+  required: ['candidates', 'current_facts'],
 };

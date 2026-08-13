@@ -24,6 +24,7 @@ from app.runtime.memory.dto import FactDTO, SummaryDTO
 from app.runtime.memory.fact_extractor import AgentResultSnippet, FactEvidence
 from app.runtime.memory.components import MemoryBundle
 from app.runtime.memory.service import MemorySnapshot
+from app.runtime.project_memory_candidates import ProjectMemoryCandidate
 
 
 @dataclass
@@ -45,6 +46,7 @@ class TurnMemory:
     durable_snapshot: MemorySnapshot = field(default_factory=MemorySnapshot)
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
     fact_evidence: List[FactEvidence] = field(default_factory=list)
+    project_memory_candidates: List[ProjectMemoryCandidate] = field(default_factory=list)
     fact_run_ref: Optional[str] = None
 
     # --- mutated during the turn by the pipeline --------------------------

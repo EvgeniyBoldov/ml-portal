@@ -15,8 +15,6 @@ from app.services.system_llm_role_service import (
 )
 from app.schemas.system_llm_roles import (
     SystemLLMRoleCreate, SystemLLMRoleUpdate, SystemLLMRoleResponse,
-    TriageRoleUpdate, PlannerRoleUpdate, SummaryRoleUpdate, MemoryRoleUpdate,
-    SynthesizerRoleUpdate, FactExtractorRoleUpdate, SummaryCompactorRoleUpdate,
 )
 from app.services.system_llm_role_contracts import build_response_contract
 
@@ -73,6 +71,20 @@ async def get_active_role(
     return _serialize_role(role)
 
 
+@router.patch("/active/{role_type}", response_model=SystemLLMRoleResponse)
+async def update_active_role(
+    role_type: SystemLLMRoleType,
+    data: SystemLLMRoleUpdate,
+    session: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Update the active configuration of a runtime-backed system role."""
+    service = SystemLLMRoleService(session)
+    role = await service.update_active_role(role_type, data)
+    await session.commit()
+    return _serialize_role(role)
+
+
 @router.post("", response_model=SystemLLMRoleResponse)
 async def create_role(
     data: SystemLLMRoleCreate,
@@ -82,6 +94,7 @@ async def create_role(
     """Create a new system LLM role."""
     service = SystemLLMRoleService(session)
     role = await service.create_role(data)
+    await session.commit()
     return _serialize_role(role)
 
 
@@ -95,6 +108,7 @@ async def update_role(
     """Update a system LLM role."""
     service = SystemLLMRoleService(session)
     role = await service.update_role(role_id, data)
+    await session.commit()
     return _serialize_role(role)
 
 
@@ -110,7 +124,7 @@ async def delete_role(
     
     if not success:
         raise HTTPException(status_code=404, detail="Role not found")
-    
+    await session.commit()
     return {"message": "Role deleted successfully"}
 
 
@@ -123,100 +137,6 @@ async def activate_role(
     """Activate a role and deactivate others of the same type."""
     service = SystemLLMRoleService(session)
     role = await service.activate_role(role_id)
-    return _serialize_role(role)
-
-
-# === Role-specific update endpoints ===
-# All accept SystemLLMRoleUpdate with real DB column names:
-# identity, mission, rules, safety, output_requirements, model, temperature, etc.
-
-@router.patch("/triage", response_model=SystemLLMRoleResponse)
-async def update_triage_role(
-    data: TriageRoleUpdate,
-    session: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin)
-):
-    """Update the active Triage role configuration."""
-    service = SystemLLMRoleService(session)
-    role = await service.update_triage_role(data)
-    await session.commit()
-    return _serialize_role(role)
-
-
-@router.patch("/planner", response_model=SystemLLMRoleResponse)
-async def update_planner_role(
-    data: PlannerRoleUpdate,
-    session: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin)
-):
-    """Update the active Planner role configuration."""
-    service = SystemLLMRoleService(session)
-    role = await service.update_planner_role(data)
-    await session.commit()
-    return _serialize_role(role)
-
-
-@router.patch("/summary", response_model=SystemLLMRoleResponse)
-async def update_summary_role(
-    data: SummaryRoleUpdate,
-    session: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin)
-):
-    """Update the active Summary role configuration."""
-    service = SystemLLMRoleService(session)
-    role = await service.update_summary_role(data)
-    await session.commit()
-    return _serialize_role(role)
-
-
-@router.patch("/memory", response_model=SystemLLMRoleResponse)
-async def update_memory_role(
-    data: MemoryRoleUpdate,
-    session: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin)
-):
-    """Update the active Memory role configuration."""
-    service = SystemLLMRoleService(session)
-    role = await service.update_memory_role(data)
-    await session.commit()
-    return _serialize_role(role)
-
-
-@router.patch("/synthesizer", response_model=SystemLLMRoleResponse)
-async def update_synthesizer_role(
-    data: SynthesizerRoleUpdate,
-    session: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin)
-):
-    """Update the active Synthesizer role configuration."""
-    service = SystemLLMRoleService(session)
-    role = await service.update_synthesizer_role(data)
-    await session.commit()
-    return _serialize_role(role)
-
-
-@router.patch("/fact-extractor", response_model=SystemLLMRoleResponse)
-async def update_fact_extractor_role(
-    data: FactExtractorRoleUpdate,
-    session: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin)
-):
-    """Update the active Fact Extractor role configuration."""
-    service = SystemLLMRoleService(session)
-    role = await service.update_fact_extractor_role(data)
-    await session.commit()
-    return _serialize_role(role)
-
-
-@router.patch("/summary-compactor", response_model=SystemLLMRoleResponse)
-async def update_summary_compactor_role(
-    data: SummaryCompactorRoleUpdate,
-    session: AsyncSession = Depends(db_session),
-    _: UserCtx = Depends(require_admin)
-):
-    """Update the active Summary Compactor role configuration."""
-    service = SystemLLMRoleService(session)
-    role = await service.update_summary_compactor_role(data)
     await session.commit()
     return _serialize_role(role)
 

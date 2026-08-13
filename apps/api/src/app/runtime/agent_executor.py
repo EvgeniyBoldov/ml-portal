@@ -191,6 +191,7 @@ class AgentExecutor:
         if lifecycle_agent_execution_id:
             ctx.extra["lifecycle_agent_execution_id"] = lifecycle_agent_execution_id
         ctx.extra["runtime_tool_ledger"] = state.tool_ledger
+        ctx.extra["runtime_turn_state"] = state
         ctx.extra["runtime_tool_reuse_enabled"] = bool(
             (platform_config or {}).get("runtime_tool_reuse_enabled", True),
         )
@@ -334,6 +335,10 @@ class AgentExecutor:
 
         # 4. Summarize into AgentResult and enrich memory.
         raw_summary = final_content or "".join(buffered_answer)
+        # Keep only a bounded internal preview for task state and orchestration.
+        # This is not the user-facing response and must not replace the
+        # canonical FINAL/attachment transport.
+        summary_preview = raw_summary.strip()[:800]
 
         # Parse structured needs from agent output if present
         needs = self._parse_needs_from_content(raw_summary)
@@ -565,6 +570,16 @@ class AgentExecutor:
                 key = spec.key
                 if spec.required and key not in outputs:
                     outputs[key] = value
+        # Read-only/data agents commonly return their result as the final
+        # answer text rather than a structured ``outputs`` object.  Preserve
+        # that successful result under the planner's required output key so
+        # the graph contract does not fail after the agent has already emitted
+        # its final answer.
+        summary = str(payload.get("summary") or "").strip()
+        if summary:
+            for spec in request.expected_outputs:
+                if spec.required and spec.key not in outputs:
+                    outputs[spec.key] = summary
         return AgentTaskResult(
             outcome=TaskOutcome.COMPLETED,
             summary=str(payload.get("summary") or ""),

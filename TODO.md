@@ -70,3 +70,9 @@
 - Если автономный режим делать отдельно, определить единый canonical storage contract для `file.read` / `file.analyze` / `file.generate` и не тащить chat-сущность в путь хранения.
 - Если оставлять chat-based хранение, явно развести sandbox upload chat и обычный chat, чтобы файловые артефакты не порождали видимые чаты и не смешивались с пользовательским chat list.
 - Связано с `apps/api/src/app/agents/builtins/file_generate.py`, `apps/api/src/app/agents/builtins/file_read.py`, `apps/api/src/app/agents/builtins/template_fill.py`, `apps/api/src/app/services/chat_attachment_service.py`, `apps/api/src/app/api/v1/routers/sandbox/runs.py`.
+
+## Runtime agent result summary — пересмотреть `summary_preview`
+
+- Позже разобраться, нужен ли вообще отдельный `summary_preview` и лимит в 800 символов.
+- Проверить, не смешивает ли текущая конструкция внутренний результат задачи, bounded summary и пользовательский ответ.
+- Определить отдельный контракт для task/result summary и убрать лимит либо заменить его на осмысленное bounded-представление, если оно действительно нужно.
