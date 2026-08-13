@@ -24,7 +24,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.memory import Fact, FactScope, FactSource
+from app.models.memory import Fact, FactScope, FactSource, FactStatus
 from app.runtime.memory.dto import FactDTO
 
 
@@ -51,6 +51,7 @@ class FactStore:
             Fact.scope == scope.value,
             Fact.subject == subject,
             Fact.superseded_by.is_(None),
+            Fact.status == FactStatus.CONFIRMED.value,
         )
         stmt = stmt.where(Fact.owner_type == owner_type, Fact.owner_id == owner_id)
         result = await self._session.execute(stmt.limit(1))
@@ -81,6 +82,7 @@ class FactStore:
         stmt = select(Fact).where(
             Fact.scope.in_(scope_values),
             Fact.superseded_by.is_(None),
+            Fact.status == FactStatus.CONFIRMED.value,
         )
 
         if owner_type is None or owner_id is None:
@@ -113,6 +115,7 @@ class FactStore:
                 Fact.owner_id == user_id,
                 Fact.superseded_by.is_(None),
                 Fact.user_visible.is_(True),
+                Fact.status == FactStatus.CONFIRMED.value,
             )
             .order_by(Fact.observed_at.desc())
             .offset(offset)
@@ -128,6 +131,7 @@ class FactStore:
         row = Fact(
             id=dto.id,
             tenant_id=dto.tenant_id,
+            project_id=dto.project_id,
             owner_type=dto.owner_type,
             owner_id=dto.owner_id,
             kind=dto.kind,
@@ -135,12 +139,18 @@ class FactStore:
             scope=dto.scope.value,
             subject=dto.subject,
             value=dto.value,
+            normalized_value=" ".join(dto.value.lower().split())[:500],
             confidence=dto.confidence,
             source=dto.source.value,
             source_ref=dto.source_ref,
             observed_at=dto.observed_at,
             superseded_by=dto.superseded_by,
             user_visible=dto.user_visible,
+            status=dto.status.value,
+            support_count=dto.support_count,
+            first_confirmed_at=dto.first_confirmed_at,
+            last_confirmed_at=dto.last_confirmed_at,
+            revision=dto.revision,
         )
         self._session.add(row)
         await self._session.flush()
@@ -259,6 +269,7 @@ def _orm_to_dto(row: Fact) -> FactDTO:
         value=row.value,
         source=FactSource(row.source),
         tenant_id=row.tenant_id,
+        project_id=row.project_id,
         owner_type=row.owner_type,
         owner_id=row.owner_id,
         kind=row.kind or "fact",
@@ -269,6 +280,11 @@ def _orm_to_dto(row: Fact) -> FactDTO:
         id=row.id,
         superseded_by=row.superseded_by,
         user_visible=row.user_visible,
+        status=FactStatus(row.status),
+        support_count=row.support_count,
+        first_confirmed_at=row.first_confirmed_at,
+        last_confirmed_at=row.last_confirmed_at,
+        revision=row.revision,
     )
 
 

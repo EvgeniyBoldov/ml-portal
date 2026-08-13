@@ -142,16 +142,16 @@ export const sandboxApi = {
   upsertFactOverride: (
     sessionId: string,
     branchId: string,
-    scope: 'user' | 'tenant',
+    scope: 'user' | 'tenant' | 'project',
     subject: string,
-    data: { state: 'set' | 'deleted'; value?: string; source?: 'user_utterance' | 'agent_result' | 'system'; confidence?: number; source_ref?: string | null },
+    data: { state: 'set' | 'deleted'; value?: string; source?: 'user_utterance' | 'tool_result' | 'manual' | 'system'; confidence?: number; source_ref?: string | null },
   ): Promise<SandboxBranchFactsArtifact> =>
     apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/facts/${encodeURIComponent(scope)}/${encodeURIComponent(subject)}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
 
-  resetFactOverride: (sessionId: string, branchId: string, scope: 'user' | 'tenant', subject: string): Promise<void> =>
+  resetFactOverride: (sessionId: string, branchId: string, scope: 'user' | 'tenant' | 'project', subject: string): Promise<void> =>
     apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/facts/${encodeURIComponent(scope)}/${encodeURIComponent(subject)}`, {
       method: 'DELETE',
     }),

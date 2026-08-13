@@ -20,7 +20,9 @@ from app.models.credential_set import Credential
 from app.models.tool_instance import ToolInstance
 from app.models.tool import Tool
 from app.runtime.memory.fact_store import FactStore
+from app.models.memory import Fact
 from app.runtime.memory.service import MemoryService
+from app.runtime.memory.fact_reconciler import FactReconciler
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -89,6 +91,11 @@ class FactsDeleteRequest(BaseModel):
 
 class FactsDeleteResponse(BaseModel):
     deleted: int
+
+
+class UserFactUpdate(BaseModel):
+    subject: str
+    value: str
 
 
 class ProfilePasswordChangeRequest(BaseModel):
@@ -264,6 +271,59 @@ async def delete_user_facts(
         await session.commit()
 
     return FactsDeleteResponse(deleted=deleted)
+
+
+@router.put("/facts/{fact_id}", response_model=UserFactResponse)
+async def update_user_fact(
+    fact_id: UUID,
+    payload: UserFactUpdate,
+    current_user: UserCtx = Depends(get_current_user),
+):
+    """Explicit user edit is a confirmed manual observation."""
+    subject, value = payload.subject.strip().lower()[:200], payload.value.strip()[:500]
+    if not subject or not value:
+        raise HTTPException(status_code=422, detail="Fact subject and value are required")
+    user_id = UUID(current_user.id)
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        row = await FactReconciler(session).replace_user_fact(
+            fact_id=fact_id, user_id=user_id, subject=subject, value=value,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Fact not found")
+        await session.commit()
+        await session.refresh(row)
+    return UserFactResponse(
+        id=str(row.id), scope=row.scope, subject=row.subject, value=row.value,
+        confidence=row.confidence, source=row.source, observed_at=row.observed_at, created_at=row.created_at,
+    )
+
+
+@router.post("/facts", response_model=UserFactResponse)
+async def create_user_fact(
+    payload: UserFactUpdate,
+    current_user: UserCtx = Depends(get_current_user),
+):
+    """Create an immediately confirmed user-owned manual fact."""
+    subject, value = payload.subject.strip().lower()[:200], payload.value.strip()[:500]
+    if not subject or not value:
+        raise HTTPException(status_code=422, detail="Fact subject and value are required")
+    user_id = UUID(current_user.id)
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        now = datetime.now(timezone.utc)
+        row = Fact(
+            tenant_id=None, owner_type="user", owner_id=user_id, scope="user",
+            subject=subject, value=value, normalized_value=" ".join(value.lower().split())[:500],
+            confidence=1.0, source="manual", source_ref=f"manual:create:{user_id}",
+            observed_at=now, user_visible=True, status="confirmed", support_count=1,
+            first_confirmed_at=now, last_confirmed_at=now,
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+    return UserFactResponse(id=str(row.id), scope=row.scope, subject=row.subject, value=row.value,
+                            confidence=row.confidence, source=row.source, observed_at=row.observed_at, created_at=row.created_at)
 
 
 @router.post("/password")

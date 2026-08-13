@@ -141,3 +141,30 @@ async def test_artifact_binds_semantic_expected_output_key() -> None:
     )
 
     assert result.outputs["completed_request"] == result.outputs["attachments"][0]
+
+
+@pytest.mark.asyncio
+async def test_summary_binds_semantic_expected_output_key_for_data_agent() -> None:
+    executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
+    request = _request()
+    request.expected_outputs = [TaskOutputSpec(key="device_info", description="Device details")]
+
+    async def emit_success(*, runtime_state, **_kwargs):
+        runtime_state.agent_results.append({
+            "success": True,
+            "summary": "i121-mgmt-sw05: active, 172.25.253.18/25",
+        })
+        yield RuntimeEvent.status("done")
+
+    executor.execute = emit_success  # type: ignore[method-assign]
+    state = SimpleNamespace(agent_results=[])
+    result = await executor.execute_task(
+        request=request,
+        runtime_state=state,
+        messages=[],
+        ctx=SimpleNamespace(extra={}),
+        user_id=AsyncMock(),
+        tenant_id=AsyncMock(),
+    )
+
+    assert result.outputs["device_info"] == result.summary

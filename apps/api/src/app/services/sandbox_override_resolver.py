@@ -5,7 +5,7 @@ Takes effective_config (from snapshot) and applies overrides to:
 - AgentVersion fields (prompt parts, execution config, safety knobs)
 - OrchestrationSettings (model, temperature, timeout, max_steps)
 - PlatformSettings (gates, policies_text)
-- SystemLLMRole configs (orchestrator prompt fields)
+- SystemLLMRole configs (runtime prompt fields)
 
 Does NOT mutate DB objects — creates shadow copies or override dicts.
 """
@@ -45,7 +45,7 @@ class SandboxOverrideResolver:
         # Get platform overrides
         platform_overrides = resolver.get_platform_overrides()
 
-        # Get SystemLLMRole overrides (for triage/planner/summary)
+        # Get SystemLLMRole overrides for a runtime role.
         role_overrides = resolver.get_role_overrides(role_entity_id)
     """
 
@@ -497,13 +497,13 @@ class SandboxOverrideResolver:
 
         return result
 
-    # ── SystemLLMRole (triage/planner/summary router configs) ────────────
+    # ── SystemLLMRole runtime configs ────────────────────────────────────
 
     def get_role_overrides(self, entity_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Get overrides for a SystemLLMRole config (orchestrator).
+        Get overrides for a SystemLLMRole config.
 
-        These modify the prompt fields of triage/planner/summary roles.
+        These modify the prompt fields of the selected runtime role.
         """
         return self.get_overrides_for_entity("orchestration", entity_id)
 

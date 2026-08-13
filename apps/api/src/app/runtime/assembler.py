@@ -22,6 +22,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.memory.builder import MemoryBuilder
 from app.runtime.memory.writer import MemoryWriter
+from app.runtime.memory.preparer import MemoryPreparer
 from app.runtime.planner.graph_planner import GraphPlanner
 from app.runtime.ports import SynthesizerPort, TaskExecutionPort
 from app.runtime.stages import FinalizationStage
@@ -59,6 +60,10 @@ class PipelineAssembler:
         return MemoryWriter(
             session=self._session, llm_client=self._llm_client
         )
+
+    @cached_property
+    def memory_preparer(self) -> MemoryPreparer:
+        return MemoryPreparer(session=self._session, llm_client=self._llm_client)
 
     @cached_property
     def graph_planner(self) -> GraphPlanner:

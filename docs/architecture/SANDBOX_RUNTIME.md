@@ -73,7 +73,7 @@ This makes reset/diff/preview behavior deterministic and keeps the UI and runtim
 
 ## Fact memory overlay
 
-Durable runtime facts have only two scopes: `user` and `tenant`. Chat writes
+Durable runtime facts have three scopes: `user`, `tenant` and `project`. Chat writes
 them to the canonical `facts` table. Sandbox never writes that table: each
 branch stores only an overlay keyed by `(scope, subject)` in its branch state.
 
@@ -82,7 +82,7 @@ branch stores only an overlay keyed by `(scope, subject)` in its branch state.
 - reset removes the overlay entry and restores the durable value.
 
 The sandbox fact inspector exposes grouped `base`, `overrides`, and `effective`
-views for both scopes. Fact overlays are included in the immutable run snapshot;
+views for all scopes. Fact overlays are included in the immutable run snapshot;
 the runtime must resolve memory from that snapshot rather than mutable branch
 state. Conversation summary storage remains for compatibility but is currently
 disabled as a runtime memory component.

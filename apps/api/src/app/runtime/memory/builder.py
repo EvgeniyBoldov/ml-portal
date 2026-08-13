@@ -226,8 +226,8 @@ class MemoryBuilder:
         effective = apply_overrides(durable_snapshot.entries, raw)
         return replace(
             durable_snapshot,
-            user_facts=tuple(item for item in effective if item.scope == FactScope.USER),
-            tenant_facts=tuple(item for item in effective if item.scope == FactScope.TENANT),
+            user_facts=tuple(item for item in effective if item.scope == FactScope.USER and item.status.value == "confirmed"),
+            tenant_facts=tuple(item for item in effective if item.scope == FactScope.TENANT and item.status.value == "confirmed"),
         )
 
 

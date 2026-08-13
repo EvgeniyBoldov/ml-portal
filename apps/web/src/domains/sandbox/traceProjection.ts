@@ -497,8 +497,9 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
       const start = startFor(state, entity);
       if (!start) return null;
       const isMemory = entity.type === 'orchestrator' && asString(start.payload.role) === 'memory';
+      const isMemoryPreparation = entity.type === 'orchestrator' && asString(start.payload.role) === 'memory_preparation';
       const isSynthesis = entity.type === 'synthesis_run';
-      if (!isMemory && !isSynthesis) return null;
+      if (!isMemory && !isMemoryPreparation && !isSynthesis) return null;
       const executorRuns = isSynthesis
         ? [synthesizerExecutorFor(state, entity)].filter((executor): executor is TraceExecutorRun => Boolean(executor))
         : entity.childKeys
@@ -506,13 +507,27 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           .filter((child): child is TraceEntity => Boolean(child))
           .map((child) => executorFor(state, child))
           .filter((executor): executor is TraceExecutorRun => Boolean(executor));
-      return {
+      const stage = {
         entity, start, number: plannerStages.length + 1, iterationNumber: plannerStages.length + 1,
-        stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : 'preparation',
-        label: isSynthesis ? 'Подготовка ответа' : 'Сохранение памяти',
-        task: isSynthesis ? 'Подготовка финального ответа' : 'Сохранение фактов и сводки', steps: [], executorRuns,
+        stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : 'memory',
+        label: isSynthesis ? 'Подготовка ответа' : isMemoryPreparation ? 'Подготовка памяти' : 'Сохранение памяти',
+        task: isSynthesis ? 'Подготовка финального ответа' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
         metrics: metricsFor(state, entity),
       } satisfies TraceStage;
+      if (isMemory || isMemoryPreparation) {
+        stage.steps = executorRuns.map((executor, index) => ({
+          key: `${entity.key}:memory-step:${executor.entity.id}`,
+          stage,
+          number: index + 1,
+          title: executor.executorSlug === 'fact_extractor' ? 'Извлечение фактов'
+            : executor.executorSlug === 'fact_compactor' ? 'Компактация фактов'
+              : 'Подготовка memory context',
+          objective: executor.task,
+          executorRuns: [executor],
+        }));
+        stage.stepNumber = stage.steps[0]?.number ?? 0;
+      }
+      return stage;
     })
     .filter((stage): stage is TraceStage => stage !== null);
   return [...plannerStages, ...systemStages].sort((left, right) => left.start.sequence - right.start.sequence);

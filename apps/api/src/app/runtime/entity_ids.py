@@ -36,6 +36,10 @@ def memory_orchestrator_id(run_id: str) -> str:
     return _id("memory-orchestrator", run_id)
 
 
+def memory_preparation_orchestrator_id(run_id: str) -> str:
+    return _id("memory-preparation-orchestrator", run_id)
+
+
 def memory_component_entity_id(run_id: str, component_name: str, index: int) -> str:
     return _id("memory-component", run_id, component_name, index)
 

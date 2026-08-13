@@ -10,7 +10,7 @@ import type { ToolNameMap } from '../../callInspection';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel } from '../../planInspection';
 import { PlanTaskCard } from './PlanTaskCard';
 import { traceStatusLabel, traceStatusTone } from '../../traceStatus';
-import { hasLimits, hasRbac, LimitsViewer, RawEventsViewer, RbacViewer } from './viewers';
+import { FactsViewer, hasLimits, hasRbac, LimitsViewer, MemoryContextViewer, RawEventsViewer, RbacViewer } from './viewers';
 
 interface Props { target: TraceInspectionTarget | null; trace: SandboxTraceState | null; toolNames?: ToolNameMap; }
 const eventPayloads = (state: SandboxTraceState | null, ids: string[]) => ids.map((id) => state?.eventsById[id]?.payload).filter(Boolean);
@@ -182,7 +182,11 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
         { key: 'info', label: 'Инфо' },
         ...(target.executor.executorSlug === 'planner' ? [{ key: 'plan', label: 'План' }]
           : target.executor.executorSlug === 'synthesizer' ? [{ key: 'result', label: 'Результат' }]
-            : [{ key: 'task', label: 'Задача' }, { key: 'result', label: 'Результат' }]),
+            : target.executor.executorSlug === 'memory_preparation'
+              ? [{ key: 'task', label: 'Задача' }, { key: 'memory', label: 'Memory' }]
+              : target.executor.executorSlug === 'fact_extractor' || target.executor.executorSlug === 'fact_compactor'
+              ? [{ key: 'task', label: 'Задача' }, { key: 'facts', label: 'Факты' }]
+              : [{ key: 'task', label: 'Задача' }, { key: 'result', label: 'Результат' }]),
         ...(hasAccessTab ? [{ key: 'access', label: 'Лимиты и доступ' }] : []),
         { key: 'raw', label: 'RAW' },
       ]
@@ -195,6 +199,8 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'info') return common;
     if (tab === 'plan') return <PlanView plan={plan} />;
     if (tab === 'task' && (target.kind === 'step' || target.kind === 'executor_run') && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
+    if (tab === 'facts' && target.kind === 'executor_run') return <FactsViewer events={target.executor.entity.eventIds.map((id) => trace?.eventsById[id]).filter((event): event is NonNullable<typeof event> => Boolean(event))} />;
+    if (tab === 'memory' && target.kind === 'executor_run') return <MemoryContextViewer events={target.executor.entity.eventIds.map((id) => trace?.eventsById[id]).filter((event): event is NonNullable<typeof event> => Boolean(event))} />;
     if (tab === 'result' && target.kind === 'iteration') return <StageResultView stage={target.stage} trace={trace} />;
     if (tab === 'result' && target.kind === 'step') return <StageResultView stage={target.step.stage} trace={trace} />;
     if (tab === 'result' && target.kind === 'executor_run') return target.executor.executorSlug === 'planner' ? <PlanView plan={plan} /> : <ExecutorResultView executor={target.executor} trace={trace} />;

@@ -285,7 +285,11 @@ class Synthesizer:
         full = ""
         try:
             model_call_config = await ModelCallConfigService(self.session).resolve(effective_model)
-            max_retries = model_call_config.max_retries
+            max_retries = int(
+                role_cfg.get("max_retries")
+                if role_cfg.get("max_retries") is not None
+                else model_call_config.max_retries
+            )
         except Exception as exc:  # noqa: BLE001
             # A role prompt can be served from a fallback even while the model
             # registry is temporarily unavailable. Keep the same safe default
@@ -349,6 +353,7 @@ class Synthesizer:
                         retry_delay_ms = self._retry_delay_ms(
                             attempt=attempt,
                             retry_after_ms=stream_event.retry_after_ms,
+                            strategy=str(role_cfg.get("retry_backoff") or "exp"),
                         )
                         yield RuntimeEvent(
                             RuntimeEventType.PROTOCOL_RETRY,
@@ -535,6 +540,9 @@ class Synthesizer:
                 "model": None,
                 "temperature": 0.3,
                 "max_tokens": 2000,
+                "timeout_s": 60,
+                "max_retries": 1,
+                "retry_backoff": "none",
             }
 
     @staticmethod
@@ -555,12 +563,22 @@ class Synthesizer:
         return result
 
     @staticmethod
-    def _retry_delay_ms(*, attempt: int, retry_after_ms: Optional[int]) -> int:
+    def _retry_delay_ms(
+        *,
+        attempt: int,
+        retry_after_ms: Optional[int],
+        strategy: str = "exp",
+    ) -> int:
         """Bound retry delay and respect a provider supplied cooldown."""
-        exponential_ms = min(10_000, 500 * (2 ** max(0, attempt)))
+        if strategy == "none":
+            base_ms = 0
+        elif strategy == "linear":
+            base_ms = min(10_000, 500 * (attempt + 1))
+        else:
+            base_ms = min(10_000, 500 * (2 ** max(0, attempt)))
         if retry_after_ms is None:
-            return exponential_ms
-        return min(30_000, max(exponential_ms, max(0, retry_after_ms)))
+            return base_ms
+        return min(30_000, max(base_ms, max(0, retry_after_ms)))
 
     @staticmethod
     def _resolve_chunk_size(

@@ -182,9 +182,10 @@ async def get_sandbox_catalog(
             SystemLLMRole.is_active.is_(True),
             SystemLLMRole.role_type.in_([
                 SystemLLMRoleType.PLANNER.value,
+                SystemLLMRoleType.MEMORY.value,
                 SystemLLMRoleType.SYNTHESIZER.value,
                 SystemLLMRoleType.FACT_EXTRACTOR.value,
-                SystemLLMRoleType.SUMMARY_COMPACTOR.value,
+                SystemLLMRoleType.FACT_COMPACTOR.value,
             ]),
         )
     )
@@ -204,12 +205,15 @@ async def get_sandbox_catalog(
             "output_requirements": role.output_requirements,
             "model": role.model,
             "temperature": role.temperature,
+            "max_tokens": role.max_tokens,
+            "timeout_s": role.timeout_s,
+            "max_retries": role.max_retries,
             "retry_backoff": role.retry_backoff,
         }
 
     limits_service = RuntimeLimitsService(db)
     role_limits: dict[str, dict] = {}
-    for role_key in ("planner", "synthesizer", "fact_extractor", "summary_compactor"):
+    for role_key in ("planner", "synthesizer", "fact_extractor", "fact_compactor"):
         limits = await limits_service.resolve_orchestrator(role_key)
         role_limits[role_key] = {
             "own": limits.own.__dict__,
@@ -226,6 +230,13 @@ async def get_sandbox_catalog(
             response_contract=build_response_contract(SystemLLMRoleType.PLANNER),
         ),
         SandboxCatalogRouterItem(
+            id="memory",
+            name="Memory",
+            description="Подготовка контекста памяти для планера",
+            config=_role_snapshot(SystemLLMRoleType.MEMORY.value),
+            response_contract=build_response_contract(SystemLLMRoleType.MEMORY),
+        ),
+        SandboxCatalogRouterItem(
             id="synthesizer",
             name="Synthesizer",
             description="Оркестратор финального ответа",
@@ -240,11 +251,11 @@ async def get_sandbox_catalog(
             response_contract=build_response_contract(SystemLLMRoleType.FACT_EXTRACTOR),
         ),
         SandboxCatalogRouterItem(
-            id="summary_compactor",
-            name="Summary Compactor",
-            description="Оркестратор уплотнения summary",
-            config={**_role_snapshot(SystemLLMRoleType.SUMMARY_COMPACTOR.value), "limits": role_limits.get("summary_compactor", {})},
-            response_contract=build_response_contract(SystemLLMRoleType.SUMMARY_COMPACTOR),
+            id="fact_compactor",
+            name="Fact Compactor",
+            description="Нормализация и объединение подтверждённых фактов",
+            config={**_role_snapshot(SystemLLMRoleType.FACT_COMPACTOR.value), "limits": role_limits.get("fact_compactor", {})},
+            response_contract=build_response_contract(SystemLLMRoleType.FACT_COMPACTOR),
         ),
     ]
 

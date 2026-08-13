@@ -142,7 +142,7 @@ async def test_synthesizer_falls_back_when_db_role_load_fails():
     call = llm.calls[0]
     assert call["model"] is None
     assert call["params"] == {"temperature": 0.3, "max_tokens": 2000}
-    assert call["options"].timeout_s == 30
+    assert call["options"].timeout_s == 60
     assert call["messages"][0]["content"]  # fallback prompt is non-empty
     assert events[-2].type.value == "final"
     assert events[-2].data["content"] == "fallback answer"

@@ -14,8 +14,7 @@ adapters to inherit — they already match by method shape.
 
 Post-M6: MemoryPort / TriageServicePort / SummaryPort / WorkingMemory are all gone.
 Cross-turn memory is owned by FactStore + SummaryStore via
-MemoryBuilder/MemoryWriter; triage was subsumed by the planner; rolling
-summary is done by SummaryCompactor inside MemoryWriter; RuntimeTurnState
+MemoryBuilder/MemoryWriter; triage was subsumed by the planner; RuntimeTurnState
 is the single source of truth for runtime state.
 """
 from __future__ import annotations
@@ -50,8 +49,7 @@ from app.runtime.turn_state import RuntimeTurnState
 # Planner                                                                      #
 # --------------------------------------------------------------------------- #
 #
-# The graph planner is the sole planner boundary. Summary ownership remains
-# with `MemoryWriter` + `SummaryCompactor`.
+# The graph planner is the sole planner boundary.
 
 
 @runtime_checkable

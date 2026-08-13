@@ -72,6 +72,22 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         result_kind="schema_search",
         scope_kind="system",
     ),
+    "project_memory.read": OperationSpec(
+        canonical_op_slug="project_memory.read",
+        domain="project_memory",
+        title="Read Project Memory",
+        description="Read confirmed compact knowledge for an exact project key",
+        result_kind="rows",
+        scope_kind="system",
+    ),
+    "project_memory.mark": OperationSpec(
+        canonical_op_slug="project_memory.mark",
+        domain="project_memory",
+        title="Mark Project Memory Candidates",
+        description="Mark evidenced project knowledge for asynchronous compaction without writing durable memory",
+        result_kind="generic",
+        scope_kind="system",
+    ),
     "collection.table.search": OperationSpec(
         canonical_op_slug="collection.table.search",
         domain="collection.table",

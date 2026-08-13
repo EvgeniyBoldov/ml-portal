@@ -21,6 +21,38 @@ logger = get_logger(__name__)
 
 SEED_AGENTS = [
     {
+        "slug": "knowledge",
+        "name": "Project Knowledge",
+        "description": "Searches evidence-backed project knowledge and proposes compact project-memory candidates.",
+        "version": {
+            "identity": "Ты — агент знаний проекта корпоративного AI-портала.",
+            "mission": "Находи проверяемые знания в доступных RAG-коллекциях и отвечай по задаче в контексте явно заданного проекта.",
+            "scope": "Работаешь только с project_key из входных данных задачи и доступными документными/табличными коллекциями.",
+            "rules": (
+                "1. Не выбирай и не угадывай проект: используй только project_key из task inputs.\n"
+                "2. Сначала вызови project_memory.read для project_key, затем ищи сведения в доступных коллекциях.\n"
+                "3. Не выдавай предположения за знания и не используй agent summaries как доказательство.\n"
+                "4. После успешного поиска можешь вызвать project_memory.mark только для атомарных ценных сведений, указав ID успешных tool calls.\n"
+                "5. Marker не записывает память сразу: не сообщай пользователю, что факт уже сохранён.\n"
+                "6. Отвечай на языке пользователя и указывай источники."
+            ),
+            "tool_use_rules": (
+                "project_memory.read принимает точный project_key и возвращает текущие подтверждённые правила. "
+                "Для документов используй collection.document.search после collection.info; для таблиц — collection.table.search. "
+                "project_memory.mark вызывай только после успешного поиска и передавай evidence_call_ids из текущего run."
+            ),
+            "output_format": "Краткий ответ с проверяемыми выводами и источниками; не показывай внутренние ID вызовов инструментов.",
+            "timeout_s": 120,
+            "max_steps": 10,
+            "max_retries": 2,
+            "max_tokens": 4096,
+            "temperature": 0.1,
+            "risk_level": "low",
+            "short_info": "Поиск знаний проекта и асинхронная маркировка доказанных правил",
+            "tags": ["knowledge", "project", "rag", "memory"],
+        },
+    },
+    {
         "slug": "knowledge-base-search",
         "name": "Process & Policy Search",
         "description": (

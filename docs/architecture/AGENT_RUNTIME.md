@@ -193,7 +193,7 @@ Policy gates остаются отдельным runtime enforcement-слоем.
 
 Источник значений лимитов:
 - `platform` scope — базовые лимиты по умолчанию;
-- `orchestrator_role` scope — лимиты системных ролей (`planner`, `synthesizer`, `fact_extractor`, `summary_compactor`);
+- `orchestrator_role` scope — лимиты системных ролей (`planner`, `synthesizer`, `fact_extractor`, `fact_compactor`);
 - `agent` scope — лимиты конкретного агента.
 
 `ExecutionLimitsService.resolve` применяет эту иерархию к каждому полю:
@@ -281,6 +281,16 @@ Runtime уже должен мыслить не "любой collection один�
 Правило:
 - в prompts, planner и inspect surfaces используем только canonical tool names,
 - raw builtin slugs остаются внутренним адаптерным слоем.
+
+## Project Memory Candidate Flow
+
+`project_memory.read` is a global system operation that returns confirmed
+compact facts for an exact project key. `project_memory.mark` never writes the
+database: it accepts only references to successful tool calls from the current
+turn and stores bounded candidates in `RuntimeTurnState`. After Synthesizer
+has returned the user answer, the normal asynchronous memory worker combines
+those candidates with extracted user/tenant facts and sends project candidates
+through the FactCompactor LLM before `FactReconciler` persists them.
 
 ## Runtime Evaluation Harness
 

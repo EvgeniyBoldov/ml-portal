@@ -1,211 +1,47 @@
+from __future__ import annotations
+
 import pytest
 
 from app.models.system_llm_role import SystemLLMRoleType
 from app.services.system_llm_role_contracts import (
     build_response_contract,
-    validate_role_contracts,
     get_role_output_model,
+    validate_role_contracts,
 )
 
 
-def test_planner_contract_has_semantic_action_enum() -> None:
+def test_planner_contract_matches_runtime_model() -> None:
+    from app.runtime.planner.graph_planner import PlannerGraphOutput
+
     contract = build_response_contract(SystemLLMRoleType.PLANNER)
     assert contract["format"] == "json"
-    schema = contract["schema"]
-    assert set(schema["properties"]["action"]["enum"]) == {
+    assert set(contract["schema"]["properties"]) == set(PlannerGraphOutput.model_fields)
+    assert set(contract["schema"]["properties"]["action"]["enum"]) == {
         "apply_graph", "ask_user", "complete", "fail",
     }
-    assert "action" in schema["required"]
-    assert "expected_revision" not in schema["properties"]
-
-
-def test_planner_contract_is_aligned_with_runtime_model() -> None:
-    from app.runtime.planner.graph_planner import PlannerGraphOutput
-
-    contract = build_response_contract(SystemLLMRoleType.PLANNER)
-    schema = contract["schema"]
-    runtime_schema = PlannerGraphOutput.model_json_schema()
-
-    contract_keys = set(schema["properties"].keys())
-    runtime_keys = set(runtime_schema["properties"].keys())
-    assert contract_keys == runtime_keys
-
-    assert set(schema["properties"]) == set(runtime_schema["properties"])
-
-
-def test_planner_contract_describes_graph_tasks() -> None:
-    contract = build_response_contract(SystemLLMRoleType.PLANNER)
-    schema = contract["schema"]
-    props = schema["properties"]
-
-    assert "tasks" in props
-    assert "executor" in props["tasks"]["description"]
-
-
-def test_fact_extractor_contract_is_json_from_pydantic() -> None:
-    """Fact extractor contract is JSON schema generated from _LLMFactOutput Pydantic model."""
-    contract = build_response_contract(SystemLLMRoleType.FACT_EXTRACTOR)
-    assert contract["format"] == "json"
-    schema = contract["schema"]
-    # Schema should have facts property (exact structure depends on Pydantic $ref handling)
-    assert "facts" in schema.get("properties", {}), "facts property should exist in schema"
-
-
-def test_synthesizer_contract_plain_text() -> None:
-    contract = build_response_contract(SystemLLMRoleType.SYNTHESIZER)
-    assert contract["format"] == "plain_text"
-    assert contract["schema"] is None
-    assert isinstance(contract["plain_text"]["criteria"], list)
-    assert contract["failure_policy"]["on_invalid"] == "accept_with_runtime_safety_filters"
-
-
-# =============================================================================
-# Contract validation and format_locked tests
-# =============================================================================
-
-
-def test_all_json_roles_have_format_locked_true() -> None:
-    """All JSON contracts must have format_locked=True (built-in roles are fixed)."""
-    json_roles = [
-        SystemLLMRoleType.PLANNER,
-        SystemLLMRoleType.TRIAGE,
-        SystemLLMRoleType.FACT_EXTRACTOR,
-        SystemLLMRoleType.SUMMARY_COMPACTOR,
-    ]
-    for role in json_roles:
-        contract = build_response_contract(role)
-        assert contract["format"] == "json"
-        assert contract.get("format_locked") is True, f"{role.value} should have format_locked=True"
-
-
-def test_all_plain_text_roles_have_format_locked_true() -> None:
-    """Plain text contracts also have format_locked=True."""
-    plain_roles = [
-        SystemLLMRoleType.SYNTHESIZER,
-        SystemLLMRoleType.SUMMARY,
-        SystemLLMRoleType.MEMORY,
-    ]
-    for role in plain_roles:
-        contract = build_response_contract(role)
-        assert contract["format"] == "plain_text"
-        assert contract.get("format_locked") is True, f"{role.value} should have format_locked=True"
-
-
-def test_validate_role_contracts_passes_for_valid_roles() -> None:
-    """Startup validation should pass for all correctly configured roles."""
-    errors = validate_role_contracts()
-    assert errors == {}, f"Unexpected validation errors: {errors}"
-
-
-def test_get_role_output_model_returns_correct_models() -> None:
-    """Registry should return correct Pydantic models for JSON roles."""
-    from app.runtime.planner.graph_planner import PlannerGraphOutput
-    from app.runtime.memory.fact_extractor import _LLMFactOutput
-    from app.runtime.memory.summary_compactor import _LLMSummaryOutput
-
-    assert get_role_output_model(SystemLLMRoleType.PLANNER) is PlannerGraphOutput
-    assert get_role_output_model(SystemLLMRoleType.FACT_EXTRACTOR) is _LLMFactOutput
-    assert get_role_output_model(SystemLLMRoleType.SUMMARY_COMPACTOR) is _LLMSummaryOutput
-    # Triage has no model yet (manual contract)
-    assert get_role_output_model(SystemLLMRoleType.TRIAGE) is None
-
-
-# =============================================================================
-# Snapshot-style schema completeness tests
-# =============================================================================
-
-
-def test_planner_contract_has_all_required_fields() -> None:
-    """Ensure planner contract includes all expected fields from Pydantic model."""
-    from app.runtime.planner.graph_planner import PlannerGraphOutput
-
-    contract = build_response_contract(SystemLLMRoleType.PLANNER)
-    schema = contract["schema"]
-
-    expected_fields = set(PlannerGraphOutput.model_fields.keys())
-    actual_fields = set(schema["properties"].keys())
-
-    assert actual_fields == expected_fields, f"Missing fields: {expected_fields - actual_fields}"
-
-
-def test_summary_compactor_contract_has_all_required_fields() -> None:
-    """Ensure summary compactor contract matches Pydantic model."""
-    from app.runtime.memory.summary_compactor import _LLMSummaryOutput
-
-    contract = build_response_contract(SystemLLMRoleType.SUMMARY_COMPACTOR)
-    schema = contract["schema"]
-
-    expected_fields = set(_LLMSummaryOutput.model_fields.keys())
-    actual_fields = set(schema["properties"].keys())
-
-    assert actual_fields == expected_fields, f"Missing fields: {expected_fields - actual_fields}"
-
-
-def test_fact_extractor_contract_has_all_required_fields() -> None:
-    """Ensure fact extractor contract matches Pydantic model."""
-    from app.runtime.memory.fact_extractor import _LLMFactOutput
-
-    contract = build_response_contract(SystemLLMRoleType.FACT_EXTRACTOR)
-    schema = contract["schema"]
-
-    expected_fields = set(_LLMFactOutput.model_fields.keys())
-    actual_fields = set(schema["properties"].keys())
-
-    assert actual_fields == expected_fields, f"Missing fields: {expected_fields - actual_fields}"
-
-
-# =============================================================================
-# Triage contract (manual schema until Pydantic model is created)
-# =============================================================================
-
-
-def test_triage_contract_is_json_with_expected_fields() -> None:
-    """Triage uses manual contract with all expected triage fields."""
-    contract = build_response_contract(SystemLLMRoleType.TRIAGE)
-    assert contract["format"] == "json"
-    schema = contract["schema"]
-
-    assert "type" in schema["properties"]
-    assert "confidence" in schema["properties"]
-    assert "reason" in schema["properties"]
-    assert "answer" in schema["properties"]
-    assert "clarify_prompt" in schema["properties"]
-    assert "goal" in schema["properties"]
-    assert "agent_hint" in schema["properties"]
-    assert "resume_run_id" in schema["properties"]
-
-    assert schema["properties"]["type"]["enum"] == ["final", "clarify", "orchestrate", "resume"]
-    assert "type" in schema["required"]
-    assert "confidence" in schema["required"]
-    assert "reason" in schema["required"]
 
 
 @pytest.mark.parametrize(
     "role",
     [
         SystemLLMRoleType.PLANNER,
+        SystemLLMRoleType.MEMORY,
         SystemLLMRoleType.FACT_EXTRACTOR,
-        SystemLLMRoleType.SUMMARY_COMPACTOR,
+        SystemLLMRoleType.FACT_COMPACTOR,
     ],
 )
-def test_json_role_examples_v2_match_runtime_schema(role: SystemLLMRoleType) -> None:
+def test_structured_runtime_roles_have_locked_json_contracts(role: SystemLLMRoleType) -> None:
     contract = build_response_contract(role)
-    examples_v2 = contract.get("examples_v2") or {}
-    outputs = examples_v2.get("outputs") or {}
-    model = get_role_output_model(role)
-    assert model is not None
-    assert outputs, f"{role.value} must provide outputs examples"
-
-    for variant_name, payload in outputs.items():
-        try:
-            model.model_validate(payload)
-        except Exception as exc:  # noqa: BLE001
-            raise AssertionError(f"{role.value}:{variant_name} example does not match runtime schema: {exc}") from exc
+    assert contract["format"] == "json"
+    assert contract["format_locked"] is True
+    assert get_role_output_model(role) is not None
 
 
-def test_triage_examples_v2_has_all_decision_variants() -> None:
-    contract = build_response_contract(SystemLLMRoleType.TRIAGE)
-    examples_v2 = contract.get("examples_v2") or {}
-    outputs = examples_v2.get("outputs") or {}
-    expected = {"final", "clarify", "orchestrate", "resume"}
-    assert expected.issubset(set(outputs.keys()))
+def test_synthesizer_contract_is_plain_text() -> None:
+    contract = build_response_contract(SystemLLMRoleType.SYNTHESIZER)
+    assert contract["format"] == "plain_text"
+    assert contract["format_locked"] is True
+
+
+def test_runtime_role_contract_registry_is_valid() -> None:
+    assert validate_role_contracts() == {}

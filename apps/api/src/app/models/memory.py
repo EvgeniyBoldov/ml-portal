@@ -64,13 +64,25 @@ class FactScope(str, Enum):
     """
     USER = "user"
     TENANT = "tenant"
+    PROJECT = "project"
+
+
+class FactStatus(str, Enum):
+    """Whether a fact may be injected into planning context."""
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    UNCONFIRMED = "unconfirmed"
+    DELETED = "deleted"
 
 
 class FactSource(str, Enum):
     """Where the fact originated from."""
     USER_UTTERANCE = "user_utterance"   # extracted from what the user said
-    AGENT_RESULT = "agent_result"       # derived from an agent/tool result
+    TOOL_RESULT = "tool_result"         # direct successful tool result
+    MANUAL = "manual"                   # explicitly edited by the user
     SYSTEM = "system"                   # system-provided (defaults, config)
+    LEGACY_AGENT_RESULT = "agent_result" # read-only compatibility; never emitted
 
 
 class Fact(Base):
@@ -90,11 +102,11 @@ class Fact(Base):
         Index("ix_facts_owner_subject_active", "owner_type", "owner_id", "subject",
               postgresql_where="superseded_by IS NULL"),
         CheckConstraint(
-            "scope IN ('user', 'tenant')",
+            "scope IN ('user', 'tenant', 'project')",
             name="ck_facts_scope",
         ),
         CheckConstraint(
-            "source IN ('user_utterance', 'agent_result', 'system')",
+            "source IN ('user_utterance', 'tool_result', 'manual', 'system', 'agent_result')",
             name="ck_facts_source",
         ),
         CheckConstraint(
@@ -117,6 +129,12 @@ class Fact(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=True,
     )
+    project_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
     # Generic ownership is the canonical contract for new rows. Legacy
     # user_id/tenant_id/chat_id remain during the compatibility transition.
@@ -132,6 +150,7 @@ class Fact(Base):
         comment="Canonical slot key, e.g. 'user.name', 'project.repo'.",
     )
     value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     confidence: Mapped[float] = mapped_column(
         Float, nullable=False, default=1.0
     )
@@ -162,6 +181,14 @@ class Fact(Base):
         default=True,
         comment="Whether the user may list / delete this fact via user API.",
     )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=FactStatus.PENDING.value,
+        server_default=FactStatus.PENDING.value,
+    )
+    support_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    first_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     # --- bookkeeping --------------------------------------------------------
     created_at: Mapped[datetime] = mapped_column(
@@ -169,6 +196,26 @@ class Fact(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+class FactObservation(Base):
+    """A unique source event which supports one fact.
+
+    Observations are intentionally small: the source reference lets callers
+    re-authorize evidence later without storing a second copy of RAG content.
+    """
+
+    __tablename__ = "fact_observations"
+    __table_args__ = (
+        Index("uq_fact_observations_fact_source", "fact_id", "source_type", "source_ref", unique=True),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    fact_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("facts.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class DialogueSummary(Base):

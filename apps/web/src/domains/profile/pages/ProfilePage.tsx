@@ -190,6 +190,37 @@ export default function ProfilePage() {
     },
   });
 
+  const updateFact = useMutation({
+    mutationFn: ({ id, subject, value }: { id: string; subject: string; value: string }) =>
+      apiRequest<UserFact>(`/profile/facts/${id}`, { method: 'PUT', body: { subject, value } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['profile', 'facts'] });
+      showSuccess('Факт обновлён');
+    },
+    onError: (error: any) => showError(error?.detail || 'Не удалось обновить факт'),
+  });
+
+  const editFact = (fact: UserFact) => {
+    const subject = window.prompt('Subject факта', fact.subject);
+    if (subject === null) return;
+    const value = window.prompt('Значение факта', fact.value);
+    if (value === null) return;
+    updateFact.mutate({ id: fact.id, subject, value });
+  };
+
+  const createFact = () => {
+    const subject = window.prompt('Subject нового факта');
+    if (!subject) return;
+    const value = window.prompt('Значение нового факта');
+    if (!value) return;
+    apiRequest<UserFact>('/profile/facts', { method: 'POST', body: { subject, value } })
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ['profile', 'facts'] });
+        showSuccess('Факт добавлен');
+      })
+      .catch((error: any) => showError(error?.detail || 'Не удалось добавить факт'));
+  };
+
   const changePassword = useMutation({
     mutationFn: async (data: { current_password: string; new_password: string }) => {
       return apiRequest<{ ok: boolean }>('/profile/password', {
@@ -448,6 +479,12 @@ export default function ProfilePage() {
             Факты памяти
           </h2>
           <Button
+            variant="outline"
+            onClick={createFact}
+          >
+            Добавить факт
+          </Button>
+          <Button
             variant="danger"
             disabled={selectedFactIds.length === 0 || deleteFacts.isPending}
             onClick={handleDeleteSelectedFacts}
@@ -484,6 +521,7 @@ export default function ProfilePage() {
                   <th>Scope</th>
                   <th>Источник</th>
                   <th>Обновлено</th>
+                  <th aria-label="Действия" />
                 </tr>
               </thead>
               <tbody>
@@ -502,6 +540,11 @@ export default function ProfilePage() {
                     <td>{fact.scope}</td>
                     <td>{fact.source}</td>
                     <td>{formatDate(fact.observed_at)}</td>
+                    <td>
+                      <Button variant="secondary" size="sm" onClick={() => editFact(fact)} disabled={updateFact.isPending}>
+                        Изменить
+                      </Button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

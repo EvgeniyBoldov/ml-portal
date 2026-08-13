@@ -21,9 +21,10 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from app.runtime.memory.dto import FactDTO, SummaryDTO
-from app.runtime.memory.fact_extractor import AgentResultSnippet
+from app.runtime.memory.fact_extractor import AgentResultSnippet, FactEvidence
 from app.runtime.memory.components import MemoryBundle
 from app.runtime.memory.service import MemorySnapshot
+from app.runtime.project_memory_candidates import ProjectMemoryCandidate
 
 
 @dataclass
@@ -44,6 +45,9 @@ class TurnMemory:
     planner_memory_context: List[Dict[str, Any]] = field(default_factory=list)
     durable_snapshot: MemorySnapshot = field(default_factory=MemorySnapshot)
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    fact_evidence: List[FactEvidence] = field(default_factory=list)
+    project_memory_candidates: List[ProjectMemoryCandidate] = field(default_factory=list)
+    fact_run_ref: Optional[str] = None
 
     # --- mutated during the turn by the pipeline --------------------------
     agent_results: List[AgentResultSnippet] = field(default_factory=list)

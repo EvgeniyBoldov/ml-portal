@@ -1,4 +1,4 @@
-from app.models.memory import FactScope, FactSource
+from app.models.memory import FactScope, FactSource, FactStatus
 from app.runtime.memory.dto import FactDTO
 from app.runtime.memory.sandbox_overlays import apply_overrides, merge_extracted
 
@@ -36,3 +36,25 @@ def test_set_override_adds_branch_only_fact() -> None:
     assert [(item.scope, item.subject, item.value) for item in effective] == [
         (FactScope.TENANT, "department.db", "Postgres 15"),
     ]
+
+
+def test_project_fact_is_kept_in_branch_overlay() -> None:
+    overrides = merge_extracted({}, [_fact(FactScope.PROJECT, "project.network.standard", "EVPN")])
+
+    effective = apply_overrides([], overrides)
+
+    assert [(item.scope, item.subject, item.status) for item in effective] == [
+        (FactScope.PROJECT, "project.network.standard", FactStatus.CONFIRMED),
+    ]
+
+
+def test_conflicting_sandbox_value_masks_confirmed_base_fact() -> None:
+    base = [_fact(FactScope.TENANT, "department.db", "Postgres 15")]
+    overrides = merge_extracted({}, [_fact(FactScope.TENANT, "department.db", "Oracle")], base=base)
+
+    effective = apply_overrides(base, overrides)
+
+    assert len(effective) == 1
+    assert effective[0].value == "Oracle"
+    assert effective[0].status == FactStatus.PENDING
+    assert overrides["tenant"]["department.db"]["conflict"] is True

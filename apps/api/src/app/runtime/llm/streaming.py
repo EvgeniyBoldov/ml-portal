@@ -84,19 +84,19 @@ class RoleStreamingCall:
         role_cfg = role_config or await self._role_service.get_role_config(role)
         model = model_override if model_override is not None else role_cfg.get("model")
         model_call_config = await self._model_call_config_service.resolve(model)
-        _timeout_s = model_call_config.request_timeout_s
+        timeout_s = int(role_cfg.get("timeout_s") or model_call_config.request_timeout_s)
         params: Dict[str, Any] = {}
         if role_cfg.get("temperature") is not None:
             params["temperature"] = role_cfg["temperature"]
-        configured_max_tokens = model_call_config.max_output_tokens
-        if configured_max_tokens is None and role_cfg.get("max_tokens") is not None:
-            configured_max_tokens = int(role_cfg["max_tokens"])
+        configured_max_tokens = role_cfg.get("max_tokens")
+        if configured_max_tokens is None:
+            configured_max_tokens = model_call_config.max_output_tokens
+        if configured_max_tokens is not None:
+            configured_max_tokens = int(configured_max_tokens)
         if configured_max_tokens is not None:
             params["max_tokens"] = configured_max_tokens
         if isinstance(params_override, dict):
             params.update(params_override)
-
-        timeout_s = _timeout_s
 
         input_tokens = estimate_tokens(str(messages))
         requested_output_tokens = int(params["max_tokens"]) if params.get("max_tokens") is not None else None

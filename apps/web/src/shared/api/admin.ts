@@ -38,9 +38,10 @@ export type ExecutorSettingsUpdate = Partial<Pick<
 
 export type SystemLLMRoleType =
   | 'planner'
+  | 'memory'
   | 'synthesizer'
   | 'fact_extractor'
-  | 'summary_compactor';
+  | 'fact_compactor';
 export type RetryBackoffType = 'none' | 'linear' | 'exp';
 
 export type ResponseContractFormat = 'json' | 'plain_text' | 'markdown';
@@ -101,8 +102,14 @@ export interface SystemLLMRole {
   rules?: string | null;
   safety?: string | null;
   output_requirements?: string | null;
+  examples?: Array<Record<string, unknown>> | null;
+  extras?: Record<string, unknown> | null;
   model?: string | null;
   temperature?: number | null;
+  max_tokens?: number | null;
+  timeout_s?: number | null;
+  max_retries?: number | null;
+  retry_backoff?: RetryBackoffType | null;
   response_contract?: ResponseContract | null;
   is_active?: boolean | null;
   created_at: string;
@@ -116,8 +123,14 @@ export interface SystemLLMRoleCreate {
   rules?: string | null;
   safety?: string | null;
   output_requirements?: string | null;
+  examples?: Array<Record<string, unknown>> | null;
+  extras?: Record<string, unknown> | null;
   model?: string | null;
   temperature?: number | null;
+  max_tokens?: number | null;
+  timeout_s?: number | null;
+  max_retries?: number | null;
+  retry_backoff?: RetryBackoffType | null;
   is_active?: boolean | null;
 }
 
@@ -127,17 +140,24 @@ export interface SystemLLMRoleUpdate {
   rules?: string | null;
   safety?: string | null;
   output_requirements?: string | null;
+  examples?: Array<Record<string, unknown>> | null;
+  extras?: Record<string, unknown> | null;
   model?: string | null;
   temperature?: number | null;
+  max_tokens?: number | null;
+  timeout_s?: number | null;
+  max_retries?: number | null;
+  retry_backoff?: RetryBackoffType | null;
   is_active?: boolean | null;
 }
 
 // Role-specific update types — all use same schema as SystemLLMRoleUpdate
 // Fields: identity, mission, rules, safety, output_requirements, model, temperature, etc.
 export type PlannerRoleUpdate = SystemLLMRoleUpdate;
+export type MemoryRoleUpdate = SystemLLMRoleUpdate;
 export type SynthesizerRoleUpdate = SystemLLMRoleUpdate;
 export type FactExtractorRoleUpdate = SystemLLMRoleUpdate;
-export type SummaryCompactorRoleUpdate = SystemLLMRoleUpdate;
+export type FactCompactorRoleUpdate = SystemLLMRoleUpdate;
 
 export interface UserCreate {
   login: string;
@@ -905,27 +925,8 @@ export const systemLLMRolesApi = {
       method: 'POST',
     }),
 
-  // Role-specific update methods
-  updatePlanner: (data: PlannerRoleUpdate): Promise<SystemLLMRole> =>
-    apiRequest('/admin/system-llm-roles/planner', {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    }),
-
-  updateSynthesizer: (data: SynthesizerRoleUpdate): Promise<SystemLLMRole> =>
-    apiRequest('/admin/system-llm-roles/synthesizer', {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    }),
-
-  updateFactExtractor: (data: FactExtractorRoleUpdate): Promise<SystemLLMRole> =>
-    apiRequest('/admin/system-llm-roles/fact-extractor', {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    }),
-
-  updateSummaryCompactor: (data: SummaryCompactorRoleUpdate): Promise<SystemLLMRole> =>
-    apiRequest('/admin/system-llm-roles/summary-compactor', {
+  updateActive: (roleType: SystemLLMRoleType, data: SystemLLMRoleUpdate): Promise<SystemLLMRole> =>
+    apiRequest(`/admin/system-llm-roles/active/${roleType}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),

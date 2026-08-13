@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from typing import Any, AsyncIterator, Mapping, Optional
 import httpx
@@ -337,6 +338,10 @@ class OpenAICompatibleLLM:
                 retry_after_ms = max(0, int(float(retry_after) * 1000))
             except (TypeError, ValueError):
                 retry_after_ms = None
+        if retry_after_ms is None:
+            retry_match = re.search(r"try again in\s+([0-9]+(?:\.[0-9]+)?)s", text)
+            if retry_match:
+                retry_after_ms = max(0, int(float(retry_match.group(1)) * 1000))
         if isinstance(exc, asyncio.TimeoutError) or "timeout" in text:
             code, safe, retryable = LLMErrorCode.TIMEOUT, "LLM provider timed out", True
         elif status_code == 401:
@@ -345,7 +350,10 @@ class OpenAICompatibleLLM:
             code, safe, retryable = LLMErrorCode.AUTHORIZATION, "LLM access was denied", False
         elif status_code == 404:
             code, safe, retryable = LLMErrorCode.MODEL_NOT_FOUND, "LLM model was not found", False
-        elif status_code == 429:
+        elif status_code == 429 or any(
+            marker in text
+            for marker in ("rate_limit_exceeded", "rate limit reached", "tokens per minute")
+        ):
             code, safe, retryable = LLMErrorCode.RATE_LIMITED, "LLM provider rate limit reached", True
         elif status_code == 413 or any(marker in text for marker in ("context_length_exceeded", "maximum context length", "request too large")):
             code, safe, retryable = LLMErrorCode.REQUEST_TOO_LARGE, "LLM request exceeds provider limits", False

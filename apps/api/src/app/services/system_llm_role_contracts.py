@@ -11,7 +11,6 @@ from app.services.system_llm_role_examples import get_role_examples
 if TYPE_CHECKING:
     from app.runtime.planner.graph_planner import PlannerGraphOutput
     from app.runtime.memory.fact_extractor import _LLMFactOutput
-    from app.runtime.memory.summary_compactor import _LLMSummaryOutput
 
 
 def _json_contract(schema: Dict[str, Any], *, on_invalid: str, format_locked: bool = True) -> Dict[str, Any]:
@@ -61,13 +60,12 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
     elif role == SystemLLMRoleType.FACT_EXTRACTOR:
         from app.runtime.memory.fact_extractor import _LLMFactOutput
         model = _LLMFactOutput
-    elif role == SystemLLMRoleType.SUMMARY_COMPACTOR:
-        from app.runtime.memory.summary_compactor import _LLMSummaryOutput
-        model = _LLMSummaryOutput
-    elif role == SystemLLMRoleType.TRIAGE:
-        # Triage uses inline schema - no separate Pydantic model yet
-        model = None
-
+    elif role == SystemLLMRoleType.FACT_COMPACTOR:
+        from app.runtime.memory.fact_compactor import _CompactionOutput
+        model = _CompactionOutput
+    elif role == SystemLLMRoleType.MEMORY:
+        from app.runtime.memory.preparer import _PreparationOutput
+        model = _PreparationOutput
     if model:
         _ROLE_OUTPUT_MODELS[role] = model
 
@@ -86,12 +84,12 @@ def _enrich_schema_with_contract_metadata(schema: Dict[str, Any], role: SystemLL
         items = schema.get("properties", {}).get("facts", {}).get("items", {})
         if items and "properties" in items:
             scope_prop = items["properties"].get("scope", {})
-            scope_prop["enum"] = ["user", "tenant"]
+            scope_prop["enum"] = ["user", "tenant", "project"]
 
-    elif role == SystemLLMRoleType.SUMMARY_COMPACTOR:
-        # entities is dict in model, but contract expects array of strings
-        # Keep as-is from model schema
-        pass
+    elif role == SystemLLMRoleType.FACT_COMPACTOR:
+        items = schema.get("properties", {}).get("facts", {}).get("items", {})
+        if items and "properties" in items:
+            items["properties"].get("scope", {})["enum"] = ["user", "tenant", "project"]
 
     return schema
 
@@ -119,34 +117,7 @@ def build_response_contract(role_type: SystemLLMRoleType | str) -> Dict[str, Any
         contract["examples_v2"] = examples_v2
         return contract
 
-    # Fallback: manual contract for roles without Pydantic models
-    if role == SystemLLMRoleType.TRIAGE:
-        contract = _json_contract(
-            {
-                "type": "object",
-                "required": ["type", "confidence", "reason"],
-                "properties": {
-                    "type": {
-                        "type": "string",
-                        "enum": ["final", "clarify", "orchestrate", "resume"],
-                        "description": "Triage decision type",
-                    },
-                    "confidence": {"type": "number", "description": "Confidence score 0-1"},
-                    "reason": {"type": "string", "description": "Explanation of decision"},
-                    "answer": {"type": ["string", "null"], "description": "Answer text (when type=final)"},
-                    "clarify_prompt": {"type": ["string", "null"], "description": "Clarification question (when type=clarify)"},
-                    "goal": {"type": ["string", "null"], "description": "Goal for orchestration (when type=orchestrate)"},
-                    "agent_hint": {"type": ["string", "null"], "description": "Suggested agent (when type=orchestrate)"},
-                    "resume_run_id": {"type": ["string", "null"], "description": "Run ID to resume (when type=resume)"},
-                },
-            },
-            on_invalid="retry_once_then_fallback",
-            format_locked=True,
-        )
-        contract["examples_v2"] = examples_v2
-        return contract
-
-    if role in (SystemLLMRoleType.SYNTHESIZER, SystemLLMRoleType.SUMMARY, SystemLLMRoleType.MEMORY):
+    if role == SystemLLMRoleType.SYNTHESIZER:
         contract = _plain_text_contract(
             on_invalid="accept_with_runtime_safety_filters",
             criteria=[
@@ -189,18 +160,15 @@ def validate_role_contracts() -> Dict[SystemLLMRoleType, str]:
     errors: Dict[SystemLLMRoleType, str] = {}
     json_roles = [
         SystemLLMRoleType.PLANNER,
-        SystemLLMRoleType.TRIAGE,
         SystemLLMRoleType.FACT_EXTRACTOR,
-        SystemLLMRoleType.SUMMARY_COMPACTOR,
+        SystemLLMRoleType.FACT_COMPACTOR,
+        SystemLLMRoleType.MEMORY,
     ]
 
     for role in json_roles:
         try:
             model = _get_output_model(role)
             if model is None:
-                if role == SystemLLMRoleType.TRIAGE:
-                    # Triage is allowed to have manual contract
-                    continue
                 errors[role] = f"No Pydantic output model registered for {role.value}"
                 continue
 

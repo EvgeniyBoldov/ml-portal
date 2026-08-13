@@ -99,7 +99,7 @@ class SandboxBranchFactsArtifactResponse(BaseModel):
 class SandboxFactOverrideUpsert(BaseModel):
     state: Literal["set", "deleted"]
     value: Optional[str] = Field(default=None, max_length=500)
-    source: Literal["user_utterance", "agent_result", "system"] = "user_utterance"
+    source: Literal["user_utterance", "tool_result", "manual", "system"] = "manual"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     source_ref: Optional[str] = Field(default=None, max_length=128)
 

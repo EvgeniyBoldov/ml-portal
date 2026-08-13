@@ -78,6 +78,18 @@ def test_normalize_error_classifies_timeout_and_context_limit():
     assert oversized.retryable is False
 
 
+def test_normalize_error_classifies_provider_tpm_limit_without_http_status():
+    error = RuntimeError(
+        "Rate limit reached: tokens per minute. Please try again in 16.14s."
+    )
+
+    normalized = OpenAICompatibleLLM._normalize_error(error)
+
+    assert normalized.code is LLMErrorCode.RATE_LIMITED
+    assert normalized.retryable is True
+    assert normalized.retry_after_ms == 16140
+
+
 def test_rejection_diagnostics_describe_tool_protocol_without_content():
     shape = OpenAICompatibleLLM._request_shape_for_diagnostics(
         {
