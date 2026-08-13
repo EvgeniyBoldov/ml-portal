@@ -22,12 +22,14 @@ import ConfirmDialog from '../ConfirmDialog';
 import { useErrorToast, useSuccessToast } from '../Toast';
 import styles from './CredentialsPanel.module.css';
 
-export type CredentialsPanelMode = 'platform' | 'user';
+export type CredentialsPanelMode = 'platform' | 'user' | 'readonly-owner';
 
 export interface CredentialsPanelProps {
   mode: CredentialsPanelMode;
   userId?: string;
   tenantId?: string;
+  ownerUserId?: string;
+  ownerTenantId?: string;
 }
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
@@ -38,7 +40,7 @@ const AUTH_TYPE_LABELS: Record<string, string> = {
   oauth: 'OAuth 2.0',
 };
 
-export function CredentialsPanel({ mode, userId, tenantId }: CredentialsPanelProps) {
+export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTenantId }: CredentialsPanelProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
@@ -53,6 +55,7 @@ export function CredentialsPanel({ mode, userId, tenantId }: CredentialsPanelPro
     if (mode === 'platform') {
       return { owner_platform: true };
     }
+    if (mode === 'readonly-owner') return {};
     if (isTenantLevel && tenantId) {
       return { owner_tenant_id: tenantId };
     }
@@ -63,8 +66,17 @@ export function CredentialsPanel({ mode, userId, tenantId }: CredentialsPanelPro
   }, [mode, isTenantLevel, userId, tenantId]);
 
   const { data: credentials = [], isLoading } = useQuery({
-    queryKey: qk.credentials.list(listParams),
-    queryFn: () => credentialsApi.list(listParams),
+    queryKey: mode === 'readonly-owner'
+      ? qk.credentials.list({ owner_user_id: ownerUserId, owner_tenant_id: ownerTenantId, summary: true })
+      : mode === 'user'
+        ? qk.profile.credentials(isTenantLevel ? 'tenant' : 'user')
+        : qk.credentials.list(listParams),
+    queryFn: () => mode === 'readonly-owner'
+      ? credentialsApi.listSummary({ owner_user_id: ownerUserId, owner_tenant_id: ownerTenantId })
+      : mode === 'user'
+        ? credentialsApi.listProfile(isTenantLevel ? 'tenant' : 'user')
+        : credentialsApi.list(listParams),
+    enabled: mode !== 'readonly-owner' || Boolean(ownerUserId || ownerTenantId),
   });
 
   const { data: allInstances = [] } = useQuery({
@@ -83,7 +95,9 @@ export function CredentialsPanel({ mode, userId, tenantId }: CredentialsPanelPro
   // ─── Mutations ─────────────────────────────────────────────────────
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => credentialsApi.delete(id),
+    mutationFn: (id: string) => mode === 'user'
+      ? credentialsApi.deleteProfile(id, isTenantLevel ? 'tenant' : 'user')
+      : credentialsApi.delete(id),
     onSuccess: () => {
       showSuccess('Credential удалён');
       queryClient.invalidateQueries({ queryKey: qk.credentials.all() });
@@ -136,7 +150,7 @@ export function CredentialsPanel({ mode, userId, tenantId }: CredentialsPanelPro
       key: 'actions',
       label: '',
       render: (c: Credential) => (
-        mode === 'platform' ? null : (
+        mode === 'platform' || mode === 'readonly-owner' ? null : (
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <Button
               variant="danger"
@@ -149,7 +163,7 @@ export function CredentialsPanel({ mode, userId, tenantId }: CredentialsPanelPro
         )
       ),
     },
-  ], [instanceMap, navigate]);
+  ], [instanceMap, navigate, mode, isTenantLevel]);
 
   return (
     <div className={styles.container}>
@@ -170,7 +184,7 @@ export function CredentialsPanel({ mode, userId, tenantId }: CredentialsPanelPro
         keyField="id"
         loading={isLoading}
         emptyText="Нет credentials"
-        onRowClick={(cred: Credential) => navigate(`/admin/credentials/${cred.id}`)}
+        onRowClick={mode === 'readonly-owner' ? undefined : (cred: Credential) => navigate(`/admin/credentials/${cred.id}`)}
       />
 
       {/* Delete Confirmation */}

@@ -41,7 +41,13 @@ export interface CredentialListParams {
   is_active?: boolean;
 }
 
+export interface CredentialSummary extends Omit<Credential, 'has_payload' | 'masked_payload'> {}
+
 export const credentialsApi = {
+  async listProfile(level: 'user' | 'tenant' = 'user'): Promise<Credential[]> {
+    const rows = await apiRequest<Array<Credential & { tool_instance_id?: string }>>(`/profile/credentials?level=${level}`);
+    return rows.map((row) => ({ ...row, instance_id: row.instance_id || row.tool_instance_id || '' }));
+  },
   async list(params: CredentialListParams = {}): Promise<Credential[]> {
     const sp = new URLSearchParams();
     if (params.skip) sp.set('skip', String(params.skip));
@@ -56,6 +62,13 @@ export const credentialsApi = {
 
   async get(id: string): Promise<Credential> {
     return apiRequest(`/admin/credentials/${id}`);
+  },
+
+  async listSummary(params: Pick<CredentialListParams, 'owner_user_id' | 'owner_tenant_id'>): Promise<CredentialSummary[]> {
+    const sp = new URLSearchParams();
+    if (params.owner_user_id) sp.set('owner_user_id', params.owner_user_id);
+    if (params.owner_tenant_id) sp.set('owner_tenant_id', params.owner_tenant_id);
+    return apiRequest(`/admin/credentials/summary?${sp.toString()}`);
   },
 
   async create(data: CredentialCreate): Promise<Credential> {
@@ -74,5 +87,9 @@ export const credentialsApi = {
 
   async delete(id: string): Promise<void> {
     return apiRequest(`/admin/credentials/${id}`, { method: 'DELETE' });
+  },
+
+  async deleteProfile(id: string, level: 'user' | 'tenant' = 'user'): Promise<void> {
+    return apiRequest(`/profile/credentials/${id}?level=${level}`, { method: 'DELETE' });
   },
 };

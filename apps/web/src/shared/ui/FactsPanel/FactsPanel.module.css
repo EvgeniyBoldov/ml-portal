@@ -1,0 +1,7 @@
+.container { display: flex; flex-direction: column; gap: var(--sp-4, 1rem); }
+.header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3, .75rem); }
+.header p { margin: 0; color: var(--text-secondary, var(--muted)); }
+.form { display: flex; flex-direction: column; gap: var(--sp-4, 1rem); }
+.form label { display: flex; flex-direction: column; gap: var(--sp-2, .5rem); color: var(--text-primary, var(--text)); font-size: var(--text-sm, .875rem); }
+.value { word-break: break-word; }
+.actions { display: flex; gap: var(--sp-2, .5rem); }

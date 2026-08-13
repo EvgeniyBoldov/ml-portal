@@ -20,6 +20,7 @@ import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import Input from '@/shared/ui/Input';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import type { User, Tenant } from '@shared/api/admin';
+import { CredentialsPanel, FactsPanel } from '@/shared/ui';
 
 /* ─── SetPasswordModal ─── */
 
@@ -499,6 +500,18 @@ export function UserPage() {
             data={metaData}
           />
         </Tab>
+
+        {!isNew && (
+        <Tab title="Credentials" layout="full" id="credentials">
+          <CredentialsPanel mode="readonly-owner" ownerUserId={id} />
+        </Tab>
+        )}
+
+        {!isNew && (
+        <Tab title="Факты" layout="full" id="facts">
+          <FactsPanel mode="admin-user" ownerId={id} />
+        </Tab>
+        )}
 
         {!isNew && (
         <Tab 

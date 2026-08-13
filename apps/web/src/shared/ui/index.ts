@@ -117,6 +117,8 @@ export type { SecretFieldProps } from './SecretField';
 // CredentialsPanel
 export { CredentialsPanel } from './CredentialsPanel';
 export type { CredentialsPanelProps, CredentialsPanelMode } from './CredentialsPanel';
+export { FactsPanel } from './FactsPanel/FactsPanel';
+export type { FactsPanelMode } from './FactsPanel/FactsPanel';
 
 // GridLayout + Block
 export { GridLayout, Block } from './GridLayout';

@@ -49,11 +49,13 @@ export const qk = {
       list: (params?: { page?: number; q?: string; limit?: number }) =>
         ['admin', 'users', 'list', params] as const,
       detail: (id: string) => ['admin', 'users', id] as const,
+      facts: (id: string) => ['admin', 'users', id, 'facts'] as const,
     },
     tenants: {
       all: () => ['admin', 'tenants'] as const,
       list: (params?: { page?: number }) => ['admin', 'tenants', 'list', params] as const,
       detail: (id: string) => ['admin', 'tenants', id] as const,
+      facts: (id: string) => ['admin', 'tenants', id, 'facts'] as const,
     },
     models: {
       all: () => ['admin', 'models'] as const,
@@ -117,6 +119,11 @@ export const qk = {
     list: (params?: Record<string, unknown>) =>
       ['credentials', 'list', params] as const,
     detail: (id: string) => ['credentials', 'detail', id] as const,
+  },
+  profile: {
+    all: () => ['profile'] as const,
+    facts: () => ['profile', 'facts'] as const,
+    credentials: (level: 'user' | 'tenant') => ['profile', 'credentials', level] as const,
   },
   rbac: {
     all: () => ['rbac'] as const,

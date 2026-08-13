@@ -35,3 +35,17 @@ class CredentialResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CredentialSummaryResponse(BaseModel):
+    """Non-secret owner-level row used by read-only admin tables."""
+    id: UUID
+    instance_id: UUID
+    owner_user_id: Optional[UUID] = None
+    owner_tenant_id: Optional[UUID] = None
+    owner_platform: bool
+    auth_type: str
+    is_active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

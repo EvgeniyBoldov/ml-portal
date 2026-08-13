@@ -402,19 +402,19 @@ async def verify_api_token(token: str) -> Optional[tuple[Users, ApiToken]]:
 # ============================================================================
 
 @router.get("/credentials", response_model=List[CredentialResponse])
-async def list_user_credentials(current_user: UserCtx = Depends(get_current_user)):
-    """List user's credentials for tool instances"""
+async def list_user_credentials(level: str = "user", current_user: UserCtx = Depends(get_current_user)):
+    """List current user's or assigned tenant's credentials without payload."""
+    if level not in {"user", "tenant"}:
+        raise HTTPException(status_code=422, detail="Invalid credential level")
     session_factory = get_session_factory()
     async with session_factory() as session:
-        result = await session.execute(
-            select(Credential, ToolInstance)
-            .join(ToolInstance, Credential.instance_id == ToolInstance.id)
-            .where(
-                Credential.owner_user_id == UUID(current_user.id),
-                Credential.is_active == True,
-            )
-            .order_by(Credential.created_at.desc())
-        )
+        owner_filter = Credential.owner_user_id == UUID(current_user.id)
+        if level == "tenant":
+            tenant_id = UUID(current_user.tenant_ids[0]) if current_user.tenant_ids else None
+            if tenant_id is None:
+                return []
+            owner_filter = Credential.owner_tenant_id == tenant_id
+        result = await session.execute(select(Credential, ToolInstance).join(ToolInstance, Credential.instance_id == ToolInstance.id).where(owner_filter, Credential.is_active == True).order_by(Credential.created_at.desc()))
         rows = result.all()
         
         return [
@@ -482,17 +482,19 @@ async def create_user_credential(
 @router.delete("/credentials/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user_credential(
     credential_id: UUID,
+    level: str = "user",
     current_user: UserCtx = Depends(get_current_user)
 ):
     """Delete user's credential"""
     session_factory = get_session_factory()
     async with session_factory() as session:
-        result = await session.execute(
-            select(Credential).where(
-                Credential.id == credential_id,
-                Credential.owner_user_id == UUID(current_user.id),
-            )
-        )
+        owner_filter = Credential.owner_user_id == UUID(current_user.id)
+        if level == "tenant":
+            tenant_id = UUID(current_user.tenant_ids[0]) if current_user.tenant_ids else None
+            if tenant_id is None:
+                raise HTTPException(status_code=404, detail="Credential not found")
+            owner_filter = Credential.owner_tenant_id == tenant_id
+        result = await session.execute(select(Credential).where(Credential.id == credential_id, owner_filter))
         credential = result.scalar_one_or_none()
         
         if not credential:

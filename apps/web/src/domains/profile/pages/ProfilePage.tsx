@@ -12,6 +12,7 @@ import Modal from '@shared/ui/Modal';
 import ConfirmDialog from '@shared/ui/ConfirmDialog';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';
 import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
+import { FactsPanel } from '@/shared/ui/FactsPanel/FactsPanel';
 import styles from './ProfilePage.module.css';
 
 interface Profile {
@@ -108,12 +109,12 @@ export default function ProfilePage() {
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [tokenToDelete, setTokenToDelete] = useState<ApiToken | null>(null);
-  const [selectedFactIds, setSelectedFactIds] = useState<string[]>([]);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [revealPassword, setRevealPassword] = useState(false);
+  const [activeTab, setActiveTab] = useState<'info' | 'credentials' | 'facts'>('info');
 
   // Fetch profile
   const { data: profile, isLoading: profileLoading } = useQuery({
@@ -125,12 +126,6 @@ export default function ProfilePage() {
   const { data: tokens = [], isLoading: tokensLoading } = useQuery({
     queryKey: ['profile', 'tokens'],
     queryFn: () => apiRequest<ApiToken[]>('/profile/tokens'),
-  });
-
-  // Fetch user facts
-  const { data: facts = [], isLoading: factsLoading } = useQuery({
-    queryKey: ['profile', 'facts'],
-    queryFn: () => apiRequest<UserFact[]>('/profile/facts'),
   });
 
   // Create token mutation
@@ -171,55 +166,6 @@ export default function ProfilePage() {
       showError('Не удалось удалить токен');
     },
   });
-
-  // Delete facts mutation
-  const deleteFacts = useMutation({
-    mutationFn: (ids: string[]) =>
-      apiRequest<{ deleted: number }>('/profile/facts', {
-        method: 'DELETE',
-        body: { ids },
-      }),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ['profile', 'facts'] });
-      setSelectedFactIds([]);
-      const count = result?.deleted ?? 0;
-      showSuccess(count > 0 ? `Удалено фактов: ${count}` : 'Факты удалены');
-    },
-    onError: (error: any) => {
-      showError(error?.detail || 'Не удалось удалить факты');
-    },
-  });
-
-  const updateFact = useMutation({
-    mutationFn: ({ id, subject, value }: { id: string; subject: string; value: string }) =>
-      apiRequest<UserFact>(`/profile/facts/${id}`, { method: 'PUT', body: { subject, value } }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['profile', 'facts'] });
-      showSuccess('Факт обновлён');
-    },
-    onError: (error: any) => showError(error?.detail || 'Не удалось обновить факт'),
-  });
-
-  const editFact = (fact: UserFact) => {
-    const subject = window.prompt('Subject факта', fact.subject);
-    if (subject === null) return;
-    const value = window.prompt('Значение факта', fact.value);
-    if (value === null) return;
-    updateFact.mutate({ id: fact.id, subject, value });
-  };
-
-  const createFact = () => {
-    const subject = window.prompt('Subject нового факта');
-    if (!subject) return;
-    const value = window.prompt('Значение нового факта');
-    if (!value) return;
-    apiRequest<UserFact>('/profile/facts', { method: 'POST', body: { subject, value } })
-      .then(() => {
-        queryClient.invalidateQueries({ queryKey: ['profile', 'facts'] });
-        showSuccess('Факт добавлен');
-      })
-      .catch((error: any) => showError(error?.detail || 'Не удалось добавить факт'));
-  };
 
   const changePassword = useMutation({
     mutationFn: async (data: { current_password: string; new_password: string }) => {
@@ -278,26 +224,6 @@ export default function ProfilePage() {
     setCopied(false);
   };
 
-  const allFactsSelected = facts.length > 0 && selectedFactIds.length === facts.length;
-
-  const toggleFactSelection = (factId: string, checked: boolean) => {
-    setSelectedFactIds(prev => {
-      if (checked) {
-        return prev.includes(factId) ? prev : [...prev, factId];
-      }
-      return prev.filter(id => id !== factId);
-    });
-  };
-
-  const toggleSelectAllFacts = (checked: boolean) => {
-    setSelectedFactIds(checked ? facts.map(f => f.id) : []);
-  };
-
-  const handleDeleteSelectedFacts = () => {
-    if (selectedFactIds.length === 0) return;
-    deleteFacts.mutate(selectedFactIds);
-  };
-
   const handleChangePassword = () => {
     if (!currentPassword.trim()) {
       showError('Введите текущий пароль');
@@ -331,7 +257,14 @@ export default function ProfilePage() {
         </Button>
       </div>
 
+      <nav className={styles.tabs} aria-label="Разделы личного кабинета">
+        <button className={activeTab === 'info' ? styles.activeTab : styles.tab} onClick={() => setActiveTab('info')} type="button">Информация</button>
+        <button className={activeTab === 'credentials' ? styles.activeTab : styles.tab} onClick={() => setActiveTab('credentials')} type="button">Credentials</button>
+        <button className={activeTab === 'facts' ? styles.activeTab : styles.tab} onClick={() => setActiveTab('facts')} type="button">Факты</button>
+      </nav>
+
       {/* Profile Section */}
+      {activeTab === 'info' && <>
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -363,7 +296,10 @@ export default function ProfilePage() {
         )}
       </section>
 
+      </>}
+
       {/* API Tokens Section */}
+      {activeTab === 'info' && <>
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <h2 className={styles.sectionTitle}>
@@ -449,7 +385,10 @@ export default function ProfilePage() {
         </div>
       </section>
 
+      </>}
+
       {/* Credentials Section */}
+      {activeTab === 'credentials' && <>
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -468,7 +407,12 @@ export default function ProfilePage() {
         />
       </section>
 
+      </>}
+
       {/* Facts Section */}
+      {activeTab === 'facts' && <>
+      <FactsPanel mode="profile" />
+      {/*
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <h2 className={styles.sectionTitle}>
@@ -552,6 +496,9 @@ export default function ProfilePage() {
           </div>
         )}
       </section>
+      */}
+
+      </>}
 
       {/* Delete Token Confirmation */}
       <ConfirmDialog

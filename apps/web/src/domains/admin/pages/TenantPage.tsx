@@ -19,6 +19,7 @@ import { LifecycleDeleteDialog } from '@/shared/ui';
 import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import type { Tenant, TenantCreate, TenantUpdate } from '@shared/api/tenant';
+import { CredentialsPanel, FactsPanel } from '@/shared/ui';
 
 type TenantFormData = Partial<TenantCreate & { is_default?: boolean }>;
 
@@ -349,6 +350,18 @@ export function TenantPage() {
             data={metaData}
           />
         </Tab>
+
+        {!isNew && (
+        <Tab title="Credentials" layout="full" id="credentials">
+          <CredentialsPanel mode="readonly-owner" ownerTenantId={id} />
+        </Tab>
+        )}
+
+        {!isNew && (
+        <Tab title="Факты" layout="full" id="facts">
+          <FactsPanel mode="admin-tenant" ownerId={id} />
+        </Tab>
+        )}
 
         {!isNew && (
         <Tab 

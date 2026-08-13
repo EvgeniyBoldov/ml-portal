@@ -507,13 +507,13 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           .filter((child): child is TraceEntity => Boolean(child))
           .map((child) => executorFor(state, child))
           .filter((executor): executor is TraceExecutorRun => Boolean(executor));
-      const stage = {
+      const stage: TraceStage = {
         entity, start, number: plannerStages.length + 1, iterationNumber: plannerStages.length + 1,
         stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : 'memory',
         label: isSynthesis ? 'Подготовка ответа' : isMemoryPreparation ? 'Подготовка памяти' : 'Сохранение памяти',
         task: isSynthesis ? 'Подготовка финального ответа' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
         metrics: metricsFor(state, entity),
-      } satisfies TraceStage;
+      };
       if (isMemory || isMemoryPreparation) {
         stage.steps = executorRuns.map((executor, index) => ({
           key: `${entity.key}:memory-step:${executor.entity.id}`,

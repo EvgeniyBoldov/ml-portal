@@ -15,9 +15,29 @@ from app.schemas.tool_instances import (
     CredentialUpdate,
     CredentialResponse,
 )
+from app.schemas.credentials import CredentialSummaryResponse
 
 router = APIRouter(tags=["credentials"])
 logger = get_logger(__name__)
+
+
+@router.get("/summary", response_model=List[CredentialSummaryResponse])
+async def list_credential_summaries(
+    skip: int = 0,
+    limit: int = 100,
+    owner_user_id: Optional[UUID] = Query(None),
+    owner_tenant_id: Optional[UUID] = Query(None),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Return non-secret owner rows for read-only admin entity tabs."""
+    if (owner_user_id is None) == (owner_tenant_id is None):
+        raise HTTPException(status_code=400, detail="Exactly one owner filter is required")
+    service = CredentialService(db)
+    creds, _ = await service.list_credentials(
+        skip=skip, limit=limit, owner_user_id=owner_user_id, owner_tenant_id=owner_tenant_id,
+    )
+    return [CredentialSummaryResponse.model_validate(cred) for cred in creds]
 
 
 def _mask_secret(value: str) -> str:
