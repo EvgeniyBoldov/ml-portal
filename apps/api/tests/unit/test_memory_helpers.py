@@ -34,6 +34,9 @@ from app.runtime.memory.summary_compactor import (
     _merge_summary,
     _LLMSummaryOutput,
 )
+from app.runtime.memory.preparer import MemoryPreparer, _PreparationOutput
+from app.runtime.memory.dto import FactDTO
+from app.models.memory import FactSource
 
 
 def _llm_result(value):
@@ -86,7 +89,7 @@ async def test_fact_extractor_maps_valid_candidates_to_dtos(extractor):
 
     assert len(facts) == 2
     assert all(f.scope == FactScope.USER for f in facts)
-    assert all(f.user_id == uid for f in facts)
+    assert all(f.owner_id is None for f in facts)  # ownership is assigned by reconciler
     assert {f.subject for f in facts} == {"user.name", "user.stack"}
 
 
@@ -215,7 +218,7 @@ def test_fact_extractor_policy_merges_role_and_sandbox():
 
 
 @pytest.mark.asyncio
-async def test_fact_extractor_marks_agent_result_source_when_from_agent_summary(extractor):
+async def test_fact_extractor_rejects_agent_summary_without_primary_evidence(extractor):
     uid = uuid4()
     extractor._structured.invoke = AsyncMock(
         return_value=_llm_result(
@@ -237,8 +240,61 @@ async def test_fact_extractor_marks_agent_result_source_when_from_agent_summary(
         known_facts=[],
         user_id=uid,
     )
+    assert facts == []
+
+
+@pytest.mark.asyncio
+async def test_memory_preparer_selects_only_llm_indexed_context() -> None:
+    preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
+    preparer._structured.invoke = AsyncMock(return_value=_llm_result(
+        _PreparationOutput(fact_indexes=[1], project_indexes=[0], ambiguities=["Нема может означать два проекта"])
+    ))
+    facts = [
+        FactDTO(scope=FactScope.USER, subject="user.role", value="network engineer", source=FactSource.USER_UTTERANCE),
+        FactDTO(scope=FactScope.TENANT, subject="tenant.standard", value="ITIL", source=FactSource.USER_UTTERANCE),
+    ]
+    result = await preparer.prepare(
+        request_text="Нужна заявка для Немы", facts=facts,
+        project_glossary=[{"id": uuid4(), "key": "nemesis", "name": "Немезида", "aliases": ["Нема"]}],
+        user_id=uuid4(), tenant_id=uuid4(), chat_id=None, sandbox_overrides=None,
+    )
+
+    assert result.fallback is False
+    assert result.items[0]["subject"] == "tenant.standard"
+    assert result.items[1]["key"] == "nemesis"
+    assert result.ambiguities == ["Нема может означать два проекта"]
+
+
+@pytest.mark.asyncio
+async def test_memory_preparer_degrades_to_empty_context() -> None:
+    preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
+    preparer._structured.invoke = AsyncMock(side_effect=RuntimeError("offline"))
+
+    result = await preparer.prepare(
+        request_text="test", facts=[], project_glossary=[], user_id=None,
+        tenant_id=None, chat_id=None, sandbox_overrides=None,
+    )
+
+    assert result.fallback is True
+    assert result.items == []
+
+
+@pytest.mark.asyncio
+async def test_fact_extractor_keeps_project_aliases_with_evidenced_project_fact(extractor) -> None:
+    extractor._structured.invoke = AsyncMock(return_value=_llm_result(
+        _LLMFactOutput(facts=[_LLMFactCandidate(
+            scope="project", project_key="nemesis", project_aliases=["Нема", "нема"],
+            subject="project.name", value="Немезида", confidence=1.0,
+        )])
+    ))
+
+    facts = await extractor.extract(
+        user_message="Для проекта Немезида, или Нема, нужна сеть", known_facts=[],
+        user_id=uuid4(), tenant_id=uuid4(),
+    )
+
     assert len(facts) == 1
-    assert facts[0].source.value == "agent_result"
+    assert facts[0].metadata["project_aliases"] == ["Нема"]
 
 
 # ============================================================ SummaryCompactor

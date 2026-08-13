@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from uuid import UUID, uuid4
 
-from app.models.memory import FactScope, FactSource
+from app.models.memory import FactScope, FactSource, FactStatus
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,7 @@ class FactDTO:
     # Optional scoping context — required-ness depends on scope and is
     # enforced by FactStore.upsert_with_supersede, not here.
     tenant_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
     owner_type: Optional[str] = None
     owner_id: Optional[UUID] = None
     kind: str = "fact"
@@ -47,6 +48,11 @@ class FactDTO:
     id: UUID = field(default_factory=uuid4)
     superseded_by: Optional[UUID] = None
     user_visible: bool = True
+    status: FactStatus = FactStatus.PENDING
+    support_count: int = 0
+    first_confirmed_at: Optional[datetime] = None
+    last_confirmed_at: Optional[datetime] = None
+    revision: int = 1
 
     def matches_key(self, other: "FactDTO") -> bool:
         """Two DTOs identify the same 'slot' iff scope, subject and the
@@ -59,6 +65,8 @@ class FactDTO:
             return self.owner_id == other.owner_id
         if self.scope == FactScope.TENANT:
             return self.owner_id == other.owner_id
+        if self.scope == FactScope.PROJECT:
+            return self.project_id == other.project_id
         return False
 
 

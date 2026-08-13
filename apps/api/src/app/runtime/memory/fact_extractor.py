@@ -38,6 +38,9 @@ class _LLMFactCandidate(BaseModel):
     subject: str
     value: str
     confidence: float = 1.0
+    project_key: Optional[str] = None
+    project_aliases: List[str] = Field(default_factory=list)
+    evidence_source_ids: List[str] = Field(default_factory=list)
 
 
 class _LLMFactOutput(BaseModel):
@@ -47,8 +50,17 @@ class _LLMFactOutput(BaseModel):
 # --- Public domain input/output --------------------------------------------
 
 
+class FactEvidence(BaseModel):
+    """A primary source made available to extraction, never an agent summary."""
+    source_id: str
+    source_type: str  # user_message | tool_result
+    source_ref: str
+    text: str
+    label: Optional[str] = None
+
+
 class AgentResultSnippet(BaseModel):
-    """Trimmed summary of an agent run, passed to the extractor."""
+    """Runtime result transport; deliberately not accepted as fact evidence."""
     agent: str
     summary: str
     success: bool = True
@@ -96,9 +108,9 @@ class FactExtractor:
         self,
         *,
         user_message: str,
-        agent_results: Sequence[AgentResultSnippet],
-        artifacts: Sequence[dict[str, Any]] = (),
-        known_facts: Sequence[KnownFactSnippet],
+        evidence: Sequence[FactEvidence] = (),
+        known_facts: Sequence[KnownFactSnippet] = (),
+        agent_results: Sequence[AgentResultSnippet] = (),
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
         chat_id: Optional[UUID] = None,
@@ -109,10 +121,14 @@ class FactExtractor:
         """Run the extractor. On any failure returns [] and logs a warning —
         memory extraction must never break a chat turn.
         """
+        # Compatibility argument ``agent_results`` is deliberately ignored:
+        # summaries can never become fact evidence.
+        effective_evidence = list(evidence) or ([FactEvidence(
+            source_id="user_message", source_type="user_message", source_ref=str(chat_id or "request"), text=user_message,
+        )] if user_message.strip() else [])
         payload = {
             "user_message": (user_message or "").strip(),
-            "agent_results": [r.model_dump() for r in agent_results],
-            "artifacts": list(artifacts),
+            "evidence": [item.model_dump() for item in effective_evidence],
             "known_facts": [k.model_dump() for k in known_facts],
         }
 
@@ -147,7 +163,7 @@ class FactExtractor:
         return self._to_dtos(
             result.value,
             user_message=user_message,
-            agent_summaries=[r.summary for r in agent_results],
+            evidence=effective_evidence,
             user_id=user_id,
             tenant_id=tenant_id,
             chat_id=chat_id,
@@ -165,7 +181,7 @@ class FactExtractor:
         out: _LLMFactOutput,
         *,
         user_message: str,
-        agent_summaries: Sequence[str],
+        evidence: Sequence[FactEvidence],
         user_id: Optional[UUID],
         tenant_id: Optional[UUID],
         chat_id: Optional[UUID],
@@ -211,9 +227,19 @@ class FactExtractor:
             if FactExtractor._looks_ephemeral(subject, value, max_value_words=max_value_words):
                 continue
 
-            # Evidence validation: fact must be traceable to source text
-            if not FactExtractor._has_evidence(subject, value, user_message, agent_summaries):
+            matched_evidence = FactExtractor._matching_evidence(
+                candidate=cand,
+                subject=subject,
+                value=value,
+                user_message=user_message,
+                evidence=evidence,
+            )
+            if not matched_evidence:
                 logger.debug("FactExtractor: skip fact without evidence: %r=%r", subject, value)
+                continue
+            if scope == FactScope.USER and not any(item.source_type == "user_message" for item in matched_evidence):
+                continue
+            if scope == FactScope.PROJECT and not (cand.project_key or "").strip():
                 continue
 
             out_list.append(
@@ -221,14 +247,14 @@ class FactExtractor:
                     scope=scope,
                     subject=subject,
                     value=value,
-                    source=FactExtractor._infer_source(
-                        subject=subject,
-                        value=value,
-                        user_message=user_message,
-                        agent_summaries=agent_summaries,
-                    ),
+                    source=(FactSource.USER_UTTERANCE if matched_evidence[0].source_type == "user_message" else FactSource.TOOL_RESULT),
                     tenant_id=tenant_id,
                     confidence=confidence,
+                    metadata={
+                        "project_key": (cand.project_key or "").strip().lower() or None,
+                        "project_aliases": _normalize_project_aliases(cand.project_aliases),
+                        "evidence": [item.model_dump() for item in matched_evidence],
+                    },
                 )
             )
         return out_list
@@ -260,62 +286,30 @@ class FactExtractor:
         return False
 
     @staticmethod
-    def _has_evidence(
-        subject: str,
-        value: str,
-        user_message: str,
-        agent_summaries: Sequence[str],
-    ) -> bool:
-        """Check if fact has evidence in source texts (anti-hallucination guard).
-        
-        Returns True if subject or value appears in user_message or agent_summaries.
-        This prevents LLM from inventing facts that weren't in the conversation.
-        """
-        if not subject or not value:
-            return False
-        
-        hay_user = (user_message or "").lower()
-        hay_agents = "\n".join([s for s in (agent_summaries or []) if s]).lower()
-        
-        # Check for subject or value in source texts
-        subj_lower = subject.lower()
-        val_lower = value.lower()
-        
-        # Exact substring match (lenient) or word match
-        if subj_lower in hay_user or val_lower in hay_user:
-            return True
-        if subj_lower in hay_agents or val_lower in hay_agents:
-            return True
-        
-        # For multi-word values, check if any significant part matches
-        val_words = val_lower.split()
-        if len(val_words) > 1:
-            # Check if majority of words appear in source
-            user_matches = sum(1 for w in val_words if w in hay_user)
-            agent_matches = sum(1 for w in val_words if w in hay_agents)
-            if user_matches >= len(val_words) * 0.5 or agent_matches >= len(val_words) * 0.5:
-                return True
-        
-        return False
-
-    @staticmethod
-    def _infer_source(
+    def _matching_evidence(
         *,
+        candidate: _LLMFactCandidate,
         subject: str,
         value: str,
         user_message: str,
-        agent_summaries: Sequence[str],
-    ) -> FactSource:
-        hay_user = (user_message or "").lower()
-        hay_agents = "\n".join([s for s in (agent_summaries or []) if s]).lower()
-        needles = [subject.lower(), value.lower()]
-        if any(n and n in hay_user for n in needles):
-            return FactSource.USER_UTTERANCE
-        if any(n and n in hay_agents for n in needles):
-            return FactSource.AGENT_RESULT
-        if hay_agents and not hay_user.strip():
-            return FactSource.AGENT_RESULT
-        return FactSource.USER_UTTERANCE
+        evidence: Sequence[FactEvidence],
+    ) -> List[FactEvidence]:
+        requested = {item.strip() for item in candidate.evidence_source_ids if item.strip()}
+        pool = [item for item in evidence if not requested or item.source_id in requested]
+        value_words = [word for word in value.lower().split() if len(word) > 2]
+        matched: List[FactEvidence] = []
+        for item in pool:
+            haystack = item.text.lower()
+            if value.lower() in haystack or subject.lower() in haystack:
+                matched.append(item)
+                continue
+            if value_words and sum(word in haystack for word in value_words) >= max(1, len(value_words) // 2):
+                matched.append(item)
+        if matched:
+            return matched
+        if user_message and (value.lower() in user_message.lower() or subject.lower() in user_message.lower()):
+            return [item for item in evidence if item.source_type == "user_message"][:1]
+        return []
 
 
 def _resolve_fact_policy(role_extras: Optional[dict], sandbox_overrides: Optional[dict]) -> dict[str, Any]:
@@ -340,3 +334,16 @@ def _resolve_fact_policy(role_extras: Optional[dict], sandbox_overrides: Optiona
         if isinstance(val, (int, float)):
             cfg["confidence_min"] = max(0.0, min(1.0, float(val)))
     return cfg
+
+
+def _normalize_project_aliases(raw: Sequence[str]) -> list[str]:
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for value in raw[:8]:
+        alias = " ".join(str(value or "").strip().split())[:120]
+        key = alias.casefold()
+        if not alias or key in seen:
+            continue
+        seen.add(key)
+        aliases.append(alias)
+    return aliases

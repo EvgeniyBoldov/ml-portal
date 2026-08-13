@@ -153,7 +153,7 @@ FACT_EXTRACTOR_V3: Dict[str, Any] = {
     "model": "llm.llama4.scout",
     "identity": "Ты — экстрактор фактов для корпоративного AI-портала.",
     "mission": (
-        "Из одного хода диалога (сообщение пользователя + результаты агентов) "
+        "Из одного хода диалога (сообщение пользователя + первичные результаты tools) "
         "извлеки компактные, атомарные факты, которые имеет смысл запомнить "
         "для будущих обращений этого пользователя или всего отдела."
     ),
@@ -161,16 +161,18 @@ FACT_EXTRACTOR_V3: Dict[str, Any] = {
         "На вход приходит JSON:\n"
         "{\n"
         '  "user_message": str,\n'
-        '  "agent_results": [ {agent, summary, success} ],\n'
+        '  "evidence": [ {source_id, source_type, source_ref, text} ],\n'
         '  "known_facts": [ {subject, value} ]   // уже в памяти — не дублируй\n'
         "}\n\n"
         "Верни СТРОГО JSON вида:\n"
         "{\n"
         '  "facts": [\n'
-        '    { "scope": "user"|"tenant",\n'
+        '    { "scope": "user"|"tenant"|"project", "project_key": str|null,\n'
         '      "subject": str,           // canonical key, snake/dot-case\n'
         '      "value": str,             // нормализованное значение, не более 200 символов\n'
-        '      "confidence": float       // 0..1, по субъективной уверенности\n'
+        '      "confidence": float,      // 0..1, по субъективной уверенности\n'
+        '      "project_aliases": [str], // aliases проекта, только для scope=project\n'
+        '      "evidence_source_ids": [str] // id первичного message/tool evidence\n'
         "    }, ...\n"
         "  ]\n"
         "}\n\n"
@@ -180,6 +182,8 @@ FACT_EXTRACTOR_V3: Dict[str, Any] = {
         "- НЕ извлекай: ход разговора, эмоции, временные намерения («сейчас хочу посмотреть X»), спекуляции.\n"
         "- scope=user — если факт про самого пользователя.\n"
         "- scope=tenant — если факт про отдел/компанию в целом («у нас стандарт — Postgres 15»).\n"
+        "- scope=project — только если указан project_key и есть первичный evidence.\n"
+        "- Не используй summaries агентов, planner или synthesizer: они не являются источниками.\n"
         "- Если подходящих фактов нет — верни {\"facts\": []}.\n"
         "- Subject — короткий ключ вида user.name, user.stack.current, department.db.standard.\n"
         "- НЕ повторяй факты, уже присутствующие в known_facts с тем же subject и значением.\n"
@@ -188,6 +192,19 @@ FACT_EXTRACTOR_V3: Dict[str, Any] = {
     "safety": "Не извлекай секреты, пароли, токены, персональные данные сверх того что юзер сам указал в своём сообщении.",
     "output_requirements": "Чистый JSON без пояснений и markdown.",
     "temperature": 0.1,
+    "max_tokens": 800,
+    "timeout_s": 15,
+    "max_retries": 1,
+    "retry_backoff": "none",
+}
+
+FACT_COMPACTOR_V3: Dict[str, Any] = {
+    "model": "llm.llama4.scout",
+    "identity": "Ты — компактор подтверждаемых фактов корпоративного AI-портала.",
+    "mission": "Объедини новые факты с текущими фактами того же субъекта, не придумывая новых сведений.",
+    "rules": "Верни только нормализованные факты из candidates. Объединяй смысловые дубли; не выбирай значение при противоречии и не создавай факт без source_candidate_indexes.",
+    "safety": "Не добавляй сведения, которых нет в candidates.",
+    "temperature": 0.0,
     "max_tokens": 800,
     "timeout_s": 15,
     "max_retries": 1,
@@ -245,5 +262,6 @@ V3_ROLE_DEFAULTS: Dict[SystemLLMRoleType, Dict[str, Any]] = {
     SystemLLMRoleType.MEMORY: MEMORY_V3,
     SystemLLMRoleType.SYNTHESIZER: SYNTHESIZER_V3,
     SystemLLMRoleType.FACT_EXTRACTOR: FACT_EXTRACTOR_V3,
+    SystemLLMRoleType.FACT_COMPACTOR: FACT_COMPACTOR_V3,
     SystemLLMRoleType.SUMMARY_COMPACTOR: SUMMARY_COMPACTOR_V3,
 }

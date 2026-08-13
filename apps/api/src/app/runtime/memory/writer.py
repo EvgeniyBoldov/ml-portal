@@ -24,8 +24,11 @@ from app.models.sandbox import SandboxBranch
 from app.runtime.memory.dto import SummaryDTO
 from app.runtime.memory.fact_extractor import (
     FactExtractor,
+    FactEvidence,
     KnownFactSnippet,
 )
+from app.runtime.memory.fact_compactor import FactCompactor
+from app.runtime.memory.fact_reconciler import FactReconciler
 from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.summary_compactor import SummaryCompactor
 from app.runtime.memory.summary_store import SummaryStore
@@ -44,7 +47,7 @@ _TRIVIAL_UTTERANCES = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass
 class MemoryWriteContext:
     memory: TurnMemory
     user_message: str
@@ -55,6 +58,7 @@ class MemoryWriteContext:
     terminal_reason: Optional[PipelineStopReason] = None
     sandbox_overrides: Optional[dict] = None
     raw_tail_max_chars: int = RAW_TAIL_MAX_CHARS
+    fact_candidates: Optional[List[Any]] = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,8 @@ class MemoryWriter:
         # these helpers while conversation memory is disabled.
         self._summary_store = SummaryStore(session)
         self._extractor = FactExtractor(session=session, llm_client=llm_client)
+        self._fact_compactor = FactCompactor(session=session, llm_client=llm_client)
+        self._fact_reconciler = FactReconciler(session)
         self._compactor = SummaryCompactor(session=session, llm_client=llm_client)
         self._llm_event_sink = llm_event_sink
         self._component_execution_ids = dict(component_execution_ids or {})
@@ -112,7 +118,8 @@ class MemoryWriter:
         # We still parallelize LLM-heavy component logic and serialize DB writes.
         self._db_write_lock = asyncio.Lock()
         self._components: List[MemoryWriteComponent] = [
-            _FactMemoryWriteComponent(self),
+            _FactExtractionMemoryWriteComponent(self),
+            _FactCompactionMemoryWriteComponent(self),
         ]
 
     async def finalize(
@@ -227,44 +234,88 @@ class MemoryWriter:
 
     # ---------------------------------------------------------------- facts
 
-    async def _write_facts(
+    async def _extract_facts(
         self,
         memory: TurnMemory,
         user_message: str,
         sandbox_overrides: Optional[dict] = None,
         persist_chat_scoped: bool = True,
-    ) -> int:
-        branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
-        if memory.chat_id is None and (not persist_chat_scoped) and branch_id is None:
-            return 0
+    ) -> List[Any]:
         known = [
             KnownFactSnippet(subject=s, value=v)
             for s, v in memory.iter_known_subjects()
         ]
-        new_facts = await self._extractor.extract(
+        evidence = [
+            FactEvidence(
+                source_id="user_message",
+                source_type="user_message",
+                source_ref=str(memory.fact_run_ref or memory.chat_id or "request"),
+                text=user_message,
+                label="user message",
+            ),
+            *memory.fact_evidence,
+        ]
+        return await self._extractor.extract(
             user_message=user_message,
-            agent_results=memory.agent_results,
-            artifacts=memory.artifacts,
+            evidence=evidence,
             known_facts=known,
             user_id=memory.user_id,
             tenant_id=memory.tenant_id,
             chat_id=memory.chat_id,
             sandbox_overrides=sandbox_overrides,
             llm_event_sink=(
-                (lambda event: self._llm_event_sink("facts", event))
+                (lambda event: self._llm_event_sink("fact_extractor", event))
                 if self._llm_event_sink
                 else None
             ),
-            agent_execution_id=self._component_execution_ids.get("facts"),
+            agent_execution_id=self._component_execution_ids.get("fact_extractor"),
         )
+
+    async def _compact_and_write_facts(
+        self,
+        memory: TurnMemory,
+        candidates: List[Any],
+        sandbox_overrides: Optional[dict] = None,
+        persist_chat_scoped: bool = True,
+    ) -> int:
+        branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
+        if not candidates:
+            return 0
+        project_keys = [
+            str(item.metadata.get("project_key") or "")
+            for item in candidates
+            if getattr(item, "scope", None) == FactScope.PROJECT
+        ]
         if memory.chat_id is None or not persist_chat_scoped:
-            if branch_id is not None:
-                await self._write_branch_facts(branch_id=branch_id, facts=new_facts)
-            return len(new_facts)
-        async with self._db_write_lock:
-            saved = await self._memory_service.write_extracted(
-                facts=new_facts, user_id=memory.user_id, tenant_id=memory.tenant_id
+            if branch_id is None:
+                return 0
+            current = list(getattr(memory.durable_snapshot, "entries", ()) or ())
+            compacted = await self._fact_compactor.compact(
+                candidates=candidates,
+                current_facts=current,
+                user_id=memory.user_id,
+                tenant_id=memory.tenant_id,
+                chat_id=memory.chat_id,
+                event_sink=(lambda event: self._llm_event_sink("fact_compactor", event)) if self._llm_event_sink else None,
             )
+            await self._write_branch_facts(branch_id=branch_id, facts=compacted, base=current)
+            return len(compacted)
+        async with self._db_write_lock:
+            await self._fact_reconciler.ensure_projects(candidates)
+            current = await self._fact_reconciler.current_for(
+                user_id=memory.user_id,
+                tenant_id=memory.tenant_id,
+                project_keys=project_keys,
+            )
+            compacted = await self._fact_compactor.compact(
+                candidates=candidates,
+                current_facts=current,
+                user_id=memory.user_id,
+                tenant_id=memory.tenant_id,
+                chat_id=memory.chat_id,
+                event_sink=(lambda event: self._llm_event_sink("fact_compactor", event)) if self._llm_event_sink else None,
+            )
+            saved = await self._fact_reconciler.apply(candidates=compacted, user_id=memory.user_id, tenant_id=memory.tenant_id)
         return saved
 
     # -------------------------------------------------------------- summary
@@ -324,12 +375,12 @@ class MemoryWriter:
         row = await self._session.execute(select(Chats.id).where(Chats.id == chat_id))
         return row.scalar_one_or_none() is not None
 
-    async def _write_branch_facts(self, *, branch_id: UUID, facts: List[Any]) -> None:
+    async def _write_branch_facts(self, *, branch_id: UUID, facts: List[Any], base: List[Any]) -> None:
         row = await self._session.execute(select(SandboxBranch).where(SandboxBranch.id == branch_id))
         branch = row.scalar_one_or_none()
         if branch is None:
             return
-        branch.fact_overrides_json = merge_extracted(branch.fact_overrides_json, facts)
+        branch.fact_overrides_json = merge_extracted(branch.fact_overrides_json, facts, base=base)
         branch.artifacts_updated_at = datetime.now(timezone.utc)
         self._session.add(branch)
         await self._session.flush()
@@ -387,8 +438,8 @@ class MemoryWriter:
         memory.memory_diagnostics["memory_write_status"] = payload
 
 
-class _FactMemoryWriteComponent:
-    name = "facts"
+class _FactExtractionMemoryWriteComponent:
+    name = "fact_extractor"
 
     def __init__(self, owner: MemoryWriter) -> None:
         self._owner = owner
@@ -396,9 +447,36 @@ class _FactMemoryWriteComponent:
     async def write(self, ctx: MemoryWriteContext) -> MemoryWriteResult:
         if ctx.skip_llm_helpers:
             return MemoryWriteResult(component_name=self.name, status="skipped", skipped_count=1)
-        inserted = await self._owner._write_facts(
+        candidates = await self._owner._extract_facts(
             ctx.memory,
             ctx.user_message,
+            ctx.sandbox_overrides,
+            ctx.persist_chat_scoped,
+        )
+        ctx.fact_candidates = candidates
+        if not ctx.persist_chat_scoped and not ctx.sandbox_branch_id:
+            return MemoryWriteResult(
+                component_name=self.name,
+                status="degraded",
+                inserted_count=len(candidates),
+                error_code="sandbox_persist_skipped",
+                error_message="Chat-scoped persistence skipped: sandbox chat is not stored in chats table",
+            )
+        return MemoryWriteResult(component_name=self.name, status="ok", inserted_count=len(candidates))
+
+
+class _FactCompactionMemoryWriteComponent:
+    name = "fact_compactor"
+
+    def __init__(self, owner: MemoryWriter) -> None:
+        self._owner = owner
+
+    async def write(self, ctx: MemoryWriteContext) -> MemoryWriteResult:
+        if ctx.skip_llm_helpers:
+            return MemoryWriteResult(component_name=self.name, status="skipped", skipped_count=1)
+        saved = await self._owner._compact_and_write_facts(
+            ctx.memory,
+            list(ctx.fact_candidates or []),
             ctx.sandbox_overrides,
             ctx.persist_chat_scoped,
         )
@@ -406,11 +484,11 @@ class _FactMemoryWriteComponent:
             return MemoryWriteResult(
                 component_name=self.name,
                 status="degraded",
-                inserted_count=inserted,
+                inserted_count=saved,
                 error_code="sandbox_persist_skipped",
                 error_message="Chat-scoped persistence skipped: sandbox chat is not stored in chats table",
             )
-        return MemoryWriteResult(component_name=self.name, status="ok", inserted_count=inserted)
+        return MemoryWriteResult(component_name=self.name, status="ok", inserted_count=saved)
 
 
 class _ConversationMemoryWriteComponent:

@@ -24,6 +24,8 @@ from .lifecycle import router as lifecycle_router
 from .rag_reindex import router as rag_reindex_router
 from .execution_limits import router as execution_limits_router
 from .periodic_tasks import router as periodic_tasks_router
+from .projects import router as projects_router
+from .glossary import router as glossary_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -48,5 +50,7 @@ router.include_router(lifecycle_router, prefix="/lifecycle", tags=["lifecycle"])
 router.include_router(rag_reindex_router, prefix="/rag", tags=["rag-reindex"])
 router.include_router(execution_limits_router, prefix="/execution-limits", tags=["execution-limits"])
 router.include_router(periodic_tasks_router, prefix="/periodic-tasks", tags=["periodic-tasks"])
+router.include_router(projects_router, tags=["projects"])
+router.include_router(glossary_router, tags=["glossary"])
 
 __all__ = ["router"]

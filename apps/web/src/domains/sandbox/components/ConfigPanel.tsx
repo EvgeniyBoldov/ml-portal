@@ -484,9 +484,9 @@ export function ConfigPanel({
       router: ({ ...(selectedRouter?.config ?? {}), limits: orchestratorLimits ?? {} }) as Record<string, unknown>,
       platform: ({ ...(platformSettings ?? {}), limits: platformLimits ?? {} }) as Record<string, unknown>,
       branch_facts: ({
-        base: branchFactsArtifact?.base ?? { user: [], tenant: [] },
-        overrides: branchFactsArtifact?.overrides ?? { user: {}, tenant: {} },
-        effective: branchFactsArtifact?.effective ?? { user: [], tenant: [] },
+        base: branchFactsArtifact?.base ?? { user: [], tenant: [], project: [] },
+        overrides: branchFactsArtifact?.overrides ?? { user: {}, tenant: {}, project: {} },
+        effective: branchFactsArtifact?.effective ?? { user: [], tenant: [], project: [] },
       }) as Record<string, unknown>,
     };
 

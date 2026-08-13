@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from app.models.memory import FactScope, FactSource
+from app.models.memory import FactScope, FactSource, FactStatus
 from app.runtime.memory.dto import FactDTO
 
 OVERLAY_SET = "set"
@@ -18,7 +18,7 @@ VALID_STATES = frozenset({OVERLAY_SET, OVERLAY_DELETED})
 
 
 def normalize_overrides(raw: object) -> dict[str, dict[str, dict[str, Any]]]:
-    """Return only valid user/tenant overlay entries from persisted JSON."""
+    """Return only valid branch-local overlays for every fact scope."""
     if not isinstance(raw, dict):
         return {}
     normalized: dict[str, dict[str, dict[str, Any]]] = {}
@@ -47,7 +47,7 @@ def apply_overrides(base: Iterable[FactDTO], raw_overrides: object) -> list[Fact
     effective = {
         (fact.scope.value, fact.subject): fact
         for fact in base
-        if fact.scope in (FactScope.USER, FactScope.TENANT)
+        if fact.scope in tuple(FactScope)
     }
     for scope in FactScope:
         for subject, entry in (overlays.get(scope.value) or {}).items():
@@ -61,19 +61,45 @@ def apply_overrides(base: Iterable[FactDTO], raw_overrides: object) -> list[Fact
     return list(effective.values())
 
 
-def merge_extracted(raw_overrides: object, facts: Iterable[FactDTO]) -> dict[str, dict[str, dict[str, Any]]]:
-    """Upsert extracted sandbox facts without disturbing unrelated overrides."""
+def merge_extracted(
+    raw_overrides: object,
+    facts: Iterable[FactDTO],
+    *,
+    base: Iterable[FactDTO] = (),
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Apply compacted facts to a branch without mutating durable memory.
+
+    Sandbox accepts a single evidenced observation as confirmed.  A differing
+    value for the same scope/subject masks the prior value and remains pending,
+    so neither side leaks into the effective confirmed memory.
+    """
     merged = normalize_overrides(raw_overrides)
+    current = {(item.scope.value, item.subject): item for item in apply_overrides(base, merged)}
     for fact in facts:
-        if fact.scope not in (FactScope.USER, FactScope.TENANT):
-            continue
         subject = fact.subject.strip()
         if not subject:
             continue
+        previous = current.get((fact.scope.value, subject))
+        conflict = previous is not None and _normalized(previous.value) != _normalized(fact.value)
+        effective_fact = FactDTO(
+            scope=fact.scope,
+            subject=subject,
+            value=fact.value,
+            source=fact.source,
+            tenant_id=fact.tenant_id,
+            project_id=fact.project_id,
+            confidence=fact.confidence,
+            source_ref=fact.source_ref,
+            metadata=dict(fact.metadata),
+            status=FactStatus.PENDING if conflict else FactStatus.CONFIRMED,
+            support_count=0 if conflict else max(1, fact.support_count),
+        )
         merged.setdefault(fact.scope.value, {})[subject] = {
             "state": OVERLAY_SET,
-            "fact": fact_to_payload(fact),
+            "fact": fact_to_payload(effective_fact),
+            "conflict": conflict,
         }
+        current[(fact.scope.value, subject)] = effective_fact
     return merged
 
 
@@ -85,6 +111,9 @@ def fact_to_payload(fact: FactDTO) -> dict[str, Any]:
         "source": fact.source.value,
         "confidence": fact.confidence,
         "source_ref": fact.source_ref,
+        "status": fact.status.value,
+        "support_count": fact.support_count,
+        "revision": fact.revision,
     }
 
 
@@ -102,8 +131,7 @@ def inspector_payload(base: Iterable[FactDTO], raw_overrides: object) -> dict[st
 def _group_facts(facts: Iterable[FactDTO]) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {scope.value: [] for scope in FactScope}
     for fact in facts:
-        if fact.scope in (FactScope.USER, FactScope.TENANT):
-            grouped[fact.scope.value].append(fact_to_payload(fact))
+        grouped[fact.scope.value].append(fact_to_payload(fact))
     for entries in grouped.values():
         entries.sort(key=lambda item: str(item["subject"]))
     return grouped
@@ -128,5 +156,12 @@ def _fact_from_entry(scope: FactScope, subject: str, entry: dict[str, Any]) -> F
         source=source,
         confidence=float(payload.get("confidence") or 1.0),
         source_ref=str(payload.get("source_ref") or "") or None,
+        status=FactStatus(str(payload.get("status") or FactStatus.CONFIRMED.value)),
+        support_count=max(0, int(payload.get("support_count") or 0)),
+        revision=max(1, int(payload.get("revision") or 1)),
         observed_at=datetime.now(timezone.utc),
     )
+
+
+def _normalized(value: str) -> str:
+    return " ".join((value or "").lower().split())

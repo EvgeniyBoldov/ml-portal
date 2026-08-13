@@ -70,6 +70,7 @@ def test_all_json_roles_have_format_locked_true() -> None:
         SystemLLMRoleType.PLANNER,
         SystemLLMRoleType.TRIAGE,
         SystemLLMRoleType.FACT_EXTRACTOR,
+        SystemLLMRoleType.FACT_COMPACTOR,
         SystemLLMRoleType.SUMMARY_COMPACTOR,
     ]
     for role in json_roles:
@@ -101,10 +102,12 @@ def test_get_role_output_model_returns_correct_models() -> None:
     """Registry should return correct Pydantic models for JSON roles."""
     from app.runtime.planner.graph_planner import PlannerGraphOutput
     from app.runtime.memory.fact_extractor import _LLMFactOutput
+    from app.runtime.memory.fact_compactor import _CompactionOutput
     from app.runtime.memory.summary_compactor import _LLMSummaryOutput
 
     assert get_role_output_model(SystemLLMRoleType.PLANNER) is PlannerGraphOutput
     assert get_role_output_model(SystemLLMRoleType.FACT_EXTRACTOR) is _LLMFactOutput
+    assert get_role_output_model(SystemLLMRoleType.FACT_COMPACTOR) is _CompactionOutput
     assert get_role_output_model(SystemLLMRoleType.SUMMARY_COMPACTOR) is _LLMSummaryOutput
     # Triage has no model yet (manual contract)
     assert get_role_output_model(SystemLLMRoleType.TRIAGE) is None
@@ -185,6 +188,7 @@ def test_triage_contract_is_json_with_expected_fields() -> None:
     [
         SystemLLMRoleType.PLANNER,
         SystemLLMRoleType.FACT_EXTRACTOR,
+        SystemLLMRoleType.FACT_COMPACTOR,
         SystemLLMRoleType.SUMMARY_COMPACTOR,
     ],
 )

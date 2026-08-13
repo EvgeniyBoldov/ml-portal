@@ -89,6 +89,13 @@ def _fact_extractor_examples() -> ExamplesV2:
     }
 
 
+def _fact_compactor_examples() -> ExamplesV2:
+    return {
+        "input": {"candidates": [{"index": 0, "scope": "project", "subject": "process.change", "value": "Change requires approval"}], "current_facts": []},
+        "outputs": {"merged": {"facts": [{"scope": "project", "subject": "process.change", "value": "Change requires approval", "source_candidate_indexes": [0]}]}},
+    }
+
+
 def _summary_compactor_examples() -> ExamplesV2:
     return {
         "input": {
@@ -143,6 +150,8 @@ def get_role_examples(role: SystemLLMRoleType | str) -> Optional[ExamplesV2]:
         return _triage_examples()
     if role_type == SystemLLMRoleType.FACT_EXTRACTOR:
         return _fact_extractor_examples()
+    if role_type == SystemLLMRoleType.FACT_COMPACTOR:
+        return _fact_compactor_examples()
     if role_type == SystemLLMRoleType.SUMMARY_COMPACTOR:
         return _summary_compactor_examples()
     if role_type in (SystemLLMRoleType.SYNTHESIZER, SystemLLMRoleType.SUMMARY, SystemLLMRoleType.MEMORY):

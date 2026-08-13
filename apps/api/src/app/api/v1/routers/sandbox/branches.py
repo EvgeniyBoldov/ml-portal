@@ -179,7 +179,7 @@ async def get_branch_facts_artifact(
         base=view["base"],
         overrides=view["overrides"],
         effective=effective,
-        facts=[*effective.get("user", []), *effective.get("tenant", [])],
+        facts=[*effective.get("user", []), *effective.get("tenant", []), *effective.get("project", [])],
         updated_at=branch.artifacts_updated_at,
     )
 
@@ -197,7 +197,7 @@ async def upsert_fact_override(
     db: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(require_admin),
 ):
-    if scope not in {"user", "tenant"} or not subject.strip():
+    if scope not in {"user", "tenant", "project"} or not subject.strip():
         raise HTTPException(status_code=422, detail="Fact scope and subject are invalid")
     if data.state == OVERLAY_SET and not (data.value or "").strip():
         raise HTTPException(status_code=422, detail="A set fact override requires a value")
@@ -235,7 +235,7 @@ async def reset_fact_override(
     db: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(require_admin),
 ):
-    if scope not in {"user", "tenant"}:
+    if scope not in {"user", "tenant", "project"}:
         raise HTTPException(status_code=422, detail="Fact scope is invalid")
     svc = SandboxService(db)
     await check_session_owner(svc, session_id, user)

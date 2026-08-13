@@ -334,8 +334,6 @@ class AgentExecutor:
 
         # 4. Summarize into AgentResult and enrich memory.
         raw_summary = final_content or "".join(buffered_answer)
-        summary_preview = raw_summary.strip()[:800]
-        facts = self._extract_facts(summary_preview, sub_sources)
 
         # Parse structured needs from agent output if present
         needs = self._parse_needs_from_content(raw_summary)
@@ -402,7 +400,6 @@ class AgentExecutor:
             {
                 "agent_slug": agent_slug,
                 "summary": result_summary,
-                "facts": facts,
                 "phase_id": task.task_id,
                 "iteration": state.iter_count,
                 "success": success,
@@ -434,8 +431,6 @@ class AgentExecutor:
                 "artifacts": artifacts,
             }
         )
-        for fact in facts:
-            state.add_runtime_fact(fact, source=agent_slug)
 
         # Store sources in runtime_state for synthesizer access
         if sub_sources:
@@ -760,52 +755,6 @@ class AgentExecutor:
 
         non_system.append({"role": "user", "content": final_query})
         return non_system
-
-    @staticmethod
-    def _extract_facts(summary: str, sources: List[dict]) -> List[str]:
-        """Lightweight fact extraction with markdown/JSON filtering.
-
-        - JSON detection: if summary starts with '{', treat as single structured fact
-        - Markdown filtering: skip table separators (|---|), headers (##), code blocks
-        """
-        facts: List[str] = []
-        summary = (summary or "").strip()
-        if not summary:
-            return facts
-
-        # JSON detection: structured output from sub-agent
-        if summary.startswith("{"):
-            facts.append(summary[:400])
-            # Still append sources for context
-            for src in sources[:3]:
-                title = (src.get("title") or src.get("name") or "").strip()
-                if title:
-                    facts.append(f"source: {title[:120]}")
-            return facts
-
-        for line in summary.splitlines():
-            line = line.strip(" -*•\t")
-            if not line:
-                continue
-            # Skip markdown artifacts
-            if line.startswith("##"):  # headers
-                continue
-            if line.startswith("|---"):  # table separators
-                continue
-            if line.startswith("```"):  # code blocks
-                continue
-            if line.startswith("|") and line.endswith("|"):  # table rows (keep content, strip pipes)
-                line = line.strip("|").replace("|", " ")
-            if len(line) < 8:
-                continue
-            facts.append(line[:280])
-            if len(facts) >= 6:
-                break
-        for src in sources[:3]:
-            title = (src.get("title") or src.get("name") or "").strip()
-            if title:
-                facts.append(f"source: {title[:120]}")
-        return facts
 
     @staticmethod
     def _parse_structured_response(raw: str) -> Dict[str, Any]:

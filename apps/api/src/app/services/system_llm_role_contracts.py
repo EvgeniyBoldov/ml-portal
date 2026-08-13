@@ -61,6 +61,9 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
     elif role == SystemLLMRoleType.FACT_EXTRACTOR:
         from app.runtime.memory.fact_extractor import _LLMFactOutput
         model = _LLMFactOutput
+    elif role == SystemLLMRoleType.FACT_COMPACTOR:
+        from app.runtime.memory.fact_compactor import _CompactionOutput
+        model = _CompactionOutput
     elif role == SystemLLMRoleType.SUMMARY_COMPACTOR:
         from app.runtime.memory.summary_compactor import _LLMSummaryOutput
         model = _LLMSummaryOutput
@@ -86,7 +89,12 @@ def _enrich_schema_with_contract_metadata(schema: Dict[str, Any], role: SystemLL
         items = schema.get("properties", {}).get("facts", {}).get("items", {})
         if items and "properties" in items:
             scope_prop = items["properties"].get("scope", {})
-            scope_prop["enum"] = ["user", "tenant"]
+            scope_prop["enum"] = ["user", "tenant", "project"]
+
+    elif role == SystemLLMRoleType.FACT_COMPACTOR:
+        items = schema.get("properties", {}).get("facts", {}).get("items", {})
+        if items and "properties" in items:
+            items["properties"].get("scope", {})["enum"] = ["user", "tenant", "project"]
 
     elif role == SystemLLMRoleType.SUMMARY_COMPACTOR:
         # entities is dict in model, but contract expects array of strings
@@ -191,6 +199,7 @@ def validate_role_contracts() -> Dict[SystemLLMRoleType, str]:
         SystemLLMRoleType.PLANNER,
         SystemLLMRoleType.TRIAGE,
         SystemLLMRoleType.FACT_EXTRACTOR,
+        SystemLLMRoleType.FACT_COMPACTOR,
         SystemLLMRoleType.SUMMARY_COMPACTOR,
     ]
 

@@ -18,6 +18,7 @@ rolling summary job is delegated to MemoryWriter + SummaryCompactor.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -37,11 +38,12 @@ from app.runtime.envelope import PhasedEvent
 from app.runtime.entity_ids import (
     interaction_id as _interaction_id,
     memory_component_entity_id as _memory_component_entity_id,
+    memory_preparation_orchestrator_id as _memory_preparation_orchestrator_id,
     memory_orchestrator_id as _memory_orchestrator_id,
     planner_orchestrator_id,
 )
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
-from app.runtime.memory.fact_extractor import AgentResultSnippet
+from app.runtime.memory.fact_extractor import AgentResultSnippet, FactEvidence
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.platform_config import PlatformConfigLoader
 from app.runtime.stages.graph_planning_stage import GraphPlanningOutcomeKind
@@ -52,11 +54,22 @@ from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.system_llm_role_service import SystemLLMRoleService
 from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
+from app.services.glossary_service import GlossaryService
 
 # Memory writeback runs via Celery (single canonical execution mode).
 RUNTIME_MEMORY_INLINE = False
+MEMORY_PREPARATION_PROJECT_LIMIT = 200
 
 logger = get_logger(__name__)
+
+
+def _tool_fact_evidence_text(value: Any, *, limit: int = 8_000) -> str:
+    """Bound a direct successful tool result for asynchronous fact extraction."""
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        text = str(value or "")
+    return text[:limit]
 
 
 def _extract_resume_checkpoint(request: PipelineRequest) -> Optional[Dict[str, Any]]:
@@ -382,6 +395,93 @@ class RuntimePipeline:
             ),
             phase=OrchestrationPhase.PIPELINE,
         )
+        # --- Memory preparation (single LLM call, no tools) -----------
+        memory_preparation_orchestrator = _memory_preparation_orchestrator_id(run_id_str)
+        memory_preparation_executor = _memory_component_entity_id(
+            run_id_str, "memory_preparation", 1,
+        )
+        project_glossary = await GlossaryService(self._session).list_project_terms(
+            limit=MEMORY_PREPARATION_PROJECT_LIMIT,
+        )
+        yield await emitter.emit(
+            RuntimeEvent.orchestrator_start(
+                orchestrator_id=memory_preparation_orchestrator,
+                run_id=run_id_str,
+                role="memory_preparation",
+                context_snapshot=compact_snapshot(
+                    inputs={"user_request": request.request_text},
+                    meta={
+                        "role": "memory_preparation",
+                        "facts_available": len(turn_mem.durable_snapshot.entries),
+                        "project_terms_available": len(project_glossary),
+                    },
+                ),
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
+        yield await emitter.emit(
+            RuntimeEvent.agent_start(
+                agent_execution_id=memory_preparation_executor,
+                parent_entity_type="orchestrator",
+                parent_entity_id=memory_preparation_orchestrator,
+                agent_slug="memory_preparation",
+                executor_type="orchestrator",
+                executor_name="Подготовка памяти",
+                task_title="Отбор контекста для планера",
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
+
+        async def _memory_preparation_event(event: RuntimeEvent) -> None:
+            await emitter.emit(event, phase=OrchestrationPhase.PIPELINE)
+
+        prepared_memory = await self._assembler.memory_preparer.prepare(
+            request_text=request.request_text,
+            facts=turn_mem.durable_snapshot.entries,
+            project_glossary=project_glossary,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            chat_id=chat_id,
+            sandbox_overrides=request.sandbox_overrides,
+            event_sink=_memory_preparation_event,
+            agent_execution_id=memory_preparation_executor,
+        )
+        turn_mem.planner_memory_context = list(prepared_memory.items)
+        yield await emitter.emit(
+            RuntimeEvent.status(
+                "memory_context_prepared",
+                entity_type="agent_execution",
+                entity_id=memory_preparation_executor,
+                parent_entity_type="orchestrator",
+                parent_entity_id=memory_preparation_orchestrator,
+                selected_facts=prepared_memory.selected_fact_count,
+                selected_projects=prepared_memory.selected_project_count,
+                ambiguities=prepared_memory.ambiguities,
+                fallback=prepared_memory.fallback,
+                memory_context=prepared_memory.items,
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
+        yield await emitter.emit(
+            RuntimeEvent.agent_end(
+                agent_execution_id=memory_preparation_executor,
+                parent_entity_type="orchestrator",
+                parent_entity_id=memory_preparation_orchestrator,
+                agent_slug="memory_preparation",
+                status="completed",
+                outcome="degraded" if prepared_memory.fallback else "completed",
+                summary=f"Контекст: {len(prepared_memory.items)} элементов",
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
+        yield await emitter.emit(
+            RuntimeEvent.orchestrator_end(
+                orchestrator_id=memory_preparation_orchestrator,
+                run_id=run_id_str,
+                status="completed",
+            ),
+            phase=OrchestrationPhase.PIPELINE,
+        )
         yield await emitter.emit(
             RuntimeEvent.orchestrator_start(
                 orchestrator_id=orchestrator_id,
@@ -694,6 +794,18 @@ class RuntimePipeline:
             for artifact in (item.get("artifacts") or [])
             if isinstance(artifact, dict)
         ]
+        turn_mem.fact_run_ref = str(runtime_state.run_id)
+        turn_mem.fact_evidence = [
+            FactEvidence(
+                source_id=str(entry.call_id),
+                source_type="tool_result",
+                source_ref=str(entry.call_id),
+                text=_tool_fact_evidence_text(entry.result_data),
+                label=str(entry.operation),
+            )
+            for entry in runtime_state.tool_ledger.entries
+            if entry.status == "succeeded" and entry.result_data is not None
+        ]
         # Sync memory_bundle reference
         runtime_state.memory_bundle = turn_mem.memory_bundle
         assistant_final = runtime_state.final_answer or ""
@@ -714,7 +826,8 @@ class RuntimePipeline:
         if inline_memory:
             memory_orchestrator = _memory_orchestrator_id(str(runtime_state.run_id))
             component_ids = {
-                "facts": _memory_component_entity_id(str(runtime_state.run_id), "facts", 1),
+                "fact_extractor": _memory_component_entity_id(str(runtime_state.run_id), "fact_extractor", 1),
+                "fact_compactor": _memory_component_entity_id(str(runtime_state.run_id), "fact_compactor", 2),
             }
             yield await emitter.emit(
                 RuntimeEvent.orchestrator_start(
@@ -772,8 +885,10 @@ class RuntimePipeline:
                             error_code=item.get("error_code"),
                             error_message=item.get("error_message"),
                             duration_ms=item.get("duration_ms", 0),
-                            parent_entity_type="agent_execution",
-                            parent_entity_id=component_entity_id,
+                            entity_type="agent_execution",
+                            entity_id=component_entity_id,
+                            parent_entity_type="orchestrator",
+                            parent_entity_id=memory_orchestrator,
                         ),
                         phase=OrchestrationPhase.PIPELINE,
                     )
@@ -839,6 +954,7 @@ class RuntimePipeline:
                 FactPayload,
                 SummaryPayload,
                 AgentResultPayload,
+                FactEvidencePayload,
             )
             memory_limits: Optional[dict[str, int]] = None
             facts_limits: Optional[dict[str, int]] = None
@@ -907,6 +1023,7 @@ class RuntimePipeline:
                     )
                     for r in turn_mem.agent_results
                 ],
+                fact_evidence=[FactEvidencePayload(**item.model_dump()) for item in turn_mem.fact_evidence],
                 skip_llm_helpers=False,
                 terminal_reason=stop_reason.value if stop_reason else None,
                 sandbox_overrides=request.sandbox_overrides,

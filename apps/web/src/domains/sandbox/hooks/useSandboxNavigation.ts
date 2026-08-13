@@ -13,6 +13,7 @@ const ORCHESTRATOR_META: Array<{
   { id: 'planner', name: 'Планер', description: 'Планирование шагов выполнения' },
   { id: 'synthesizer', name: 'Synthesizer', description: 'Сборка итогового ответа' },
   { id: 'fact_extractor', name: 'Fact Extractor', description: 'Извлечение фактов для памяти' },
+  { id: 'fact_compactor', name: 'Fact Compactor', description: 'Сопоставление и нормализация фактов' },
   { id: 'summary_compactor', name: 'Summary Compactor', description: 'Компрессия rolling summary' },
 ];
 
@@ -53,6 +54,11 @@ export function useCatalogData(sessionId: string | undefined) {
         staleTime: 30_000,
       },
       {
+        queryKey: qk.admin.systemLlmRoles.active('fact_compactor'),
+        queryFn: () => systemLLMRolesApi.getActive('fact_compactor'),
+        staleTime: 30_000,
+      },
+      {
         queryKey: qk.admin.systemLlmRoles.active('summary_compactor'),
         queryFn: () => systemLLMRolesApi.getActive('summary_compactor'),
         staleTime: 30_000,
@@ -64,12 +70,14 @@ export function useCatalogData(sessionId: string | undefined) {
     const plannerConfig = orchestratorQueries[0]?.data as Record<string, unknown> | undefined;
     const synthesizerConfig = orchestratorQueries[1]?.data as Record<string, unknown> | undefined;
     const factExtractorConfig = orchestratorQueries[2]?.data as Record<string, unknown> | undefined;
-    const summaryCompactorConfig = orchestratorQueries[3]?.data as Record<string, unknown> | undefined;
+    const factCompactorConfig = orchestratorQueries[3]?.data as Record<string, unknown> | undefined;
+    const summaryCompactorConfig = orchestratorQueries[4]?.data as Record<string, unknown> | undefined;
 
     const configById: Record<string, Record<string, unknown>> = {
       planner: plannerConfig ?? {},
       synthesizer: synthesizerConfig ?? {},
       fact_extractor: factExtractorConfig ?? {},
+      fact_compactor: factCompactorConfig ?? {},
       summary_compactor: summaryCompactorConfig ?? {},
     };
 

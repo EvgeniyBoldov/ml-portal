@@ -14,6 +14,7 @@ from uuid import UUID
 
 from celery import shared_task
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.memory import FactScope, FactSource
@@ -21,7 +22,7 @@ from app.workers.session_factory import get_worker_session
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.memory.dto import SummaryDTO, FactDTO
-from app.runtime.memory.fact_extractor import AgentResultSnippet
+from app.runtime.memory.fact_extractor import AgentResultSnippet, FactEvidence
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.memory.writer import MemoryWriter
 from app.runtime.events import RuntimeEvent, RuntimeEventType
@@ -62,6 +63,14 @@ class AgentResultPayload(BaseModel):
     success: bool = True
 
 
+class FactEvidencePayload(BaseModel):
+    source_id: str
+    source_type: str
+    source_ref: str
+    text: str
+    label: Optional[str] = None
+
+
 class MemoryFinalizePayload(BaseModel):
     """
     Serializable payload for memory finalization task.
@@ -79,6 +88,7 @@ class MemoryFinalizePayload(BaseModel):
     summary: SummaryPayload
     retrieved_facts: List[FactPayload] = Field(default_factory=list)
     agent_results: List[AgentResultPayload] = Field(default_factory=list)
+    fact_evidence: List[FactEvidencePayload] = Field(default_factory=list)
     
     # Control flags
     skip_llm_helpers: bool = False
@@ -142,6 +152,10 @@ def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
         AgentResultSnippet(agent=r.agent, summary=r.summary, success=r.success)
         for r in payload.agent_results
     ]
+    memory.fact_evidence = [
+        FactEvidence(**item.model_dump()) for item in payload.fact_evidence
+    ]
+    memory.fact_run_ref = payload.runtime_run_id
     
     return memory
 
@@ -151,9 +165,14 @@ async def _load_memory_prompts(session: AsyncSession) -> dict[str, str]:
     prompts: dict[str, str] = {}
     try:
         facts_cfg = await service.get_role_config(SystemLLMRoleType.FACT_EXTRACTOR)
-        prompts["facts"] = str(facts_cfg.get("prompt") or "")
+        prompts["fact_extractor"] = str(facts_cfg.get("prompt") or "")
     except Exception:
-        prompts["facts"] = ""
+        prompts["fact_extractor"] = ""
+    try:
+        compactor_cfg = await service.get_role_config(SystemLLMRoleType.FACT_COMPACTOR)
+        prompts["fact_compactor"] = str(compactor_cfg.get("prompt") or "")
+    except Exception:
+        prompts["fact_compactor"] = ""
     return prompts
 
 
@@ -208,13 +227,15 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
             
             # Run memory writer
             component_entity_ids = {
-                "facts": memory_component_entity_id(payload.runtime_run_id or payload.chat_id or "unknown", "facts", 1),
+                "fact_extractor": memory_component_entity_id(payload.runtime_run_id or payload.chat_id or "unknown", "fact_extractor", 1),
+                "fact_compactor": memory_component_entity_id(payload.runtime_run_id or payload.chat_id or "unknown", "fact_compactor", 2),
             }
             memory_orchestrator_id = make_memory_orchestrator_id(payload.runtime_run_id or payload.chat_id or "unknown")
-            component_limits = {"facts": payload.facts_limits}
+            component_limits = {"fact_extractor": payload.facts_limits, "fact_compactor": payload.facts_limits}
             budget_own: dict[str, dict[str, int]] = {
                 memory_orchestrator_id: {},
-                component_entity_ids["facts"]: {},
+                component_entity_ids["fact_extractor"]: {},
+                component_entity_ids["fact_compactor"]: {},
             }
             llm_structured_result: dict[str, dict[str, Any]] = {}
 
@@ -428,19 +449,24 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             error_code=item.get("error_code"),
                             error_message=item.get("error_message"),
                             duration_ms=item.get("duration_ms", 0),
-                            parent_entity_type="agent_execution",
-                            parent_entity_id=component_entity_id,
+                            entity_type="agent_execution",
+                            entity_id=component_entity_id,
+                            parent_entity_type="orchestrator",
+                            parent_entity_id=memory_orchestrator_id,
                         )
                     )
-                    if component_name == "facts":
+                    if component_name in {"fact_extractor", "fact_compactor"}:
                         parsed = llm_structured_result.get(component_name) or {}
                         facts_payload = parsed.get("facts") if isinstance(parsed, dict) else None
                         await _publish(
                             RuntimeEvent.status(
                                 "memory_facts_result",
-                                parent_entity_type="agent_execution",
-                                parent_entity_id=component_entity_id,
+                                parent_entity_type="orchestrator",
+                                parent_entity_id=memory_orchestrator_id,
+                                component_name=component_name,
                                 facts=facts_payload if isinstance(facts_payload, list) else [],
+                                entity_type="agent_execution",
+                                entity_id=component_entity_id,
                             )
                         )
                     delta = {
@@ -475,7 +501,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             outcome=component_status,
                             summary=(
                                 f"Новых фактов: {int(item.get('inserted_count') or 0)}"
-                                if component_name == "facts"
+                                if component_name in {"fact_extractor", "fact_compactor"}
                                 else None
                             ),
                         )
@@ -494,9 +520,9 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     limits = (
                         payload.memory_limits
                         if entity_type == "orchestrator"
-                        else component_limits.get("facts")
+                        else component_limits.get("fact_extractor" if entity_id == component_entity_ids["fact_extractor"] else "fact_compactor")
                     )
-                    role = "memory" if entity_type == "orchestrator" else "facts"
+                    role = "memory" if entity_type == "orchestrator" else ("fact_extractor" if entity_id == component_entity_ids["fact_extractor"] else "fact_compactor")
                     own_snapshot = {
                         key: int(value)
                         for key, value in budget_own.get(entity_id, {}).items()

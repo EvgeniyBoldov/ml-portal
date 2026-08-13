@@ -41,6 +41,9 @@ from .chat_turn import ChatTurn
 from .sandbox import SandboxSession, SandboxOverride, SandboxRun
 from .discovered_tool import DiscoveredTool
 from .memory import Fact, FactScope, FactSource, DialogueSummary
+from .memory import FactObservation, FactStatus
+from .project import Project
+from .glossary import GlossaryEntry, GlossaryScope
 from .execution_limit import (
     ActorExecutionLimit,
     ActorExecutionLimitScope,
@@ -115,6 +118,11 @@ __all__ = [
     "FactScope",
     "FactSource",
     "DialogueSummary",
+    "FactObservation",
+    "FactStatus",
+    "Project",
+    "GlossaryEntry",
+    "GlossaryScope",
     "ExecutionLimit",
     "ExecutionLimitScope",
     "ActorExecutionLimit",
