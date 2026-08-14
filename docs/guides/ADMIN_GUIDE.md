@@ -77,6 +77,15 @@
   - только platform-level execution limits (LLM + Runtime).
 - `Оркестрация -> Planner / Synthesizer / Fact Extractor / Summary Compactor`
   - у каждой системной роли свои execution limits (LLM + Runtime) и свой prompt contract.
+- `Память` (facts)
+  - runtime memory имеет scopes `user`, `tenant`, `project`;
+  - администратор может просматривать и редактировать факты через отдельные
+    user/tenant surfaces, но credentials никогда не входят в memory и не
+    показываются через memory API;
+  - автоматические изменения проходят `FactExtractor -> FactCompactor ->
+    FactReconciler`, а ручные admin edits помечаются как manual и используют
+    supersede/tombstone semantics;
+  - ошибки асинхронного memory writeback не отменяют уже выданный ответ.
 - `Агенты -> <агент> -> Лимиты`
   - execution limits конкретного агента (LLM + Runtime).
 - `Настройки платформы -> Политики/гейты`

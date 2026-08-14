@@ -159,11 +159,19 @@ They are intentionally lightweight:
 ## 9. Planner Memory Contract
 
 Flow:
-1. Planner keeps bounded working context in `RunContextCompact`.
-2. Planner persists execution memory in `ExecutionMemoryService`.
-3. `RunContextCompact` is used only for prompt assembly and loop control.
-4. `ExecutionMemoryService` is used for persistence, observability, and resume.
+1. `MemoryBuilder` reads bounded confirmed user/tenant facts through
+   `MemoryService` and assembles the current-turn memory bundle.
+2. `MemoryPreparer` optionally selects relevant fact/project indexes for the
+   planner; it never writes facts and returns an empty fallback on failure.
+3. Planner receives only the bounded `planner_memory_context`; it does not
+   query memory tables or receive a full storage dump.
+4. After terminal finalization, `finalize_memory` runs asynchronously through
+   `FactExtractor -> FactCompactor -> FactReconciler` and persists evidence-
+   backed facts using supersede semantics.
 
 Binding rule:
-- `RunContextCompact` is short-lived and bounded in-memory state,
-- `ExecutionMemoryService` is durable run memory and may store a longer history.
+- `RuntimeTurnState`/`TurnMemory` are short-lived bounded turn state,
+- `MemorySnapshot` is the immutable read projection for one run,
+- `facts` is durable business memory; `runtime_execution_events` remains the
+  execution journal and is not a memory store,
+- sandbox overlays are branch-scoped and never directly persist durable facts.

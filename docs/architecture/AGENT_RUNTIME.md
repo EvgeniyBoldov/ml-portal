@@ -143,6 +143,27 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 7. Checkpoint и outputs открывают зависимости или возобновляют логическую task новым attempt.
 8. FinalizationStage формирует финальный ответ только после terminal plan; sandbox сохраняет и стримит canonical journal events, chat стримит только пользовательский transport.
 
+### Memory lifecycle
+
+Turn memory is assembled before planning by `MemoryBuilder`. It reads only
+bounded confirmed active facts for the effective user and tenant through
+`MemoryService`; the builder also assembles bounded in-turn tool, agent and
+attachment sections. For sandbox runs, branch fact overlays are applied before
+the immutable snapshot is handed to runtime.
+
+The `memory` system role is not a fact writer: it selects indexes from the
+already loaded facts/project glossary and may report ambiguities. A failed
+selection falls back to an empty optional context and does not fail the main
+turn.
+
+After finalization, the chat path emits the answer and dispatches
+`finalize_memory` asynchronously. That worker runs `FactExtractor`,
+`FactCompactor` and `FactReconciler`; evidence is deduplicated into
+`FactObservation`, active rows use supersede semantics, and only confirmed
+facts are read by a later turn. Writeback failures are isolated from the user
+answer. Sandbox fact overlays never persist directly to the durable `facts`
+table.
+
 ### Единый journal boundary
 
 `RuntimeEventLogger` создаётся один раз на root run и является единственным
@@ -291,6 +312,12 @@ turn and stores bounded candidates in `RuntimeTurnState`. After Synthesizer
 has returned the user answer, the normal asynchronous memory worker combines
 those candidates with extracted user/tenant facts and sends project candidates
 through the FactCompactor LLM before `FactReconciler` persists them.
+
+The same writeback worker handles user and tenant candidates extracted from the
+turn. `project_memory.mark` only places bounded evidence-backed candidates in
+the current `RuntimeTurnState`; it is never a direct database write. Manual
+admin fact edits use the separate admin fact service and are not treated as
+LLM-extracted evidence.
 
 ## Runtime Evaluation Harness
 

@@ -28,12 +28,33 @@ selected items, budget, priority, selection reason и diagnostics.
 
 Базовые секции:
 
-- `conversation` — структурированная summary/open questions/entities/raw tail.
-- `facts` — query-ranked user / department / company facts.
+- `facts` — query-ranked confirmed user / tenant / project facts.
 - `tool_ledger` / `agent_results` — in-turn runtime context.
+- `attachments` / `collections` — bounded context and capability context.
 
-Текущий `TurnMemory.summary` и `TurnMemory.retrieved_facts` остаются
-backward-compatible projection до полного удаления legacy `WorkingMemory`.
+`MemoryBuilder` создает эти sections из `MemoryService`/`FactStore` и текущего
+turn context. `TurnMemory.summary` сохраняется как compatibility DTO, но
+conversation-summary component сейчас не зарегистрирован в активном runtime
+memory registry. `TurnMemory.retrieved_facts` и `planner_memory_context` —
+bounded compatibility projections, а не самостоятельные stores.
+
+Read path:
+
+```text
+facts + effective user/tenant scope -> MemoryService -> MemorySnapshot
+                                   -> MemoryBuilder -> planner/agent context
+```
+
+Write path после terminal finalization:
+
+```text
+turn evidence -> FactExtractor -> FactCompactor -> FactReconciler -> facts
+```
+
+По умолчанию writeback выполняется асинхронной Celery-задачей
+`finalize_memory`; ошибка writeback не отменяет уже выданный ответ. Сырые
+LLM-кандидаты не считаются durable memory без evidence, compaction и
+reconciliation.
 
 ### MCP runtime flags
 

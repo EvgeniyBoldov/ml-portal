@@ -73,6 +73,11 @@ This makes reset/diff/preview behavior deterministic and keeps the UI and runtim
 
 ## Fact memory overlay
 
+The durable fact contract and post-turn writeback pipeline are defined in
+[`RUNTIME_MEMORY.md`](RUNTIME_MEMORY.md). Sandbox uses only the overlay part of
+that contract: it never turns a branch preview into a direct durable-memory
+write.
+
 Durable runtime facts have three scopes: `user`, `tenant` and `project`. Chat writes
 them to the canonical `facts` table. Sandbox never writes that table: each
 branch stores only an overlay keyed by `(scope, subject)` in its branch state.

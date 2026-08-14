@@ -21,7 +21,9 @@
 - [Flows](architecture/FLOWS.md)
 - [Collection Asset Refactor](architecture/COLLECTION_ASSET_REFACTOR.md)
 - [MCP Credential Flow](architecture/MCP_CREDENTIAL_FLOW.md)
+- [DCBox MCP](architecture/DCBOX_MCP.md)
 - [Sandbox Runtime](architecture/SANDBOX_RUNTIME.md)
+- [Runtime Memory](architecture/RUNTIME_MEMORY.md)
 - [Chat File Attachments](architecture/CHAT_FILE_ATTACHMENTS.md)
 - [Entity Builder Pattern](architecture/ENTITY_BUILDER_PATTERN.md)
 

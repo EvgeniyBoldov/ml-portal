@@ -22,6 +22,32 @@ PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "netbox-mcp-shim", "version": "1.0.0"}
 SESSIONS: set[str] = set()
 
+# Explicit routes for NetBox plugins.  Keys are stable MCP object types; values
+# are relative API paths so the registry cannot redirect requests to another
+# host.  Keep endpoint spelling here even when it is non-standard (for
+# example, DCBox exposes ``capacitys`` and ``vlanmappinggroup``).
+PLUGIN_ENDPOINTS = {
+    "plugin.installed_plugins": "/api/plugins/installed-plugins/",
+    "plugin.dcbox": "/api/plugins/dcbox/",
+    "plugin.technical_record": "/api/plugins/technical-record/",
+    "plugin.techsupport": "/api/plugins/techsupport/",
+    "plugin.netbox_attachments": "/api/plugins/netbox-attachments/",
+    "plugin.change_requests": "/api/plugins/change-requests/",
+    "plugin.storage_systems": "/api/plugins/storage-systems/",
+    "plugin.operation_system": "/api/plugins/operation-system/",
+    "plugin.backup": "/api/plugins/backup/",
+    "plugin.aggregate": "/api/plugins/aggregate/",
+    "plugin.custom_objects": "/api/plugins/custom-objects/",
+    "plugin.floorplan": "/api/plugins/floorplan/",
+    "dcbox.capacity": "/api/plugins/dcbox/capacitys/",
+    "dcbox.channel": "/api/plugins/dcbox/channels/",
+    "dcbox.device_group": "/api/plugins/dcbox/device-groups/",
+    "dcbox.infrastructure_place": "/api/plugins/dcbox/infrastructure-places/",
+    "dcbox.interface_group": "/api/plugins/dcbox/interface-groups/",
+    "dcbox.prefix_group": "/api/plugins/dcbox/prefix-groups/",
+    "dcbox.vlan_mapping_group": "/api/plugins/dcbox/vlanmappinggroup/",
+}
+
 
 def _jsonrpc_ok(rpc_id: Any, result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
@@ -161,6 +187,28 @@ async def _netbox_get(
         response = await client.get(url, headers=headers, params=params)
     response.raise_for_status()
     return response.json()
+
+
+def _resolve_object_path(object_type: str) -> str:
+    """Resolve a canonical object type to a safe NetBox API path."""
+    normalized = str(object_type or "").strip()
+    if not normalized or "." not in normalized:
+        raise ValueError("object_type must be in app.model format, e.g. dcim.device")
+
+    plugin_path = PLUGIN_ENDPOINTS.get(normalized)
+    if plugin_path:
+        return plugin_path
+
+    if normalized.startswith("dcbox."):
+        raise ValueError(f"Unknown DCBox object type: {normalized}")
+
+    app_name, model = normalized.split(".", 1)
+    model_path = model.replace("_", "-")
+    if model_path.endswith("address"):
+        model_path += "es"
+    elif not model_path.endswith("s"):
+        model_path += "s"
+    return f"/api/{app_name}/{model_path}/"
 
 
 def _slim_result(obj: Any, max_results: int = 50) -> Any:
@@ -395,24 +443,14 @@ async def mcp_root(
                 object_type = str(arguments.get("object_type") or "").strip()
                 if not object_type or "." not in object_type:
                     raise ValueError("object_type must be in app.model format, e.g. dcim.device")
-                app, model = object_type.split(".", 1)
                 limit = int(arguments.get("limit") or 50)
                 filters = arguments.get("filters") or {}
                 params: Dict[str, Any] = {"limit": max(1, min(limit, 200))}
                 params.update({k: v for k, v in filters.items() if v is not None})
-                # NetBox REST path: pluralize model name (interfaces, addresses, etc.)
-                model_path = model.replace("_", "-")
-                # Handle irregular plurals
-                if model_path.endswith("address"):
-                    model_path += "es"
-                elif model_path.endswith("s"):
-                    pass  # already plural
-                else:
-                    model_path += "s"
                 data = await _netbox_get(
                     base_url=base_url,
                     token=token,
-                    path=f"/api/{app}/{model_path}/",
+                    path=_resolve_object_path(object_type),
                     params=params,
                 )
                 return _jsonrpc_ok(rpc_id, _as_tool_result(data))
@@ -424,17 +462,15 @@ async def mcp_root(
                 if object_types:
                     results = []
                     for ot in object_types[:5]:
-                        if "." not in ot:
-                            continue
-                        app, model = ot.split(".", 1)
                         params: Dict[str, Any] = {"limit": max(1, min(limit, 100))}
                         if q:
                             params["q"] = q
+                        path = _resolve_object_path(ot)
                         try:
                             page = await _netbox_get(
                                 base_url=base_url,
                                 token=token,
-                                path=f"/api/{app}/{model.replace('_', '-')}s/",
+                                path=path,
                                 params=params,
                             )
                             results.append({"object_type": ot, "results": page.get("results", []), "count": page.get("count", 0)})

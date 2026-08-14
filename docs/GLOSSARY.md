@@ -80,7 +80,29 @@ AI-ассистент с набором инструментов, промпто
 Роль сборки финального ответа пользователю. Имеет plain-text контракт с критериями.
 
 ### Fact Extractor
-Роль извлечения атомарных фактов из диалога. Имеет JSON-контракт ответа (`facts[]`).
+Роль извлечения устойчивых атомарных фактов из завершённого turn. Получает
+ограниченный user message, final answer, успешные agent/tool evidence и
+project candidates; не пишет БД напрямую и имеет JSON-контракт `facts[]`.
+
+### Memory Preparer
+Необязательная pre-planner роль. Выбирает существующие индексы user/tenant
+facts и project glossary для текущего запроса и возвращает ambiguities. Не
+создаёт факты, не вызывает planner и при ошибке даёт пустой fallback.
+
+### Fact Compactor
+Роль нормализации и консолидации fact candidates. Убирает дубли и выбирает
+компакционное действие (`add`, `rewrite`, `supersede`, `mark_conflict`), но не
+является самостоятельным writer-ом.
+
+### Fact Reconciler
+Детерминированный persistence-компонент durable memory. Проверяет scope,
+owner и evidence, обновляет observations/support count, подтверждает факт
+по правилам и применяет supersede/tombstone semantics.
+
+### Durable Fact
+Подтверждённый active факт в `facts`: user, tenant или project scope,
+`superseded_by IS NULL` и `status=confirmed`. Факты с evidence и revisions
+выбираются через `MemoryService`, а не прямым запросом prompt builder-а.
 
 ### Summary Compactor
 Роль обновления структурного summary диалога (`goals`, `done`, `entities`, `open_questions`).

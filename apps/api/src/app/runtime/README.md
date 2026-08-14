@@ -31,6 +31,24 @@ Runtime code should depend on `ports.py` contracts, not concrete DB/HTTP classes
 - Ports: run store, memory repo, planner, synthesizer, config loader.
 - Adapters: `app.services.*`, `app.repositories.*`, and external clients.
 
+## Memory ownership
+
+`MemoryBuilder` is the turn-start assembly boundary. It uses
+`MemoryService`/`FactStore` to create a bounded `MemorySnapshot` containing
+confirmed active user and tenant facts, then combines it with bounded tool,
+agent-result, attachment and collection sections. It does not load the
+conversation summary into the active component registry.
+
+`MemoryPreparer` selects existing fact/project indexes for planner context. It
+is optional and fail-open: an LLM/provider failure produces an empty fallback,
+not invented memory or a failed user turn.
+
+Terminal writeback is owned by `MemoryWriter` and normally runs in the Celery
+`finalize_memory` task after the answer. The writer pipeline is
+`FactExtractor -> FactCompactor -> FactReconciler`; only evidence-backed,
+deduplicated and reconciled facts become active. The task uses a fresh worker
+session and never passes a live session/logger through Celery.
+
 Rule of thumb:
 - If logic is domain/runtime behavior -> keep in `app/runtime/*`.
 - If logic is I/O, SQL, external API, or framework integration -> adapter layer.

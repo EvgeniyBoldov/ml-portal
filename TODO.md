@@ -42,11 +42,16 @@
 - Цель: «думающий модуль» (пред-планер) использует эти факты для переформулировки цели и лучшего понимания контекста запроса.
 - Связано с `PLAN_AGENT_NEEDS_CONTRACT.md` (раздел «Думающий модуль» вне MVP-скоупа).
 
-## Runtime memory — deferred chat and project lifecycle
+## Runtime memory — remaining lifecycle work
 
-- Добавить durable chat memory и отдельный compactor contract после того, как
-  будет введен canonical `MemoryEntry` read-path (`docs/architecture/RUNTIME_MEMORY.md`).
-- Реализовать authoring и RAG extraction для user/tenant/project memory; не
+- Durable user/tenant/project facts, bounded read path, fact extraction,
+  compaction, reconciliation and asynchronous writeback уже реализованы;
+  канонический контракт описан в `docs/architecture/RUNTIME_MEMORY.md`.
+- Не добавлять отдельный durable chat-memory store: conversation summary
+  остаётся compatibility storage до отдельного обоснованного RFC, а active
+  runtime memory использует facts и in-turn sections.
+- Доработать authoring и RAG extraction для user/tenant/project memory через
+  существующий `FactExtractor -> FactCompactor -> FactReconciler` flow; не
   делать extractor прямым writer-ом active memory.
 - Добавить project-memory lifecycle: source refresh, retention/cleanup,
   устаревание правил и controlled removal.
