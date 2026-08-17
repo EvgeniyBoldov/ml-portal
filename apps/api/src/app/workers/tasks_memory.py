@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.models.memory import FactScope, FactSource
 from app.workers.session_factory import get_worker_session
+from app.workers.transaction_utils import checkpoint_commit
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.memory.dto import SummaryDTO, FactDTO
@@ -427,6 +428,11 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     terminal_reason=terminal_reason,
                     sandbox_overrides=payload.sandbox_overrides,
                 )
+                # Reconciliation uses flushes so facts are visible within the
+                # worker transaction, but a Celery session is rolled back on
+                # close unless this task owns an explicit commit boundary.
+                # Persist the completed writeback before emitting diagnostics.
+                await checkpoint_commit(session, "finalize_memory", "facts_writeback")
                 diagnostics = turn_memory.memory_diagnostics or {}
                 write_status = diagnostics.get("memory_write_status", {})
                 results = [
