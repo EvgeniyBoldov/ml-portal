@@ -572,6 +572,13 @@ class RuntimePipeline:
                         reason=terminal_status,
                         run_id=run_id_str,
                         question=planning_outcome.pause_question,
+                        message=planning_outcome.pause_message,
+                        action=(
+                            {"kind": "confirm", **(planning_outcome.pause_context or {})}
+                            if terminal_status == PipelineStopReason.WAITING_CONFIRMATION.value
+                            else None
+                        ),
+                        context=planning_outcome.pause_context,
                     ),
                     phase=OrchestrationPhase.PIPELINE,
                 )

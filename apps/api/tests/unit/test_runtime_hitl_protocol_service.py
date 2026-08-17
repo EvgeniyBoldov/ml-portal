@@ -28,6 +28,19 @@ def test_extract_operation_fingerprint_falls_back_to_paused_context():
     assert fingerprint == "fp-ctx"
 
 
+def test_confirmation_stop_keeps_operation_context_for_resume_token() -> None:
+    payload = RuntimeHitlProtocolService.build_paused_from_stop(
+        {
+            "reason": "waiting_confirmation",
+            "action": {"kind": "confirm", "operation_fingerprint": "fp-1"},
+            "context": {"operation_fingerprint": "fp-1", "tool_slug": "device.write"},
+        }
+    )
+
+    assert payload["action"]["operation_fingerprint"] == "fp-1"
+    assert payload["context"]["tool_slug"] == "device.write"
+
+
 def test_build_paused_from_stop_waiting_input_sets_input_kind():
     payload = RuntimeHitlProtocolService.build_paused_from_stop(
         {"reason": "waiting_input", "question": "Need VLAN id"}

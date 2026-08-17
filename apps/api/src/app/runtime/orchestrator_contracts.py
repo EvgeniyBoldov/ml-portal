@@ -232,6 +232,14 @@ class TaskExecutionError(RuntimeError):
         self.details = dict(details or {})
 
 
+class TaskConfirmationRequired(RuntimeError):
+    """A task reached an operation gate and must resume from its checkpoint."""
+
+    def __init__(self, payload: Dict[str, Any]) -> None:
+        self.payload = dict(payload or {})
+        super().__init__(str(self.payload.get("summary") or self.payload.get("message") or "Operation requires confirmation"))
+
+
 def parse_agent_task_result(content: str) -> AgentTaskResult:
     """Parse the exact JSON protocol; prose and markdown are rejected."""
     text = str(content or "").strip()

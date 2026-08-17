@@ -632,6 +632,8 @@ class RuntimeEvent:
         run_id: Optional[str] = None,
         question: Optional[str] = None,
         message: Optional[str] = None,
+        action: Optional[Dict[str, Any]] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> "RuntimeEvent":
         data: Dict[str, Any] = {"reason": reason}
         if run_id is not None:
@@ -640,6 +642,10 @@ class RuntimeEvent:
             data["question"] = question
         if message:
             data["message"] = message
+        if action:
+            data["action"] = dict(action)
+        if context:
+            data["context"] = dict(context)
         return cls(RuntimeEventType.STOP, data)
 
     @classmethod

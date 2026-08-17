@@ -33,6 +33,7 @@ from app.core.logging import get_logger
 from app.runtime.contracts import AgentAnswerStatus, NeedSpec
 from app.runtime.orchestrator_contracts import (
     AgentTaskResult,
+    TaskConfirmationRequired,
     TaskExecutionError,
     TaskOutcome,
     TaskRequest,
@@ -489,6 +490,7 @@ class AgentExecutor:
         the terminal result into a state transition.
         """
         before = len(runtime_state.agent_results)
+        confirmation_payload: Optional[Dict[str, Any]] = None
         logger = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
         if runtime_log_parent:
             ctx.extra["runtime_log_parent"] = dict(runtime_log_parent)
@@ -504,8 +506,15 @@ class AgentExecutor:
             model=model,
             agent_version_id=agent_version_id,
         ):
+            if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
+                confirmation_payload = dict(event.data or {})
             if logger is not None:
-                await logger.emit(event, phase=OrchestrationPhase.AGENT)
+                # The graph owns the task pause and emits the canonical
+                # interaction event with its persisted checkpoint.
+                if event.type != RuntimeEventType.CONFIRMATION_REQUIRED:
+                    await logger.emit(event, phase=OrchestrationPhase.AGENT)
+        if confirmation_payload is not None:
+            raise TaskConfirmationRequired(confirmation_payload)
         payload = runtime_state.agent_results[-1] if len(runtime_state.agent_results) > before else {}
         raw_needs = payload.get("needs") if isinstance(payload, dict) else []
         task_needs = []

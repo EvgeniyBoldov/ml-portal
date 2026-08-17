@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator, Dict, Optional, Protocol
 from app.runtime.orchestrator_contracts import (
     AgentTaskResult,
     PlanRequest,
+    TaskConfirmationRequired,
     TaskExecutionError,
     TaskAttemptFailure,
     TaskOutcome,
@@ -582,6 +583,41 @@ class GraphOrchestrator:
                 task_executor_kwargs["iteration_id"] = active_iteration_id
                 result = await self.executor.execute_task(request=request, **task_executor_kwargs)
             except Exception as exc:
+                if isinstance(exc, TaskConfirmationRequired):
+                    confirmation = dict(exc.payload or {})
+                    await self.store.pause_task_for_confirmation(
+                        plan_id,
+                        task_id,
+                        confirmation=confirmation,
+                    )
+                    await observe(
+                        "task_paused",
+                        entity_type="task",
+                        entity_id=task_id,
+                        parent_type="plan",
+                        parent_id=str(plan_id),
+                        payload={"reason": "waiting_confirmation"},
+                        trigger="waiting_confirmation",
+                    )
+                    yield OrchestratorEvent(
+                        type="confirmation_required",
+                        entity_type="interaction",
+                        entity_id=str(uuid4()),
+                        parent_entity_type="step",
+                        parent_entity_id=step_id,
+                        **confirmation,
+                    )
+                    yield OrchestratorEvent(type="agent_end", entity_id=executor_id,
+                                            agent_execution_id=executor_id, parent_entity_type="step", parent_entity_id=step_id,
+                                            agent_slug=task.executor, task_id=task_id, status="waiting_confirmation")
+                    yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
+                                            parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
+                                            step_number=step_number, status="waiting_confirmation", outcome="waiting_confirmation")
+                    closed = close_active_iteration(status="waiting_confirmation", outcome="waiting_confirmation")
+                    if closed is not None:
+                        yield closed
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
+                    return
                 if isinstance(exc, TaskExecutionError):
                     failure = TaskAttemptFailure(
                         code=exc.code,

@@ -741,6 +741,45 @@ class SqlPlanStore:
             plan.status = PlanStatus.ACTIVE.value
         await self.session.flush()
 
+    async def pause_task_for_confirmation(
+        self,
+        plan_id: UUID,
+        task_id: str,
+        *,
+        confirmation: Dict[str, Any],
+    ) -> RuntimePlanTask:
+        """Persist a confirmation gate as a task checkpoint, not a failure."""
+        lookup = await self.session.execute(
+            select(RuntimePlanTask).where(
+                RuntimePlanTask.plan_id == plan_id,
+                RuntimePlanTask.task_id == task_id,
+            ).with_for_update()
+        )
+        task = lookup.scalar_one_or_none()
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        checkpoint = dict(task.checkpoint or {})
+        checkpoint["confirmation"] = dict(confirmation or {})
+        task.checkpoint = checkpoint
+        task.status = TaskStatus.WAITING_USER.value
+
+        attempt_result = await self.session.execute(
+            select(RuntimeTaskAttempt).where(
+                RuntimeTaskAttempt.task_row_id == task.id,
+                RuntimeTaskAttempt.attempt_number == task.attempts,
+            ).with_for_update()
+        )
+        attempt = attempt_result.scalar_one_or_none()
+        if attempt is not None:
+            attempt.status = AttemptStatus.CANCELLED.value
+            attempt.finished_at = _now()
+
+        plan = await self.session.get(RuntimePlan, plan_id, with_for_update=True)
+        if plan is not None:
+            plan.status = PlanStatus.WAITING_INPUT.value
+        await self.session.flush()
+        return task
+
     async def resume_planner_pause(self, plan_id: UUID) -> None:
         """Reactivate a plan paused by the planner's ``ask_user`` decision.
 

@@ -28,6 +28,8 @@ class GraphPlanningOutcome:
     stop_reason: PipelineStopReason
     answer_brief: Optional[str] = None
     pause_question: Optional[str] = None
+    pause_message: Optional[str] = None
+    pause_context: Optional[Dict[str, Any]] = None
     final_answer_strategy: str = "synthesize"
 
 
@@ -57,6 +59,8 @@ class GraphPlanningStage:
         runtime_limits: Optional[Dict[str, int]] = None,
     ) -> AsyncIterator[PhasedEvent]:
         pause_question: Optional[str] = None
+        pause_message: Optional[str] = None
+        confirmation_context: Optional[Dict[str, Any]] = None
         runtime_sink = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
         if runtime_sink is not None:
             async def emit_planner_event(event: RuntimeEvent) -> None:
@@ -77,11 +81,17 @@ class GraphPlanningStage:
                 tenant_id=tenant_id,
                 chat_id=UUID(request.chat_id) if request.chat_id else None,
             )
+        resume_action = str((runtime_state.continuation or {}).get("resume_action") or "").strip().lower()
         resume_user_response: Optional[str] = None
         if plan.status == "waiting_input":
-            resume_user_response = str(request.request_text or "").strip()
-            await self._store.resolve_waiting_need(plan.id, user_input=resume_user_response)
-            await self._store.resume_planner_pause(plan.id)
+            if resume_action == "confirm":
+                await self._store.resume_waiting_tasks(plan.id, user_input="")
+            else:
+                # request_text is the original chat content on a continuation;
+                # RuntimeTurnState holds the actual answer from the checkpoint.
+                resume_user_response = str(runtime_state.current_user_query or "").strip()
+                await self._store.resolve_waiting_need(plan.id, user_input=resume_user_response)
+                await self._store.resume_planner_pause(plan.id)
         effective_runtime_limits = dict(runtime_limits or {})
         task_attempts_limit = effective_runtime_limits.get("task_attempts")
         if isinstance(task_attempts_limit, int) and task_attempts_limit > 0:
@@ -119,6 +129,11 @@ class GraphPlanningStage:
             runtime_event = event.to_runtime_event()
             if runtime_event.type == RuntimeEventType.WAITING_INPUT:
                 pause_question = str(runtime_event.data.get("question") or "").strip() or None
+            elif runtime_event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
+                pause_message = str(
+                    runtime_event.data.get("message") or runtime_event.data.get("summary") or ""
+                ).strip() or None
+                confirmation_context = dict(runtime_event.data or {})
             yield PhasedEvent(runtime_event, OrchestrationPhase.PLANNER)
         snapshot = await self._store.snapshot(plan.id)
         status = str(snapshot["status"])
@@ -129,10 +144,13 @@ class GraphPlanningStage:
                 answer_brief=None,
             )
         elif status == "waiting_input":
+            is_confirmation = confirmation_context is not None
             self.outcome = GraphPlanningOutcome(
                 kind=GraphPlanningOutcomeKind.PAUSED,
-                stop_reason=PipelineStopReason.WAITING_INPUT,
+                stop_reason=(PipelineStopReason.WAITING_CONFIRMATION if is_confirmation else PipelineStopReason.WAITING_INPUT),
                 pause_question=pause_question,
+                pause_message=pause_message,
+                pause_context=confirmation_context,
             )
         else:
             self.outcome = GraphPlanningOutcome(
