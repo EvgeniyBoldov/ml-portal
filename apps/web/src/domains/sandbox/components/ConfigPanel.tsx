@@ -32,6 +32,7 @@ import { TraceInspector } from './traceInspector/TraceInspector';
 import type { SandboxTraceState } from '../traceState';
 import type { TraceInspectionTarget } from '../traceProjection';
 import { SandboxResolver } from '../lib/sandboxResolver';
+import { BranchFactsInspector } from './BranchFactsInspector';
 import styles from './ConfigPanel.module.css';
 
 interface SessionConfigPanelProps {
@@ -348,7 +349,7 @@ export function ConfigPanel({
     enabled: activeBranchId.length > 0,
     staleTime: 15_000,
   });
-  const { data: branchFactsArtifact } = useQuery({
+  const { data: branchFactsArtifact, isLoading: isBranchFactsLoading, isError: isBranchFactsError } = useQuery({
     queryKey: qk.sandbox.branchArtifacts.facts(sessionId, activeBranchId),
     queryFn: () => sandboxApi.getBranchFactsArtifact(sessionId, activeBranchId),
     enabled: activeBranchId.length > 0,
@@ -812,6 +813,7 @@ export function ConfigPanel({
   };
 
   const isEntityInspectorMode = Boolean(traceTarget);
+  const isBranchFactsInspector = selectedItem?.type === 'artifact' && selectedItem.artifactKind === 'facts';
 
   return (
     <div className={styles.panel}>
@@ -880,7 +882,7 @@ export function ConfigPanel({
         </div>
       </div>
 
-      {selectedItem?.type === 'parameter' ? (
+      {isBranchFactsInspector ? null : selectedItem?.type === 'parameter' ? (
         <ConfigTabs
           items={[
             { id: 'platform', label: 'Платформа' },
@@ -893,7 +895,13 @@ export function ConfigPanel({
       )}
 
       <div className={styles.body}>
-        {selectedItem && visibleSections.length > 0 ? (
+        {isBranchFactsInspector ? (
+          <BranchFactsInspector
+            artifact={branchFactsArtifact}
+            isLoading={isBranchFactsLoading}
+            isError={isBranchFactsError}
+          />
+        ) : selectedItem && visibleSections.length > 0 ? (
           <div className={styles['sections-list']}>
             {visibleSections.map((section) => (
               <div key={section.title} className={styles.section}>

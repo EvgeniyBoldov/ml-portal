@@ -290,8 +290,12 @@ class MemoryWriter:
                 sandbox_overrides=sandbox_overrides,
                 event_sink=(lambda event: self._llm_event_sink("fact_compactor", event)) if self._llm_event_sink else None,
             )
-            await self._write_branch_facts(branch_id=branch_id, facts=[item for item in compacted if item.kind != "glossary"], base=current)
-            return len(compacted)
+            branch_facts = [item for item in compacted if item.kind != "glossary"]
+            return await self._write_branch_facts(
+                branch_id=branch_id,
+                facts=branch_facts,
+                base=current,
+            )
         async with self._db_write_lock:
             await self._fact_reconciler.ensure_projects(all_candidates)
             current = await self._fact_reconciler.current_for(
@@ -326,15 +330,17 @@ class MemoryWriter:
         row = await self._session.execute(select(Chats.id).where(Chats.id == chat_id))
         return row.scalar_one_or_none() is not None
 
-    async def _write_branch_facts(self, *, branch_id: UUID, facts: List[Any], base: List[Any]) -> None:
+    async def _write_branch_facts(self, *, branch_id: UUID, facts: List[Any], base: List[Any]) -> int:
         row = await self._session.execute(select(SandboxBranch).where(SandboxBranch.id == branch_id))
         branch = row.scalar_one_or_none()
         if branch is None:
-            return
+            logger.warning("MemoryWriter: sandbox branch %s is missing; facts were not persisted", branch_id)
+            return 0
         branch.fact_overrides_json = merge_extracted(branch.fact_overrides_json, facts, base=base)
         branch.artifacts_updated_at = datetime.now(timezone.utc)
         self._session.add(branch)
         await self._session.flush()
+        return len(facts)
 
     @staticmethod
     def _should_skip_llm_helpers(

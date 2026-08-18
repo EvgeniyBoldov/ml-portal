@@ -264,18 +264,22 @@ export function useSandboxRun(sessionId: string) {
           ...prev,
           trace: replayRuntimeJournal(detail.events),
         } : prev);
-        if (hasMemoryWriteEnded(detail.events)) return;
+        if (hasMemoryWriteEnded(detail.events)) {
+          qc.invalidateQueries({ queryKey: ['sandbox', 'branch-artifacts'] });
+          return;
+        }
       } catch {
         return;
       }
       await new Promise<void>((resolve) => window.setTimeout(resolve, MEMORY_TRACE_POLL_INTERVAL_MS));
     }
-  }, [sessionId]);
+  }, [qc, sessionId]);
 
   const invalidate = useCallback((branchId?: string | null) => {
     qc.invalidateQueries({ queryKey: qk.sandbox.runs.list(sessionId) });
     if (branchId) qc.invalidateQueries({ queryKey: qk.sandbox.runs.list(sessionId, branchId) });
     qc.invalidateQueries({ queryKey: qk.sandbox.sessions.detail(sessionId) });
+    qc.invalidateQueries({ queryKey: ['sandbox', 'branch-artifacts'] });
   }, [qc, sessionId]);
 
   const run = useCallback(async (

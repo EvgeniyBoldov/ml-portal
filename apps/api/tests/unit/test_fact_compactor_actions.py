@@ -39,3 +39,44 @@ async def test_compactor_preserves_llm_selected_supersede_targets() -> None:
 
     assert result[0].metadata["compaction_action"] == "supersede"
     assert result[0].metadata["compaction_target_ids"] == [str(target.id)]
+
+
+@pytest.mark.asyncio
+async def test_compactor_keeps_evidenced_candidates_omitted_by_partial_llm_output() -> None:
+    first = FactDTO(
+        scope=FactScope.USER,
+        subject="role",
+        value="network engineer",
+        source=FactSource.USER_UTTERANCE,
+        metadata={"evidence": [{"source_type": "user_message", "source_ref": "turn-1"}]},
+    )
+    omitted = FactDTO(
+        scope=FactScope.USER,
+        subject="preferred language",
+        value="Russian",
+        source=FactSource.USER_UTTERANCE,
+        metadata={"evidence": [{"source_type": "user_message", "source_ref": "turn-1"}]},
+    )
+    compactor = FactCompactor(session=AsyncMock(), llm_client=AsyncMock())
+    compactor._structured.invoke = AsyncMock(return_value=_result(_CompactionOutput(facts=[
+        _CompactedFact(
+            scope="user",
+            subject="role",
+            value="network engineer",
+            action="add",
+            source_candidate_indexes=[0],
+        )
+    ])))
+
+    result = await compactor.compact(
+        candidates=[first, omitted],
+        current_facts=[],
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        chat_id=uuid4(),
+    )
+
+    assert {(item.subject, item.value) for item in result} == {
+        ("role", "network engineer"),
+        ("preferred language", "Russian"),
+    }

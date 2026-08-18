@@ -144,9 +144,15 @@ async def get_branch_artifacts_meta(
     branch = await svc.get_branch_artifacts(branch_id)
     if not branch or branch.session_id != session_id:
         raise HTTPException(status_code=404, detail="Branch not found")
+    snapshot = await MemoryService(fact_store=FactStore(db)).read_snapshot(
+        user_id=user_uuid(user),
+        tenant_id=await tenant_uuid(db, user),
+        limit=100,
+    )
+    effective = inspector_payload(snapshot.entries, branch.fact_overrides_json)["effective"]
     return SandboxBranchArtifactsMetaResponse(
         branch_id=branch.id,
-        facts_count=len(branch.facts_artifact_json or []),
+        facts_count=sum(len(effective.get(scope, [])) for scope in ("user", "tenant", "project")),
         summary_present=bool(branch.summary_artifact_json),
         updated_at=branch.artifacts_updated_at,
     )

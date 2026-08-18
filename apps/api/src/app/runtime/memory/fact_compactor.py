@@ -87,9 +87,21 @@ class FactCompactor:
         except Exception:
             return [*exact, *semantic]
         compacted: list[FactDTO] = []
+        represented_candidate_indexes: set[int] = set()
         for output in result.value.facts:
-            matches = [semantic[index] for index in output.source_candidate_indexes if 0 <= index < len(semantic)]
-            if not matches or output.action == "discard":
+            source_indexes = [
+                index
+                for index in output.source_candidate_indexes
+                if 0 <= index < len(semantic)
+            ]
+            matches = [semantic[index] for index in source_indexes]
+            if not matches:
+                continue
+            # The compactor is allowed to discard a candidate only when it
+            # explicitly references it.  A partial/invalid LLM response must
+            # not silently turn evidenced extractor output into data loss.
+            represented_candidate_indexes.update(source_indexes)
+            if output.action == "discard":
                 continue
             base = matches[0]
             evidence: list[dict[str, Any]] = []
@@ -142,7 +154,12 @@ class FactCompactor:
                 metadata=metadata,
                 confidence=max(item.confidence for item in matches),
             ))
-        return [*exact, *(compacted or semantic)]
+        untouched = [
+            candidate
+            for index, candidate in enumerate(semantic)
+            if index not in represented_candidate_indexes
+        ]
+        return [*exact, *compacted, *untouched]
 
 
 def item_to_payload(item: FactDTO, index: int | None = None) -> dict[str, Any]:

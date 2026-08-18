@@ -1,6 +1,12 @@
 from app.models.memory import FactScope, FactSource, FactStatus
+from app.runtime.memory.builder import MemoryBuilder
 from app.runtime.memory.dto import FactDTO
+from app.runtime.memory.service import MemorySnapshot
 from app.runtime.memory.sandbox_overlays import apply_overrides, merge_extracted
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
 
 
 def _fact(scope: FactScope, subject: str, value: str) -> FactDTO:
@@ -58,3 +64,44 @@ def test_conflicting_sandbox_value_masks_confirmed_base_fact() -> None:
     assert effective[0].value == "Oracle"
     assert effective[0].status == FactStatus.PENDING
     assert overrides["tenant"]["department.db"]["conflict"] is True
+
+
+@pytest.mark.asyncio
+async def test_memory_builder_reads_confirmed_branch_user_overlay_on_next_run() -> None:
+    base = FactDTO(
+        scope=FactScope.USER,
+        subject="role",
+        value="engineer",
+        source=FactSource.USER_UTTERANCE,
+        status=FactStatus.CONFIRMED,
+    )
+    override = merge_extracted(
+        {},
+        [FactDTO(
+            scope=FactScope.USER,
+            subject="specialization",
+            value="network engineer",
+            source=FactSource.USER_UTTERANCE,
+        )],
+        base=[base],
+    )
+    builder = MemoryBuilder(session=AsyncMock())
+    builder._memory_service.read_snapshot = AsyncMock(
+        return_value=MemorySnapshot(user_facts=(base,))
+    )
+
+    memory = await builder.build(
+        goal="network design",
+        chat_id=None,
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        sandbox_overrides={
+            "sandbox_branch_id": str(uuid4()),
+            "fact_overrides": override,
+        },
+    )
+
+    assert {(fact.subject, fact.value) for fact in memory.durable_snapshot.user_facts} == {
+        ("role", "engineer"),
+        ("specialization", "network engineer"),
+    }
