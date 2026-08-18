@@ -14,6 +14,7 @@ from app.api.v1.routers.chat import messages as chat_messages
 from app.core.security import UserCtx
 from app.schemas.chats import ChatMessageStreamRequest
 from app.schemas.confirmations import ConfirmationIssueRequest
+from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeRequest
 
 
 class _Result:
@@ -139,4 +140,63 @@ async def test_send_message_stream_passes_confirmation_tokens(monkeypatch):
     assert stream_kwargs["confirmation_tokens"] == ["tok-1", "tok-2"]
     assert str(stream_kwargs["execution_mode"].value) == "thinking"
     assert stream_kwargs["idempotency_key"] == "idem-123"
+    assert any("event: done" in chunk for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_resume_run_reuses_paused_chat_turn(monkeypatch):
+    chat_id = uuid4()
+    user_id = uuid4()
+    tenant_id = uuid4()
+    run_id = uuid4()
+    turn = SimpleNamespace(
+        id=uuid4(),
+        chat_id=chat_id,
+        user_id=user_id,
+        status="paused",
+        pause_status="waiting_input",
+        paused_action={"kind": "input"},
+        paused_context={"question": "Какая тема?"},
+        paused_at=datetime.now(timezone.utc),
+    )
+    captured: dict[str, object] = {}
+
+    class _Service:
+        def __init__(self, **kwargs):
+            captured["init_kwargs"] = kwargs
+
+        async def send_message_stream(self, **kwargs):
+            captured["stream_kwargs"] = kwargs
+            yield {"type": "final", "message_id": "assistant-1"}
+
+    monkeypatch.setattr(chat_messages, "ChatStreamService", _Service)
+    monkeypatch.setattr(chat_messages, "map_service_event_to_sse", lambda _: "event: final\ndata: {}\n\n")
+
+    session = AsyncMock()
+    session.execute.side_effect = [
+        _Result(turn),
+        _Result(SimpleNamespace(goal="Что мне почитать?")),
+        _Result(turn),
+    ]
+    response = await chat_messages.resume_run(
+        run_id=str(run_id),
+        body=RuntimeResumeRequest(
+            action=RuntimeResumeAction.INPUT,
+            input="Сетевая инженерия",
+        ),
+        session=session,
+        current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]),
+        _rl=None,
+    )
+
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk)
+
+    assert turn.status == "resumed"
+    assert captured["stream_kwargs"]["resumed_turn_id"] == str(turn.id)
+    assert captured["stream_kwargs"]["continuation_meta"]["resumed_from_run_id"] == str(run_id)
+    checkpoint = captured["stream_kwargs"]["continuation_meta"]["resume_checkpoint"]
+    assert checkpoint["original_goal"] == "Что мне почитать?"
+    session.commit.assert_awaited_once()
     assert any("event: done" in chunk for chunk in chunks)

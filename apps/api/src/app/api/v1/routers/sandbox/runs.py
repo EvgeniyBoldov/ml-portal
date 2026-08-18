@@ -1,4 +1,4 @@
-"""Sandbox runs — list, detail, execute (SSE), confirm."""
+"""Sandbox runs — list, detail, execute and resume (SSE)."""
 import asyncio
 import json
 import uuid
@@ -30,17 +30,21 @@ from app.models.collection import Collection
 from app.models.tool_instance import ToolInstance
 from app.schemas.chats import ChatAttachmentUploadResponse
 from app.schemas.sandbox import (
-    SandboxConfirmAction,
     SandboxRunCreate,
     SandboxRunListItem,
     SandboxRunDetailResponse,
 )
+from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeRequest
 from app.schemas.runtime_events import RuntimeJournalEventResponse
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.chat_visibility import make_sandbox_upload_chat_name
 from app.services.sandbox_service import SandboxService
 from app.services.runtime_event_journal_service import RuntimeEventJournalService
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
+from app.services.runtime_resume_checkpoint_service import (
+    RuntimeResumeCheckpointService,
+    RuntimeResumeValidationError,
+)
 from app.services.chat_router_event_mapper import build_resume_content
 from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
 from app.services.runtime_tail_event_bus import RuntimeRunControlBus, RuntimeTailSubscriber
@@ -344,15 +348,6 @@ async def run_sandbox(
     if not branch or branch.session_id != session_id:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    sandbox_confirmed_fingerprints = list(data.confirmed_fingerprints or [])
-    if data.parent_run_id and not sandbox_confirmed_fingerprints:
-        parent_run = await svc.get_run(data.parent_run_id)
-        if parent_run and parent_run.session_id == session_id:
-            sandbox_confirmed_fingerprints = RuntimeHitlProtocolService.extract_confirmed_fingerprints(
-                parent_run.paused_action if isinstance(parent_run.paused_action, dict) else None,
-                parent_run.paused_context if isinstance(parent_run.paused_context, dict) else None,
-            )
-
     # Create snapshot + run record through one sandbox service contract
     run_prep = await svc.prepare_run(
         session_id=session_id,
@@ -460,7 +455,7 @@ async def run_sandbox(
                 user_id=u_uuid,
                 chat_id=str(sandbox_chat_id),
                 request_id=str(uuid.uuid4()),
-                extra={"sandbox_confirmed_fingerprints": sandbox_confirmed_fingerprints},
+                extra={},
             )
             runtime_deps = tool_ctx.get_runtime_deps()
             runtime_deps.session_factory = session_factory
@@ -546,50 +541,11 @@ async def upload_sandbox_attachment(
         raise
 
 
-@router.post("/sessions/{session_id}/runs/{run_id}/confirm")
-async def confirm_run_action(
-    session_id: uuid.UUID,
-    run_id: uuid.UUID,
-    data: SandboxConfirmAction,
-    db: AsyncSession = Depends(db_session),
-    user: UserCtx = Depends(require_admin),
-):
-    """Confirm or reject a pending write action for a paused run. Owner only."""
-    svc = SandboxService(db)
-    await check_session_owner(svc, session_id, user)
-
-    run = await svc.get_run(run_id)
-    if not run or run.session_id != session_id:
-        raise HTTPException(status_code=404, detail="Run not found")
-    if run.status != "waiting_confirmation":
-        raise HTTPException(status_code=400, detail="Run is not waiting for confirmation")
-
-    if data.confirmed:
-        confirmed_fingerprints = RuntimeHitlProtocolService.extract_confirmed_fingerprints(
-            run.paused_action if isinstance(run.paused_action, dict) else None,
-            run.paused_context if isinstance(run.paused_context, dict) else None,
-        )
-        await svc.finish_run(run_id, "confirmed", None)
-        await db.commit()
-        return {
-            "status": "confirmed",
-            "run_id": str(run_id),
-            "resume": {
-                "parent_run_id": str(run_id),
-                "confirmed_fingerprints": confirmed_fingerprints,
-            },
-        }
-    else:
-        await svc.finish_run(run_id, "completed", "Write action rejected by user")
-        await db.commit()
-        return {"status": "rejected", "run_id": str(run_id)}
-
-
 @router.post("/sessions/{session_id}/runs/{run_id}/resume")
 async def resume_sandbox_run(
     session_id: uuid.UUID,
     run_id: uuid.UUID,
-    data: SandboxConfirmAction,
+    data: RuntimeResumeRequest,
     db: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(require_admin),
     llm_client: LLMClientProtocol = Depends(get_llm_client),
@@ -598,26 +554,23 @@ async def resume_sandbox_run(
 
     Continues the same run (no new trace), streaming incremental events.
     """
-    from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
-
     svc = SandboxService(db)
     await check_session_owner(svc, session_id, user)
 
     run = await svc.get_run(run_id)
     if not run or run.session_id != session_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.status not in ("waiting_confirmation", "waiting_input"):
-        raise HTTPException(status_code=400, detail="Run is not waiting for resume")
+    try:
+        user_input = RuntimeResumeCheckpointService.validate_action(
+            pause_status=run.status,
+            action=data.action,
+            user_input=data.input,
+        )
+    except RuntimeResumeValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    action = data.action.value
 
-    user_input = str(data.user_input or "").strip()
-    if run.status == "waiting_input":
-        action = "input"
-        if not user_input:
-            raise HTTPException(status_code=400, detail="user_input is required for waiting_input resume")
-    else:
-        action = "confirm" if data.confirmed else "cancel"
-
-    if action == "cancel":
+    if data.action is RuntimeResumeAction.CANCEL:
         await svc.finish_run(run_id, "cancelled", "Cancelled by user")
         await db.commit()
 
@@ -649,9 +602,6 @@ async def resume_sandbox_run(
         owner_id=str(u_uuid),
     )
 
-    # Preserve the runtime execution identity for continuation lineage.
-    agent_execution_id = paused_context.get("run_id") if paused_context else None
-
     checkpoint = RuntimeResumeCheckpointService().build(
         run_id=run_id,
         agent_slug=resumed_agent_slug,
@@ -662,7 +612,9 @@ async def resume_sandbox_run(
         paused_context=paused_context,
         resume_action=action,
         user_input=user_input or None,
-        source_context_snapshot=None,
+        source_context_snapshot=RuntimeResumeCheckpointService.source_context_snapshot(
+            goal=str(run.request_text or ""),
+        ),
     )
 
     # The resume checkpoint is now copied in memory; clear the persisted pause
@@ -678,11 +630,9 @@ async def resume_sandbox_run(
     # Confirmation data for HITL gate. Sandbox owns a hidden chat used for
     # attachments, so the operation executor follows the regular signed-token
     # path (rather than its chat_id=None sandbox preapproval path).
-    confirmed_fingerprints: list[str] = []
     confirmation_tokens: list[str] = []
     if isinstance(paused_action, dict):
-        confirmed_fingerprints = RuntimeHitlProtocolService.extract_confirmed_fingerprints(paused_action, paused_context)
-        if action == "confirm":
+        if data.action is RuntimeResumeAction.CONFIRM:
             fingerprint = RuntimeHitlProtocolService.extract_operation_fingerprint(
                 paused_action,
                 paused_context,
@@ -701,18 +651,56 @@ async def resume_sandbox_run(
     async def event_stream() -> AsyncGenerator[str, None]:
         session_factory = get_session_factory()
         async with session_factory() as stream_db:
+            runtime_sandbox_resolver = RuntimeSandboxResolver(session=stream_db)
+            resolved_agent_state = None
+            if resumed_agent_slug or resumed_agent_version_id:
+                try:
+                    resolved_agent_state = await runtime_sandbox_resolver.resolve_sandbox_agent(
+                        agent_slug=resumed_agent_slug,
+                        tenant_id=t_uuid,
+                        agent_version_id=resumed_agent_version_id,
+                    )
+                except Exception as agent_err:  # noqa: BLE001
+                    await RuntimeEventJournalFactory.create(
+                        context=RuntimeLogContext(
+                            run_id=run_id,
+                            level=RuntimeLoggingLevel.FULL,
+                            origin="sandbox",
+                            tenant_id=t_uuid,
+                            user_id=u_uuid,
+                            stream_logs=True,
+                            stream_progress=True,
+                        ),
+                        session_factory=session_factory,
+                    ).error(
+                        agent_err,
+                        payload={"stage": "sandbox_agent_resolve", "agent_slug": resumed_agent_slug},
+                    )
+                    await SandboxService(stream_db).finish_run(run_id, "failed", str(agent_err))
+                    await stream_db.commit()
+                    yield _format_sse(
+                        "error",
+                        {"run_id": str(run_id), "error": "Sandbox agent resolution failed"},
+                    )
+                    yield _format_sse("done", {"run_id": str(run_id)})
+                    return
+
             tool_ctx = ToolContext(
                 tenant_id=t_uuid,
                 user_id=u_uuid,
                 chat_id=str(sandbox_chat_id),
                 request_id=str(uuid.uuid4()),
-                extra={"sandbox_confirmed_fingerprints": confirmed_fingerprints},
+                extra={},
             )
             runtime_deps = tool_ctx.get_runtime_deps()
             runtime_deps.session_factory = session_factory
-            resumed_overrides = RuntimeSandboxResolver.sandbox_runtime_overrides(
+            resumed_overrides = runtime_sandbox_resolver.sandbox_runtime_overrides(
                 effective_config,
-                agent_version=None,
+                agent_version=(
+                    resolved_agent_state.agent_version
+                    if resolved_agent_state is not None
+                    else None
+                ),
             )
             resumed_overrides.update({
                 "logging_level": "full",
@@ -728,14 +716,9 @@ async def resume_sandbox_run(
             runtime_deps.sandbox_overrides = resumed_overrides
             tool_ctx.set_runtime_deps(runtime_deps)
 
-            # Build request from paused state context
-            original_goal = ""
-            if paused_context and isinstance(paused_context.get("inputs"), dict):
-                original_goal = paused_context["inputs"].get("goal", "")
-            if not original_goal and paused_context and isinstance(paused_context.get("orchestrator"), dict):
-                original_goal = paused_context["orchestrator"].get("goal", "")
-
-            request_text = original_goal or str(run.request_text or "").strip() or "Continue"
+            # The original request is immutable for a sandbox run.  A pause
+            # answer belongs only to the continuation message/checkpoint.
+            request_text = str(run.request_text or "").strip()
             resume_content = build_resume_content(
                 action=action,
                 user_input=user_input,
@@ -756,7 +739,7 @@ async def resume_sandbox_run(
                 sandbox_overrides=resumed_overrides,
                 continuation_meta={
                     "resume_checkpoint": checkpoint,
-                    "resumed_from_run_id": agent_execution_id,
+                    "resumed_from_run_id": str(run_id),
                 },
                 confirmation_tokens=confirmation_tokens,
                 await_background_tail=False,
@@ -793,7 +776,7 @@ async def cancel_sandbox_run(
     run = await svc.get_run(run_id)
     if not run or run.session_id != session_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.status not in ("running", "cancelling", "waiting_confirmation", "waiting_input"):
+    if run.status not in ("running", "cancelling"):
         raise HTTPException(status_code=400, detail="Run is not active")
 
     if run.status == "running":
@@ -807,11 +790,6 @@ async def cancel_sandbox_run(
         status = "cancelling"
     elif run.status == "cancelling":
         status = "cancelling"
-    else:
-        await svc.finish_run(run_id, "cancelled", "Cancelled by user")
-        await db.commit()
-        status = "cancelled"
-
     async def _cancel_gen() -> AsyncGenerator[str, None]:
         yield _format_sse("final", {"run_id": str(run_id), "status": status})
         yield _format_sse("done", {"run_id": str(run_id)})

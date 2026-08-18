@@ -172,8 +172,10 @@ Paused-run rule:
   run is resumed or cancelled.
 - Resume continues the same sandbox run and clears the persisted pause only
   after its immutable resume checkpoint has been constructed.
-- A paused run is cancelled through its dedicated sandbox cancel endpoint;
-  aborting a browser stream is not a cancellation signal.
+- A paused run is cancelled by the common resume payload
+  `{ "action": "cancel" }`; the dedicated cancel endpoint is only for an
+  actively running execution. Aborting a browser stream is not a cancellation
+  signal.
 
 Snapshot rule:
 - the run must use the immutable snapshot produced from the branch resolver state,

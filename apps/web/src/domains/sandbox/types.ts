@@ -204,11 +204,11 @@ export type SandboxStreamEvent =
   | { type: 'error'; runId: string; error: string }
   | { type: 'done'; runId: string };
 
-// ── Confirm ─────────────────────────────────────────────────────────────────
+// ── Continuation ────────────────────────────────────────────────────────────
 
-export interface SandboxConfirmAction {
-  confirmed: boolean;
-  user_input?: string;
+export interface RuntimeResumeRequest {
+  action: 'input' | 'confirm' | 'cancel';
+  input?: string;
 }
 
 // ── Catalog (sidebar data) ──────────────────────────────────────────────────

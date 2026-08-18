@@ -596,13 +596,13 @@ def test_collection_doc_search_source_name_prefers_title_then_filename():
     assert result[str(rows[1].id)] == "fallback.txt"
 
 
-def test_collection_doc_search_builds_download_uri_for_source():
-    tool = CollectionDocSearchTool()
-    source_id = str(uuid4())
+def test_collection_doc_search_declares_artifact_reference_for_source():
+    # Collection search returns an opaque chat artifact reference. The old
+    # ragdoc_* download URI was removed with the shared artifact contract.
+    from app.agents.builtins.collection_doc_search import _OUTPUT_SCHEMA_V1
 
-    uri = tool._build_source_uri(source_id)  # noqa: SLF001
-
-    assert uri == f"/api/v1/files/ragdoc_{source_id}_original/download"
+    hit_properties = _OUTPUT_SCHEMA_V1["properties"]["hits"]["items"]["properties"]
+    assert hit_properties["artifact_id"] == {"type": ["string", "null"]}
 
 
 def test_collection_doc_search_rejects_non_filterable_field():

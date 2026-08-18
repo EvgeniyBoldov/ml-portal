@@ -5,7 +5,7 @@ Sub-routers:
 - sessions.py  — Sessions CRUD
 - branches.py  — Branches + branch overrides + snapshots
 - overrides.py — Session-level overrides
-- runs.py      — Runs list/detail/execute/confirm
+- runs.py      — Runs list/detail/execute/resume/cancel
 - catalog.py   — Components tree for sidebar
 """
 from fastapi import APIRouter

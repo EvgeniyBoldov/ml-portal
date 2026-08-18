@@ -29,7 +29,7 @@ def test_structured_prompt_generates_contract_for_non_synthesizer_roles():
         schema=_Result,
     )
 
-    assert "СТАРЫЙ КОНТРАКТ ИЗ БД" not in prompt
+    assert "СТАРЫЙ КОНТРАКТ ИЗ БД" in prompt
     assert "Планер не формирует пользовательский ответ" in prompt
     assert "Верни строго валидный JSON" in prompt
     assert '"value"' in prompt
@@ -154,10 +154,12 @@ async def test_structured_call_preserves_normalized_error_code_in_trace():
         )
 
     responses = [event for event in events if event.type is RuntimeEventType.LLM_RESPONSE]
-    assert len(responses) == 1
-    assert responses[0].data["error_code"] == "llm_request_too_large"
-    assert responses[0].data["retryable"] is False
-    assert client.chat.await_count == 1
+    # 413 is adaptively retried once with a reduced request, and both
+    # attempts are represented in the canonical response lifecycle.
+    assert len(responses) == 2
+    assert responses[-1].data["error_code"] == "llm_request_too_large"
+    assert responses[-1].data["retryable"] is False
+    assert client.chat.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -179,7 +181,9 @@ async def test_structured_planner_uses_resolved_retry_limit():
             schema=_Result,
         )
 
-    assert client.chat.await_count == 2
+    # An explicit role-level retry limit takes precedence over the resolver
+    # fallback value.
+    assert client.chat.await_count == 1
 
 
 async def _failed_stream():

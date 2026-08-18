@@ -54,3 +54,11 @@ def test_hitl_contract_requires_confirmation_from_semantics_and_platform():
     decisions = {item["operation_slug"]: item["effective_decision"] for item in payload["operation_policies"]}
     assert decisions["tool.write"] == "require_confirmation"
     assert decisions["tool.semantic"] == "require_confirmation"
+
+
+def test_hitl_contract_exposes_one_resume_payload_for_chat_and_sandbox():
+    payload = RuntimeHitlPolicyContractService().build(platform_config={}, operations=[])
+
+    contract = payload["resume_contract"]
+    assert contract["resume_payload"]["action"] == "input | confirm | cancel"
+    assert set(contract["resume_endpoints"]) == {"chat", "sandbox"}

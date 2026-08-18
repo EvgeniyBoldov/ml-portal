@@ -54,15 +54,6 @@ class RuntimeHitlProtocolService:
                 return value
         return ""
 
-    @classmethod
-    def extract_confirmed_fingerprints(
-        cls,
-        paused_action: Optional[Dict[str, Any]],
-        paused_context: Optional[Dict[str, Any]],
-    ) -> list[str]:
-        fingerprint = cls.extract_operation_fingerprint(paused_action, paused_context)
-        return [fingerprint] if fingerprint else []
-
     @staticmethod
     def _action_kind_for_reason(reason: str) -> str:
         if reason == "waiting_confirmation":

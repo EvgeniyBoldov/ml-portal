@@ -27,11 +27,12 @@ from app.repositories.factory import AsyncRepositoryFactory
 from app.schemas.chat_events import ChatSSEEventType, ErrorPayload, format_chat_sse, format_chat_sse_done
 from app.schemas.chats import ChatMessageStreamRequest
 from app.schemas.confirmations import ConfirmationIssueRequest, ConfirmationIssueResponse
+from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeRequest
 from app.services.chat_router_event_mapper import build_resume_content, map_service_event_to_sse
-from app.services.chat_resume_orchestrator import ChatResumeOrchestrator
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.chat_stream_service import ChatStreamService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
+from app.services.runtime_resume_checkpoint_service import RuntimeResumeValidationError
 from app.agents.runtime.confirmation import get_confirmation_service
 from app.runtime.contracts import ExecutionMode
 
@@ -191,7 +192,7 @@ async def issue_confirmation_token(
 @router.post("/runs/{run_id}/resume")
 async def resume_run(
     run_id: str,
-    body: Dict[str, Any],
+    body: RuntimeResumeRequest,
     session: AsyncSession = Depends(db_session),
     current_user: UserCtx = Depends(get_current_user),
     _rl: None = Depends(rate_limit_dependency(key_prefix="chat_resume", rpm=20, rph=300)),
@@ -204,10 +205,6 @@ async def resume_run(
         run_uuid = uuid.UUID(run_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid run ID")
-
-    action = body.get("action", "")
-    if action not in ("confirm", "cancel", "input"):
-        raise HTTPException(status_code=400, detail="action must be 'confirm', 'cancel', or 'input'")
 
     turn_service = ChatTurnService(session)
     run_result = await session.execute(
@@ -228,20 +225,29 @@ async def resume_run(
     paused_action = turn.paused_action
     paused_context = turn.paused_context
 
-    if action == "cancel":
+    user_input = body.input
+    try:
+        normalized_input = RuntimeResumeCheckpointService.validate_action(
+            pause_status=str(turn.pause_status or ""),
+            action=body.action,
+            user_input=user_input,
+        )
+    except RuntimeResumeValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if body.action is RuntimeResumeAction.CANCEL:
         await turn_service.cancel_turn(turn.id, error_message="Cancelled by user")
         await session.commit()
         async def _cancel_gen() -> AsyncGenerator[str, None]:
             yield format_chat_sse_done()
         return StreamingResponse(_cancel_gen(), media_type="text/event-stream")
 
-    user_input = ""
-    if action == "input":
-        user_input = str(body.get("input", "")).strip()
-        if not user_input:
-            raise HTTPException(status_code=400, detail="input field is required for action='input'")
+    checkpoint_service = RuntimeResumeCheckpointService.from_session(session)
+    original_goal = await checkpoint_service.resolve_original_goal(run_uuid)
+    if original_goal is None:
+        raise HTTPException(status_code=409, detail="Runtime continuation plan not found")
 
-    checkpoint = RuntimeResumeCheckpointService().build(
+    checkpoint = checkpoint_service.build(
         run_id=run_uuid,
         agent_slug="",
         tenant_id=tenant_uuid_val,
@@ -249,12 +255,17 @@ async def resume_run(
         chat_id=turn.chat_id,
         paused_action=paused_action if isinstance(paused_action, dict) else None,
         paused_context=paused_context if isinstance(paused_context, dict) else None,
-        resume_action=action,
-        user_input=user_input or None,
-        source_context_snapshot={},
+        resume_action=body.action.value,
+        user_input=normalized_input or None,
+        source_context_snapshot=RuntimeResumeCheckpointService.source_context_snapshot(
+            goal=original_goal,
+        ),
     )
 
-    await turn_service.cancel_turn(turn.id, error_message="Turn resumed via continuation flow")
+    # Keep one ChatTurn for the entire paused/resumed lifecycle.  Cancelling
+    # this row before continuation made the next request look stale and also
+    # created a duplicate ChatTurn for the same runtime run.
+    await turn_service.resume_turn(turn.id)
     await session.commit()
 
     if not turn.chat_id:
@@ -265,8 +276,8 @@ async def resume_run(
         return StreamingResponse(_no_chat_gen(), media_type="text/event-stream")
 
     resume_content = build_resume_content(
-        action=action,
-        user_input=user_input,
+        action=body.action.value,
+        user_input=normalized_input,
         paused_action=paused_action if isinstance(paused_action, dict) else None,
         paused_context=paused_context if isinstance(paused_context, dict) else None,
     )
@@ -274,7 +285,7 @@ async def resume_run(
     # P0-4: For confirm action, issue a confirmation token so the resumed pipeline
     # can pass the HITL gate without looping back to another confirmation_required.
     confirmation_tokens: list[str] = []
-    if action == "confirm" and isinstance(paused_action, dict):
+    if body.action is RuntimeResumeAction.CONFIRM and isinstance(paused_action, dict):
         fingerprint = RuntimeHitlProtocolService.extract_operation_fingerprint(
             paused_action if isinstance(paused_action, dict) else None,
             paused_context if isinstance(paused_context, dict) else None,
@@ -317,6 +328,7 @@ async def resume_run(
                     "resume_checkpoint": checkpoint,
                     "resumed_from_run_id": run_id,
                 },
+                resumed_turn_id=str(turn.id),
                 confirmation_tokens=confirmation_tokens,
                 persist_user_message=False,
             ):

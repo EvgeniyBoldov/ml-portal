@@ -70,4 +70,4 @@ async def test_extraction_observer_gets_terminal_summary() -> None:
     )
 
     assert [stage for stage, _ in events] == ["started", "completed"]
-    assert events[-1][1]["parser"] == "text"
+    assert events[-1][1]["parser"] == "txt(ascii)"

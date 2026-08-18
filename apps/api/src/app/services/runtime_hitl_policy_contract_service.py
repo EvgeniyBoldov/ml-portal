@@ -70,10 +70,13 @@ class RuntimeHitlPolicyContractService:
             "operation_policies": operation_policies,
             "resume_contract": {
                 "pause_statuses": ["waiting_input", "waiting_confirmation"],
-                "resume_endpoint": "/api/v1/chats/runs/{run_id}/resume",
+                "resume_endpoints": {
+                    "chat": "/api/v1/chats/runs/{run_id}/resume",
+                    "sandbox": "/api/v1/sandbox/sessions/{session_id}/runs/{run_id}/resume",
+                },
                 "resume_payload": {
-                    "decision": "confirm | reject",
-                    "answer": "optional string",
+                    "action": "input | confirm | cancel",
+                    "input": "required only when action=input",
                 },
             },
         }

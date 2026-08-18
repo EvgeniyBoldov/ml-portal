@@ -4,9 +4,76 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
+from app.schemas.runtime_continuation import RuntimeResumeAction
+from app.runtime.plan_store import SqlPlanStore
+
+
+class RuntimeResumeValidationError(ValueError):
+    """A continuation action does not match the persisted pause state."""
+
 
 class RuntimeResumeCheckpointService:
     """Builds immutable checkpoint payload for paused-run continuation."""
+
+    def __init__(self, *, plan_store: Optional[SqlPlanStore] = None) -> None:
+        self._plan_store = plan_store
+
+    @classmethod
+    def from_session(cls, session: Any) -> "RuntimeResumeCheckpointService":
+        return cls(plan_store=SqlPlanStore(session))
+
+    async def resolve_original_goal(self, run_id: UUID) -> Optional[str]:
+        """Read the durable plan goal without making transports inspect plans."""
+        if self._plan_store is None:
+            return None
+        plan = await self._plan_store.get_by_run(run_id)
+        if plan is None:
+            return None
+        goal = str(plan.goal or "").strip()
+        return goal or None
+
+    @staticmethod
+    def validate_action(
+        *,
+        pause_status: str,
+        action: RuntimeResumeAction,
+        user_input: Optional[str],
+    ) -> str:
+        normalized_status = str(pause_status or "").strip()
+        normalized_input = str(user_input or "").strip()
+        if normalized_status == "waiting_input":
+            if action is RuntimeResumeAction.CANCEL:
+                return ""
+            if action is not RuntimeResumeAction.INPUT:
+                raise RuntimeResumeValidationError("waiting_input requires action='input' or action='cancel'")
+            if not normalized_input:
+                raise RuntimeResumeValidationError("input is required for action='input'")
+            return normalized_input
+        if normalized_status == "waiting_confirmation":
+            if action not in {RuntimeResumeAction.CONFIRM, RuntimeResumeAction.CANCEL}:
+                raise RuntimeResumeValidationError(
+                    "waiting_confirmation requires action='confirm' or action='cancel'"
+                )
+            return ""
+        raise RuntimeResumeValidationError("Run is not waiting for resume")
+
+    @staticmethod
+    def source_context_snapshot(
+        *,
+        goal: str,
+        execution_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Keep the original goal separate from the user's continuation answer."""
+        normalized_goal = str(goal or "").strip()
+        snapshot: Dict[str, Any] = {
+            "inputs": {
+                "goal": normalized_goal,
+                "user_request": normalized_goal,
+            }
+        }
+        if execution_mode:
+            snapshot["meta"] = {"execution_mode": str(execution_mode)}
+        return snapshot
 
     def build(
         self,

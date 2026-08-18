@@ -34,7 +34,6 @@ class TestHealthReadiness:
              patch("app.core.di.get_llm_client") as get_llm_client, \
              patch("app.services.embedding_model_config_service.EmbeddingModelConfigService.ensure_registered", new=AsyncMock()), \
              patch("app.adapters.embeddings.EmbeddingServiceFactory.get_service") as get_emb_service, \
-             patch("app.services.run_store.RunStore"), \
              patch.dict(sys.modules, {
                  "app.agents.registry": registry_module,
                  "app.services.agent_service": agent_service_module,
@@ -91,7 +90,6 @@ class TestHealthReadiness:
              patch("app.core.di.get_llm_client") as get_llm_client, \
              patch("app.services.embedding_model_config_service.EmbeddingModelConfigService.ensure_registered", new=AsyncMock()), \
              patch("app.adapters.embeddings.EmbeddingServiceFactory.get_service") as get_emb_service, \
-             patch("app.services.run_store.RunStore"), \
              patch("app.celery_app.app") as celery_app, \
              patch.dict(sys.modules, {
                  "app.agents.registry": registry_module,

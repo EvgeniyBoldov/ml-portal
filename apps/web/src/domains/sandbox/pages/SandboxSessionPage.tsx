@@ -301,7 +301,7 @@ export default function SandboxSessionPage() {
           onSelectBranch={setActiveBranchId}
           onCreateBranchFromMessage={handleCreateBranchFromMessage}
           onRun={handleRun}
-          onResumeSubmit={(text) => sandboxRun.confirmAction(true, text)}
+          onResumeSubmit={sandboxRun.resumePausedRun}
           onCancelPausedRun={sandboxRun.cancelPausedRun}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}

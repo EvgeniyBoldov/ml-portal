@@ -70,7 +70,7 @@ def test_graph_planner_input_builder_uses_persisted_plan_contract():
 
     assert set(payload) == {
         "goal", "mode", "replan_reason", "plan", "completed_outputs", "available_artifacts",
-        "needs", "last_failure", "available_agents",
+        "needs", "last_failure", "memory_context", "available_agents",
     }
     assert payload["mode"] == "replan"
     assert payload["replan_reason"] == "technical_failure"

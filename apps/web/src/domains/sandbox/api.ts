@@ -16,7 +16,7 @@ import type {
   SandboxBranchSummaryArtifact,
   SandboxRunListItem,
   SandboxRunDetail,
-  SandboxConfirmAction,
+  RuntimeResumeRequest,
   SandboxCatalog,
 } from './types';
 
@@ -171,20 +171,10 @@ export const sandboxApi = {
   getRunDetail: (sessionId: string, runId: string): Promise<SandboxRunDetail> =>
     apiRequest(`${BASE}/sessions/${sessionId}/runs/${runId}`),
 
-  confirmRunAction: (
-    sessionId: string,
-    runId: string,
-    data: SandboxConfirmAction,
-  ): Promise<{ status: string; run_id: string }> =>
-    apiRequest(`${BASE}/sessions/${sessionId}/runs/${runId}/confirm`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-
   resumeRun: async (
     sessionId: string,
     runId: string,
-    data: SandboxConfirmAction,
+    data: RuntimeResumeRequest,
     signal?: AbortSignal,
   ): Promise<Response> => {
     const { fetchStreamWithAuth } = await import('@/shared/api/streamAuth');

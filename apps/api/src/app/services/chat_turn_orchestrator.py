@@ -53,6 +53,7 @@ class ChatTurnOrchestrator:
         store_idempotency,
         bind_attachments,
         preloaded_context: Optional[list[dict[str, Any]]] = None,
+        resumed_turn_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         turn = ChatTurnState(chat_id=chat_id, request_id=idempotency_key)
         continuation_run_id = (continuation_meta or {}).get("resumed_from_run_id")
@@ -61,14 +62,21 @@ class ChatTurnOrchestrator:
         except (TypeError, ValueError):
             runtime_run_id = str(uuid.uuid4())
         hash_payload = content if not artifact_ids else f"{content}||artifacts:{','.join(sorted(artifact_ids))}"
-        persisted_turn = await self.turn_service.start_turn(
-            chat_id=chat_id,
-            user_id=user_id,
-            idempotency_key=idempotency_key,
-            request_hash=self.turn_service.build_request_hash(hash_payload),
-            runtime_run_id=runtime_run_id,
-        )
-        turn_id = persisted_turn.id  # cache scalar to survive ORM expiry
+        if resumed_turn_id:
+            # A clarification/confirmation is the continuation of the same
+            # logical chat turn.  The router has atomically moved this row
+            # from paused to resumed before opening the stream; do not create
+            # a second row for the same root runtime run.
+            turn_id = uuid.UUID(str(resumed_turn_id))
+        else:
+            persisted_turn = await self.turn_service.start_turn(
+                chat_id=chat_id,
+                user_id=user_id,
+                idempotency_key=idempotency_key,
+                request_hash=self.turn_service.build_request_hash(hash_payload),
+                runtime_run_id=runtime_run_id,
+            )
+            turn_id = persisted_turn.id  # cache scalar to survive ORM expiry
 
         user_message_id: Optional[str] = None
         if persist_user_message:

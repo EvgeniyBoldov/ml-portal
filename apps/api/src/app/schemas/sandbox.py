@@ -175,7 +175,6 @@ class SandboxRunCreate(BaseModel):
     branch_id: Optional[UUID] = None
     parent_run_id: Optional[UUID] = None
     artifact_ids: Optional[list[UUID]] = None
-    confirmed_fingerprints: Optional[list[str]] = None
     execution_mode: Optional[Literal["normal", "thinking"]] = None
 
 
@@ -206,13 +205,6 @@ class SandboxRunDetailResponse(BaseModel):
 
 
 # ── Run Step ─────────────────────────────────────────────────────────────────
-
-# ── Actions ──────────────────────────────────────────────────────────────────
-
-class SandboxConfirmAction(BaseModel):
-    confirmed: bool
-    user_input: Optional[str] = None
-
 
 # ── Catalog ─────────────────────────────────────────────────────────────────
 

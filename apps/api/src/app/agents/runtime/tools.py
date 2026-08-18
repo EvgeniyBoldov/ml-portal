@@ -318,8 +318,9 @@ class OperationExecutionFacade:
             args=operation_call.arguments or {},
         )
         if ctx.chat_id is None:
-            # Sandbox/non-chat execution must provide an explicit pre-approval
-            # list from the caller; otherwise confirmation is required.
+            # This compatibility path is for non-chat callers that cannot
+            # issue a signed confirmation token. Chat and sandbox continuations
+            # always use the signed-token path below.
             approved = ctx.extra.get("sandbox_confirmed_fingerprints")
             approved_list = approved if isinstance(approved, list) else []
             if fingerprint in approved_list:

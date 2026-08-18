@@ -1,6 +1,12 @@
 from uuid import uuid4
 
-from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
+import pytest
+
+from app.schemas.runtime_continuation import RuntimeResumeAction
+from app.services.runtime_resume_checkpoint_service import (
+    RuntimeResumeCheckpointService,
+    RuntimeResumeValidationError,
+)
 
 
 def test_build_resume_checkpoint_payload_contains_required_fields():
@@ -47,3 +53,51 @@ def test_build_resume_checkpoint_payload_carries_source_goal_snapshot():
     assert payload["original_goal"] == "Покажи коллекции"
     assert payload["original_user_request"] == "Покажи коллекции"
     assert payload["source_context_snapshot"]["inputs"]["goal"] == "Покажи коллекции"
+
+
+def test_waiting_input_requires_nonempty_input_and_accepts_cancel():
+    service = RuntimeResumeCheckpointService()
+
+    assert service.validate_action(
+        pause_status="waiting_input",
+        action=RuntimeResumeAction.INPUT,
+        user_input="  общий вопрос  ",
+    ) == "общий вопрос"
+    assert service.validate_action(
+        pause_status="waiting_input",
+        action=RuntimeResumeAction.CANCEL,
+        user_input=None,
+    ) == ""
+    with pytest.raises(RuntimeResumeValidationError, match="input is required"):
+        service.validate_action(
+            pause_status="waiting_input",
+            action=RuntimeResumeAction.INPUT,
+            user_input=" ",
+        )
+    with pytest.raises(RuntimeResumeValidationError, match="waiting_input"):
+        service.validate_action(
+            pause_status="waiting_input",
+            action=RuntimeResumeAction.CONFIRM,
+            user_input=None,
+        )
+
+
+def test_waiting_confirmation_accepts_only_confirm_or_cancel():
+    service = RuntimeResumeCheckpointService()
+
+    assert service.validate_action(
+        pause_status="waiting_confirmation",
+        action=RuntimeResumeAction.CONFIRM,
+        user_input=None,
+    ) == ""
+    assert service.validate_action(
+        pause_status="waiting_confirmation",
+        action=RuntimeResumeAction.CANCEL,
+        user_input=None,
+    ) == ""
+    with pytest.raises(RuntimeResumeValidationError, match="waiting_confirmation"):
+        service.validate_action(
+            pause_status="waiting_confirmation",
+            action=RuntimeResumeAction.INPUT,
+            user_input="answer",
+        )

@@ -169,6 +169,7 @@ class ChatStreamService:
         model: Optional[str] = None,
         agent_slug: Optional[str] = None,
         continuation_meta: Optional[Dict[str, Any]] = None,
+        resumed_turn_id: Optional[str] = None,
         persist_user_message: bool = True,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Send message and stream response while preserving current chat contract."""
@@ -279,6 +280,7 @@ class ChatStreamService:
                 model=model,
                 agent_slug=agent_slug,
                 continuation_meta=continuation_meta,
+                resumed_turn_id=resumed_turn_id,
                 persist_user_message=persist_user_message,
                 run_with_router=self._run_with_router,
                 store_idempotency=self.store_idempotency,

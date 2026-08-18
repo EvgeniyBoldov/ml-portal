@@ -304,18 +304,15 @@ export function useSandboxRun(sessionId: string) {
     } finally { invalidate(branchId); }
   }, [consumeRunStream, followMemoryTrace, invalidate, reconcileTrace, sessionId]);
 
-  const confirmAction = useCallback(async (confirmed: boolean, userInput?: string) => {
+  const resumePausedRun = useCallback(async (userInput?: string) => {
     if (!activeRun.runId) return false;
-    if (!confirmed) {
-      await sandboxApi.confirmRunAction(sessionId, activeRun.runId, { confirmed: false });
-      setActiveRun((prev) => ({ ...prev, status: 'completed', pendingConfirmation: null }));
-      invalidate();
-      return true;
-    }
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const response = await sandboxApi.resumeRun(sessionId, activeRun.runId, { confirmed: true, user_input: userInput }, controller.signal);
+      const request = activeRun.status === 'waiting_input'
+        ? { action: 'input' as const, input: userInput }
+        : { action: 'confirm' as const };
+      const response = await sandboxApi.resumeRun(sessionId, activeRun.runId, request, controller.signal);
       if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
       setActiveRun((prev) => ({ ...prev, status: 'running', pendingConfirmation: null, progress: [], error: null }));
       const runId = await consumeRunStream(response);
@@ -337,7 +334,9 @@ export function useSandboxRun(sessionId: string) {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const response = await sandboxApi.cancelRun(sessionId, activeRun.runId, controller.signal);
+      const response = activeRun.status === 'waiting_input' || activeRun.status === 'waiting_confirmation'
+        ? await sandboxApi.resumeRun(sessionId, activeRun.runId, { action: 'cancel' }, controller.signal)
+        : await sandboxApi.cancelRun(sessionId, activeRun.runId, controller.signal);
       if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
       setActiveRun((prev) => ({ ...prev, error: null }));
       const runId = await consumeRunStream(response);
@@ -375,6 +374,6 @@ export function useSandboxRun(sessionId: string) {
     isRunning: activeRun.status === 'running',
     isWaitingConfirmation: activeRun.status === 'waiting_confirmation' && activeRun.pendingConfirmation !== null,
     isWaitingInput: activeRun.status === 'waiting_input',
-    run, stop, reset, confirmAction, cancelPausedRun,
+    run, stop, reset, resumePausedRun, cancelPausedRun,
   };
 }

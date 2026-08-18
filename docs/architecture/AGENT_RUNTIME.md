@@ -260,23 +260,15 @@ Runtime уже должен мыслить не "любой collection один�
 
 ## Pause / resume
 
-### Текущее поведение
+### Каноническое поведение
 - Runtime может остановиться на `waiting_input` или `waiting_confirmation`.
-- Pause state сохраняется в `chat_turn` и canonical checkpoint/plan state.
-- Continuation идёт как новый chat turn в том же чате.
+- Pause state сохраняется в transport state и canonical checkpoint/plan state.
+- Continuation всегда переиспользует исходный runtime run и тот же
+  `RuntimePipeline`; это не новый пользовательский запрос и не новый root run.
 
-Это рабочий production path, но это ещё не mid-run checkpoint resume.
-
-### Усиление контракта continuation
-- При `POST /api/v1/chats/runs/{run_id}/resume` формируется `resume_checkpoint`.
-- Source run переводится в статус `resumed`.
-- Checkpoint сохраняется в `chat_turn.paused_context` и continuation metadata.
-- Continuation сохраняет lineage через `continuation_meta`; отдельная execution-модель не создаётся.
-
-### Известные проблемы (Chat + Sandbox)
-1. **Песочница вместо resume запуска новый run** — пользователь жмёт "Ответить" на вопрос → создаётся новый `SandboxRun`, рантайм гоняется второй раз с нуля.
-2. **Текст вопроса агента дублируется** — приходит как `chunk`/delta-стрим (попадает в карточку "Ответ"), и тот же текст приходит как `waiting_input`/`confirmation_required` → попадает в поле ввода.
-3. **Архитектурно неверно**: Q&A разбросан между `delta`-сообщениями, паузой и user-message нового рана. Должен быть отдельный step `answer` в трейсе с парой `{question, answer}`, видимый только в инспекторе.
+Перед повторным запуском исполнителя строится неизменяемый `resume_checkpoint`.
+Он хранит исходную цель отдельно от пользовательского ввода, поэтому ответ на
+уточнение не может стать новым `goal`.
 
 ### Контракт paused_action / paused_context
 - Backend должен сохранять полный paused-state через `RuntimeHitlProtocolService.build_paused_from_stop`.
@@ -287,6 +279,12 @@ Runtime уже должен мыслить не "любой collection один�
 - **Chat**: `POST /chats/runs/{id}/resume` → SSE-стрим (не JSON).
 - **Sandbox**: `POST /sandbox/sessions/{sid}/runs/{rid}/resume` → SSE-стрим, тот же `RuntimePipeline`, тот же run_id (не создавать новый).
 - Sandbox resume продолжает тот же sandbox run id; chat continuation не создаёт root journal run.
+- Оба endpoint принимают один payload: `{ "action": "input" | "confirm" | "cancel", "input"?: string }`.
+  Для `waiting_input` допустимы `input` (непустое поле `input`) и `cancel`;
+  для `waiting_confirmation` — `confirm` и `cancel`.
+- Подтверждение выполняется только signed confirmation token, выпущенным из
+  сохранённого pause state; raw fingerprints и отдельный confirm endpoint не
+  являются transport contract.
 
 ## Retrieval Surfaces
 

@@ -26,6 +26,47 @@ def orchestrator() -> ChatTurnOrchestrator:
 
 class TestChatTurnOrchestrator:
     @pytest.mark.asyncio
+    async def test_execute_turn_reuses_resumed_turn_instead_of_creating_duplicate(self, orchestrator: ChatTurnOrchestrator):
+        turn_id = uuid4()
+        chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
+        orchestrator.turn_service.start_turn = AsyncMock()
+        orchestrator.turn_service.complete_turn = AsyncMock()
+        orchestrator.persistence_service.create_assistant_message = AsyncMock(
+            return_value=SimpleNamespace(message_id="assistant-1", created_at="2026-01-01T12:00:01Z")
+        )
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
+
+        async def fake_run_with_router(**kwargs):
+            assert kwargs["runtime_run_id"] == "00000000-0000-0000-0000-000000000040"
+            yield {"type": "final_content", "content": "Продолжаю", "sources": []}
+
+        events = [
+            event
+            async for event in orchestrator.execute_turn(
+                chat=chat,
+                chat_id="chat-1",
+                user_id="user-1",
+                content="Уточнение пользователя",
+                artifact_ids=[],
+                attachment_meta=[],
+                attachment_contexts=[],
+                idempotency_key=None,
+                model=None,
+                agent_slug=None,
+                continuation_meta={"resumed_from_run_id": "00000000-0000-0000-0000-000000000040"},
+                resumed_turn_id=str(turn_id),
+                persist_user_message=False,
+                run_with_router=fake_run_with_router,
+                store_idempotency=AsyncMock(),
+                bind_attachments=AsyncMock(),
+            )
+        ]
+
+        assert any(event["type"] == "final" for event in events)
+        orchestrator.turn_service.start_turn.assert_not_awaited()
+        orchestrator.turn_service.complete_turn.assert_awaited_once_with(turn_id, assistant_message_id="assistant-1")
+
+    @pytest.mark.asyncio
     async def test_execute_turn_skips_user_message_persistence_for_resume_flow(self, orchestrator: ChatTurnOrchestrator):
         chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
         orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))

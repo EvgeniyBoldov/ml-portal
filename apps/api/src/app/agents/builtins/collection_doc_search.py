@@ -59,6 +59,7 @@ _OUTPUT_SCHEMA_V1 = {
                     "source_name": {"type": "string"},
                     "score": {"type": "number"},
                     "page": {"type": "integer"},
+                    "artifact_id": {"type": ["string", "null"]},
                     "metadata": {"type": "object"},
                 },
             },
