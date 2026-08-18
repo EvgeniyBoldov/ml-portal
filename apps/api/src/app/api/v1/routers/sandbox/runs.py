@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, get_current_user_sse, require_admin
 from app.agents import ToolContext
+from app.agents.runtime.confirmation import get_confirmation_service
 from app.agents.runtime_sandbox_resolver import RuntimeSandboxResolver
 from app.core.db import get_session_factory
 from app.runtime import PipelineRequest
@@ -157,6 +158,13 @@ async def _observe_sandbox_runner(
     try:
         await subscriber.subscribe()
         listener_task = asyncio.create_task(listen())
+        # A resumed sandbox execution deliberately reuses the same run id. Do
+        # not replay its previous journal segment into this SSE connection: a
+        # historical waiting_input/confirmation_required event would otherwise
+        # make the client reopen an already resolved pause after the new run
+        # has produced its final answer.
+        existing_rows = await RuntimeEventJournalService(stream_db).list_run_events(run_id)
+        emitted_event_ids.update(str(row.id) for row in existing_rows)
         runner_task = await sandbox_runtime_runner.start(
             command=command,
             llm_client=llm_client,
@@ -441,7 +449,7 @@ async def run_sandbox(
             sandbox_overrides["logging_level"] = "full"
             # In sandbox we keep memory finalize inline so fact/summary helper
             # events are visible in the same run trace.
-            sandbox_overrides["memory_inline"] = bool(sandbox_overrides.get("memory_inline", False))
+            sandbox_overrides["memory_inline"] = True
             sandbox_overrides["sandbox_run_id"] = str(run_id)
             sandbox_overrides["sandbox_branch_id"] = str(branch_id)
             sandbox_overrides["sandbox_session_id"] = str(session_id)
@@ -667,10 +675,28 @@ async def resume_sandbox_run(
     if not branch:
         raise HTTPException(status_code=400, detail="Run has no branch")
 
-    # Confirmation tokens for HITL gate
+    # Confirmation data for HITL gate. Sandbox owns a hidden chat used for
+    # attachments, so the operation executor follows the regular signed-token
+    # path (rather than its chat_id=None sandbox preapproval path).
     confirmed_fingerprints: list[str] = []
+    confirmation_tokens: list[str] = []
     if isinstance(paused_action, dict):
         confirmed_fingerprints = RuntimeHitlProtocolService.extract_confirmed_fingerprints(paused_action, paused_context)
+        if action == "confirm":
+            fingerprint = RuntimeHitlProtocolService.extract_operation_fingerprint(
+                paused_action,
+                paused_context,
+            )
+            if fingerprint:
+                try:
+                    token, _ = get_confirmation_service().issue(
+                        fingerprint=fingerprint,
+                        user_id=u_uuid,
+                        chat_id=sandbox_chat_id,
+                    )
+                    confirmation_tokens = [token]
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Failed to issue sandbox confirmation token on resume: %s", exc)
 
     async def event_stream() -> AsyncGenerator[str, None]:
         session_factory = get_session_factory()
@@ -690,6 +716,11 @@ async def resume_sandbox_run(
             )
             resumed_overrides.update({
                 "logging_level": "full",
+                # A sandbox run persists its fact effects to the frozen branch
+                # overlay in its own transaction. Keeping this inline makes
+                # that write deterministic and visible before the run is
+                # marked complete.
+                "memory_inline": True,
                 "sandbox_run_id": str(run_id),
                 "sandbox_branch_id": str(branch.id),
                 "sandbox_session_id": str(session_id),
@@ -727,7 +758,7 @@ async def resume_sandbox_run(
                     "resume_checkpoint": checkpoint,
                     "resumed_from_run_id": agent_execution_id,
                 },
-                confirmation_tokens=confirmed_fingerprints,
+                confirmation_tokens=confirmation_tokens,
                 await_background_tail=False,
             )
             async for frame in _observe_sandbox_runner(
