@@ -255,6 +255,7 @@ class TestChatTurnOrchestrator:
             paused_action=None,
             paused_context=None,
         )
+        orchestrator.turn_service.session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_execute_turn_does_not_generate_title_for_non_default_chat_name(self, orchestrator: ChatTurnOrchestrator):

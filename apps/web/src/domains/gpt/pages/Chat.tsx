@@ -132,15 +132,7 @@ export default function Chat() {
     try {
       const userInput = clarifyInput.trim();
       let resumed = false;
-      if (pendingConfirmation && state.pausedRunId) {
-        resumed = await resumeStream(
-          state.pausedRunId,
-          'confirm',
-          userInput,
-          () => {},
-          (err: string) => setStreamError(_friendlyError(err)),
-        );
-      } else if (state.pausedRunId) {
+      if (state.pausedRunId) {
         resumed = await resumeStream(
           state.pausedRunId,
           'input',

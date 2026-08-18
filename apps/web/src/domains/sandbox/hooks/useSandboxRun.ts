@@ -175,6 +175,10 @@ export function pauseFromJournalEvent(journal: RuntimeJournalEvent): SandboxPaus
   };
 }
 
+export function shouldApplyJournalPause(receivedPauseFrame: boolean): boolean {
+  return !receivedPauseFrame;
+}
+
 function appendProgress(items: RuntimeProgress[], progress: RuntimeProgress): RuntimeProgress[] {
   const last = items[items.length - 1];
   if (last?.description === progress.description && last.phase === progress.phase && last.kind === progress.kind) return items;
@@ -189,6 +193,7 @@ export function useSandboxRun(sessionId: string) {
   const consumeRunStream = useCallback(async (response: Response): Promise<string | null> => {
     let finalContent = '';
     let paused = false;
+    let receivedPauseFrame = false;
     let streamedRunId: string | null = null;
     await consumeSse(response, (frame) => {
       const event = decodeSandboxFrame(frame);
@@ -202,7 +207,7 @@ export function useSandboxRun(sessionId: string) {
       } else if (event.type === 'journal') {
         streamedRunId = event.journal.run_id;
         const journalPause = pauseFromJournalEvent(event.journal);
-        if (journalPause) {
+        if (journalPause && shouldApplyJournalPause(receivedPauseFrame)) {
           paused = true;
           setActiveRun((prev) => ({
             ...prev,
@@ -227,6 +232,7 @@ export function useSandboxRun(sessionId: string) {
       } else if (event.type === 'pause') {
         streamedRunId = event.pause.run_id;
         paused = true;
+        receivedPauseFrame = true;
         setActiveRun((prev) => ({
           ...prev,
           status: event.pause.reason,
@@ -308,14 +314,17 @@ export function useSandboxRun(sessionId: string) {
     } finally { invalidate(branchId); }
   }, [consumeRunStream, followMemoryTrace, invalidate, reconcileTrace, sessionId]);
 
-  const resumePausedRun = useCallback(async (userInput?: string) => {
+  const resumePausedRun = useCallback(async (action: 'input' | 'confirm', userInput?: string) => {
     if (!activeRun.runId) return false;
+    const expectedAction = activeRun.pendingConfirmation?.reason === 'waiting_input' ? 'input' : 'confirm';
+    if (action !== expectedAction) {
+      setActiveRun((prev) => ({ ...prev, error: 'Состояние ожидания изменилось. Повторите действие.' }));
+      return false;
+    }
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const request = activeRun.status === 'waiting_input'
-        ? { action: 'input' as const, input: userInput }
-        : { action: 'confirm' as const };
+      const request = action === 'input' ? { action, input: userInput } : { action };
       const response = await sandboxApi.resumeRun(sessionId, activeRun.runId, request, controller.signal);
       if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
       setActiveRun((prev) => ({ ...prev, status: 'running', pendingConfirmation: null, progress: [], error: null }));
@@ -331,7 +340,7 @@ export function useSandboxRun(sessionId: string) {
       }
       return false;
     } finally { invalidate(); }
-  }, [activeRun.runId, consumeRunStream, followMemoryTrace, invalidate, reconcileTrace, sessionId]);
+  }, [activeRun.pendingConfirmation?.reason, activeRun.runId, consumeRunStream, followMemoryTrace, invalidate, reconcileTrace, sessionId]);
 
   const cancelPausedRun = useCallback(async () => {
     if (!activeRun.runId) return false;

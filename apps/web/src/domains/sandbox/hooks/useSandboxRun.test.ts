@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pauseFromJournalEvent } from './useSandboxRun';
+import { pauseFromJournalEvent, shouldApplyJournalPause } from './useSandboxRun';
 
 const journal = (event_type: string, payload: Record<string, unknown>) => ({
   id: 'event-1',
@@ -49,5 +49,10 @@ describe('pauseFromJournalEvent', () => {
 
   it('ignores non-interaction journal events', () => {
     expect(pauseFromJournalEvent(journal('plan_terminal', {}))).toBeNull();
+  });
+
+  it('uses a journal pause only until the canonical pause frame arrives', () => {
+    expect(shouldApplyJournalPause(false)).toBe(true);
+    expect(shouldApplyJournalPause(true)).toBe(false);
   });
 });

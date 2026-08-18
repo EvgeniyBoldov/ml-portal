@@ -265,6 +265,11 @@ class ChatTurnOrchestrator:
                 paused_action=paused_action,
                 paused_context=paused_context,
             )
+            # The browser receives the pause over SSE and resumes through a
+            # new HTTP request. Persist the checkpoint before emitting that
+            # frame; a flush alone is rolled back when the streaming request
+            # dependency closes its session.
+            await self.turn_service.session.commit()
             question = ""
             message = ""
             if isinstance(paused_context, dict):

@@ -163,7 +163,8 @@ interface Props {
   onSelectBranch: (branchId: string) => void;
   onCreateBranchFromMessage: (sourceText: string, parentRunId?: string | null) => Promise<void>;
   onRun: (text: string, parentRunId?: string | null, artifactIds?: string[]) => void;
-  onResumeSubmit: (text: string) => Promise<boolean>;
+  onResumeInput: (text: string) => Promise<boolean>;
+  onConfirmPausedRun: () => Promise<boolean>;
   onCancelPausedRun: () => Promise<boolean>;
   onStop: () => void;
   onSelectRun?: (runId?: string) => void;
@@ -186,7 +187,8 @@ export default function RunChat({
   onSelectBranch,
   onCreateBranchFromMessage,
   onRun,
-  onResumeSubmit,
+  onResumeInput,
+  onConfirmPausedRun,
   onCancelPausedRun,
   onStop,
   onSelectRun,
@@ -359,7 +361,7 @@ export default function RunChat({
   const handleClarifySubmit = async () => {
     const text = input.trim();
     if (!text) return;
-    if (await onResumeSubmit(text)) {
+    if (await onResumeInput(text)) {
       setInput('');
     }
   };
@@ -475,7 +477,7 @@ export default function RunChat({
                       || String(activeRun?.pendingConfirmation?.context.message || '')
                       || 'Требуется подтверждение')}
                 </div>
-                <div className={styles['clarify-row']}>
+                {isWaitingInput ? <div className={styles['clarify-row']}>
                   <textarea
                     ref={clarifyInputRef}
                     className={styles['input-field']}
@@ -496,7 +498,14 @@ export default function RunChat({
                   <Button size="sm" variant="danger" onClick={() => { void onCancelPausedRun(); }} disabled={isRunning}>
                     Отменить
                   </Button>
-                </div>
+                </div> : <div className={styles['clarify-row']}>
+                  <Button size="sm" onClick={() => { void onConfirmPausedRun(); }} disabled={isRunning}>
+                    Подтвердить
+                  </Button>
+                  <Button size="sm" variant="danger" onClick={() => { void onCancelPausedRun(); }} disabled={isRunning}>
+                    Отменить
+                  </Button>
+                </div>}
                 {activeRun.error && <div className={styles['upload-error']}>{activeRun.error}</div>}
               </div>
             )}
