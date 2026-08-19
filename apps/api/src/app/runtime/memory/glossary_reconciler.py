@@ -1,113 +1,200 @@
-"""Persistence adapter for LLM-normalized tenant terminology."""
+"""Candidate persistence for evidence-backed user and tenant terminology."""
 from __future__ import annotations
 
-from typing import Sequence
+from datetime import datetime, timezone
+from typing import Any, Sequence
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.glossary import GlossaryEntry, GlossaryScope
+from app.models.glossary import (
+    GlossaryEntry,
+    GlossaryObservation,
+    GlossaryScope,
+    GlossaryStatus,
+)
 from app.models.memory import FactScope, FactSource
 from app.runtime.memory.dto import FactDTO
 
 
+GLOSSARY_CONFIRMATION_SUPPORT = 3
+
+
 class GlossaryReconciler:
-    """Stores compacted glossary entries; semantic decisions come from LLM."""
+    """Persist glossary candidates and confirm only independently observed terms."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def current_for(self, *, tenant_id: UUID | None) -> list[FactDTO]:
-        if tenant_id is None:
+    async def current_for(
+        self,
+        *,
+        user_id: UUID | None,
+        tenant_id: UUID | None,
+    ) -> list[FactDTO]:
+        owners = []
+        if user_id is not None:
+            owners.append(
+                (GlossaryEntry.scope == GlossaryScope.USER.value)
+                & (GlossaryEntry.user_id == user_id)
+            )
+        if tenant_id is not None:
+            owners.append(
+                (GlossaryEntry.scope == GlossaryScope.TENANT.value)
+                & (GlossaryEntry.tenant_id == tenant_id)
+            )
+        if not owners:
             return []
         rows = await self._session.execute(
             select(GlossaryEntry).where(
-                GlossaryEntry.scope == GlossaryScope.TENANT.value,
-                GlossaryEntry.tenant_id == tenant_id,
                 GlossaryEntry.is_active.is_(True),
+                GlossaryEntry.status == GlossaryStatus.CONFIRMED.value,
+                or_(*owners),
             )
         )
         return [
             FactDTO(
                 id=row.id,
-                scope=FactScope.TENANT,
+                scope=FactScope(row.scope),
                 kind="glossary",
                 subject=row.canonical_term,
                 value=row.description or row.canonical_term,
                 source=FactSource.SYSTEM,
                 tenant_id=tenant_id,
+                owner_type=row.scope,
+                owner_id=row.user_id if row.scope == GlossaryScope.USER.value else row.tenant_id,
                 metadata={"aliases": list(row.aliases or [])},
             )
             for row in rows.scalars().all()
         ]
 
-    async def apply(self, *, candidates: Sequence[FactDTO], tenant_id: UUID | None) -> int:
-        if tenant_id is None:
-            return 0
+    async def apply(
+        self,
+        *,
+        candidates: Sequence[FactDTO],
+        user_id: UUID | None,
+        tenant_id: UUID | None,
+    ) -> int:
         changed = 0
         for candidate in candidates:
-            if candidate.kind != "glossary" or candidate.scope != FactScope.TENANT:
+            if candidate.kind != "glossary":
+                continue
+            owner = _owner_for(candidate.scope, user_id=user_id, tenant_id=tenant_id)
+            if owner is None:
                 continue
             action = str(candidate.metadata.get("compaction_action") or "add")
             if action in {"discard", "mark_conflict"}:
                 continue
-            targets = _uuids(candidate.metadata.get("compaction_target_ids") or [])
-            if action in {"rewrite", "supersede"} and targets:
-                await self._session.execute(
-                    update(GlossaryEntry)
-                    .where(
-                        GlossaryEntry.id.in_(targets),
-                        GlossaryEntry.tenant_id == tenant_id,
-                        GlossaryEntry.scope == GlossaryScope.TENANT.value,
-                    )
-                    .values(is_active=False)
-                )
-            row = (
-                await self._session.execute(
-                    select(GlossaryEntry).where(
-                        GlossaryEntry.scope == GlossaryScope.TENANT.value,
-                        GlossaryEntry.tenant_id == tenant_id,
-                        GlossaryEntry.canonical_term == candidate.subject,
-                    )
-                )
-            ).scalar_one_or_none()
-            aliases = _aliases(candidate.metadata.get("aliases") or [])
+            scope, owner_id = owner
+            row = await self._find(scope=scope, owner_id=owner_id, canonical_term=candidate.subject)
+            aliases = _aliases(candidate.metadata.get("aliases") or [], candidate.subject)
             if row is None:
                 row = GlossaryEntry(
-                    scope=GlossaryScope.TENANT.value,
-                    tenant_id=tenant_id,
+                    scope=scope.value,
+                    user_id=owner_id if scope == GlossaryScope.USER else None,
+                    tenant_id=owner_id if scope == GlossaryScope.TENANT else None,
                     canonical_term=candidate.subject,
                     aliases=aliases,
                     description=candidate.value,
+                    status=GlossaryStatus.PENDING.value,
+                    support_count=0,
                 )
                 self._session.add(row)
+                await self._session.flush()
             else:
-                row.is_active = True
-                row.description = candidate.value
-                row.aliases = _aliases([*(row.aliases or []), *aliases])
-                self._session.add(row)
+                row.aliases = _aliases([*(row.aliases or []), *aliases], row.canonical_term)
+                if row.status != GlossaryStatus.CONFIRMED.value:
+                    row.description = candidate.value
+
+            added = await self._add_observations(row, candidate.metadata.get("evidence") or [])
+            if not added:
+                continue
+            now = datetime.now(timezone.utc)
+            row.support_count += added
+            if row.status != GlossaryStatus.CONFIRMED.value and row.support_count >= GLOSSARY_CONFIRMATION_SUPPORT:
+                row.status = GlossaryStatus.CONFIRMED.value
+                row.first_confirmed_at = row.first_confirmed_at or now
+            if row.status == GlossaryStatus.CONFIRMED.value:
+                row.last_confirmed_at = now
+            self._session.add(row)
             changed += 1
         await self._session.flush()
         return changed
 
+    async def _find(
+        self,
+        *,
+        scope: GlossaryScope,
+        owner_id: UUID,
+        canonical_term: str,
+    ) -> GlossaryEntry | None:
+        stmt = select(GlossaryEntry).where(
+            GlossaryEntry.scope == scope.value,
+            GlossaryEntry.canonical_term == canonical_term,
+            GlossaryEntry.is_active.is_(True),
+        )
+        stmt = stmt.where(
+            GlossaryEntry.user_id == owner_id
+            if scope == GlossaryScope.USER
+            else GlossaryEntry.tenant_id == owner_id
+        )
+        return (await self._session.execute(stmt.limit(1))).scalar_one_or_none()
 
-def _aliases(raw: Sequence[object]) -> list[str]:
+    async def _add_observations(self, row: GlossaryEntry, raw: Sequence[object]) -> int:
+        added = 0
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            source_type = str(item.get("source_type") or "").strip()
+            source_ref = str(item.get("source_ref") or "").strip()
+            if not source_type or not source_ref:
+                continue
+            exists = await self._session.execute(
+                select(GlossaryObservation.id).where(
+                    GlossaryObservation.entry_id == row.id,
+                    GlossaryObservation.source_type == source_type,
+                    GlossaryObservation.source_ref == source_ref,
+                )
+            )
+            if exists.scalar_one_or_none() is not None:
+                continue
+            self._session.add(GlossaryObservation(
+                entry_id=row.id,
+                source_type=source_type,
+                source_ref=source_ref,
+                source_label=_label(item.get("label")),
+            ))
+            await self._session.flush()
+            added += 1
+        return added
+
+
+def _owner_for(
+    scope: FactScope,
+    *,
+    user_id: UUID | None,
+    tenant_id: UUID | None,
+) -> tuple[GlossaryScope, UUID] | None:
+    if scope == FactScope.USER and user_id is not None:
+        return GlossaryScope.USER, user_id
+    if scope == FactScope.TENANT and tenant_id is not None:
+        return GlossaryScope.TENANT, tenant_id
+    return None
+
+
+def _aliases(raw: Sequence[object], canonical_term: str) -> list[str]:
     result: list[str] = []
-    seen: set[str] = set()
+    seen: set[str] = {" ".join(canonical_term.strip().casefold().split())}
     for item in raw:
         value = " ".join(str(item or "").strip().split())[:255]
-        if value and value.casefold() not in seen:
-            seen.add(value.casefold())
+        normalized = value.casefold()
+        if value and normalized not in seen:
+            seen.add(normalized)
             result.append(value)
     return result
 
 
-def _uuids(raw: Sequence[object]) -> list[UUID]:
-    result: list[UUID] = []
-    for item in raw:
-        try:
-            result.append(UUID(str(item)))
-        except (TypeError, ValueError):
-            continue
-    return result
+def _label(value: Any) -> str | None:
+    normalized = " ".join(str(value or "").strip().split())[:255]
+    return normalized or None

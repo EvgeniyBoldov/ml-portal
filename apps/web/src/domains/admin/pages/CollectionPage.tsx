@@ -14,8 +14,8 @@ import {
   type BackendCollectionField,
   type CreateCollectionRequest,
   type CollectionField,
-  type ToolInstanceDetail,
   type CollectionType,
+  type CollectionCapabilityTool,
   type UpdateCollectionRequest,
 } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
@@ -48,7 +48,7 @@ import { collectionFieldColumns } from './collection/fields/fieldColumns';
 
 /* ─── Page-specific columns ─── */
 
-type RuntimeOperationRow = NonNullable<ToolInstanceDetail['runtime_operations']>[number];
+type RuntimeOperationRow = CollectionCapabilityTool;
 
 type CollectionEditorForm = {
   slug: string;
@@ -196,12 +196,11 @@ const ACTIVE_VERSION_META_FIELDS: FieldConfig[] = [
 ];
 
 const TOOL_COLUMNS: DataTableColumn<RuntimeOperationRow>[] = [
-  { key: 'operation_slug', label: 'Operation slug', render: (row) => <code>{row.operation_slug}</code> },
-  { key: 'operation', label: 'Operation', render: (row) => row.operation || '—' },
+  { key: 'operation', label: 'Operation', render: (row) => <code>{row.operation}</code> },
+  { key: 'title', label: 'Название', render: (row) => row.title || '—' },
+  { key: 'description', label: 'Описание', render: (row) => row.description || '—' },
   { key: 'source', label: 'Source', render: (row) => row.source || '—' },
-  { key: 'risk_level', label: 'Risk', render: (row) => row.risk_level || '—' },
-  { key: 'side_effects', label: 'Side effects', render: (row) => row.side_effects || '—' },
-  { key: 'provider_instance_slug', label: 'Provider', render: (row) => row.provider_instance_slug || '—' },
+  { key: 'provider', label: 'Provider', render: (row) => row.provider || '—' },
 ];
 
 /* ─── Component ─── */
@@ -347,6 +346,13 @@ export function CollectionPage() {
     staleTime: 30_000,
   });
 
+  const { data: collectionCapabilities } = useQuery({
+    queryKey: ['collections', 'capabilities', collection?.id ?? ''],
+    queryFn: () => collectionsApi.getCapabilities(collection!.id),
+    enabled: !isNew && !!collection?.id,
+    staleTime: 30_000,
+  });
+
   // ─── Derived ───
   const viewData = {
     slug: collection?.slug ?? '',
@@ -478,12 +484,12 @@ export function CollectionPage() {
 
   const runtimeOperations = useMemo(() => {
     const bySlug = new Map<string, RuntimeOperationRow>();
-    for (const op of dataConnector?.runtime_operations ?? []) {
-      if (!op?.operation_slug) continue;
-      if (!bySlug.has(op.operation_slug)) bySlug.set(op.operation_slug, op);
+    for (const op of collectionCapabilities?.tools ?? []) {
+      if (!op?.operation) continue;
+      if (!bySlug.has(op.operation)) bySlug.set(op.operation, op);
     }
-    return Array.from(bySlug.values()).sort((a, b) => a.operation_slug.localeCompare(b.operation_slug));
-  }, [dataConnector?.runtime_operations]);
+    return Array.from(bySlug.values()).sort((a, b) => a.operation.localeCompare(b.operation));
+  }, [collectionCapabilities?.tools]);
   const activeVersion =
     collection?.current_version
     ?? versions.find((v) => v.status === 'published')
@@ -883,7 +889,7 @@ export function CollectionPage() {
             <DataTable<RuntimeOperationRow>
               columns={TOOL_COLUMNS}
               data={runtimeOperations}
-              keyField="operation_slug"
+              keyField="operation"
               emptyText="Для связанного коннектора нет runtime-операций."
             />
           </Tab>

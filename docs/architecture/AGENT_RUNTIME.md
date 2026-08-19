@@ -122,14 +122,20 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 
 ```
 \`\`\`tool_call
-{"tool": "instance.docs.search", "arguments": {"query": "..."}}
+{"tool": "collection.document.search", "arguments": {"collection_slug": "docs", "query": "..."}}
 \`\`\`
 ```
 
 При этом:
 - local collection tools публикуются в том же формате descriptor, что и MCP tools,
 - executor уже сам решает, это in-process provider или remote MCP target,
-- planner и runtime оперируют canonical tools, а не raw tool names провайдера.
+- planner и runtime оперируют canonical tools, а не raw tool names провайдера;
+- каждый collection-scoped вызов обязательно передаёт `collection_slug`. Имя
+  тулзы не кодирует instance, provider или source;
+- `CollectionRuntimeResolver` — единственный резолвер target-а: для local
+  collection он выбирает provider по `collection_type`, для SQL/API следует
+  цепочке `collection -> data source -> MCP provider`. RBAC применяется после
+  этого резолвинга к каждой коллекции, не к общему provider.
 
 ## Runtime flow
 
@@ -242,17 +248,27 @@ Policy gates (`require_confirmation_*`, `forbid_*`) применяются в `P
 
 ## Collection resolution
 
-Runtime уже должен мыслить не "любой collection одинаковый", а resolver-ами по типу коллекции.
+Runtime мыслит коллекцией как semantic/data scope, а не как именем
+provider-инстанса. Публичный вызов всегда содержит `collection_slug`; UUID
+коллекции не является LLM-facing аргументом. Runtime после валидации slug
+разрешает конкретную коллекцию, проверяет effective access и создаёт
+target-specific execution binding.
 
-Текущие resolver categories:
-- local table collection,
-- local document collection,
-- remote SQL collection stub.
+`CollectionRuntimeResolver` — единственная точка выбора runtime target:
+
+- local `table`, `document` и `template` выбирают общий in-process provider по
+  `collection_type`;
+- remote `sql` и `api` проходят цепочку
+  `collection -> data_instance -> access_via/provider`;
+- RBAC и readiness применяются к каждой разрешённой коллекции и её target, а
+  не к общему provider-инстансу.
 
 Минимальные retrieval profiles:
 - `table.hybrid` — фильтры/поиск + semantic fallback по retrieval fields,
 - `document.semantic` — семантический поиск по документным фрагментам,
-- `remote.sql.catalog` — каталог таблиц/схем и планирование SQL-доступа.
+- `remote.sql.catalog` — каталог таблиц/схем и планирование SQL-доступа;
+- `remote.api` — provider-specific API operations за canonical operation
+  descriptor.
 
 Правило:
 - новый тип коллекции должен приводить к явному новому resolver path,
@@ -288,13 +304,22 @@ Runtime уже должен мыслить не "любой collection один�
 
 ## Retrieval Surfaces
 
-Публичные retrieval operations (видны planner/LLM):
+Публичные collection operations (видны planner/LLM):
+- `collection.info`
 - `collection.document.search`
+- `collection.document.list`
+- `collection.document.get`
 - `collection.table.search`
+- `collection.template.list`
+- `collection.template.search`
+- `collection.template.get_schema`
+- `collection.template.fill`
 
 Внутренние builtin handler slugs (runtime implementation detail):
 - `collection.doc_search` -> публикуется как `collection.document.search`
 - `collection.search` -> публикуется как `collection.table.search`
+- template handlers уже используют canonical `collection.template.*` slugs;
+  их provider/instance binding остаётся внутренним.
 - `collection.text_search` -> внутренний runtime handler (не публикуется planner/LLM напрямую)
 
 Правило:
@@ -356,15 +381,19 @@ Structured answer contract (backend):
 
 ## Добавление новой локальной операции
 
-1. Создать local provider handler / adapter
+1. Создать local provider handler / adapter или зарегистрировать remote MCP
+   capability
 2. Экспортировать MCP-compatible descriptor:
    - `name`
    - `description`
    - `inputSchema`
    - optional `outputSchema`
-3. Подключить provider к домену data instance
-4. Убедиться, что `OperationRouter` публикует `ResolvedOperation`
-5. Не делать agent bindings source of truth для runtime
+3. Подключить provider к collection resolver path; для remote source задать
+   реляционную цепочку `data_instance -> access_via/provider`
+4. Убедиться, что `OperationRouter` публикует один canonical
+   `ResolvedOperation`, а target-specific binding остаётся внутренним
+5. Включить `collection_slug` в input schema каждой collection-bound operation
+6. Не делать agent bindings source of truth для runtime
 
 ## RuntimeEvent
 

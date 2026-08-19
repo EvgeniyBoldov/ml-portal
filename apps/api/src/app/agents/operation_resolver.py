@@ -8,6 +8,7 @@ from app.agents.contracts import OperationCredentialContext, ResolvedOperation
 from app.agents.credential_resolver import RuntimeCredentialResolver
 from app.agents.operation_builder import OperationBuilder
 from app.models.tool_instance import ToolInstance
+from app.models.collection import Collection
 from app.services.permission_service import EffectivePermissions
 
 
@@ -25,9 +26,10 @@ class RuntimeOperationResolver:
         self.collection_capability_resolver = collection_capability_resolver
         self.credential_resolver = credential_resolver
 
-    async def resolve_for_instance(
+    async def resolve_for_collection(
         self,
         *,
+        collection: Collection,
         instance: ToolInstance,
         provider: ToolInstance,
         runtime_domain: Optional[str] = None,
@@ -44,7 +46,8 @@ class RuntimeOperationResolver:
             if resolved_runtime_domain.startswith("collection.")
             else None
         )
-        capability_candidates = await self.collection_capability_resolver.resolve_for_instance(
+        capability_candidates = await self.collection_capability_resolver.resolve_for_collection(
+            collection=collection,
             instance=instance,
             provider=provider,
         )

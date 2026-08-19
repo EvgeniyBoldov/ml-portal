@@ -10,6 +10,7 @@ from app.agents.operation_publication import (
     is_operation_allowed_for_collection_type,
 )
 from app.models.discovered_tool import DiscoveredTool
+from app.models.collection import Collection
 from app.models.tool_instance import ToolInstance
 from app.services.collection_tool_resolver import CollectionToolResolver, VirtualDiscoveredTool
 
@@ -28,19 +29,20 @@ class CollectionCapabilityResolver:
     def __init__(self, tool_loader: CollectionToolResolver) -> None:
         self.tool_loader = tool_loader
 
-    async def resolve_for_instance(
+    async def resolve_for_collection(
         self,
         *,
+        collection: Collection,
         instance: ToolInstance,
         provider: ToolInstance,
     ) -> List[CapabilityCandidate]:
-        context = await self.tool_loader._build_context(instance=instance, provider=provider)
-        discovered_tools = await self.tool_loader.load_discovered_tools(
+        discovered_tools = await self.tool_loader.load_discovered_tools_for_collection(
+            collection=collection,
             instance=instance,
             provider=provider,
         )
 
-        collection_type = str(getattr(context.bound_collection, "collection_type", "") or "").strip().lower()
+        collection_type = str(getattr(collection, "collection_type", "") or "").strip().lower()
         if not collection_type:
             return []
 
@@ -59,7 +61,7 @@ class CollectionCapabilityResolver:
                 collection_type=collection_type,
             ):
                 continue
-            if spec.requires_vector_search and not bool(getattr(context.bound_collection, "has_vector_search", False)):
+            if spec.requires_vector_search and not bool(getattr(collection, "has_vector_search", False)):
                 continue
             candidate = self._match_binding(binding, discovered_index)
             if candidate is None:

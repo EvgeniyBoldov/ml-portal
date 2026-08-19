@@ -215,7 +215,7 @@ def build_tools_prompt(
 - Сначала сопоставь задачу с нужной коллекцией или системной возможностью из capability card выше.
 - Перед работой с любой коллекцией сначала вызови `collection.info` для этой коллекции.
 - Другие collection-bound действия не придумывай по памяти: используй только те имена и аргументы, которые вернулись в результате `collection.info`.
-- Для collection-bound операций не передавай и не меняй `collection_slug`/`collection_id`, если операция явно не требует это в своей схеме.
+- Для collection-bound операций всегда передавай `collection_slug` ровно из capability card или результата `collection.info`. Не передавай `collection_id`: он разрешается и проверяется внутри runtime.
 - В поле `tool` используй имя инструмента ровно в том виде, как оно указано в списке ниже.
 
 {call_heading}
@@ -283,7 +283,12 @@ def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str,
     """Convert resolved executable tools to OpenAI-compatible tool declarations."""
 
     tools: List[Dict[str, Any]] = []
+    seen_names: set[str] = set()
     for op in operations:
+        name = str(getattr(op, "operation", "") or op.operation_slug).strip()
+        if not name or name in seen_names:
+            continue
+        seen_names.add(name)
         raw = build_prompt_input_schema(op)
         schema = _sanitize_tool_schema(raw)
         schema.setdefault("type", "object")
@@ -292,7 +297,7 @@ def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str,
             {
                 "type": "function",
                 "function": {
-                    "name": op.operation_slug,
+                    "name": name,
                     "description": build_prompt_operation_description(
                         op,
                         summary=getattr(op, "published", None),

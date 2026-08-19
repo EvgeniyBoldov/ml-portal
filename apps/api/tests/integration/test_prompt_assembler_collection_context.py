@@ -63,7 +63,7 @@ async def test_prompt_assembler_renders_collection_semantics_from_current_versio
         is_active=True,
     )
 
-    router.data_instance_resolver.resolve = AsyncMock(
+    router.collection_runtime_resolver.resolve = AsyncMock(
         return_value=[
             SimpleNamespace(
                 instance=instance,
@@ -92,7 +92,7 @@ async def test_prompt_assembler_renders_collection_semantics_from_current_versio
             data_instance_slug=instance.slug,
         ),
     )
-    router.operation_resolver.resolve_for_instance = AsyncMock(return_value=[(op, None)])
+    router.operation_resolver.resolve_for_collection = AsyncMock(return_value=[(op, None)])
 
     result = await router.resolve(user_id=uuid4(), tenant_id=tenant_id)
 

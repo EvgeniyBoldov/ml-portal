@@ -11,7 +11,7 @@ _COLLECTION_BINDING_FIELDS = frozenset({"collection_slug", "collection_id"})
 
 
 def operation_requires_explicit_collection_binding(op: "ResolvedOperation") -> bool:
-    return False
+    return getattr(op, "scope", "collection") == "collection"
 
 
 def build_prompt_input_schema(op: "ResolvedOperation") -> Dict[str, Any]:
@@ -22,18 +22,19 @@ def build_prompt_input_schema(op: "ResolvedOperation") -> Dict[str, Any]:
         properties = {}
         schema["properties"] = properties
 
-    if getattr(op, "scope", "collection") == "collection" and not operation_requires_explicit_collection_binding(op):
-        for field_name in _COLLECTION_BINDING_FIELDS:
-            properties.pop(field_name, None)
-        required = [
-            item
+    if operation_requires_explicit_collection_binding(op):
+        properties["collection_slug"] = {"type": "string", "minLength": 1}
+        required = {
+            str(item).strip()
             for item in (schema.get("required") or [])
-            if str(item).strip() not in _COLLECTION_BINDING_FIELDS
-        ]
-        if required:
-            schema["required"] = required
-        else:
-            schema.pop("required", None)
+            if str(item).strip()
+        }
+        required.add("collection_slug")
+        schema["required"] = sorted(required)
+        # A collection id is an internal persistence detail.  The public
+        # contract deliberately targets a collection by its stable slug.
+        properties.pop("collection_id", None)
+        schema["required"] = [item for item in schema["required"] if item != "collection_id"]
 
     return schema
 
@@ -73,21 +74,14 @@ def build_prompt_operation_description(
     max_chars: int = 512,
 ) -> str:
     title = _text(getattr(summary, "title", None)) or _text(getattr(op, "name", None)) or _text(getattr(op, "operation_slug", None))
-    collection_slug = _text(getattr(summary, "collection_slug", None)) or _text(getattr(op, "collection_slug", None))
     collection_type = _text(getattr(summary, "collection_type", None))
     result_kind = _text(getattr(summary, "result_kind", None)) or _text(getattr(op, "result_kind", None))
     base_description = _text(getattr(summary, "description", None)) or _text(getattr(op, "description", None))
 
     parts: List[str] = [title]
     if getattr(op, "scope", "collection") == "collection":
-        if collection_slug and collection_type:
-            parts.append(f"bound to collection: {collection_slug} ({collection_type})")
-            parts.append("runtime already binds the collection; do not pass or change collection_slug/collection_id")
-        elif collection_slug:
-            parts.append(f"bound to collection: {collection_slug}")
-            parts.append("runtime already binds the collection; do not pass or change collection_slug/collection_id")
-        else:
-            parts.append("bound to collection; runtime already binds the collection")
+        type_note = f" ({collection_type})" if collection_type else ""
+        parts.append(f"requires collection_slug target{type_note}")
     if base_description:
         parts.append(base_description)
     if result_kind:

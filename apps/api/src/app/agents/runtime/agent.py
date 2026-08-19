@@ -1244,7 +1244,7 @@ class AgentToolRuntime(BaseRuntime):
             op.operation_slug
             for op in available_operations
             if str(getattr(op, "collection_slug", "") or "").strip() == collection_slug
-            and op.operation_slug in returned_slugs
+            and str(getattr(op, "operation", "") or "").strip() in returned_slugs
             and getattr(op, "operation", None) != "collection.info"
         }
         loop_state.opened_collections.add(collection_slug)

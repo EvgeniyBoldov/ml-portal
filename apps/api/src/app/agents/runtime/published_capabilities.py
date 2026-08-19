@@ -19,7 +19,9 @@ def build_published_operation_summary(
 ) -> PublishedOperationSummary:
     readiness = getattr(collection, "readiness", None)
     return PublishedOperationSummary(
-        operation_slug=str(getattr(operation, "operation_slug", "") or "").strip(),
+        # Runtime bindings are target-specific.  Publication exposes only the
+        # canonical tool name; collection_slug is a required call argument.
+        operation_slug=str(getattr(operation, "operation", "") or "").strip(),
         canonical_name=str(getattr(operation, "operation", "") or "").strip(),
         scope_kind=getattr(operation, "scope", "collection"),
         domain=getattr(operation, "published_domain", None),
@@ -166,9 +168,43 @@ def build_published_collection_summaries(
 def serialize_published_operations(
     operations: Iterable[ResolvedOperation],
 ) -> list[dict]:
-    payload: list[dict] = []
+    """Publish one canonical operation per public name.
+
+    ``ResolvedOperation`` is intentionally target-specific so execution can
+    validate a concrete collection and route it to the right provider.  That
+    internal graph must not leak as repeated tools into prompts or trace
+    snapshots.  Collection-specific capability detail remains available in
+    ``available_collections``; this compact view records all valid target
+    slugs on the single canonical operation.
+    """
+
+    summaries: dict[tuple[str, str], PublishedOperationSummary] = {}
     for operation in operations:
         summary = _resolve_operation_summary(operation)
+        key = (summary.scope_kind, summary.canonical_name or summary.operation_slug)
+        current = summaries.get(key)
+        if current is None:
+            summaries[key] = summary.model_copy(
+                update={
+                    "collection_slugs": ([summary.collection_slug] if summary.collection_slug else []),
+                }
+            )
+            continue
+
+        if summary.collection_slug and summary.collection_slug not in current.collection_slugs:
+            current.collection_slugs.append(summary.collection_slug)
+
+    payload: list[dict] = []
+    for summary in summaries.values():
+        summary.collection_slugs.sort()
+        if len(summary.collection_slugs) > 1:
+            # A single collection-specific value would be misleading here.
+            # The per-collection details live in available_collections.
+            summary.collection_slug = None
+            summary.collection_type = None
+            summary.collection_purpose = None
+            summary.collection_readiness = None
+            summary.schema_freshness = None
         payload.append(summary.model_dump(mode="json"))
     return payload
 

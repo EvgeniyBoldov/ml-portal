@@ -43,7 +43,7 @@ from .discovered_tool import DiscoveredTool
 from .memory import Fact, FactScope, FactSource, DialogueSummary
 from .memory import FactObservation, FactStatus
 from .project import Project
-from .glossary import GlossaryEntry, GlossaryScope
+from .glossary import GlossaryEntry, GlossaryObservation, GlossaryScope, GlossaryStatus
 from .execution_limit import (
     ActorExecutionLimit,
     ActorExecutionLimitScope,
@@ -122,7 +122,9 @@ __all__ = [
     "FactStatus",
     "Project",
     "GlossaryEntry",
+    "GlossaryObservation",
     "GlossaryScope",
+    "GlossaryStatus",
     "ExecutionLimit",
     "ExecutionLimitScope",
     "ActorExecutionLimit",

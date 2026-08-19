@@ -208,37 +208,17 @@ class DirectOperationExecutor:
         if binding is None:
             return merged_args
         instance_info = binding.context.model_dump()
-        config = instance_info.get("config") or {}
-        allowed_slugs = instance_info.get("allowed_collection_slugs") or []
-
         request_slug = merged_args.get("collection_slug")
-        request_collection_id = merged_args.get("collection_id")
-        binding_collection_id = instance_info.get("collection_id")
         binding_collection_slug = instance_info.get("collection_slug")
-
-        # Validate: if bindings restrict collections, the requested one must be allowed.
-        if allowed_slugs and request_slug and request_slug not in allowed_slugs:
-            raise ValueError(
-                f"Collection '{request_slug}' is not allowed for this operation. "
-                f"Allowed: {allowed_slugs}"
-            )
-        if request_collection_id and binding_collection_id and request_collection_id != binding_collection_id:
-            raise ValueError(
-                f"Collection id '{request_collection_id}' does not match the bound collection id "
-                f"'{binding_collection_id}' for this operation."
-            )
-
-        # Collection-bound operations inherit their bound collection slug when
-        # the model omits it from arguments.
-        if not request_slug:
-            if binding_collection_slug:
-                merged_args["collection_slug"] = binding_collection_slug
-            else:
-                config_collection_slug = config.get("collection_slug")
-                if config_collection_slug:
-                    merged_args["collection_slug"] = config_collection_slug
-        if not request_collection_id and binding_collection_id:
-            merged_args["collection_id"] = binding_collection_id
+        if binding_collection_slug:
+            if not request_slug:
+                raise ValueError("collection_slug is required for a collection operation")
+            if request_slug != binding_collection_slug:
+                raise ValueError(
+                    f"Collection '{request_slug}' does not match operation target "
+                    f"'{binding_collection_slug}'."
+                )
+        merged_args.pop("collection_id", None)
 
         return merged_args
 
@@ -256,32 +236,17 @@ class DirectOperationExecutor:
         instance_info = binding.context.model_dump()
         data_config = binding.context.config or {}
         credential_context = binding.credential
-        allowed_slugs = instance_info.get("allowed_collection_slugs") or []
-
         request_slug = merged_args.get("collection_slug")
-        request_collection_id = merged_args.get("collection_id")
-        binding_collection_id = instance_info.get("collection_id")
         binding_collection_slug = instance_info.get("collection_slug")
-
-        # Validate: if bindings restrict collections, the requested one must be allowed.
-        if allowed_slugs and request_slug and request_slug not in allowed_slugs:
-            raise ValueError(
-                f"Collection '{request_slug}' is not allowed for this operation. "
-                f"Allowed: {allowed_slugs}"
-            )
-        if request_collection_id and binding_collection_id and request_collection_id != binding_collection_id:
-            raise ValueError(
-                f"Collection id '{request_collection_id}' does not match the bound collection id "
-                f"'{binding_collection_id}' for this operation."
-            )
-
-        # Collection-bound operations inherit their bound collection slug when
-        # the model omits it from arguments.
-        if not request_slug:
-            if binding_collection_slug:
-                merged_args["collection_slug"] = binding_collection_slug
-        if not request_collection_id and binding_collection_id:
-            merged_args["collection_id"] = binding_collection_id
+        if binding_collection_slug:
+            if not request_slug:
+                raise ValueError("collection_slug is required for a collection operation")
+            if request_slug != binding_collection_slug:
+                raise ValueError(
+                    f"Collection '{request_slug}' does not match operation target "
+                    f"'{binding_collection_slug}'."
+                )
+        merged_args.pop("collection_id", None)
 
         merged_args.setdefault("instance_context", {})
         if isinstance(merged_args["instance_context"], dict):

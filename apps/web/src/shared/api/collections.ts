@@ -154,6 +154,62 @@ export interface CollectionListResponse {
   has_more?: boolean;
 }
 
+export interface ProjectMemoryProject {
+  key: string;
+  name: string;
+  aliases: string[];
+  status_counts: Record<string, number>;
+  updated_at: string | null;
+}
+
+export interface ProjectMemoryOverviewResponse {
+  projects: ProjectMemoryProject[];
+  total: number;
+}
+
+export interface ProjectMemoryFact {
+  subject: string;
+  value: string;
+  kind: string;
+  status: string;
+  observed_at: string;
+}
+
+export interface ProjectMemoryProjectDetailResponse {
+  project: ProjectMemoryProject;
+  facts: ProjectMemoryFact[];
+}
+
+export interface GlossaryCatalogEntry {
+  canonical_term: string;
+  aliases: string[];
+  description: string | null;
+  entity_type: string;
+  scope: 'global' | 'tenant';
+  updated_at: string;
+}
+
+export interface GlossaryOverviewResponse {
+  entries: GlossaryCatalogEntry[];
+  total: number;
+}
+
+export interface CollectionCapabilityTool {
+  operation: string;
+  title: string;
+  description: string;
+  source: string;
+  provider: string;
+}
+
+export interface CollectionCapabilitiesResponse {
+  collection_id: string;
+  collection_slug: string;
+  collection_type?: CollectionType;
+  status?: string;
+  tools: CollectionCapabilityTool[];
+}
+
 export interface CreateCollectionRequest {
   tenant_id?: string;
   collection_type?: CollectionType;
@@ -455,6 +511,10 @@ export const collectionsApi = {
     return toFrontendCollection(collection);
   },
 
+  getCapabilities: async (id: string): Promise<CollectionCapabilitiesResponse> => {
+    return apiRequest<CollectionCapabilitiesResponse>(`/admin/collections/${id}/capabilities`);
+  },
+
   getTypePresets: async (): Promise<CollectionTypePresetsResponse> => {
     return apiRequest<CollectionTypePresetsResponse>('/admin/collections/type-presets');
   },
@@ -693,6 +753,19 @@ export const collectionsApi = {
     const collection = await apiRequest<Collection>(`/collections/${slug}`);
     return toFrontendCollection(collection);
   },
+
+  getProjectMemoryOverview: async (): Promise<ProjectMemoryOverviewResponse> =>
+    apiRequest<ProjectMemoryOverviewResponse>('/collections/project-memory'),
+
+  getProjectMemoryProject: async (
+    projectKey: string,
+  ): Promise<ProjectMemoryProjectDetailResponse> =>
+    apiRequest<ProjectMemoryProjectDetailResponse>(
+      `/collections/project-memory/projects/${encodeURIComponent(projectKey)}`,
+    ),
+
+  getGlossaryOverview: async (): Promise<GlossaryOverviewResponse> =>
+    apiRequest<GlossaryOverviewResponse>('/collections/glossary'),
 
   // CSV operations
   previewCSV: async (

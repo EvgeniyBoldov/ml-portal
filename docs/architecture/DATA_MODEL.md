@@ -144,6 +144,10 @@ PermissionSet and CredentialSet are still scope-aware, but scope is mainly used 
 ```
 
 - `collections.data_instance_id` — обязательный FK на `tool_instances.id`.
+  Для SQL/API это source в цепочке `collection -> data source -> MCP provider`.
+  Для local table/document/template поле сохраняется как совместимый
+  persistence-FK, но не выбирает runtime provider: его выбирает
+  `CollectionRuntimeResolver` только по типу коллекции.
 - Binding через `config.bindings` удалён из runtime-контракта.
 - Источник связи `Collection ↔ DataInstance` только реляционный FK.
 

@@ -8,7 +8,8 @@ The goal is to evolve the existing model without breaking runtime:
 - keep `Collection` as the semantic/data-asset layer,
 - keep `ToolInstance` as runtime access/connector layer,
 - remove behavior-level dependency on `instance.domain`,
-- unify local and remote collections under one binding contract.
+- unify local and remote collections under one resolution contract while
+  keeping their provider selection rules explicit.
 
 ## Why This Refactor Exists
 
@@ -57,15 +58,19 @@ Collection must not store endpoint contracts.
 
 Instance is not the owner of data semantics.
 
-### 3. Runtime Binding Contract
+### 3. Runtime Resolution Contract
 
 Runtime resolves in this order:
-1. collection (semantic/data scope),
-2. linked data instance (access boundary),
-3. linked service instance (connector path),
-4. published tools for execution.
+1. public `collection_slug` to the semantic collection scope,
+2. effective access and readiness for that collection,
+3. local provider by `collection_type`, or the remote
+   `data_instance -> access_via/provider` chain,
+4. one canonical published operation with an internal target-specific binding.
 
-Behavior must be driven by explicit binding metadata, not by domain string checks.
+The public operation contract is provider-agnostic. `collection_id` is an
+internal persistence/runtime identifier and is not exposed to the planner or
+LLM. Behavior is driven by collection type, relational source links and
+capabilities, not by `instance.domain` or provider-qualified tool names.
 
 ## Domain Policy
 
@@ -82,11 +87,13 @@ Rules:
 
 Objective: remove collection behavior checks from `domain`.
 
-Done:
-- introduced explicit collection binding helper (`instance.config`),
-- switched readiness and runtime collection checks to binding resolution,
-- updated local collection instance config with explicit binding marker,
-- introduced canonical local provider instance (`local-runtime`) and linked local data instances via `access_via_instance_id`.
+Implemented:
+- introduced `CollectionRuntimeResolver` as the collection-first target
+  resolver;
+- local collection provider selection uses explicit `collection_type`;
+- remote sources use the relational data-instance/provider chain;
+- canonical publication and internal target bindings no longer use
+  `instance.config.bindings` as runtime source of truth.
 
 ### Phase 2
 
@@ -118,8 +125,11 @@ Tasks:
 1. replace domain-driven publication mapping with binding/capability-driven mapping,
 2. keep backward compatibility bridge for existing operation slugs.
 
-Progress:
-- publication now prefers discovered capability domains (`discovered_tool.domains`) and only then falls back to instance runtime domain.
+Implemented:
+- publication prefers discovered capability domains and canonical operation
+  metadata; instance domain is only transitional fallback metadata;
+- shared providers publish one canonical operation while execution retains
+  collection-specific bindings.
 
 ### Phase 5
 

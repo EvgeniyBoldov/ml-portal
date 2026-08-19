@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.agents.data_instance_resolver import RuntimeDataInstanceResolver
+from app.agents.data_instance_resolver import CollectionRuntimeResolver
 
 
 @pytest.mark.asyncio
@@ -14,7 +14,7 @@ async def test_resolver_keeps_service_backed_collection_chain():
     instance_service = SimpleNamespace(
         evaluate_instance_readiness=AsyncMock(return_value=(True, "ready", None))
     )
-    resolver = RuntimeDataInstanceResolver(session=session, instance_service=instance_service)
+    resolver = CollectionRuntimeResolver(session=session, instance_service=instance_service)
 
     collection = SimpleNamespace(collection_type="document", is_active=True)
     service_instance = SimpleNamespace(
@@ -27,9 +27,8 @@ async def test_resolver_keeps_service_backed_collection_chain():
         domain="collection.document",
     )
 
-    resolver._load_active_collection_bindings = AsyncMock(  # noqa: SLF001
-        return_value=[(collection, service_instance)]
-    )
+    resolver._load_active_collections = AsyncMock(return_value=[collection])  # noqa: SLF001
+    resolver._resolve_collection_source = AsyncMock(return_value=service_instance)  # noqa: SLF001
 
     items = await resolver.resolve()
 
@@ -48,7 +47,7 @@ async def test_resolver_uses_access_via_provider_for_remote_data():
     instance_service = SimpleNamespace(
         evaluate_instance_readiness=AsyncMock(return_value=(True, "ready", None))
     )
-    resolver = RuntimeDataInstanceResolver(session=session, instance_service=instance_service)
+    resolver = CollectionRuntimeResolver(session=session, instance_service=instance_service)
 
     collection = SimpleNamespace(collection_type="api", is_active=True)
     data_instance = SimpleNamespace(
@@ -66,9 +65,8 @@ async def test_resolver_uses_access_via_provider_for_remote_data():
         health_status="healthy",
     )
 
-    resolver._load_active_collection_bindings = AsyncMock(  # noqa: SLF001
-        return_value=[(collection, data_instance)]
-    )
+    resolver._load_active_collections = AsyncMock(return_value=[collection])  # noqa: SLF001
+    resolver._resolve_collection_source = AsyncMock(return_value=data_instance)  # noqa: SLF001
     resolver._resolve_provider_instance = AsyncMock(return_value=provider_instance)  # noqa: SLF001
 
     items = await resolver.resolve()
@@ -80,3 +78,23 @@ async def test_resolver_uses_access_via_provider_for_remote_data():
     assert item.collection is collection
     assert item.readiness_reason == "ready"
     assert item.runtime_domain == "collection.api"
+
+
+@pytest.mark.asyncio
+async def test_local_collection_type_selects_provider_without_reading_legacy_binding():
+    local_template_service = SimpleNamespace(slug="local-template-tools")
+    instance_service = SimpleNamespace(
+        resolve_local_service_for_collection_type=AsyncMock(
+            return_value=local_template_service
+        )
+    )
+    resolver = CollectionRuntimeResolver(session=SimpleNamespace(), instance_service=instance_service)
+    collection = SimpleNamespace(
+        collection_type="template",
+        data_instance=SimpleNamespace(slug="legacy-template-data"),
+    )
+
+    source = await resolver._resolve_collection_source(collection)  # noqa: SLF001
+
+    assert source is local_template_service
+    instance_service.resolve_local_service_for_collection_type.assert_awaited_once_with("template")

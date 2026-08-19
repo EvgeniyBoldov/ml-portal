@@ -22,16 +22,16 @@ logger = get_logger(__name__)
 _INPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
-        "collection_id": {
+        "collection_slug": {
             "type": "string",
-            "description": "UUID or slug of the template collection",
+            "description": "Slug of the template collection",
         },
         "row_id": {
             "type": "string",
             "description": "UUID of the template row",
         },
     },
-    "required": ["collection_id", "row_id"],
+    "required": ["collection_slug", "row_id"],
 }
 
 _OUTPUT_SCHEMA_V1 = {
@@ -71,12 +71,15 @@ class TemplateGetSchemaTool(VersionedTool):
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         log = ctx.tool_notes("collection.template.get_schema")
 
-        collection_id = str(args.get("collection_id") or "").strip()
+        collection_slug = str(args.get("collection_slug") or "").strip()
+        # Existing persisted task payloads may still contain collection_id.
+        # It is a compatibility input only; all published contracts use slug.
+        legacy_collection_id = str(args.get("collection_id") or "").strip()
         row_id = str(args.get("row_id") or "").strip()
-        if not collection_id or not row_id:
-            log.error("Missing collection_id or row_id")
+        if not (collection_slug or legacy_collection_id) or not row_id:
+            log.error("Missing collection_slug or row_id")
             return ToolResult.fail(
-                "Missing 'collection_id' or 'row_id' argument",
+                "Missing 'collection_slug' or 'row_id' argument",
                 logs=log.entries_dict(),
             )
 
@@ -85,20 +88,22 @@ class TemplateGetSchemaTool(VersionedTool):
             session_factory = get_session_factory()
             async with session_factory() as session:
                 service = CollectionService(session)
-                try:
-                    cid = uuid.UUID(collection_id)
-                    collection = await service.get_by_id(cid)
-                except ValueError:
-                    collection = await service.get_by_slug(collection_id)
+                if collection_slug:
+                    collection = await service.get_by_slug(collection_slug)
+                else:
+                    try:
+                        collection = await service.get_by_id(uuid.UUID(legacy_collection_id))
+                    except ValueError:
+                        collection = None
 
                 if not collection:
                     return ToolResult.fail(
-                        f"Collection '{collection_id}' not found",
+                        f"Collection '{collection_slug or legacy_collection_id}' not found",
                         logs=log.entries_dict(),
                     )
                 if collection.collection_type != CollectionType.TEMPLATE.value:
                     return ToolResult.fail(
-                        f"Collection '{collection_id}' is not a template collection",
+                        f"Collection '{collection_slug or legacy_collection_id}' is not a template collection",
                         logs=log.entries_dict(),
                     )
 
@@ -107,7 +112,7 @@ class TemplateGetSchemaTool(VersionedTool):
                 row = await row_service.get_row_by_id(collection, rid)
                 if not row:
                     return ToolResult.fail(
-                        f"Template row '{row_id}' not found in collection '{collection_id}'",
+                        f"Template row '{row_id}' not found in collection '{collection_slug or legacy_collection_id}'",
                         logs=log.entries_dict(),
                     )
 

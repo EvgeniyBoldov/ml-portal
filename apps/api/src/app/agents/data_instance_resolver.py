@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -21,13 +22,13 @@ class AllowedDataInstance:
     runtime_domain: str
 
 
-class RuntimeDataInstanceResolver:
-    """Resolve runtime-ready collection bindings for local and remote chains.
+class CollectionRuntimeResolver:
+    """Resolve an execution source for every active collection.
 
-    Source of truth is Collection.data_instance_id. For each active collection,
-    we resolve its bound instance and then provider:
-    - remote data: data instance -> access_via provider
-    - local/service-backed data: collection may bind directly to service instance
+    Collection is the selection root.  Local collections select their shared
+    provider solely from ``collection_type``; ``data_instance_id`` remains a
+    persistence compatibility field and is not consulted for that decision.
+    Remote collections retain the explicit source -> MCP provider chain.
     """
 
     def __init__(
@@ -41,8 +42,20 @@ class RuntimeDataInstanceResolver:
 
     async def resolve(self) -> List[AllowedDataInstance]:
         resolved: List[AllowedDataInstance] = []
-        bindings = await self._load_active_collection_bindings()
-        for collection, instance in bindings:
+        for collection in await self._load_active_collections():
+            instance = await self._resolve_collection_source(collection)
+            if instance is None:
+                missing_source = SimpleNamespace(slug=f"missing-source-{collection.slug}", domain="")
+                resolved.append(
+                    AllowedDataInstance(
+                        instance=missing_source,
+                        provider=None,
+                        collection=collection,
+                        readiness_reason="missing_source",
+                        runtime_domain=self._resolve_runtime_domain(collection, missing_source),
+                    )
+                )
+                continue
             is_ready, readiness_reason, _ = await self.instance_service.evaluate_instance_readiness(
                 instance
             )
@@ -87,24 +100,31 @@ class RuntimeDataInstanceResolver:
             )
         return resolved
 
-    async def _load_active_collection_bindings(
-        self,
-    ) -> List[tuple[Collection, ToolInstance]]:
+    async def _load_active_collections(self) -> List[Collection]:
         result = await self.session.execute(
-            select(Collection, ToolInstance)
-            .join(ToolInstance, ToolInstance.id == Collection.data_instance_id)
+            select(Collection)
             .options(
                 selectinload(Collection.schema),
                 selectinload(Collection.current_version),
+                selectinload(Collection.data_instance),
             )
             .where(
                 Collection.is_active.is_(True),
                 Collection.lifecycle_status != "deprecated",
-                ToolInstance.is_active.is_(True),
             )
             .order_by(Collection.created_at.asc())
         )
-        return list(result.all())
+        return list(result.scalars().all())
+
+    async def _resolve_collection_source(self, collection: Collection) -> Optional[ToolInstance]:
+        collection_type = str(collection.collection_type or "").strip().lower()
+        if collection_type in {
+            CollectionType.TABLE.value,
+            CollectionType.DOCUMENT.value,
+            CollectionType.TEMPLATE.value,
+        }:
+            return await self.instance_service.resolve_local_service_for_collection_type(collection_type)
+        return collection.data_instance
 
     @staticmethod
     def _resolve_runtime_domain(collection: Optional[Collection], instance: ToolInstance) -> str:

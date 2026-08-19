@@ -42,9 +42,13 @@ async def test_template_fill_returns_structured_validation_failure(monkeypatch):
     }
 
     monkeypatch.setattr("app.agents.builtins.template_fill.get_session_factory", lambda: _SessionManager)
+    collection_service = SimpleNamespace(
+        get_by_id=AsyncMock(return_value=collection),
+        get_by_slug=AsyncMock(return_value=collection),
+    )
     monkeypatch.setattr(
         "app.agents.builtins.template_fill.CollectionService",
-        lambda session: SimpleNamespace(get_by_id=AsyncMock(return_value=collection), get_by_slug=AsyncMock(return_value=None)),
+        lambda session: collection_service,
     )
     monkeypatch.setattr(
         "app.agents.builtins.template_fill.CollectionRowService",
@@ -58,7 +62,7 @@ async def test_template_fill_returns_structured_validation_failure(monkeypatch):
     result = await tool.v1_0_0(
         ctx,
         {
-            "collection_id": str(uuid4()),
+            "collection_slug": "template",
             "row_id": str(uuid4()),
             "values": {"author.name": "Alice"},
         },
@@ -70,6 +74,7 @@ async def test_template_fill_returns_structured_validation_failure(monkeypatch):
     assert result.metadata["validation_errors"]
     assert any(item["path"] == "author" or item["path"] == "author.name" for item in result.metadata["validation_errors"])
     assert "retry" in result.metadata["retry_hint"].lower() or "repeat" in result.metadata["retry_hint"].lower()
+    collection_service.get_by_slug.assert_awaited_once_with("template")
 
 
 @pytest.mark.asyncio
@@ -116,9 +121,13 @@ async def test_template_fill_persists_custom_named_artifact(monkeypatch):
     )
 
     monkeypatch.setattr("app.agents.builtins.template_fill.get_session_factory", lambda: _SessionManager)
+    collection_service = SimpleNamespace(
+        get_by_id=AsyncMock(return_value=collection),
+        get_by_slug=AsyncMock(return_value=collection),
+    )
     monkeypatch.setattr(
         "app.agents.builtins.template_fill.CollectionService",
-        lambda session: SimpleNamespace(get_by_id=AsyncMock(return_value=collection), get_by_slug=AsyncMock(return_value=None)),
+        lambda session: collection_service,
     )
     monkeypatch.setattr(
         "app.agents.builtins.template_fill.CollectionRowService",
@@ -138,7 +147,7 @@ async def test_template_fill_persists_custom_named_artifact(monkeypatch):
     result = await TemplateFillTool().v1_0_0(
         ToolContext(tenant_id=uuid4(), user_id=uuid4(), chat_id=uuid4()),
         {
-            "collection_id": str(uuid4()),
+            "collection_slug": "template",
             "row_id": str(uuid4()),
             "values": {"name": "Alice"},
             "filename": "result.xlsx",
@@ -150,3 +159,4 @@ async def test_template_fill_persists_custom_named_artifact(monkeypatch):
     assert write.await_args.kwargs["filename"] == "result.xlsx"
     assert write.await_args.kwargs["content"] == b"result"
     session.commit.assert_awaited_once()
+    collection_service.get_by_slug.assert_awaited_once_with("template")

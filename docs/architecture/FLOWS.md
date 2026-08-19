@@ -44,7 +44,8 @@ Flow:
 4. Resolve effective semantic/runtime config through `ToolResolver`.
 5. Map it to a canonical `OperationSpec`.
 6. Apply deterministic `PublicationRule`.
-7. Expose an instance-scoped `Operation`.
+7. Expose one canonical `Operation` with target-specific bindings kept inside
+   runtime.
 
 Binding rule:
 - raw provider names never become planner vocabulary,
@@ -65,7 +66,8 @@ Flow:
 1. Resolve user, tenant, and agent context.
 2. Resolve allowed instances and policies.
 3. Resolve semantic profiles and available operations.
-4. Produce execution targets.
+4. Produce canonical operation descriptors and target-specific execution
+   bindings.
 5. Pass execution through `RuntimeControlPlane` for sandbox attachment, logging-level resolution, and trace/error persistence.
 6. Run the operation loop with policy and trace controls.
 
@@ -74,10 +76,19 @@ Binding rule:
 - runtime resolves execution targets, not raw tool slugs.
 
 Collection resolution note:
-- runtime should resolve collections through type-specific resolvers,
-- local table, local document, and remote SQL catalog flows must stay explicit,
-- adding a new collection type should require a new resolver path, not hidden branching in prompt assembly.
-- retrieval contract for planner/LLM must use canonical names (`collection.document.search`, `collection.table.search`), while raw builtin slugs stay internal.
+- `CollectionRuntimeResolver` is the single target resolver;
+- local `table`, `document` and `template` collections select an in-process
+  provider by type;
+- remote `sql` and `api` collections follow the relational
+  `collection -> data_instance -> access_via/provider` chain;
+- every collection-bound public operation requires `collection_slug`; the
+  internal `collection_id` is resolved after access checks and is never part of
+  the LLM-facing schema;
+- publication exposes one canonical operation name even when several
+  collection targets share the same provider; target-specific bindings remain
+  internal to execution;
+- adding a new collection type requires an explicit resolver/publication path,
+  not hidden branching in prompt assembly.
 
 ## 4. Sandbox Overlay Flow
 

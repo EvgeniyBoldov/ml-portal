@@ -169,6 +169,10 @@ export const qk = {
       ['collections', 'data', slug, params] as const,
     documents: (id: string, params?: { page?: number; size?: number; status?: string }) =>
       ['collections', 'documents', id, params] as const,
+    projectMemoryOverview: () => ['collections', 'project-memory', 'overview'] as const,
+    projectMemoryProject: (projectKey: string) =>
+      ['collections', 'project-memory', 'project', projectKey] as const,
+    glossaryOverview: () => ['collections', 'glossary', 'overview'] as const,
   },
   auth: {
     me: () => ['auth', 'me'] as const,

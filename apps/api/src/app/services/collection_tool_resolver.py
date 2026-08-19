@@ -1,8 +1,8 @@
-"""
-Collection-aware runtime tool resolver.
+"""Collection-first discovered-tool resolver.
 
-Centralizes discovered-tool loading logic for runtime/admin summaries.
-The resolver uses Collection.data_instance_id as single source of truth.
+The caller must supply the target collection.  A shared local provider never
+selects a collection implicitly; remote source binding is resolved above this
+layer and passed in explicitly.
 """
 from __future__ import annotations
 
@@ -21,10 +21,7 @@ from app.agents.operation_publication import (
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
 from app.models.collection import Collection
-from app.services.collection_linking import (
-    resolve_bound_collection_by_instance_id,
-    runtime_domain_for_collection,
-)
+from app.services.collection_linking import runtime_domain_for_collection
 from app.services.instance_capabilities import is_mcp_service_instance
 
 @dataclass(frozen=True)
@@ -34,7 +31,6 @@ class CollectionToolResolutionContext:
     bound_collection: Optional[Collection]
     runtime_domain: str
     provider_kind: str  # "mcp" | "local"
-    is_service_instance: bool
 
 
 @dataclass(frozen=True)
@@ -54,50 +50,37 @@ class CollectionToolResolver:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def load_discovered_tools(
+    async def load_discovered_tools_for_collection(
         self,
         *,
+        collection: Collection,
         instance: ToolInstance,
         provider: ToolInstance,
     ) -> List[DiscoveredTool | VirtualDiscoveredTool]:
-        context = await self._build_context(instance=instance, provider=provider)
-        tools = await self._load_tools_for_context(
-            context=context,
-        )
-        tools.extend(self._load_builtin_collection_tools(context=context))
-        deduped = self._dedupe_tools(tools)
-        if context.is_service_instance:
-            return deduped
-        return [
-            tool
-            for tool in deduped
-            if self._is_tool_supported_for_context(
-                tool=tool,
-                context=context,
-            )
-        ]
+        """Resolve tools for an explicit collection target.
 
-    async def _build_context(
-        self,
-        *,
-        instance: ToolInstance,
-        provider: ToolInstance,
-    ) -> CollectionToolResolutionContext:
-        bound_collection = await self._resolve_bound_collection(instance)
+        A local provider can serve many collections.  Never infer the target
+        collection from the provider instance: doing so makes the first bound
+        collection silently win for every shared local service.
+        """
         runtime_domain = runtime_domain_for_collection(
-            collection=bound_collection,
+            collection=collection,
             fallback_domain=getattr(instance, "domain", ""),
         )
-        provider_kind = "mcp" if self._is_mcp_provider(provider) else "local"
-        is_service_instance = bool(getattr(instance, "is_service", False))
-        return CollectionToolResolutionContext(
+        context = CollectionToolResolutionContext(
             instance=instance,
             provider=provider,
-            bound_collection=bound_collection,
+            bound_collection=collection,
             runtime_domain=runtime_domain,
-            provider_kind=provider_kind,
-            is_service_instance=is_service_instance,
+            provider_kind="mcp" if self._is_mcp_provider(provider) else "local",
         )
+        tools = await self._load_tools_for_context(context=context)
+        tools.extend(self._load_builtin_collection_tools(context=context))
+        return [
+            tool
+            for tool in self._dedupe_tools(tools)
+            if self._is_tool_supported_for_context(tool=tool, context=context)
+        ]
 
     async def _load_tools_for_context(
         self,
@@ -199,26 +182,6 @@ class CollectionToolResolver:
         if handler is None:
             return "system" in (list(getattr(tool, "domains", None) or []))
         return "system" in (list(getattr(handler, "domains", None) or []))
-
-    @staticmethod
-    def _resolve_local_domains(instance: ToolInstance) -> List[str]:
-        """
-        Build ordered local runtime domains for compatibility filtering.
-
-        Priority:
-        1. persisted instance domain
-        """
-        domains: List[str] = []
-        domain = str(getattr(instance, "domain", "") or "").strip()
-        if domain:
-            domains.append(domain)
-        return domains
-
-    async def _resolve_bound_collection(self, instance: ToolInstance) -> Optional[Collection]:
-        return await resolve_bound_collection_by_instance_id(
-            self.session,
-            data_instance_id=instance.id,
-        )
 
     @staticmethod
     def _load_builtin_collection_tools(

@@ -74,7 +74,6 @@ async def test_resolve_system_tools_creates_global_binding_without_collection_co
     assert binding is not None
     assert binding.context.scope == "system"
     assert binding.context.collection_slug is None
-    assert binding.context.allowed_collection_slugs == []
     assert binding.target.data_instance_slug == "system"
 
 

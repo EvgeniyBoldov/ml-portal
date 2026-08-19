@@ -22,9 +22,9 @@ logger = get_logger(__name__)
 _INPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
-        "collection_id": {
+        "collection_slug": {
             "type": "string",
-            "description": "UUID or slug of the template collection",
+            "description": "Slug of the template collection",
         },
         "query": {
             "type": "string",
@@ -36,7 +36,7 @@ _INPUT_SCHEMA_V1 = {
             "default": 20,
         },
     },
-    "required": ["collection_id"],
+    "required": ["collection_slug"],
 }
 
 _OUTPUT_SCHEMA_V1 = {
@@ -85,10 +85,13 @@ class TemplateListTool(VersionedTool):
         if not ctx.chat_id:
             return ToolResult.fail("Template listing requires a chat context.", logs=log.entries_dict())
 
-        collection_id = str(args.get("collection_id") or "").strip()
-        if not collection_id:
-            log.error("Missing collection_id")
-            return ToolResult.fail("Missing 'collection_id' argument", logs=log.entries_dict())
+        collection_slug = str(args.get("collection_slug") or "").strip()
+        # Compatibility for persisted payloads produced before the public
+        # collection-slug contract. New calls must use collection_slug.
+        legacy_collection_id = str(args.get("collection_id") or "").strip()
+        if not (collection_slug or legacy_collection_id):
+            log.error("Missing collection_slug")
+            return ToolResult.fail("Missing 'collection_slug' argument", logs=log.entries_dict())
 
         query_filter = str(args.get("query") or "").strip() or None
         limit = int(args.get("limit", 20))
@@ -97,23 +100,24 @@ class TemplateListTool(VersionedTool):
             session_factory = get_session_factory()
             async with session_factory() as session:
                 service = CollectionService(session)
-                # Try UUID first, then slug
-                try:
-                    import uuid
-                    cid = uuid.UUID(collection_id)
-                    collection = await service.get_by_id(cid)
-                except ValueError:
-                    collection = await service.get_by_slug(collection_id)
+                if collection_slug:
+                    collection = await service.get_by_slug(collection_slug)
+                else:
+                    try:
+                        import uuid
+                        collection = await service.get_by_id(uuid.UUID(legacy_collection_id))
+                    except ValueError:
+                        collection = None
 
                 if not collection:
                     return ToolResult.fail(
-                        f"Collection '{collection_id}' not found",
+                        f"Collection '{collection_slug or legacy_collection_id}' not found",
                         logs=log.entries_dict(),
                     )
 
                 if collection.collection_type != CollectionType.TEMPLATE.value:
                     return ToolResult.fail(
-                        f"Collection '{collection_id}' is not a template collection",
+                        f"Collection '{collection_slug or legacy_collection_id}' is not a template collection",
                         logs=log.entries_dict(),
                     )
 

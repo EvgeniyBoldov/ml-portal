@@ -33,6 +33,8 @@ import { SSEClient, type SSEMessage } from '@shared/lib/sse';
 import { buildFileDownloadUrl } from '@shared/api/files';
 import { summarizeTemplateSchema } from '@shared/lib/templateSchemaSummary';
 import TemplateStatusModal from './TemplateStatusModal';
+import GlossaryCollectionView from './GlossaryCollectionView';
+import ProjectMemoryCollectionView from './ProjectMemoryCollectionView';
 import styles from './CollectionDataPage.module.css';
 
 const PAGE_SIZES = [25, 50, 100];
@@ -1718,8 +1720,16 @@ export default function CollectionDataPage() {
   const { data: collection, isLoading: collectionLoading } = useQuery({
     queryKey: ['collections', 'detail', slug],
     queryFn: () => collectionsApi.getBySlug(slug!),
-    enabled: !!slug,
+    enabled: !!slug && slug !== 'project-memory' && slug !== 'glossary',
   });
+
+  if (slug === 'project-memory') {
+    return <ProjectMemoryCollectionView />;
+  }
+
+  if (slug === 'glossary') {
+    return <GlossaryCollectionView />;
+  }
 
   if (collectionLoading) {
     return (

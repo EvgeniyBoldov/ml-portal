@@ -17,6 +17,15 @@ The runtime memory implementation is currently backed by the `facts` table and
 the `MemoryService`/`FactStore` facade; the older `WorkingMemory` API is not a
 public source of truth.
 
+The terminology catalogue is a separate persistence surface. It stores
+canonical terms and aliases rather than propositions, so it is not a `Fact`
+row and is never dumped into runtime memory. Automatically extracted user and
+tenant terms begin as evidence-backed candidates in `glossary_entries`; only
+after three distinct `GlossaryObservation` sources do they become
+`confirmed`. Global terms are curated manually. The user-facing glossary
+projection includes only confirmed entries from the current user, current
+tenant and global scopes.
+
 ## Durable scopes
 
 The implemented durable scopes are:
@@ -161,6 +170,9 @@ and runs the write pipeline:
 ```text
 successful evidence -> FactExtractor -> FactCompactor -> FactReconciler
                     -> Fact + FactObservation rows
+
+terminology evidence -> FactExtractor -> FactCompactor -> GlossaryReconciler
+                     -> glossary_entries + GlossaryObservation rows
 ```
 
 `FactExtractor` validates that a candidate is stable, scoped and supported by
@@ -169,6 +181,10 @@ compaction action. `FactReconciler` owns persistence, support counts,
 confirmation thresholds, project resolution, conflict markers and
 supersede/tombstone semantics. None of these components may write raw LLM
 output directly to active memory.
+
+`GlossaryReconciler` owns the analogous candidate lifecycle for `kind=glossary`.
+It deduplicates source references, merges aliases case-insensitively and does
+not expose a pending or unconfirmed term to users or runtime consumers.
 
 Chat dispatches this writeback to the Celery `memory` queue by default after
 the final answer. Sandbox does not mutate durable facts; its `set`/`deleted`

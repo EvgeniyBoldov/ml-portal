@@ -12,7 +12,7 @@ from app.agents.contracts import (
     ResolvedOperation,
 )
 from app.agents.collection_readiness import CollectionReadinessBuilder
-from app.agents.data_instance_resolver import RuntimeDataInstanceResolver
+from app.agents.data_instance_resolver import CollectionRuntimeResolver
 from app.agents.credential_resolver import RuntimeCredentialResolver
 from app.agents.operation_resolver import RuntimeOperationResolver
 from app.agents.operation_builder import OperationBuilder
@@ -66,7 +66,7 @@ class OperationRouter:
             self.credential_service,
             mcp_credential_broker_enabled=self.mcp_credential_broker_enabled,
         )
-        self.data_instance_resolver = RuntimeDataInstanceResolver(
+        self.collection_runtime_resolver = CollectionRuntimeResolver(
             session=self.session,
             instance_service=self.instance_service,
         )
@@ -94,27 +94,21 @@ class OperationRouter:
                 tenant_id=tenant_id,
                 default_collection_allow=default_collection_allow,
             )
-        instances = await self.data_instance_resolver.resolve()
+        instances = await self.collection_runtime_resolver.resolve()
 
         result = OperationResolveResult(effective_permissions=effective_permissions)
         graph_builder = RuntimeExecutionGraphBuilder()
-        seen_operation_slugs: set[str] = set()
         for allowed in instances:
             instance = allowed.instance
             collection = allowed.collection
             provider = allowed.provider
             readiness_reason = allowed.readiness_reason
             runtime_domain = allowed.runtime_domain
-            if readiness_reason != "ready":
-                result.missing.collections.append(
-                    f"{instance.slug} ({readiness_reason})"
-                )
-                continue
-
             if collection is None:
-                result.missing.collections.append(f"{instance.slug} (unbound_data_instance)")
                 continue
-
+            if readiness_reason != "ready":
+                result.missing.collections.append(f"{collection.slug} ({readiness_reason})")
+                continue
             provider_for_execution = provider if provider is not None else instance
             collection_id = str(collection.id)
             collection_slug = str(collection.slug)
@@ -139,7 +133,8 @@ class OperationRouter:
             )
             result.resolved_data_instances.append(resolved_instance)
 
-            operations = await self.operation_resolver.resolve_for_instance(
+            operations = await self.operation_resolver.resolve_for_collection(
+                collection=collection,
                 instance=instance,
                 provider=provider_for_execution,
                 runtime_domain=runtime_domain,
@@ -162,18 +157,14 @@ class OperationRouter:
                 continue
 
             for operation, credential_context in operations:
-                if operation.operation_slug in seen_operation_slugs:
-                    # Shared local service instance handles multiple collections;
-                    # aggregate the collection into the existing binding.
-                    existing = graph_builder._graph.bindings.get(operation.operation_slug)
-                    if existing and collection_slug:
-                        current = set(existing.context.allowed_collection_slugs or [])
-                        current.add(collection_slug)
-                        existing.context.allowed_collection_slugs = sorted(current)
-                    continue
-                seen_operation_slugs.add(operation.operation_slug)
-                if operation.collection_slug is None and collection_slug:
-                    operation.collection_slug = collection_slug
+                # The public name is canonical (collection.template.search),
+                # while the execution graph needs a unique binding per target
+                # collection.  Do not aggregate shared local services: each
+                # collection keeps its own target and credential context.
+                binding_slug = f"collection.{collection_slug}.{operation.operation}"
+                operation.operation_slug = binding_slug
+                operation.target.operation_slug = binding_slug
+                operation.collection_slug = collection_slug
                 result.resolved_operations.append(operation)
                 context_payload = self._build_operation_context(
                     instance=instance,
@@ -182,7 +173,6 @@ class OperationRouter:
                     runtime_domain=runtime_domain,
                     collection_id=collection_id,
                     collection_slug=collection_slug,
-                    allowed_collection_slugs=[collection_slug] if collection_slug else [],
                     has_credentials=operation.target.has_credentials,
                     credential_scope=operation.credential_scope,
                 )
@@ -196,7 +186,7 @@ class OperationRouter:
         await self._resolve_system_tools(
             result=result,
             graph_builder=graph_builder,
-            seen_operation_slugs=seen_operation_slugs,
+            seen_operation_slugs=set(),
             effective_permissions=effective_permissions,
             user_id=user_id,
             tenant_id=tenant_id,
@@ -265,7 +255,6 @@ class OperationRouter:
                 runtime_domain="system",
                 collection_id=None,
                 collection_slug=None,
-                allowed_collection_slugs=[],
                 has_credentials=operation.target.has_credentials,
                 credential_scope=operation.credential_scope,
             )
@@ -340,7 +329,6 @@ class OperationRouter:
         runtime_domain: str,
         collection_id: Optional[str],
         collection_slug: Optional[str],
-        allowed_collection_slugs: list[str],
         has_credentials: bool,
         credential_scope: str,
     ) -> Dict[str, Any]:
@@ -350,7 +338,6 @@ class OperationRouter:
             "scope": scope,
             "collection_id": collection_id,
             "collection_slug": collection_slug,
-            "allowed_collection_slugs": allowed_collection_slugs,
             "provider_instance_id": str(provider_for_execution.id),
             "provider_instance_slug": provider_for_execution.slug,
             "has_credentials": has_credentials,

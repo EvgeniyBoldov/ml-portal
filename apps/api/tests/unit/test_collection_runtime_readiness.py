@@ -154,12 +154,12 @@ async def test_operation_router_marks_missing_credentials_in_readiness_and_missi
         runtime_domain="collection.sql",
     )
 
-    router.data_instance_resolver = SimpleNamespace(resolve=AsyncMock(return_value=[allowed_instance]))
+    router.collection_runtime_resolver = SimpleNamespace(resolve=AsyncMock(return_value=[allowed_instance]))
     router.collection_status_snapshot = SimpleNamespace(
         get_status_snapshot=AsyncMock(return_value={"status": "ready"})
     )
     router.operation_resolver = SimpleNamespace(
-        resolve_for_instance=AsyncMock(return_value=[(operation, None)])
+        resolve_for_collection=AsyncMock(return_value=[(operation, None)])
     )
     router.system_capability_resolver = SimpleNamespace(
         resolve=AsyncMock(return_value=[])

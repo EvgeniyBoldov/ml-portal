@@ -51,10 +51,6 @@ def _tool(**overrides):
 
 @pytest.mark.asyncio
 async def test_runtime_tool_summary_returns_zero_for_non_data_instance(monkeypatch):
-    monkeypatch.setattr(
-        "app.services.collection_tool_resolver.CollectionToolResolver._resolve_bound_collection",
-        AsyncMock(return_value=None),
-    )
     summary = await _runtime_tool_summary(
         db=SimpleNamespace(),
         instance=_instance(instance_kind="service", is_data=False),
@@ -65,23 +61,24 @@ async def test_runtime_tool_summary_returns_zero_for_non_data_instance(monkeypat
 @pytest.mark.asyncio
 async def test_runtime_tool_summary_builds_counts(monkeypatch):
     instance = _instance()
-    provider = _provider()
     discovered_tools = [_tool(slug="collection.search"), _tool(slug="collection.table.search")]
+    collection = SimpleNamespace(slug="contracts", collection_type="api")
+    db = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [collection]))
+        )
+    )
 
     monkeypatch.setattr(
-        "app.api.v1.routers.admin.tool_instances._resolve_provider_instance",
-        AsyncMock(return_value=provider),
+        "app.agents.data_instance_resolver.CollectionRuntimeResolver._resolve_provider_instance",
+        AsyncMock(return_value=_provider()),
     )
     monkeypatch.setattr(
-        "app.api.v1.routers.admin.tool_instances._load_discovered_tools_for_instance",
-        AsyncMock(return_value=discovered_tools),
+        "app.agents.data_instance_resolver.CollectionRuntimeResolver._resolve_collection_source",
+        AsyncMock(return_value=instance),
     )
     monkeypatch.setattr(
-        "app.services.collection_tool_resolver.CollectionToolResolver._resolve_bound_collection",
-        AsyncMock(return_value=SimpleNamespace(collection_type="table", has_vector_search=True)),
-    )
-    monkeypatch.setattr(
-        "app.agents.capability_resolver.CollectionCapabilityResolver.resolve_for_instance",
+        "app.agents.capability_resolver.CollectionCapabilityResolver.resolve_for_collection",
         AsyncMock(
             return_value=[
                 SimpleNamespace(
@@ -97,7 +94,7 @@ async def test_runtime_tool_summary_builds_counts(monkeypatch):
     )
 
     discovered_count, runtime_count, operations = await _runtime_tool_summary(
-        db=SimpleNamespace(),
+        db=db,
         instance=instance,
     )
 

@@ -186,6 +186,10 @@ class PublishedOperationSummary(BaseModel):
     description: Optional[str] = None
     result_kind: Optional[str] = None
     collection_slug: Optional[str] = None
+    # A canonical collection operation can be executable for more than one
+    # collection.  The runtime keeps separate internal bindings, while
+    # publication exposes one public operation plus its explicit targets.
+    collection_slugs: List[str] = Field(default_factory=list)
     collection_type: Optional[str] = None
     collection_purpose: Optional[str] = None
     collection_readiness: Optional[str] = None

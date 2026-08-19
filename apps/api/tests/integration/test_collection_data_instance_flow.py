@@ -6,14 +6,14 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.data_instance_resolver import RuntimeDataInstanceResolver
+from app.agents.data_instance_resolver import CollectionRuntimeResolver
 from app.models.collection import Collection
 from app.models.tool_instance import ToolInstance
 from app.services.tool_instance_service import ToolInstanceService
 
 
 @pytest.mark.asyncio
-async def test_runtime_data_instance_resolver_uses_fk_collection_binding_only():
+async def test_collection_runtime_resolver_uses_remote_fk_source_chain():
     instance_id = uuid4()
     tenant_id = uuid4()
 
@@ -47,14 +47,14 @@ async def test_runtime_data_instance_resolver_uses_fk_collection_binding_only():
     )
 
     session = MagicMock()
-    session.execute = AsyncMock(
-        return_value=SimpleNamespace(all=lambda: [(collection, instance)])
-    )
 
     instance_service = ToolInstanceService(session)
     instance_service.evaluate_instance_readiness = AsyncMock(return_value=(True, "ready", {}))
 
-    resolver = RuntimeDataInstanceResolver(session=session, instance_service=instance_service)
+    resolver = CollectionRuntimeResolver(session=session, instance_service=instance_service)
+    resolver._load_active_collections = AsyncMock(return_value=[collection])  # noqa: SLF001
+    resolver._resolve_collection_source = AsyncMock(return_value=instance)  # noqa: SLF001
+    resolver._resolve_provider_instance = AsyncMock(return_value=instance)  # noqa: SLF001
     resolved = await resolver.resolve()
 
     assert len(resolved) == 1

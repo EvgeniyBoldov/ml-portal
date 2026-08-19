@@ -18,6 +18,16 @@
   color: var(--text-on-primary, #ffffff) !important;
 }
 
+.type-memory {
+  background: var(--primary, #8b5cf6) !important;
+  color: var(--text-on-primary, #ffffff) !important;
+}
+
+.type-glossary {
+  background: var(--info, #0ea5e9) !important;
+  color: var(--text-on-primary, #ffffff) !important;
+}
+
 .status-active {
   background: var(--status-success, #22c55e) !important;
   color: var(--text-on-primary, #ffffff) !important;

@@ -37,7 +37,7 @@ class OperationPromptRenderer:
         return {
             "type": "function",
             "function": {
-                "name": op.operation_slug,
+                "name": op.operation,
                 "description": description,
                 "parameters": _compact_json_schema(build_prompt_input_schema(op)),
             },
@@ -280,17 +280,17 @@ class PromptAssembler:
         if not resolved_operations:
             return []
         schemas: List[Dict[str, Any]] = []
-        collection_info_added = False
+        seen_canonical: set[str] = set()
         for op in filter_prompt_visible_operations(resolved_operations):
             canonical_name = (
                 _text(getattr(getattr(op, "published", None), "canonical_name", None))
                 or _text(getattr(op, "operation", None))
             )
+            if canonical_name in seen_canonical:
+                continue
+            seen_canonical.add(canonical_name)
             if canonical_name == "collection.info":
-                if collection_info_added:
-                    continue
                 schemas.append(self.operation_renderer.render_public_collection_info_schema(op))
-                collection_info_added = True
                 continue
             schemas.append(self.operation_renderer.render_schema(op))
         return schemas

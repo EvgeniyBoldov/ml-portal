@@ -83,7 +83,6 @@ class OperationExecutionFacade:
         Bounded tool diagnostics (from ToolExecutionNotes) are attached to
         result.metadata["logs"] and become part of the canonical tool result.
         """
-        original_operation_slug = operation_call.tool_name
         operation, resolved_slug_error = self._find_operation(
             operation_call.tool_name,
             operation_call.arguments,
@@ -131,20 +130,6 @@ class OperationExecutionFacade:
                     "source": "runtime",
                 },
             ), []
-
-        if (
-            original_operation_slug == "collection.info"
-            and isinstance(operation_call.arguments, dict)
-            and any(key in operation_call.arguments for key in ("collection_slug", "collection_id"))
-        ):
-            stripped_arguments = dict(operation_call.arguments)
-            stripped_arguments.pop("collection_slug", None)
-            stripped_arguments.pop("collection_id", None)
-            operation_call = ToolCall(
-                id=operation_call.id,
-                tool_name=operation_call.tool_name,
-                arguments=stripped_arguments,
-            )
 
         normalized_arguments = self._normalize_args(operation, operation_call.arguments)
         if normalized_arguments is not operation_call.arguments:
@@ -391,7 +376,7 @@ class OperationExecutionFacade:
             collection_slug = ""
             if isinstance(arguments, dict):
                 collection_slug = str(arguments.get("collection_slug") or "").strip()
-            if operation_slug == "collection.info" and collection_slug:
+            if collection_slug:
                 scoped_matches = [
                     operation
                     for operation in shorthand_matches
@@ -404,7 +389,8 @@ class OperationExecutionFacade:
             )
             return None, (
                 f"Tool '{operation_slug}' is ambiguous. "
-                f"Use exact invoke name. Matching tools: {candidates}"
+                "Provide collection_slug for the intended collection. "
+                f"Matching bindings: {candidates}"
             )
         candidates = ", ".join(
             operation.operation_slug for operation in operations[:10]
@@ -412,7 +398,7 @@ class OperationExecutionFacade:
         if candidates:
             return None, (
                 f"Tool '{operation_slug}' is unavailable. "
-                f"Use exact invoke name from the prompt. Available examples: {candidates}"
+                f"Use a published canonical tool name. Available bindings: {candidates}"
             )
         return None, None
 

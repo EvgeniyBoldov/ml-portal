@@ -85,7 +85,7 @@ class CapabilityCardBuilder:
         for item in items:
             slug = self._text(item.collection_slug or item.slug)
             summary = summaries.get(slug)
-            if summary is None or not summary.available_operations:
+            if summary is None:
                 continue
             if shown >= max_items:
                 break
@@ -114,14 +114,8 @@ class CapabilityCardBuilder:
 
         if shown == 0:
             return ""
-        total_with_ops = sum(
-            1
-            for item in items
-            if (summary := summaries.get(self._text(item.collection_slug or item.slug)))
-            and summary.available_operations
-        )
-        if total_with_ops > shown:
-            lines.append(f"- ... и ещё {total_with_ops - shown} коллекций")
+        if len(items) > shown:
+            lines.append(f"- ... и ещё {len(items) - shown} коллекций")
         return "\n".join(lines)
 
     def _build_system_operations_card(

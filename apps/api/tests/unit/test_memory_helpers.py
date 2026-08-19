@@ -308,3 +308,22 @@ async def test_fact_extractor_keeps_tenant_glossary_candidate(extractor) -> None
     assert len(facts) == 1
     assert facts[0].kind == "glossary"
     assert facts[0].metadata["aliases"] == ["EVPN"]
+
+
+@pytest.mark.asyncio
+async def test_fact_extractor_keeps_user_glossary_candidate(extractor) -> None:
+    extractor._structured.invoke = AsyncMock(return_value=_llm_result(
+        _LLMFactOutput(facts=[_LLMFactCandidate(
+            scope="user", kind="glossary", subject="my acronym",
+            value="personal shorthand", aliases=["MA"], confidence=1.0,
+        )])
+    ))
+
+    facts = await extractor.extract(
+        user_message="Для меня MA означает personal shorthand",
+        known_facts=[], user_id=uuid4(), tenant_id=uuid4(),
+    )
+
+    assert len(facts) == 1
+    assert facts[0].scope == FactScope.USER
+    assert facts[0].kind == "glossary"

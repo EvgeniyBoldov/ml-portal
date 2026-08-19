@@ -17,6 +17,38 @@ import {
 } from '@/shared/ui';
 import styles from './CollectionsListPage.module.css';
 
+interface ProjectMemoryCollectionRow {
+  id: 'project-memory';
+  slug: 'project-memory';
+  name: 'Project Memory';
+  collection_type: 'project_memory';
+  is_active: true;
+  total_rows: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface GlossaryCollectionRow {
+  id: 'glossary';
+  slug: 'glossary';
+  name: 'Глоссарий';
+  collection_type: 'glossary';
+  is_active: true;
+  total_rows: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+type CollectionCatalogRow = Collection | ProjectMemoryCollectionRow | GlossaryCollectionRow;
+
+function isProjectMemoryCollection(row: CollectionCatalogRow): row is ProjectMemoryCollectionRow {
+  return row.collection_type === 'project_memory';
+}
+
+function isGlossaryCollection(row: CollectionCatalogRow): row is GlossaryCollectionRow {
+  return row.collection_type === 'glossary';
+}
+
 export default function CollectionsListPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
@@ -26,7 +58,49 @@ export default function CollectionsListPage() {
     queryFn: () => collectionsApi.list(true),
   });
 
-  const collections = data?.items ?? [];
+  const { data: projectMemory } = useQuery({
+    queryKey: qk.collections.projectMemoryOverview(),
+    queryFn: () => collectionsApi.getProjectMemoryOverview(),
+  });
+
+  const { data: glossary } = useQuery({
+    queryKey: qk.collections.glossaryOverview(),
+    queryFn: () => collectionsApi.getGlossaryOverview(),
+  });
+
+  const collections = useMemo<CollectionCatalogRow[]>(() => {
+    const latestUpdate = projectMemory?.projects.reduce<string | undefined>(
+      (latest, project) => {
+        if (!project.updated_at || (latest && latest >= project.updated_at)) return latest;
+        return project.updated_at;
+      },
+      undefined,
+    );
+    return [
+      {
+        id: 'project-memory',
+        slug: 'project-memory',
+        name: 'Project Memory',
+        collection_type: 'project_memory',
+        is_active: true,
+        total_rows: projectMemory?.total ?? 0,
+        updated_at: latestUpdate,
+      },
+      {
+        id: 'glossary',
+        slug: 'glossary',
+        name: 'Глоссарий',
+        collection_type: 'glossary',
+        is_active: true,
+        total_rows: glossary?.total ?? 0,
+        updated_at: glossary?.entries.reduce<string | undefined>(
+          (latest, entry) => !latest || latest < entry.updated_at ? entry.updated_at : latest,
+          undefined,
+        ),
+      },
+      ...(data?.items ?? []),
+    ];
+  }, [data?.items, glossary, projectMemory]);
 
   const filteredCollections = useMemo(() => {
     if (!search.trim()) return collections;
@@ -53,7 +127,7 @@ export default function CollectionsListPage() {
     }
   };
 
-  const columns: DataTableColumn<Collection>[] = [
+  const columns: DataTableColumn<CollectionCatalogRow>[] = [
     {
       key: 'name',
       label: 'НАЗВАНИЕ',
@@ -85,13 +159,19 @@ export default function CollectionsListPage() {
           { value: 'sql', label: 'SQL' },
           { value: 'api', label: 'API' },
           { value: 'template', label: 'Шаблоны' },
+          { value: 'project_memory', label: 'Project Memory' },
+          { value: 'glossary', label: 'Глоссарий' },
         ],
         getValue: (row) => row.collection_type,
       },
       render: (row) => (
         <Badge
           className={
-            row.collection_type === 'document'
+            row.collection_type === 'project_memory'
+              ? styles['type-memory']
+              : row.collection_type === 'glossary'
+                ? styles['type-glossary']
+              : row.collection_type === 'document'
               ? styles['type-document']
               : row.collection_type === 'sql'
                 ? styles['type-sql']
@@ -100,7 +180,19 @@ export default function CollectionsListPage() {
                   : styles['type-table']
           }
         >
-          {row.collection_type === 'document' ? 'Документы' : row.collection_type === 'sql' ? 'SQL' : row.collection_type === 'api' ? 'API' : row.collection_type === 'template' ? 'Шаблоны' : 'Таблица'}
+          {row.collection_type === 'project_memory'
+            ? 'Project Memory'
+            : row.collection_type === 'glossary'
+              ? 'Глоссарий'
+            : row.collection_type === 'document'
+              ? 'Документы'
+              : row.collection_type === 'sql'
+                ? 'SQL'
+                : row.collection_type === 'api'
+                  ? 'API'
+                  : row.collection_type === 'template'
+                    ? 'Шаблоны'
+                    : 'Таблица'}
         </Badge>
       ),
     },
@@ -137,7 +229,11 @@ export default function CollectionsListPage() {
         placeholder: 'Кол-во',
         getValue: (row) => row.total_rows,
       },
-      render: (row) => row.total_rows?.toLocaleString() ?? '0',
+      render: (row) => isProjectMemoryCollection(row)
+        ? `${row.total_rows.toLocaleString()} проектов`
+        : isGlossaryCollection(row)
+          ? `${row.total_rows.toLocaleString()} терминов`
+          : row.total_rows?.toLocaleString() ?? '0',
     },
     {
       key: 'created_at',

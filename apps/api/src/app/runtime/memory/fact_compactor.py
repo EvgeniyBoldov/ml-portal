@@ -56,6 +56,7 @@ class FactCompactor:
         for candidate in candidates:
             if candidate.scope.value in {"user", "tenant"} and any(
                 current.scope == candidate.scope
+                and current.kind == candidate.kind
                 and current.subject == candidate.subject
                 and _normalized(current.value) == _normalized(candidate.value)
                 for current in current_facts

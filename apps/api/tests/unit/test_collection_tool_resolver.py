@@ -13,33 +13,6 @@ def _instance(*, config=None, domain=""):
     return SimpleNamespace(config=config or {}, domain=domain, instance_kind="data")
 
 
-def test_resolve_local_domains_uses_instance_domain_only():
-    instance = _instance(config={}, domain="rag")
-
-    domains = CollectionToolResolver._resolve_local_domains(instance)
-
-    assert domains == ["rag"]
-
-
-def test_resolve_local_domains_avoids_duplicates():
-    instance = _instance(config={}, domain="collection.document")
-
-    domains = CollectionToolResolver._resolve_local_domains(instance)
-
-    assert domains == ["collection.document"]
-
-
-def test_resolve_local_domains_falls_back_to_instance_domain():
-    instance = _instance(
-        config={"provider_kind": "local"},
-        domain="sql",
-    )
-
-    domains = CollectionToolResolver._resolve_local_domains(instance)
-
-    assert domains == ["sql"]
-
-
 def test_collection_catalog_tool_is_supported_for_collection_bound_local_provider():
     instance = _instance(config={}, domain="collection.document")
     tool = SimpleNamespace(source="local", slug="collection.info")
@@ -53,7 +26,6 @@ def test_collection_catalog_tool_is_supported_for_collection_bound_local_provide
             bound_collection=bound_collection,
             runtime_domain="collection.document",
             provider_kind="local",
-            is_service_instance=False,
         ),
     )
 
@@ -73,7 +45,6 @@ def test_collection_catalog_tool_is_supported_for_api_collection_provider():
             bound_collection=bound_collection,
             runtime_domain="collection.api",
             provider_kind="local",
-            is_service_instance=False,
         ),
     )
 
@@ -93,7 +64,6 @@ def test_text_search_tool_supported_for_bound_template_collection():
             bound_collection=bound_collection,
             runtime_domain="collection.template",
             provider_kind="local",
-            is_service_instance=False,
         ),
     )
 
@@ -113,7 +83,6 @@ def test_text_search_tool_rejected_for_template_without_vector_search():
             bound_collection=bound_collection,
             runtime_domain="collection.template",
             provider_kind="local",
-            is_service_instance=False,
         ),
     )
 
@@ -135,9 +104,6 @@ async def test_load_discovered_tools_adds_builtin_collection_info_for_bound_loca
         placement="local",
     )
     local_tool = SimpleNamespace(source="local", slug="collection.search")
-    resolver._resolve_bound_collection = AsyncMock(
-        return_value=SimpleNamespace(id="collection-1", collection_type="table", has_vector_search=False)
-    )
     resolver._load_local_tools_for_provider = AsyncMock(return_value=[local_tool])
     resolver._load_provider_tools = AsyncMock(return_value=[])
     monkeypatch.setattr(
@@ -157,7 +123,11 @@ async def test_load_discovered_tools_adds_builtin_collection_info_for_bound_loca
         ],
     )
 
-    tools = await resolver.load_discovered_tools(instance=instance, provider=provider)
+    tools = await resolver.load_discovered_tools_for_collection(
+        collection=SimpleNamespace(id="collection-1", collection_type="table", has_vector_search=False),
+        instance=instance,
+        provider=provider,
+    )
 
     assert [tool.slug for tool in tools] == ["collection.search", "collection.info"]
 
@@ -173,9 +143,6 @@ async def test_load_discovered_tools_adds_builtin_collection_info_for_mcp_backed
         config={"provider_kind": "mcp"},
         connector_type="mcp",
         placement="remote",
-    )
-    resolver._resolve_bound_collection = AsyncMock(
-        return_value=SimpleNamespace(id="collection-1", collection_type="api", has_vector_search=False)
     )
     resolver._load_local_tools_for_provider = AsyncMock(return_value=[])
     resolver._load_provider_tools = AsyncMock(return_value=[])
@@ -196,7 +163,11 @@ async def test_load_discovered_tools_adds_builtin_collection_info_for_mcp_backed
         ],
     )
 
-    tools = await resolver.load_discovered_tools(instance=instance, provider=provider)
+    tools = await resolver.load_discovered_tools_for_collection(
+        collection=SimpleNamespace(id="collection-1", collection_type="api", has_vector_search=False),
+        instance=instance,
+        provider=provider,
+    )
 
     assert [tool.slug for tool in tools] == ["collection.info"]
 
@@ -222,21 +193,3 @@ async def test_load_system_tools_skips_stale_non_system_template_handlers(monkey
     tools = await resolver._load_system_tools()  # noqa: SLF001
 
     assert [tool.slug for tool in tools] == ["file.read"]
-
-
-@pytest.mark.asyncio
-async def test_resolve_bound_collection_for_service_backed_local_collection(monkeypatch):
-    resolver = CollectionToolResolver(session=SimpleNamespace())
-    instance = SimpleNamespace(id="svc-1", is_data=False, instance_kind="service")
-    bound = SimpleNamespace(id="collection-1", slug="reglament", collection_type="document")
-
-    mocked = AsyncMock(return_value=bound)
-    monkeypatch.setattr(
-        "app.services.collection_tool_resolver.resolve_bound_collection_by_instance_id",
-        mocked,
-    )
-
-    result = await resolver._resolve_bound_collection(instance)  # noqa: SLF001
-
-    assert result is bound
-    mocked.assert_awaited_once_with(resolver.session, data_instance_id="svc-1")

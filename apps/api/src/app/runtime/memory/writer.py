@@ -303,7 +303,10 @@ class MemoryWriter:
                 tenant_id=memory.tenant_id,
                 project_keys=project_keys,
             )
-            current.extend(await self._glossary_reconciler.current_for(tenant_id=memory.tenant_id))
+            current.extend(await self._glossary_reconciler.current_for(
+                user_id=memory.user_id,
+                tenant_id=memory.tenant_id,
+            ))
             compacted = await self._fact_compactor.compact(
                 candidates=all_candidates,
                 current_facts=current,
@@ -320,6 +323,7 @@ class MemoryWriter:
             )
             saved += await self._glossary_reconciler.apply(
                 candidates=[item for item in compacted if item.kind == "glossary"],
+                user_id=memory.user_id,
                 tenant_id=memory.tenant_id,
             )
         return saved

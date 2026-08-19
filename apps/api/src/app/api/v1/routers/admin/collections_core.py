@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agents.collection_readiness import CollectionReadinessBuilder
+from app.agents.capability_resolver import CollectionCapabilityResolver
+from app.agents.data_instance_resolver import CollectionRuntimeResolver
 from app.agents.contracts import CollectionRuntimeReadiness, CollectionRuntimeStatus
 from app.agents.credential_resolver import CredentialsUnavailableError
 from app.agents.operation_router import OperationRouter
@@ -39,6 +41,8 @@ from app.services.mcp_jsonrpc_client import (
     mcp_result_error_message,
 )
 from app.services.collection_service import CollectionService, _UNSET
+from app.services.collection_tool_resolver import CollectionToolResolver
+from app.services.tool_instance_service import ToolInstanceService
 
 from .collections_shared import build_collection_response
 
@@ -523,6 +527,58 @@ async def discover_api_entities(
     return DiscoverApiEntitiesResponse(items=items, total=len(items))
 
 
+@router.get("/{collection_id}/capabilities")
+async def get_collection_capabilities(
+    collection_id: uuid.UUID,
+    session: AsyncSession = Depends(db_uow),
+    admin_user=Depends(require_admin),
+):
+    """Return configured tools for one collection without runtime RBAC filtering."""
+    result = await session.execute(
+        select(Collection)
+        .options(selectinload(Collection.data_instance))
+        .where(Collection.id == collection_id)
+    )
+    collection = result.scalar_one_or_none()
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    collection_runtime = CollectionRuntimeResolver(
+        session=session,
+        instance_service=ToolInstanceService(session),
+    )
+    instance = await collection_runtime._resolve_collection_source(collection)  # noqa: SLF001
+    if instance is None:
+        return {"collection_id": str(collection.id), "collection_slug": collection.slug, "tools": []}
+
+    provider = await collection_runtime._resolve_provider_instance(instance)  # noqa: SLF001
+    if provider is None:
+        return {"collection_id": str(collection.id), "collection_slug": collection.slug, "tools": []}
+
+    resolver = CollectionCapabilityResolver(CollectionToolResolver(session))
+    candidates = await resolver.resolve_for_collection(
+        collection=collection,
+        instance=instance,
+        provider=provider,
+    )
+    tools = [
+        {
+            "operation": candidate.canonical_op_slug,
+            "title": str(getattr(candidate.discovered_tool, "name", "") or candidate.canonical_op_slug),
+            "description": str(getattr(candidate.discovered_tool, "description", "") or ""),
+            "source": candidate.scope_kind,
+            "provider": str(getattr(provider, "slug", "") or ""),
+        }
+        for candidate in candidates
+    ]
+    return {
+        "collection_id": str(collection.id),
+        "collection_slug": collection.slug,
+        "collection_type": collection.collection_type,
+        "status": collection.status,
+        "tools": tools,
+    }
+
+
 @router.get("/{collection_id}", response_model=CollectionResponse)
 async def get_collection(
     collection_id: uuid.UUID,
@@ -610,7 +666,8 @@ async def _build_collection_runtime_readiness(
         schema_stale_after_hours=getattr(settings, "COLLECTION_SCHEMA_STALE_HOURS", 24)
     )
     snapshot = await operation_router.collection_status_snapshot.get_status_snapshot(collection)
-    data_instance = collection.data_instance
+    collection_runtime = operation_router.collection_runtime_resolver
+    data_instance = await collection_runtime._resolve_collection_source(collection)  # noqa: SLF001
     if data_instance is None:
         return readiness_builder.build(
             collection=collection,
@@ -624,11 +681,9 @@ async def _build_collection_runtime_readiness(
             collection_snapshot=snapshot,
         )
 
-    provider = data_instance
-    if data_instance.access_via_instance_id:
-        loaded = await operation_router.data_instance_resolver._load_provider_instance(data_instance)  # noqa: SLF001
-        if loaded is not None:
-            provider = loaded
+    provider = await collection_runtime._resolve_provider_instance(data_instance)  # noqa: SLF001
+    if provider is None:
+        provider = data_instance
 
     effective_permissions = await operation_router.runtime_rbac_resolver.resolve_effective_permissions(
         user_id=user_id,
@@ -637,17 +692,17 @@ async def _build_collection_runtime_readiness(
     )
     operations = []
     try:
-        operations = await operation_router.operation_resolver.resolve_for_instance(
+        operations = await operation_router.operation_resolver.resolve_for_collection(
+            collection=collection,
             instance=data_instance,
             provider=provider,
-            runtime_domain=operation_router.data_instance_resolver._resolve_runtime_domain(  # noqa: SLF001
+            runtime_domain=collection_runtime._resolve_runtime_domain(  # noqa: SLF001
                 collection,
                 data_instance,
             ),
             effective_permissions=effective_permissions,
             user_id=user_id,
             tenant_id=tenant_id,
-            sandbox_overrides=None,
         )
     except CredentialsUnavailableError:
         operations = []

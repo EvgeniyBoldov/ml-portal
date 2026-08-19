@@ -223,7 +223,7 @@ class FactExtractor:
             kind = (cand.kind or "fact").strip().lower()
             if kind not in {"fact", "glossary"}:
                 continue
-            if kind == "glossary" and scope != FactScope.TENANT:
+            if kind == "glossary" and scope not in {FactScope.USER, FactScope.TENANT}:
                 continue
             confidence = max(0.0, min(1.0, float(cand.confidence)))
             if confidence < confidence_min:

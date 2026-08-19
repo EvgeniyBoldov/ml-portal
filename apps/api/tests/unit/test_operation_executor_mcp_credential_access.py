@@ -171,7 +171,7 @@ def test_merge_mcp_args_allows_raw_credentials_when_fallback_enabled():
     assert instance_ctx.get("credentials", {}).get("token") == "raw-secret"
 
 
-def test_merge_mcp_args_injects_bound_collection_identifiers():
+def test_merge_mcp_args_requires_and_preserves_bound_collection_slug():
     operation_slug = "instance.docs.collection.document.search"
     target = ProviderExecutionTarget(
         operation_slug=operation_slug,
@@ -194,7 +194,6 @@ def test_merge_mcp_args_injects_bound_collection_identifiers():
             scope="collection",
             collection_id=collection_id,
             collection_slug="reglament",
-            allowed_collection_slugs=["reglament"],
             provider_instance_id=str(uuid4()),
             provider_instance_slug="docs-mcp",
             has_credentials=False,
@@ -212,7 +211,12 @@ def test_merge_mcp_args_injects_bound_collection_identifiers():
 
     executor = DirectOperationExecutor()
     binding, _ = executor._resolve_target_binding(operation_slug, ctx)
-    merged = executor._merge_mcp_args(target, {"query": "nginx"}, ctx, binding=binding)
+    merged = executor._merge_mcp_args(
+        target,
+        {"collection_slug": "reglament", "query": "nginx"},
+        ctx,
+        binding=binding,
+    )
 
     assert merged["collection_slug"] == "reglament"
-    assert merged["collection_id"] == collection_id
+    assert "collection_id" not in merged

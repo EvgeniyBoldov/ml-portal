@@ -1,0 +1,111 @@
+.page {
+  min-height: 100%;
+  background: var(--bg);
+}
+
+.header {
+  padding: var(--sp-4) var(--sp-6);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--panel);
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.header h1,
+.header h2,
+.factsHeader h2,
+.projectsSection h2 {
+  margin: 0;
+  color: var(--text);
+}
+
+.header p {
+  margin: var(--sp-1) 0 0;
+  color: var(--muted);
+}
+
+.content {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.2fr);
+  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-6);
+}
+
+.projectsSection,
+.factsSection {
+  min-width: 0;
+}
+
+.projectsSection h2 {
+  margin-bottom: var(--sp-3);
+  font-size: var(--text-lg);
+}
+
+.factsSection {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  padding: var(--sp-4);
+}
+
+.factsHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+
+.factsHeader span,
+.projectKey {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.statusSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.factKey {
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.factValue {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.selectedRow td {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.loading {
+  display: grid;
+  place-items: center;
+  min-height: 260px;
+  padding: var(--sp-6);
+}
+
+@media (max-width: 900px) {
+  .content {
+    grid-template-columns: 1fr;
+    padding: var(--sp-4);
+  }
+
+  .header {
+    padding: var(--sp-4);
+  }
+
+  .factsHeader {
+    flex-direction: column;
+  }
+}

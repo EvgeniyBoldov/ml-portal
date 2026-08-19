@@ -43,6 +43,7 @@ def _operation(*, schema: dict) -> ResolvedOperation:
         input_schema=schema,
         data_instance_id=target.data_instance_id,
         data_instance_slug=target.data_instance_slug,
+        collection_slug="sql-demo",
         provider_instance_id=target.provider_instance_id,
         provider_instance_slug=target.provider_instance_slug,
         source="mcp",
@@ -96,9 +97,9 @@ def _template_fill_operation() -> ResolvedOperation:
         description="Fill template",
         input_schema={
             "type": "object",
-            "required": ["collection_id", "row_id", "values"],
+            "required": ["collection_slug", "row_id", "values"],
             "properties": {
-                "collection_id": {"type": "string"},
+                "collection_slug": {"type": "string"},
                 "row_id": {"type": "string"},
                 "values": {"type": "object"},
                 "filename": {"type": "string"},
@@ -138,6 +139,7 @@ async def test_template_fill_wraps_flattened_values_before_validation():
         id="template-flat",
         tool_name=operation.operation_slug,
         arguments={
+            "collection_slug": "templates",
             "row_id": "row-1",
             "author": {"name": "Alice"},
             "network": {"source": {"ip": "10.0.0.1"}},
@@ -149,6 +151,7 @@ async def test_template_fill_wraps_flattened_values_before_validation():
     assert result.success is True
     forwarded_call = executor_impl.await_args.args[0]
     assert forwarded_call.arguments == {
+        "collection_slug": "templates",
         "row_id": "row-1",
         "values": {
             "author": {"name": "Alice"},
@@ -169,6 +172,7 @@ async def test_template_fill_parses_values_json_object_before_validation():
         id="template-json-string",
         tool_name=operation.operation_slug,
         arguments={
+            "collection_slug": "templates",
             "row_id": "row-1",
             "values": '{"author": {"name": "Alice"}}',
         },
@@ -193,6 +197,7 @@ async def test_template_fill_parses_values_python_literal_before_validation():
         id="template-python-literal",
         tool_name=operation.operation_slug,
         arguments={
+            "collection_slug": "templates",
             "row_id": "row-1",
             "values": "{'author': {'name': 'Alice'}, 'ports': '443, 123'}",
         },
@@ -214,7 +219,7 @@ async def test_template_fill_keeps_invalid_values_string_for_schema_error():
     call = ToolCall(
         id="template-invalid-values",
         tool_name=operation.operation_slug,
-        arguments={"row_id": "row-1", "values": "not-json"},
+        arguments={"collection_slug": "templates", "row_id": "row-1", "values": "not-json"},
     )
 
     result, _ = await ToolExecutor().execute(call, _ctx(), [operation])
@@ -235,7 +240,7 @@ async def test_collection_operation_requires_successful_collection_info_activati
     call = ToolCall(
         id="template-before-info",
         tool_name=operation.operation_slug,
-        arguments={"row_id": "row-1", "values": {"author": "Alice"}},
+        arguments={"collection_slug": "templates", "row_id": "row-1", "values": {"author": "Alice"}},
     )
 
     result, _ = await ToolExecutor().execute(call, ctx, [operation])
@@ -256,7 +261,7 @@ async def test_collection_operation_runs_after_collection_info_activation():
     call = ToolCall(
         id="template-after-info",
         tool_name=operation.operation_slug,
-        arguments={"row_id": "row-1", "values": {"author": "Alice"}},
+        arguments={"collection_slug": "templates", "row_id": "row-1", "values": {"author": "Alice"}},
     )
 
     result, _ = await ToolExecutor().execute(call, ctx, [operation])
@@ -286,7 +291,7 @@ async def test_operation_executor_rejects_nested_type_mismatch():
     call = ToolCall(
         id="c-1",
         tool_name=operation.operation_slug,
-        arguments={"filters": {"limit": "10"}},
+        arguments={"collection_slug": "sql-demo", "filters": {"limit": "10"}},
     )
     result, _ = await ToolExecutor().execute(call, _ctx(), [operation])
 
@@ -311,7 +316,7 @@ async def test_operation_executor_rejects_additional_properties_and_enum():
     call = ToolCall(
         id="c-2",
         tool_name=operation.operation_slug,
-        arguments={"mode": "unsafe", "extra": 1},
+        arguments={"collection_slug": "sql-demo", "mode": "unsafe", "extra": 1},
     )
     result, _ = await ToolExecutor().execute(call, _ctx(), [operation])
 
@@ -358,7 +363,7 @@ async def test_operation_executor_builtin_validation_contract_without_jsonschema
     call = ToolCall(
         id="c-fallback",
         tool_name=operation.operation_slug,
-        arguments={"filters": {"limit": "10"}},
+        arguments={"collection_slug": "sql-demo", "filters": {"limit": "10"}},
     )
     monkeypatch.setattr(runtime_tools, "_JSONSCHEMA_AVAILABLE", False, raising=True)
     result, _ = await ToolExecutor().execute(call, _ctx(), [operation])
@@ -418,7 +423,7 @@ async def test_operation_executor_accepts_unique_canonical_shorthand():
     call = ToolCall(
         id="c-short",
         tool_name="collection.document.search",
-        arguments={"query": "nginx"},
+        arguments={"collection_slug": "docs", "query": "nginx"},
     )
 
     result, _ = await ToolExecutor().execute(call, ctx, [operation])
@@ -509,7 +514,7 @@ async def test_operation_executor_resolves_collection_info_by_collection_slug():
     executor_impl.assert_awaited_once()
     forwarded_call = executor_impl.await_args.args[0]
     assert forwarded_call.tool_name == "instance.template.collection.info"
-    assert forwarded_call.arguments == {}
+    assert forwarded_call.arguments == {"collection_slug": "template"}
 
 
 @pytest.mark.asyncio
@@ -536,7 +541,6 @@ async def test_operation_executor_uses_prompt_schema_for_hidden_binding_fields()
             scope="collection",
             collection_id=str(uuid4()),
             collection_slug="docs",
-            allowed_collection_slugs=["docs"],
             provider_instance_id=str(uuid4()),
             provider_instance_slug="doc-runtime",
             config={},
@@ -555,7 +559,7 @@ async def test_operation_executor_uses_prompt_schema_for_hidden_binding_fields()
     call = ToolCall(
         id="c-hidden",
         tool_name=operation.operation_slug,
-        arguments={"query": "nginx"},
+        arguments={"collection_slug": "docs", "query": "nginx"},
     )
 
     result, _ = await ToolExecutor().execute(call, ctx, [operation])
@@ -607,7 +611,7 @@ async def test_operation_executor_strips_null_optional_args_before_validation():
     call = ToolCall(
         id="c-null",
         tool_name="instance.template.collection.info",
-        arguments={"filters": {"status": None}},
+        arguments={"collection_slug": "template", "filters": {"status": None}},
     )
 
     result, _ = await ToolExecutor().execute(call, ctx, [operation])
@@ -615,10 +619,10 @@ async def test_operation_executor_strips_null_optional_args_before_validation():
     assert result.success is True
     executor_impl.assert_awaited_once()
     forwarded_call = executor_impl.await_args.args[0]
-    assert forwarded_call.arguments == {"filters": {}}
+    assert forwarded_call.arguments == {"collection_slug": "template", "filters": {}}
 
 
-def test_merge_local_args_injects_bound_collection_identifiers():
+def test_merge_local_args_requires_exact_bound_collection_slug():
     target = ProviderExecutionTarget(
         operation_slug="instance.templates.collection.template.fill",
         provider_type="local",
@@ -629,7 +633,6 @@ def test_merge_local_args_injects_bound_collection_identifiers():
         data_instance_slug="template",
         handler_slug="collection.template_fill",
     )
-    collection_id = str(uuid4())
     binding = OperationExecutionBinding(
         operation_slug=target.operation_slug,
         target=target,
@@ -637,9 +640,8 @@ def test_merge_local_args_injects_bound_collection_identifiers():
             instance_id=str(uuid4()),
             instance_slug="template",
             scope="collection",
-            collection_id=collection_id,
+            collection_id=str(uuid4()),
             collection_slug="template",
-            allowed_collection_slugs=["template"],
             provider_instance_id=str(uuid4()),
             provider_instance_slug="template-runtime",
             config={},
@@ -653,13 +655,13 @@ def test_merge_local_args_injects_bound_collection_identifiers():
 
     merged = DirectOperationExecutor._merge_local_args(
         target,
-        {"row_id": "row-1", "values": {"src_ip": "10.10.10.2"}},
+        {"collection_slug": "template", "row_id": "row-1", "values": {"src_ip": "10.10.10.2"}},
         ToolContext(tenant_id=uuid4(), user_id=uuid4()),
         binding=binding,
     )
 
     assert merged["collection_slug"] == "template"
-    assert merged["collection_id"] == collection_id
+    assert "collection_id" not in merged
 
 
 @pytest.mark.asyncio
@@ -705,7 +707,7 @@ async def test_template_search_falls_back_to_keyword_matches_when_vectors_unavai
     assert hits[0]["row_data"]["weight"] == 1.25
 
 
-def test_merge_local_args_rejects_mismatched_bound_collection_id():
+def test_merge_local_args_rejects_mismatched_bound_collection_slug():
     target = ProviderExecutionTarget(
         operation_slug="instance.templates.collection.template.fill",
         provider_type="local",
@@ -725,7 +727,6 @@ def test_merge_local_args_rejects_mismatched_bound_collection_id():
             scope="collection",
             collection_id=str(uuid4()),
             collection_slug="template",
-            allowed_collection_slugs=["template"],
             provider_instance_id=str(uuid4()),
             provider_instance_slug="template-runtime",
             config={},
@@ -737,11 +738,11 @@ def test_merge_local_args_rejects_mismatched_bound_collection_id():
         credential=None,
     )
 
-    with pytest.raises(ValueError, match="does not match the bound collection id"):
+    with pytest.raises(ValueError, match="does not match operation target"):
         DirectOperationExecutor._merge_local_args(
             target,
             {
-                "collection_id": str(uuid4()),
+                "collection_slug": "other-template",
                 "row_id": "row-1",
                 "values": {"src_ip": "10.10.10.2"},
             },

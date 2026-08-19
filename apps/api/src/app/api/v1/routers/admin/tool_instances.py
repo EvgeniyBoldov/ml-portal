@@ -14,11 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agents.capability_resolver import CollectionCapabilityResolver
-from app.agents.operation_publication import build_runtime_operation_slug
+from app.agents.data_instance_resolver import CollectionRuntimeResolver
 from app.agents.mcp_discovery import parse_discovered_operation
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
-from app.models.discovered_tool import DiscoveredTool
+from app.models.collection import Collection, CollectionType
 from app.models.tool_instance import ToolInstance
 from app.services.collection_tool_resolver import CollectionToolResolver
 from app.services.tool_discovery_service import ToolDiscoveryService
@@ -40,31 +40,11 @@ from app.schemas.tool_instances import (
 router = APIRouter(tags=["tool-instances"])
 
 
-async def _resolve_provider_instance(db: AsyncSession, instance: ToolInstance) -> Optional[ToolInstance]:
-    if not instance.access_via_instance_id:
-        return instance
-    stmt = select(ToolInstance).where(ToolInstance.id == instance.access_via_instance_id)
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
-
-
 def _provider_kind_from_instance(instance: ToolInstance) -> Optional[str]:
     config = instance.config or {}
     raw = config.get("provider_kind")
     normalized = str(raw or "").strip().lower()
     return normalized or None
-
-
-async def _load_discovered_tools_for_instance(
-    db: AsyncSession,
-    instance: ToolInstance,
-    provider: ToolInstance,
-) -> List[DiscoveredTool]:
-    resolver = CollectionToolResolver(db)
-    return await resolver.load_discovered_tools(
-        instance=instance,
-        provider=provider,
-    )
 
 
 async def _runtime_tool_summary(
@@ -74,49 +54,67 @@ async def _runtime_tool_summary(
     if not getattr(instance, "is_active", False):
         return 0, 0, []
 
-    tool_loader = CollectionToolResolver(db)
-    bound_collection = await tool_loader._resolve_bound_collection(instance)
+    collection_types_by_service = {
+        ToolInstanceService.LOCAL_TABLE_SERVICE_SLUG: CollectionType.TABLE.value,
+        ToolInstanceService.LOCAL_DOCUMENT_SERVICE_SLUG: CollectionType.DOCUMENT.value,
+        ToolInstanceService.LOCAL_TEMPLATE_SERVICE_SLUG: CollectionType.TEMPLATE.value,
+    }
     if instance.is_data:
-        provider = await _resolve_provider_instance(db, instance)
+        statement = select(Collection).where(Collection.data_instance_id == instance.id)
+    elif instance.slug in collection_types_by_service:
+        statement = select(Collection).where(
+            Collection.collection_type == collection_types_by_service[instance.slug]
+        )
     else:
-        provider = instance if bound_collection is not None else None
-    if not provider or bound_collection is None:
+        return 0, 0, []
+    collections = list((await db.execute(statement)).scalars().all())
+    if not collections:
         return 0, 0, []
 
-    capability_resolver = CollectionCapabilityResolver(tool_loader)
-    discovered_tools = await _load_discovered_tools_for_instance(db, instance, provider)
-    capability_candidates = await capability_resolver.resolve_for_instance(
-        instance=instance,
-        provider=provider,
+    tool_loader = CollectionToolResolver(db)
+    collection_runtime = CollectionRuntimeResolver(
+        session=db,
+        instance_service=ToolInstanceService(db),
     )
+    capability_resolver = CollectionCapabilityResolver(tool_loader)
     runtime_operations: List[RuntimeOperationListItem] = []
-    seen: set[str] = set()
-    for capability in capability_candidates:
-        discovered_tool = capability.discovered_tool
-        operation_slug = build_runtime_operation_slug(instance.slug, capability.canonical_op_slug)
-        if operation_slug in seen:
+    discovered_keys: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str]] = set()
+    for collection in collections:
+        source = await collection_runtime._resolve_collection_source(collection)  # noqa: SLF001
+        if source is None:
             continue
-        seen.add(operation_slug)
-        discovered_operation = parse_discovered_operation(
-            tool_name=str(getattr(discovered_tool, "slug", "") or ""),
-            description=getattr(discovered_tool, "description", None),
-            input_schema=getattr(discovered_tool, "input_schema", None),
-            output_schema=getattr(discovered_tool, "output_schema", None),
+        provider = await collection_runtime._resolve_provider_instance(source)  # noqa: SLF001
+        if provider is None:
+            continue
+        candidates = await capability_resolver.resolve_for_collection(
+            collection=collection, instance=source, provider=provider
         )
-        runtime_operations.append(
-            RuntimeOperationListItem(
-                operation_slug=operation_slug,
+        for capability in candidates:
+            discovered_tool = capability.discovered_tool
+            discovered_keys.add((str(discovered_tool.source), str(discovered_tool.slug)))
+            key = (collection.slug, capability.canonical_op_slug)
+            if key in seen:
+                continue
+            seen.add(key)
+            discovered_operation = parse_discovered_operation(
+                tool_name=str(getattr(discovered_tool, "slug", "") or ""),
+                description=getattr(discovered_tool, "description", None),
+                input_schema=getattr(discovered_tool, "input_schema", None),
+                output_schema=getattr(discovered_tool, "output_schema", None),
+            )
+            runtime_operations.append(RuntimeOperationListItem(
+                operation_slug=f"collection.{collection.slug}.{capability.canonical_op_slug}",
                 operation=capability.canonical_op_slug,
                 source=str(getattr(discovered_tool, "source", "") or ""),
                 discovered_tool_slug=str(getattr(discovered_tool, "slug", "") or ""),
-                provider_instance_slug=provider.slug if provider else None,
+                provider_instance_slug=provider.slug,
                 risk_level=discovered_operation.risk_level,
                 side_effects=discovered_operation.side_effects,
                 idempotent=True,
                 requires_confirmation=discovered_operation.requires_confirmation,
-            )
-        )
-    return len(discovered_tools), len(runtime_operations), runtime_operations
+            ))
+    return len(discovered_keys), len(runtime_operations), runtime_operations
 
 
 def _aggregate_linked_runtime(
