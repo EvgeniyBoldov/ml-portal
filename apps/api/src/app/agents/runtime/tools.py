@@ -707,6 +707,7 @@ class OperationExecutionFacade:
         *,
         operation_slug: Optional[str] = None,
         include_operation_contracts: bool = True,
+        evidence_call_id: Optional[str] = None,
     ) -> str:
         """Format a bounded, action-oriented tool result for the next LLM turn.
 
@@ -722,6 +723,13 @@ class OperationExecutionFacade:
             raw_output = result.data or {}
             canonical_operation = OperationExecutionFacade._canonical_operation_name(operation_slug)
             if isinstance(raw_output, dict):
+                # This ID is intentionally projected only into the follow-up
+                # LLM context.  It is the runtime ledger key accepted by
+                # project_memory.mark, unlike an artifact id or the provider's
+                # native tool-call id.
+                raw_output = dict(raw_output)
+                if evidence_call_id:
+                    raw_output["evidence_call_id"] = evidence_call_id
                 if canonical_operation == "collection.info":
                     raw_output = OperationExecutionFacade._compact_collection_info_for_context(
                         raw_output,

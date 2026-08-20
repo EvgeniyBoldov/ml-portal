@@ -1,4 +1,4 @@
-"""Candidate persistence for evidence-backed user and tenant terminology."""
+"""Candidate persistence for evidence-backed user, tenant and global terminology."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -34,6 +34,7 @@ class GlossaryReconciler:
         tenant_id: UUID | None,
     ) -> list[FactDTO]:
         owners = []
+        owners.append(GlossaryEntry.scope == GlossaryScope.GLOBAL.value)
         if user_id is not None:
             owners.append(
                 (GlossaryEntry.scope == GlossaryScope.USER.value)
@@ -56,15 +57,29 @@ class GlossaryReconciler:
         return [
             FactDTO(
                 id=row.id,
-                scope=FactScope(row.scope),
+                # FactDTO is the existing compactor transport and its scopes
+                # intentionally exclude global durable facts.  Global glossary
+                # ownership is carried separately in metadata.
+                scope=(
+                    FactScope.TENANT
+                    if row.scope == GlossaryScope.GLOBAL.value
+                    else FactScope(row.scope)
+                ),
                 kind="glossary",
                 subject=row.canonical_term,
                 value=row.description or row.canonical_term,
                 source=FactSource.SYSTEM,
                 tenant_id=tenant_id,
                 owner_type=row.scope,
-                owner_id=row.user_id if row.scope == GlossaryScope.USER.value else row.tenant_id,
-                metadata={"aliases": list(row.aliases or [])},
+                owner_id=(
+                    row.user_id
+                    if row.scope == GlossaryScope.USER.value
+                    else row.tenant_id
+                ),
+                metadata={
+                    "aliases": list(row.aliases or []),
+                    "glossary_scope": row.scope,
+                },
             )
             for row in rows.scalars().all()
         ]
@@ -80,7 +95,11 @@ class GlossaryReconciler:
         for candidate in candidates:
             if candidate.kind != "glossary":
                 continue
-            owner = _owner_for(candidate.scope, user_id=user_id, tenant_id=tenant_id)
+            owner = _owner_for(
+                candidate,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
             if owner is None:
                 continue
             action = str(candidate.metadata.get("compaction_action") or "add")
@@ -126,7 +145,7 @@ class GlossaryReconciler:
         self,
         *,
         scope: GlossaryScope,
-        owner_id: UUID,
+        owner_id: UUID | None,
         canonical_term: str,
     ) -> GlossaryEntry | None:
         stmt = select(GlossaryEntry).where(
@@ -134,11 +153,16 @@ class GlossaryReconciler:
             GlossaryEntry.canonical_term == canonical_term,
             GlossaryEntry.is_active.is_(True),
         )
-        stmt = stmt.where(
-            GlossaryEntry.user_id == owner_id
-            if scope == GlossaryScope.USER
-            else GlossaryEntry.tenant_id == owner_id
-        )
+        if scope == GlossaryScope.USER:
+            stmt = stmt.where(GlossaryEntry.user_id == owner_id)
+        elif scope == GlossaryScope.TENANT:
+            stmt = stmt.where(GlossaryEntry.tenant_id == owner_id)
+        else:
+            stmt = stmt.where(
+                GlossaryEntry.user_id.is_(None),
+                GlossaryEntry.tenant_id.is_(None),
+                GlossaryEntry.project_id.is_(None),
+            )
         return (await self._session.execute(stmt.limit(1))).scalar_one_or_none()
 
     async def _add_observations(self, row: GlossaryEntry, raw: Sequence[object]) -> int:
@@ -147,7 +171,7 @@ class GlossaryReconciler:
             if not isinstance(item, dict):
                 continue
             source_type = str(item.get("source_type") or "").strip()
-            source_ref = str(item.get("source_ref") or "").strip()
+            source_ref = str(item.get("support_ref") or item.get("source_ref") or "").strip()
             if not source_type or not source_ref:
                 continue
             exists = await self._session.execute(
@@ -171,14 +195,16 @@ class GlossaryReconciler:
 
 
 def _owner_for(
-    scope: FactScope,
+    candidate: FactDTO,
     *,
     user_id: UUID | None,
     tenant_id: UUID | None,
-) -> tuple[GlossaryScope, UUID] | None:
-    if scope == FactScope.USER and user_id is not None:
+) -> tuple[GlossaryScope, UUID | None] | None:
+    if candidate.kind == "glossary" and candidate.metadata.get("glossary_scope") == GlossaryScope.GLOBAL.value:
+        return GlossaryScope.GLOBAL, None
+    if candidate.scope == FactScope.USER and user_id is not None:
         return GlossaryScope.USER, user_id
-    if scope == FactScope.TENANT and tenant_id is not None:
+    if candidate.scope == FactScope.TENANT and tenant_id is not None:
         return GlossaryScope.TENANT, tenant_id
     return None
 

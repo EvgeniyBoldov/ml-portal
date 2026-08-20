@@ -1206,6 +1206,7 @@ class AgentToolRuntime(BaseRuntime):
             result,
             operation_slug=operation_call.tool_name,
             include_operation_contracts=include_operation_contracts,
+            evidence_call_id=operation_call.id if result.success else None,
         )
         operation_results_for_context.append((operation_call, result_text))
 

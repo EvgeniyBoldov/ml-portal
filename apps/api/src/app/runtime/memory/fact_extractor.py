@@ -59,6 +59,10 @@ class FactEvidence(BaseModel):
     source_ref: str
     text: str
     label: Optional[str] = None
+    # Stable source identity used for confirmation.  A runtime tool-call ID is
+    # suitable for provenance, but repeated retrieval of the same document
+    # must not count as independent glossary support.
+    support_ref: Optional[str] = None
 
 
 class AgentResultSnippet(BaseModel):
@@ -251,6 +255,10 @@ class FactExtractor:
             if scope == FactScope.PROJECT:
                 continue
 
+            glossary_scope = None
+            if kind == "glossary" and _has_grounded_glossary_evidence(matched_evidence):
+                glossary_scope = "global"
+
             out_list.append(
                 FactDTO(
                     scope=scope,
@@ -265,6 +273,7 @@ class FactExtractor:
                         "project_aliases": _normalize_project_aliases(cand.project_aliases),
                         "aliases": _normalize_project_aliases(cand.aliases),
                         "evidence": [item.model_dump() for item in matched_evidence],
+                        "glossary_scope": glossary_scope,
                     },
                 )
             )
@@ -358,3 +367,16 @@ def _normalize_project_aliases(raw: Sequence[str]) -> list[str]:
         seen.add(key)
         aliases.append(alias)
     return aliases
+
+
+def _has_grounded_glossary_evidence(evidence: Sequence[FactEvidence]) -> bool:
+    """Whether a candidate comes from a verified knowledge retrieval result."""
+    return any(
+        item.source_type == "tool_result"
+        and str(item.label or "").strip() in {
+            "collection.document.search",
+            "collection.table.search",
+        }
+        and bool(str(item.support_ref or item.source_ref or "").strip())
+        for item in evidence
+    )

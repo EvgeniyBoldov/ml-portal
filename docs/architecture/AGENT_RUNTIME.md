@@ -158,9 +158,10 @@ attachment sections. For sandbox runs, branch fact overlays are applied before
 the immutable snapshot is handed to runtime.
 
 The `memory` system role is not a fact writer: it selects indexes from the
-already loaded facts/project glossary and may report ambiguities. A failed
-selection falls back to an empty optional context and does not fail the main
-turn.
+already loaded facts, project catalogue and confirmed global glossary, and may
+report ambiguities. Global terms remain a distinct bounded context item rather
+than project aliases. A failed selection falls back to an empty optional
+context and does not fail the main turn.
 
 After finalization, the chat path emits the answer and dispatches
 `finalize_memory` asynchronously. That worker runs `FactExtractor`,
@@ -330,8 +331,9 @@ target-specific execution binding.
 
 `project_memory.read` is a global system operation that returns confirmed
 compact facts for an exact project key. `project_memory.mark` never writes the
-database: it accepts only references to successful tool calls from the current
-turn and stores bounded candidates in `RuntimeTurnState`. After Synthesizer
+database: it accepts only the runtime `evidence_call_id` exposed by a successful
+tool result from the current turn and stores bounded candidates in
+`RuntimeTurnState`. After Synthesizer
 has returned the user answer, the normal asynchronous memory worker combines
 those candidates with extracted user/tenant facts and sends project candidates
 through the FactCompactor LLM before `FactReconciler` persists them.

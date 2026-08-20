@@ -18,6 +18,7 @@ from app.runtime.memory.dto import FactDTO
 class _PreparationOutput(BaseModel):
     fact_indexes: list[int] = Field(default_factory=list)
     project_indexes: list[int] = Field(default_factory=list)
+    glossary_indexes: list[int] = Field(default_factory=list)
     ambiguities: list[str] = Field(default_factory=list)
 
 
@@ -26,6 +27,7 @@ class PreparedMemoryContext:
     items: list[dict[str, Any]]
     selected_fact_count: int
     selected_project_count: int
+    selected_glossary_count: int
     ambiguities: list[str]
     fallback: bool = False
 
@@ -42,6 +44,7 @@ class MemoryPreparer:
         request_text: str,
         facts: Sequence[FactDTO],
         project_glossary: Sequence[dict[str, Any]],
+        glossary: Sequence[dict[str, Any]],
         user_id: UUID | None,
         tenant_id: UUID | None,
         chat_id: UUID | None,
@@ -59,6 +62,15 @@ class MemoryPreparer:
                 {"index": index, "id": str(item["id"]), "key": item["key"], "name": item["name"], "aliases": item["aliases"]}
                 for index, item in enumerate(project_glossary)
             ],
+            "glossary": [
+                {
+                    "index": index,
+                    "term": item["term"],
+                    "description": item["description"],
+                    "aliases": item["aliases"],
+                }
+                for index, item in enumerate(glossary)
+            ],
         }
         try:
             result = await self._structured.invoke(
@@ -73,22 +85,33 @@ class MemoryPreparer:
                 agent_execution_id=agent_execution_id,
             )
         except Exception:  # memory preparation is optional
-            return PreparedMemoryContext(items=[], selected_fact_count=0, selected_project_count=0, ambiguities=[], fallback=True)
+            return PreparedMemoryContext(items=[], selected_fact_count=0, selected_project_count=0, selected_glossary_count=0, ambiguities=[], fallback=True)
 
         output = result.value
         chosen_facts = _by_indexes(facts, output.fact_indexes)
         chosen_projects = _by_indexes(project_glossary, output.project_indexes)
+        chosen_glossary = _by_indexes(glossary, output.glossary_indexes)
         items = [
             {"type": "fact", "scope": item.scope.value, "subject": item.subject, "value": item.value}
             for item in chosen_facts
         ] + [
             {"type": "project", "project_id": str(item["id"]), "key": item["key"], "name": item["name"], "matched_aliases": item["aliases"]}
             for item in chosen_projects
+        ] + [
+            {
+                "type": "glossary",
+                "scope": "global",
+                "term": item["term"],
+                "description": item["description"],
+                "aliases": item["aliases"],
+            }
+            for item in chosen_glossary
         ]
         return PreparedMemoryContext(
             items=items,
             selected_fact_count=len(chosen_facts),
             selected_project_count=len(chosen_projects),
+            selected_glossary_count=len(chosen_glossary),
             ambiguities=[item[:240] for item in output.ambiguities[:4] if item.strip()],
         )
 

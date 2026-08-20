@@ -21,6 +21,7 @@ from app.runtime.llm.structured import (
 )
 from app.runtime.memory.fact_extractor import (
     AgentResultSnippet,
+    FactEvidence,
     FactExtractor,
     _resolve_fact_policy,
     _LLMFactCandidate,
@@ -239,7 +240,10 @@ async def test_fact_extractor_rejects_agent_summary_without_primary_evidence(ext
 async def test_memory_preparer_selects_only_llm_indexed_context() -> None:
     preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
     preparer._structured.invoke = AsyncMock(return_value=_llm_result(
-        _PreparationOutput(fact_indexes=[1], project_indexes=[0], ambiguities=["Нема может означать два проекта"])
+        _PreparationOutput(
+            fact_indexes=[1], project_indexes=[0], glossary_indexes=[0],
+            ambiguities=["Нема может означать два проекта"],
+        )
     ))
     facts = [
         FactDTO(scope=FactScope.USER, subject="user.role", value="network engineer", source=FactSource.USER_UTTERANCE),
@@ -248,12 +252,21 @@ async def test_memory_preparer_selects_only_llm_indexed_context() -> None:
     result = await preparer.prepare(
         request_text="Нужна заявка для Немы", facts=facts,
         project_glossary=[{"id": uuid4(), "key": "nemesis", "name": "Немезида", "aliases": ["Нема"]}],
+        glossary=[{"term": "срк", "description": "Система резервного копирования", "aliases": ["СРК"]}],
         user_id=uuid4(), tenant_id=uuid4(), chat_id=None, sandbox_overrides=None,
     )
 
     assert result.fallback is False
     assert result.items[0]["subject"] == "tenant.standard"
     assert result.items[1]["key"] == "nemesis"
+    assert result.items[2] == {
+        "type": "glossary",
+        "scope": "global",
+        "term": "срк",
+        "description": "Система резервного копирования",
+        "aliases": ["СРК"],
+    }
+    assert result.selected_glossary_count == 1
     assert result.ambiguities == ["Нема может означать два проекта"]
     call = preparer._structured.invoke.await_args
     assert call.kwargs["role"] is SystemLLMRoleType.MEMORY
@@ -266,7 +279,7 @@ async def test_memory_preparer_degrades_to_empty_context() -> None:
     preparer._structured.invoke = AsyncMock(side_effect=RuntimeError("offline"))
 
     result = await preparer.prepare(
-        request_text="test", facts=[], project_glossary=[], user_id=None,
+        request_text="test", facts=[], project_glossary=[], glossary=[], user_id=None,
         tenant_id=None, chat_id=None, sandbox_overrides=None,
     )
 
@@ -308,6 +321,30 @@ async def test_fact_extractor_keeps_tenant_glossary_candidate(extractor) -> None
     assert len(facts) == 1
     assert facts[0].kind == "glossary"
     assert facts[0].metadata["aliases"] == ["EVPN"]
+
+
+@pytest.mark.asyncio
+async def test_fact_extractor_promotes_grounded_glossary_to_global_candidate(extractor) -> None:
+    extractor._structured.invoke = AsyncMock(return_value=_llm_result(
+        _LLMFactOutput(facts=[_LLMFactCandidate(
+            scope="tenant", kind="glossary", subject="срк",
+            value="Система резервного копирования", aliases=["СРК"],
+            confidence=1.0, evidence_source_ids=["search-1"],
+        )])
+    ))
+
+    facts = await extractor.extract(
+        user_message="что такое срк",
+        evidence=[FactEvidence(
+            source_id="search-1", source_type="tool_result", source_ref="tool-call-1",
+            support_ref="document-1", label="collection.document.search",
+            text="СРК — система резервного копирования.",
+        )],
+        known_facts=[], user_id=uuid4(), tenant_id=uuid4(),
+    )
+
+    assert len(facts) == 1
+    assert facts[0].metadata["glossary_scope"] == "global"
 
 
 @pytest.mark.asyncio

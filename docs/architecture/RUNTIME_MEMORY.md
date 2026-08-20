@@ -19,12 +19,14 @@ public source of truth.
 
 The terminology catalogue is a separate persistence surface. It stores
 canonical terms and aliases rather than propositions, so it is not a `Fact`
-row and is never dumped into runtime memory. Automatically extracted user and
-tenant terms begin as evidence-backed candidates in `glossary_entries`; only
-after three distinct `GlossaryObservation` sources do they become
-`confirmed`. Global terms are curated manually. The user-facing glossary
-projection includes only confirmed entries from the current user, current
-tenant and global scopes.
+row. Automatically extracted user and tenant terms begin as evidence-backed
+candidates in `glossary_entries`; terminology grounded in a successful document
+or table search becomes a global candidate. A term becomes `confirmed` only
+after three distinct stable source references. Pending and unconfirmed terms
+are hidden; confirmed global terms are supplied to the memory selector as a
+separate bounded glossary input, never as facts or projects. The user-facing
+glossary projection includes only confirmed entries from the current user,
+current tenant and global scopes.
 
 ## Durable scopes
 
@@ -114,7 +116,9 @@ canonical system operations `project_memory.read` and `project_memory.mark`:
 - `project_memory.read` returns bounded confirmed memory for an exact
   project key;
 - `project_memory.mark` records bounded evidence-backed candidates in the
-  current turn only and never writes durable memory directly.
+  current turn only and never writes durable memory directly. Its evidence IDs
+  must be the `evidence_call_id` exposed on a successful tool result; artifact
+  IDs and native provider call IDs are not valid evidence.
 
 Planner/agent access is deliberately limited to these contextual tools. They
 do not receive arbitrary database access or unrestricted file content. Files

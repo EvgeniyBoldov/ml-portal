@@ -70,6 +70,22 @@ def _tool_fact_evidence_text(value: Any, *, limit: int = 8_000) -> str:
     return text[:limit]
 
 
+def _tool_fact_evidence_support_ref(value: Any, *, fallback: str) -> str:
+    """Return a stable retrieval-source identity for glossary confirmation."""
+    if isinstance(value, dict):
+        hits = value.get("hits")
+        if isinstance(hits, list):
+            refs = sorted({
+                str(item.get("artifact_id") or item.get("id") or "").strip()
+                for item in hits
+                if isinstance(item, dict)
+                and str(item.get("artifact_id") or item.get("id") or "").strip()
+            })
+            if refs:
+                return "|".join(refs)[:128]
+    return fallback[:128]
+
+
 def _extract_resume_checkpoint(request: PipelineRequest) -> Optional[Dict[str, Any]]:
     continuation_meta = request.continuation_meta if isinstance(request.continuation_meta, dict) else {}
     checkpoint = continuation_meta.get("resume_checkpoint")
@@ -401,6 +417,9 @@ class RuntimePipeline:
         project_glossary = await GlossaryService(self._session).list_project_terms(
             limit=MEMORY_PREPARATION_PROJECT_LIMIT,
         )
+        global_glossary = await GlossaryService(self._session).list_confirmed_global_terms(
+            limit=MEMORY_PREPARATION_PROJECT_LIMIT,
+        )
         yield await emitter.emit(
             RuntimeEvent.orchestrator_start(
                 orchestrator_id=memory_preparation_orchestrator,
@@ -412,6 +431,7 @@ class RuntimePipeline:
                         "role": "memory_preparation",
                         "facts_available": len(turn_mem.durable_snapshot.entries),
                         "project_terms_available": len(project_glossary),
+                        "global_glossary_available": len(global_glossary),
                     },
                 ),
             ),
@@ -437,6 +457,7 @@ class RuntimePipeline:
             request_text=request.request_text,
             facts=turn_mem.durable_snapshot.entries,
             project_glossary=project_glossary,
+            glossary=global_glossary,
             user_id=user_id,
             tenant_id=tenant_id,
             chat_id=chat_id,
@@ -819,6 +840,10 @@ class RuntimePipeline:
                 source_ref=str(entry.call_id),
                 text=_tool_fact_evidence_text(entry.result_data),
                 label=str(entry.operation),
+                support_ref=_tool_fact_evidence_support_ref(
+                    entry.result_data,
+                    fallback=str(entry.call_id),
+                ),
             )
             for entry in runtime_state.tool_ledger.entries
             if entry.status == "succeeded" and entry.result_data is not None

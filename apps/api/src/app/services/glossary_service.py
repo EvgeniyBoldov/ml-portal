@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.glossary import GlossaryEntry, GlossaryScope
+from app.models.glossary import GlossaryEntry, GlossaryScope, GlossaryStatus
 from app.models.project import Project
 
 
@@ -27,6 +27,25 @@ class GlossaryService:
         )
         return [
             {"id": item.id, "key": item.key, "name": item.name, "aliases": list(item.aliases or [])}
+            for item in rows.scalars().all()
+        ]
+
+    async def list_confirmed_global_terms(self, *, limit: int) -> list[dict[str, object]]:
+        """Bounded global terminology projection for pre-planner selection."""
+        rows = await self._session.execute(
+            select(GlossaryEntry).where(
+                GlossaryEntry.is_active.is_(True),
+                GlossaryEntry.status == GlossaryStatus.CONFIRMED.value,
+                GlossaryEntry.scope == GlossaryScope.GLOBAL.value,
+            ).order_by(GlossaryEntry.canonical_term).limit(limit)
+        )
+        return [
+            {
+                "id": item.id,
+                "term": item.canonical_term,
+                "description": item.description or item.canonical_term,
+                "aliases": list(item.aliases or []),
+            }
             for item in rows.scalars().all()
         ]
 

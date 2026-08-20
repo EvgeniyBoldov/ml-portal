@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.glossary import GlossaryEntry, GlossaryObservation, GlossaryStatus
+from app.models.glossary import GlossaryEntry, GlossaryObservation, GlossaryScope, GlossaryStatus
 from app.models.memory import FactScope, FactSource
 from app.runtime.memory.dto import FactDTO
 from app.runtime.memory.glossary_reconciler import GlossaryReconciler
@@ -44,6 +44,27 @@ def _candidate(*, source_ref: str) -> FactDTO:
                 "source_type": "user_message",
                 "source_ref": source_ref,
                 "label": "user message",
+            }],
+        },
+    )
+
+
+def _global_candidate(*, source_ref: str) -> FactDTO:
+    candidate = _candidate(source_ref=source_ref)
+    return FactDTO(
+        scope=candidate.scope,
+        kind=candidate.kind,
+        subject="срк",
+        value="Система резервного копирования",
+        source=FactSource.TOOL_RESULT,
+        metadata={
+            "aliases": ["СРК"],
+            "glossary_scope": "global",
+            "evidence": [{
+                "source_type": "tool_result",
+                "source_ref": "runtime-call",
+                "support_ref": source_ref,
+                "label": "collection.document.search",
             }],
         },
     )
@@ -101,3 +122,21 @@ async def test_existing_evidence_does_not_increase_candidate_support() -> None:
     assert changed == 0
     assert entry.status == GlossaryStatus.PENDING.value
     assert entry.support_count == 1
+
+
+@pytest.mark.asyncio
+async def test_global_glossary_candidate_has_no_tenant_owner() -> None:
+    session = _Session([None, None])
+
+    changed = await GlossaryReconciler(session).apply(
+        candidates=[_global_candidate(source_ref="document-1")],
+        user_id=uuid4(), tenant_id=uuid4(),
+    )
+
+    entry = next(item for item in session.added if isinstance(item, GlossaryEntry))
+    observation = next(item for item in session.added if isinstance(item, GlossaryObservation))
+    assert changed == 1
+    assert entry.scope == GlossaryScope.GLOBAL.value
+    assert entry.user_id is None
+    assert entry.tenant_id is None
+    assert observation.source_ref == "document-1"
