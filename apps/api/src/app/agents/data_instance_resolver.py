@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import monotonic
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +11,11 @@ from sqlalchemy.orm import selectinload
 
 from app.models.collection import Collection, CollectionType
 from app.models.tool_instance import ToolInstance
+from app.core.logging import get_logger
 from app.services.tool_instance_service import ToolInstanceService
+
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -41,11 +46,34 @@ class CollectionRuntimeResolver:
         self.instance_service = instance_service
 
     async def resolve(self) -> List[AllowedDataInstance]:
+        started = monotonic()
         resolved: List[AllowedDataInstance] = []
-        for collection in await self._load_active_collections():
-            instance = await self._resolve_collection_source(collection)
+        collections = await self._load_active_collections()
+        # A local collection type shares one runtime provider.  Resolving it
+        # invokes ensure_local_service_instances(), so doing that once per
+        # collection turns preflight into repeated writes/lookups and can wait
+        # behind a concurrent collection-admin transaction.
+        local_service_cache: Dict[str, ToolInstance] = {}
+        logger.info(
+            "preflight_collection_sources_started",
+            extra={"collections_count": len(collections)},
+        )
+        for collection in collections:
+            collection_started = monotonic()
+            collection_context = {
+                "collection_slug": str(getattr(collection, "slug", "") or ""),
+                "collection_type": str(getattr(collection, "collection_type", "") or ""),
+            }
+            logger.info("preflight_collection_source_started", extra=collection_context)
+            instance = await self._resolve_collection_source(
+                collection,
+                local_service_cache=local_service_cache,
+            )
             if instance is None:
-                missing_source = SimpleNamespace(slug=f"missing-source-{collection.slug}", domain="")
+                missing_source = SimpleNamespace(
+                    slug=f"missing-source-{collection_context['collection_slug']}",
+                    domain="",
+                )
                 resolved.append(
                     AllowedDataInstance(
                         instance=missing_source,
@@ -54,6 +82,14 @@ class CollectionRuntimeResolver:
                         readiness_reason="missing_source",
                         runtime_domain=self._resolve_runtime_domain(collection, missing_source),
                     )
+                )
+                logger.warning(
+                    "preflight_collection_source_completed",
+                    extra={
+                        **collection_context,
+                        "readiness_reason": "missing_source",
+                        "duration_ms": int((monotonic() - collection_started) * 1000),
+                    },
                 )
                 continue
             is_ready, readiness_reason, _ = await self.instance_service.evaluate_instance_readiness(
@@ -71,6 +107,15 @@ class CollectionRuntimeResolver:
                         runtime_domain=runtime_domain,
                     )
                 )
+                logger.info(
+                    "preflight_collection_source_completed",
+                    extra={
+                        **collection_context,
+                        "instance_slug": str(getattr(instance, "slug", "") or ""),
+                        "readiness_reason": readiness_reason,
+                        "duration_ms": int((monotonic() - collection_started) * 1000),
+                    },
+                )
                 continue
 
             provider = await self._resolve_provider_instance(instance)
@@ -87,6 +132,15 @@ class CollectionRuntimeResolver:
                             runtime_domain=runtime_domain,
                         )
                     )
+                    logger.info(
+                        "preflight_collection_source_completed",
+                        extra={
+                            **collection_context,
+                            "instance_slug": str(getattr(instance, "slug", "") or ""),
+                            "readiness_reason": f"provider_{provider_reason}",
+                            "duration_ms": int((monotonic() - collection_started) * 1000),
+                        },
+                    )
                     continue
 
             resolved.append(
@@ -98,6 +152,23 @@ class CollectionRuntimeResolver:
                     runtime_domain=runtime_domain,
                 )
             )
+            logger.info(
+                "preflight_collection_source_completed",
+                extra={
+                    **collection_context,
+                    "instance_slug": str(getattr(instance, "slug", "") or ""),
+                    "provider_slug": str(getattr(provider, "slug", "") or ""),
+                    "readiness_reason": readiness_reason,
+                    "duration_ms": int((monotonic() - collection_started) * 1000),
+                },
+            )
+        logger.info(
+            "preflight_collection_sources_completed",
+            extra={
+                "collections_count": len(collections),
+                "duration_ms": int((monotonic() - started) * 1000),
+            },
+        )
         return resolved
 
     async def _load_active_collections(self) -> List[Collection]:
@@ -116,14 +187,26 @@ class CollectionRuntimeResolver:
         )
         return list(result.scalars().all())
 
-    async def _resolve_collection_source(self, collection: Collection) -> Optional[ToolInstance]:
+    async def _resolve_collection_source(
+        self,
+        collection: Collection,
+        *,
+        local_service_cache: Optional[Dict[str, ToolInstance]] = None,
+    ) -> Optional[ToolInstance]:
         collection_type = str(collection.collection_type or "").strip().lower()
         if collection_type in {
             CollectionType.TABLE.value,
             CollectionType.DOCUMENT.value,
             CollectionType.TEMPLATE.value,
         }:
-            return await self.instance_service.resolve_local_service_for_collection_type(collection_type)
+            if local_service_cache is not None and collection_type in local_service_cache:
+                return local_service_cache[collection_type]
+            instance = await self.instance_service.resolve_local_service_for_collection_type(
+                collection_type
+            )
+            if local_service_cache is not None:
+                local_service_cache[collection_type] = instance
+            return instance
         return collection.data_instance
 
     @staticmethod

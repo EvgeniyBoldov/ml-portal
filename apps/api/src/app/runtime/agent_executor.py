@@ -15,6 +15,7 @@ Design:
 """
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 import json
 import re
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.context import ToolContext
 from app.agents.execution_preflight import ExecutionMode, ExecutionPreflight
+from app.core.config import get_settings
 from app.agents.operation_executor import DirectOperationExecutor
 from app.agents.runtime.agent import AgentToolRuntime
 from app.core.http.clients import LLMClientProtocol
@@ -103,31 +105,40 @@ class AgentExecutor:
         state = runtime_state
 
         # 1. Preflight for the sub-agent.
+        preflight_timeout_s = get_settings().PREFLIGHT_TIMEOUT_SECONDS
         try:
-            sub_request = await self.preflight.prepare(
-                agent_slug=agent_slug,
-                user_id=user_id,
-                tenant_id=tenant_id,
-                request_text=str(task.inputs.get("query") or task.instructions or state.goal)[:500],
-                allow_partial=True,
-                platform_config=platform_config,
-                include_routable_agents=False,
-                agent_version_id=agent_version_id,
-                event_sink=ctx.extra.get("runtime_event_logger"),
-                trace_parent_id=lifecycle_agent_execution_id,
+            sub_request = await asyncio.wait_for(
+                self.preflight.prepare(
+                    agent_slug=agent_slug,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    request_text=str(task.inputs.get("query") or task.instructions or state.goal)[:500],
+                    allow_partial=True,
+                    platform_config=platform_config,
+                    include_routable_agents=False,
+                    agent_version_id=agent_version_id,
+                    event_sink=ctx.extra.get("runtime_event_logger"),
+                    trace_parent_id=lifecycle_agent_execution_id,
+                ),
+                timeout=preflight_timeout_s,
             )
         except Exception as exc:
             debug_traceback = traceback.format_exc()
-            logger.warning("Sub-agent preflight failed for %s: %s", agent_slug, exc)
+            error_message = (
+                f"Preflight timed out after {preflight_timeout_s}s"
+                if isinstance(exc, asyncio.TimeoutError)
+                else str(exc)
+            )
+            logger.warning("Sub-agent preflight failed for %s: %s", agent_slug, error_message)
             state.add_agent_result(
                 {
                     "agent_slug": agent_slug,
-                    "summary": f"preflight_failed: {exc}",
+                    "summary": f"preflight_failed: {error_message}",
                     "success": False,
                     "outcome": "failed",
                     "sufficient_for_phase": False,
                     "missing_inputs": [],
-                    "error": str(exc),
+                    "error": error_message,
                     "error_code": RuntimeErrorCode.AGENT_PRECHECK_FAILED.value,
                     "retryable": False,
                     "iteration": state.iter_count,
@@ -139,7 +150,7 @@ class AgentExecutor:
                 }
             )
             yield RuntimeEvent.error(
-                f"Sub-agent {agent_slug} unavailable: {exc}",
+                f"Sub-agent {agent_slug} unavailable: {error_message}",
                 recoverable=False,
                 error_code=RuntimeErrorCode.AGENT_PRECHECK_FAILED,
                 retryable=False,

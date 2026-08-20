@@ -98,3 +98,35 @@ async def test_local_collection_type_selects_provider_without_reading_legacy_bin
 
     assert source is local_template_service
     instance_service.resolve_local_service_for_collection_type.assert_awaited_once_with("template")
+
+
+@pytest.mark.asyncio
+async def test_resolver_resolves_shared_local_provider_once_per_collection_type():
+    local_template_service = SimpleNamespace(
+        id="template-service",
+        slug="local-template-tools",
+        is_data=False,
+        is_active=True,
+        health_status="healthy",
+        access_via_instance_id=None,
+        domain="collection.template",
+    )
+    instance_service = SimpleNamespace(
+        resolve_local_service_for_collection_type=AsyncMock(
+            return_value=local_template_service
+        ),
+        evaluate_instance_readiness=AsyncMock(return_value=(True, "ready", None)),
+    )
+    resolver = CollectionRuntimeResolver(session=SimpleNamespace(), instance_service=instance_service)
+    resolver._load_active_collections = AsyncMock(  # noqa: SLF001
+        return_value=[
+            SimpleNamespace(slug="first-template", collection_type="template"),
+            SimpleNamespace(slug="second-template", collection_type="template"),
+        ]
+    )
+
+    resolved = await resolver.resolve()
+
+    assert len(resolved) == 2
+    assert all(item.provider is local_template_service for item in resolved)
+    instance_service.resolve_local_service_for_collection_type.assert_awaited_once_with("template")

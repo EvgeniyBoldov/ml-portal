@@ -15,6 +15,7 @@ ExecutionPreflight — фасад для подготовки ExecutionRequest.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -176,11 +177,19 @@ class ExecutionPreflight:
 
         try:
             # 1. Resolve agent + version
+            logger.info(
+                "preflight_stage_started",
+                extra={"agent_slug": agent_slug, "stage": "agent_resolution"},
+            )
             agent_result = await self.agent_resolver.resolve(
                 agent_slug=agent_slug,
                 tenant_id=tenant_id,
                 agent_version_id=agent_version_id,
                 include_routable_agents=include_routable_agents,
+            )
+            logger.info(
+                "preflight_stage_completed",
+                extra={"agent_slug": agent_slug, "stage": "agent_resolution", "duration_ms": int((time.time() - start_time) * 1000)},
             )
             routing_reasons.append(f"Agent '{agent_slug}' loaded")
 
@@ -188,12 +197,27 @@ class ExecutionPreflight:
             default_collection_allow = bool(
                 (platform_config or {}).get("default_collection_allow", True)
             )
+            operations_started = time.time()
+            logger.info(
+                "preflight_stage_started",
+                extra={"agent_slug": agent_slug, "stage": "operation_resolution"},
+            )
             operation_result = await self._resolve_operations(
                 user_id=user_id,
                 tenant_id=tenant_id,
                 agent_slug=agent_slug,
                 effective_permissions_override=effective_permissions_override,
                 default_collection_allow=default_collection_allow,
+            )
+            logger.info(
+                "preflight_stage_completed",
+                extra={
+                    "agent_slug": agent_slug,
+                    "stage": "operation_resolution",
+                    "duration_ms": int((time.time() - operations_started) * 1000),
+                    "operations_count": len(operation_result.resolved_operations),
+                    "data_instances_count": len(operation_result.resolved_data_instances),
+                },
             )
             routing_reasons.append(
                 f"Permissions resolved: "
@@ -223,11 +247,20 @@ class ExecutionPreflight:
                 )
 
             # 3. Build available_actions from resolved operations
+            actions_started = time.time()
+            logger.info(
+                "preflight_stage_started",
+                extra={"agent_slug": agent_slug, "stage": "available_actions"},
+            )
             agent_result_with_actions, agent_reasons = await self._build_available_actions(
                 agent_result=agent_result,
                 operation_result=operation_result,
                 include_routable_agents=include_routable_agents,
                 routable_agents_override=routable_agents_override,
+            )
+            logger.info(
+                "preflight_stage_completed",
+                extra={"agent_slug": agent_slug, "stage": "available_actions", "duration_ms": int((time.time() - actions_started) * 1000)},
             )
             routing_reasons.extend(agent_reasons)
 
@@ -322,6 +355,17 @@ class ExecutionPreflight:
 
             return exec_request
 
+        except asyncio.CancelledError:
+            logger.warning(
+                "preflight_cancelled",
+                extra={"agent_slug": agent_slug, "duration_ms": int((time.time() - start_time) * 1000)},
+            )
+            await emit(
+                RuntimeEventType.PREFLIGHT_FAILED,
+                reason="cancelled",
+                duration_ms=int((time.time() - start_time) * 1000),
+            )
+            raise
         except AgentUnavailableError:
             await emit(RuntimeEventType.PREFLIGHT_FAILED, reason="unavailable")
             raise
