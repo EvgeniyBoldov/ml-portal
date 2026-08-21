@@ -895,7 +895,14 @@ class RuntimePipeline:
             failed_components: list[str] = []
             degraded_components: list[str] = []
             try:
-                await self._assembler.memory_writer.finalize(
+                async def _memory_llm_event(event: RuntimeEvent) -> None:
+                    await emitter.emit(event, phase=OrchestrationPhase.PIPELINE)
+
+                writer = self._assembler.build_memory_writer(
+                    llm_event_sink=lambda _component, event: _memory_llm_event(event),
+                    component_execution_ids=component_ids,
+                )
+                await writer.finalize(
                     memory=turn_mem,
                     user_message=request.request_text,
                     assistant_final=assistant_final,
@@ -928,6 +935,7 @@ class RuntimePipeline:
                             error_code=item.get("error_code"),
                             error_message=item.get("error_message"),
                             duration_ms=item.get("duration_ms", 0),
+                            facts=item.get("facts", []),
                             entity_type="agent_execution",
                             entity_id=component_entity_id,
                             parent_entity_type="orchestrator",

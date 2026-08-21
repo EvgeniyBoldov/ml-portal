@@ -41,6 +41,31 @@ export interface TraceExecutorRun {
   executorSlug: string;
   calls: TraceCall[];
   metrics: TraceMetrics;
+  memoryResult?: TraceMemoryComponentResult;
+}
+
+export interface TraceMemoryFact {
+  scope: string;
+  kind: string;
+  subject: string;
+  value: string;
+  confidence?: number;
+  changeType: string;
+  statusBefore?: string;
+  statusAfter?: string;
+  supportBefore?: number;
+  supportAfter?: number;
+  supportDelta?: number;
+  compactionAction?: string;
+}
+
+export interface TraceMemoryComponentResult {
+  componentName: 'fact_extractor' | 'fact_compactor';
+  status: string;
+  insertedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  facts: TraceMemoryFact[];
 }
 
 export interface TraceStage {
@@ -88,6 +113,11 @@ export interface TraceMetrics {
 
 const asString = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
 const asNumber = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+const asRecord = (value: unknown): Record<string, unknown> | undefined => (
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+);
 const isEndEvent = (type: string): boolean => type.endsWith('_end') || type.endsWith('_finished');
 const iterationLabel = (type: string, number: number): string => {
   if (type === 'replan') return 'Перепланирование';
@@ -104,6 +134,46 @@ const eventsFor = (state: SandboxTraceState, entity: TraceEntity): RuntimeJourna
 const startFor = (state: SandboxTraceState, entity: TraceEntity): RuntimeJournalEvent | undefined => (
   eventsFor(state, entity).find((event) => event.event_type.endsWith('_start') || event.event_type.endsWith('_started'))
 );
+
+function memoryComponentResult(events: RuntimeJournalEvent[]): TraceMemoryComponentResult | undefined {
+  const resultEvent = [...events].reverse().find((event) => event.event_type === 'memory_component_result');
+  if (!resultEvent) return undefined;
+  const payload = resultEvent.payload;
+  const componentName = asString(payload.component_name);
+  if (componentName !== 'fact_extractor' && componentName !== 'fact_compactor') return undefined;
+  const sourceFacts = Array.isArray(payload.facts)
+    ? payload.facts
+    : ([...events].reverse().find((event) => event.event_type === 'memory_facts_result')?.payload.facts ?? []);
+  const facts = Array.isArray(sourceFacts) ? sourceFacts.flatMap((item): TraceMemoryFact[] => {
+    const fact = asRecord(item);
+    if (!fact) return [];
+    const subject = asString(fact.subject);
+    const value = asString(fact.value);
+    if (!subject || !value) return [];
+    return [{
+      scope: asString(fact.scope) || 'unknown',
+      kind: asString(fact.kind) || 'fact',
+      subject,
+      value,
+      confidence: asNumber(fact.confidence),
+      changeType: asString(fact.change_type) || (componentName === 'fact_extractor' ? 'candidate_extracted' : 'candidate_reinforced'),
+      statusBefore: asString(fact.status_before) || undefined,
+      statusAfter: asString(fact.status_after) || asString(fact.status) || undefined,
+      supportBefore: asNumber(fact.support_before),
+      supportAfter: asNumber(fact.support_after) ?? asNumber(fact.support_count),
+      supportDelta: asNumber(fact.support_delta),
+      compactionAction: asString(fact.compaction_action) || undefined,
+    }];
+  }) : [];
+  return {
+    componentName,
+    status: asString(payload.status) || 'completed',
+    insertedCount: asNumber(payload.inserted_count) ?? 0,
+    updatedCount: asNumber(payload.updated_count) ?? 0,
+    skippedCount: asNumber(payload.skipped_count) ?? 0,
+    facts,
+  };
+}
 
 function metricsFor(state: SandboxTraceState, entity: TraceEntity): TraceMetrics {
   const events = eventsFor(state, entity);
@@ -404,6 +474,7 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
       successfulCalls: callMetrics.successfulCalls || baseMetrics.successfulCalls,
       failedCalls: callMetrics.failedCalls || baseMetrics.failedCalls,
     },
+    memoryResult: memoryComponentResult(eventsFor(state, entity)),
   };
 }
 

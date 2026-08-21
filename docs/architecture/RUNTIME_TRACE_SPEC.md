@@ -177,6 +177,23 @@ below the answer and do not require the synthesizer to emit markdown links.
   database session. The worker reconstructs a logger with a session factory,
   retains `run_id`, and uses task attempt/idempotency keys for retries.
 
+### Post-turn memory components
+
+`fact_extractor` and `fact_compactor` are `agent_execution` children of the
+post-turn memory orchestrator. Whenever either component makes an LLM request,
+its `llm_request` and `llm_response` are direct children of that component
+execution and use the normal call lifecycle contract.
+
+Each component emits one `status` event with
+`stage=memory_component_result`. In addition to bounded counts and safe error
+fields, its `facts` field is a typed operator projection. The extractor lists
+only extracted candidates. The compactor lists only persisted changes; each
+item has the fact's scope/kind/subject/value, `change_type`, status before and
+after, confirmation support before/after and delta, and its compaction action.
+Unchanged facts are omitted. This projection never contains raw evidence,
+credentials or LLM reasoning. The inspector renders it through the canonical
+trace projection; RAW remains the only generic journal-payload view.
+
 ## Prohibited
 
 Do not add a second trace builder, compatibility mapper, or a second event

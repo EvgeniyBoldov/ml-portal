@@ -1,20 +1,26 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorNotice, InspectorScalar, InspectorStatus } from '@/shared/ui/Inspector';
-import type { RuntimeJournalEvent } from '../../../types';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorNotice, InspectorScalar, InspectorStatus } from '@/shared/ui/Inspector';
+import type { TraceMemoryComponentResult } from '../../../traceProjection';
 
-const asFacts = (events: RuntimeJournalEvent[]): Array<Record<string, unknown>> => {
-  const payload = [...events].reverse().find((event) => event.event_type === 'memory_facts_result')?.payload;
-  return Array.isArray(payload?.facts) ? payload.facts.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
-};
+const statusLabel = (status: string | undefined): string => ({ pending: 'Кандидат', confirmed: 'Подтверждён', unconfirmed: 'Не подтверждён' })[status ?? ''] ?? status ?? '—';
+const changeLabel = (change: string): string => ({
+  candidate_extracted: 'Извлечён кандидат',
+  candidate_created: 'Создан кандидат',
+  candidate_reinforced: 'Добавлено подтверждение',
+  candidate_confirmed: 'Кандидат подтверждён',
+  confirmed: 'Сразу подтверждён',
+  sandbox_updated: 'Обновлён в sandbox',
+})[change] ?? change;
 
-export function FactsViewer({ events }: { events: RuntimeJournalEvent[] }) {
-  const facts = asFacts(events);
-  if (!facts.length) return <InspectorNotice tone="neutral" message="Факты на этом шаге не были извлечены или не прошли проверку." />;
-  return <div>{facts.map((fact, index) => <InspectorFieldGroup key={`${String(fact.subject ?? '')}:${index}`}>
-    <InspectorFieldRow label="Scope"><InspectorScalar value={String(fact.scope ?? '—')} /></InspectorFieldRow>
-    <InspectorFieldRow label="Свойство"><InspectorScalar value={String(fact.subject ?? '—')} /></InspectorFieldRow>
-    <InspectorFieldRow label="Значение"><InspectorScalar value={String(fact.value ?? '—')} /></InspectorFieldRow>
-    {fact.status ? <InspectorFieldRow label="Статус"><InspectorStatus label={String(fact.status)} tone={fact.status === 'confirmed' ? 'success' : 'warn'} /></InspectorFieldRow> : null}
-    {fact.support_count !== undefined ? <InspectorFieldRow label="Подтверждения"><InspectorScalar value={fact.support_count as number} /></InspectorFieldRow> : null}
-    {fact.evidence_source_ids ? <InspectorFieldRow label="Источники"><InspectorJsonBlock value={fact.evidence_source_ids} /></InspectorFieldRow> : null}
+export function FactsViewer({ result }: { result: TraceMemoryComponentResult | undefined }) {
+  if (!result?.facts.length) return <InspectorNotice tone="neutral" message={result?.componentName === 'fact_compactor' ? 'Изменений фактов в этом запуске нет.' : 'Факты на этом шаге не были извлечены или не прошли проверку.'} />;
+  return <div>{result.facts.map((fact, index) => <InspectorFieldGroup key={`${fact.subject}:${fact.value}:${index}`}>
+    <InspectorFieldRow label="Область"><InspectorScalar value={fact.scope} /></InspectorFieldRow>
+    <InspectorFieldRow label="Свойство"><InspectorScalar value={fact.subject} /></InspectorFieldRow>
+    <InspectorFieldRow label="Значение"><InspectorScalar value={fact.value} /></InspectorFieldRow>
+    <InspectorFieldRow label="Изменение"><InspectorScalar value={changeLabel(fact.changeType)} /></InspectorFieldRow>
+    {fact.statusAfter ? <InspectorFieldRow label="Статус"><InspectorStatus label={fact.statusBefore ? `${statusLabel(fact.statusBefore)} → ${statusLabel(fact.statusAfter)}` : statusLabel(fact.statusAfter)} tone={fact.statusAfter === 'confirmed' ? 'success' : 'warn'} /></InspectorFieldRow> : null}
+    {fact.supportDelta !== undefined ? <InspectorFieldRow label="Подтверждения"><InspectorScalar value={fact.supportBefore !== undefined && fact.supportAfter !== undefined ? `+${fact.supportDelta}: ${fact.supportBefore} → ${fact.supportAfter}` : `+${fact.supportDelta}`} /></InspectorFieldRow> : null}
+    {fact.compactionAction ? <InspectorFieldRow label="Решение компактора"><InspectorScalar value={fact.compactionAction} /></InspectorFieldRow> : null}
+    {fact.confidence !== undefined ? <InspectorFieldRow label="Уверенность"><InspectorScalar value={fact.confidence} /></InspectorFieldRow> : null}
   </InspectorFieldGroup>)}</div>;
 }

@@ -45,6 +45,7 @@ class FactCompactor:
         chat_id: UUID | None,
         sandbox_overrides: dict[str, Any] | None = None,
         event_sink: Callable[[RuntimeEvent], Awaitable[None]] | None = None,
+        agent_execution_id: str | None = None,
     ) -> list[FactDTO]:
         if not candidates:
             return []
@@ -81,6 +82,7 @@ class FactCompactor:
                 chat_id=chat_id,
                 sandbox_overrides=sandbox_overrides,
                 event_sink=event_sink,
+                agent_execution_id=agent_execution_id,
                 fallback_factory=lambda _raw: _CompactionOutput(),
             )
         except StructuredCallError:

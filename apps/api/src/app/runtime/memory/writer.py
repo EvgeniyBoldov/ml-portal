@@ -56,6 +56,7 @@ class MemoryWriteContext:
     terminal_reason: Optional[PipelineStopReason] = None
     sandbox_overrides: Optional[dict] = None
     fact_candidates: Optional[List[Any]] = None
+    fact_changes: Optional[List[dict[str, Any]]] = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ class MemoryWriteResult:
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     duration_ms: int = 0
+    facts: tuple[dict[str, Any], ...] = ()
 
     def compact_view(self) -> dict:
         return {
@@ -79,6 +81,7 @@ class MemoryWriteResult:
             "error_code": self.error_code,
             "error_message": self.error_message,
             "duration_ms": self.duration_ms,
+            "facts": list(self.facts),
         }
 
 
@@ -266,12 +269,12 @@ class MemoryWriter:
         candidates: List[Any],
         sandbox_overrides: Optional[dict] = None,
         persist_chat_scoped: bool = True,
-    ) -> int:
+    ) -> tuple[int, list[dict[str, Any]]]:
         branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
         project_candidates = self._project_candidate_facts(memory)
         all_candidates = [*candidates, *project_candidates]
         if not all_candidates:
-            return 0
+            return 0, []
         project_keys = [
             str(item.metadata.get("project_key") or "")
             for item in all_candidates
@@ -289,13 +292,26 @@ class MemoryWriter:
                 chat_id=memory.chat_id,
                 sandbox_overrides=sandbox_overrides,
                 event_sink=(lambda event: self._llm_event_sink("fact_compactor", event)) if self._llm_event_sink else None,
+                agent_execution_id=self._component_execution_ids.get("fact_compactor"),
             )
             branch_facts = [item for item in compacted if item.kind != "glossary"]
-            return await self._write_branch_facts(
+            saved = await self._write_branch_facts(
                 branch_id=branch_id,
                 facts=branch_facts,
                 base=current,
             )
+            return saved, [
+                _fact_change_view(
+                    item,
+                    change_type="sandbox_updated",
+                    status_before=None,
+                    status_after="pending",
+                    support_before=0,
+                    support_after=0,
+                    support_delta=0,
+                )
+                for item in branch_facts
+            ]
         async with self._db_write_lock:
             await self._fact_reconciler.ensure_projects(all_candidates)
             current = await self._fact_reconciler.current_for(
@@ -315,18 +331,34 @@ class MemoryWriter:
                 chat_id=memory.chat_id,
                 sandbox_overrides=sandbox_overrides,
                 event_sink=(lambda event: self._llm_event_sink("fact_compactor", event)) if self._llm_event_sink else None,
+                agent_execution_id=self._component_execution_ids.get("fact_compactor"),
             )
-            saved = await self._fact_reconciler.apply(
+            changes = await self._fact_reconciler.apply_with_changes(
                 candidates=[item for item in compacted if item.kind != "glossary"],
                 user_id=memory.user_id,
                 tenant_id=memory.tenant_id,
             )
-            saved += await self._glossary_reconciler.apply(
+            glossary_saved = await self._glossary_reconciler.apply(
                 candidates=[item for item in compacted if item.kind == "glossary"],
                 user_id=memory.user_id,
                 tenant_id=memory.tenant_id,
             )
-        return saved
+        return len(changes) + glossary_saved, [
+            {
+                "scope": item.scope,
+                "kind": item.kind,
+                "subject": item.subject,
+                "value": item.value,
+                "change_type": item.change_type,
+                "status_before": item.status_before,
+                "status_after": item.status_after,
+                "support_before": item.support_before,
+                "support_after": item.support_after,
+                "support_delta": item.support_delta,
+                "compaction_action": item.compaction_action,
+            }
+            for item in changes
+        ]
 
     async def _chat_exists(self, chat_id) -> bool:
         if chat_id is None:
@@ -412,8 +444,14 @@ class _FactExtractionMemoryWriteComponent:
                 inserted_count=len(candidates),
                 error_code="sandbox_persist_skipped",
                 error_message="Chat-scoped persistence skipped: sandbox chat is not stored in chats table",
+                facts=tuple(_fact_candidate_view(item) for item in candidates),
             )
-        return MemoryWriteResult(component_name=self.name, status="ok", inserted_count=len(candidates))
+        return MemoryWriteResult(
+            component_name=self.name,
+            status="ok",
+            inserted_count=len(candidates),
+            facts=tuple(_fact_candidate_view(item) for item in candidates),
+        )
 
 
 class _FactCompactionMemoryWriteComponent:
@@ -425,7 +463,7 @@ class _FactCompactionMemoryWriteComponent:
     async def write(self, ctx: MemoryWriteContext) -> MemoryWriteResult:
         if ctx.skip_llm_helpers:
             return MemoryWriteResult(component_name=self.name, status="skipped", skipped_count=1)
-        saved = await self._owner._compact_and_write_facts(
+        saved, changes = await self._owner._compact_and_write_facts(
             ctx.memory,
             list(ctx.fact_candidates or []),
             ctx.sandbox_overrides,
@@ -439,7 +477,50 @@ class _FactCompactionMemoryWriteComponent:
                 error_code="sandbox_persist_skipped",
                 error_message="Chat-scoped persistence skipped: sandbox chat is not stored in chats table",
             )
-        return MemoryWriteResult(component_name=self.name, status="ok", inserted_count=saved)
+        ctx.fact_changes = changes
+        return MemoryWriteResult(
+            component_name=self.name,
+            status="ok",
+            inserted_count=saved,
+            facts=tuple(changes),
+        )
+
+
+def _fact_candidate_view(fact: FactDTO) -> dict[str, Any]:
+    return {
+        "scope": fact.scope.value,
+        "kind": fact.kind,
+        "subject": fact.subject,
+        "value": fact.value,
+        "confidence": fact.confidence,
+        "change_type": "candidate_extracted",
+        "status_after": "pending",
+    }
+
+
+def _fact_change_view(
+    fact: FactDTO,
+    *,
+    change_type: str,
+    status_before: str | None,
+    status_after: str,
+    support_before: int,
+    support_after: int,
+    support_delta: int,
+) -> dict[str, Any]:
+    return {
+        "scope": fact.scope.value,
+        "kind": fact.kind,
+        "subject": fact.subject,
+        "value": fact.value,
+        "change_type": change_type,
+        "status_before": status_before,
+        "status_after": status_after,
+        "support_before": support_before,
+        "support_after": support_after,
+        "support_delta": support_delta,
+        "compaction_action": str(fact.metadata.get("compaction_action") or "add"),
+    }
 
 
 def _resolve_sandbox_branch_id(sandbox_overrides: Optional[dict]) -> Optional[UUID]:

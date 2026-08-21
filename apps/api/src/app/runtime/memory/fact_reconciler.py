@@ -1,6 +1,7 @@
 """Deterministic persistence for compacted fact candidates."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Sequence
 from uuid import UUID
@@ -12,6 +13,23 @@ from app.models.memory import Fact, FactObservation, FactScope, FactStatus
 from app.models.memory import FactSource
 from app.models.project import Project
 from app.runtime.memory.dto import FactDTO
+
+
+@dataclass(frozen=True)
+class FactReconciliationChange:
+    """Safe, operator-facing description of one persisted fact transition."""
+
+    scope: str
+    kind: str
+    subject: str
+    value: str
+    change_type: str
+    status_before: str | None
+    status_after: str
+    support_before: int
+    support_after: int
+    support_delta: int
+    compaction_action: str
 
 
 class FactReconciler:
@@ -69,8 +87,23 @@ class FactReconciler:
         tenant_id: UUID | None,
         sandbox: bool = False,
     ) -> int:
+        return len(await self.apply_with_changes(
+            candidates=candidates,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            sandbox=sandbox,
+        ))
+
+    async def apply_with_changes(
+        self,
+        *,
+        candidates: Sequence[FactDTO],
+        user_id: UUID | None,
+        tenant_id: UUID | None,
+        sandbox: bool = False,
+    ) -> list[FactReconciliationChange]:
         await self.ensure_projects(candidates)
-        changed = 0
+        changes: list[FactReconciliationChange] = []
         for candidate in candidates:
             compaction_action = str(candidate.metadata.get("compaction_action") or "add")
             owner_type, owner_id, project_id = await self._owner_for(candidate, user_id=user_id, tenant_id=tenant_id)
@@ -79,6 +112,9 @@ class FactReconciler:
             existing = await self._find_same(
                 candidate, owner_type=owner_type, owner_id=owner_id, project_id=project_id,
             )
+            is_new = existing is None
+            status_before = existing.status if existing is not None else None
+            support_before = int(existing.support_count or 0) if existing is not None else 0
             if existing is None:
                 existing = Fact(
                     tenant_id=tenant_id,
@@ -122,9 +158,28 @@ class FactReconciler:
             if existing.scope == FactScope.PROJECT.value and existing.status == FactStatus.CONFIRMED.value:
                 await self._apply_confirmed_project_aliases(existing, candidate.metadata.get("project_aliases") or [])
             self._session.add(existing)
-            changed += 1
+            status_after = str(existing.status)
+            if is_new:
+                change_type = "confirmed" if status_after == FactStatus.CONFIRMED.value else "candidate_created"
+            elif status_before != status_after and status_after == FactStatus.CONFIRMED.value:
+                change_type = "candidate_confirmed"
+            else:
+                change_type = "candidate_reinforced"
+            changes.append(FactReconciliationChange(
+                scope=str(existing.scope),
+                kind=str(existing.kind),
+                subject=str(existing.subject),
+                value=str(existing.value),
+                change_type=change_type,
+                status_before=status_before,
+                status_after=status_after,
+                support_before=support_before,
+                support_after=int(existing.support_count or 0),
+                support_delta=added,
+                compaction_action=compaction_action,
+            ))
         await self._session.flush()
-        return changed
+        return changes
 
     async def _apply_confirmed_project_aliases(self, fact: Fact, raw_aliases: Sequence[object]) -> None:
         if fact.project_id is None:

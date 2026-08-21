@@ -185,7 +185,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
             : target.executor.executorSlug === 'memory_preparation'
               ? [{ key: 'task', label: 'Задача' }, { key: 'memory', label: 'Memory' }]
               : target.executor.executorSlug === 'fact_extractor' || target.executor.executorSlug === 'fact_compactor'
-              ? [{ key: 'task', label: 'Задача' }, { key: 'facts', label: 'Факты' }]
+              ? [{ key: 'task', label: 'Задача' }, { key: 'facts', label: target.executor.executorSlug === 'fact_compactor' ? 'Изменения' : 'Факты' }]
               : [{ key: 'task', label: 'Задача' }, { key: 'result', label: 'Результат' }]),
         ...(hasAccessTab ? [{ key: 'access', label: 'Лимиты и доступ' }] : []),
         { key: 'raw', label: 'RAW' },
@@ -199,7 +199,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'info') return common;
     if (tab === 'plan') return <PlanView plan={plan} />;
     if (tab === 'task' && (target.kind === 'step' || target.kind === 'executor_run') && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
-    if (tab === 'facts' && target.kind === 'executor_run') return <FactsViewer events={target.executor.entity.eventIds.map((id) => trace?.eventsById[id]).filter((event): event is NonNullable<typeof event> => Boolean(event))} />;
+    if (tab === 'facts' && target.kind === 'executor_run') return <FactsViewer result={target.executor.memoryResult} />;
     if (tab === 'memory' && target.kind === 'executor_run') return <MemoryContextViewer events={target.executor.entity.eventIds.map((id) => trace?.eventsById[id]).filter((event): event is NonNullable<typeof event> => Boolean(event))} />;
     if (tab === 'result' && target.kind === 'iteration') return <StageResultView stage={target.stage} trace={trace} />;
     if (tab === 'result' && target.kind === 'step') return <StageResultView stage={target.step.stage} trace={trace} />;

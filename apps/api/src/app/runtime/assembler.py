@@ -61,6 +61,10 @@ class PipelineAssembler:
             session=self._session, llm_client=self._llm_client
         )
 
+    def build_memory_writer(self, **kwargs: object) -> MemoryWriter:
+        """Build an observed writer for an inline post-turn memory tail."""
+        return MemoryWriter(session=self._session, llm_client=self._llm_client, **kwargs)
+
     @cached_property
     def memory_preparer(self) -> MemoryPreparer:
         return MemoryPreparer(session=self._session, llm_client=self._llm_client)

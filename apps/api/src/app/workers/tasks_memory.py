@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import json
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -252,7 +251,6 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 component_entity_ids["fact_extractor"]: {},
                 component_entity_ids["fact_compactor"]: {},
             }
-            llm_structured_result: dict[str, dict[str, Any]] = {}
 
             async def _emit_budget_snapshot(
                 *,
@@ -298,13 +296,6 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     return
 
                 response_text = event_data.get("response")
-                if isinstance(response_text, str) and response_text.strip():
-                    try:
-                        parsed = json.loads(response_text)
-                        if isinstance(parsed, dict):
-                            llm_structured_result[component_name] = parsed
-                    except Exception:
-                        pass
                 tokens_in = llm_token_inputs.pop(llm_call_id, 0)
                 tokens_out = max(0, len(str(response_text or "")) // 4)
                 tokens_total = tokens_in + tokens_out
@@ -469,26 +460,13 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             error_code=item.get("error_code"),
                             error_message=item.get("error_message"),
                             duration_ms=item.get("duration_ms", 0),
+                            facts=item.get("facts", []),
                             entity_type="agent_execution",
                             entity_id=component_entity_id,
                             parent_entity_type="orchestrator",
                             parent_entity_id=memory_orchestrator_id,
                         )
                     )
-                    if component_name in {"fact_extractor", "fact_compactor"}:
-                        parsed = llm_structured_result.get(component_name) or {}
-                        facts_payload = parsed.get("facts") if isinstance(parsed, dict) else None
-                        await _publish(
-                            RuntimeEvent.status(
-                                "memory_facts_result",
-                                parent_entity_type="orchestrator",
-                                parent_entity_id=memory_orchestrator_id,
-                                component_name=component_name,
-                                facts=facts_payload if isinstance(facts_payload, list) else [],
-                                entity_type="agent_execution",
-                                entity_id=component_entity_id,
-                            )
-                        )
                     delta = {
                         "agent_steps": 1,
                         "wall_time_ms": int(item.get("duration_ms") or 0),

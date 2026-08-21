@@ -80,3 +80,27 @@ async def test_compactor_keeps_evidenced_candidates_omitted_by_partial_llm_outpu
         ("role", "network engineer"),
         ("preferred language", "Russian"),
     }
+
+
+@pytest.mark.asyncio
+async def test_compactor_forwards_its_execution_id_to_structured_llm() -> None:
+    candidate = FactDTO(
+        scope=FactScope.USER,
+        subject="role",
+        value="network engineer",
+        source=FactSource.USER_UTTERANCE,
+    )
+    compactor = FactCompactor(session=AsyncMock(), llm_client=AsyncMock())
+    compactor._structured.invoke = AsyncMock(return_value=_result(_CompactionOutput()))
+
+    await compactor.compact(
+        candidates=[candidate],
+        current_facts=[],
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        chat_id=uuid4(),
+        event_sink=AsyncMock(),
+        agent_execution_id="fact-compactor-execution",
+    )
+
+    assert compactor._structured.invoke.await_args.kwargs["agent_execution_id"] == "fact-compactor-execution"
