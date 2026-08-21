@@ -728,8 +728,6 @@ class OperationExecutionFacade:
                 # project_memory.mark, unlike an artifact id or the provider's
                 # native tool-call id.
                 raw_output = dict(raw_output)
-                if evidence_call_id:
-                    raw_output["evidence_call_id"] = evidence_call_id
                 if canonical_operation == "collection.info":
                     raw_output = OperationExecutionFacade._compact_collection_info_for_context(
                         raw_output,
@@ -741,6 +739,12 @@ class OperationExecutionFacade:
                     raw_output = OperationExecutionFacade._compact_template_schema_for_context(raw_output)
                 elif canonical_operation == "collection.template.fill":
                     raw_output = OperationExecutionFacade._compact_template_fill_for_context(raw_output)
+                # Compact projections return new dictionaries, so append the
+                # runtime evidence reference only after projection.  This
+                # keeps the ID available for a later project_memory.mark call
+                # without exposing provider-native IDs or raw tool payloads.
+                if evidence_call_id:
+                    raw_output["evidence_call_id"] = evidence_call_id
             try:
                 return _json.dumps(raw_output, ensure_ascii=False, default=str)[
                     :MAX_TOOL_CONTEXT_CHARS

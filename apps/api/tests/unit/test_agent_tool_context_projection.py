@@ -69,6 +69,22 @@ def test_context_projection_includes_runtime_evidence_call_id_only_when_provided
     assert '"artifact_id": "document-1"' in context
 
 
+def test_collection_info_context_projection_keeps_runtime_evidence_call_id():
+    context = OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok(
+            {
+                "collection": {"slug": "backup_reglaments"},
+                "readiness": {"status": "ready"},
+                "tools": [{"tool_name": "collection.document.search"}],
+            }
+        ),
+        operation_slug="collection.info",
+        evidence_call_id="runtime-info-1",
+    )
+
+    assert json.loads(context)["evidence_call_id"] == "runtime-info-1"
+
+
 def test_collection_info_native_projection_omits_duplicate_tool_contracts():
     context = OperationExecutionFacade.format_result_for_context(
         ToolResult.ok(
@@ -151,3 +167,18 @@ def test_template_context_projections_keep_only_next_call_contract():
         "content_type": "application/vnd.ms-excel",
         "size_bytes": 42,
     }
+
+
+def test_template_compact_projections_keep_runtime_evidence_call_id():
+    context = OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok(
+            {
+                "collection": "template_test",
+                "hits": [{"row_id": "row-1", "row_data": {"title": "Request"}}],
+            }
+        ),
+        operation_slug="collection.template.search",
+        evidence_call_id="runtime-template-search-1",
+    )
+
+    assert json.loads(context)["evidence_call_id"] == "runtime-template-search-1"
