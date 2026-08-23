@@ -158,10 +158,11 @@ attachment sections. For sandbox runs, branch fact overlays are applied before
 the immutable snapshot is handed to runtime.
 
 The `memory` system role is not a fact writer: it selects indexes from the
-already loaded facts, project catalogue and confirmed global glossary, and may
-report ambiguities. Global terms remain a distinct bounded context item rather
-than project aliases. A failed selection falls back to an empty optional
-context and does not fail the main turn.
+already loaded facts, project catalogue and confirmed glossary, and may report
+ambiguities. Glossary aliases are used by `memory.lookup` to expand terms before
+project and project-memory-key matching; project rules are never injected into
+the automatic turn snapshot. A failed selection falls back to an empty
+optional context and does not fail the main turn.
 
 After finalization, the chat path emits the answer and dispatches
 `finalize_memory` asynchronously. That worker runs `FactExtractor`,
@@ -183,7 +184,13 @@ executor, agent runtime, tools, budgets и workers получают только
 Preflight, operation execution and agent-triggered document extraction are
 also journalled semantic boundaries. Extraction is a child of `tool_call`;
 independent RAG ingestion keeps its own job-status/event contract.
-Entity hierarchy: `run -> plan -> task -> attempt -> agent_execution -> llm_call|tool_call|interaction|error`.
+The canonical trace presentation hierarchy is
+`run -> orchestrator -> plan_revision -> step -> agent_execution -> llm_call|tool_call|interaction|error|snapshot`.
+`task` and `attempt` are persisted execution-control entities, not a competing
+trace containment chain: lifecycle rows retain their plan parent and carry
+explicit task/attempt references to the corresponding executor run. Until the
+breaking terminology migration, emitted `planner_iteration`/`iteration` rows
+are the legacy wire name for `plan_revision`.
 
 ### Progress delivery
 
@@ -329,17 +336,19 @@ target-specific execution binding.
 
 ## Project Memory Candidate Flow
 
-`project_memory.read` is a global system operation that returns confirmed
-compact facts for an exact project key. `project_memory.mark` never writes the
-database: it accepts only the runtime `evidence_call_id` exposed by a successful
-tool result from the current turn and stores bounded candidates in
-`RuntimeTurnState`. After Synthesizer
+`memory.lookup` is a global system operation which accepts multiple suspicious
+terms, resolves confirmed glossary aliases, resolves matching project catalogue
+entries, and returns bounded project-memory keys without values. `memory.read`
+returns confirmed compact facts only for exact project keys and selected keys.
+`memory.mark` never writes the database: it accepts only the runtime
+`evidence_call_id` exposed by a successful tool result from the current turn and
+stores bounded candidates in `RuntimeTurnState`. After Synthesizer
 has returned the user answer, the normal asynchronous memory worker combines
 those candidates with extracted user/tenant facts and sends project candidates
 through the FactCompactor LLM before `FactReconciler` persists them.
 
 The same writeback worker handles user and tenant candidates extracted from the
-turn. `project_memory.mark` only places bounded evidence-backed candidates in
+turn. `memory.mark` only places bounded evidence-backed candidates in
 the current `RuntimeTurnState`; it is never a direct database write. Manual
 admin fact edits use the separate admin fact service and are not treated as
 LLM-extracted evidence.

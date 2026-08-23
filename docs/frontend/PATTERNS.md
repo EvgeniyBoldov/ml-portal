@@ -170,3 +170,19 @@ Viewer показывает только эту модель в едином с�
 табы. Сложные представления (`PlanViewer`, `LimitsViewer`, `RbacViewer`,
 `PromptViewer`, request/response/result viewers) живут в sandbox domain и
 переиспользуются между инспекторами. RAW остаётся отдельным read-only табом.
+
+Для каждого типа inspector заранее задай применимые tabs и для каждого tab —
+presentation schema: источники в связанных journal events, payload paths,
+порядок полей, renderer и поведение при отсутствии значения. Не добавляй в tab
+все автоматически найденные данные и не используй generic object-to-fields как
+штатный fallback. Новое поле journal безопасно появляется только в RAW, пока не
+будет намеренно добавлено в typed tab model.
+
+`Info` показывает краткую идентичность и состояние сущности: type, status,
+duration, attempts/calls и компактный usage. Тематические tabs раскрывают один
+аспект (`Task`, `Plan`, `Request`, `Result`/`Error`, `Prompt`, `Access`,
+`Memory`, `Facts`). Структурные области отображаются специализированными
+Viewers; JSON и большой текст — форматированным read-only Viewer с действием
+полноэкранного просмотра; статусы и enum-типы — локализованными label/badge.
+Необязательное отсутствующее поле скрывается, ожидаемое показывает `Нет данных`,
+обязательное — явную ошибку presentation contract.

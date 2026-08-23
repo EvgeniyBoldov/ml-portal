@@ -23,10 +23,11 @@ row. Automatically extracted user and tenant terms begin as evidence-backed
 candidates in `glossary_entries`; terminology grounded in a successful document
 or table search becomes a global candidate. A term becomes `confirmed` only
 after three distinct stable source references. Pending and unconfirmed terms
-are hidden; confirmed global terms are supplied to the memory selector as a
-separate bounded glossary input, never as facts or projects. The user-facing
-glossary projection includes only confirmed entries from the current user,
-current tenant and global scopes.
+are hidden. Confirmed entries are supplied to the memory selector as a
+separate bounded glossary input and are also available to `memory.lookup` for
+alias expansion. Glossary entries do not need to declare an entity type: the
+expanded forms are matched against the project catalogue and project-memory
+keys in the read service.
 
 ## Durable scopes
 
@@ -94,7 +95,7 @@ Planner and agents have different memory needs.
 
 | Consumer | Injected automatically | Retrieved on demand |
 | --- | --- | --- |
-| Planner | Selected user/tenant context | Exact project memory through canonical project-memory operations |
+| Planner | Selected user/tenant context | Glossary/project resolution and exact project memory through canonical system operations |
 | Agent | Task-filtered user/tenant context | Project memory, files and RAG through canonical tools |
 | Synthesizer | No durable memory by default; only final task results and allowed evidence | None |
 
@@ -111,22 +112,36 @@ not injected.
 ## Project-memory tools
 
 Project context follows progressive disclosure. The runtime exposes the
-canonical system operations `project_memory.read` and `project_memory.mark`:
+canonical system operations `memory.lookup`, `memory.read` and `memory.mark`:
 
-- `project_memory.read` returns bounded confirmed memory for an exact
-  project key;
-- `project_memory.mark` records bounded evidence-backed candidates in the
+- `memory.lookup` accepts a batch of suspicious terms. It first returns
+  confirmed glossary matches and expands each query with its canonical term
+  and aliases. It then searches project `key`, `name` and aliases and returns
+  only bounded dynamic memory keys for each resolved project; fact values are
+  never returned by this operation;
+- `memory.read` accepts one or more exact `{project_key, keys}` groups and
+  returns bounded confirmed values only for those keys. Agents should use keys
+  returned by `memory.lookup`, not invent subject keys;
+- `memory.mark` records bounded evidence-backed candidates in the
   current turn only and never writes durable memory directly. Its evidence IDs
   must be the `evidence_call_id` exposed on a successful tool result; artifact
   IDs and native provider call IDs are not valid evidence.
 
-Planner/agent access is deliberately limited to these contextual tools. They
-do not receive arbitrary database access or unrestricted file content. Files
-and RAG are read by a normal context/document agent through existing canonical
-tools.
+All three operations are published as `scope_kind=system` operations and are
+available without collection binding. Planner and agent access is deliberately
+limited to these contextual tools. They do not receive arbitrary database
+access or unrestricted file content. Files and RAG are read by a normal
+context/document agent through existing canonical tools.
 
-An ambiguous or missing project result causes the planner to use its existing
-`ask_user` decision and resume after the user supplies the project.
+The older `project_memory.read` operation remains a compatibility surface for
+existing callers during migration; new prompts and plans must use
+`memory.lookup` followed by `memory.read`.
+
+If one term resolves to multiple projects, `memory.lookup` returns
+`ambiguous_projects` and does not read any of them. If several distinct
+projects are identified in one request, it returns all of them as separate
+groups. An ambiguous or missing project result causes the planner to use its
+existing `ask_user` decision and resume after the user supplies the project.
 
 ## Planner and task lifecycle
 
@@ -159,7 +174,8 @@ They must not carry unbounded file bodies.
 
 File and document inspection belongs to a standard context/document agent,
 not to planner execution. It is a normal configured agent with safe system
-operations such as `file.read`, RAG search and project-memory tools.
+operations such as `file.read`, `memory.lookup`, `memory.read`, RAG search and
+project-memory tools.
 
 For a simple file summary the planner creates one context-reader task with
 `on_success=continue`; once that task completes, normal finalization produces

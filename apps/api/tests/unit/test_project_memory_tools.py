@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.builtins.project_memory import ProjectMemoryMarkTool
+from app.agents.builtins.memory import MemoryMarkTool
 from app.agents.context import ToolContext
 from app.runtime.turn_state import RuntimeTurnState
 from app.workers.tasks_memory import (
@@ -31,7 +31,7 @@ async def test_project_memory_marker_accepts_successful_same_run_evidence() -> N
     ctx.extra["runtime_turn_state"] = state
     ctx.extra["runtime_tool_ledger"] = state.tool_ledger
 
-    result = await ProjectMemoryMarkTool().v1_0_0(ctx, {
+    result = await MemoryMarkTool().v1_0_0(ctx, {
         "project_key": "nemesis",
         "candidates": [{
             "subject": "network.ssh.access",
@@ -53,7 +53,7 @@ async def test_project_memory_marker_rejects_missing_or_self_evidence() -> None:
     ctx.extra["runtime_turn_state"] = state
     ctx.extra["runtime_tool_ledger"] = state.tool_ledger
 
-    result = await ProjectMemoryMarkTool().v1_0_0(ctx, {
+    result = await MemoryMarkTool().v1_0_0(ctx, {
         "project_key": "nemesis",
         "candidates": [{
             "subject": "network.ssh.access",

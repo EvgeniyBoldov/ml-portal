@@ -43,6 +43,13 @@ conversation summary into the active component registry.
 is optional and fail-open: an LLM/provider failure produces an empty fallback,
 not invented memory or a failed user turn.
 
+Project memory is disclosed progressively through the system operations
+`memory.lookup` → `memory.read`. `memory.lookup` batch-resolves confirmed
+glossary aliases, project names/aliases and dynamic project-memory keys without
+returning values. `memory.read` reads only the exact `{project_key, keys}`
+groups returned by lookup. `memory.mark` records evidence-backed candidates in
+the current turn and never writes durable facts directly.
+
 Terminal writeback is owned by `MemoryWriter` and normally runs in the Celery
 `finalize_memory` task after the answer. The writer pipeline is
 `FactExtractor -> FactCompactor -> FactReconciler`; only evidence-backed,

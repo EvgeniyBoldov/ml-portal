@@ -236,6 +236,7 @@ class DirectOperationExecutor:
         instance_info = binding.context.model_dump()
         data_config = binding.context.config or {}
         credential_context = binding.credential
+        credential_delivered_by_broker = False
         request_slug = merged_args.get("collection_slug")
         binding_collection_slug = instance_info.get("collection_slug")
         if binding_collection_slug:
@@ -269,6 +270,7 @@ class DirectOperationExecutor:
                 )
                 if access_ctx:
                     merged_args["instance_context"]["credential_access"] = access_ctx
+                    credential_delivered_by_broker = True
                 elif credential_context.payload:
                     if self._mcp_credential_broker_required and not self._mcp_allow_raw_credential_fallback:
                         raise ValueError(
@@ -283,7 +285,9 @@ class DirectOperationExecutor:
             for field_name in ("instance_url", "base_url", "url", "address"):
                 merged_args.setdefault(field_name, data_instance_url)
 
-        if credential_context and credential_context.payload:
+        # A broker-issued access context is the secret-delivery boundary.  Do
+        # not additionally copy its decrypted payload into tool arguments.
+        if credential_context and credential_context.payload and not credential_delivered_by_broker:
             _apply_credential_hints(merged_args, credential_context)
         return merged_args
 

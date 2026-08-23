@@ -16,14 +16,24 @@ Every row has an event `id`, `run_id`, monotonic `sequence`, `event_type`,
 - `caused_by_event_id` links a response, retry or rejection to its initiating
   event. It is not a substitute for the parent entity.
 
-Sandbox hierarchy is:
+The canonical sandbox presentation hierarchy is:
 
 ```text
-run → orchestrator → iteration → step → agent_execution → LLM/tool/interaction/error/snapshot
+run → orchestrator → plan_revision → step → agent_execution → LLM/tool/interaction/error/snapshot
 ```
 
-Iteration and step ids are stable strings scoped by root run. Executor ids are UUIDs.
-Parallel executor runs receive independent immutable logger scopes.
+`plan_revision` is the operator-facing trace entity for one planner decision
+and its execution wave. `task` and `attempt` remain persisted runtime
+control-plane entities: task lifecycle events retain their plan parent and
+carry explicit task/attempt references to the executor run. They are not a
+second competing containment hierarchy for the trace UI.
+
+The current event/entity names `planner_iteration` and `iteration` are legacy
+wire terminology for `plan_revision` until the planned breaking rename. The
+trace projector may map those canonical rows to `plan_revision`, but new
+emitters must not create a parallel hierarchy. Revision and step ids are stable
+strings scoped by root run. Executor ids are UUIDs. Parallel executor runs
+receive independent immutable logger scopes.
 
 For the sandbox execution graph, an `agent_start` payload creates the
 `agent_execution` entity and also carries the
@@ -47,14 +57,14 @@ a terminal `llm_response`; the plaintext-protocol fallback emits a correlated
 `protocol_retry` and reuses the same call ID. A fallback must never leave its
 `llm_request` in a running state.
 
-Every started iteration, step and executor has a terminal event. Step start
+Every started plan revision, step and executor has a terminal event. Step start
 contains goal/intent, inputs and risk; step end contains outcome, summary and
 sufficiency. Executor end contains a safe result summary, `completion_kind`,
 `sufficient_for_phase`, missing inputs/needs, attachments/artifacts, output
 preview and retry/error classification.
 
 Plan creation and revision events are owned by the planner executor run that
-produced them (and therefore are also contained by its iteration). Their payload
+produced them (and therefore are also contained by its plan revision). Their payload
 includes `revision_before`, `revision_after`, mode/trigger and redacted plan patch.
 `planner_decision` records the normalized semantic action; `protocol_retry`
 records only retry number and safe error classification. Task lifecycle rows

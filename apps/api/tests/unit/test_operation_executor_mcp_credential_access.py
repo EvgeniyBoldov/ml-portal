@@ -67,6 +67,7 @@ def test_merge_mcp_args_injects_credential_access_context_when_broker_enabled():
     assert "credentials" not in instance_ctx
     assert instance_ctx["credential_access"].get("token")
     assert instance_ctx["credential_access"].get("resolve_url")
+    assert "raw-secret" not in str(merged)
 
 
 def test_merge_mcp_args_rejects_raw_credentials_when_broker_required():

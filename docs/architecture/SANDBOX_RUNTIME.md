@@ -143,6 +143,39 @@ Run inspector contract:
 - UUID-only payloads and technical timestamps are noise in ordinary tabs;
   backend event payloads must provide human-readable operator fields.
 
+### Trace tab presentation contract
+
+A semantic tab is a curated, typed view of a selected entity, not an automatic
+dump of its payloads. For every entity inspector and every tab, the trace
+projection defines a stable presentation schema: applicable source event types
+and payload paths, field order, renderer, and the missing-data policy. The
+schema selects only information useful for the tab's purpose; unknown or newly
+logged fields remain available in RAW until a dedicated presentation model is
+added.
+
+The common `Info` tab is deliberately compact: entity/call type, lifecycle
+status, duration, attempts or call count, and compact usage when it fits. It
+is not a catch-all context tab. Task, plan, request, result/error, prompt,
+access, memory and facts tabs show only their own domain. Usage becomes a
+separate Viewer/tab only when its independent metrics would overload `Info`.
+
+Use typed renderers rather than generic JSON fields:
+
+- status, type, kind, phase, risk and source use normalized human-readable
+  labels/badges;
+- datetime and duration use short localized display values; raw timestamps are
+  diagnostic data and belong in RAW unless they are the subject of the tab;
+- JSON and long text use the formatted read-only text/JSON viewer with a
+  full-screen expansion action;
+- limits, RBAC, usage, plan, evidence, facts and other structured domains use
+  their own Viewer components, never a list of arbitrary payload keys.
+
+Each selected field is either `optional` (hidden when absent), `expected`
+(shown as `Нет данных` when absent), or `required` (shown as a presentation
+contract issue). A Viewer must not search nearby events, infer values from
+sequence order, or use a generic object-to-fields fallback to fill gaps. RAW
+is always the final read-only tab and is the only universal raw-event view.
+
 Good group boundaries:
 - agent version,
 - tool release/version,

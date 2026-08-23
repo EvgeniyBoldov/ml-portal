@@ -187,6 +187,47 @@ services:
   #       condition: service_healthy
   #   restart: unless-stopped
 
+  # atlassian-jira-mcp:
+  #   build:
+  #     context: .
+  #     dockerfile: mcp/mcp_server.dockerfile
+  #     args:
+  #       - MCP_SERVER_DIR=atlassian
+  #   ports:
+  #     - "8013:8080"
+  #   environment:
+  #     - PORT=8080
+  #     - VERIFY_SSL=true
+  #     - JIRA_CA_BUNDLE=
+  #     - JIRA_TIMEOUT_SECONDS=20
+  #     - JIRA_MCP_MAX_RESULTS=50
+  #     - MCP_SECRET_BROKER_TIMEOUT_SECONDS=10
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   restart: unless-stopped
+
+  # ml-inference-mcp:
+  #   build:
+  #     context: .
+  #     dockerfile: mcp/mcp_server.dockerfile
+  #     args:
+  #       - MCP_SERVER_DIR=ml_inference
+  #   ports:
+  #     - "8014:8080"
+  #   volumes:
+  #     - ./mcp/ml_inference/server.py:/opt/mcp/ml_inference/server.py:ro
+  #   environment:
+  #     - PORT=8080
+  #     - VERIFY_SSL=${ML_INFERENCE_VERIFY_SSL:-true}
+  #     - ML_INFERENCE_CA_BUNDLE=${ML_INFERENCE_CA_BUNDLE:-}
+  #     - ML_INFERENCE_TIMEOUT_SECONDS=${ML_INFERENCE_TIMEOUT_SECONDS:-30}
+  #     - ML_INFERENCE_MAX_MODELS_PER_PAGE=${ML_INFERENCE_MAX_MODELS_PER_PAGE:-100}
+  #     - ML_INFERENCE_MAX_RESPONSE_BYTES=${ML_INFERENCE_MAX_RESPONSE_BYTES:-262144}
+  #     - MCP_SECRET_BROKER_TIMEOUT_SECONDS=${MCP_SECRET_BROKER_TIMEOUT_SECONDS:-10}
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   restart: unless-stopped
+
   # =============================================================================
   # EMBEDDING SERVICES
   # Each instance serves one model. Add more instances for additional models.

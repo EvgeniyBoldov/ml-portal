@@ -143,6 +143,9 @@ make env
 
 ## MCP
 - `NETBOX_URL` — URL NetBox для `netbox-mcp-custom`.
+- `JIRA_CA_BUNDLE` — путь к CA bundle для self-hosted Jira, если используется внутренний CA.
+- `JIRA_TIMEOUT_SECONDS` — timeout запросов Atlassian Jira MCP.
+- `JIRA_MCP_MAX_RESULTS` — верхняя граница результатов Jira MCP в одном ответе.
 
 ## MCP / Runtime Security
 - `MCP_CREDENTIAL_BROKER_ENABLED` — включить broker-flow для MCP credentials.

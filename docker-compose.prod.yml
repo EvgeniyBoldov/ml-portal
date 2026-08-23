@@ -175,6 +175,29 @@ services:
       postgres-remote:
         condition: service_healthy
 
+  atlassian-jira-mcp:
+    image: ml-portal/mcp-atlassian-jira:${IMAGE_TAG:-latest}
+    <<: *restart
+    environment:
+      - PORT=8080
+      - VERIFY_SSL=true
+      - JIRA_CA_BUNDLE=${JIRA_CA_BUNDLE:-}
+      - JIRA_TIMEOUT_SECONDS=${JIRA_TIMEOUT_SECONDS:-20}
+      - JIRA_MCP_MAX_RESULTS=${JIRA_MCP_MAX_RESULTS:-50}
+      - MCP_SECRET_BROKER_TIMEOUT_SECONDS=${MCP_SECRET_BROKER_TIMEOUT_SECONDS:-10}
+
+  ml-inference-mcp:
+    image: ml-portal/mcp-ml-inference:${IMAGE_TAG:-latest}
+    <<: *restart
+    environment:
+      - PORT=8080
+      - VERIFY_SSL=${ML_INFERENCE_VERIFY_SSL:-true}
+      - ML_INFERENCE_CA_BUNDLE=${ML_INFERENCE_CA_BUNDLE:-}
+      - ML_INFERENCE_TIMEOUT_SECONDS=${ML_INFERENCE_TIMEOUT_SECONDS:-30}
+      - ML_INFERENCE_MAX_MODELS_PER_PAGE=${ML_INFERENCE_MAX_MODELS_PER_PAGE:-100}
+      - ML_INFERENCE_MAX_RESPONSE_BYTES=${ML_INFERENCE_MAX_RESPONSE_BYTES:-262144}
+      - MCP_SECRET_BROKER_TIMEOUT_SECONDS=${MCP_SECRET_BROKER_TIMEOUT_SECONDS:-10}
+
   # ===========================================================================
   # EMBEDDING SERVICE
   # ===========================================================================

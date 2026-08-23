@@ -102,6 +102,28 @@ services:
     image: ml-portal/mcp-sql:${IMAGE_TAG:-latest}
 
   # ---------------------------------------------------------------------------
+  # MCP — Atlassian Jira Server / Data Center
+  # ---------------------------------------------------------------------------
+  atlassian-jira-mcp:
+    build:
+      context: .
+      dockerfile: mcp/mcp_server.dockerfile
+      args:
+        MCP_SERVER_DIR: atlassian
+    image: ml-portal/mcp-atlassian-jira:${IMAGE_TAG:-latest}
+
+  # ---------------------------------------------------------------------------
+  # MCP — ML inference facade
+  # ---------------------------------------------------------------------------
+  ml-inference-mcp:
+    build:
+      context: .
+      dockerfile: mcp/mcp_server.dockerfile
+      args:
+        MCP_SERVER_DIR: ml_inference
+    image: ml-portal/mcp-ml-inference:${IMAGE_TAG:-latest}
+
+  # ---------------------------------------------------------------------------
   # NGINX (optional — bakes in static config if desired)
   # In prod we mount configs as volumes instead, so this is optional.
   # ---------------------------------------------------------------------------

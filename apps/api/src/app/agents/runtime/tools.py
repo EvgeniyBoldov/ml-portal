@@ -725,7 +725,7 @@ class OperationExecutionFacade:
             if isinstance(raw_output, dict):
                 # This ID is intentionally projected only into the follow-up
                 # LLM context.  It is the runtime ledger key accepted by
-                # project_memory.mark, unlike an artifact id or the provider's
+                # memory.mark, unlike an artifact id or the provider's
                 # native tool-call id.
                 raw_output = dict(raw_output)
                 if canonical_operation == "collection.info":
@@ -741,7 +741,7 @@ class OperationExecutionFacade:
                     raw_output = OperationExecutionFacade._compact_template_fill_for_context(raw_output)
                 # Compact projections return new dictionaries, so append the
                 # runtime evidence reference only after projection.  This
-                # keeps the ID available for a later project_memory.mark call
+                # keeps the ID available for a later memory.mark call
                 # without exposing provider-native IDs or raw tool payloads.
                 if evidence_call_id:
                     raw_output["evidence_call_id"] = evidence_call_id

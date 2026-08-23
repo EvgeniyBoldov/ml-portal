@@ -80,12 +80,28 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         result_kind="rows",
         scope_kind="system",
     ),
-    "project_memory.mark": OperationSpec(
-        canonical_op_slug="project_memory.mark",
-        domain="project_memory",
+    "memory.mark": OperationSpec(
+        canonical_op_slug="memory.mark",
+        domain="memory",
         title="Mark Project Memory Candidates",
         description="Mark evidenced project knowledge for asynchronous compaction without writing durable memory",
         result_kind="generic",
+        scope_kind="system",
+    ),
+    "memory.lookup": OperationSpec(
+        canonical_op_slug="memory.lookup",
+        domain="memory",
+        title="Lookup Memory Terms",
+        description="Resolve glossary aliases, projects, and relevant project-memory keys without reading values",
+        result_kind="catalog",
+        scope_kind="system",
+    ),
+    "memory.read": OperationSpec(
+        canonical_op_slug="memory.read",
+        domain="memory",
+        title="Read Project Memory",
+        description="Read confirmed values for project-memory keys returned by memory.lookup",
+        result_kind="rows",
         scope_kind="system",
     ),
     "collection.table.search": OperationSpec(
