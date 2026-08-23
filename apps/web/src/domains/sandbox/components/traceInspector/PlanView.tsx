@@ -1,10 +1,11 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorTextBlock } from '@/shared/ui/Inspector';
-import { projectPlan } from '../../planInspection';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorNotice, InspectorTextBlock } from '@/shared/ui/Inspector';
+import type { PlanViewModel } from '../../planInspection';
 import { PlanTaskCard } from './PlanTaskCard';
 import styles from './PlanView.module.css';
 
-export function HumanPlanView({ plan }: { plan: unknown }) {
-  const value = projectPlan(plan);
+export function HumanPlanView({ plan }: { plan?: PlanViewModel }) {
+  if (!plan) return <InspectorNotice tone="neutral" message="План для этого этапа не записан в журнал." />;
+  const value = plan;
   return <div className={styles.summary}>
     <InspectorFieldGroup>
       {value.decision ? <InspectorFieldRow label="Действие">{value.decision}</InspectorFieldRow> : null}

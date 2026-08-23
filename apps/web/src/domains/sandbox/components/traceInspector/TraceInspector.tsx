@@ -4,10 +4,9 @@ import type { TraceInspectionTarget } from '../../traceProjection';
 import { PlanView, TextValue } from './TraceDataViews';
 import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponseView } from './CallViews';
 import { ExecutorResultView, StageResultView, StepResultView } from './ResultViews';
-import { callDisplayName, llmResponseContent, toDisplayEntries } from '../../callInspection';
+import { callDisplayName, toDisplayEntries } from '../../callInspection';
 import { callPresentation, formatCallDuration } from '../../callPresentation';
 import type { ToolNameMap } from '../../callInspection';
-import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel } from '../../planInspection';
 import { PlanTaskCard } from './PlanTaskCard';
 import { traceStatusLabel, traceStatusTone } from '../../traceStatus';
 import { FactsViewer, LimitsViewer, MemoryContextViewer, PreflightViewer, PromptViewer, RawEventsViewer, RbacViewer } from './viewers';
@@ -41,97 +40,9 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
   const runBudgetSnapshot = trace?.runId
     ? latestEntityPayload(trace, `run:${trace.runId}`, 'budget_snapshot')
     : undefined;
-  const plannerExecutorIds = new Set(stage.executorRuns.filter((item) => item.executorSlug === 'planner').map((item) => item.entity.id));
-  const journalEvents = Object.values(trace?.eventsById ?? {});
-  const planEvent = journalEvents
-    .filter((event) => event.event_type === 'plan_created' || event.event_type === 'plan_patch_applied')
-    .filter((event) => plannerExecutorIds.has(event.parent_entity_id ?? ''))
-    .sort((left, right) => right.sequence - left.sequence)[0];
-  const plannerResponse = journalEvents
-    .filter((event) => event.event_type === 'llm_response' && plannerExecutorIds.has(event.parent_entity_id ?? '') && event.payload.purpose === 'planning_decision')
-    .sort((left, right) => right.sequence - left.sequence)[0];
-  const rawPlan = planEvent?.payload
-    ?? (plannerResponse ? llmResponseContent(plannerResponse.payload) : undefined)
-    ?? payloads.find((value) => value && typeof value === 'object' && ('patch' in value || 'revision' in value || 'plan_id' in value))
-    ?? {};
-  const plan = rawPlan && typeof rawPlan === 'object' && !Array.isArray(rawPlan)
-    ? (() => {
-        const value = rawPlan as Record<string, unknown>;
-        const patch = value.patch;
-        return patch && typeof patch === 'object' && !Array.isArray(patch) && Array.isArray((patch as Record<string, unknown>).tasks)
-          ? {
-              ...value,
-              ...(patch as Record<string, unknown>),
-              tasks: ((patch as Record<string, unknown>).tasks as unknown[]).map((task) => {
-                if (!task || typeof task !== 'object' || Array.isArray(task)) return task;
-                const item = task as Record<string, unknown>;
-                return {
-                  ...item,
-                  title: item.title ?? item.intent ?? item.task_id,
-                  objective: item.objective ?? item.instructions,
-                  agent_slug: item.agent_slug ?? item.executor,
-                };
-              }),
-            }
-          : value;
-      })()
-    : rawPlan;
-  const planTasks = projectPlan(plan).tasks;
-  const selectedPlanTask = (taskId: string | undefined): PlanTaskViewModel | undefined => (
-    taskId ? planTasks.find((task) => task.taskId === taskId) : undefined
-  );
-  const selectedTask = (() => {
-    if (target.kind === 'step') {
-      const runtimeExecutor = target.step.executorRuns[0];
-      const runtimePayload = runtimeExecutor?.start.payload ?? {};
-      const taskId = target.step.taskId ?? (typeof runtimePayload.task_id === 'string' ? runtimePayload.task_id : undefined);
-      const plannedTask = selectedPlanTask(taskId);
-      if (plannedTask) {
-        return {
-          ...plannedTask,
-          title: target.step.title || plannedTask.title,
-          objective: target.step.objective ?? plannedTask.objective,
-          executor: plannedTask.executor ?? runtimeExecutor?.executorSlug,
-          status: plannedTask.status ?? taskStatusLabel(runtimeExecutor?.entity.status),
-          inputs: target.step.inputs ?? plannedTask.inputs,
-        };
-      }
-      return projectPlanTask({
-        task_id: taskId,
-        title: target.step.title,
-        objective: target.step.objective,
-        inputs: target.step.inputs,
-        executor: runtimeExecutor?.executorSlug,
-        status: taskStatusLabel(runtimeExecutor?.entity.status),
-      }, taskId ?? 'step-task');
-    }
-    if (target.kind === 'executor_run') {
-      const runtimePayload = target.executor.start.payload;
-      const taskId = typeof runtimePayload.task_id === 'string' ? runtimePayload.task_id : undefined;
-      const plannedTask = selectedPlanTask(taskId);
-      if (plannedTask) {
-        return {
-          ...plannedTask,
-          title: target.executor.task || plannedTask.title,
-          objective: typeof runtimePayload.task_objective === 'string' ? runtimePayload.task_objective : plannedTask.objective,
-          executor: plannedTask.executor ?? target.executor.executorSlug,
-          status: plannedTask.status ?? taskStatusLabel(target.executor.entity.status),
-          inputs: runtimePayload.task_inputs ?? plannedTask.inputs,
-          instructions: typeof runtimePayload.instructions === 'string' ? runtimePayload.instructions : plannedTask.instructions,
-        };
-      }
-      return projectPlanTask({
-        task_id: taskId,
-        title: target.executor.task,
-        objective: runtimePayload.task_objective,
-        instructions: runtimePayload.instructions,
-        inputs: runtimePayload.task_inputs,
-        executor: target.executor.executorSlug,
-        status: taskStatusLabel(target.executor.entity.status),
-      }, taskId ?? target.executor.entity.id);
-    }
-    return undefined;
-  })();
+  const selectedTask = target.kind === 'step' ? target.step.taskPresentation
+    : target.kind === 'executor_run' ? target.executor.taskPresentation
+      : undefined;
   const targetMetrics = target.kind === 'iteration' ? target.stage.metrics
     : target.kind === 'step' ? target.step.metrics
       : target.kind === 'executor_run' ? target.executor.metrics
@@ -140,7 +51,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     ? callPresentation(target.call)
     : undefined;
   const callHasError = selectedCallPresentation?.status === 'error';
-  const hasPlanTab = target.kind === 'iteration' && stage.executorRuns.some((executor) => executor.executorSlug === 'planner');
+  const hasPlanTab = target.kind === 'iteration' && Boolean(stage.plan);
   const common = <InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={traceStatusLabel(entity.status)} tone={statusTone(entity.status)} /></InspectorFieldRow>
     {targetMetrics?.elapsedMs ? <InspectorFieldRow label="Длительность"><InspectorScalar value={`${(targetMetrics.elapsedMs / 1000).toFixed(1)} с`} /></InspectorFieldRow> : null}
@@ -155,7 +66,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     : target.kind === 'step' ? [{ key: 'info', label: 'Инфо' }, { key: 'task', label: 'Задача' }, { key: 'result', label: 'Результат' }, { key: 'raw', label: 'RAW' }]
       : target.kind === 'executor_run' ? [
         { key: 'info', label: 'Инфо' },
-        ...(target.executor.executorSlug === 'planner' ? [{ key: 'plan', label: 'План' }]
+        ...(target.executor.executorSlug === 'planner' && stage.plan ? [{ key: 'plan', label: 'План' }]
           : target.executor.executorSlug === 'synthesizer' ? [{ key: 'result', label: 'Результат' }]
             : target.executor.executorSlug === 'memory_preparation'
               ? [{ key: 'task', label: 'Задача' }, { key: 'memory', label: 'Memory' }]
@@ -175,13 +86,13 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'info' && target.kind === 'call' && target.call.kind === 'tool') return <ToolInfoView call={target.call} toolNames={toolNames} description={target.executor.task} />;
     if (tab === 'info' && target.kind === 'call') return <CallInfoView call={target.call} />;
     if (tab === 'info') return common;
-    if (tab === 'plan') return <PlanView plan={plan} />;
+    if (tab === 'plan') return <PlanView plan={stage.plan} />;
     if (tab === 'task' && (target.kind === 'step' || target.kind === 'executor_run') && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
     if (tab === 'facts' && target.kind === 'executor_run') return <FactsViewer result={target.executor.memoryResult} />;
-    if (tab === 'memory' && target.kind === 'executor_run') return <MemoryContextViewer events={target.executor.entity.eventIds.map((id) => trace?.eventsById[id]).filter((event): event is NonNullable<typeof event> => Boolean(event))} />;
+    if (tab === 'memory' && target.kind === 'executor_run') return <MemoryContextViewer context={target.executor.memoryContext} />;
     if (tab === 'result' && target.kind === 'iteration') return <StageResultView stage={target.stage} trace={trace} />;
     if (tab === 'result' && target.kind === 'step') return <StepResultView step={target.step} trace={trace} />;
-    if (tab === 'result' && target.kind === 'executor_run') return target.executor.executorSlug === 'planner' ? <PlanView plan={plan} /> : <ExecutorResultView executor={target.executor} trace={trace} />;
+    if (tab === 'result' && target.kind === 'executor_run') return target.executor.executorSlug === 'planner' ? <PlanView plan={stage.plan} /> : <ExecutorResultView executor={target.executor} trace={trace} />;
     if (tab === 'prompt' && target.kind === 'executor_run') return <PromptViewer prompt={target.executor.prompt} />;
     if (tab === 'rbac' && target.kind === 'executor_run') return <RbacViewer snapshot={target.executor.rbacSnapshot ?? target.executor.preflight?.rbacSnapshot} />;
     if (tab === 'limits' && target.kind === 'executor_run') return <LimitsViewer executorSnapshot={target.executor.limitsSnapshot} runSnapshot={runBudgetSnapshot} />;

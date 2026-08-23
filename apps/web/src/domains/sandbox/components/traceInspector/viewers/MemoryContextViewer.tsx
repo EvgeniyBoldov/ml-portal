@@ -1,16 +1,13 @@
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorNotice, InspectorScalar, InspectorStatus } from '@/shared/ui/Inspector';
-import type { RuntimeJournalEvent } from '../../../types';
+import type { TraceMemoryContext } from '../../../traceProjection';
 
-export function MemoryContextViewer({ events }: { events: RuntimeJournalEvent[] }) {
-  const payload = [...events].reverse().find((event) => event.event_type === 'status' && event.payload.stage === 'memory_context_prepared')?.payload;
-  if (!payload) return <InspectorNotice tone="neutral" message="Подготовленный memory context не записан в журнал." />;
-  const ambiguities = Array.isArray(payload.ambiguities) ? payload.ambiguities : [];
-  const context = Array.isArray(payload.memory_context) ? payload.memory_context : [];
+export function MemoryContextViewer({ context }: { context?: TraceMemoryContext }) {
+  if (!context) return <InspectorNotice tone="neutral" message="Подготовленный memory context не записан в журнал." />;
   return <InspectorFieldGroup>
-    <InspectorFieldRow label="Статус"><InspectorStatus label={payload.fallback === true ? 'Fallback без памяти' : 'Подготовлен'} tone={payload.fallback === true ? 'warn' : 'success'} /></InspectorFieldRow>
-    <InspectorFieldRow label="Выбрано фактов"><InspectorScalar value={typeof payload.selected_facts === 'number' ? payload.selected_facts : 0} /></InspectorFieldRow>
-    <InspectorFieldRow label="Выбрано проектов"><InspectorScalar value={typeof payload.selected_projects === 'number' ? payload.selected_projects : 0} /></InspectorFieldRow>
-    {context.length ? <InspectorFieldRow label="Контекст планера"><InspectorJsonBlock value={context} /></InspectorFieldRow> : null}
-    {ambiguities.length ? <InspectorFieldRow label="Неоднозначности"><InspectorJsonBlock value={ambiguities} /></InspectorFieldRow> : null}
+    <InspectorFieldRow label="Статус"><InspectorStatus label={context.fallback ? 'Fallback без памяти' : 'Подготовлен'} tone={context.fallback ? 'warn' : 'success'} /></InspectorFieldRow>
+    <InspectorFieldRow label="Выбрано фактов"><InspectorScalar value={context.selectedFacts} /></InspectorFieldRow>
+    <InspectorFieldRow label="Выбрано проектов"><InspectorScalar value={context.selectedProjects} /></InspectorFieldRow>
+    {context.context.length ? <InspectorFieldRow label="Контекст планера"><InspectorJsonBlock value={context.context} /></InspectorFieldRow> : null}
+    {context.ambiguities.length ? <InspectorFieldRow label="Неоднозначности"><InspectorJsonBlock value={context.ambiguities} /></InspectorFieldRow> : null}
   </InspectorFieldGroup>;
 }

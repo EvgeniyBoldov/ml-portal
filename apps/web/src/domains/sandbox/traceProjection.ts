@@ -1,5 +1,6 @@
 import type { RuntimeJournalEvent, SandboxTraceState, TraceEntity } from './traceState';
-import { callDisplayName, llmResponseStatus, purposeLabel, toolResult } from './callInspection';
+import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, purposeLabel, toolResult } from './callInspection';
+import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
 
 export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
 
@@ -18,6 +19,8 @@ export interface TraceCall {
   summary?: string;
   toolCallCount?: number;
   extraction?: TraceExtraction;
+  /** Typed plan result when this LLM call produced a planning decision. */
+  plan?: PlanViewModel;
   /** Logical compatibility id for historical retry rows. */
   logicalLlmCallId?: string;
   /** Legacy attempts, present only when historical rows used separate IDs. */
@@ -46,6 +49,10 @@ export interface TraceExecutorRun {
   prompt?: TracePrompt;
   rbacSnapshot?: unknown;
   limitsSnapshot?: unknown;
+  /** Runtime task presentation bound by the trace projector. */
+  taskPresentation?: PlanTaskViewModel;
+  /** Selected context produced by the memory-preparation executor. */
+  memoryContext?: TraceMemoryContext;
 }
 
 export interface TracePrompt {
@@ -92,6 +99,14 @@ export interface TraceMemoryComponentResult {
   facts: TraceMemoryFact[];
 }
 
+export interface TraceMemoryContext {
+  fallback: boolean;
+  selectedFacts: number;
+  selectedProjects: number;
+  context: unknown[];
+  ambiguities: string[];
+}
+
 export interface TraceStage {
   entity: TraceEntity;
   start: RuntimeJournalEvent;
@@ -101,6 +116,8 @@ export interface TraceStage {
   iterationType: string;
   label: string;
   task: string;
+  /** Planner-owned plan for this revision only. */
+  plan?: PlanViewModel;
   /** All canonical steps in this planner iteration, in execution order. */
   steps: TraceStep[];
   executorRuns: TraceExecutorRun[];
@@ -118,6 +135,8 @@ export interface TraceStep {
   objective?: string;
   inputs?: unknown;
   result?: unknown;
+  /** Runtime/planner task presentation prepared by the trace projection. */
+  taskPresentation: PlanTaskViewModel;
   executorRuns: TraceExecutorRun[];
   metrics: TraceMetrics;
 }
@@ -199,6 +218,20 @@ function memoryComponentResult(events: RuntimeJournalEvent[]): TraceMemoryCompon
     updatedCount: asNumber(payload.updated_count) ?? 0,
     skippedCount: asNumber(payload.skipped_count) ?? 0,
     facts,
+  };
+}
+
+function memoryContextFor(events: RuntimeJournalEvent[]): TraceMemoryContext | undefined {
+  const payload = [...events].reverse().find((event) => (
+    event.event_type === 'status' && event.payload.stage === 'memory_context_prepared'
+  ))?.payload;
+  if (!payload) return undefined;
+  return {
+    fallback: payload.fallback === true,
+    selectedFacts: asNumber(payload.selected_facts) ?? 0,
+    selectedProjects: asNumber(payload.selected_projects) ?? 0,
+    context: Array.isArray(payload.memory_context) ? payload.memory_context : [],
+    ambiguities: stringArray(payload.ambiguities),
   };
 }
 
@@ -374,6 +407,9 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
       end: [...extractionEvents].reverse().find((event) => event.event_type === 'extraction_completed' || event.event_type === 'extraction_failed'),
     } satisfies TraceExtraction;
   })() : undefined;
+  const plan = isLlm && response && llmOutcome(response.payload, toolCallCount ?? 0).kind === 'plan'
+    ? projectPlan(llmResponseContent(response.payload))
+    : undefined;
   return {
     entity,
     events,
@@ -406,6 +442,7 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
       : undefined,
     toolCallCount,
     extraction,
+    plan,
     logicalLlmCallId,
   };
 }
@@ -583,6 +620,7 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
       failedCalls: callMetrics.failedCalls || baseMetrics.failedCalls,
     },
     memoryResult: memoryComponentResult(executorEvents),
+    memoryContext: memoryContextFor(executorEvents),
     preflight: preflightFor(state, entity),
     prompt: promptFor(executorEvents, calls),
     rbacSnapshot: latestPayload(executorEvents, 'rbac_snapshot')?.rbac,
@@ -599,7 +637,7 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     .filter((child): child is TraceEntity => Boolean(child))
     .map((child) => callFor(state, child))
     .filter((call): call is TraceCall => Boolean(call)));
-  return {
+  const executor: TraceExecutorRun = {
     entity,
     start,
     task: 'Подготовка финального ответа',
@@ -610,6 +648,90 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     metrics: metricsFor(state, entity),
     prompt: promptFor(eventsFor(state, entity), calls),
   };
+  executor.taskPresentation = taskPresentationForExecutor(executor);
+  return executor;
+}
+
+function parentMatchesExecutor(event: RuntimeJournalEvent, executorIds: Set<string>): boolean {
+  const parentId = asString(event.parent_entity_id ?? event.payload.parent_entity_id);
+  const parentType = asString(event.parent_entity_type ?? event.payload.parent_entity_type);
+  return parentType === 'agent_execution' && executorIds.has(parentId);
+}
+
+function planForStage(state: SandboxTraceState, executors: TraceExecutorRun[]): PlanViewModel | undefined {
+  const plannerIds = new Set(executors
+    .filter((executor) => executor.executorSlug === 'planner')
+    .map((executor) => executor.entity.id));
+  if (!plannerIds.size) return undefined;
+  const events = state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .filter((event): event is RuntimeJournalEvent => Boolean(event));
+  const planEvent = [...events].reverse().find((event) => (
+    (event.event_type === 'plan_created' || event.event_type === 'plan_patch_applied')
+    && parentMatchesExecutor(event, plannerIds)
+  ));
+  if (planEvent) return projectPlan(planEvent.payload);
+  const plannerResponse = [...events].reverse().find((event) => (
+    event.event_type === 'llm_response'
+    && event.payload.purpose === 'planning_decision'
+    && parentMatchesExecutor(event, plannerIds)
+  ));
+  return plannerResponse ? projectPlan(llmResponseContent(plannerResponse.payload)) : undefined;
+}
+
+function taskPresentationForExecutor(executor: TraceExecutorRun, plan?: PlanViewModel): PlanTaskViewModel {
+  const payload = executor.start.payload;
+  const taskId = asString(payload.task_id);
+  const planned = taskId ? plan?.tasks.find((task) => task.taskId === taskId) : undefined;
+  if (planned) {
+    return {
+      ...planned,
+      title: executor.task || planned.title,
+      objective: asString(payload.task_objective) || planned.objective,
+      executor: planned.executor ?? executor.executorSlug,
+      status: planned.status ?? taskStatusLabel(executor.entity.status),
+      inputs: payload.task_inputs ?? planned.inputs,
+      instructions: asString(payload.instructions) || planned.instructions,
+    };
+  }
+  return projectPlanTask({
+    task_id: taskId || undefined,
+    title: executor.task,
+    objective: payload.task_objective,
+    instructions: payload.instructions,
+    inputs: payload.task_inputs,
+    executor: executor.executorSlug,
+    status: taskStatusLabel(executor.entity.status),
+  }, taskId || executor.entity.id);
+}
+
+function taskPresentationForStep(
+  payload: Record<string, unknown>,
+  title: string,
+  objective: string | undefined,
+  executor: TraceExecutorRun | undefined,
+  plan?: PlanViewModel,
+): PlanTaskViewModel {
+  const taskId = asString(payload.task_id) || asString(payload.phase_id);
+  const planned = taskId ? plan?.tasks.find((task) => task.taskId === taskId) : undefined;
+  if (planned) {
+    return {
+      ...planned,
+      title: title || planned.title,
+      objective: objective ?? planned.objective,
+      executor: planned.executor ?? executor?.executorSlug,
+      status: planned.status ?? taskStatusLabel(executor?.entity.status),
+      inputs: payload.inputs ?? payload.task_inputs ?? planned.inputs,
+    };
+  }
+  return projectPlanTask({
+    task_id: taskId || undefined,
+    title,
+    objective,
+    inputs: payload.inputs ?? payload.task_inputs,
+    executor: executor?.executorSlug,
+    status: taskStatusLabel(executor?.entity.status),
+  }, taskId || executor?.entity.id || 'step-task');
 }
 
 export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
@@ -641,6 +763,8 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         || asString(start.payload.task_title)
         || asString(start.payload.goal)
         || 'Выполнение задачи';
+      const plan = planForStage(state, executorRuns);
+      for (const executor of executorRuns) executor.taskPresentation = taskPresentationForExecutor(executor, plan);
       const stage: TraceStage = {
         entity,
         start,
@@ -650,6 +774,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         iterationType,
         label: iterationLabel(iterationType, number),
         task,
+        plan,
         steps: [],
         executorRuns,
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
@@ -659,15 +784,18 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         const payload = stepStart?.payload ?? {};
         const stepExecutors = executorRunsByStep[index];
         const executor = stepExecutors[0];
+        const title = asString(payload.title) || asString(payload.task_title) || asString(payload.task_objective) || executor?.task || stage.task;
+        const objective = asString(payload.objective) || asString(payload.task_objective) || undefined;
         return {
           key: stepEntity.key,
           entity: stepEntity,
           stage,
           number: asNumber(payload.step_number) ?? index + 1,
           taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
-          title: asString(payload.title) || asString(payload.task_title) || asString(payload.task_objective) || executor?.task || stage.task,
-          objective: asString(payload.objective) || asString(payload.task_objective) || undefined,
+          title,
+          objective,
           inputs: payload.inputs ?? payload.task_inputs,
+          taskPresentation: taskPresentationForStep(payload, title, objective, executor, plan),
           executorRuns: stepExecutors,
           metrics: aggregateMetrics(metricsFor(state, stepEntity), stepExecutors.map((executor) => executor.metrics)),
         };
@@ -701,6 +829,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
       };
       if (isMemory || isMemoryPreparation) {
+        for (const executor of executorRuns) executor.taskPresentation = taskPresentationForExecutor(executor);
         stage.steps = executorRuns.map((executor, index) => ({
           key: `${entity.key}:memory-step:${executor.entity.id}`,
           entity: executor.entity,
@@ -710,6 +839,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
             : executor.executorSlug === 'fact_compactor' ? 'Компактация фактов'
               : 'Подготовка memory context',
           objective: executor.task,
+          taskPresentation: taskPresentationForExecutor(executor),
           executorRuns: [executor],
           metrics: executor.metrics,
         }));
@@ -726,15 +856,18 @@ export function stepFor(stage: TraceStage): TraceStep {
   if (firstStep) return firstStep;
   const executor = stage.executorRuns[0];
   const payload = executor?.start.payload ?? stage.start.payload;
+  const title = asString(payload.title) || asString(payload.task_title) || asString(payload.task_objective) || stage.task;
+  const objective = asString(payload.objective) || asString(payload.task_objective) || undefined;
   return {
     key: `step:${stage.entity.key}`,
     entity: stage.entity,
     stage,
     number: stage.stepNumber,
     taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
-    title: asString(payload.title) || asString(payload.task_title) || asString(payload.task_objective) || stage.task,
-    objective: asString(payload.objective) || asString(payload.task_objective) || undefined,
+    title,
+    objective,
     inputs: payload.inputs ?? payload.task_inputs,
+    taskPresentation: taskPresentationForStep(payload, title, objective, executor, stage.plan),
     executorRuns: stage.executorRuns,
     metrics: aggregateMetrics(metricsFor(state, stage.entity), stage.executorRuns.map((executor) => executor.metrics)),
   };

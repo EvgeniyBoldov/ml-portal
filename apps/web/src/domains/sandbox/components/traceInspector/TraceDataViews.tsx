@@ -1,6 +1,7 @@
 import Badge from '@/shared/ui/Badge';
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorNotice, InspectorScalar, InspectorTextBlock } from '@/shared/ui/Inspector';
 import { HumanPlanView } from './PlanView';
+import type { PlanViewModel } from '../../planInspection';
 import styles from './TraceDataViews.module.css';
 
 type RecordValue = Record<string, unknown>;
@@ -78,7 +79,7 @@ export function accessRows(rbac: RecordValue): AccessRow[] {
   return rows.sort((left, right) => left.kind.localeCompare(right.kind, 'ru') || left.name.localeCompare(right.name, 'ru'));
 }
 
-export function PlanView({ plan }: { plan: unknown }) {
+export function PlanView({ plan }: { plan?: PlanViewModel }) {
   return <HumanPlanView plan={plan} />;
 }
 

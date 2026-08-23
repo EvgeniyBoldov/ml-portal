@@ -64,4 +64,51 @@ describe('projectTraceStages memory components', () => {
       missing: { tools: [], collections: ['private_docs (rbac_denied)'], credentials: ['dcbox'] },
     });
   });
+
+  it('keeps a planner plan scoped to its own revision and maps planned tasks to steps', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1', iteration_number: 1 }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', task_id: 'plan-1', title: 'Сформировать план' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'planner-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'planner', task_title: 'Сформировать план' }),
+      event(4, 'plan_created', {
+        entity_type: 'plan', entity_id: 'plan-1', parent_entity_type: 'agent_execution', parent_entity_id: 'planner-1',
+        revision_after: 1, patch: { decision: 'create_plan', tasks: [{ task_id: 'plan-1', executor: 'tech_fact_manager', intent: 'search_fact', instructions: 'Найти определение' }] },
+      }),
+      event(5, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-2', iteration_number: 2 }),
+      event(6, 'step_start', { entity_type: 'step', entity_id: 'step-2', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-2', task_id: 'plan-2', title: 'Перепланировать' }),
+      event(7, 'agent_start', { entity_type: 'agent_execution', entity_id: 'planner-2', parent_entity_type: 'step', parent_entity_id: 'step-2', agent_slug: 'planner', task_title: 'Перепланировать' }),
+      event(8, 'plan_created', {
+        entity_type: 'plan', entity_id: 'plan-2', parent_entity_type: 'agent_execution', parent_entity_id: 'planner-2',
+        revision_after: 2, patch: { decision: 'revise_plan', tasks: [{ task_id: 'plan-2', executor: 'other_answer', intent: 'answer', instructions: 'Сформировать ответ' }] },
+      }),
+    ]);
+
+    const [first, second] = projectTraceStages(state);
+    expect(first.plan?.tasks.map((task) => task.taskId)).toEqual(['plan-1']);
+    expect(second.plan?.tasks.map((task) => task.taskId)).toEqual(['plan-2']);
+    expect(first.steps[0].taskPresentation).toMatchObject({ taskId: 'plan-1', executor: 'tech_fact_manager', intent: 'search_fact' });
+    expect(first.executorRuns[0].taskPresentation).toMatchObject({ taskId: 'planner-1', executor: 'planner', title: 'Сформировать план' });
+  });
+
+  it('projects memory context and keeps a minimal task presentation when no plan exists', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'memory-preparation', role: 'memory_preparation' }),
+      event(2, 'agent_start', { entity_type: 'agent_execution', entity_id: 'selector-1', parent_entity_type: 'orchestrator', parent_entity_id: 'memory-preparation', agent_slug: 'memory_preparation', task_title: 'Отбор контекста' }),
+      event(3, 'status', {
+        entity_type: 'agent_execution', entity_id: 'selector-1', parent_entity_type: 'orchestrator', parent_entity_id: 'memory-preparation',
+        stage: 'memory_context_prepared', fallback: true, selected_facts: 2, selected_projects: 1,
+        memory_context: [{ type: 'fact', subject: 'role', value: 'engineer' }], ambiguities: ['СРК может означать несколько терминов'],
+      }),
+    ]);
+
+    const stage = projectTraceStages(state)[0];
+    expect(stage.steps[0].taskPresentation).toMatchObject({ title: 'Отбор контекста', executor: 'memory_preparation' });
+    expect(stage.executorRuns[0].memoryContext).toEqual({
+      fallback: true,
+      selectedFacts: 2,
+      selectedProjects: 1,
+      context: [{ type: 'fact', subject: 'role', value: 'engineer' }],
+      ambiguities: ['СРК может означать несколько терминов'],
+    });
+  });
 });

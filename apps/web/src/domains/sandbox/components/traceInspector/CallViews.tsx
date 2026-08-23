@@ -130,7 +130,7 @@ export function LlmResponseSnapshotView({ call, toolNames }: { call: TraceCall; 
       </div>)}
     </div>;
   }
-  if (semanticOutcome?.kind === 'plan') return <div className={styles.list}>{metadata}<PlanView plan={parsed.data} /></div>;
+  if (semanticOutcome?.kind === 'plan') return <div className={styles.list}>{metadata}<PlanView plan={call.plan} /></div>;
   if (parsed.kind === 'tool_call') {
     const toolCall = parsed.data as Record<string, unknown>;
     return <div className={styles.list}>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Выбранная операция">{callDisplayName(String(toolCall.tool ?? '—'), toolNames)}</InspectorFieldRow><InspectorFieldRow label="Аргументы"><Value value={toolCall.arguments ?? {}} /></InspectorFieldRow></InspectorFieldGroup></div>;
