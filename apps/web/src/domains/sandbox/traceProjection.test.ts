@@ -143,4 +143,51 @@ describe('projectTraceStages memory components', () => {
     expect(executorTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Результат', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
     expect(callTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Запрос', 'Результат', 'RAW']);
   });
+
+  it('projects a terminal executor result without making the viewer read journal events', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker', executor_name: 'Worker' }),
+      event(4, 'tool_call', { entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', tool: 'collection.document.search' }),
+      event(5, 'tool_result', { entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', success: true, result: { success: true, data: [] } }),
+      event(6, 'agent_end', {
+        entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1',
+        status: 'completed', summary: 'Готовый результат', completion_kind: 'answer', sufficient_for_phase: true,
+        needs: [{ key: 'follow_up' }], artifacts: [{ file_name: 'answer.txt' }],
+      }),
+    ]);
+
+    const result = projectTraceStages(state)[0].steps[0].executorRuns[0].result;
+    expect(result).toEqual(expect.objectContaining({
+      name: 'Worker', status: 'completed', statusLabel: 'Готово', output: 'Готовый результат',
+      completionKind: 'answer', sufficientForPhase: true, needs: [{ key: 'follow_up' }], artifacts: [{ file_name: 'answer.txt' }],
+      operations: { total: 1, succeeded: 1, failed: 0 },
+    }));
+  });
+
+  it('uses the final answer marker as the synthesizer result', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'synthesis_start', { entity_type: 'synthesis_run', entity_id: 'synthesis-1' }),
+      event(2, 'final_answer_marker', { entity_type: 'run', entity_id: 'run-1', parent_entity_type: 'synthesis_run', parent_entity_id: 'synthesis-1', content: 'Готовый ответ' }),
+      event(3, 'synthesis_end', { entity_type: 'synthesis_run', entity_id: 'synthesis-1', status: 'completed' }),
+    ]);
+
+    expect(projectTraceStages(state)[0].executorRuns[0].result).toMatchObject({
+      status: 'completed', output: 'Готовый ответ',
+    });
+  });
+
+  it('projects an executor failure with its safe error message', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker' }),
+      event(4, 'error', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', agent_execution_id: 'agent-1', safe_message: 'Доступ к источнику отсутствует' }),
+    ]);
+
+    expect(projectTraceStages(state)[0].steps[0].executorRuns[0].result).toMatchObject({
+      status: 'failed', statusLabel: 'Ошибка', message: 'Доступ к источнику отсутствует',
+    });
+  });
 });

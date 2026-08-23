@@ -69,9 +69,9 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'task' && (target.kind === 'step' || target.kind === 'executor') && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
     if (tab === 'facts' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} />;
     if (tab === 'memory' && target.kind === 'executor') return <MemoryContextViewer context={target.executor.memoryContext} />;
-    if (tab === 'result' && target.kind === 'stage') return <StageResultView stage={target.stage} trace={trace} />;
-    if (tab === 'result' && target.kind === 'step') return <StepResultView step={target.step} trace={trace} />;
-    if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : <ExecutorResultView executor={target.executor} trace={trace} />;
+    if (tab === 'result' && target.kind === 'stage') return <StageResultView stage={target.stage} />;
+    if (tab === 'result' && target.kind === 'step') return <StepResultView step={target.step} />;
+    if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : <ExecutorResultView executor={target.executor} />;
     if (tab === 'prompt' && target.kind === 'executor') return <PromptViewer prompt={target.executor.prompt} />;
     if (tab === 'rbac' && target.kind === 'executor') return <RbacViewer snapshot={target.executor.rbacSnapshot ?? target.executor.preflight?.rbacSnapshot} />;
     if (tab === 'limits' && target.kind === 'executor') return <LimitsViewer executorSnapshot={target.executor.limitsSnapshot} runSnapshot={runBudgetSnapshot} />;

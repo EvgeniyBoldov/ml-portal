@@ -132,6 +132,9 @@ Run inspector contract:
 - the projection exposes presentation entities `stage`, `step`, `executor`,
   `call` and `error`; wire names such as `planner_iteration` remain journal
   compatibility details and never determine inspector navigation;
+- each projected executor carries its curated terminal result (status, safe
+  message, output, dependencies, artifacts and operation counters); result
+  Viewers render that model and never search journal events themselves;
 - the projection assigns stage (`plan_revision`, memory preparation/writeback,
   synthesis), step and executor presentation kinds and returns the ordered tab
   policy with the selected target. The inspector renders that policy and does

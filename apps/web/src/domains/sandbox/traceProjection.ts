@@ -1,5 +1,5 @@
 import type { RuntimeJournalEvent, SandboxTraceState, TraceEntity } from './traceState';
-import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, purposeLabel, toolResult } from './callInspection';
+import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, parseCallContent, purposeLabel, sanitizeDisplay, toolResult } from './callInspection';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
 
 export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
@@ -55,6 +55,8 @@ export interface TraceExecutorRun {
   executorSlug: string;
   kind: TraceExecutorKind;
   calls: TraceCall[];
+  /** Curated terminal result of this executor, prepared from canonical relations. */
+  result: TraceExecutorResult;
   metrics: TraceMetrics;
   memoryResult?: TraceMemoryComponentResult;
   preflight?: TracePreflight;
@@ -65,6 +67,22 @@ export interface TraceExecutorRun {
   taskPresentation?: PlanTaskViewModel;
   /** Selected context produced by the memory-preparation executor. */
   memoryContext?: TraceMemoryContext;
+}
+
+export type TraceResultStatus = 'running' | 'completed' | 'failed' | 'unfulfillable' | 'aborted' | 'paused' | 'waiting' | 'unknown';
+
+export interface TraceExecutorResult {
+  name: string;
+  status: TraceResultStatus;
+  statusLabel: string;
+  output?: unknown;
+  message?: string;
+  completionKind?: string;
+  sufficientForPhase?: boolean;
+  missingInputs?: unknown;
+  needs?: unknown;
+  artifacts?: unknown;
+  operations: { total: number; succeeded: number; failed: number };
 }
 
 export interface TracePrompt {
@@ -178,6 +196,20 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => (
     ? value as Record<string, unknown>
     : undefined
 );
+const resultStatusOf = (value: unknown): TraceResultStatus => {
+  const status = asString(value).toLowerCase();
+  if (['completed', 'success', 'succeeded'].includes(status)) return 'completed';
+  if (['failed', 'error'].includes(status)) return 'failed';
+  if (status === 'unfulfillable') return 'unfulfillable';
+  if (['aborted', 'cancelled', 'canceled'].includes(status)) return 'aborted';
+  if (status === 'paused') return 'paused';
+  if (['waiting', 'waiting_input'].includes(status)) return 'waiting';
+  return status ? 'running' : 'unknown';
+};
+export const traceResultStatusLabel = (status: TraceResultStatus): string => ({
+  completed: 'Готово', failed: 'Ошибка', unfulfillable: 'Неисполнимо', aborted: 'Прервано', paused: 'На паузе',
+  waiting: 'Ожидает данных', running: 'Выполняется', unknown: 'Нет результата',
+} as Record<TraceResultStatus, string>)[status];
 const isEndEvent = (type: string): boolean => type.endsWith('_end') || type.endsWith('_finished');
 const iterationLabel = (type: string, number: number): string => {
   if (type === 'replan') return 'Перепланирование';
@@ -610,6 +642,70 @@ function directCallsFor(
     .filter((call): call is TraceCall => Boolean(call));
 }
 
+function resultOutputFrom(payload: Record<string, unknown>): unknown {
+  for (const key of ['output', 'result', 'answer', 'response', 'content', 'summary', 'message']) {
+    if (payload[key] !== undefined && payload[key] !== null && payload[key] !== '') return payload[key];
+  }
+  return undefined;
+}
+
+function resultMessageFrom(payload: Record<string, unknown>): string | undefined {
+  for (const key of ['user_message', 'safe_message', 'operator_message', 'message', 'error']) {
+    const value = asString(payload[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function executorResultFor(
+  state: SandboxTraceState,
+  entity: TraceEntity,
+  executorName: string,
+  executorSlug: string,
+  calls: TraceCall[],
+): TraceExecutorResult {
+  const executorEvents = eventsFor(state, entity);
+  const ended = [...executorEvents].reverse().find((event) => event.event_type === 'agent_end');
+  const isSynthesizer = executorSlug === 'synthesizer';
+  const final = isSynthesizer
+    ? state.eventIdsBySequence
+      .map((id) => state.eventsById[id])
+      .filter((event): event is RuntimeJournalEvent => Boolean(event))
+      .filter((event) => event.event_type === 'final_answer_marker'
+        && event.parent_entity_type === 'synthesis_run'
+        && event.parent_entity_id === entity.id)
+      .sort((left, right) => right.sequence - left.sequence)[0]
+    : undefined;
+  const error = state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .find((event) => event?.event_type === 'error' && (
+      event.payload.agent_execution_id === entity.id
+      || (event.parent_entity_type === entity.type && event.parent_entity_id === entity.id)
+    ));
+  const endPayload = asRecord(ended?.payload) ?? {};
+  const finalPayload = asRecord(final?.payload) ?? {};
+  const errorPayload = asRecord(error?.payload) ?? {};
+  const resultPayload = isSynthesizer && Object.keys(finalPayload).length ? finalPayload : endPayload;
+  const output = resultOutputFrom(resultPayload);
+  const toolCalls = calls.filter((call) => call.kind === 'tool');
+  const succeeded = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === true).length;
+  const failed = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === false).length;
+  const status = resultStatusOf(resultPayload.status ?? (error ? 'failed' : entity.status));
+  return {
+    name: executorName,
+    status,
+    statusLabel: traceResultStatusLabel(status),
+    output: output === undefined ? undefined : sanitizeDisplay(parseCallContent(output).data ?? output),
+    message: resultMessageFrom(errorPayload) ?? resultMessageFrom(resultPayload),
+    completionKind: asString(endPayload.completion_kind) || undefined,
+    sufficientForPhase: typeof endPayload.sufficient_for_phase === 'boolean' ? endPayload.sufficient_for_phase : undefined,
+    missingInputs: endPayload.missing_inputs,
+    needs: endPayload.needs,
+    artifacts: endPayload.artifacts ?? endPayload.attachments ?? resultPayload.attachments ?? resultPayload.artifacts,
+    operations: { total: toolCalls.length, succeeded, failed },
+  };
+}
+
 function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecutorRun | null {
   if (entity.type !== 'agent_execution') return null;
   const start = startFor(state, entity);
@@ -670,6 +766,7 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     executorSlug: slug,
     kind: executorKindFor(slug),
     calls,
+    result: executorResultFor(state, entity, executorName, slug, calls),
     metrics: {
       ...baseMetrics,
       retries: retriesAfterStart || baseMetrics.retries,
@@ -705,6 +802,7 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     executorSlug: 'synthesizer',
     kind: 'synthesizer',
     calls,
+    result: executorResultFor(state, entity, 'Синтезатор', 'synthesizer', calls),
     metrics: metricsFor(state, entity),
     prompt: promptFor(eventsFor(state, entity), calls),
   };
