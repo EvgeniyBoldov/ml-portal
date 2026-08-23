@@ -129,6 +129,13 @@ The right panel should show the selected effective tool release or draft candida
 Run inspector contract:
 - inspector selects an entity and compact semantic tabs; reusable domain Viewers
   render prepared plan, request, response, result, limits and access models;
+- the projection exposes presentation entities `stage`, `step`, `executor`,
+  `call` and `error`; wire names such as `planner_iteration` remain journal
+  compatibility details and never determine inspector navigation;
+- the projection assigns stage (`plan_revision`, memory preparation/writeback,
+  synthesis), step and executor presentation kinds and returns the ordered tab
+  policy with the selected target. The inspector renders that policy and does
+  not branch on an executor slug;
 - LLM and tool calls use `Info`, `Request`, `Result` or `Error`, `RAW`; result
   and error are mutually exclusive;
 - planner uses `Info`, `Plan`, `Prompt`, `RBAC`, `Limits`, `Preflight`, `RAW`;

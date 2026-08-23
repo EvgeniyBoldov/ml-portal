@@ -14,8 +14,8 @@ const synthesisEntity: TraceEntity = {
 };
 
 const synthesizer: TraceExecutorRun = {
-  entity: synthesisEntity, start: event('start', 1, 'synthesis_start', {}), task: 'Подготовка финального ответа',
-  executorType: 'SYNTHESIZER', executorName: 'Синтезатор', executorSlug: 'synthesizer', calls: [], metrics: {},
+  entity: synthesisEntity, inspectorKey: 'executor:synthesis_run:synth-1', start: event('start', 1, 'synthesis_start', {}), task: 'Подготовка финального ответа',
+  executorType: 'SYNTHESIZER', executorName: 'Синтезатор', executorSlug: 'synthesizer', kind: 'synthesizer', calls: [], metrics: {},
 };
 
 describe('result inspection projection', () => {

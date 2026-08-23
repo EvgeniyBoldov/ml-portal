@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { projectTraceStages } from './traceProjection';
+import { projectTraceStages, resolveTraceInspectionTarget, stepFor } from './traceProjection';
 import { replayRuntimeJournal, type RuntimeJournalEvent } from './traceState';
 
 const event = (sequence: number, eventType: string, payload: Record<string, unknown>): RuntimeJournalEvent => ({
@@ -32,6 +32,10 @@ describe('projectTraceStages memory components', () => {
     ]);
 
     const compactor = projectTraceStages(state)[0].executorRuns[0];
+    const target = resolveTraceInspectionTarget(state, compactor.inspectorKey);
+    expect(compactor.kind).toBe('fact_compactor');
+    expect(target?.kind).toBe('executor');
+    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Изменения', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
     expect(compactor.memoryResult?.facts).toEqual([expect.objectContaining({
       subject: 'network.zone',
       changeType: 'candidate_confirmed',
@@ -84,6 +88,12 @@ describe('projectTraceStages memory components', () => {
     ]);
 
     const [first, second] = projectTraceStages(state);
+    const stageTarget = resolveTraceInspectionTarget(state, 'planner_iteration:iteration-1');
+    const plannerTarget = resolveTraceInspectionTarget(state, first.executorRuns[0].inspectorKey);
+    expect(first.kind).toBe('plan_revision');
+    expect(first.steps[0].kind).toBe('planner_decision');
+    expect(stageTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'План', 'Итоги', 'RAW']);
+    expect(plannerTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'План', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
     expect(first.plan?.tasks.map((task) => task.taskId)).toEqual(['plan-1']);
     expect(second.plan?.tasks.map((task) => task.taskId)).toEqual(['plan-2']);
     expect(first.steps[0].taskPresentation).toMatchObject({ taskId: 'plan-1', executor: 'tech_fact_manager', intent: 'search_fact' });
@@ -102,6 +112,10 @@ describe('projectTraceStages memory components', () => {
     ]);
 
     const stage = projectTraceStages(state)[0];
+    const target = resolveTraceInspectionTarget(state, stage.executorRuns[0].inspectorKey);
+    expect(stage.kind).toBe('memory_preparation');
+    expect(stage.steps[0].kind).toBe('memory_selection');
+    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Memory', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
     expect(stage.steps[0].taskPresentation).toMatchObject({ title: 'Отбор контекста', executor: 'memory_preparation' });
     expect(stage.executorRuns[0].memoryContext).toEqual({
       fallback: true,
@@ -110,5 +124,23 @@ describe('projectTraceStages memory components', () => {
       context: [{ type: 'fact', subject: 'role', value: 'engineer' }],
       ambiguities: ['СРК может означать несколько терминов'],
     });
+  });
+
+  it('uses synthesis presentation kinds and the shared executor tab policy', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'synthesis_start', { entity_type: 'synthesis_run', entity_id: 'synthesis-1' }),
+      event(2, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'synthesis_run', parent_entity_id: 'synthesis-1', purpose: 'final_answer' }),
+    ]);
+
+    const stage = projectTraceStages(state)[0];
+    const target = resolveTraceInspectionTarget(state, 'synthesis_run:synthesis-1');
+    const executorTarget = resolveTraceInspectionTarget(state, 'executor:synthesis_run:synthesis-1');
+    const callTarget = resolveTraceInspectionTarget(state, 'llm_call:llm-1');
+    expect(stage.kind).toBe('synthesis');
+    expect(stepFor(stage).kind).toBe('synthesis');
+    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Итоги', 'RAW']);
+    expect(executorTarget?.kind).toBe('executor');
+    expect(executorTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Результат', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
+    expect(callTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Запрос', 'Результат', 'RAW']);
   });
 });

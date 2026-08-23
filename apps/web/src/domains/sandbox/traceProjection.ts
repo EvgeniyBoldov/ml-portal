@@ -3,6 +3,15 @@ import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, pur
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
 
 export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
+export type TraceStageKind = 'plan_revision' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
+export type TraceStepKind = 'planner_decision' | 'task_execution' | 'memory_selection' | 'memory_write' | 'synthesis';
+export type TraceExecutorKind = 'planner' | 'agent' | 'memory_selector' | 'fact_extractor' | 'fact_compactor' | 'synthesizer';
+export type TraceInspectorTabId = 'info' | 'plan' | 'task' | 'memory' | 'facts' | 'result' | 'prompt' | 'rbac' | 'limits' | 'preflight' | 'request' | 'response' | 'error' | 'raw';
+
+export interface TraceInspectorTab {
+  id: TraceInspectorTabId;
+  label: string;
+}
 
 export interface TraceCall {
   entity: TraceEntity;
@@ -37,11 +46,14 @@ export interface TraceExtraction {
 
 export interface TraceExecutorRun {
   entity: TraceEntity;
+  /** Stable presentation key; differs from the stage key for synthesizer. */
+  inspectorKey: string;
   start: RuntimeJournalEvent;
   task: string;
   executorType: string;
   executorName: string;
   executorSlug: string;
+  kind: TraceExecutorKind;
   calls: TraceCall[];
   metrics: TraceMetrics;
   memoryResult?: TraceMemoryComponentResult;
@@ -114,6 +126,7 @@ export interface TraceStage {
   iterationNumber: number;
   stepNumber: number;
   iterationType: string;
+  kind: TraceStageKind;
   label: string;
   task: string;
   /** Planner-owned plan for this revision only. */
@@ -130,6 +143,7 @@ export interface TraceStep {
   entity: TraceEntity;
   stage: TraceStage;
   number: number;
+  kind: TraceStepKind;
   taskId?: string;
   title: string;
   objective?: string;
@@ -142,11 +156,11 @@ export interface TraceStep {
 }
 
 export type TraceInspectionTarget =
-  | { kind: 'iteration'; key: string; stage: TraceStage }
-  | { kind: 'step'; key: string; step: TraceStep }
-  | { kind: 'executor_run'; key: string; executor: TraceExecutorRun; stage: TraceStage }
-  | { kind: 'call'; key: string; call: TraceCall; executor: TraceExecutorRun; stage: TraceStage }
-  | { kind: 'error'; key: string; call: TraceCall; executor: TraceExecutorRun; stage: TraceStage };
+  | { kind: 'stage'; key: string; stage: TraceStage; tabs: TraceInspectorTab[] }
+  | { kind: 'step'; key: string; step: TraceStep; tabs: TraceInspectorTab[] }
+  | { kind: 'executor'; key: string; executor: TraceExecutorRun; stage: TraceStage; tabs: TraceInspectorTab[] }
+  | { kind: 'call'; key: string; call: TraceCall; executor: TraceExecutorRun; stage: TraceStage; tabs: TraceInspectorTab[] }
+  | { kind: 'error'; key: string; call: TraceCall; executor: TraceExecutorRun; stage: TraceStage; tabs: TraceInspectorTab[] };
 
 export interface TraceMetrics {
   elapsedMs?: number;
@@ -174,6 +188,48 @@ const iterationLabel = (type: string, number: number): string => {
   if (type === 'preparation') return 'Подготовка';
   return type || 'Этап';
 };
+const executorKindFor = (slug: string): TraceExecutorKind => {
+  if (slug === 'planner') return 'planner';
+  if (slug === 'memory_preparation') return 'memory_selector';
+  if (slug === 'fact_extractor') return 'fact_extractor';
+  if (slug === 'fact_compactor') return 'fact_compactor';
+  if (slug === 'synthesizer') return 'synthesizer';
+  return 'agent';
+};
+const stepKindFor = (stage: TraceStageKind, executor?: TraceExecutorRun): TraceStepKind => {
+  if (stage === 'synthesis') return 'synthesis';
+  if (stage === 'memory_preparation') return 'memory_selection';
+  if (stage === 'memory_writeback') return 'memory_write';
+  return executor?.kind === 'planner' ? 'planner_decision' : 'task_execution';
+};
+const tab = (id: TraceInspectorTabId, label: string): TraceInspectorTab => ({ id, label });
+const executorSnapshotTabs = (): TraceInspectorTab[] => [tab('prompt', 'Prompt'), tab('rbac', 'RBAC'), tab('limits', 'Лимиты'), tab('preflight', 'Preflight'), tab('raw', 'RAW')];
+const callHasError = (call: TraceCall): boolean => (
+  call.kind === 'error'
+  || (call.kind === 'llm' && Boolean(call.response) && llmResponseStatus(call.response.payload) === 'error')
+  || (call.kind === 'tool' && toolResult(call.response?.payload ?? {}).success === false)
+);
+export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[] {
+  if (target.kind === 'stage') return [tab('info', 'Инфо'), ...(target.stage.plan ? [tab('plan', 'План')] : []), tab('result', 'Итоги'), tab('raw', 'RAW')];
+  if (target.kind === 'step') return [tab('info', 'Инфо'), tab('task', 'Задача'), tab('result', 'Результат'), tab('raw', 'RAW')];
+  if (target.kind === 'executor') {
+    const primary = target.executor.kind === 'planner'
+      ? target.stage.plan ? [tab('plan', 'План')] : [tab('result', 'Результат')]
+      : target.executor.kind === 'synthesizer' ? [tab('result', 'Результат')]
+        : target.executor.kind === 'memory_selector' ? [tab('task', 'Задача'), tab('memory', 'Memory')]
+          : target.executor.kind === 'fact_extractor' ? [tab('task', 'Задача'), tab('facts', 'Факты')]
+            : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), tab('facts', 'Изменения')]
+              : [tab('task', 'Задача'), tab('result', 'Результат')];
+    return [tab('info', 'Инфо'), ...primary, ...executorSnapshotTabs()];
+  }
+  if (target.kind === 'error') return [tab('info', 'Инфо'), tab('error', 'Ошибка'), tab('raw', 'RAW')];
+  const hasError = callHasError(target.call);
+  return [tab('info', 'Инфо'), tab('request', 'Запрос'), tab(hasError ? 'error' : 'response', hasError ? 'Ошибка' : 'Результат'), tab('raw', 'RAW')];
+}
+
+export function withTraceInspectorTabs(target: TraceInspectionTarget): TraceInspectionTarget {
+  return { ...target, tabs: tabsForTarget(target) };
+}
 const eventsFor = (state: SandboxTraceState, entity: TraceEntity): RuntimeJournalEvent[] => (
   entity.eventIds.map((id) => state.eventsById[id]).filter((event): event is RuntimeJournalEvent => Boolean(event))
 );
@@ -606,11 +662,13 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     .length;
   return {
     entity,
+    inspectorKey: entity.key,
     start,
     task,
     executorType,
     executorName,
     executorSlug: slug,
+    kind: executorKindFor(slug),
     calls,
     metrics: {
       ...baseMetrics,
@@ -639,11 +697,13 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     .filter((call): call is TraceCall => Boolean(call)));
   const executor: TraceExecutorRun = {
     entity,
+    inspectorKey: `executor:${entity.key}`,
     start,
     task: 'Подготовка финального ответа',
     executorType: 'SYNTHESIZER',
     executorName: 'Синтезатор',
     executorSlug: 'synthesizer',
+    kind: 'synthesizer',
     calls,
     metrics: metricsFor(state, entity),
     prompt: promptFor(eventsFor(state, entity), calls),
@@ -772,6 +832,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         iterationNumber: number,
         stepNumber: 0,
         iterationType,
+        kind: 'plan_revision',
         label: iterationLabel(iterationType, number),
         task,
         plan,
@@ -791,6 +852,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           entity: stepEntity,
           stage,
           number: asNumber(payload.step_number) ?? index + 1,
+          kind: stepKindFor(stage.kind, executor),
           taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
           title,
           objective,
@@ -824,6 +886,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
       const stage: TraceStage = {
         entity, start, number: plannerStages.length + 1, iterationNumber: plannerStages.length + 1,
         stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : 'memory',
+        kind: isSynthesis ? 'synthesis' : isMemoryPreparation ? 'memory_preparation' : 'memory_writeback',
         label: isSynthesis ? 'Подготовка ответа' : isMemoryPreparation ? 'Подготовка памяти' : 'Сохранение памяти',
         task: isSynthesis ? 'Подготовка финального ответа' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
@@ -835,6 +898,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           entity: executor.entity,
           stage,
           number: index + 1,
+          kind: stepKindFor(stage.kind, executor),
           title: executor.executorSlug === 'fact_extractor' ? 'Извлечение фактов'
             : executor.executorSlug === 'fact_compactor' ? 'Компактация фактов'
               : 'Подготовка memory context',
@@ -863,13 +927,14 @@ export function stepFor(stage: TraceStage): TraceStep {
     entity: stage.entity,
     stage,
     number: stage.stepNumber,
+    kind: stepKindFor(stage.kind, executor),
     taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
     title,
     objective,
     inputs: payload.inputs ?? payload.task_inputs,
     taskPresentation: taskPresentationForStep(payload, title, objective, executor, stage.plan),
     executorRuns: stage.executorRuns,
-    metrics: aggregateMetrics(metricsFor(state, stage.entity), stage.executorRuns.map((executor) => executor.metrics)),
+    metrics: stage.metrics,
   };
 }
 
@@ -879,19 +944,29 @@ export function resolveTraceInspectionTarget(
   key: string,
 ): TraceInspectionTarget | null {
   for (const stage of projectTraceStages(state)) {
-    if (stage.entity.key === key) return { kind: 'iteration', key, stage };
     for (const step of stage.steps.length > 0 ? stage.steps : [stepFor(stage)]) {
-      if (step.key === key) return { kind: 'step', key, step };
+      if (step.key === key) {
+        const target: TraceInspectionTarget = { kind: 'step', key, step, tabs: [] };
+        return withTraceInspectorTabs(target);
+      }
     }
     for (const executor of stage.executorRuns) {
-      if (executor.entity.key === key) return { kind: 'executor_run', key, executor, stage };
+      if (executor.inspectorKey === key) {
+        const target: TraceInspectionTarget = { kind: 'executor', key, executor, stage, tabs: [] };
+        return withTraceInspectorTabs(target);
+      }
       for (const call of executor.calls) {
         if (call.entity.key === key) {
-          return call.kind === 'error'
-            ? { kind: 'error', key, call, executor, stage }
-            : { kind: 'call', key, call, executor, stage };
+          const target: TraceInspectionTarget = call.kind === 'error'
+            ? { kind: 'error', key, call, executor, stage, tabs: [] }
+            : { kind: 'call', key, call, executor, stage, tabs: [] };
+          return withTraceInspectorTabs(target);
         }
       }
+    }
+    if (stage.entity.key === key) {
+      const target: TraceInspectionTarget = { kind: 'stage', key, stage, tabs: [] };
+      return withTraceInspectorTabs(target);
     }
   }
   return null;

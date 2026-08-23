@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { SandboxTraceState } from '../traceState';
 import type { RuntimeProgress } from '../types';
-import { projectTraceStages, stepFor, traceElapsedMs, type TraceCall, type TraceExecutorRun, type TraceInspectionTarget, type TraceMetrics, type TraceStage } from '../traceProjection';
+import { projectTraceStages, stepFor, traceElapsedMs, withTraceInspectorTabs, type TraceCall, type TraceExecutorRun, type TraceInspectionTarget, type TraceMetrics, type TraceStage } from '../traceProjection';
 import { callPresentation, callStatusPresentation } from '../callPresentation';
 import { normalizeTraceStatus, traceStatusLabel } from '../traceStatus';
 import styles from './ExecutionTrace.module.css';
@@ -105,7 +105,7 @@ function CallCard({ call, executor, stage, onSelect, selected }: { call: TraceCa
       : callStatusPresentation(presentation.status);
   return (
     <div className={styles.callWrap}>
-      <button type="button" className={`${styles.call} ${styles[`call-${call.kind}`]} ${selected ? styles.isSelected : ''}`} onClick={() => onSelect?.(call.kind === 'error' ? { kind: 'error', key: call.entity.key, call, executor, stage } : { kind: 'call', key: call.entity.key, call, executor, stage })}>
+      <button type="button" className={`${styles.call} ${styles[`call-${call.kind}`]} ${selected ? styles.isSelected : ''}`} onClick={() => onSelect?.(withTraceInspectorTabs(call.kind === 'error' ? { kind: 'error', key: call.entity.key, call, executor, stage, tabs: [] } : { kind: 'call', key: call.entity.key, call, executor, stage, tabs: [] }))}>
         <span className={styles.callType}><i className={styles.typeMarker} />{typeLabel}</span>
         <span className={styles.callTitle}>{call.title}{call.summary ? <small>{call.summary}</small> : null}</span>
         <span className={`${styles.callStatus} ${presentation.status === 'error' ? styles.callStatusError : presentation.status === 'ok' ? styles.callStatusComplete : presentation.status === 'waiting_retry' ? styles.callStatusWarning : styles.callStatusRunning}`}><span>{status.label}</span>{presentation.outcome?.count ? <span className={styles.callStatusCount}>· {presentation.outcome.count}</span> : null}</span>
@@ -124,9 +124,9 @@ function ExecutorRunCard({ executor, stage, onSelect, selectedTargetKey }: { exe
   const [expanded, setExpanded] = useState(false);
   const isTerminal = ['completed', 'complete', 'failed', 'fail', 'error', 'stalled'].includes(executor.entity.status);
   return (
-    <article className={`${styles.executor} ${statusClass(executor.entity.status)} ${selectedTargetKey === executor.entity.key ? styles.isSelected : ''}`}>
+    <article className={`${styles.executor} ${statusClass(executor.entity.status)} ${selectedTargetKey === executor.inspectorKey ? styles.isSelected : ''}`}>
       <div className={styles.executorBody}>
-        <button type="button" className={styles.executorLabel} onClick={() => onSelect?.({ kind: 'executor_run', key: executor.entity.key, executor, stage })}>
+        <button type="button" className={styles.executorLabel} onClick={() => onSelect?.(withTraceInspectorTabs({ kind: 'executor', key: executor.inspectorKey, executor, stage, tabs: [] }))}>
           <span className={styles.executorType}>{executor.executorType}</span>
           <span className={styles.executorName}>{executor.executorName}<small>{executor.task}</small></span>
           {executor.calls.length > 0 ? <CallSummary calls={executor.calls} /> : null}
@@ -151,7 +151,7 @@ function StepCard({ step, onSelect, selectedTargetKey }: { step: ReturnType<type
   const { stage } = step;
   return (
     <div className={styles.stageRow}>
-      <button type="button" className={`${styles.stageNumber} ${selectedTargetKey === step.key ? styles.isSelected : ''}`} onClick={() => onSelect?.({ kind: 'step', key: step.key, step })}>{step.number || stage.iterationNumber || 1}</button>
+      <button type="button" className={`${styles.stageNumber} ${selectedTargetKey === step.key ? styles.isSelected : ''}`} onClick={() => onSelect?.(withTraceInspectorTabs({ kind: 'step', key: step.key, step, tabs: [] }))}>{step.number || stage.iterationNumber || 1}</button>
       <div className={styles.stage}>
         <div className={styles.executorList}>{step.executorRuns.map((executor) => <ExecutorRunCard key={executor.entity.key} executor={executor} stage={stage} onSelect={onSelect} selectedTargetKey={selectedTargetKey} />)}</div>
       </div>
@@ -198,7 +198,7 @@ export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget
       {expanded && <div className={styles.iterations}>{stages.map((stage) => (
         <article key={stage.entity.key} className={`${styles.iteration} ${styles[`iteration-${stage.iterationType}`] ?? ''} ${selectedTargetKey === stage.entity.key ? styles.isSelected : ''}`}>
           <header className={styles.iterationHeader}>
-            <button type="button" className={styles.iterationType} onClick={() => onSelectTarget?.({ kind: 'iteration', key: stage.entity.key, stage })}>
+            <button type="button" className={styles.iterationType} onClick={() => onSelectTarget?.(withTraceInspectorTabs({ kind: 'stage', key: stage.entity.key, stage, tabs: [] }))}>
               {stage.label}
             </button>
             <span className={styles.iterationTask}>{stage.task}</span>

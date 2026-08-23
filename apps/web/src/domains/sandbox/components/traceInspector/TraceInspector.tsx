@@ -26,32 +26,30 @@ function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' |
 
 export function TraceInspector({ target, trace, toolNames }: Props) {
   if (!target) return null;
-  const entity = target.kind === 'iteration' ? target.stage.entity
+  const entity = target.kind === 'stage' ? target.stage.entity
     : target.kind === 'step' ? target.step.entity
       : target.kind === 'call' || target.kind === 'error' ? target.call.entity
       : target.executor.entity;
-  const title = target.kind === 'iteration' ? target.stage.label
+  const title = target.kind === 'stage' ? target.stage.label
     : target.kind === 'step' ? target.step.title
-      : target.kind === 'executor_run' ? target.executor.executorName
+      : target.kind === 'executor' ? target.executor.executorName
         : target.call.kind === 'tool' ? callDisplayName(String(target.call.request.payload.tool ?? ''), toolNames) : target.call.title;
-  const kindLabel = { iteration: 'Этап', step: 'Шаг', executor_run: 'Запуск исполнителя', call: 'Вызов', error: 'Ошибка' }[target.kind];
+  const kindLabel = { stage: 'Этап', step: 'Шаг', executor: 'Запуск исполнителя', call: 'Вызов', error: 'Ошибка' }[target.kind];
   const payloads = eventPayloads(trace, entity.eventIds);
-  const stage = target.kind === 'iteration' ? target.stage : target.kind === 'step' ? target.step.stage : target.stage;
+  const stage = target.kind === 'stage' ? target.stage : target.kind === 'step' ? target.step.stage : target.stage;
   const runBudgetSnapshot = trace?.runId
     ? latestEntityPayload(trace, `run:${trace.runId}`, 'budget_snapshot')
     : undefined;
   const selectedTask = target.kind === 'step' ? target.step.taskPresentation
-    : target.kind === 'executor_run' ? target.executor.taskPresentation
+    : target.kind === 'executor' ? target.executor.taskPresentation
       : undefined;
-  const targetMetrics = target.kind === 'iteration' ? target.stage.metrics
+  const targetMetrics = target.kind === 'stage' ? target.stage.metrics
     : target.kind === 'step' ? target.step.metrics
-      : target.kind === 'executor_run' ? target.executor.metrics
+      : target.kind === 'executor' ? target.executor.metrics
         : undefined;
   const selectedCallPresentation = target.kind === 'call' || target.kind === 'error'
     ? callPresentation(target.call)
     : undefined;
-  const callHasError = selectedCallPresentation?.status === 'error';
-  const hasPlanTab = target.kind === 'iteration' && Boolean(stage.plan);
   const common = <InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={traceStatusLabel(entity.status)} tone={statusTone(entity.status)} /></InspectorFieldRow>
     {targetMetrics?.elapsedMs ? <InspectorFieldRow label="Длительность"><InspectorScalar value={`${(targetMetrics.elapsedMs / 1000).toFixed(1)} с`} /></InspectorFieldRow> : null}
@@ -61,42 +59,23 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     {targetMetrics?.tokens ? <InspectorFieldRow label="Токены"><InspectorScalar value={targetMetrics.tokens} /></InspectorFieldRow> : null}
     {targetMetrics?.retries ? <InspectorFieldRow label="Повторы"><InspectorScalar value={targetMetrics.retries} /></InspectorFieldRow> : null}
   </InspectorFieldGroup>;
-  const tabs = target.kind === 'call' && target.call.kind === 'llm' ? [{ key: 'info', label: 'Инфо' }, { key: 'request', label: 'Запрос' }, { key: callHasError ? 'error' : 'response', label: callHasError ? 'Ошибка' : 'Результат' }, { key: 'raw', label: 'RAW' }]
-    : target.kind === 'iteration' ? [{ key: 'info', label: 'Инфо' }, ...(hasPlanTab ? [{ key: 'plan', label: 'План' }] : []), { key: 'result', label: 'Итоги' }, { key: 'raw', label: 'RAW' }]
-    : target.kind === 'step' ? [{ key: 'info', label: 'Инфо' }, { key: 'task', label: 'Задача' }, { key: 'result', label: 'Результат' }, { key: 'raw', label: 'RAW' }]
-      : target.kind === 'executor_run' ? [
-        { key: 'info', label: 'Инфо' },
-        ...(target.executor.executorSlug === 'planner' && stage.plan ? [{ key: 'plan', label: 'План' }]
-          : target.executor.executorSlug === 'synthesizer' ? [{ key: 'result', label: 'Результат' }]
-            : target.executor.executorSlug === 'memory_preparation'
-              ? [{ key: 'task', label: 'Задача' }, { key: 'memory', label: 'Memory' }]
-              : target.executor.executorSlug === 'fact_extractor' || target.executor.executorSlug === 'fact_compactor'
-              ? [{ key: 'task', label: 'Задача' }, { key: 'facts', label: target.executor.executorSlug === 'fact_compactor' ? 'Изменения' : 'Факты' }]
-              : [{ key: 'task', label: 'Задача' }, { key: 'result', label: 'Результат' }]),
-        { key: 'prompt', label: 'Prompt' },
-        { key: 'rbac', label: 'RBAC' },
-        { key: 'limits', label: 'Лимиты' },
-        { key: 'preflight', label: 'Preflight' },
-        { key: 'raw', label: 'RAW' },
-      ]
-        : target.kind === 'error' ? [{ key: 'info', label: 'Инфо' }, { key: 'error', label: 'Ошибка' }, { key: 'raw', label: 'RAW' }]
-          : [{ key: 'info', label: 'Инфо' }, { key: 'request', label: 'Запрос' }, { key: callHasError ? 'error' : 'response', label: callHasError ? 'Ошибка' : 'Результат' }, { key: 'raw', label: 'RAW' }];
+  const tabs = target.tabs.map((item) => ({ key: item.id, label: item.label }));
   const render = (tab: string) => {
     if (tab === 'info' && target.kind === 'call' && target.call.kind === 'llm') return <LlmInfoView call={target.call} />;
     if (tab === 'info' && target.kind === 'call' && target.call.kind === 'tool') return <ToolInfoView call={target.call} toolNames={toolNames} description={target.executor.task} />;
     if (tab === 'info' && target.kind === 'call') return <CallInfoView call={target.call} />;
     if (tab === 'info') return common;
     if (tab === 'plan') return <PlanView plan={stage.plan} />;
-    if (tab === 'task' && (target.kind === 'step' || target.kind === 'executor_run') && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
-    if (tab === 'facts' && target.kind === 'executor_run') return <FactsViewer result={target.executor.memoryResult} />;
-    if (tab === 'memory' && target.kind === 'executor_run') return <MemoryContextViewer context={target.executor.memoryContext} />;
-    if (tab === 'result' && target.kind === 'iteration') return <StageResultView stage={target.stage} trace={trace} />;
+    if (tab === 'task' && (target.kind === 'step' || target.kind === 'executor') && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
+    if (tab === 'facts' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} />;
+    if (tab === 'memory' && target.kind === 'executor') return <MemoryContextViewer context={target.executor.memoryContext} />;
+    if (tab === 'result' && target.kind === 'stage') return <StageResultView stage={target.stage} trace={trace} />;
     if (tab === 'result' && target.kind === 'step') return <StepResultView step={target.step} trace={trace} />;
-    if (tab === 'result' && target.kind === 'executor_run') return target.executor.executorSlug === 'planner' ? <PlanView plan={stage.plan} /> : <ExecutorResultView executor={target.executor} trace={trace} />;
-    if (tab === 'prompt' && target.kind === 'executor_run') return <PromptViewer prompt={target.executor.prompt} />;
-    if (tab === 'rbac' && target.kind === 'executor_run') return <RbacViewer snapshot={target.executor.rbacSnapshot ?? target.executor.preflight?.rbacSnapshot} />;
-    if (tab === 'limits' && target.kind === 'executor_run') return <LimitsViewer executorSnapshot={target.executor.limitsSnapshot} runSnapshot={runBudgetSnapshot} />;
-    if (tab === 'preflight' && target.kind === 'executor_run') return <PreflightViewer preflight={target.executor.preflight} />;
+    if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : <ExecutorResultView executor={target.executor} trace={trace} />;
+    if (tab === 'prompt' && target.kind === 'executor') return <PromptViewer prompt={target.executor.prompt} />;
+    if (tab === 'rbac' && target.kind === 'executor') return <RbacViewer snapshot={target.executor.rbacSnapshot ?? target.executor.preflight?.rbacSnapshot} />;
+    if (tab === 'limits' && target.kind === 'executor') return <LimitsViewer executorSnapshot={target.executor.limitsSnapshot} runSnapshot={runBudgetSnapshot} />;
+    if (tab === 'preflight' && target.kind === 'executor') return <PreflightViewer preflight={target.executor.preflight} />;
     if (tab === 'error' && target.kind === 'call' && target.call.kind === 'llm') return <LlmErrorView call={target.call} />;
     if (tab === 'error' && (target.kind === 'error' || target.kind === 'call')) {
       const payload = target.call.response?.payload ?? target.call.request.payload;
