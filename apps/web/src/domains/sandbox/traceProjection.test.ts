@@ -130,6 +130,7 @@ describe('projectTraceStages memory components', () => {
     const state = replayRuntimeJournal([
       event(1, 'synthesis_start', { entity_type: 'synthesis_run', entity_id: 'synthesis-1' }),
       event(2, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'synthesis_run', parent_entity_id: 'synthesis-1', purpose: 'final_answer' }),
+      event(3, 'llm_response', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'synthesis_run', parent_entity_id: 'synthesis-1', result_kind: 'answer', content: 'Готово', terminal: true }),
     ]);
 
     const stage = projectTraceStages(state)[0];
@@ -142,6 +143,10 @@ describe('projectTraceStages memory components', () => {
     expect(executorTarget?.kind).toBe('executor');
     expect(executorTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Результат', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
     expect(callTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Запрос', 'Результат', 'RAW']);
+    if (callTarget?.kind === 'call') {
+      expect(callTarget.call.requestView).toMatchObject({ purpose: 'Финальный ответ', messages: [] });
+      expect(callTarget.call.responseView).toMatchObject({ resultKind: 'answer', terminal: true, content: { kind: 'text', text: 'Готово' } });
+    }
   });
 
   it('projects a terminal executor result without making the viewer read journal events', () => {

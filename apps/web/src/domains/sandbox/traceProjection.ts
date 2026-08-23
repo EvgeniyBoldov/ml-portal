@@ -1,5 +1,7 @@
 import type { RuntimeJournalEvent, SandboxTraceState, TraceEntity } from './traceState';
-import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, parseCallContent, purposeLabel, sanitizeDisplay, toolResult } from './callInspection';
+import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, parseCallContent, purposeLabel, sanitizeDisplay, toDisplayEntries, toolResult, type DisplayEntry, type LlmOutcome, type ParsedContent } from './callInspection';
+import type { CallErrorDetails, CallPresentationStatus } from './callPresentation';
+import { callPresentation } from './callPresentation';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
 
 export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
@@ -34,6 +36,61 @@ export interface TraceCall {
   logicalLlmCallId?: string;
   /** Legacy attempts, present only when historical rows used separate IDs. */
   attempts?: TraceCall[];
+  /** Typed operator-facing fields for semantic inspector tabs. */
+  info: TraceCallInfo;
+  requestView: TraceCallRequest;
+  responseView?: TraceCallResponse;
+  errorView?: CallErrorDetails;
+}
+
+export interface TraceCallInfo {
+  status: CallPresentationStatus;
+  durationMs?: number;
+  retryCount: number;
+  outcome?: LlmOutcome;
+  tokensIn?: number;
+  tokensOut?: number;
+  tokensTotal?: number;
+}
+
+export interface TraceCallRequest {
+  model?: string;
+  purpose?: string;
+  temperature?: number;
+  maxTokens?: number;
+  requestBytes?: number;
+  inputTokensEstimate?: number;
+  responseSchemaBytes?: number;
+  messages: Array<{ role: string; content: ParsedContent }>;
+  toolName?: string;
+  description?: string;
+  arguments?: unknown;
+  question?: string;
+  message?: string;
+}
+
+export interface TraceToolInvocation {
+  name: string;
+  arguments?: unknown;
+}
+
+export interface TraceToolResult {
+  success?: boolean;
+  message?: string;
+  data: unknown;
+  details: DisplayEntry[];
+  truncated: boolean;
+  items: Array<{ title: string; fields: DisplayEntry[] }>;
+}
+
+export interface TraceCallResponse {
+  resultKind?: string;
+  responseLength?: number;
+  terminal?: boolean;
+  content?: ParsedContent;
+  toolCall?: TraceToolInvocation;
+  linkedToolCalls: TraceToolInvocation[];
+  toolResult?: TraceToolResult;
 }
 
 /** Canonical document-extraction subrun owned by a tool call. */
@@ -439,6 +496,87 @@ function aggregateMetrics(own: TraceMetrics, children: TraceMetrics[]): TraceMet
   };
 }
 
+function numberPayload(payload: Record<string, unknown>, key: string): number | undefined {
+  return asNumber(payload[key]);
+}
+
+function requestViewFor(kind: TraceCallKind, payload: Record<string, unknown>): TraceCallRequest {
+  const messages = Array.isArray(payload.messages)
+    ? payload.messages.map((item) => {
+      const message = asRecord(item) ?? {};
+      return { role: asString(message.role) || 'message', content: parseCallContent(message.content ?? message) };
+    })
+    : [];
+  return {
+    model: asString(payload.model) || undefined,
+    purpose: asString(payload.purpose) ? purposeLabel(payload.purpose) : undefined,
+    temperature: numberPayload(payload, 'temperature'),
+    maxTokens: numberPayload(payload, 'max_tokens'),
+    requestBytes: numberPayload(payload, 'request_bytes'),
+    inputTokensEstimate: numberPayload(payload, 'input_tokens_estimate'),
+    responseSchemaBytes: numberPayload(payload, 'response_schema_bytes'),
+    messages,
+    toolName: asString(payload.tool) || asString(payload.tool_slug) || undefined,
+    description: asString(payload.description) || asString(payload.intent) || undefined,
+    arguments: payload.arguments,
+    question: asString(payload.question) || undefined,
+    message: asString(payload.message) || undefined,
+  };
+}
+
+function resultItems(data: unknown): Array<{ title: string; fields: DisplayEntry[] }> {
+  const record = asRecord(data);
+  const values = Array.isArray(data)
+    ? data
+    : Array.isArray(record?.templates) ? record.templates
+      : Array.isArray(record?.hits) ? record.hits : [];
+  return values.map((item, index) => {
+    const row = asRecord(item) ?? {};
+    return {
+      title: asString(row.title) || asString(row.primary_fragment) || asString(row.name) || `Элемент ${index + 1}`,
+      fields: toDisplayEntries(row.row_data ?? row),
+    };
+  });
+}
+
+function responseViewFor(
+  kind: TraceCallKind,
+  response: RuntimeJournalEvent | undefined,
+  linkedToolCalls: RuntimeJournalEvent[],
+  toolCallCount: number | undefined,
+): TraceCallResponse | undefined {
+  if (!response) return undefined;
+  const payload = response.payload;
+  const content = kind === 'llm' ? llmResponseContent(payload) : undefined;
+  const parsed = content === undefined ? undefined : parseCallContent(content);
+  const parsedRecord = parsed?.kind === 'json' ? asRecord(parsed.data) : undefined;
+  const toolCall = parsed?.kind === 'tool_call' && parsedRecord
+    ? { name: asString(parsedRecord.tool) || 'Операция', arguments: parsedRecord.arguments }
+    : undefined;
+  const toolResultView = kind === 'tool'
+    ? (() => {
+      const result = toolResult(payload);
+      return {
+        ...result,
+        truncated: payload.truncated === true,
+        items: resultItems(result.data),
+      };
+    })()
+    : undefined;
+  return {
+    resultKind: asString(payload.result_kind) || undefined,
+    responseLength: numberPayload(payload, 'response_length'),
+    terminal: typeof payload.terminal === 'boolean' ? payload.terminal : undefined,
+    content: parsed,
+    toolCall,
+    linkedToolCalls: linkedToolCalls.map((event) => ({
+      name: asString(event.payload.tool) || 'Операция',
+      arguments: event.payload.arguments,
+    })),
+    toolResult: toolResultView,
+  };
+}
+
 function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | null {
   const isLlm = entity.type === 'llm_call';
   const isTool = entity.type === 'tool_call';
@@ -498,7 +636,7 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
   const plan = isLlm && response && llmOutcome(response.payload, toolCallCount ?? 0).kind === 'plan'
     ? projectPlan(llmResponseContent(response.payload))
     : undefined;
-  return {
+  const call = {
     entity,
     events,
     request,
@@ -532,7 +670,21 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
     extraction,
     plan,
     logicalLlmCallId,
+  } as TraceCall;
+  const presentation = callPresentation(call);
+  call.info = {
+    status: presentation.status,
+    durationMs: presentation.durationMs,
+    retryCount: presentation.retryCount,
+    outcome: presentation.outcome,
+    tokensIn: presentation.tokensIn,
+    tokensOut: presentation.tokensOut,
+    tokensTotal: presentation.tokensTotal,
   };
+  call.requestView = requestViewFor(call.kind, request.payload);
+  call.responseView = responseViewFor(call.kind, response, linkedToolCalls, toolCallCount);
+  call.errorView = presentation.error;
+  return call;
 }
 
 /**

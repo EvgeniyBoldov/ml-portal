@@ -141,6 +141,9 @@ Run inspector contract:
   not branch on an executor slug;
 - LLM and tool calls use `Info`, `Request`, `Result` or `Error`, `RAW`; result
   and error are mutually exclusive;
+- `TraceCall` exposes typed request, response, error and compact info models to
+  semantic Viewers. Unknown payload fields are not projected into semantic
+  tabs and remain available only in RAW;
 - planner uses `Info`, `Plan`, `Prompt`, `RBAC`, `Limits`, `Preflight`, `RAW`;
   agent uses `Info`, `Task`, `Result`, `Prompt`, `RBAC`, `Limits`, `Preflight`,
   `RAW`; synthesizer uses its applicable result and snapshot tabs;

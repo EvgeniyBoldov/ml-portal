@@ -4,8 +4,8 @@ import type { TraceInspectionTarget } from '../../traceProjection';
 import { PlanView, TextValue } from './TraceDataViews';
 import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponseView } from './CallViews';
 import { ExecutorResultView, StageResultView, StepResultView } from './ResultViews';
-import { callDisplayName, toDisplayEntries } from '../../callInspection';
-import { callPresentation, formatCallDuration } from '../../callPresentation';
+import { callDisplayName } from '../../callInspection';
+import { formatCallDuration } from '../../callPresentation';
 import type { ToolNameMap } from '../../callInspection';
 import { PlanTaskCard } from './PlanTaskCard';
 import { traceStatusLabel, traceStatusTone } from '../../traceStatus';
@@ -33,7 +33,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
   const title = target.kind === 'stage' ? target.stage.label
     : target.kind === 'step' ? target.step.title
       : target.kind === 'executor' ? target.executor.executorName
-        : target.call.kind === 'tool' ? callDisplayName(String(target.call.request.payload.tool ?? ''), toolNames) : target.call.title;
+        : target.call.kind === 'tool' ? callDisplayName(target.call.requestView.toolName ?? '', toolNames) : target.call.title;
   const kindLabel = { stage: 'Этап', step: 'Шаг', executor: 'Запуск исполнителя', call: 'Вызов', error: 'Ошибка' }[target.kind];
   const payloads = eventPayloads(trace, entity.eventIds);
   const stage = target.kind === 'stage' ? target.stage : target.kind === 'step' ? target.step.stage : target.stage;
@@ -47,9 +47,6 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     : target.kind === 'step' ? target.step.metrics
       : target.kind === 'executor' ? target.executor.metrics
         : undefined;
-  const selectedCallPresentation = target.kind === 'call' || target.kind === 'error'
-    ? callPresentation(target.call)
-    : undefined;
   const common = <InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={traceStatusLabel(entity.status)} tone={statusTone(entity.status)} /></InspectorFieldRow>
     {targetMetrics?.elapsedMs ? <InspectorFieldRow label="Длительность"><InspectorScalar value={`${(targetMetrics.elapsedMs / 1000).toFixed(1)} с`} /></InspectorFieldRow> : null}
@@ -78,9 +75,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'preflight' && target.kind === 'executor') return <PreflightViewer preflight={target.executor.preflight} />;
     if (tab === 'error' && target.kind === 'call' && target.call.kind === 'llm') return <LlmErrorView call={target.call} />;
     if (tab === 'error' && (target.kind === 'error' || target.kind === 'call')) {
-      const payload = target.call.response?.payload ?? target.call.request.payload;
-      const error = selectedCallPresentation?.error;
-      const entries = toDisplayEntries(payload).filter((entry) => ['Код ошибки', 'Сообщение', 'Статус', 'error', 'error type', 'retryable', 'recoverable', 'Можно повторить', 'Восстанавливаемая'].includes(entry.label) || entry.label.toLowerCase().includes('ошиб'));
+      const error = target.call.errorView;
       return <InspectorFieldGroup>
         <InspectorFieldRow label="Статус"><InspectorStatus label="Ошибка" tone="danger" /></InspectorFieldRow>
         {error ? <>
@@ -91,13 +86,13 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
           {error.providerCode ? <InspectorFieldRow label="Код провайдера"><InspectorScalar value={error.providerCode} /></InspectorFieldRow> : null}
           {error.retryable !== undefined ? <InspectorFieldRow label="Можно повторить"><InspectorStatus label={error.retryable ? 'Да' : 'Нет'} tone={error.retryable ? 'warn' : 'neutral'} /></InspectorFieldRow> : null}
           {error.retryAfterMs !== undefined ? <InspectorFieldRow label="Повтор через"><InspectorScalar value={formatCallDuration(error.retryAfterMs)} /></InspectorFieldRow> : null}
-        </> : entries.map((entry) => <TextValue key={entry.label} label={entry.label} value={entry.value} />)}
+        </> : <InspectorFieldRow label="Сообщение">Нет данных</InspectorFieldRow>}
       </InspectorFieldGroup>;
     }
-    if (tab === 'request' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmRequestSnapshotView call={target.call} executionSnapshot={target.executor.prompt?.snapshot} /> : target.call.kind === 'tool' ? <ToolRequestView call={target.call} /> : <InspectorFieldGroup><TextValue label="Запрос" value={target.call.request.payload.question ?? target.call.request.payload.message} /></InspectorFieldGroup>;
-    if (tab === 'response' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmResponseSnapshotView call={target.call} toolNames={toolNames} /> : target.call.kind === 'tool' ? <ToolResponseView call={target.call} /> : <InspectorFieldGroup><TextValue label="Ответ" value={target.call.response?.payload.user_answer ?? target.call.response?.payload.answer ?? 'Ожидается'} /></InspectorFieldGroup>;
+    if (tab === 'request' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmRequestSnapshotView call={target.call} executionSnapshot={target.executor.prompt?.snapshot} /> : target.call.kind === 'tool' ? <ToolRequestView call={target.call} /> : <InspectorFieldGroup><TextValue label="Запрос" value={target.call.requestView.question ?? target.call.requestView.message} /></InspectorFieldGroup>;
+    if (tab === 'response' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmResponseSnapshotView call={target.call} toolNames={toolNames} /> : target.call.kind === 'tool' ? <ToolResponseView call={target.call} /> : <InspectorFieldGroup><TextValue label="Ответ" value={target.call.responseView?.content?.text ?? 'Ожидается'} /></InspectorFieldGroup>;
     if (tab === 'raw' && (target.kind === 'call' || target.kind === 'error')) {
-      return <RawEventsViewer events={(selectedCallPresentation?.rawEvents ?? target.call.events).map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;
+      return <RawEventsViewer events={[...target.call.events, ...target.call.retryEvents, ...(target.call.extraction?.events ?? [])].map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;
     }
     if (tab === 'raw') return <RawEventsViewer events={entity.eventIds.map((id) => trace?.eventsById[id]).filter((event): event is NonNullable<typeof event> => Boolean(event)).map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;
     return <InspectorFieldGroup><InspectorJsonBlock value={payloads} /></InspectorFieldGroup>;
