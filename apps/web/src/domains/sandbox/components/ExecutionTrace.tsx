@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SandboxTraceState } from '../traceState';
 import type { RuntimeProgress } from '../types';
 import { projectTraceStages, stepFor, traceElapsedMs, withTraceInspectorTabs, type TraceCall, type TraceExecutorRun, type TraceInspectionTarget, type TraceMetrics, type TraceStage } from '../traceProjection';
-import { callPresentation, callStatusPresentation } from '../callPresentation';
+import { callStatusPresentation } from '../callPresentation';
 import { normalizeTraceStatus, traceStatusLabel } from '../traceStatus';
 import styles from './ExecutionTrace.module.css';
 
@@ -97,18 +97,17 @@ function CallCard({ call, executor, stage, onSelect, selected }: { call: TraceCa
     confirm: 'ПОДТВЕРЖДЕНИЕ',
     error: 'ОШИБКА',
   }[call.kind];
-  const presentation = callPresentation(call);
-  const status = call.kind === 'clarify' && presentation.status === 'running'
+  const status = call.kind === 'clarify' && call.info.status === 'running'
     ? { label: 'Ожидает ответ', tone: 'warn' as const }
-    : call.kind === 'confirm' && presentation.status === 'running'
+    : call.kind === 'confirm' && call.info.status === 'running'
       ? { label: 'Ожидает решения', tone: 'warn' as const }
-      : callStatusPresentation(presentation.status);
+      : callStatusPresentation(call.info.status);
   return (
     <div className={styles.callWrap}>
       <button type="button" className={`${styles.call} ${styles[`call-${call.kind}`]} ${selected ? styles.isSelected : ''}`} onClick={() => onSelect?.(withTraceInspectorTabs(call.kind === 'error' ? { kind: 'error', key: call.entity.key, call, executor, stage, tabs: [] } : { kind: 'call', key: call.entity.key, call, executor, stage, tabs: [] }))}>
         <span className={styles.callType}><i className={styles.typeMarker} />{typeLabel}</span>
         <span className={styles.callTitle}>{call.title}{call.summary ? <small>{call.summary}</small> : null}</span>
-        <span className={`${styles.callStatus} ${presentation.status === 'error' ? styles.callStatusError : presentation.status === 'ok' ? styles.callStatusComplete : presentation.status === 'waiting_retry' ? styles.callStatusWarning : styles.callStatusRunning}`}><span>{status.label}</span>{presentation.outcome?.count ? <span className={styles.callStatusCount}>· {presentation.outcome.count}</span> : null}</span>
+        <span className={`${styles.callStatus} ${call.info.status === 'error' ? styles.callStatusError : call.info.status === 'ok' ? styles.callStatusComplete : call.info.status === 'waiting_retry' ? styles.callStatusWarning : styles.callStatusRunning}`}><span>{status.label}</span>{call.info.outcome?.count ? <span className={styles.callStatusCount}>· {call.info.outcome.count}</span> : null}</span>
       </button>
     </div>
   );

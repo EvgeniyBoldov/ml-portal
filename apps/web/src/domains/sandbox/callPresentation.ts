@@ -122,7 +122,7 @@ export function callPresentation(call: TraceCall): CallPresentation {
       ...base,
       status: waitingRetry ? 'waiting_retry' : failed ? 'error' : 'ok',
       outcome,
-      error: failed ? errorForLlm(response, emptyResponse) : undefined,
+      error: failed || waitingRetry ? errorForLlm(response, emptyResponse) : undefined,
       tokensIn,
       tokensOut,
       tokensTotal: numberField(response.tokens_total) ?? (tokensIn !== undefined && tokensOut !== undefined ? tokensIn + tokensOut : undefined),

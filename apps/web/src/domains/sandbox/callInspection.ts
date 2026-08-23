@@ -119,8 +119,8 @@ export function llmOutcome(payload: Record<string, unknown>, toolCallCount = 0):
   if (!hasContent(content)) return { kind: 'empty', label: 'Пусто' };
 
   const parsed = parseCallContent(content);
-  if (parsed.kind === 'tool_call') return { kind: 'tools', label: 'Вызов инструментов', count: 1 };
   const data = asRecord(parsed.data);
+  if (parsed.kind === 'tool_call' || (data.tool !== undefined && data.arguments !== undefined)) return { kind: 'tools', label: 'Вызов инструментов', count: 1 };
   const nestedPlan = asRecord(data.plan);
   const planData = Object.keys(nestedPlan).length ? nestedPlan : data;
   const action = String(planData.action ?? planData.decision ?? data.action ?? data.decision ?? '').trim();

@@ -908,8 +908,12 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     .map((id) => state.eventsById[id])
     .filter((event) => event.event_type === 'protocol_retry' && event.sequence >= start.sequence && event.sequence <= retryEndSequence)
     .length;
+  const latestCall = calls[calls.length - 1];
+  const projectedEntity = entity.status === 'running' && latestCall && latestCall.info.status !== 'running' && latestCall.info.status !== 'waiting_retry'
+    ? { ...entity, status: latestCall.info.status === 'ok' ? 'completed' : 'failed' }
+    : entity;
   return {
-    entity,
+    entity: projectedEntity,
     inspectorKey: entity.key,
     start,
     task,
@@ -922,9 +926,9 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     metrics: {
       ...baseMetrics,
       retries: retriesAfterStart || baseMetrics.retries,
-      calls: callMetrics.calls || baseMetrics.calls,
-      successfulCalls: callMetrics.successfulCalls || baseMetrics.successfulCalls,
-      failedCalls: callMetrics.failedCalls || baseMetrics.failedCalls,
+      calls: callMetrics.calls ?? baseMetrics.calls,
+      successfulCalls: callMetrics.successfulCalls ?? baseMetrics.successfulCalls,
+      failedCalls: callMetrics.failedCalls ?? baseMetrics.failedCalls,
     },
     memoryResult: memoryComponentResult(executorEvents),
     memoryContext: memoryContextFor(executorEvents),

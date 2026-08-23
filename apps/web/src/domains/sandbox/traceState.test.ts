@@ -244,7 +244,7 @@ describe('sandbox trace state', () => {
     expect(executor.calls[0].attempts).toHaveLength(2);
     expect(executor.calls[0].response).toBeUndefined();
     expect(executor.calls[0].retryEvents.map((item) => item.event_type)).toEqual(['protocol_retry']);
-    expect(executor.calls[0].events.map((item) => item.id)).toHaveLength(3);
+    expect(executor.calls[0].events.map((item) => item.id)).toHaveLength(4);
     expect(resolveTraceInspectionTarget(state, executor.calls[0].entity.key)).toMatchObject({ kind: 'call' });
   });
 

@@ -1,7 +1,6 @@
 import Badge from '@/shared/ui/Badge';
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorScalar, InspectorTextBlock } from '@/shared/ui/Inspector';
 import type { TraceExecutorResult, TraceExecutorRun, TraceStage, TraceStep } from '../../traceProjection';
-import { toDisplayEntries } from '../../callInspection';
 import styles from './ResultViews.module.css';
 
 function tone(status: TraceExecutorResult['status']): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
@@ -14,10 +13,6 @@ function tone(status: TraceExecutorResult['status']): 'neutral' | 'success' | 'w
 function Output({ value }: { value: unknown }) {
   if (typeof value === 'string') return <InspectorTextBlock text={value} />;
   if (value === null || typeof value === 'number' || typeof value === 'boolean') return <InspectorScalar value={value} />;
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const entries = toDisplayEntries(value);
-    if (entries.length) return <InspectorFieldGroup>{entries.map((entry) => <InspectorFieldRow key={entry.label} label={entry.label}>{entry.value === null || ['string', 'number', 'boolean'].includes(typeof entry.value) ? <InspectorScalar value={entry.value as string | number | boolean | null} /> : <InspectorJsonBlock value={entry.value} />}</InspectorFieldRow>)}</InspectorFieldGroup>;
-  }
   return <InspectorJsonBlock value={value} />;
 }
 
