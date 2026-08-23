@@ -246,6 +246,24 @@ export interface TraceMetrics {
   failedCalls?: number;
 }
 
+export interface TraceAttachment {
+  artifactId: string;
+  fileName: string;
+  downloadUrl?: string;
+  contentType?: string;
+  sizeBytes?: number;
+}
+
+export interface TraceRunView {
+  runId: string | null;
+  status: string;
+  finalContent: string;
+  attachments: TraceAttachment[];
+  error?: string;
+  pause?: { kind: 'input' | 'confirmation'; question?: string; message?: string };
+  budgetSnapshot?: unknown;
+}
+
 const asString = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
 const asNumber = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 const asRecord = (value: unknown): Record<string, unknown> | undefined => (
@@ -295,7 +313,7 @@ const tab = (id: TraceInspectorTabId, label: string): TraceInspectorTab => ({ id
 const executorSnapshotTabs = (): TraceInspectorTab[] => [tab('prompt', 'Prompt'), tab('rbac', 'RBAC'), tab('limits', 'Лимиты'), tab('preflight', 'Preflight'), tab('raw', 'RAW')];
 const callHasError = (call: TraceCall): boolean => (
   call.kind === 'error'
-  || (call.kind === 'llm' && Boolean(call.response) && llmResponseStatus(call.response.payload) === 'error')
+  || (call.kind === 'llm' && call.response !== undefined && llmResponseStatus(call.response.payload) === 'error')
   || (call.kind === 'tool' && toolResult(call.response?.payload ?? {}).success === false)
 );
 export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[] {
@@ -1167,6 +1185,79 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
     })
     .filter((stage): stage is TraceStage => stage !== null);
   return [...plannerStages, ...systemStages].sort((left, right) => left.start.sequence - right.start.sequence);
+}
+
+function runEvents(state: SandboxTraceState): RuntimeJournalEvent[] {
+  return state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .filter((event): event is RuntimeJournalEvent => Boolean(event));
+}
+
+function attachmentList(value: unknown): TraceAttachment[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((item): TraceAttachment[] => {
+    const record = asRecord(item);
+    const artifactId = asString(record?.artifact_id);
+    const fileName = asString(record?.file_name);
+    if (!artifactId || !fileName || seen.has(artifactId)) return [];
+    seen.add(artifactId);
+    return [{
+      artifactId,
+      fileName,
+      downloadUrl: asString(record?.download_url) || undefined,
+      contentType: asString(record?.content_type) || undefined,
+      sizeBytes: asNumber(record?.size_bytes),
+    }];
+  });
+}
+
+function safeRunError(events: RuntimeJournalEvent[]): string | undefined {
+  for (const event of [...events].reverse()) {
+    if (event.event_type !== 'error' && event.event_type !== 'run_failed') continue;
+    const payload = event.payload;
+    const message = asString(payload.safe_message) || asString(payload.user_message) || asString(payload.message) || asString(payload.error);
+    if (message) return message;
+  }
+  return undefined;
+}
+
+export function projectTraceRun(state: SandboxTraceState): TraceRunView {
+  const events = runEvents(state);
+  let finalContent = '';
+  let attachments: TraceAttachment[] = [];
+  for (const event of [...events].reverse()) {
+    if (event.event_type === 'final' || event.event_type === 'final_content') {
+      if (!finalContent) finalContent = asString(event.payload.content) || asString(event.payload.answer);
+      if (attachments.length === 0) attachments = attachmentList(event.payload.attachments);
+    }
+  }
+  if (!finalContent) {
+    finalContent = events
+      .filter((event) => event.event_type === 'delta')
+      .map((event) => typeof event.payload.content === 'string' ? event.payload.content : '')
+      .join('');
+  }
+  if (attachments.length === 0) {
+    for (const event of [...events].reverse()) {
+      attachments = attachmentList(event.payload.attachments);
+      if (attachments.length > 0) break;
+    }
+  }
+  const waiting = [...events].reverse().find((event) => event.event_type === 'waiting_input' || event.event_type === 'confirmation_required');
+  const waitingPayload = waiting?.payload;
+  const pause = waiting ? {
+    kind: waiting.event_type === 'confirmation_required' ? 'confirmation' as const : 'input' as const,
+    question: asString(waitingPayload?.question) || undefined,
+    message: asString(waitingPayload?.message) || asString(waitingPayload?.summary) || undefined,
+  } : undefined;
+  const budgetSnapshot = [...events].reverse().find((event) => event.event_type === 'budget_snapshot' || event.event_type === 'run_budget_snapshot')?.payload;
+  const root = state.rootEntityKey ? state.entitiesByKey[state.rootEntityKey] : undefined;
+  const terminal = [...events].reverse().find((event) => event.event_type === 'run_end' || event.event_type === 'run_failed');
+  const status = asString(terminal?.payload.status)
+    || (root?.status && root.status !== 'running' ? root.status : undefined)
+    || (pause ? (pause.kind === 'input' ? 'waiting_input' : 'waiting_confirmation') : root?.status || 'unknown');
+  return { runId: state.runId, status, finalContent, attachments, error: safeRunError(events), pause, budgetSnapshot };
 }
 
 export function stepFor(stage: TraceStage): TraceStep {

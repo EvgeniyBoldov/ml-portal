@@ -45,6 +45,7 @@ describe('call presentation', () => {
     const call: TraceCall = {
       entity: entity('llm-1'), events: [request, response], request, response,
       retryEvents: [retry], linkedToolCalls: [], kind: 'llm', title: 'LLM', toolCallCount: 0,
+      info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
     };
 
     expect(callPresentation(call)).toMatchObject({
@@ -63,6 +64,7 @@ describe('call presentation', () => {
     const call: TraceCall = {
       entity: { ...entity('tool-1'), key: 'tool_call:tool-1', type: 'tool_call' },
       events: [request, response], request, response, retryEvents: [], linkedToolCalls: [], kind: 'tool', title: 'file.generate',
+      info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
     };
 
     expect(callPresentation(call)).toMatchObject({ status: 'error', durationMs: 4000, error: { message: 'Недоступно' } });
@@ -76,6 +78,7 @@ describe('call presentation', () => {
     const call: TraceCall = {
       entity: entity('llm-1'), events: [request, response], request, response,
       retryEvents: [], linkedToolCalls: [tool], kind: 'llm', title: 'LLM', toolCallCount: 1,
+      info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
     };
 
     expect(callPresentation(call)).toMatchObject({
@@ -97,6 +100,7 @@ describe('call presentation', () => {
     const call: TraceCall = {
       entity: entity('llm-1'), events: [request, response], request, response,
       retryEvents: [], linkedToolCalls: [], kind: 'llm', title: 'LLM', toolCallCount: 0,
+      info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
     };
 
     expect(callPresentation(call)).toMatchObject({

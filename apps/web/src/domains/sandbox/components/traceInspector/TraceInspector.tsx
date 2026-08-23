@@ -1,6 +1,6 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorHeader, InspectorJsonBlock, InspectorPanel, InspectorScalar, InspectorStatus, InspectorTabs } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorHeader, InspectorPanel, InspectorScalar, InspectorStatus, InspectorTabs } from '@/shared/ui/Inspector';
 import type { SandboxTraceState } from '../../traceState';
-import type { TraceInspectionTarget } from '../../traceProjection';
+import { projectTraceRun, type TraceInspectionTarget } from '../../traceProjection';
 import { PlanView, TextValue } from './TraceDataViews';
 import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponseView } from './CallViews';
 import { ExecutorResultView, StageResultView, StepResultView } from './ResultViews';
@@ -12,14 +12,6 @@ import { traceStatusLabel, traceStatusTone } from '../../traceStatus';
 import { FactsViewer, LimitsViewer, MemoryContextViewer, PreflightViewer, PromptViewer, RawEventsViewer, RbacViewer } from './viewers';
 
 interface Props { target: TraceInspectionTarget | null; trace: SandboxTraceState | null; toolNames?: ToolNameMap; }
-const eventPayloads = (state: SandboxTraceState | null, ids: string[]) => ids.map((id) => state?.eventsById[id]?.payload).filter(Boolean);
-const latestEntityPayload = (state: SandboxTraceState | null, entityId: string, eventType: string): Record<string, unknown> | undefined => {
-  const entity = state?.entitiesByKey[entityId];
-  if (!entity) return undefined;
-  return [...entity.eventIds].reverse()
-    .map((id) => state?.eventsById[id])
-    .find((event) => event?.event_type === eventType)?.payload;
-};
 function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
   return traceStatusTone(status);
 }
@@ -35,11 +27,8 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
       : target.kind === 'executor' ? target.executor.executorName
         : target.call.kind === 'tool' ? callDisplayName(target.call.requestView.toolName ?? '', toolNames) : target.call.title;
   const kindLabel = { stage: 'Этап', step: 'Шаг', executor: 'Запуск исполнителя', call: 'Вызов', error: 'Ошибка' }[target.kind];
-  const payloads = eventPayloads(trace, entity.eventIds);
   const stage = target.kind === 'stage' ? target.stage : target.kind === 'step' ? target.step.stage : target.stage;
-  const runBudgetSnapshot = trace?.runId
-    ? latestEntityPayload(trace, `run:${trace.runId}`, 'budget_snapshot')
-    : undefined;
+  const runBudgetSnapshot = trace ? projectTraceRun(trace).budgetSnapshot : undefined;
   const selectedTask = target.kind === 'step' ? target.step.taskPresentation
     : target.kind === 'executor' ? target.executor.taskPresentation
       : undefined;
@@ -95,7 +84,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
       return <RawEventsViewer events={[...target.call.events, ...target.call.retryEvents, ...(target.call.extraction?.events ?? [])].map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;
     }
     if (tab === 'raw') return <RawEventsViewer events={entity.eventIds.map((id) => trace?.eventsById[id]).filter((event): event is NonNullable<typeof event> => Boolean(event)).map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;
-    return <InspectorFieldGroup><InspectorJsonBlock value={payloads} /></InspectorFieldGroup>;
+    return <InspectorFieldGroup><InspectorFieldRow label="Данные">Нет данных</InspectorFieldRow></InspectorFieldGroup>;
   };
   return <InspectorPanel header={<InspectorHeader tone={traceStatusTone(entity.status)} kindLabel={kindLabel} title={title} />}><InspectorTabs entityId={target.key} tabs={tabs} render={render} /></InspectorPanel>;
 }

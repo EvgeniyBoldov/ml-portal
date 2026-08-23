@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { projectTraceStages, resolveTraceInspectionTarget, stepFor } from './traceProjection';
+import { projectTraceRun, projectTraceStages, resolveTraceInspectionTarget, stepFor } from './traceProjection';
 import { replayRuntimeJournal, type RuntimeJournalEvent } from './traceState';
 
 const event = (sequence: number, eventType: string, payload: Record<string, unknown>): RuntimeJournalEvent => ({
@@ -193,6 +193,41 @@ describe('projectTraceStages memory components', () => {
 
     expect(projectTraceStages(state)[0].steps[0].executorRuns[0].result).toMatchObject({
       status: 'failed', statusLabel: 'Ошибка', message: 'Доступ к источнику отсутствует',
+    });
+  });
+});
+
+describe('projectTraceRun', () => {
+  it('prefers the terminal answer and normalizes/deduplicates attachments', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'delta', { entity_type: 'run', entity_id: 'run-1', content: 'partial ' }),
+      event(2, 'final', {
+        entity_type: 'run', entity_id: 'run-1', content: 'Готово',
+        attachments: [
+          { artifact_id: 'a-1', file_name: 'answer.txt' },
+          { artifact_id: 'a-1', file_name: 'duplicate.txt' },
+          { artifact_id: '', file_name: 'invalid.txt' },
+        ],
+      }),
+      event(3, 'run_end', { entity_type: 'run', entity_id: 'run-1', status: 'completed' }),
+    ]);
+    expect(projectTraceRun(state)).toMatchObject({
+      runId: 'run-1', status: 'completed', finalContent: 'Готово',
+      attachments: [{ artifactId: 'a-1', fileName: 'answer.txt' }],
+    });
+  });
+
+  it('falls back to deltas and projects waiting/error/budget state safely', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'delta', { entity_type: 'run', entity_id: 'run-1', content: 'one ' }),
+      event(2, 'delta', { entity_type: 'run', entity_id: 'run-1', content: 'two' }),
+      event(3, 'waiting_input', { entity_type: 'run', entity_id: 'run-1', question: 'Уточните запрос' }),
+      event(4, 'budget_snapshot', { entity_type: 'run', entity_id: 'run-1', own: { llm_calls: 1 } }),
+      event(5, 'error', { entity_type: 'run', entity_id: 'run-1', safe_message: 'Недоступно', traceback: 'secret' }),
+    ]);
+    expect(projectTraceRun(state)).toMatchObject({
+      finalContent: 'one two', status: 'error', error: 'Недоступно',
+      pause: { kind: 'input', question: 'Уточните запрос' }, budgetSnapshot: { own: { llm_calls: 1 } },
     });
   });
 });

@@ -10,14 +10,13 @@ import { Icon } from '@/shared/ui/Icon';
 import { Tooltip } from '@/shared/ui';
 import { qk } from '@/shared/api/keys';
 import type { ActiveRun } from '../hooks/useSandboxRun';
-import type { SandboxBranchListItem, SandboxRunListItem, RuntimeJournalEvent } from '../types';
-import type { ChatAttachmentRef } from '@/domains/chat/types';
+import type { SandboxBranchListItem, SandboxRunListItem } from '../types';
 import { replayRuntimeJournal } from '../traceState';
 import { sandboxApi } from '../api';
 import ChatQuestionCard from './ChatQuestionCard';
 import ChatAnswerCard from './ChatAnswerCard';
 import { ExecutionTrace } from './ExecutionTrace';
-import type { TraceInspectionTarget } from '../traceProjection';
+import { projectTraceRun, type TraceInspectionTarget } from '../traceProjection';
 import styles from './RunChat.module.css';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -25,49 +24,6 @@ import styles from './RunChat.module.css';
 function extractClarifyQuestion(context: Record<string, unknown> | undefined): string | null {
   const question = context && typeof context.question === 'string' ? context.question.trim() : '';
   return question || null;
-}
-
-function extractFinalContent(
-  events: RuntimeJournalEvent[],
-): string {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    if (event.event_type === 'final' || event.event_type === 'final_content') {
-      const content = event.payload.content;
-      if (typeof content === 'string') return content;
-    }
-  }
-  let result = '';
-  for (const event of events) {
-    if (event.event_type === 'delta' && typeof event.payload.content === 'string') {
-      result += event.payload.content;
-    }
-  }
-  return result;
-}
-
-function extractFinalAttachments(events: RuntimeJournalEvent[]): ChatAttachmentRef[] {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const rawAttachments = events[i].payload.attachments;
-    if (!Array.isArray(rawAttachments)) continue;
-    const seen = new Set<string>();
-    return rawAttachments.flatMap((item) => {
-      if (!item || typeof item !== 'object') return [];
-      const record = item as Record<string, unknown>;
-      const artifactId = typeof record.artifact_id === 'string' ? record.artifact_id : '';
-      const fileName = typeof record.file_name === 'string' ? record.file_name : '';
-      if (!artifactId || !fileName || seen.has(artifactId)) return [];
-      seen.add(artifactId);
-      return [{
-        artifactId,
-        fileName,
-        downloadUrl: typeof record.download_url === 'string' ? record.download_url : undefined,
-        contentType: typeof record.content_type === 'string' ? record.content_type : undefined,
-        sizeBytes: typeof record.size_bytes === 'number' ? record.size_bytes : undefined,
-      }];
-    });
-  }
-  return [];
 }
 
 // ── HistoricalRunItem ───────────────────────────────────────────────────────
@@ -102,14 +58,14 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
     refetchInterval: run.status === 'running' ? 2_000 : false,
   });
 
-  const finalContent = runDetail ? extractFinalContent(runDetail.events) : '';
-  const finalAttachments = runDetail ? extractFinalAttachments(runDetail.events) : [];
-  const isFailed = run.status === 'failed';
-
   const trace = useMemo(
     () => replayRuntimeJournal(runDetail?.events ?? []),
     [runDetail],
   );
+  const runView = useMemo(() => projectTraceRun(trace), [trace]);
+  const finalContent = runView.finalContent;
+  const finalAttachments = runView.attachments;
+  const isFailed = run.status === 'failed' || runView.status === 'failed' || Boolean(runView.error);
 
   return (
     <div className={styles['conversation-item']}>
@@ -126,7 +82,7 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
       <div className={styles['answer-row']}>
         {runDetail ? (
           <ChatAnswerCard
-            text={isFailed ? (runDetail.error ?? 'Ошибка выполнения') : finalContent}
+            text={isFailed ? (runDetail.error ?? runView.error ?? 'Ошибка выполнения') : finalContent}
             isRunning={false}
             attachments={finalAttachments}
           />
@@ -399,7 +355,8 @@ export default function RunChat({
   const hasActiveRun = activeRun.status !== 'idle';
   const hasHistory = historicalRuns.length > 0;
   const isPaused = activeRun.status === 'waiting_input' || activeRun.status === 'waiting_confirmation';
-  const showActiveAnswerCard = !isPaused && (isRunning || activeRun.finalContent.trim().length > 0 || activeRun.finalAttachments.length > 0);
+  const activeRunView = useMemo(() => projectTraceRun(activeRun.trace), [activeRun.trace]);
+  const activeAttachments = activeRunView.attachments.length > 0 ? activeRunView.attachments : activeRun.finalAttachments;
   const latestClarifyQuestion = useMemo(
     () => extractClarifyQuestion(activeRun.pendingConfirmation?.context),
     [activeRun.pendingConfirmation],
@@ -414,8 +371,9 @@ export default function RunChat({
   }, [activeRun.requestText, activeRun.runId, lineageRuns, input]);
 
   const activeAssistantMessage = useMemo(() => {
-    return String(activeRun.finalContent || '').trim();
-  }, [activeRun.finalContent]);
+    return String(activeRunView.finalContent || activeRun.finalContent || '').trim();
+  }, [activeRunView.finalContent, activeRun.finalContent]);
+  const showActiveAnswerCard = !isPaused && (isRunning || activeAssistantMessage.length > 0 || activeAttachments.length > 0);
 
   return (
     <div className={styles.chat}>
@@ -454,9 +412,9 @@ export default function RunChat({
 
             <div className={styles['answer-row']}>
               {showActiveAnswerCard && (
-                <ChatAnswerCard text={activeAssistantMessage} isRunning={isRunning} attachments={activeRun.finalAttachments} />
+                <ChatAnswerCard text={activeAssistantMessage} isRunning={isRunning} attachments={activeAttachments} />
               )}
-              {!isReadOnly && !isRunning && activeRun.finalContent && (
+              {!isReadOnly && !isRunning && activeAssistantMessage && (
                 <button
                   type="button"
                   className={styles['fork-btn']}

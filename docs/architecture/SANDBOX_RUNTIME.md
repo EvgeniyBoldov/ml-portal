@@ -154,6 +154,13 @@ Run inspector contract:
   boolean). RAW renders one source journal event per read-only JSON field;
 - UUID-only payloads and technical timestamps are noise in ordinary tabs;
   backend event payloads must provide human-readable operator fields.
+- Run-level answer state is projected by the same trace projector into a typed
+  `TraceRunView`: terminal content takes precedence over streamed deltas,
+  attachment references are validated and deduplicated, safe errors and pause
+  state are normalized, and the latest run budget snapshot is exposed as a
+  bounded limits model. Chat rendering consumes this model; it does not scan
+  journal payloads for final content or attachments. RAW remains the diagnostic
+  escape hatch for the complete source events.
 
 ### Trace tab presentation contract
 
