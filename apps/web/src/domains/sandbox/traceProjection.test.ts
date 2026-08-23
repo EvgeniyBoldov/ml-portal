@@ -121,7 +121,7 @@ describe('projectTraceStages memory components', () => {
       fallback: true,
       selectedFacts: 2,
       selectedProjects: 1,
-      context: [{ type: 'fact', subject: 'role', value: 'engineer' }],
+      context: [{ type: 'fact', scope: 'unknown', subject: 'role', value: 'engineer' }],
       ambiguities: ['СРК может означать несколько терминов'],
     });
   });
@@ -248,7 +248,7 @@ describe('projectTraceRun', () => {
     ]);
     expect(projectTraceRun(state)).toMatchObject({
       finalContent: 'one two', status: 'error', error: 'Недоступно',
-      pause: { kind: 'input', question: 'Уточните запрос' }, budgetSnapshot: { own: { llm_calls: 1 } },
+      pause: { kind: 'input', question: 'Уточните запрос' }, limits: { rows: [{ key: 'llm_calls', used: 1, label: 'Вызовы LLM' }] },
     });
   });
 });

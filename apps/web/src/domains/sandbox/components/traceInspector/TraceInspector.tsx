@@ -28,7 +28,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
         : target.call.kind === 'tool' ? callDisplayName(target.call.requestView.toolName ?? '', toolNames) : target.call.title;
   const kindLabel = { stage: 'Этап', step: 'Шаг', executor: 'Запуск исполнителя', call: 'Вызов', error: 'Ошибка' }[target.kind];
   const stage = target.kind === 'stage' ? target.stage : target.kind === 'step' ? target.step.stage : target.stage;
-  const runBudgetSnapshot = trace ? projectTraceRun(trace).budgetSnapshot : undefined;
+  const runLimits = trace ? projectTraceRun(trace).limits : undefined;
   const selectedTask = target.kind === 'step' ? target.step.taskPresentation
     : target.kind === 'executor' ? target.executor.taskPresentation
       : undefined;
@@ -59,8 +59,8 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'result' && target.kind === 'step') return <StepResultView step={target.step} />;
     if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : <ExecutorResultView executor={target.executor} />;
     if (tab === 'prompt' && target.kind === 'executor') return <PromptViewer prompt={target.executor.prompt} />;
-    if (tab === 'rbac' && target.kind === 'executor') return <RbacViewer snapshot={target.executor.rbacSnapshot ?? target.executor.preflight?.rbacSnapshot} />;
-    if (tab === 'limits' && target.kind === 'executor') return <LimitsViewer executorSnapshot={target.executor.limitsSnapshot} runSnapshot={runBudgetSnapshot} />;
+    if (tab === 'rbac' && target.kind === 'executor') return <RbacViewer access={target.executor.access} />;
+    if (tab === 'limits' && target.kind === 'executor') return <LimitsViewer executorLimits={target.executor.limits} runLimits={runLimits} />;
     if (tab === 'preflight' && target.kind === 'executor') return <PreflightViewer preflight={target.executor.preflight} />;
     if (tab === 'error' && target.kind === 'call' && target.call.kind === 'llm') return <LlmErrorView call={target.call} />;
     if (tab === 'error' && (target.kind === 'error' || target.kind === 'call')) {
@@ -78,7 +78,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
         </> : <InspectorFieldRow label="Сообщение">Нет данных</InspectorFieldRow>}
       </InspectorFieldGroup>;
     }
-    if (tab === 'request' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmRequestSnapshotView call={target.call} executionSnapshot={target.executor.prompt?.snapshot} /> : target.call.kind === 'tool' ? <ToolRequestView call={target.call} /> : <InspectorFieldGroup><TextValue label="Запрос" value={target.call.requestView.question ?? target.call.requestView.message} /></InspectorFieldGroup>;
+    if (tab === 'request' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmRequestSnapshotView call={target.call} /> : target.call.kind === 'tool' ? <ToolRequestView call={target.call} /> : <InspectorFieldGroup><TextValue label="Запрос" value={target.call.requestView.question ?? target.call.requestView.message} /></InspectorFieldGroup>;
     if (tab === 'response' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmResponseSnapshotView call={target.call} toolNames={toolNames} /> : target.call.kind === 'tool' ? <ToolResponseView call={target.call} /> : <InspectorFieldGroup><TextValue label="Ответ" value={target.call.responseView?.content?.text ?? 'Ожидается'} /></InspectorFieldGroup>;
     if (tab === 'raw' && (target.kind === 'call' || target.kind === 'error')) {
       return <RawEventsViewer events={[...target.call.events, ...target.call.retryEvents, ...(target.call.extraction?.events ?? [])].map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;

@@ -99,6 +99,44 @@ export interface TraceExtraction {
   events: RuntimeJournalEvent[];
   start?: RuntimeJournalEvent;
   end?: RuntimeJournalEvent;
+  result: TraceExtractionResult;
+}
+
+export interface TraceExtractionResult {
+  status: 'running' | 'completed' | 'failed';
+  fileName?: string;
+  contentType?: string;
+  format?: string;
+  profile?: string;
+  representation?: string;
+  truncated?: boolean;
+  warnings: string[];
+  message?: string;
+}
+
+export interface TraceLimitRow {
+  key: string;
+  label: string;
+  used?: number;
+  limit?: number;
+  remaining?: number;
+  status: 'neutral' | 'ok' | 'warning' | 'exceeded';
+}
+
+export interface TraceLimitsView {
+  rows: TraceLimitRow[];
+}
+
+export interface TraceAccessRow {
+  kind: 'Агент' | 'Коллекция';
+  name: string;
+  allowed: boolean;
+  reason: string;
+}
+
+export interface TraceAccessView {
+  rows: TraceAccessRow[];
+  defaultCollectionAllow?: boolean;
 }
 
 export interface TraceExecutorRun {
@@ -118,8 +156,8 @@ export interface TraceExecutorRun {
   memoryResult?: TraceMemoryComponentResult;
   preflight?: TracePreflight;
   prompt?: TracePrompt;
-  rbacSnapshot?: unknown;
-  limitsSnapshot?: unknown;
+  access?: TraceAccessView;
+  limits?: TraceLimitsView;
   /** Runtime task presentation bound by the trace projector. */
   taskPresentation?: PlanTaskViewModel;
   /** Selected context produced by the memory-preparation executor. */
@@ -145,7 +183,6 @@ export interface TraceExecutorResult {
 export interface TracePrompt {
   text?: string;
   hash?: string;
-  snapshot?: unknown;
 }
 
 export interface TracePreflight {
@@ -159,7 +196,7 @@ export interface TracePreflight {
   };
   operationsCount?: number;
   dataInstancesCount?: number;
-  rbacSnapshot?: unknown;
+  access?: TraceAccessView;
 }
 
 export interface TraceMemoryFact {
@@ -190,9 +227,14 @@ export interface TraceMemoryContext {
   fallback: boolean;
   selectedFacts: number;
   selectedProjects: number;
-  context: unknown[];
+  context: TraceMemoryContextItem[];
   ambiguities: string[];
 }
+
+export type TraceMemoryContextItem =
+  | { type: 'fact'; scope: string; subject: string; value: string }
+  | { type: 'project'; projectId?: string; key: string; name: string; matchedAliases: string[] }
+  | { type: 'glossary'; scope: string; term: string; description: string; aliases: string[] };
 
 export interface TraceStage {
   entity: TraceEntity;
@@ -261,7 +303,7 @@ export interface TraceRunView {
   attachments: TraceAttachment[];
   error?: string;
   pause?: { kind: 'input' | 'confirmation'; question?: string; message?: string };
-  budgetSnapshot?: unknown;
+  limits?: TraceLimitsView;
 }
 
 const asString = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
@@ -271,6 +313,58 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => (
     ? value as Record<string, unknown>
     : undefined
 );
+const limitLabels: Record<string, string> = {
+  agent_steps: 'Шаги агента', planner_steps: 'Шаги планера', plan_revisions: 'Ревизии плана',
+  task_attempts: 'Попытки задач', agent_runs: 'Запуски агентов', llm_calls: 'Вызовы LLM',
+  tool_calls: 'Вызовы инструментов', tokens_in: 'Входные токены', tokens_out: 'Выходные токены',
+  tokens_total: 'Всего токенов', retries: 'Повторы', wall_time_ms: 'Время выполнения',
+};
+const limitLabel = (key: string): string => limitLabels[key] ?? key.replace(/_/g, ' ');
+const recordNumber = (value: unknown, key: string): number | undefined => asNumber(asRecord(value)?.[key]);
+
+function limitsFor(snapshot: unknown): TraceLimitsView | undefined {
+  if (snapshot === undefined || snapshot === null) return undefined;
+  const value = asRecord(snapshot) ?? {};
+  const nested = asRecord(value.snapshot) ?? {};
+  const own = asRecord(value.own) ?? {};
+  const limits = asRecord(value.limits ?? value.runtime_limits) ?? {};
+  const keys = new Set([...Object.keys(nested), ...Object.keys(own), ...Object.keys(limits)]);
+  const rows = [...keys].map((key): TraceLimitRow => {
+    const metric = asRecord(nested[key]) ?? {};
+    const used = recordNumber(metric, 'used') ?? asNumber(own[key]);
+    const limit = recordNumber(metric, 'limit') ?? asNumber(limits[key]);
+    const remaining = recordNumber(metric, 'remaining') ?? (limit !== undefined && used !== undefined ? Math.max(0, limit - used) : undefined);
+    const status: TraceLimitRow['status'] = limit === undefined
+      ? 'neutral'
+      : (used ?? 0) > limit || remaining === 0
+        ? 'exceeded'
+        : (used ?? 0) / limit >= 0.8 ? 'warning' : 'ok';
+    return { key, label: limitLabel(key), used, limit, remaining, status };
+  }).filter((row) => row.used !== undefined || row.limit !== undefined)
+    .sort((left, right) => left.label.localeCompare(right.label, 'ru'));
+  return rows.length ? { rows } : undefined;
+}
+
+function accessFor(snapshot: unknown): TraceAccessView | undefined {
+  if (snapshot === undefined || snapshot === null) return undefined;
+  const value = asRecord(snapshot) ?? {};
+  const rbac = asRecord(value.rbac ?? value) ?? {};
+  const collectionFilter = asRecord(rbac.collection_filter) ?? {};
+  const rows: TraceAccessRow[] = [];
+  const add = (kind: TraceAccessRow['kind'], values: unknown, allowed: boolean, reason: string) => {
+    if (!Array.isArray(values)) return;
+    for (const item of values) if (typeof item === 'string' && item) rows.push({ kind, name: item, allowed, reason });
+  };
+  add('Агент', rbac.allowed, true, 'Разрешён эффективной политикой');
+  add('Агент', rbac.denied_by_rbac, false, 'Запрещён RBAC');
+  add('Коллекция', collectionFilter.allowed, true, 'Доступна выбранному агенту');
+  add('Коллекция', collectionFilter.denied_by_capability, false, 'Не входит в capability агента');
+  add('Коллекция', collectionFilter.denied_by_rbac, false, 'Запрещена RBAC');
+  const defaultCollectionAllow = typeof rbac.default_collection_allow === 'boolean'
+    ? rbac.default_collection_allow
+    : typeof collectionFilter.default_collection_allow === 'boolean' ? collectionFilter.default_collection_allow : undefined;
+  return { rows: rows.sort((left, right) => `${left.kind}:${left.name}`.localeCompare(`${right.kind}:${right.name}`, 'ru')), defaultCollectionAllow };
+}
 const resultStatusOf = (value: unknown): TraceResultStatus => {
   const status = asString(value).toLowerCase();
   if (['completed', 'success', 'succeeded'].includes(status)) return 'completed';
@@ -320,8 +414,8 @@ const hasResult = (result: TraceExecutorResult): boolean => (
 );
 const executorSnapshotTabs = (executor: TraceExecutorRun): TraceInspectorTab[] => [
   ...(executor.prompt ? [tab('prompt', 'Промпт')] : []),
-  ...((executor.rbacSnapshot ?? executor.preflight?.rbacSnapshot) !== undefined ? [tab('rbac', 'Доступ')] : []),
-  ...(executor.limitsSnapshot !== undefined ? [tab('limits', 'Лимиты')] : []),
+  ...(executor.access ? [tab('rbac', 'Доступ')] : []),
+  ...(executor.limits ? [tab('limits', 'Лимиты')] : []),
   ...(executor.preflight ? [tab('preflight', 'Проверка')] : []),
   tab('raw', 'RAW'),
 ];
@@ -403,12 +497,49 @@ function memoryContextFor(events: RuntimeJournalEvent[]): TraceMemoryContext | u
     event.event_type === 'status' && event.payload.stage === 'memory_context_prepared'
   ))?.payload;
   if (!payload) return undefined;
+  const context = Array.isArray(payload.memory_context) ? payload.memory_context.flatMap((item): TraceMemoryContextItem[] => {
+    const record = asRecord(item);
+    const type = asString(record?.type);
+    if (type === 'fact') {
+      const scope = asString(record?.scope) || 'unknown';
+      const subject = asString(record?.subject);
+      const value = asString(record?.value);
+      return scope && subject && value ? [{ type: 'fact', scope, subject, value }] : [];
+    }
+    if (type === 'project') {
+      const key = asString(record?.key);
+      const name = asString(record?.name);
+      return key && name ? [{ type: 'project', projectId: asString(record?.project_id) || undefined, key, name, matchedAliases: stringArray(record?.matched_aliases) }] : [];
+    }
+    if (type === 'glossary') {
+      const term = asString(record?.term);
+      const description = asString(record?.description);
+      return term && description ? [{ type: 'glossary', scope: asString(record?.scope) || 'global', term, description, aliases: stringArray(record?.aliases) }] : [];
+    }
+    return [];
+  }) : [];
   return {
     fallback: payload.fallback === true,
     selectedFacts: asNumber(payload.selected_facts) ?? 0,
     selectedProjects: asNumber(payload.selected_projects) ?? 0,
-    context: Array.isArray(payload.memory_context) ? payload.memory_context : [],
+    context,
     ambiguities: stringArray(payload.ambiguities),
+  };
+}
+
+function extractionResultFor(entity: TraceEntity, start: RuntimeJournalEvent | undefined, end: RuntimeJournalEvent | undefined): TraceExtractionResult {
+  const payload = asRecord(end?.payload ?? start?.payload) ?? {};
+  const failed = entity.status === 'failed' || end?.event_type === 'extraction_failed';
+  return {
+    status: failed ? 'failed' : end ? 'completed' : 'running',
+    fileName: asString(payload.file_name) || undefined,
+    contentType: asString(payload.content_type) || undefined,
+    format: asString(payload.format) || undefined,
+    profile: asString(payload.profile) || undefined,
+    representation: asString(payload.representation) || undefined,
+    truncated: typeof payload.truncated === 'boolean' ? payload.truncated : undefined,
+    warnings: stringArray(payload.warnings),
+    message: asString(payload.safe_message) || asString(payload.user_message) || asString(payload.message) || asString(payload.error) || undefined,
   };
 }
 
@@ -443,7 +574,7 @@ function preflightFor(state: SandboxTraceState, executor: TraceEntity): TracePre
     },
     operationsCount: asNumber(payload.operations_count),
     dataInstancesCount: asNumber(payload.data_instances_count),
-    rbacSnapshot: payload.rbac_audit,
+    access: accessFor(payload.rbac_audit),
   };
 }
 
@@ -457,7 +588,7 @@ function promptFor(events: RuntimeJournalEvent[], calls: TraceCall[]): TraceProm
   const snapshotRecord = asRecord(snapshot) ?? {};
   const text = asString(snapshotRecord.system_prompt);
   const hash = asString(snapshotRecord.system_prompt_hash);
-  if (text || hash || snapshot) return { text: text || undefined, hash: hash || undefined, snapshot };
+  if (text || hash) return { text: text || undefined, hash: hash || undefined };
 
   for (const call of calls) {
     if (call.kind !== 'llm') continue;
@@ -663,6 +794,11 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
       events: extractionEvents,
       start: extractionEvents.find((event) => event.event_type === 'extraction_started'),
       end: [...extractionEvents].reverse().find((event) => event.event_type === 'extraction_completed' || event.event_type === 'extraction_failed'),
+      result: extractionResultFor(
+        extractionEntity,
+        extractionEvents.find((event) => event.event_type === 'extraction_started'),
+        [...extractionEvents].reverse().find((event) => event.event_type === 'extraction_completed' || event.event_type === 'extraction_failed'),
+      ),
     } satisfies TraceExtraction;
   })() : undefined;
   const plan = isLlm && response && llmOutcome(response.payload, toolCallCount ?? 0).kind === 'plan'
@@ -966,8 +1102,8 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     memoryContext: memoryContextFor(executorEvents),
     preflight: preflightFor(state, entity),
     prompt: promptFor(executorEvents, calls),
-    rbacSnapshot: latestPayload(executorEvents, 'rbac_snapshot')?.rbac,
-    limitsSnapshot: latestPayload(executorEvents, 'budget_snapshot') ?? latestPayload(executorEvents, 'limits_snapshot'),
+    access: accessFor(latestPayload(executorEvents, 'rbac_snapshot')?.rbac) ?? preflightFor(state, entity)?.access,
+    limits: limitsFor(latestPayload(executorEvents, 'budget_snapshot') ?? latestPayload(executorEvents, 'limits_snapshot')),
   };
 }
 
@@ -993,6 +1129,7 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     result: executorResultFor(state, entity, 'Синтезатор', 'synthesizer', calls),
     metrics: metricsFor(state, entity),
     prompt: promptFor(eventsFor(state, entity), calls),
+    limits: limitsFor(latestPayload(eventsFor(state, entity), 'budget_snapshot')),
   };
   executor.taskPresentation = taskPresentationForExecutor(executor);
   return executor;
@@ -1271,7 +1408,7 @@ export function projectTraceRun(state: SandboxTraceState): TraceRunView {
   const status = asString(terminal?.payload.status)
     || (root?.status && root.status !== 'running' ? root.status : undefined)
     || (pause ? (pause.kind === 'input' ? 'waiting_input' : 'waiting_confirmation') : root?.status || 'unknown');
-  return { runId: state.runId, status, finalContent, attachments, error: safeRunError(events), pause, budgetSnapshot };
+  return { runId: state.runId, status, finalContent, attachments, error: safeRunError(events), pause, limits: limitsFor(budgetSnapshot) };
 }
 
 export function stepFor(stage: TraceStage): TraceStep {

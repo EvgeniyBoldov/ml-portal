@@ -156,6 +156,10 @@ Run inspector contract:
 - executor-level `Prompt`, `RBAC`, `Limits` and `Preflight` are separate typed
   tabs. `Prompt` shows the effective system prompt for the execution; the LLM
   request retains the concrete message list for that call;
+- access, limits, extraction and memory context are normalized by the trace
+  projector before rendering. Their Viewers receive only typed models and do
+  not parse journal payloads or reconstruct relations; extraction keeps a
+  bounded result model while the complete source event remains in `RAW`;
 - fields are typed (`datetime`, `duration`, status label, json, text, number,
   boolean). RAW renders one source journal event per read-only JSON field;
 - UUID-only payloads and technical timestamps are noise in ordinary tabs;

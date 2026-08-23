@@ -2,7 +2,6 @@ import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorSc
 import type { TraceCall } from '../../traceProjection';
 import { callDisplayName, formatFieldLabel, parseCallContent, type DisplayEntry, type ToolNameMap } from '../../callInspection';
 import { callStatusPresentation, formatCallDuration } from '../../callPresentation';
-import { ExecutionContextViewer } from './viewers/ExecutionContextViewer';
 import { ExtractionResultViewer } from './viewers/ExtractionResultViewer';
 import { PlanView } from './TraceDataViews';
 import styles from './CallViews.module.css';
@@ -92,7 +91,7 @@ export function ToolInfoView({ call, toolNames, description }: { call: TraceCall
   </InspectorFieldGroup>;
 }
 
-export function LlmRequestSnapshotView({ call, executionSnapshot }: { call: TraceCall; executionSnapshot?: unknown }) {
+export function LlmRequestSnapshotView({ call }: { call: TraceCall }) {
   const messages = call.requestView.messages;
   const request = call.requestView;
   const roleLabel = (role: string): string => ({ system: 'Система', user: 'Пользователь', assistant: 'Ассистент', tool: 'Инструмент' }[role] ?? formatFieldLabel(role));
@@ -105,7 +104,6 @@ export function LlmRequestSnapshotView({ call, executionSnapshot }: { call: Trac
       {request.responseSchemaBytes !== undefined ? <InspectorFieldRow label="Размер response schema"><InspectorScalar value={`${request.responseSchemaBytes} B`} /></InspectorFieldRow> : null}
     </InspectorFieldGroup>
     {messages.length ? messages.map((message, index) => <div key={`${message.role}:${index}`} className={`${styles.message} ${styles[message.role] ?? ''}`}><div className={styles.messageHeader}><span>{roleLabel(message.role)}</span>{message.role === 'system' ? <span>системный контекст</span> : null}</div><Value value={message.content.data ?? message.content.text} structured /></div>) : <InspectorFieldGroup><InspectorFieldRow label="Сообщения">Нет данных</InspectorFieldRow></InspectorFieldGroup>}
-    <ExecutionContextViewer snapshot={executionSnapshot} />
   </div>;
 }
 

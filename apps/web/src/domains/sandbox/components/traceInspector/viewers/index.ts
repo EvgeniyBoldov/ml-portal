@@ -1,5 +1,4 @@
-export { LimitsViewer, RbacViewer, hasLimits, hasRbac } from './AccessViewers';
-export { ExecutionContextViewer } from './ExecutionContextViewer';
+export { LimitsViewer, RbacViewer } from './AccessViewers';
 export { PromptViewer } from './PromptViewer';
 export { RawEventsViewer, type RawTraceEvent } from './RawEventsViewer';
 export { ExtractionResultViewer } from './ExtractionResultViewer';
