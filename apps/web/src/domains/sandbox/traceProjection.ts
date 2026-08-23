@@ -310,28 +310,42 @@ const stepKindFor = (stage: TraceStageKind, executor?: TraceExecutorRun): TraceS
   return executor?.kind === 'planner' ? 'planner_decision' : 'task_execution';
 };
 const tab = (id: TraceInspectorTabId, label: string): TraceInspectorTab => ({ id, label });
-const executorSnapshotTabs = (): TraceInspectorTab[] => [tab('prompt', 'Prompt'), tab('rbac', 'RBAC'), tab('limits', 'Лимиты'), tab('preflight', 'Preflight'), tab('raw', 'RAW')];
+const hasResult = (result: TraceExecutorResult): boolean => (
+  result.status !== 'unknown'
+  || result.output !== undefined
+  || result.message !== undefined
+  || result.operations.total > 0
+  || result.needs !== undefined
+  || result.artifacts !== undefined
+);
+const executorSnapshotTabs = (executor: TraceExecutorRun): TraceInspectorTab[] => [
+  ...(executor.prompt ? [tab('prompt', 'Промпт')] : []),
+  ...((executor.rbacSnapshot ?? executor.preflight?.rbacSnapshot) !== undefined ? [tab('rbac', 'Доступ')] : []),
+  ...(executor.limitsSnapshot !== undefined ? [tab('limits', 'Лимиты')] : []),
+  ...(executor.preflight ? [tab('preflight', 'Проверка')] : []),
+  tab('raw', 'RAW'),
+];
 const callHasError = (call: TraceCall): boolean => (
   call.kind === 'error'
   || (call.kind === 'llm' && call.response !== undefined && llmResponseStatus(call.response.payload) === 'error')
   || (call.kind === 'tool' && toolResult(call.response?.payload ?? {}).success === false)
 );
 export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[] {
-  if (target.kind === 'stage') return [tab('info', 'Инфо'), ...(target.stage.plan ? [tab('plan', 'План')] : []), tab('result', 'Итоги'), tab('raw', 'RAW')];
+  if (target.kind === 'stage') return [tab('info', 'Инфо'), ...(target.stage.plan ? [tab('plan', 'План')] : []), tab('result', 'Результат'), tab('raw', 'RAW')];
   if (target.kind === 'step') return [tab('info', 'Инфо'), tab('task', 'Задача'), tab('result', 'Результат'), tab('raw', 'RAW')];
   if (target.kind === 'executor') {
     const primary = target.executor.kind === 'planner'
       ? target.stage.plan ? [tab('plan', 'План')] : [tab('result', 'Результат')]
-      : target.executor.kind === 'synthesizer' ? [tab('result', 'Результат')]
-        : target.executor.kind === 'memory_selector' ? [tab('task', 'Задача'), tab('memory', 'Memory')]
-          : target.executor.kind === 'fact_extractor' ? [tab('task', 'Задача'), tab('facts', 'Факты')]
-            : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), tab('facts', 'Изменения')]
-              : [tab('task', 'Задача'), tab('result', 'Результат')];
-    return [tab('info', 'Инфо'), ...primary, ...executorSnapshotTabs()];
+      : target.executor.kind === 'synthesizer' ? (hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])
+        : target.executor.kind === 'memory_selector' ? [tab('task', 'Задача'), ...(target.executor.memoryContext ? [tab('memory', 'Память')] : [])]
+          : target.executor.kind === 'fact_extractor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Факты')] : [])]
+            : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Изменения')] : [])]
+              : [tab('task', 'Задача'), ...(hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])];
+    return [tab('info', 'Инфо'), ...primary, ...executorSnapshotTabs(target.executor)];
   }
   if (target.kind === 'error') return [tab('info', 'Инфо'), tab('error', 'Ошибка'), tab('raw', 'RAW')];
   const hasError = callHasError(target.call);
-  return [tab('info', 'Инфо'), tab('request', 'Запрос'), tab(hasError ? 'error' : 'response', hasError ? 'Ошибка' : 'Результат'), tab('raw', 'RAW')];
+  return [tab('info', 'Инфо'), tab('request', 'Запрос'), ...(hasError ? [tab('error', 'Ошибка')] : target.call.responseView ? [tab('response', 'Ответ')] : []), tab('raw', 'RAW')];
 }
 
 export function withTraceInspectorTabs(target: TraceInspectionTarget): TraceInspectionTarget {

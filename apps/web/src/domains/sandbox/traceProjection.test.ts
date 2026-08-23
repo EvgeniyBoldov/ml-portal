@@ -35,7 +35,7 @@ describe('projectTraceStages memory components', () => {
     const target = resolveTraceInspectionTarget(state, compactor.inspectorKey);
     expect(compactor.kind).toBe('fact_compactor');
     expect(target?.kind).toBe('executor');
-    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Изменения', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
+    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Изменения', 'RAW']);
     expect(compactor.memoryResult?.facts).toEqual([expect.objectContaining({
       subject: 'network.zone',
       changeType: 'candidate_confirmed',
@@ -92,8 +92,8 @@ describe('projectTraceStages memory components', () => {
     const plannerTarget = resolveTraceInspectionTarget(state, first.executorRuns[0].inspectorKey);
     expect(first.kind).toBe('plan_revision');
     expect(first.steps[0].kind).toBe('planner_decision');
-    expect(stageTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'План', 'Итоги', 'RAW']);
-    expect(plannerTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'План', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
+    expect(stageTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'План', 'Результат', 'RAW']);
+    expect(plannerTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'План', 'RAW']);
     expect(first.plan?.tasks.map((task) => task.taskId)).toEqual(['plan-1']);
     expect(second.plan?.tasks.map((task) => task.taskId)).toEqual(['plan-2']);
     expect(first.steps[0].taskPresentation).toMatchObject({ taskId: 'plan-1', executor: 'tech_fact_manager', intent: 'search_fact' });
@@ -115,7 +115,7 @@ describe('projectTraceStages memory components', () => {
     const target = resolveTraceInspectionTarget(state, stage.executorRuns[0].inspectorKey);
     expect(stage.kind).toBe('memory_preparation');
     expect(stage.steps[0].kind).toBe('memory_selection');
-    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Memory', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
+    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Память', 'RAW']);
     expect(stage.steps[0].taskPresentation).toMatchObject({ title: 'Отбор контекста', executor: 'memory_preparation' });
     expect(stage.executorRuns[0].memoryContext).toEqual({
       fallback: true,
@@ -139,10 +139,10 @@ describe('projectTraceStages memory components', () => {
     const callTarget = resolveTraceInspectionTarget(state, 'llm_call:llm-1');
     expect(stage.kind).toBe('synthesis');
     expect(stepFor(stage).kind).toBe('synthesis');
-    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Итоги', 'RAW']);
+    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Результат', 'RAW']);
     expect(executorTarget?.kind).toBe('executor');
-    expect(executorTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Результат', 'Prompt', 'RBAC', 'Лимиты', 'Preflight', 'RAW']);
-    expect(callTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Запрос', 'Результат', 'RAW']);
+    expect(executorTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Результат', 'RAW']);
+    expect(callTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Запрос', 'Ответ', 'RAW']);
     if (callTarget?.kind === 'call') {
       expect(callTarget.call.requestView).toMatchObject({ purpose: 'Финальный ответ', messages: [] });
       expect(callTarget.call.responseView).toMatchObject({ resultKind: 'answer', terminal: true, content: { kind: 'text', text: 'Готово' } });
@@ -194,6 +194,27 @@ describe('projectTraceStages memory components', () => {
     expect(projectTraceStages(state)[0].steps[0].executorRuns[0].result).toMatchObject({
       status: 'failed', statusLabel: 'Ошибка', message: 'Доступ к источнику отсутствует',
     });
+  });
+
+  it('shows snapshot tabs only when the corresponding projection exists', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker', task_title: 'Выполнение' }),
+      event(4, 'rbac_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', rbac: { allowed: ['worker'] } }),
+      event(5, 'budget_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', own: { llm_calls: 1 }, limits: { llm_calls: 2 } }),
+      event(6, 'preflight_started', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1' }),
+      event(7, 'preflight_completed', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', status: 'ok', missing: { tools: [], collections: [], credentials: [] } }),
+      event(8, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', messages: [{ role: 'system', content: 'prompt' }] }),
+      event(9, 'llm_response', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', content: 'ok', status: 'completed' }),
+      event(10, 'agent_end', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', status: 'completed', summary: 'Готово' }),
+    ]);
+    const stages = projectTraceStages(state);
+    const executorTarget = resolveTraceInspectionTarget(state, 'agent_execution:agent-1');
+    const callTarget = resolveTraceInspectionTarget(state, 'llm_call:llm-1');
+    expect(executorTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Результат', 'Промпт', 'Доступ', 'Лимиты', 'Проверка', 'RAW']);
+    expect(callTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Запрос', 'Ответ', 'RAW']);
+    expect(stages[0].executorRuns[0].prompt?.text).toBe('prompt');
   });
 });
 

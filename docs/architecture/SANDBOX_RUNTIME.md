@@ -139,14 +139,20 @@ Run inspector contract:
   synthesis), step and executor presentation kinds and returns the ordered tab
   policy with the selected target. The inspector renders that policy and does
   not branch on an executor slug;
-- LLM and tool calls use `Info`, `Request`, `Result` or `Error`, `RAW`; result
-  and error are mutually exclusive;
+- LLM and tool calls use `Инфо`, `Запрос`, `Ответ` or `Ошибка`, `RAW`; result
+  and error are mutually exclusive, and an unavailable terminal result is not
+  exposed as an empty tab;
 - `TraceCall` exposes typed request, response, error and compact info models to
   semantic Viewers. Unknown payload fields are not projected into semantic
   tabs and remain available only in RAW;
-- planner uses `Info`, `Plan`, `Prompt`, `RBAC`, `Limits`, `Preflight`, `RAW`;
-  agent uses `Info`, `Task`, `Result`, `Prompt`, `RBAC`, `Limits`, `Preflight`,
-  `RAW`; synthesizer uses its applicable result and snapshot tabs;
+- planner uses `Инфо`, `План` and applicable snapshot tabs; an agent uses
+  `Инфо`, `Задача`, an available `Результат` and applicable snapshot tabs;
+  memory/fact executors expose `Память`/`Факты` only when their projection has
+  data; synthesizer exposes an available `Результат` and applicable snapshot
+  tabs;
+- specialized snapshot tabs (`Промпт`, `Доступ`, `Лимиты`, `Проверка`) are
+  data-aware and hidden when their source was not recorded. `RAW` is the stable
+  final diagnostic tab for every selectable entity;
 - executor-level `Prompt`, `RBAC`, `Limits` and `Preflight` are separate typed
   tabs. `Prompt` shows the effective system prompt for the execution; the LLM
   request retains the concrete message list for that call;
