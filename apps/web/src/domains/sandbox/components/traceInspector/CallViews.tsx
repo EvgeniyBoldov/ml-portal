@@ -89,8 +89,16 @@ export function ToolInfoView({ call, toolNames, description }: { call: TraceCall
 
 export function LlmRequestSnapshotView({ call, executionSnapshot }: { call: TraceCall; executionSnapshot?: unknown }) {
   const messages = llmMessages(call.request.payload);
+  const request = call.request.payload;
   const roleLabel = (role: string): string => ({ system: 'Система', user: 'Пользователь', assistant: 'Ассистент', tool: 'Инструмент' }[role] ?? formatFieldLabel(role));
   return <div className={styles.messages}>
+    <InspectorFieldGroup>
+      {request.temperature !== undefined ? <InspectorFieldRow label="Температура"><InspectorScalar value={request.temperature as number} /></InspectorFieldRow> : null}
+      {request.max_tokens !== undefined ? <InspectorFieldRow label="Лимит токенов"><InspectorScalar value={request.max_tokens as number} /></InspectorFieldRow> : null}
+      {request.request_bytes !== undefined ? <InspectorFieldRow label="Размер запроса"><InspectorScalar value={`${request.request_bytes} B`} /></InspectorFieldRow> : null}
+      {request.input_tokens_estimate !== undefined ? <InspectorFieldRow label="Оценка входных токенов"><InspectorScalar value={request.input_tokens_estimate as number} /></InspectorFieldRow> : null}
+      {request.response_schema_bytes !== undefined ? <InspectorFieldRow label="Размер response schema"><InspectorScalar value={`${request.response_schema_bytes} B`} /></InspectorFieldRow> : null}
+    </InspectorFieldGroup>
     {messages.length ? messages.map((message, index) => <div key={`${message.role}:${index}`} className={`${styles.message} ${styles[message.role] ?? ''}`}><div className={styles.messageHeader}><span>{roleLabel(message.role)}</span>{message.role === 'system' ? <span>системный контекст</span> : null}</div><Value value={message.content.data ?? message.content.text} structured /></div>) : <Fields entries={toDisplayEntries(call.request.payload)} />}
     <ExecutionContextViewer snapshot={executionSnapshot} />
   </div>;
@@ -104,12 +112,17 @@ export function LlmResponseSnapshotView({ call, toolNames }: { call: TraceCall; 
   if (presentation.status === 'error') return <InspectorFieldGroup><InspectorFieldRow label="Результат"><InspectorScalar value="Нет результата" /></InspectorFieldRow></InspectorFieldGroup>;
   const semanticOutcome = presentation.outcome;
   const parsed = parseCallContent(llmResponseContent(payload));
+  const metadata = <InspectorFieldGroup>
+    {payload.result_kind !== undefined ? <InspectorFieldRow label="Тип результата"><InspectorScalar value={String(payload.result_kind)} /></InspectorFieldRow> : null}
+    {payload.response_length !== undefined ? <InspectorFieldRow label="Размер ответа"><InspectorScalar value={`${payload.response_length} B`} /></InspectorFieldRow> : null}
+    {payload.terminal !== undefined ? <InspectorFieldRow label="Терминальный"><InspectorScalar value={payload.terminal === true ? 'Да' : 'Нет'} /></InspectorFieldRow> : null}
+  </InspectorFieldGroup>;
   if (semanticOutcome?.kind === 'tools') {
     if (parsed.kind === 'tool_call') {
       const toolCall = parsed.data as Record<string, unknown>;
-      return <InspectorFieldGroup><InspectorFieldRow label="Выбранная операция">{callDisplayName(String(toolCall.tool ?? '—'), toolNames)}</InspectorFieldRow><InspectorFieldRow label="Аргументы"><Value value={toolCall.arguments ?? {}} /></InspectorFieldRow></InspectorFieldGroup>;
+      return <div className={styles.list}>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Выбранная операция">{callDisplayName(String(toolCall.tool ?? '—'), toolNames)}</InspectorFieldRow><InspectorFieldRow label="Аргументы"><Value value={toolCall.arguments ?? {}} /></InspectorFieldRow></InspectorFieldGroup></div>;
     }
-    return <div className={styles.list}>
+    return <div className={styles.list}>{metadata}
       <InspectorFieldGroup><InspectorFieldRow label="Результат"><InspectorStatus label={semanticOutcome.count ? `${semanticOutcome.label} · ${semanticOutcome.count}` : semanticOutcome.label} tone="info" /></InspectorFieldRow></InspectorFieldGroup>
       {presentation.linkedToolCalls.map((toolCall, index) => <div key={toolCall.id} className={styles.listItem}>
         <div className={styles.listTitle}>{callDisplayName(String(toolCall.payload.tool ?? '—'), toolNames)}</div>
@@ -117,13 +130,13 @@ export function LlmResponseSnapshotView({ call, toolNames }: { call: TraceCall; 
       </div>)}
     </div>;
   }
-  if (semanticOutcome?.kind === 'plan') return <PlanView plan={parsed.data} />;
+  if (semanticOutcome?.kind === 'plan') return <div className={styles.list}>{metadata}<PlanView plan={parsed.data} /></div>;
   if (parsed.kind === 'tool_call') {
     const toolCall = parsed.data as Record<string, unknown>;
-    return <InspectorFieldGroup><InspectorFieldRow label="Выбранная операция">{callDisplayName(String(toolCall.tool ?? '—'), toolNames)}</InspectorFieldRow><InspectorFieldRow label="Аргументы"><Value value={toolCall.arguments ?? {}} /></InspectorFieldRow></InspectorFieldGroup>;
+    return <div className={styles.list}>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Выбранная операция">{callDisplayName(String(toolCall.tool ?? '—'), toolNames)}</InspectorFieldRow><InspectorFieldRow label="Аргументы"><Value value={toolCall.arguments ?? {}} /></InspectorFieldRow></InspectorFieldGroup></div>;
   }
-  if (parsed.kind === 'json') return <Fields entries={toDisplayEntries(parsed.data)} />;
-  return <InspectorFieldGroup><InspectorFieldRow label="Ответ"><Value value={parsed.text} /></InspectorFieldRow></InspectorFieldGroup>;
+  if (parsed.kind === 'json') return <div className={styles.list}>{metadata}<Fields entries={toDisplayEntries(parsed.data)} /></div>;
+  return <div className={styles.list}>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Ответ"><Value value={parsed.text} /></InspectorFieldRow></InspectorFieldGroup></div>;
 }
 
 export const LlmRequestView = LlmRequestSnapshotView;

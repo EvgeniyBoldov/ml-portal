@@ -42,6 +42,30 @@ export interface TraceExecutorRun {
   calls: TraceCall[];
   metrics: TraceMetrics;
   memoryResult?: TraceMemoryComponentResult;
+  preflight?: TracePreflight;
+  prompt?: TracePrompt;
+  rbacSnapshot?: unknown;
+  limitsSnapshot?: unknown;
+}
+
+export interface TracePrompt {
+  text?: string;
+  hash?: string;
+  snapshot?: unknown;
+}
+
+export interface TracePreflight {
+  status: string;
+  mode?: string;
+  durationMs?: number;
+  missing: {
+    tools: string[];
+    collections: string[];
+    credentials: string[];
+  };
+  operationsCount?: number;
+  dataInstancesCount?: number;
+  rbacSnapshot?: unknown;
 }
 
 export interface TraceMemoryFact {
@@ -85,6 +109,8 @@ export interface TraceStage {
 
 export interface TraceStep {
   key: string;
+  /** Real step entity; synthetic system steps use their owning stage entity. */
+  entity: TraceEntity;
   stage: TraceStage;
   number: number;
   taskId?: string;
@@ -93,6 +119,7 @@ export interface TraceStep {
   inputs?: unknown;
   result?: unknown;
   executorRuns: TraceExecutorRun[];
+  metrics: TraceMetrics;
 }
 
 export type TraceInspectionTarget =
@@ -175,6 +202,66 @@ function memoryComponentResult(events: RuntimeJournalEvent[]): TraceMemoryCompon
   };
 }
 
+function latestPayload(events: RuntimeJournalEvent[], eventType: string): Record<string, unknown> | undefined {
+  return [...events].reverse().find((event) => event.event_type === eventType)?.payload;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
+}
+
+function preflightFor(state: SandboxTraceState, executor: TraceEntity): TracePreflight | undefined {
+  const entity = executor.childKeys
+    .map((key) => state.entitiesByKey[key])
+    .find((child): child is TraceEntity => Boolean(child) && child.type === 'preflight');
+  if (!entity) return undefined;
+  const events = eventsFor(state, entity);
+  const payload = latestPayload(events, 'preflight_completed')
+    ?? latestPayload(events, 'preflight_failed')
+    ?? latestPayload(events, 'preflight_snapshot')
+    ?? latestPayload(events, 'preflight_started')
+    ?? {};
+  const missing = asRecord(payload.missing) ?? {};
+  return {
+    status: asString(payload.status) || entity.status || 'unknown',
+    mode: asString(payload.mode) || undefined,
+    durationMs: asNumber(payload.duration_ms),
+    missing: {
+      tools: stringArray(missing.tools),
+      collections: stringArray(missing.collections),
+      credentials: stringArray(missing.credentials),
+    },
+    operationsCount: asNumber(payload.operations_count),
+    dataInstancesCount: asNumber(payload.data_instances_count),
+    rbacSnapshot: payload.rbac_audit,
+  };
+}
+
+function promptFor(events: RuntimeJournalEvent[], calls: TraceCall[]): TracePrompt | undefined {
+  const snapshot = [...events].reverse().map((event) => event.payload)
+    .map((payload) => payload.config_snapshot ?? payload.context_snapshot)
+    .find((value) => {
+      const record = asRecord(value) ?? {};
+      return record.system_prompt !== undefined || record.system_prompt_hash !== undefined;
+    });
+  const snapshotRecord = asRecord(snapshot) ?? {};
+  const text = asString(snapshotRecord.system_prompt);
+  const hash = asString(snapshotRecord.system_prompt_hash);
+  if (text || hash || snapshot) return { text: text || undefined, hash: hash || undefined, snapshot };
+
+  for (const call of calls) {
+    if (call.kind !== 'llm') continue;
+    const messages = Array.isArray(call.request.payload.messages) ? call.request.payload.messages : [];
+    const systemMessage = messages.find((message) => {
+      const record = asRecord(message) ?? {};
+      return record.role === 'system' && typeof record.content === 'string';
+    });
+    const prompt = asString((asRecord(systemMessage) ?? {}).content);
+    if (prompt) return { text: prompt };
+  }
+  return undefined;
+}
+
 function metricsFor(state: SandboxTraceState, entity: TraceEntity): TraceMetrics {
   const events = eventsFor(state, entity);
   const started = startFor(state, entity);
@@ -208,6 +295,26 @@ function metricsFor(state: SandboxTraceState, entity: TraceEntity): TraceMetrics
     calls: calls || undefined,
     successfulCalls: successfulCalls || undefined,
     failedCalls: failedCalls || undefined,
+  };
+}
+
+function aggregateMetrics(own: TraceMetrics, children: TraceMetrics[]): TraceMetrics {
+  const sum = (key: keyof TraceMetrics): number | undefined => {
+    const values = [own, ...children]
+      .map((item) => item[key])
+      .filter((value): value is number => value !== undefined);
+    return values.length ? values.reduce((total, value) => total + value, 0) : undefined;
+  };
+  const childElapsed = children
+    .map((item) => item.elapsedMs)
+    .filter((value): value is number => value !== undefined);
+  return {
+    elapsedMs: own.elapsedMs ?? (childElapsed.length ? childElapsed.reduce((total, value) => total + value, 0) : undefined),
+    tokens: sum('tokens'),
+    retries: sum('retries'),
+    calls: sum('calls'),
+    successfulCalls: sum('successfulCalls'),
+    failedCalls: sum('failedCalls'),
   };
 }
 
@@ -431,6 +538,7 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     : directCallsFor(state, entity, entity, childEventIds);
   const calls = groupLogicalLlmCalls([...childCalls, ...directCalls]
     .sort((left, right) => left.request.sequence - right.request.sequence));
+  const executorEvents = eventsFor(state, entity);
   const baseMetrics = metricsFor(state, entity);
   const callMetrics = calls.reduce((result, call) => {
     const failed = call.kind === 'error'
@@ -474,7 +582,11 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
       successfulCalls: callMetrics.successfulCalls || baseMetrics.successfulCalls,
       failedCalls: callMetrics.failedCalls || baseMetrics.failedCalls,
     },
-    memoryResult: memoryComponentResult(eventsFor(state, entity)),
+    memoryResult: memoryComponentResult(executorEvents),
+    preflight: preflightFor(state, entity),
+    prompt: promptFor(executorEvents, calls),
+    rbacSnapshot: latestPayload(executorEvents, 'rbac_snapshot')?.rbac,
+    limitsSnapshot: latestPayload(executorEvents, 'budget_snapshot') ?? latestPayload(executorEvents, 'limits_snapshot'),
   };
 }
 
@@ -496,6 +608,7 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     executorSlug: 'synthesizer',
     calls,
     metrics: metricsFor(state, entity),
+    prompt: promptFor(eventsFor(state, entity), calls),
   };
 }
 
@@ -539,7 +652,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         task,
         steps: [],
         executorRuns,
-        metrics: metricsFor(state, entity),
+        metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
       };
       stage.steps = stepEntities.map((stepEntity, index) => {
         const stepStart = startFor(state, stepEntity);
@@ -548,6 +661,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         const executor = stepExecutors[0];
         return {
           key: stepEntity.key,
+          entity: stepEntity,
           stage,
           number: asNumber(payload.step_number) ?? index + 1,
           taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
@@ -555,6 +669,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           objective: asString(payload.objective) || asString(payload.task_objective) || undefined,
           inputs: payload.inputs ?? payload.task_inputs,
           executorRuns: stepExecutors,
+          metrics: aggregateMetrics(metricsFor(state, stepEntity), stepExecutors.map((executor) => executor.metrics)),
         };
       });
       stage.stepNumber = stage.steps[0]?.number ?? 0;
@@ -583,11 +698,12 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : 'memory',
         label: isSynthesis ? 'Подготовка ответа' : isMemoryPreparation ? 'Подготовка памяти' : 'Сохранение памяти',
         task: isSynthesis ? 'Подготовка финального ответа' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
-        metrics: metricsFor(state, entity),
+        metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
       };
       if (isMemory || isMemoryPreparation) {
         stage.steps = executorRuns.map((executor, index) => ({
           key: `${entity.key}:memory-step:${executor.entity.id}`,
+          entity: executor.entity,
           stage,
           number: index + 1,
           title: executor.executorSlug === 'fact_extractor' ? 'Извлечение фактов'
@@ -595,6 +711,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
               : 'Подготовка memory context',
           objective: executor.task,
           executorRuns: [executor],
+          metrics: executor.metrics,
         }));
         stage.stepNumber = stage.steps[0]?.number ?? 0;
       }
@@ -611,6 +728,7 @@ export function stepFor(stage: TraceStage): TraceStep {
   const payload = executor?.start.payload ?? stage.start.payload;
   return {
     key: `step:${stage.entity.key}`,
+    entity: stage.entity,
     stage,
     number: stage.stepNumber,
     taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
@@ -618,6 +736,7 @@ export function stepFor(stage: TraceStage): TraceStep {
     objective: asString(payload.objective) || asString(payload.task_objective) || undefined,
     inputs: payload.inputs ?? payload.task_inputs,
     executorRuns: stage.executorRuns,
+    metrics: aggregateMetrics(metricsFor(state, stage.entity), stage.executorRuns.map((executor) => executor.metrics)),
   };
 }
 

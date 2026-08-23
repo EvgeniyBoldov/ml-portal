@@ -40,4 +40,28 @@ describe('projectTraceStages memory components', () => {
       supportDelta: 1,
     })]);
   });
+
+  it('projects preflight and the effective system prompt onto the owning executor', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker' }),
+      event(4, 'preflight_started', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1' }),
+      event(5, 'preflight_completed', {
+        entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', mode: 'partial', duration_ms: 12,
+        missing: { tools: [], collections: ['private_docs (rbac_denied)'], credentials: ['dcbox'] }, operations_count: 4, data_instances_count: 2,
+      }),
+      event(6, 'llm_request', {
+        entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1',
+        messages: [{ role: 'system', content: 'System prompt' }],
+      }),
+    ]);
+
+    const executor = projectTraceStages(state)[0].steps[0].executorRuns[0];
+    expect(executor.prompt?.text).toBe('System prompt');
+    expect(executor.preflight).toMatchObject({
+      mode: 'partial', durationMs: 12, operationsCount: 4, dataInstancesCount: 2,
+      missing: { tools: [], collections: ['private_docs (rbac_denied)'], credentials: ['dcbox'] },
+    });
+  });
 });

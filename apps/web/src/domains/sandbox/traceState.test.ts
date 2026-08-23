@@ -210,6 +210,7 @@ describe('sandbox trace state', () => {
       [2, 'Проверить сеть', 'net.engineer'],
       [3, 'Проверить результат', 'viewer'],
     ]);
+    expect(stage.steps.map((step) => step.entity.key)).toEqual(['step:step-plan', 'step:step-network', 'step:step-review']);
   });
 
   it('projects calls from the canonical executor parent link', () => {

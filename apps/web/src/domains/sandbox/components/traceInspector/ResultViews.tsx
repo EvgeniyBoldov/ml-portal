@@ -1,7 +1,7 @@
 import Badge from '@/shared/ui/Badge';
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorScalar, InspectorTextBlock } from '@/shared/ui/Inspector';
 import type { SandboxTraceState } from '../../traceState';
-import type { TraceExecutorRun, TraceStage } from '../../traceProjection';
+import type { TraceExecutorRun, TraceStage, TraceStep } from '../../traceProjection';
 import { toDisplayEntries } from '../../callInspection';
 import { projectExecutorResult, projectStageResults, type ExecutorResultViewModel } from '../../resultInspection';
 import styles from './ResultViews.module.css';
@@ -50,4 +50,10 @@ export const SynthesizerResultViewer = ExecutorResultView;
 export function StageResultView({ stage, trace }: { stage: TraceStage; trace: SandboxTraceState | null }) {
   const results = projectStageResults(stage, trace);
   return <div className={styles.list}>{results.length ? results.map((result, index) => <ExecutorResultCard key={`${result.name}:${index}`} result={result} />) : <InspectorFieldGroup><InspectorFieldRow label="Результат">Исполнители ещё не запускались.</InspectorFieldRow></InspectorFieldGroup>}</div>;
+}
+
+/** Shows only the executor results that belong to the selected logical step. */
+export function StepResultView({ step, trace }: { step: TraceStep; trace: SandboxTraceState | null }) {
+  const results = step.executorRuns.map((executor) => projectExecutorResult(executor, trace));
+  return <div className={styles.list}>{results.length ? results.map((result, index) => <ExecutorResultCard key={`${result.name}:${index}`} result={result} />) : <InspectorFieldGroup><InspectorFieldRow label="Результат">Исполнители этого шага ещё не запускались.</InspectorFieldRow></InspectorFieldGroup>}</div>;
 }

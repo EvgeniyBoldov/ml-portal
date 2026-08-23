@@ -1,10 +1,11 @@
 export { LimitsViewer, RbacViewer, hasLimits, hasRbac } from './AccessViewers';
 export { ExecutionContextViewer } from './ExecutionContextViewer';
-export { ExecutionContextViewer as PromptViewer } from './ExecutionContextViewer';
+export { PromptViewer } from './PromptViewer';
 export { RawEventsViewer, type RawTraceEvent } from './RawEventsViewer';
 export { ExtractionResultViewer } from './ExtractionResultViewer';
 export { FactsViewer } from './FactsViewer';
 export { MemoryContextViewer } from './MemoryContextViewer';
+export { PreflightViewer } from './PreflightViewer';
 export { LlmTokenUsage as TokenUsageViewer, LlmRequestSnapshotView as LlmRequestViewer, LlmResponseSnapshotView as LlmResponseViewer, ToolRequestView as ToolRequestViewer, ToolResponseView as ToolResponseViewer } from '../CallViews';
 export { AgentResultViewer, SynthesizerResultViewer } from '../ResultViews';
 export { HumanPlanView as PlanViewer } from '../PlanView';

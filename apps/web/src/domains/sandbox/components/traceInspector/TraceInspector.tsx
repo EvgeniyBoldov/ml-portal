@@ -3,14 +3,14 @@ import type { SandboxTraceState } from '../../traceState';
 import type { TraceInspectionTarget } from '../../traceProjection';
 import { PlanView, TextValue } from './TraceDataViews';
 import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponseView } from './CallViews';
-import { ExecutorResultView, StageResultView } from './ResultViews';
+import { ExecutorResultView, StageResultView, StepResultView } from './ResultViews';
 import { callDisplayName, llmResponseContent, toDisplayEntries } from '../../callInspection';
 import { callPresentation, formatCallDuration } from '../../callPresentation';
 import type { ToolNameMap } from '../../callInspection';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel } from '../../planInspection';
 import { PlanTaskCard } from './PlanTaskCard';
 import { traceStatusLabel, traceStatusTone } from '../../traceStatus';
-import { FactsViewer, hasLimits, hasRbac, LimitsViewer, MemoryContextViewer, RawEventsViewer, RbacViewer } from './viewers';
+import { FactsViewer, LimitsViewer, MemoryContextViewer, PreflightViewer, PromptViewer, RawEventsViewer, RbacViewer } from './viewers';
 
 interface Props { target: TraceInspectionTarget | null; trace: SandboxTraceState | null; toolNames?: ToolNameMap; }
 const eventPayloads = (state: SandboxTraceState | null, ids: string[]) => ids.map((id) => state?.eventsById[id]?.payload).filter(Boolean);
@@ -21,13 +21,6 @@ const latestEntityPayload = (state: SandboxTraceState | null, entityId: string, 
     .map((id) => state?.eventsById[id])
     .find((event) => event?.event_type === eventType)?.payload;
 };
-const latestExecutorConfigSnapshot = (state: SandboxTraceState | null, entityId: string): Record<string, unknown> | undefined => {
-  const entity = state?.entitiesByKey[entityId];
-  if (!entity) return undefined;
-  return [...entity.eventIds].reverse()
-    .map((id) => state?.eventsById[id]?.payload)
-    .find((payload): payload is Record<string, unknown> => Boolean(payload?.config_snapshot));
-};
 function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
   return traceStatusTone(status);
 }
@@ -35,32 +28,16 @@ function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' |
 export function TraceInspector({ target, trace, toolNames }: Props) {
   if (!target) return null;
   const entity = target.kind === 'iteration' ? target.stage.entity
-    : target.kind === 'step' ? target.step.stage.entity
+    : target.kind === 'step' ? target.step.entity
       : target.kind === 'call' || target.kind === 'error' ? target.call.entity
       : target.executor.entity;
   const title = target.kind === 'iteration' ? target.stage.label
     : target.kind === 'step' ? target.step.title
       : target.kind === 'executor_run' ? target.executor.executorName
         : target.call.kind === 'tool' ? callDisplayName(String(target.call.request.payload.tool ?? ''), toolNames) : target.call.title;
-  const kindLabel = { iteration: 'Итерация', step: 'Шаг', executor_run: 'Запуск исполнителя', call: 'Вызов', error: 'Ошибка' }[target.kind];
+  const kindLabel = { iteration: 'Этап', step: 'Шаг', executor_run: 'Запуск исполнителя', call: 'Вызов', error: 'Ошибка' }[target.kind];
   const payloads = eventPayloads(trace, entity.eventIds);
-  const contextSnapshot = payloads.find((value) => value && typeof value === 'object' && 'context_snapshot' in value) as Record<string, unknown> | undefined;
-  const rbacSnapshot = payloads.find((value) => value && typeof value === 'object' && 'rbac' in value) as Record<string, unknown> | undefined;
-  const limitsSnapshot = payloads.find((value) => value && typeof value === 'object' && ('limits' in value || 'runtime_limits' in value)) as Record<string, unknown> | undefined;
-  const snapshot = contextSnapshot?.context_snapshot ?? contextSnapshot ?? {};
   const stage = target.kind === 'iteration' ? target.stage : target.kind === 'step' ? target.step.stage : target.stage;
-  const selectedExecutor = target.kind === 'executor_run' || target.kind === 'call' || target.kind === 'error'
-    ? target.executor
-    : undefined;
-  const executorBudgetSnapshot = selectedExecutor
-    ? latestEntityPayload(trace, selectedExecutor.entity.key, 'budget_snapshot')
-    : undefined;
-  const executorRbacSnapshot = selectedExecutor
-    ? latestEntityPayload(trace, selectedExecutor.entity.key, 'rbac_snapshot')
-    : undefined;
-  const executorConfigSnapshot = selectedExecutor
-    ? latestExecutorConfigSnapshot(trace, selectedExecutor.entity.key)
-    : undefined;
   const runBudgetSnapshot = trace?.runId
     ? latestEntityPayload(trace, `run:${trace.runId}`, 'budget_snapshot')
     : undefined;
@@ -156,16 +133,14 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     return undefined;
   })();
   const targetMetrics = target.kind === 'iteration' ? target.stage.metrics
-    : target.kind === 'step' ? target.step.stage.metrics
+    : target.kind === 'step' ? target.step.metrics
       : target.kind === 'executor_run' ? target.executor.metrics
         : undefined;
   const selectedCallPresentation = target.kind === 'call' || target.kind === 'error'
     ? callPresentation(target.call)
     : undefined;
   const callHasError = selectedCallPresentation?.status === 'error';
-  const accessSnapshot = executorRbacSnapshot ?? rbacSnapshot ?? snapshot;
-  const budgetSnapshot = executorBudgetSnapshot ?? limitsSnapshot ?? snapshot;
-  const hasAccessTab = target.kind === 'executor_run' && (hasLimits(budgetSnapshot) || hasLimits(runBudgetSnapshot) || hasRbac(accessSnapshot));
+  const hasPlanTab = target.kind === 'iteration' && stage.executorRuns.some((executor) => executor.executorSlug === 'planner');
   const common = <InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={traceStatusLabel(entity.status)} tone={statusTone(entity.status)} /></InspectorFieldRow>
     {targetMetrics?.elapsedMs ? <InspectorFieldRow label="Длительность"><InspectorScalar value={`${(targetMetrics.elapsedMs / 1000).toFixed(1)} с`} /></InspectorFieldRow> : null}
@@ -176,7 +151,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     {targetMetrics?.retries ? <InspectorFieldRow label="Повторы"><InspectorScalar value={targetMetrics.retries} /></InspectorFieldRow> : null}
   </InspectorFieldGroup>;
   const tabs = target.kind === 'call' && target.call.kind === 'llm' ? [{ key: 'info', label: 'Инфо' }, { key: 'request', label: 'Запрос' }, { key: callHasError ? 'error' : 'response', label: callHasError ? 'Ошибка' : 'Результат' }, { key: 'raw', label: 'RAW' }]
-    : target.kind === 'iteration' ? [{ key: 'info', label: 'Инфо' }, { key: 'plan', label: 'План' }, { key: 'raw', label: 'RAW' }]
+    : target.kind === 'iteration' ? [{ key: 'info', label: 'Инфо' }, ...(hasPlanTab ? [{ key: 'plan', label: 'План' }] : []), { key: 'result', label: 'Итоги' }, { key: 'raw', label: 'RAW' }]
     : target.kind === 'step' ? [{ key: 'info', label: 'Инфо' }, { key: 'task', label: 'Задача' }, { key: 'result', label: 'Результат' }, { key: 'raw', label: 'RAW' }]
       : target.kind === 'executor_run' ? [
         { key: 'info', label: 'Инфо' },
@@ -187,7 +162,10 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
               : target.executor.executorSlug === 'fact_extractor' || target.executor.executorSlug === 'fact_compactor'
               ? [{ key: 'task', label: 'Задача' }, { key: 'facts', label: target.executor.executorSlug === 'fact_compactor' ? 'Изменения' : 'Факты' }]
               : [{ key: 'task', label: 'Задача' }, { key: 'result', label: 'Результат' }]),
-        ...(hasAccessTab ? [{ key: 'access', label: 'Лимиты и доступ' }] : []),
+        { key: 'prompt', label: 'Prompt' },
+        { key: 'rbac', label: 'RBAC' },
+        { key: 'limits', label: 'Лимиты' },
+        { key: 'preflight', label: 'Preflight' },
         { key: 'raw', label: 'RAW' },
       ]
         : target.kind === 'error' ? [{ key: 'info', label: 'Инфо' }, { key: 'error', label: 'Ошибка' }, { key: 'raw', label: 'RAW' }]
@@ -202,12 +180,12 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'facts' && target.kind === 'executor_run') return <FactsViewer result={target.executor.memoryResult} />;
     if (tab === 'memory' && target.kind === 'executor_run') return <MemoryContextViewer events={target.executor.entity.eventIds.map((id) => trace?.eventsById[id]).filter((event): event is NonNullable<typeof event> => Boolean(event))} />;
     if (tab === 'result' && target.kind === 'iteration') return <StageResultView stage={target.stage} trace={trace} />;
-    if (tab === 'result' && target.kind === 'step') return <StageResultView stage={target.step.stage} trace={trace} />;
+    if (tab === 'result' && target.kind === 'step') return <StepResultView step={target.step} trace={trace} />;
     if (tab === 'result' && target.kind === 'executor_run') return target.executor.executorSlug === 'planner' ? <PlanView plan={plan} /> : <ExecutorResultView executor={target.executor} trace={trace} />;
-    if (tab === 'access' && target.kind === 'executor_run') return <>
-      {hasLimits(budgetSnapshot) || hasLimits(runBudgetSnapshot) ? <LimitsViewer executorSnapshot={budgetSnapshot} runSnapshot={runBudgetSnapshot} /> : null}
-      {hasRbac(accessSnapshot) ? <RbacViewer snapshot={accessSnapshot} /> : null}
-    </>;
+    if (tab === 'prompt' && target.kind === 'executor_run') return <PromptViewer prompt={target.executor.prompt} />;
+    if (tab === 'rbac' && target.kind === 'executor_run') return <RbacViewer snapshot={target.executor.rbacSnapshot ?? target.executor.preflight?.rbacSnapshot} />;
+    if (tab === 'limits' && target.kind === 'executor_run') return <LimitsViewer executorSnapshot={target.executor.limitsSnapshot} runSnapshot={runBudgetSnapshot} />;
+    if (tab === 'preflight' && target.kind === 'executor_run') return <PreflightViewer preflight={target.executor.preflight} />;
     if (tab === 'error' && target.kind === 'call' && target.call.kind === 'llm') return <LlmErrorView call={target.call} />;
     if (tab === 'error' && (target.kind === 'error' || target.kind === 'call')) {
       const payload = target.call.response?.payload ?? target.call.request.payload;
@@ -226,7 +204,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
         </> : entries.map((entry) => <TextValue key={entry.label} label={entry.label} value={entry.value} />)}
       </InspectorFieldGroup>;
     }
-    if (tab === 'request' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmRequestSnapshotView call={target.call} executionSnapshot={executorConfigSnapshot ?? snapshot} /> : target.call.kind === 'tool' ? <ToolRequestView call={target.call} /> : <InspectorFieldGroup><TextValue label="Запрос" value={target.call.request.payload.question ?? target.call.request.payload.message} /></InspectorFieldGroup>;
+    if (tab === 'request' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmRequestSnapshotView call={target.call} executionSnapshot={target.executor.prompt?.snapshot} /> : target.call.kind === 'tool' ? <ToolRequestView call={target.call} /> : <InspectorFieldGroup><TextValue label="Запрос" value={target.call.request.payload.question ?? target.call.request.payload.message} /></InspectorFieldGroup>;
     if (tab === 'response' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmResponseSnapshotView call={target.call} toolNames={toolNames} /> : target.call.kind === 'tool' ? <ToolResponseView call={target.call} /> : <InspectorFieldGroup><TextValue label="Ответ" value={target.call.response?.payload.user_answer ?? target.call.response?.payload.answer ?? 'Ожидается'} /></InspectorFieldGroup>;
     if (tab === 'raw' && (target.kind === 'call' || target.kind === 'error')) {
       return <RawEventsViewer events={(selectedCallPresentation?.rawEvents ?? target.call.events).map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;

@@ -131,13 +131,12 @@ Run inspector contract:
   render prepared plan, request, response, result, limits and access models;
 - LLM and tool calls use `Info`, `Request`, `Result` or `Error`, `RAW`; result
   and error are mutually exclusive;
-- planner uses `Info`, `Plan`, optional `Limits and access`, `RAW`; agent uses
-  `Info`, `Task`, `Result`, optional `Limits and access`, `RAW`; synthesizer
-  uses `Info`, `Result`, optional `Limits and access`, `RAW`;
-- the executor configuration/prompt snapshot is shown as effective context in
-  its LLM request, not in a catch-all executor Context tab;
-- `LimitsViewer` and `RbacViewer` are independent and the combined access tab
-  is absent when neither snapshot is present;
+- planner uses `Info`, `Plan`, `Prompt`, `RBAC`, `Limits`, `Preflight`, `RAW`;
+  agent uses `Info`, `Task`, `Result`, `Prompt`, `RBAC`, `Limits`, `Preflight`,
+  `RAW`; synthesizer uses its applicable result and snapshot tabs;
+- executor-level `Prompt`, `RBAC`, `Limits` and `Preflight` are separate typed
+  tabs. `Prompt` shows the effective system prompt for the execution; the LLM
+  request retains the concrete message list for that call;
 - fields are typed (`datetime`, `duration`, status label, json, text, number,
   boolean). RAW renders one source journal event per read-only JSON field;
 - UUID-only payloads and technical timestamps are noise in ordinary tabs;
