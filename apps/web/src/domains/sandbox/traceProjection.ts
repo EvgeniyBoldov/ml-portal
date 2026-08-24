@@ -127,6 +127,24 @@ export interface TraceLimitsView {
   rows: TraceLimitRow[];
 }
 
+export type TraceExecutorStatisticKey = 'llm_calls' | 'tool_calls' | 'tokens_total' | 'llm_retries' | 'llm_errors' | 'tool_errors';
+
+export interface TraceExecutorStatistic {
+  key: TraceExecutorStatisticKey;
+  label: string;
+  value: number;
+  input?: number;
+  output?: number;
+  limit?: TraceLimitRow;
+}
+
+export interface TraceExecutorInfoView {
+  status: TraceResultStatus;
+  statusLabel: string;
+  durationMs?: number;
+  statistics: TraceExecutorStatistic[];
+}
+
 export interface TraceAccessRow {
   kind: 'Агент' | 'Коллекция';
   name: string;
@@ -152,6 +170,7 @@ export interface TraceExecutorRun {
   calls: TraceCall[];
   /** Curated terminal result of this executor, prepared from canonical relations. */
   result: TraceExecutorResult;
+  info: TraceExecutorInfoView;
   metrics: TraceMetrics;
   memoryResult?: TraceMemoryComponentResult;
   preflight?: TracePreflight;
@@ -343,6 +362,21 @@ function limitsFor(snapshot: unknown): TraceLimitsView | undefined {
   }).filter((row) => row.used !== undefined || row.limit !== undefined)
     .sort((left, right) => left.label.localeCompare(right.label, 'ru'));
   return rows.length ? { rows } : undefined;
+}
+
+const executorLimitOrder = ['wall_time_ms', 'llm_calls', 'tool_calls', 'tokens_total', 'task_attempts', 'agent_steps', 'retries'];
+
+function executorLimitsFor(snapshot: unknown): TraceLimitsView | undefined {
+  const rows = limitsFor(snapshot)?.rows ?? [];
+  const filtered = rows
+    .filter((row) => row.limit !== undefined && row.key !== 'tokens_in' && row.key !== 'tokens_out')
+    .sort((left, right) => {
+      const leftOrder = executorLimitOrder.indexOf(left.key);
+      const rightOrder = executorLimitOrder.indexOf(right.key);
+      return (leftOrder < 0 ? executorLimitOrder.length : leftOrder) - (rightOrder < 0 ? executorLimitOrder.length : rightOrder)
+        || left.label.localeCompare(right.label, 'ru');
+    });
+  return filtered.length ? { rows: filtered } : undefined;
 }
 
 function accessFor(snapshot: unknown): TraceAccessView | undefined {
@@ -1026,6 +1060,42 @@ function executorResultFor(
   };
 }
 
+function executorInfoFor(
+  result: TraceExecutorResult,
+  calls: TraceCall[],
+  durationMs: number | undefined,
+  limits?: TraceLimitsView,
+): TraceExecutorInfoView {
+  const limitByKey = new Map((limits?.rows ?? []).map((row) => [row.key, row]));
+  const llmCalls = calls.filter((call) => call.kind === 'llm');
+  const toolCalls = calls.filter((call) => call.kind === 'tool');
+  const llmAttempts = llmCalls.flatMap((call) => call.attempts ?? [call]);
+  const sum = (values: Array<number | undefined>): number | undefined => {
+    const present = values.filter((value): value is number => value !== undefined);
+    return present.length ? present.reduce((total, value) => total + value, 0) : undefined;
+  };
+  const tokensIn = sum(llmAttempts.map((call) => call.info.tokensIn));
+  const tokensOut = sum(llmAttempts.map((call) => call.info.tokensOut));
+  const tokensTotal = sum(llmAttempts.map((call) => call.info.tokensTotal));
+  const statistics: TraceExecutorStatistic[] = [];
+  const add = (key: TraceExecutorStatisticKey, label: string, value: number | undefined, extras: Pick<TraceExecutorStatistic, 'input' | 'output'> = {}) => {
+    if (value === undefined || value === 0) return;
+    statistics.push({ key, label, value, ...extras, limit: limitByKey.get(key) });
+  };
+  add('llm_calls', 'LLM-вызовы', llmCalls.length);
+  add('tool_calls', 'Вызовы инструментов', toolCalls.length);
+  add('tokens_total', 'Токены', tokensTotal, { input: tokensIn, output: tokensOut });
+  add('llm_retries', 'Повторы LLM', sum(llmCalls.map((call) => call.info.retryCount)));
+  add('llm_errors', 'Ошибки LLM', llmCalls.filter((call) => call.info.status === 'error').length);
+  add('tool_errors', 'Ошибки инструментов', toolCalls.filter((call) => call.info.status === 'error').length);
+  return {
+    status: result.status,
+    statusLabel: result.statusLabel,
+    durationMs,
+    statistics,
+  };
+}
+
 function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecutorRun | null {
   if (entity.type !== 'agent_execution') return null;
   const start = startFor(state, entity);
@@ -1080,6 +1150,15 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
   const projectedEntity = entity.status === 'running' && latestCall && latestCall.info.status !== 'running' && latestCall.info.status !== 'waiting_retry'
     ? { ...entity, status: latestCall.info.status === 'ok' ? 'completed' : 'failed' }
     : entity;
+  const metrics = {
+    ...baseMetrics,
+    retries: retriesAfterStart || baseMetrics.retries,
+    calls: callMetrics.calls ?? baseMetrics.calls,
+    successfulCalls: callMetrics.successfulCalls ?? baseMetrics.successfulCalls,
+    failedCalls: callMetrics.failedCalls ?? baseMetrics.failedCalls,
+  };
+  const limits = executorLimitsFor(latestPayload(executorEvents, 'budget_snapshot') ?? latestPayload(executorEvents, 'limits_snapshot'));
+  const result = executorResultFor(state, entity, executorName, slug, calls);
   return {
     entity: projectedEntity,
     inspectorKey: entity.key,
@@ -1090,20 +1169,15 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     executorSlug: slug,
     kind: executorKindFor(slug),
     calls,
-    result: executorResultFor(state, entity, executorName, slug, calls),
-    metrics: {
-      ...baseMetrics,
-      retries: retriesAfterStart || baseMetrics.retries,
-      calls: callMetrics.calls ?? baseMetrics.calls,
-      successfulCalls: callMetrics.successfulCalls ?? baseMetrics.successfulCalls,
-      failedCalls: callMetrics.failedCalls ?? baseMetrics.failedCalls,
-    },
+    result,
+    info: executorInfoFor(result, calls, metrics.elapsedMs, limits),
+    metrics,
     memoryResult: memoryComponentResult(executorEvents),
     memoryContext: memoryContextFor(executorEvents),
     preflight: preflightFor(state, entity),
     prompt: promptFor(executorEvents, calls),
     access: accessFor(latestPayload(executorEvents, 'rbac_snapshot')?.rbac) ?? preflightFor(state, entity)?.access,
-    limits: limitsFor(latestPayload(executorEvents, 'budget_snapshot') ?? latestPayload(executorEvents, 'limits_snapshot')),
+    limits,
   };
 }
 
@@ -1116,6 +1190,9 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     .filter((child): child is TraceEntity => Boolean(child))
     .map((child) => callFor(state, child))
     .filter((call): call is TraceCall => Boolean(call)));
+  const limits = executorLimitsFor(latestPayload(eventsFor(state, entity), 'budget_snapshot'));
+  const result = executorResultFor(state, entity, 'Синтезатор', 'synthesizer', calls);
+  const metrics = metricsFor(state, entity);
   const executor: TraceExecutorRun = {
     entity,
     inspectorKey: `executor:${entity.key}`,
@@ -1126,10 +1203,11 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     executorSlug: 'synthesizer',
     kind: 'synthesizer',
     calls,
-    result: executorResultFor(state, entity, 'Синтезатор', 'synthesizer', calls),
-    metrics: metricsFor(state, entity),
+    result,
+    info: executorInfoFor(result, calls, metrics.elapsedMs, limits),
+    metrics,
     prompt: promptFor(eventsFor(state, entity), calls),
-    limits: limitsFor(latestPayload(eventsFor(state, entity), 'budget_snapshot')),
+    limits,
   };
   executor.taskPresentation = taskPresentationForExecutor(executor);
   return executor;

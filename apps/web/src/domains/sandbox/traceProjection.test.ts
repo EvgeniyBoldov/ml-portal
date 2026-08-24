@@ -216,6 +216,33 @@ describe('projectTraceStages memory components', () => {
     expect(callTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Запрос', 'Ответ', 'RAW']);
     expect(stages[0].executorRuns[0].prompt?.text).toBe('prompt');
   });
+
+  it('projects agent work statistics and only its configured limits', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker' }),
+      event(4, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1' }),
+      event(5, 'llm_response', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', status: 'completed', tokens_in: 100, tokens_out: 50, tokens_total: 150 }),
+      event(6, 'protocol_retry', { entity_type: 'run', entity_id: 'run-1', llm_call_id: 'llm-1' }),
+      event(7, 'tool_call', { entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', tool: 'first' }),
+      event(8, 'tool_result', { entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', success: false }),
+      event(9, 'tool_call', { entity_type: 'tool_call', entity_id: 'tool-2', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', tool: 'second' }),
+      event(10, 'tool_result', { entity_type: 'tool_call', entity_id: 'tool-2', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', success: true }),
+      event(11, 'budget_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', snapshot: { llm_calls: { used: 1, limit: 2, remaining: 1 }, tool_calls: { used: 2 }, tokens_total: { used: 150, limit: 200, remaining: 50 }, tokens_in: { used: 100 }, tokens_out: { used: 50 } } }),
+      event(12, 'agent_end', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', status: 'completed', summary: 'Готово' }),
+    ]);
+
+    const executor = projectTraceStages(state)[0].executorRuns[0];
+    expect(executor.info.statistics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'llm_calls', value: 1, limit: expect.objectContaining({ limit: 2 }) }),
+      expect.objectContaining({ key: 'tool_calls', value: 2 }),
+      expect.objectContaining({ key: 'tokens_total', value: 150, input: 100, output: 50, limit: expect.objectContaining({ limit: 200 }) }),
+      expect.objectContaining({ key: 'llm_retries', value: 1 }),
+      expect.objectContaining({ key: 'tool_errors', value: 1 }),
+    ]));
+    expect(executor.limits?.rows.map((row) => row.key)).toEqual(['llm_calls', 'tokens_total']);
+  });
 });
 
 describe('projectTraceRun', () => {

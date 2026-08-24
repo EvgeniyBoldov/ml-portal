@@ -28,12 +28,9 @@ function LimitsTable({ view, title }: { view: TraceLimitsView; title: string }) 
   </InspectorSection>;
 }
 
-export function LimitsViewer({ executorLimits, runLimits }: { executorLimits?: TraceLimitsView; runLimits?: TraceLimitsView }) {
-  if (!executorLimits?.rows.length && !runLimits?.rows.length) return <InspectorEmptyState message="Лимиты для этого запуска не записаны в журнал." />;
-  return <InspectorStack>
-    {executorLimits ? <LimitsTable view={executorLimits} title="Текущий запуск" /> : null}
-    {runLimits ? <LimitsTable view={runLimits} title="Общий лимит run" /> : null}
-  </InspectorStack>;
+export function LimitsViewer({ limits }: { limits?: TraceLimitsView }) {
+  if (!limits?.rows.length) return <InspectorEmptyState message="Локальные ограничения для этого исполнителя не записаны в журнал." />;
+  return <InspectorStack><LimitsTable view={limits} title="Ограничения исполнителя" /></InspectorStack>;
 }
 
 export function RbacViewer({ access }: { access?: TraceAccessView }) {

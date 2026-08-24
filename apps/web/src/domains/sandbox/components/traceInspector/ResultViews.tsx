@@ -1,5 +1,5 @@
 import Badge from '@/shared/ui/Badge';
-import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorScalar, InspectorTextBlock } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorScalar, InspectorStatus, InspectorTextBlock } from '@/shared/ui/Inspector';
 import type { TraceExecutorResult, TraceExecutorRun, TraceStage, TraceStep } from '../../traceProjection';
 import { InspectorEmptyState, InspectorStack } from './InspectorPrimitives';
 import styles from './ResultViews.module.css';
@@ -15,6 +15,21 @@ function Output({ value }: { value: unknown }) {
   if (typeof value === 'string') return <InspectorTextBlock text={value} />;
   if (value === null || typeof value === 'number' || typeof value === 'boolean') return <InspectorScalar value={value} />;
   return <InspectorJsonBlock value={value} />;
+}
+
+const completionKindLabel = (value: string): string => ({ answer: 'Ответ', completed: 'Завершено', plan: 'План', failed: 'Ошибка' }[value] ?? value);
+
+function ExecutorResultFields({ result }: { result: TraceExecutorResult }) {
+  return <InspectorFieldGroup>
+    <InspectorFieldRow label="Статус"><InspectorStatus label={result.statusLabel} tone={tone(result.status)} /></InspectorFieldRow>
+    {result.completionKind ? <InspectorFieldRow label="Тип завершения"><InspectorScalar value={completionKindLabel(result.completionKind)} /></InspectorFieldRow> : null}
+    {result.sufficientForPhase !== undefined ? <InspectorFieldRow label="Достаточно для этапа"><InspectorScalar value={result.sufficientForPhase} /></InspectorFieldRow> : null}
+    {result.message ? <InspectorFieldRow label="Итог"><InspectorTextBlock text={result.message} /></InspectorFieldRow> : null}
+    {result.output !== undefined ? <InspectorFieldRow label="Результат"><Output value={result.output} /></InspectorFieldRow> : null}
+    {result.missingInputs !== undefined ? <InspectorFieldRow label="Недостающие входные данные"><Output value={result.missingInputs} /></InspectorFieldRow> : null}
+    {result.needs !== undefined ? <InspectorFieldRow label="Потребности"><Output value={result.needs} /></InspectorFieldRow> : null}
+    {result.artifacts !== undefined ? <InspectorFieldRow label="Артефакты"><Output value={result.artifacts} /></InspectorFieldRow> : null}
+  </InspectorFieldGroup>;
 }
 
 function ExecutorResultCard({ result }: { result: TraceExecutorResult }) {
@@ -35,7 +50,7 @@ function ExecutorResultCard({ result }: { result: TraceExecutorResult }) {
 }
 
 export function ExecutorResultView({ executor }: { executor: TraceExecutorRun }) {
-  return <ExecutorResultCard result={executor.result} />;
+  return <ExecutorResultFields result={executor.result} />;
 }
 
 export const AgentResultViewer = ExecutorResultView;

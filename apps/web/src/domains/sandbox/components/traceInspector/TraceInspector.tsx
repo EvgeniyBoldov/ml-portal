@@ -1,6 +1,6 @@
 import { InspectorFieldGroup, InspectorFieldRow, InspectorHeader, InspectorPanel, InspectorScalar, InspectorStatus, InspectorTabs } from '@/shared/ui/Inspector';
 import type { SandboxTraceState } from '../../traceState';
-import { projectTraceRun, type TraceInspectionTarget } from '../../traceProjection';
+import type { TraceInspectionTarget } from '../../traceProjection';
 import { PlanView, TextValue } from './TraceDataViews';
 import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponseView } from './CallViews';
 import { ExecutorResultView, StageResultView, StepResultView } from './ResultViews';
@@ -9,7 +9,7 @@ import { formatCallDuration } from '../../callPresentation';
 import type { ToolNameMap } from '../../callInspection';
 import { PlanTaskCard } from './PlanTaskCard';
 import { traceStatusLabel, traceStatusTone } from '../../traceStatus';
-import { FactsViewer, LimitsViewer, MemoryContextViewer, PreflightViewer, PromptViewer, RawEventsViewer, RbacViewer } from './viewers';
+import { ExecutorInfoViewer, FactsViewer, LimitsViewer, MemoryContextViewer, PreflightViewer, PromptViewer, RawEventsViewer, RbacViewer, TaskViewer } from './viewers';
 
 interface Props { target: TraceInspectionTarget | null; trace: SandboxTraceState | null; toolNames?: ToolNameMap; }
 function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
@@ -28,7 +28,6 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
         : target.call.kind === 'tool' ? callDisplayName(target.call.requestView.toolName ?? '', toolNames) : target.call.title;
   const kindLabel = { stage: 'Этап', step: 'Шаг', executor: 'Запуск исполнителя', call: 'Вызов', error: 'Ошибка' }[target.kind];
   const stage = target.kind === 'stage' ? target.stage : target.kind === 'step' ? target.step.stage : target.stage;
-  const runLimits = trace ? projectTraceRun(trace).limits : undefined;
   const selectedTask = target.kind === 'step' ? target.step.taskPresentation
     : target.kind === 'executor' ? target.executor.taskPresentation
       : undefined;
@@ -50,9 +49,11 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'info' && target.kind === 'call' && target.call.kind === 'llm') return <LlmInfoView call={target.call} />;
     if (tab === 'info' && target.kind === 'call' && target.call.kind === 'tool') return <ToolInfoView call={target.call} toolNames={toolNames} description={target.executor.task} />;
     if (tab === 'info' && target.kind === 'call') return <CallInfoView call={target.call} />;
+    if (tab === 'info' && target.kind === 'executor') return <ExecutorInfoViewer info={target.executor.info} />;
     if (tab === 'info') return common;
     if (tab === 'plan') return <PlanView plan={stage.plan} />;
-    if (tab === 'task' && (target.kind === 'step' || target.kind === 'executor') && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
+    if (tab === 'task' && target.kind === 'executor') return <TaskViewer task={selectedTask} />;
+    if (tab === 'task' && target.kind === 'step' && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
     if (tab === 'facts' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} />;
     if (tab === 'memory' && target.kind === 'executor') return <MemoryContextViewer context={target.executor.memoryContext} />;
     if (tab === 'result' && target.kind === 'stage') return <StageResultView stage={target.stage} />;
@@ -60,7 +61,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : <ExecutorResultView executor={target.executor} />;
     if (tab === 'prompt' && target.kind === 'executor') return <PromptViewer prompt={target.executor.prompt} />;
     if (tab === 'rbac' && target.kind === 'executor') return <RbacViewer access={target.executor.access} />;
-    if (tab === 'limits' && target.kind === 'executor') return <LimitsViewer executorLimits={target.executor.limits} runLimits={runLimits} />;
+    if (tab === 'limits' && target.kind === 'executor') return <LimitsViewer limits={target.executor.limits} />;
     if (tab === 'preflight' && target.kind === 'executor') return <PreflightViewer preflight={target.executor.preflight} />;
     if (tab === 'error' && target.kind === 'call' && target.call.kind === 'llm') return <LlmErrorView call={target.call} />;
     if (tab === 'error' && (target.kind === 'error' || target.kind === 'call')) {
