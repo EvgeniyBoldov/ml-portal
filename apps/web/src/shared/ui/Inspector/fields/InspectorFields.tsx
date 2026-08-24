@@ -84,3 +84,30 @@ export function InspectorTextBlock({ text }: { text: string }) {
     </div>
   );
 }
+
+/**
+ * Bounded inspector value for semantic tabs.  The full value remains available
+ * in a read-only modal, while the tab itself stays scannable.
+ */
+export function InspectorExpandableValue({
+  value,
+  title,
+}: {
+  value: unknown;
+  title: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={styles.expandableValue}>
+      <div className={styles.expandablePreview}>
+        <SmartViewer value={value} />
+      </div>
+      <div className={styles.expandableActions}>
+        <button type="button" className={styles.expandableButton} onClick={() => setOpen(true)}>
+          Развернуть
+        </button>
+      </div>
+      <SmartViewerModal value={value} open={open} onClose={() => setOpen(false)} title={title} />
+    </div>
+  );
+}

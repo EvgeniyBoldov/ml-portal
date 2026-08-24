@@ -149,6 +149,47 @@ describe('projectTraceStages memory components', () => {
     }
   });
 
+  it('builds one labelled LLM transcript and a safe expandable tool result projection', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker' }),
+      event(4, 'llm_request', {
+        entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1',
+        messages: [
+          { role: 'system', content: 'Следуй правилам' },
+          { role: 'user', content: 'Найди документ' },
+          { role: 'tool', content: '{"total":2}' },
+        ],
+      }),
+      event(5, 'llm_response', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', content: 'Готово', status: 'completed' }),
+      event(6, 'tool_call', { entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', tool: 'collection.document.search', arguments: { query: 'СРК' } }),
+      event(7, 'tool_result', {
+        entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', success: true,
+        result: { success: true, data: { total: 2, artifact_id: 'private', rows: [{ title: 'Регламент' }] } },
+      }),
+    ]);
+
+    const llmTarget = resolveTraceInspectionTarget(state, 'llm_call:llm-1');
+    const toolTarget = resolveTraceInspectionTarget(state, 'tool_call:tool-1');
+    if (llmTarget?.kind === 'call') {
+      expect(llmTarget.call.requestView.messageTranscript).toContain('Системные инструкции');
+      expect(llmTarget.call.requestView.messageTranscript).toContain('Запрос пользователя');
+      expect(llmTarget.call.requestView.messageTranscript).toContain('Контекст инструмента');
+    } else {
+      throw new Error('LLM call projection is missing');
+    }
+    if (toolTarget?.kind === 'call') {
+      expect(toolTarget.call.responseView?.toolResult).toMatchObject({
+        success: true,
+        summary: 'Получено: 2',
+        data: { total: 2, rows: [{ title: 'Регламент' }] },
+      });
+    } else {
+      throw new Error('Tool call projection is missing');
+    }
+  });
+
   it('projects a terminal executor result without making the viewer read journal events', () => {
     const state = replayRuntimeJournal([
       event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),

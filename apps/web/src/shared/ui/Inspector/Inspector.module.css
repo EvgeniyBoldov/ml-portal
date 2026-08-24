@@ -137,6 +137,46 @@
   background: var(--bg-hover, rgba(0, 0, 0, 0.06));
 }
 
+.expandableValue {
+  width: 100%;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-active, #f3f4f6);
+  overflow: hidden;
+}
+
+.expandablePreview {
+  max-height: 220px;
+  overflow: hidden;
+  padding: var(--space-2, 8px);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs, 12px);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.expandableActions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--space-2, 8px) var(--space-2, 8px);
+}
+
+.expandableButton {
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  padding: 4px 8px;
+  background: var(--bg-secondary, #fff);
+  color: var(--text-secondary, #6b7280);
+  font: inherit;
+  font-size: var(--text-xs, 12px);
+  cursor: pointer;
+}
+
+.expandableButton:hover {
+  color: var(--text-primary, #1a1a1a);
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+}
+
 .empty {
   padding: var(--space-4, 16px);
   text-align: center;

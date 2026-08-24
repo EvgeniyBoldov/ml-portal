@@ -1,5 +1,5 @@
 import type { RuntimeJournalEvent, SandboxTraceState, TraceEntity } from './traceState';
-import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, parseCallContent, purposeLabel, sanitizeDisplay, toDisplayEntries, toolResult, type DisplayEntry, type LlmOutcome, type ParsedContent } from './callInspection';
+import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, parseCallContent, purposeLabel, sanitizeDisplay, toolResult, type LlmOutcome, type ParsedContent } from './callInspection';
 import type { CallErrorDetails, CallPresentationStatus } from './callPresentation';
 import { callPresentation } from './callPresentation';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
@@ -62,6 +62,8 @@ export interface TraceCallRequest {
   inputTokensEstimate?: number;
   responseSchemaBytes?: number;
   messages: Array<{ role: string; content: ParsedContent }>;
+  /** Ordered, labelled message transcript for the semantic request tab. */
+  messageTranscript?: string;
   toolName?: string;
   description?: string;
   arguments?: unknown;
@@ -78,9 +80,8 @@ export interface TraceToolResult {
   success?: boolean;
   message?: string;
   data: unknown;
-  details: DisplayEntry[];
+  summary: string;
   truncated: boolean;
-  items: Array<{ title: string; fields: DisplayEntry[] }>;
 }
 
 export interface TraceCallResponse {
@@ -713,6 +714,7 @@ function requestViewFor(kind: TraceCallKind, payload: Record<string, unknown>): 
     inputTokensEstimate: numberPayload(payload, 'input_tokens_estimate'),
     responseSchemaBytes: numberPayload(payload, 'response_schema_bytes'),
     messages,
+    messageTranscript: messageTranscript(messages),
     toolName: asString(payload.tool) || asString(payload.tool_slug) || undefined,
     description: asString(payload.description) || asString(payload.intent) || undefined,
     arguments: payload.arguments,
@@ -721,19 +723,29 @@ function requestViewFor(kind: TraceCallKind, payload: Record<string, unknown>): 
   };
 }
 
-function resultItems(data: unknown): Array<{ title: string; fields: DisplayEntry[] }> {
-  const record = asRecord(data);
-  const values = Array.isArray(data)
-    ? data
-    : Array.isArray(record?.templates) ? record.templates
-      : Array.isArray(record?.hits) ? record.hits : [];
-  return values.map((item, index) => {
-    const row = asRecord(item) ?? {};
-    return {
-      title: asString(row.title) || asString(row.primary_fragment) || asString(row.name) || `Элемент ${index + 1}`,
-      fields: toDisplayEntries(row.row_data ?? row),
-    };
-  });
+function messageTranscript(messages: Array<{ role: string; content: ParsedContent }>): string | undefined {
+  if (!messages.length) return undefined;
+  const labels: Record<string, string> = {
+    system: 'Системные инструкции',
+    user: 'Запрос пользователя',
+    assistant: 'Ответ ассистента',
+    tool: 'Контекст инструмента',
+  };
+  return messages.map((message) => {
+    const content = message.content.kind === 'text'
+      ? message.content.text ?? ''
+      : JSON.stringify(message.content.data, null, 2);
+    return `${labels[message.role] ?? `Сообщение: ${message.role}`}\n${'─'.repeat(24)}\n${content}`;
+  }).join('\n\n');
+}
+
+function toolResultSummary(success: boolean | undefined, data: unknown): string {
+  const record = asRecord(data) ?? {};
+  const total = asNumber(record.total) ?? asNumber(record.count);
+  if (total !== undefined) return `Получено: ${total}`;
+  if (Array.isArray(data)) return `Получено элементов: ${data.length}`;
+  if (Object.keys(record).length) return `Получено полей: ${Object.keys(record).length}`;
+  return success === false ? 'Операция завершилась ошибкой' : 'Операция выполнена';
 }
 
 function responseViewFor(
@@ -754,9 +766,11 @@ function responseViewFor(
     ? (() => {
       const result = toolResult(payload);
       return {
-        ...result,
+        success: result.success,
+        message: result.message,
+        data: sanitizeDisplay(result.data),
+        summary: toolResultSummary(result.success, result.data),
         truncated: payload.truncated === true,
-        items: resultItems(result.data),
       };
     })()
     : undefined;
