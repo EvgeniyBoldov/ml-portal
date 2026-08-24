@@ -1,5 +1,6 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorNotice, InspectorScalar, InspectorStatus, InspectorTextBlock } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorScalar, InspectorStatus, InspectorTextBlock } from '@/shared/ui/Inspector';
 import type { TraceExtraction } from '../../../traceProjection';
+import { InspectorEmptyState } from '../InspectorPrimitives';
 
 const tone = (status: string): 'neutral' | 'success' | 'warn' | 'danger' => status === 'completed' ? 'success' : status === 'failed' ? 'danger' : 'warn';
 const label = (status: string): string => status === 'completed' ? 'Готово' : status === 'failed' ? 'Ошибка' : 'Выполняется';
@@ -19,6 +20,6 @@ export function ExtractionResultViewer({ extraction }: { extraction?: TraceExtra
       {result.message ? <InspectorFieldRow label="Сообщение"><InspectorTextBlock text={result.message} /></InspectorFieldRow> : null}
       {result.warnings.length ? <InspectorFieldRow label="Предупреждения"><InspectorTextBlock text={result.warnings.join('\n')} /></InspectorFieldRow> : null}
     </InspectorFieldGroup>
-    {!result.fileName && !result.contentType && !result.format && !result.message && !result.warnings.length ? <InspectorNotice tone="neutral" message="Извлечение завершилось без дополнительных метаданных." /> : null}
+    {!result.fileName && !result.contentType && !result.format && !result.message && !result.warnings.length ? <InspectorEmptyState message="Извлечение завершилось без дополнительных метаданных." /> : null}
   </>;
 }

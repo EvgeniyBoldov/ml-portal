@@ -1,7 +1,7 @@
 import Badge from '@/shared/ui/Badge';
 import { InspectorNotice } from '@/shared/ui/Inspector';
 import type { TraceAccessView, TraceLimitsView } from '../../../traceProjection';
-import styles from '../TraceDataViews.module.css';
+import { InspectorEmptyState, InspectorSection, InspectorStack, InspectorTable } from '../InspectorPrimitives';
 
 type LimitRow = TraceLimitsView['rows'][number];
 
@@ -17,35 +17,32 @@ const limitTone = (row: LimitRow): 'neutral' | 'success' | 'warn' | 'danger' => 
 
 function LimitsTable({ view, title }: { view: TraceLimitsView; title: string }) {
   if (!view.rows.length) return null;
-  return <section className={styles.section}>
-    <h4>{title}</h4>
-    <div className={styles.tableWrap}><table className={styles.table}>
-      <thead><tr><th>Метрика</th><th>Использовано</th><th>Лимит</th><th>Осталось</th><th>Статус</th></tr></thead>
-      <tbody>{view.rows.map((row) => {
+  return <InspectorSection title={title}>
+    <InspectorTable headers={['Метрика', 'Использовано', 'Лимит', 'Осталось', 'Статус']}>
+      {view.rows.map((row) => {
         const tone = limitTone(row);
         const status = row.status === 'neutral' ? 'Не задан' : row.status === 'exceeded' ? 'Исчерпан' : row.status === 'warning' ? 'Близко к лимиту' : 'В норме';
         return <tr key={row.key}><td>{row.label}</td><td>{metricValue(row.key, row.used)}</td><td>{metricValue(row.key, row.limit)}</td><td>{metricValue(row.key, row.remaining)}</td><td><Badge size="small" tone={tone}>{status}</Badge></td></tr>;
-      })}</tbody>
-    </table></div>
-  </section>;
+      })}
+    </InspectorTable>
+  </InspectorSection>;
 }
 
 export function LimitsViewer({ executorLimits, runLimits }: { executorLimits?: TraceLimitsView; runLimits?: TraceLimitsView }) {
-  if (!executorLimits?.rows.length && !runLimits?.rows.length) return <InspectorNotice tone="neutral" message="Лимиты для этого запуска не записаны в журнал." />;
-  return <div className={styles.stack}>
+  if (!executorLimits?.rows.length && !runLimits?.rows.length) return <InspectorEmptyState message="Лимиты для этого запуска не записаны в журнал." />;
+  return <InspectorStack>
     {executorLimits ? <LimitsTable view={executorLimits} title="Текущий запуск" /> : null}
     {runLimits ? <LimitsTable view={runLimits} title="Общий лимит run" /> : null}
-  </div>;
+  </InspectorStack>;
 }
 
 export function RbacViewer({ access }: { access?: TraceAccessView }) {
-  if (!access) return <InspectorNotice tone="neutral" message="RBAC-снимок для этого запуска не записан." />;
-  if (!access.rows.length && access.defaultCollectionAllow === undefined) return <InspectorNotice tone="neutral" message="RBAC-снимок не содержит решений доступа." />;
-  return <div className={styles.stack}>
+  if (!access) return <InspectorEmptyState message="RBAC-снимок для этого запуска не записан." />;
+  if (!access.rows.length && access.defaultCollectionAllow === undefined) return <InspectorEmptyState message="RBAC-снимок не содержит решений доступа." />;
+  return <InspectorStack>
     {access.defaultCollectionAllow !== undefined ? <InspectorNotice tone={access.defaultCollectionAllow ? 'info' : 'warn'} message={`Коллекции без явного правила: ${access.defaultCollectionAllow ? 'разрешены' : 'запрещены'}.`} /> : null}
-    {access.rows.length ? <div className={styles.tableWrap}><table className={styles.table}>
-      <thead><tr><th>Тип</th><th>Сущность</th><th>Доступ</th><th>Причина</th></tr></thead>
-      <tbody>{access.rows.map((row) => <tr key={`${row.kind}:${row.name}:${row.reason}`}><td>{row.kind}</td><td><code>{row.name}</code></td><td><Badge size="small" tone={row.allowed ? 'success' : 'danger'}>{row.allowed ? 'Разрешено' : 'Запрещено'}</Badge></td><td>{row.reason}</td></tr>)}</tbody>
-    </table></div> : null}
-  </div>;
+    {access.rows.length ? <InspectorTable headers={['Тип', 'Сущность', 'Доступ', 'Причина']}>
+      {access.rows.map((row) => <tr key={`${row.kind}:${row.name}:${row.reason}`}><td>{row.kind}</td><td><code>{row.name}</code></td><td><Badge size="small" tone={row.allowed ? 'success' : 'danger'}>{row.allowed ? 'Разрешено' : 'Запрещено'}</Badge></td><td>{row.reason}</td></tr>)}
+    </InspectorTable> : null}
+  </InspectorStack>;
 }

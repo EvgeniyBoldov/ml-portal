@@ -1,6 +1,7 @@
 import Badge from '@/shared/ui/Badge';
-import { InspectorFieldGroup, InspectorFieldRow, InspectorNotice, InspectorScalar } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorScalar } from '@/shared/ui/Inspector';
 import type { TracePreflight } from '../../../traceProjection';
+import { InspectorEmptyState } from '../InspectorPrimitives';
 
 const statusTone = (status: string): 'neutral' | 'success' | 'warn' | 'danger' => {
   if (['completed', 'ok', 'ready'].includes(status)) return 'success';
@@ -10,12 +11,13 @@ const statusTone = (status: string): 'neutral' | 'success' | 'warn' | 'danger' =
 };
 
 const missingLabel = (items: string[]): string => items.length ? items.join(', ') : 'Нет';
+const statusLabel = (status: string): string => ({ completed: 'Готово', ok: 'Готово', ready: 'Готово', failed: 'Ошибка', error: 'Ошибка', partial: 'Частично', running: 'Выполняется' }[status] ?? (status || 'Неизвестно'));
 
 /** Typed availability summary prepared by the trace projection for one executor. */
 export function PreflightViewer({ preflight }: { preflight?: TracePreflight }) {
-  if (!preflight) return <InspectorNotice tone="neutral" message="Preflight-снимок для этого исполнителя не записан в журнал." />;
+  if (!preflight) return <InspectorEmptyState message="Preflight-снимок для этого исполнителя не записан в журнал." />;
   return <InspectorFieldGroup>
-    <InspectorFieldRow label="Статус"><Badge size="small" tone={statusTone(preflight.status)}>{preflight.status}</Badge></InspectorFieldRow>
+    <InspectorFieldRow label="Статус"><Badge size="small" tone={statusTone(preflight.status)}>{statusLabel(preflight.status)}</Badge></InspectorFieldRow>
     {preflight.mode ? <InspectorFieldRow label="Режим"><InspectorScalar value={preflight.mode} /></InspectorFieldRow> : null}
     {preflight.durationMs !== undefined ? <InspectorFieldRow label="Длительность"><InspectorScalar value={`${preflight.durationMs} мс`} /></InspectorFieldRow> : null}
     <InspectorFieldRow label="Недостающие инструменты"><InspectorScalar value={missingLabel(preflight.missing.tools)} /></InspectorFieldRow>
