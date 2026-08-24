@@ -148,7 +148,7 @@ export function callStatusPresentation(status: CallPresentationStatus): { label:
   if (status === 'waiting_retry') return { label: 'Ожидает повтора', tone: 'warn' };
   if (status === 'error') return { label: 'Ошибка', tone: 'danger' };
   if (status === 'running') return { label: 'Выполняется', tone: 'warn' };
-  return { label: 'OK', tone: 'success' };
+  return { label: 'Готово', tone: 'success' };
 }
 
 export function formatCallDuration(durationMs: number | undefined): string {

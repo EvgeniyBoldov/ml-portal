@@ -8,7 +8,6 @@
 .summary { padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--trace-surface, var(--bg-elevated)); }
 .success { border-left: 3px solid var(--success); }
 .failure { border-left: 3px solid var(--danger); }
-.list { display: flex; flex-direction: column; gap: var(--space-2); }
 .listItem { padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--trace-surface, var(--bg-elevated)); }
 .listTitle { margin-bottom: var(--space-1); font-size: var(--text-sm); font-weight: var(--font-weight-semibold); }
 .tokenUsage { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--text-sm); }

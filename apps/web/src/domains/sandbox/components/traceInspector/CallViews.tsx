@@ -4,6 +4,7 @@ import { callDisplayName, formatFieldLabel, parseCallContent, type DisplayEntry,
 import { callStatusPresentation, formatCallDuration } from '../../callPresentation';
 import { ExtractionResultViewer } from './viewers/ExtractionResultViewer';
 import { PlanView } from './TraceDataViews';
+import { InspectorStack } from './InspectorPrimitives';
 import styles from './CallViews.module.css';
 
 function Value({ value, structured = false }: { value: unknown; structured?: boolean }) {
@@ -121,22 +122,22 @@ export function LlmResponseSnapshotView({ call, toolNames }: { call: TraceCall; 
   </InspectorFieldGroup>;
   if (semanticOutcome?.kind === 'tools') {
     if (response.toolCall) {
-      return <div className={styles.list}>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Выбранная операция">{callDisplayName(response.toolCall.name, toolNames)}</InspectorFieldRow><InspectorFieldRow label="Аргументы"><Value value={response.toolCall.arguments ?? {}} /></InspectorFieldRow></InspectorFieldGroup></div>;
+      return <InspectorStack>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Выбранная операция">{callDisplayName(response.toolCall.name, toolNames)}</InspectorFieldRow><InspectorFieldRow label="Аргументы"><Value value={response.toolCall.arguments ?? {}} /></InspectorFieldRow></InspectorFieldGroup></InspectorStack>;
     }
-    return <div className={styles.list}>{metadata}
+    return <InspectorStack>{metadata}
       <InspectorFieldGroup><InspectorFieldRow label="Результат"><InspectorStatus label={semanticOutcome.count ? `${semanticOutcome.label} · ${semanticOutcome.count}` : semanticOutcome.label} tone="info" /></InspectorFieldRow></InspectorFieldGroup>
       {response.linkedToolCalls.map((toolCall, index) => <div key={`${toolCall.name}:${index}`} className={styles.listItem}>
         <div className={styles.listTitle}>{callDisplayName(toolCall.name, toolNames)}</div>
         <ToolRequest value={toolCall.arguments} />
       </div>)}
-    </div>;
+    </InspectorStack>;
   }
-  if (semanticOutcome?.kind === 'plan') return <div className={styles.list}>{metadata}<PlanView plan={call.plan} /></div>;
+  if (semanticOutcome?.kind === 'plan') return <InspectorStack>{metadata}<PlanView plan={call.plan} /></InspectorStack>;
   if (response.toolCall) {
-    return <div className={styles.list}>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Выбранная операция">{callDisplayName(response.toolCall.name, toolNames)}</InspectorFieldRow><InspectorFieldRow label="Аргументы"><Value value={response.toolCall.arguments ?? {}} /></InspectorFieldRow></InspectorFieldGroup></div>;
+    return <InspectorStack>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Выбранная операция">{callDisplayName(response.toolCall.name, toolNames)}</InspectorFieldRow><InspectorFieldRow label="Аргументы"><Value value={response.toolCall.arguments ?? {}} /></InspectorFieldRow></InspectorFieldGroup></InspectorStack>;
   }
-  if (parsed?.kind === 'json') return <div className={styles.list}>{metadata}<Value value={parsed.data} /></div>;
-  return <div className={styles.list}>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Ответ"><Value value={parsed?.text} /></InspectorFieldRow></InspectorFieldGroup></div>;
+  if (parsed?.kind === 'json') return <InspectorStack>{metadata}<Value value={parsed.data} /></InspectorStack>;
+  return <InspectorStack>{metadata}<InspectorFieldGroup><InspectorFieldRow label="Ответ"><Value value={parsed?.text} /></InspectorFieldRow></InspectorFieldGroup></InspectorStack>;
 }
 
 export const LlmRequestView = LlmRequestSnapshotView;
@@ -159,13 +160,13 @@ export function ToolResponse({ call }: { call: TraceCall }) {
   const presentation = call.info;
   const result = call.responseView?.toolResult;
   if (!result) return <InspectorFieldGroup><InspectorFieldRow label="Статус"><InspectorStatus label={presentation.status === 'waiting_retry' ? 'Ожидает повтора' : 'Ожидается'} tone="warn" /></InspectorFieldRow></InspectorFieldGroup>;
-  return <div className={styles.list}>
+  return <InspectorStack>
     <div className={`${styles.summary} ${presentation.status === 'error' ? styles.failure : styles.success}`}><Fields entries={result.details} />{result.message ? <InspectorTextBlock text={result.message} /> : null}</div>
     {typeof result.data === 'string' && result.data ? <InspectorFieldGroup><InspectorFieldRow label="Предпросмотр результата"><InspectorTextBlock text={result.data} /></InspectorFieldRow>{result.truncated ? <InspectorFieldRow label="Результат">Сокращён</InspectorFieldRow> : null}</InspectorFieldGroup> : null}
     {result.items.map((item, index) => <div key={index} className={styles.listItem}><div className={styles.listTitle}>{item.title}</div><Fields entries={item.fields} /></div>)}
     {!result.items.length && result.data !== undefined && result.data !== null && typeof result.data !== 'string' ? <div className={styles.summary}><Fields entries={result.details} /></div> : null}
     <ExtractionResultViewer extraction={call.extraction} />
-  </div>;
+  </InspectorStack>;
 }
 
 export const ToolResponseView = ToolResponse;

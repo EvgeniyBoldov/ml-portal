@@ -1,6 +1,7 @@
 import Badge from '@/shared/ui/Badge';
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorScalar, InspectorTextBlock } from '@/shared/ui/Inspector';
 import type { TraceExecutorResult, TraceExecutorRun, TraceStage, TraceStep } from '../../traceProjection';
+import { InspectorEmptyState, InspectorStack } from './InspectorPrimitives';
 import styles from './ResultViews.module.css';
 
 function tone(status: TraceExecutorResult['status']): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
@@ -42,11 +43,11 @@ export const SynthesizerResultViewer = ExecutorResultView;
 
 export function StageResultView({ stage }: { stage: TraceStage }) {
   const results = stage.executorRuns.map((executor) => executor.result);
-  return <div className={styles.list}>{results.length ? results.map((result, index) => <ExecutorResultCard key={`${result.name}:${index}`} result={result} />) : <InspectorFieldGroup><InspectorFieldRow label="Результат">Исполнители ещё не запускались.</InspectorFieldRow></InspectorFieldGroup>}</div>;
+  return <InspectorStack>{results.length ? results.map((result, index) => <ExecutorResultCard key={`${result.name}:${index}`} result={result} />) : <InspectorEmptyState message="Исполнители ещё не запускались." />}</InspectorStack>;
 }
 
 /** Shows only the executor results that belong to the selected logical step. */
 export function StepResultView({ step }: { step: TraceStep }) {
   const results = step.executorRuns.map((executor) => executor.result);
-  return <div className={styles.list}>{results.length ? results.map((result, index) => <ExecutorResultCard key={`${result.name}:${index}`} result={result} />) : <InspectorFieldGroup><InspectorFieldRow label="Результат">Исполнители этого шага ещё не запускались.</InspectorFieldRow></InspectorFieldGroup>}</div>;
+  return <InspectorStack>{results.length ? results.map((result, index) => <ExecutorResultCard key={`${result.name}:${index}`} result={result} />) : <InspectorEmptyState message="Исполнители этого шага ещё не запускались." />}</InspectorStack>;
 }
