@@ -59,14 +59,14 @@ make restart
 make down
 ```
 
-## 7. Prod запуск
+## 7. Production запуск
 
-В репозитории сейчас зафиксирован процесс сборки prod-образов (`make build-prod`),
-но нет отдельного `docker-compose.prod.yml` как единого стандартизованного рантайма.
+Production runtime хранится в production GitLab repository: настоящий
+`docker-compose.prod.yml`, `release.env` и `.gitlab-ci.yml` там отделены от
+локальной разработки. После release GitLab Runner на production VM применяет
+конкретный commit pipeline; вручную запускать dev-compose на production нельзя.
 
-Рекомендация:
-- использовать собранные образы в отдельном production deployment (compose/k8s/nomad) в infra-репозитории,
-- не запускать prod напрямую из dev `docker-compose.yml`.
+Полный процесс: [Release Workflow](RELEASE_WORKFLOW.md).
 
 ## 8. Health monitoring
 

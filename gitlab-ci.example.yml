@@ -1,0 +1,28 @@
+# Copy to .gitlab-ci.yml in the production GitLab repository.
+# The production runner must be a protected shell runner tagged "production"
+# and must have Docker Compose v2 plus access to the internal GitLab Registry.
+
+stages:
+  - deploy
+
+deploy-production:
+  stage: deploy
+  tags:
+    - production
+  resource_group: production
+  environment:
+    name: production
+  variables:
+    GIT_STRATEGY: fetch
+    DEPLOY_WAIT_TIMEOUT: "180"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      changes:
+        - release.env
+  before_script:
+    - test -n "$PROD_ENV_FILE"
+    - test -r "$PROD_ENV_FILE"
+  script:
+    # This script deploys the runner checkout at $CI_COMMIT_SHA. Do not add
+    # git pull here: retrying an old pipeline must deploy its old release state.
+    - bash scripts/release/deploy.sh

@@ -4,8 +4,9 @@
 
 ## 1. Preflight (обязательно)
 
-- [ ] Зафиксирован релизный тег: `vX`.
-- [ ] Зафиксирован base-образ: `ml-portal-base-ml:vX` (не `latest`).
+- [ ] Зафиксирован release commit в production GitLab и его `release.env`.
+- [ ] `APP_IMAGE_TAG` и `BASE_IMAGE_TAG` являются immutable-тегами, не `latest`.
+- [ ] `IMAGE_REPOSITORY` указывает на внутренний GitLab Container Registry, не `127.0.0.1`.
 - [ ] Все критичные секреты заданы и не `CHANGE_ME`:
   - [ ] `POSTGRES_PASSWORD`
   - [ ] `JWT_SECRET`
@@ -17,46 +18,30 @@
 - [ ] `CORS_ALLOW_ORIGINS` ограничен (не `*`).
 - [ ] Проверены `DATABASE_URL` и `ASYNC_DB_URL` на прод-БД.
 
-## 2. Сборка образов
+## 2. Сборка и публикация образов
 
 ```bash
-make build-base BASE_IMAGE_PROD=ml-portal-base-ml:vX
-make build-prod BASE_IMAGE_PROD=ml-portal-base-ml:vX PROD_IMAGE_TAG=vX
+make update-source
+make release-check
+make release
 ```
 
 Проверка:
 
 ```bash
-docker image ls | rg 'ml-portal|base-ml'
+docker compose -f docker-compose.build.yml config --images
 ```
 
-## 3. Поставка в контур без интернета (если air-gapped)
+## 3. Поставка в контур без интернета
 
-```bash
-docker save \
-  ml-portal-base-ml:vX \
-  ml-portal-api:vX \
-  ml-portal-worker:vX \
-  ml-portal-emb:vX \
-  ml-portal-rerank:vX \
-  ml-portal-frontend:vX \
-  ml-portal-nginx:vX \
-  -o ml-portal-vX-images.tar
-```
-
-На production-хосте:
-
-```bash
-docker load -i ml-portal-vX-images.tar
-```
+Production VM получает образы только из внутреннего GitLab Container Registry.
+После `make release` GitLab pipeline на production runner делает `pull` и
+`up -d`; перенос tar-файлов не является штатным путём.
 
 ## 4. Применение миграций
 
-До переключения трафика:
-
-```bash
-alembic upgrade heads
-```
+Pipeline применяет только `alembic upgrade $DB_REVISION` из release-файла до
+переключения сервисов. API-контейнер не выполняет миграции при каждом рестарте.
 
 - [ ] Миграции прошли без ошибок.
 - [ ] Нет "pending" миграций.
@@ -94,7 +79,6 @@ docker logs <worker>
 
 ## 8. Rollback plan (до релиза должен быть готов)
 
-- [ ] Сохранены образы предыдущей версии `v(X-1)`.
-- [ ] Подготовлен rollback `.env`/конфигов при необходимости.
-- [ ] Понятен порядок отката: образы -> конфиг -> миграции (если поддерживают downgrade).
-
+- [ ] Предыдущий успешный release pipeline доступен в GitLab.
+- [ ] Старые image tags не были перезаписаны.
+- [ ] Понятно, что retry старого pipeline откатывает код/compose/образы, но не БД.

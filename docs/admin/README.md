@@ -7,6 +7,7 @@
 2. [Build Guide](BUILD.md) — собрать dev/prod образы и base.
 3. [Run Guide](RUN.md) — запустить dev-стек и проверить состояние.
 4. [Deploy Checklist](DEPLOY_CHECKLIST.md) — короткий preflight/smoke/rollback для первого прод-релиза.
+5. [Release Workflow](RELEASE_WORKFLOW.md) — source → GitLab Registry → production VM workflow.
 
 ## Быстрые ссылки
 - Главная документация: [../README.md](../README.md)
