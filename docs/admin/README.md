@@ -8,6 +8,7 @@
 3. [Run Guide](RUN.md) — запустить dev-стек и проверить состояние.
 4. [Deploy Checklist](DEPLOY_CHECKLIST.md) — короткий preflight/smoke/rollback для первого прод-релиза.
 5. [Release Workflow](RELEASE_WORKFLOW.md) — source → GitLab Registry → production VM workflow.
+6. [Production Host Setup](PRODUCTION_HOST_SETUP.md) — ОС, права, Runner и root-owned deployment controller.
 
 ## Быстрые ссылки
 - Главная документация: [../README.md](../README.md)

@@ -63,8 +63,9 @@ make down
 
 Production runtime хранится в production GitLab repository: настоящий
 `docker-compose.prod.yml`, `release.env` и `.gitlab-ci.yml` там отделены от
-локальной разработки. После release GitLab Runner на production VM применяет
-конкретный commit pipeline; вручную запускать dev-compose на production нельзя.
+локальной разработки. После release GitLab Runner на production VM через
+root-owned controller применяет конкретный commit как immutable bundle в
+`/opt/ml-portal/releases`; вручную запускать dev-compose на production нельзя.
 
 Полный процесс: [Release Workflow](RELEASE_WORKFLOW.md).
 

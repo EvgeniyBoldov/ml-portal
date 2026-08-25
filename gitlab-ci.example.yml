@@ -1,9 +1,24 @@
 # Copy to .gitlab-ci.yml in the production GitLab repository.
-# The production runner must be a protected shell runner tagged "production"
-# and must have Docker Compose v2 plus access to the internal GitLab Registry.
+# The protected shell runner has no Docker group membership. It may invoke only
+# the root-owned /usr/local/sbin/ml-portal-deploy controller through sudo.
 
 stages:
+  - validate
   - deploy
+
+validate-production-release:
+  stage: validate
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      changes:
+        - release.env
+        - docker-compose.prod.yml
+        - scripts/release/common.sh
+        - scripts/release/deploy.sh
+        - scripts/release/production-controller.sh
+  script:
+    - bash -n scripts/release/common.sh scripts/release/deploy.sh scripts/release/production-controller.sh
+    - bash -c 'source scripts/release/common.sh; load_release_file'
 
 deploy-production:
   stage: deploy
@@ -14,15 +29,49 @@ deploy-production:
     name: production
   variables:
     GIT_STRATEGY: fetch
-    DEPLOY_WAIT_TIMEOUT: "180"
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       changes:
         - release.env
+  when: manual
+  allow_failure: false
+  manual_confirmation: "Deploy this immutable release to production?"
   before_script:
-    - test -n "$PROD_ENV_FILE"
-    - test -r "$PROD_ENV_FILE"
+    - test "$(git rev-parse HEAD)" = "$CI_COMMIT_SHA"
+    - test -f release.env
+    - test -f docker-compose.prod.yml
+    - test -x /usr/local/sbin/ml-portal-deploy
   script:
-    # This script deploys the runner checkout at $CI_COMMIT_SHA. Do not add
-    # git pull here: retrying an old pipeline must deploy its old release state.
-    - bash scripts/release/deploy.sh
+    # Do not add git pull here. A retry must deploy this exact commit state.
+    - sudo --non-interactive /usr/local/sbin/ml-portal-deploy deploy --source "$CI_PROJECT_DIR" --release "$CI_COMMIT_SHA"
+  after_script:
+    - sudo --non-interactive /usr/local/sbin/ml-portal-deploy status > deployment-status.env || true
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths:
+      - deployment-status.env
+
+rollback-production:
+  stage: deploy
+  tags:
+    - production
+  resource_group: production
+  environment:
+    name: production
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      changes:
+        - release.env
+  when: manual
+  allow_failure: false
+  manual_confirmation: "Restore the previous application release? Database migrations are not rolled back."
+  script:
+    - sudo --non-interactive /usr/local/sbin/ml-portal-deploy rollback
+  after_script:
+    - sudo --non-interactive /usr/local/sbin/ml-portal-deploy status > deployment-status.env || true
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths:
+      - deployment-status.env

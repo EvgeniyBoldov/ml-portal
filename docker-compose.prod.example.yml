@@ -8,14 +8,15 @@
 #
 # What lives on the prod server (bind mounts):
 #   - /srv/ml-portal/models_llm/   — ML model weights (heavy, never in image)
-#   - /srv/ml-portal/infra/nginx/  — nginx configs (env-specific)
-#   - /srv/ml-portal/infra/ssl/    — TLS certificates
-#   - /srv/ml-portal/.env          — secrets & env vars
+#   - /etc/ml-portal/nginx/        — nginx configs (env-specific)
+#   - /etc/ml-portal/tls/          — TLS certificates
+#   - /etc/ml-portal/prod.env      — secrets & env vars
 #
-# Usage in the production repository:
-#   docker compose --env-file /srv/ml-portal/.env --env-file release.env \
-#     -f docker-compose.prod.yml up -d
+# Normal production deployments use the root-owned ml-portal-deploy controller.
+# Direct docker compose commands are reserved for documented host maintenance.
 # =============================================================================
+
+name: ml-portal
 
 x-restart: &restart
   restart: unless-stopped

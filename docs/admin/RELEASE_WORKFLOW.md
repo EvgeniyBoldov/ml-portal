@@ -10,7 +10,9 @@
 - A Docker Registry is running on the production VM and is reachable from both
   the DevOps workstation and the VM by one DNS name. The GitLab Runner is
   installed on the production VM. It deploys only; images are built and pushed
-  from the DevOps workstation.
+  from the DevOps workstation. The Runner has no Docker group membership: it
+  invokes the root-owned deployment controller described in
+  [Production Host Setup](PRODUCTION_HOST_SETUP.md).
 
 ## Initial production repository setup
 
@@ -24,9 +26,12 @@
    apply production-only mounts/configuration.
 3. Copy `release.env.example` to `release.env`, set `IMAGE_REPOSITORY` to the
    internal Docker Registry path, and commit it.
-4. Copy `gitlab-ci.example.yml` to `.gitlab-ci.yml`; set protected CI variables
-   `PROD_ENV_FILE` and, for private registry authentication, `REGISTRY_USERNAME`
-   and `REGISTRY_PASSWORD`.
+4. Follow [Production Host Setup](PRODUCTION_HOST_SETUP.md): store `prod.env`
+   and Registry credentials as root-owned host files, install the deployment
+   controller and configure its scoped Runner `sudoers` rule.
+5. Copy `gitlab-ci.example.yml` to `.gitlab-ci.yml` and protect the production
+   environment. The deploy job is manually approved; no production secrets are
+   stored in GitLab CI variables.
 
 The registry path must be a single internal DNS endpoint, including its port,
 reachable by both the DevOps workstation and production VM. Do not use
@@ -49,8 +54,8 @@ head in `release.env`, and pushes the resulting GitLab release commit. It only
 publishes a new base image when the fingerprint of the base Dockerfile or base
 requirements changes.
 
-The deploy pipeline checks out that exact release commit, pulls only application
-images from `IMAGE_REPOSITORY`, upgrades the database forward to `DB_REVISION`,
-and starts the compose stack. A retry of an older pipeline restores its code,
-compose and image tags; database downgrades remain a separately controlled
-manual operation.
+The deploy pipeline stages that exact release commit as an immutable bundle on
+the production host, pulls only application images from `IMAGE_REPOSITORY`,
+upgrades the database forward to `DB_REVISION`, and starts application services
+only. A retry of an older pipeline deploys its old compose and image tags;
+database downgrades remain a separately controlled manual operation.

@@ -63,8 +63,22 @@ require_clean_worktree() {
 
 load_release_file() {
   test -f "$RELEASE_FILE" || fail "Missing release.env. Copy release.env.example in the production GitLab repository."
+  if ! awk '
+    /^[[:space:]]*($|#)/ { next }
+    /^[A-Z][A-Z0-9_]*=[-A-Za-z0-9._:\/@+]+$/ {
+      split($0, pair, "=")
+      key = pair[1]
+      if (key !~ /^(IMAGE_REPOSITORY|APP_IMAGE_TAG|BASE_IMAGE_TAG|BASE_INPUT_SHA|SOURCE_SHA|DB_REVISION)$/ || seen[key]++) {
+        exit 1
+      }
+      next
+    }
+    { exit 1 }
+  ' "$RELEASE_FILE"; then
+    fail "release.env must contain each supported manifest key at most once as a safe KEY=VALUE entry."
+  fi
   set -a
-  # release.env is a reviewed, tracked deployment manifest; it must contain only KEY=VALUE entries.
+  # release.env was validated above and contains only immutable deployment metadata.
   # shellcheck disable=SC1090
   source "$RELEASE_FILE"
   set +a

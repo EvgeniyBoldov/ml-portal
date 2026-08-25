@@ -17,6 +17,8 @@
 - [ ] `ENV=production`, `DEBUG=false`.
 - [ ] `CORS_ALLOW_ORIGINS` ограничен (не `*`).
 - [ ] Проверены `DATABASE_URL` и `ASYNC_DB_URL` на прод-БД.
+- [ ] Production host прошёл [настройку ОС и прав](PRODUCTION_HOST_SETUP.md);
+  runner не состоит в группе `docker`, а secrets находятся в root-owned файлах.
 
 ## 2. Сборка и публикация образов
 
@@ -41,7 +43,9 @@ Production VM получает образы только из внутренне
 ## 4. Применение миграций
 
 Pipeline применяет только `alembic upgrade $DB_REVISION` из release-файла до
-переключения сервисов. API-контейнер не выполняет миграции при каждом рестарте.
+переключения application-сервисов. API-контейнер не выполняет миграции при
+каждом рестарте. Миграции должны быть backward-compatible: rollback контейнеров
+не откатывает БД.
 
 - [ ] Миграции прошли без ошибок.
 - [ ] Нет "pending" миграций.
@@ -81,4 +85,5 @@ docker logs <worker>
 
 - [ ] Предыдущий успешный release pipeline доступен в GitLab.
 - [ ] Старые image tags не были перезаписаны.
-- [ ] Понятно, что retry старого pipeline откатывает код/compose/образы, но не БД.
+- [ ] Понятно, что controller делает application-only rollback при health failure;
+  БД остаётся в новой forward-схеме.
