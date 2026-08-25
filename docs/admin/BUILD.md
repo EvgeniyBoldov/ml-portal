@@ -31,8 +31,8 @@ with both `build:` and a fully-qualified `image:` needs no Makefile change.
 The release manifest records two independent versions:
 
 - `APP_IMAGE_TAG` changes for every release.
-- `BASE_IMAGE_TAG` changes only when the hash of the base Dockerfile or base
-  requirements changes.
+- `BASE_IMAGE_TAG` uses `base-vMAJOR.MINOR` and changes only when the hash of
+  the base Dockerfile or base requirements changes.
 
 Application images use immutable, fully-qualified GitLab Registry names. The
 production VM only pulls those images through its internal network; it does not

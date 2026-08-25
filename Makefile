@@ -13,7 +13,7 @@ COMPOSE_DEV := docker compose -f docker-compose.yml
 	up down restart logs ps build build-no-cache migrate \
 	test test-api test-backend test-frontend test-unit test-integration \
 	test-runtime-core test-runtime-integration test-runtime-eval test-backend-10-10-gate test-e2e test-e2e-ui \
-	update-source release-check release
+	update-source release-preview release-check release
 
 help:
 	@echo ""
@@ -38,6 +38,7 @@ help:
 	@echo ""
 	@echo "  Production release (only in the production GitLab clone):"
 	@echo "    make update-source       Merge source/main from GitHub into local main"
+	@echo "    make release-preview     Show current and next release versions"
 	@echo "    make release-check       Validate release.env and release prerequisites"
 	@echo "    make release             Build, push, version, commit and push a release"
 	@echo ""
@@ -157,6 +158,9 @@ test-e2e-ui:
 
 update-source:
 	bash scripts/release/update-source.sh
+
+release-preview:
+	bash scripts/release/release-preview.sh
 
 release-check:
 	bash scripts/release/release-check.sh

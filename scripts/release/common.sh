@@ -54,12 +54,12 @@ bump_app_patch() {
   printf 'v%s.%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "$((BASH_REMATCH[3] + 1))"
 }
 
-bump_base_patch() {
+bump_base_minor() {
   local tag="$1"
-  if [[ ! "$tag" =~ ^base-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    fail "BASE_IMAGE_TAG must be base-vMAJOR.MINOR.PATCH, got: $tag"
+  if [[ ! "$tag" =~ ^base-v([0-9]+)\.([0-9]+)$ ]]; then
+    fail "BASE_IMAGE_TAG must be base-vMAJOR.MINOR, got: $tag"
   fi
-  printf 'base-v%s.%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "$((BASH_REMATCH[3] + 1))"
+  printf 'base-v%s.%s\n' "${BASH_REMATCH[1]}" "$((BASH_REMATCH[2] + 1))"
 }
 
 release_value_from_ref() {

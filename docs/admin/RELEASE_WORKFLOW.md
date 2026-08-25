@@ -36,6 +36,7 @@ On the DevOps workstation:
 
 ```bash
 make update-source
+make release-preview
 make test
 make release
 ```

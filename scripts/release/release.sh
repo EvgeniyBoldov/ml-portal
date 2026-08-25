@@ -19,7 +19,7 @@ if docker manifest inspect "$api_image" >/dev/null 2>&1; then
 fi
 
 if test "$next_base_sha" != "$BASE_INPUT_SHA"; then
-  next_base_tag="$(bump_base_patch "$BASE_IMAGE_TAG")"
+  next_base_tag="$(bump_base_minor "$BASE_IMAGE_TAG")"
   next_base_ref="${IMAGE_REPOSITORY}/base-ml:${next_base_tag}"
   if docker manifest inspect "$next_base_ref" >/dev/null 2>&1; then
     fail "Refusing to overwrite immutable base image already present in registry: ${next_base_ref}"
