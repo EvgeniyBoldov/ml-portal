@@ -16,7 +16,7 @@
 #   APP_IMAGE_TAG    — immutable service-image tag for this release
 #
 # Override both when needed:
-#   BASE_IMAGE=gitlab.internal:5050/group/ml-portal/base-ml:base-v1.2.0 \
+#   BASE_IMAGE=gitlab.internal:5050/group/ml-portal/base-ml:base-1.2 \
 #   IMAGE_REPOSITORY=gitlab.internal:5050/group/ml-portal APP_IMAGE_TAG=v1.5.0 \
 #   docker compose -f docker-compose.build.yml build
 # =============================================================================
