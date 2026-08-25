@@ -2,33 +2,39 @@
 
 ## Purpose
 - Keep one source of truth for runtime tool semantics.
-- Separate raw discovered capabilities from published runtime tools.
+- Separate provider discovery snapshots from runtime execution descriptors.
 - Prevent collection-bound tools from leaking into global/system prompt space.
 
 ## Layers
 1. `ToolRegistry` and MCP discovery expose raw handlers/tools.
-2. `ToolDiscoveryService` stores raw snapshots in `discovered_tools`.
-3. `app.agents.operation_publication` is the canonical semantics layer.
-4. `CollectionToolResolver` selects raw tools for an instance/provider context.
-5. `ToolResolver` maps a raw tool to a canonical published runtime tool.
-6. `OperationBuilder` builds exact invoke identities for runtime execution.
-7. Prompt builders and trace snapshots read published canonical summaries only.
+2. `ToolDiscoveryService` stores raw provider snapshots in `discovered_tools`.
+3. `CollectionToolResolver` resolves `collection -> data instance -> provider`
+   and returns that provider's active tools plus platform collection defaults.
+4. `ToolResolver` projects a resolved raw tool into a runtime descriptor; it
+   does not infer collection availability from domains or provider names.
+5. `OperationBuilder` builds exact collection-bound execution identities.
+6. Prompt builders, runtime and admin capability API consume the same resolved
+   operation set.
 
 ## Rules
-- `discovered_tools` is a raw availability snapshot, not a semantic source of truth.
-- Scope classification (`system` vs `collection`) comes only from canonical publication.
-- Collection-bound tools must declare supported `collection_types` in canonical semantics.
-- Unpublished collection-like tools must not fall back to `system`.
+- `discovered_tools` is a raw availability snapshot belonging to one provider.
+- A collection-bound tool is available because its resolved provider discovered
+  it, not because a domain/name allow-list recognizes it.
+- `collection.info` is a platform collection default. System tools remain a
+  separate global surface.
+- MCP tool names are the public operation names and must be unique for
+  incompatible schemas in one runtime snapshot.
 - Runtime execution accepts only the exact invoke identity from `ResolvedOperation.operation_slug`.
-- Prompts should expose human-facing capability structure and exact invoke names, but not internal raw handler aliases.
+- Prompts expose resolved provider tool names, human descriptions and exact
+  invoke schemas; provider URLs and execution bindings remain internal.
 
 ## Prompt Contract
 - Capability card shows collections, purposes, and available actions.
 - Callable tools appendix shows exact invoke name, concise description, collection binding, and input schema.
-- Internal-only fields such as raw handler aliases stay out of LLM prompt and belong in operator tooling only if needed.
+- Internal provider URLs, credentials and execution bindings stay out of the
+  LLM prompt and belong in runtime/operator surfaces only if needed.
 
 ## Maintenance
-- Adding a new runtime tool requires:
-  - a canonical `OperationSpec`,
-  - publication rules for raw aliases,
-  - tests for discovery, collection compatibility, and exact invoke execution.
+- Adding a remote MCP tool requires discovery plus an active provider binding;
+  no product-code publication rule is added. Tests cover discovery, collection
+  resolution and exact invoke execution.

@@ -1,14 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Literal, Optional
-
-from app.agents.operation_publication import (
-    CollectionCapabilityBinding,
-    get_collection_capability_bindings,
-    get_operation_spec,
-    is_operation_allowed_for_collection_type,
-)
+from typing import List, Literal
 from app.models.discovered_tool import DiscoveredTool
 from app.models.collection import Collection
 from app.models.tool_instance import ToolInstance
@@ -24,7 +17,7 @@ class CapabilityCandidate:
 
 
 class CollectionCapabilityResolver:
-    """Resolve collection-bound capabilities from canonical registry + available bindings."""
+    """Resolve the selected provider's active capabilities for a collection."""
 
     def __init__(self, tool_loader: CollectionToolResolver) -> None:
         self.tool_loader = tool_loader
@@ -42,64 +35,22 @@ class CollectionCapabilityResolver:
             provider=provider,
         )
 
-        collection_type = str(getattr(collection, "collection_type", "") or "").strip().lower()
-        if not collection_type:
-            return []
-
-        discovered_index = self._index_by_slug(discovered_tools)
         resolved: List[CapabilityCandidate] = []
-        seen_canonical: set[str] = set()
-        for binding in get_collection_capability_bindings(collection_type):
-            if binding.canonical_op_slug in seen_canonical:
-                continue
-            spec = get_operation_spec(binding.canonical_op_slug)
-            if spec is None:
-                continue
-            publication = spec.to_publication_decision()
-            if not is_operation_allowed_for_collection_type(
-                publication,
-                collection_type=collection_type,
-            ):
-                continue
-            if spec.requires_vector_search and not bool(getattr(collection, "has_vector_search", False)):
-                continue
-            candidate = self._match_binding(binding, discovered_index)
-            if candidate is None:
-                continue
-            seen_canonical.add(binding.canonical_op_slug)
-            resolved.append(candidate)
-        return resolved
-
-    @staticmethod
-    def _index_by_slug(
-        discovered_tools: Iterable[DiscoveredTool | VirtualDiscoveredTool],
-    ) -> dict[str, List[DiscoveredTool | VirtualDiscoveredTool]]:
-        index: dict[str, List[DiscoveredTool | VirtualDiscoveredTool]] = {}
+        seen_raw_slugs: set[str] = set()
         for tool in discovered_tools:
-            slug = str(getattr(tool, "slug", "") or "").strip()
-            if not slug:
+            raw_slug = str(getattr(tool, "slug", "") or "").strip()
+            if not raw_slug or raw_slug in seen_raw_slugs:
                 continue
-            index.setdefault(slug, []).append(tool)
-        return index
-
-    @staticmethod
-    def _match_binding(
-        binding: CollectionCapabilityBinding,
-        discovered_index: dict[str, List[DiscoveredTool | VirtualDiscoveredTool]],
-    ) -> Optional[CapabilityCandidate]:
-        for raw_slug in binding.raw_tool_slugs:
-            matches = discovered_index.get(raw_slug) or []
-            for tool in matches:
-                source = str(getattr(tool, "source", "") or "").strip()
-                if binding.source != "any" and source != binding.source:
-                    continue
-                return CapabilityCandidate(
-                    canonical_op_slug=binding.canonical_op_slug,
+            seen_raw_slugs.add(raw_slug)
+            resolved.append(
+                CapabilityCandidate(
+                    canonical_op_slug=raw_slug,
                     raw_tool_slug=raw_slug,
                     scope_kind="collection",
                     discovered_tool=tool,
                 )
-        return None
+            )
+        return resolved
 
 
 class SystemCapabilityResolver:

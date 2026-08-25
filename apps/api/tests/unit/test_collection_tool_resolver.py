@@ -70,7 +70,7 @@ def test_text_search_tool_supported_for_bound_template_collection():
     assert supported is True
 
 
-def test_text_search_tool_rejected_for_template_without_vector_search():
+def test_provider_tool_is_not_filtered_by_collection_vector_flags():
     instance = _instance(config={}, domain="collection.template")
     tool = SimpleNamespace(source="local", slug="collection.template.search")
     bound_collection = SimpleNamespace(id="any", collection_type="template", has_vector_search=False)
@@ -86,7 +86,7 @@ def test_text_search_tool_rejected_for_template_without_vector_search():
         ),
     )
 
-    assert supported is False
+    assert supported is True
 
 
 @pytest.mark.asyncio
@@ -170,6 +170,34 @@ async def test_load_discovered_tools_adds_builtin_collection_info_for_mcp_backed
     )
 
     assert [tool.slug for tool in tools] == ["collection.info"]
+
+
+@pytest.mark.asyncio
+async def test_remote_mcp_provider_tools_are_loaded_without_provider_kind_or_domains(monkeypatch):
+    resolver = CollectionToolResolver(session=SimpleNamespace())
+    instance = SimpleNamespace(id="data-1", is_data=True, config={}, domain="api")
+    provider = SimpleNamespace(
+        id="provider-1",
+        slug="jira-mcp",
+        instance_kind="service",
+        config={},
+        connector_type="mcp",
+        placement="remote",
+    )
+    jira_tool = SimpleNamespace(source="mcp", slug="jira_search_issues", name="Search Jira")
+    resolver._load_provider_tools = AsyncMock(return_value=[jira_tool])
+    monkeypatch.setattr(
+        "app.services.collection_tool_resolver.ToolRegistry.list_all",
+        lambda: [],
+    )
+
+    tools = await resolver.load_discovered_tools_for_collection(
+        collection=SimpleNamespace(id="collection-1", collection_type="api", has_vector_search=False),
+        instance=instance,
+        provider=provider,
+    )
+
+    assert [tool.slug for tool in tools] == ["jira_search_issues"]
 
 
 @pytest.mark.asyncio

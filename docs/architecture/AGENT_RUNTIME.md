@@ -129,13 +129,16 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 При этом:
 - local collection tools публикуются в том же формате descriptor, что и MCP tools,
 - executor уже сам решает, это in-process provider или remote MCP target,
-- planner и runtime оперируют canonical tools, а не raw tool names провайдера;
+- planner и runtime оперируют resolved tool names выбранного provider-а;
 - каждый collection-scoped вызов обязательно передаёт `collection_slug`. Имя
   тулзы не кодирует instance, provider или source;
-- `CollectionRuntimeResolver` — единственный резолвер target-а: для local
+- `CollectionRuntimeResolver` — единственный резолвер target-а, а
+  `CollectionToolResolver` — единственный резолвер tools этого target-а: для local
   collection он выбирает provider по `collection_type`, для SQL/API следует
   цепочке `collection -> data source -> MCP provider`. RBAC применяется после
-  этого резолвинга к каждой коллекции, не к общему provider.
+  этого резолвинга к каждой коллекции, не к общему provider. Tools берутся как
+  active discovered tools выбранного provider-а плюс platform defaults коллекции;
+  список provider-specific имён в коде не используется.
 
 ## Runtime flow
 
@@ -275,8 +278,8 @@ target-specific execution binding.
 - `table.hybrid` — фильтры/поиск + semantic fallback по retrieval fields,
 - `document.semantic` — семантический поиск по документным фрагментам,
 - `remote.sql.catalog` — каталог таблиц/схем и планирование SQL-доступа;
-- `remote.api` — provider-specific API operations за canonical operation
-  descriptor.
+- `remote.api` — operations, которые реально отдал выбранный API provider
+  через discovery, за MCP-compatible descriptor.
 
 Правило:
 - новый тип коллекции должен приводить к явному новому resolver path,

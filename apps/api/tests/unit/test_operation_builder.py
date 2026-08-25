@@ -120,7 +120,7 @@ async def test_template_builtin_is_published_as_collection_operation() -> None:
     operation, _ = built
     assert operation.scope == "collection"
     assert operation.operation == "collection.template.fill"
-    assert operation.operation_slug == "instance.template-data.collection.template.fill"
+    assert operation.operation_slug == "collection.template.fill"
     assert operation.raw_tool_slug == "collection.template.fill"
     assert operation.result_kind == "file"
     assert operation.data_instance_slug == "template-data"

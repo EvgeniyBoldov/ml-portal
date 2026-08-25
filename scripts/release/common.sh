@@ -5,15 +5,48 @@ if [[ -z "${BASH_VERSION:-}" ]]; then
   return 1 2>/dev/null || exit 1
 fi
 
-set -euo pipefail
+set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RELEASE_FILE="${REPO_ROOT}/release.env"
 BASE_DOCKERFILE="${REPO_ROOT}/infra/docker/base/Dockerfile.ml"
 BASE_REQUIREMENTS="${REPO_ROOT}/infra/docker/base/requirements.ml.txt"
+RELEASE_PHASE="startup"
+RELEASE_PHASE_STARTED_AT=$SECONDS
+
+release_log() {
+  printf '[release %s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2
+}
+
+release_phase_start() {
+  RELEASE_PHASE="$1"
+  RELEASE_PHASE_STARTED_AT=$SECONDS
+  release_log "START: ${RELEASE_PHASE}"
+}
+
+release_phase_end() {
+  release_log "DONE: ${RELEASE_PHASE} (duration: $((SECONDS - RELEASE_PHASE_STARTED_AT))s)"
+}
+
+release_error_trap() {
+  local status=$?
+  local source_file="${BASH_SOURCE[1]-${BASH_SOURCE[0]}}"
+  local source_line="${BASH_LINENO[0]-unknown}"
+  release_log "ERROR: phase=${RELEASE_PHASE}, status=${status}, location=${source_file}:${source_line}, command=${BASH_COMMAND}"
+}
+
+release_exit_trap() {
+  local status=$?
+  if test "$status" -ne 0; then
+    release_log "EXIT: release stopped in phase=${RELEASE_PHASE}, status=${status}, elapsed=$((SECONDS - RELEASE_PHASE_STARTED_AT))s"
+  fi
+}
+
+trap release_error_trap ERR
+trap release_exit_trap EXIT
 
 fail() {
-  echo "ERROR: $*" >&2
+  release_log "ERROR: $*"
   exit 1
 }
 

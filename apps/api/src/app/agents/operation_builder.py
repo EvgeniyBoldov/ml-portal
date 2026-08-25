@@ -5,7 +5,6 @@ from uuid import UUID
 
 from app.agents.capability_resolver import CapabilityCandidate
 from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget, ResolvedOperation
-from app.agents.operation_publication import build_runtime_operation_slug
 from app.agents.runtime.prompt_contract import build_prompt_input_schema, summarize_prompt_input_schema
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.tool_resolver import ResolvedTool, ToolResolver
@@ -92,24 +91,9 @@ class OperationBuilder:
         )
         if resolution is None:
             return None
-        publication = resolution.publication
-        if publication is None:
-            logger.info(
-                "operation_builder_skip_unpublished_tool",
-                extra={
-                    "instance_slug": instance.slug,
-                    "instance_domain": runtime_domain,
-                    "raw_slug": raw_operation_name,
-                },
-            )
-            return None
-        operation_name = publication.canonical_op_slug
-
-        is_system_tool = publication.scope_kind == "system"
-        if is_system_tool:
-            operation_slug = operation_name
-        else:
-            operation_slug = build_runtime_operation_slug(instance.slug, operation_name)
+        operation_name = resolution.operation_name
+        is_system_tool = capability.scope_kind == "system"
+        operation_slug = operation_name
         if operation_slug in seen_operation_slugs:
             logger.info(
                 "operation_publication_duplicate_canonical_skipped",

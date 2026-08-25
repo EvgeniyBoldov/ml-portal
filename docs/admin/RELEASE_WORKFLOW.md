@@ -7,8 +7,10 @@
 - Production GitLab is cloned by DevOps. It has `origin` pointing at GitLab and
   a `source` remote pointing at GitHub. It owns the real `docker-compose.prod.yml`,
   `release.env` and `.gitlab-ci.yml` copied from the templates in this repository.
-- The GitLab Runner is installed on the production VM. It deploys only; images
-  are built and pushed from the DevOps workstation.
+- A Docker Registry is running on the production VM and is reachable from both
+  the DevOps workstation and the VM by one DNS name. The GitLab Runner is
+  installed on the production VM. It deploys only; images are built and pushed
+  from the DevOps workstation.
 
 ## Initial production repository setup
 
@@ -21,7 +23,7 @@
 2. Copy `docker-compose.prod.example.yml` to `docker-compose.prod.yml` and
    apply production-only mounts/configuration.
 3. Copy `release.env.example` to `release.env`, set `IMAGE_REPOSITORY` to the
-   internal GitLab Container Registry path, and commit it.
+   internal Docker Registry path, and commit it.
 4. Copy `gitlab-ci.example.yml` to `.gitlab-ci.yml`; set protected CI variables
    `PROD_ENV_FILE` and, for private registry authentication, `REGISTRY_USERNAME`
    and `REGISTRY_PASSWORD`.

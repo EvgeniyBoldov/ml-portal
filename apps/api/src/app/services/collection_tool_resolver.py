@@ -14,10 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agents.registry import ToolRegistry
-from app.agents.operation_publication import (
-    is_operation_allowed_for_collection_type,
-    resolve_publication,
-)
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
 from app.models.collection import Collection
@@ -174,6 +170,14 @@ class CollectionToolResolver:
 
     @staticmethod
     def _is_mcp_provider(provider: ToolInstance) -> bool:
+        # Discovery accepts remote MCP services by connector_type. Resolution
+        # must use the same execution-provider rule; provider_kind is admin
+        # metadata and must not make an already discovered MCP look local.
+        if str(getattr(provider, "placement", "") or "").strip().lower() == "local":
+            return False
+        connector_type = str(getattr(provider, "connector_type", "") or "").strip().lower()
+        if connector_type == "mcp":
+            return True
         return is_mcp_service_instance(provider)
 
     @staticmethod
@@ -192,29 +196,14 @@ class CollectionToolResolver:
         if collection is None:
             return []
 
-        collection_type = str(getattr(collection, "collection_type", "") or "").strip().lower()
-        context_domains = [context.runtime_domain] if context.runtime_domain else None
         tools: List[VirtualDiscoveredTool] = []
         for handler in ToolRegistry.list_all():
+            # Platform defaults are explicit collection capabilities, not an
+            # inferred allow-list for provider tools. collection.info is the
+            # sole default today and is valid for every collection.
+            if str(getattr(handler, "slug", "") or "").strip() != "collection.info":
+                continue
             domains = list(getattr(handler, "domains", None) or [])
-            if context.runtime_domain and context.runtime_domain not in domains:
-                continue
-            publication = resolve_publication(
-                raw_slug=str(getattr(handler, "slug", "") or "").strip(),
-                discovered_domains=domains,
-                context_domains=context_domains,
-            )
-            if publication is None or publication.scope_kind != "collection":
-                continue
-            if not is_operation_allowed_for_collection_type(
-                publication,
-                collection_type=collection_type,
-            ):
-                continue
-            if publication.spec.requires_vector_search and not bool(
-                getattr(collection, "has_vector_search", False)
-            ):
-                continue
             descriptor = handler.to_mcp_descriptor()
             tools.append(
                 VirtualDiscoveredTool(
@@ -244,24 +233,6 @@ class CollectionToolResolver:
         tool: DiscoveredTool | VirtualDiscoveredTool,
         context: CollectionToolResolutionContext,
     ) -> bool:
-        if tool.source != "local":
-            return True
-        publication = resolve_publication(
-            raw_slug=str(tool.slug or "").strip(),
-            discovered_domains=getattr(tool, "domains", None) or [],
-            context_domains=[context.runtime_domain] if context.runtime_domain else None,
-        )
-        if publication is None:
-            return False
-        if publication.scope_kind == "system":
-            return True
-        if not is_operation_allowed_for_collection_type(
-            publication,
-            collection_type=getattr(context.bound_collection, "collection_type", None),
-        ):
-            return False
-        if publication.spec.requires_vector_search and not bool(
-            getattr(context.bound_collection, "has_vector_search", False)
-        ):
-            return False
-        return True
+        # The collection/provider relationship already scopes provider tools.
+        # Do not reclassify them by domains or provider-specific raw names.
+        return bool(str(getattr(tool, "slug", "") or "").strip())

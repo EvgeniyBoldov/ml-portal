@@ -22,9 +22,7 @@ from app.agents.mcp_discovery import parse_discovered_operation
 from app.agents.registry import ToolRegistry
 from app.core.logging import get_logger
 from app.models.discovered_tool import DiscoveredTool
-from app.models.collection import Collection
 from app.models.tool_instance import ToolInstance
-from app.services.collection_linking import context_domain_for_collection
 from app.services.instance_capabilities import is_mcp_service_instance
 from app.services.mcp_jsonrpc_client import mcp_list_tools
 
@@ -352,7 +350,6 @@ class ToolDiscoveryService:
             try:
                 tools = await self._fetch_mcp_tools(provider.url)
                 scanned_provider_ids.append(provider.id)
-                mcp_domains = await self._resolve_mcp_domains(provider)
                 for tool in tools:
                     tool_name = tool.get("name", "")
                     if not tool_name:
@@ -370,7 +367,12 @@ class ToolDiscoveryService:
                         description=discovered.description,
                         source="mcp",
                         provider_instance_id=provider.id,
-                        domains=mcp_domains,
+                        # Discovery is only the provider's raw capability snapshot.
+                        # A collection binding is resolved later from
+                        # collection -> data instance -> provider; copying a
+                        # collection domain onto every provider tool makes the
+                        # snapshot stale and turns a relationship into magic.
+                        domains=[],
                         input_schema=discovered.input_schema,
                         output_schema=discovered.output_schema,
                         now=now,
@@ -440,75 +442,6 @@ class ToolDiscoveryService:
             return True
         # Backward compatibility: legacy tests/fixtures identify MCP service by provider_kind=mcp.
         return is_mcp_service_instance(instance)
-
-    async def _resolve_mcp_domains(self, provider: ToolInstance) -> List[str]:
-        """
-        Determine domains for MCP tools based on linked data instances.
-
-        Priority:
-        1. Explicit config.domains on provider
-        2. Domains from data instances that reference this provider via access_via_instance_id
-        3. Provider's own domain (if not generic "mcp")
-        """
-        config_domains = (provider.config or {}).get("domains")
-        if config_domains and isinstance(config_domains, list):
-            return config_domains
-
-        stmt = (
-            select(ToolInstance)
-            .where(
-                ToolInstance.access_via_instance_id == provider.id,
-                ToolInstance.connector_type == "data",
-                ToolInstance.is_active.is_(True),
-            )
-            .order_by(ToolInstance.slug)
-        )
-        result = await self.session.execute(stmt)
-        linked_instances = list(result.scalars().all())
-        linked_domains: List[str] = []
-        for instance in linked_instances:
-            collection_result = await self.session.execute(
-                select(Collection).where(Collection.data_instance_id == instance.id).limit(1)
-            )
-            bound_collection = collection_result.scalar_one_or_none()
-            collection_domain = context_domain_for_collection(bound_collection)
-            if collection_domain and collection_domain not in linked_domains:
-                linked_domains.append(collection_domain)
-
-            for capability_domain in self._extract_capability_domains(instance.config):
-                if capability_domain not in linked_domains:
-                    linked_domains.append(capability_domain)
-        if linked_domains:
-            return linked_domains
-
-        logger.warning(
-            "mcp_provider_no_linked_data_domains",
-            extra={
-                "provider_slug": provider.slug,
-                "provider_id": str(provider.id),
-                "hint": "Link a data instance to this provider via access_via_instance_id, then rescan.",
-            },
-        )
-        return []
-
-    @staticmethod
-    def _extract_capability_domains(config: Optional[Dict[str, Any]]) -> List[str]:
-        cfg = config or {}
-        domains: List[str] = []
-
-        raw_domains = cfg.get("capability_domains")
-        if isinstance(raw_domains, list):
-            for raw in raw_domains:
-                normalized = str(raw or "").strip()
-                if normalized and normalized not in domains:
-                    domains.append(normalized)
-
-        raw_single = cfg.get("capability_domain")
-        normalized_single = str(raw_single or "").strip()
-        if normalized_single and normalized_single not in domains:
-            domains.append(normalized_single)
-
-        return domains
 
     # ── MCP protocol ───────────────────────────────────────────────────────
 

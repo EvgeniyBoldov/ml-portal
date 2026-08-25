@@ -113,31 +113,33 @@ class ToolResolver:
         runtime_domain: str,
         context_domains: Optional[List[str]] = None,
     ) -> Optional[ResolvedTool]:
-        raw_operation_name = discovered_tool.slug
-        publication = resolve_publication(
-            raw_slug=raw_operation_name,
-            discovered_domains=discovered_tool.domains or [],
-            context_domains=context_domains,
-        )
-        if publication is None:
-            logger.info(
-                "tool_publication_missing_skip",
-                extra={
-                    "instance_slug": instance.slug,
-                    "provider_slug": provider.slug,
-                    "runtime_domain": runtime_domain,
-                    "raw_slug": raw_operation_name,
-                    "discovered_domains": list(discovered_tool.domains or []),
-                },
-            )
+        raw_operation_name = str(discovered_tool.slug or "").strip()
+        if not raw_operation_name:
             return None
-        operation_name = publication.canonical_op_slug
-        title = publication.spec.title
+        is_system = bool(context_domains and "system" in context_domains)
+        # System tools retain their canonical static contract. Collection tools
+        # are the selected provider's capabilities and therefore publish their
+        # MCP name directly; no domain/name mapping participates in selection.
+        publication = (
+            resolve_publication(
+                raw_slug=raw_operation_name,
+                discovered_domains=discovered_tool.domains or [],
+                context_domains=context_domains,
+            )
+            if is_system
+            else None
+        )
+        if is_system and publication is None:
+            return None
+        operation_name = publication.canonical_op_slug if publication else raw_operation_name
+        title = publication.spec.title if publication else _build_title(
+            getattr(discovered_tool, "name", None), raw_operation_name
+        )
         container = ToolPublicationContainerView(
             id=None,
             slug=discovered_tool.slug,
             name=title,
-            domains=list(discovered_tool.domains or []) or [runtime_domain],
+            domains=list(discovered_tool.domains or []),
             current_version_id=None,
             is_virtual=True,
         )
@@ -155,7 +157,7 @@ class ToolResolver:
         description = (
             discovered_operation.description.strip()
             if discovered_operation.description and discovered_operation.description.strip()
-            else publication.spec.description
+            else (publication.spec.description if publication else "")
         )
         return ResolvedTool(
             raw_slug=raw_operation_name,
@@ -165,9 +167,9 @@ class ToolResolver:
             description=description,
             input_schema=discovered_operation.input_schema,
             output_schema=discovered_operation.output_schema,
-            domain=publication.spec.domain,
-            result_kind=publication.spec.result_kind,
-            scope_kind=publication.scope_kind,  # type: ignore[arg-type]
+            domain=publication.spec.domain if publication else None,
+            result_kind=publication.spec.result_kind if publication else None,
+            scope_kind=(publication.scope_kind if publication else "collection"),  # type: ignore[arg-type]
             risk_level=discovered_operation.risk_level,
             side_effects=discovered_operation.side_effects,
             requires_confirmation=discovered_operation.requires_confirmation,

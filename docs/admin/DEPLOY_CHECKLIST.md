@@ -6,7 +6,7 @@
 
 - [ ] Зафиксирован release commit в production GitLab и его `release.env`.
 - [ ] `APP_IMAGE_TAG` и `BASE_IMAGE_TAG` являются immutable-тегами, не `latest`.
-- [ ] `IMAGE_REPOSITORY` указывает на внутренний GitLab Container Registry, не `127.0.0.1`.
+- [ ] `IMAGE_REPOSITORY` указывает на общий внутренний Docker Registry, не `127.0.0.1`.
 - [ ] Все критичные секреты заданы и не `CHANGE_ME`:
   - [ ] `POSTGRES_PASSWORD`
   - [ ] `JWT_SECRET`

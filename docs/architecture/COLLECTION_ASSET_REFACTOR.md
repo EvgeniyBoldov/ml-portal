@@ -65,12 +65,13 @@ Runtime resolves in this order:
 2. effective access and readiness for that collection,
 3. local provider by `collection_type`, or the remote
    `data_instance -> access_via/provider` chain,
-4. one canonical published operation with an internal target-specific binding.
+4. the provider's active discovered operations plus platform collection
+   defaults, projected into runtime operations with an internal target binding.
 
 The public operation contract is provider-agnostic. `collection_id` is an
 internal persistence/runtime identifier and is not exposed to the planner or
 LLM. Behavior is driven by collection type, relational source links and
-capabilities, not by `instance.domain` or provider-qualified tool names.
+provider capabilities, not by `instance.domain` or provider-specific allow-lists.
 
 ## Domain Policy
 
@@ -119,17 +120,14 @@ Tasks:
 
 ### Phase 4
 
-Objective: deprecate domain-coupled operation publication.
-
-Tasks:
-1. replace domain-driven publication mapping with binding/capability-driven mapping,
-2. keep backward compatibility bridge for existing operation slugs.
+Objective: remove domain/provider-name coupling from operation resolution.
 
 Implemented:
-- publication prefers discovered capability domains and canonical operation
-  metadata; instance domain is only transitional fallback metadata;
-- shared providers publish one canonical operation while execution retains
-  collection-specific bindings.
+- active discovered tools are selected from the resolved provider;
+- collection defaults are added by the collection tool resolver;
+- runtime operation names come from the discovered MCP descriptor;
+- execution retains collection-specific target bindings;
+- a new MCP capability does not require a product-code publication rule.
 
 ### Phase 5
 

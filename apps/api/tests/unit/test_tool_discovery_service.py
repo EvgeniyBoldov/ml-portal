@@ -269,47 +269,6 @@ async def test_load_mcp_providers_filters_non_mcp_services():
     assert [provider.slug for provider in providers] == ["gateway-mcp"]
 
 
-@pytest.mark.asyncio
-async def test_resolve_mcp_domains_prefers_collection_fk_runtime_domain():
-    provider = SimpleNamespace(id=uuid4(), config={})
-    collection_id = uuid4()
-    data_collection_instance = SimpleNamespace(
-        id=collection_id,
-        slug="collection-sales",
-        domain="rag",
-        config={},
-    )
-    linked_jira = SimpleNamespace(
-        id=uuid4(),
-        slug="jira-prod",
-        domain="jira",
-        config={
-            "provider_kind": "remote_data",
-            "capability_domains": ["jira"],
-        },
-    )
-    linked_instances_result = MagicMock()
-    linked_instances_result.scalars.return_value.all.return_value = [data_collection_instance, linked_jira]
-    collection_lookup_result = MagicMock()
-    collection_lookup_result.scalar_one_or_none.return_value = SimpleNamespace(collection_type="table")
-    missing_collection_result = MagicMock()
-    missing_collection_result.scalar_one_or_none.return_value = None
-
-    session = MagicMock()
-    session.execute = AsyncMock(
-        side_effect=[
-            linked_instances_result,
-            collection_lookup_result,
-            missing_collection_result,
-        ]
-    )
-    service = ToolDiscoveryService(session=session)
-
-    domains = await service._resolve_mcp_domains(provider)
-
-    assert domains == ["collection.table", "jira"]
-
-
 def test_local_provider_kind_includes_templates():
     assert LocalProviderKind.to_domain("local_templates") == "collection.template"
     assert "local_templates" in LocalProviderKind.known_kinds()

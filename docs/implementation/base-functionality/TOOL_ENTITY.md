@@ -16,29 +16,28 @@ It exists between:
 The tool layer consists of three persisted entities:
 
 1. `DiscoveredTool`
-- raw capability snapshot from `local` registry or `mcp` provider,
+- active raw capability snapshot from one local or `mcp` provider,
 - stores source linkage and call contract,
-- may exist without any published runtime tool.
+- becomes collection-available through the provider bound to that collection.
 
 2. `Tool`
-- stable product container,
-- links a chosen capability family to curated runtime releases,
-- owns human-readable catalog metadata and current active release pointer.
+- optional product/catalog container,
+- links a capability family to optional curated runtime releases,
+- does not gate provider-tool availability.
 
 3. `ToolRelease`
-- semantic/runtime version of the tool,
-- stores safety, execution, routing, and LLM-facing metadata,
-- is the only semantic version entity that runtime should treat as curated source of truth.
+- optional semantic/runtime version of the tool,
+- stores additional safety, execution and LLM-facing metadata,
+- does not act as an allow-list for provider discovery.
 
 ## Resolver Contract
 
 `ToolResolver` is the only place where tool data becomes agent-facing.
 
-It must assemble the prompt/runtime view from:
-- `DiscoveredTool` raw contract,
-- effective `ToolRelease` semantics,
-- sandbox overlays,
-- canonical publication rules.
+It must assemble the prompt/runtime view from the resolved provider snapshot,
+the raw `DiscoveredTool` contract, optional catalog/release metadata and
+sandbox overlays. Collection availability is resolved by the collection tool
+resolver, not by publication rules.
 
 If a field is already present in the raw contract or release semantics, do not duplicate it elsewhere unless the resolver needs to normalize or override it.
 
@@ -51,13 +50,10 @@ Responsible for:
 - source/provider provenance,
 - input/output schema snapshot,
 - source lifecycle (`is_active`, `last_seen_at`),
-- draft candidate state before publication.
+- active/inactive source lifecycle (`is_active`, `last_seen_at`).
 
 Not responsible for:
-- final runtime semantics,
-- planner-facing naming,
-- policy-ready metadata,
-- stable publication identity.
+- optional curated metadata or product identity.
 
 ### `Tool`
 
@@ -90,17 +86,16 @@ Not responsible for:
 
 Canonical chain:
 
-1. `DiscoveredTool` appears after discovery.
-2. Admin may leave it unpublished.
-3. When the capability should become a product/runtime tool, platform creates or links a `Tool`.
-4. `ToolRelease` provides curated semantic/runtime versions for that `Tool`.
-5. Runtime resolves instance-scoped operations from:
-   `DiscoveredTool` contract + `ToolRelease` semantics + instance binding + publication rules.
+1. `DiscoveredTool` appears after provider discovery.
+2. Collection resolver selects active snapshots from the collection's provider.
+3. Runtime builds an operation from the raw contract and collection target.
+4. `Tool`/`ToolRelease` may enrich or govern an already discovered capability,
+   but their existence is not required for availability.
 
 Important rule:
-- not every `DiscoveredTool` must become a `Tool`,
-- unpublished discovered capabilities remain valid draft candidates,
-- sandbox may temporarily publish such draft candidates through resolver overlays.
+- every active provider capability is eligible for its bound collections,
+- optional catalog/release data never replaces provider relationship resolution,
+- sandbox overlays remain limited to registered runtime-safe values.
 
 ## Runtime Rule
 
@@ -108,22 +103,22 @@ Runtime must not assemble semantics from multiple competing persisted sources.
 
 Target rule:
 - raw contract comes from `DiscoveredTool`,
-- curated semantics come from effective `ToolRelease`,
-- operation identity comes from publication rules and canonical operation specs,
-- prompt-facing tool view comes only from `ToolResolver`.
+- optional metadata comes from effective catalog/release data,
+- operation identity comes from the discovered provider tool name and collection
+  target binding,
+- prompt-facing tool view comes from the same resolver used by runtime/admin API.
 
 ## Sandbox Rule
 
 Sandbox does not introduce a special tool domain model.
 
-Sandbox overlays only the effective semantic version:
-- existing `ToolRelease` may be overridden through resolver,
-- unpublished `DiscoveredTool` may be treated as draft candidate and temporarily exposed through resolver,
-- branch snapshot materializes the effective publication state without mutating global admin state.
+Sandbox overlays only explicitly registered runtime-safe values. The branch
+snapshot uses the same provider-first tool resolution as runtime and does not
+create a second publication or discovery model.
 
 ## Non-goals
 
-- no direct agent dependency on raw discovered tool slugs,
+- no direct agent dependency on provider URLs, credentials or storage rows,
 - no semantic duplication across `DiscoveredTool` and `ToolRelease`,
 - no second sandbox-only tool entity,
-- no forced publication of every discovered capability.
+- no manual product-code publication rule for a new MCP capability.

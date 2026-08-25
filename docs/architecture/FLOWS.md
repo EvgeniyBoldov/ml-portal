@@ -38,23 +38,24 @@ Related entity docs:
 - [Operation Entity](DATA_MODEL.md#operation)
 
 Flow:
-1. Discover raw capability as `DiscoveredTool`.
-2. Keep it unpublished or review it as draft candidate.
-3. Link it to a `Tool` publication container when accepted.
-4. Resolve effective semantic/runtime config through `ToolResolver`.
-5. Map it to a canonical `OperationSpec`.
-6. Apply deterministic `PublicationRule`.
-7. Expose one canonical `Operation` with target-specific bindings kept inside
-   runtime.
+1. Discover the provider capability as an active `DiscoveredTool` snapshot.
+2. Resolve the collection's data connector and execution provider.
+3. Select that provider's active discovered tools and add collection defaults.
+4. Normalize each descriptor through `ToolResolver`.
+5. Build an executable `ResolvedOperation` with a collection-specific target
+   binding.
 
 Binding rule:
-- raw provider names never become planner vocabulary,
-- runtime sees only canonical published operations built from raw contract + effective semantic release.
+- provider tool names are the operation names exposed for that collection;
+- provider URLs, credentials and execution bindings never become planner
+  vocabulary;
+- a new MCP capability does not require a product-code publication rule.
 
 Operational note:
-- discovery/rescan refreshes raw source schemas and tool descriptors,
-- discovery alone does not publish anything,
-- sandbox may temporarily publish a discovered draft candidate through branch overlay.
+- discovery/rescan refreshes the provider's raw schemas and tool descriptors;
+- discovery availability is scoped by the collection's provider relationship;
+- sandbox may override runtime-safe fields, but does not create a second tool
+  selection model.
 
 ## 3. Runtime Routing Flow
 
@@ -73,7 +74,7 @@ Flow:
 
 Binding rule:
 - planner works on allowed operations,
-- runtime resolves execution targets, not raw tool slugs.
+- runtime resolves execution targets for the already selected provider tools.
 
 Collection resolution note:
 - `CollectionRuntimeResolver` is the single target resolver;
@@ -109,10 +110,10 @@ Binding rule:
 - sandbox may override only runtime-safe, resolver-registered values,
 - sandbox may not redefine runtime behavior.
 
-Tool publication note:
-- unpublished discovered tools may exist in sandbox as draft runtime nodes,
-- sandbox may override the `published` flag for the branch snapshot,
-- runtime and RBAC should consume only the effective published set from the snapshot, not the raw discovery list.
+Tool resolution note:
+- sandbox and runtime consume the same provider-first tool resolver;
+- sandbox may override registered runtime-safe fields;
+- raw discovery is never queried by frontend code or by a second resolver.
 
 ## 5. MCP Credential Delivery Flow
 
