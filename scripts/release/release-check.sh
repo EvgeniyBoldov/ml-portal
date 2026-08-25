@@ -13,6 +13,10 @@ test "$branch" = "main" || fail "release must run on main, current branch: ${bra
 git -C "$REPO_ROOT" fetch origin main
 git -C "$REPO_ROOT" merge-base --is-ancestor origin/main HEAD || \
   fail "Local main is behind origin/main; run make update-source before release."
+git -C "$REPO_ROOT" remote get-url source >/dev/null || fail "Missing source remote (GitHub source repository)."
+git -C "$REPO_ROOT" fetch source main
+git -C "$REPO_ROOT" merge-base --is-ancestor source/main HEAD || \
+  fail "Local main does not contain source/main; run make update-source before release."
 
 origin_tag="$(release_value_from_ref origin/main APP_IMAGE_TAG)"
 test -n "$origin_tag" || fail "origin/main has no release.env APP_IMAGE_TAG."

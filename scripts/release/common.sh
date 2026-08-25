@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+if [[ -z "${BASH_VERSION:-}" ]]; then
+  echo "This helper is Bash-only; run: make base-hash" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,11 +44,16 @@ load_release_file() {
 }
 
 base_input_sha() {
+  local dockerfile_sha requirements_sha
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$BASE_DOCKERFILE" "$BASE_REQUIREMENTS" | sha256sum | awk '{print "sha256:" $1}'
+    dockerfile_sha="$(sha256sum "$BASE_DOCKERFILE" | awk '{print $1}')"
+    requirements_sha="$(sha256sum "$BASE_REQUIREMENTS" | awk '{print $1}')"
   else
-    shasum -a 256 "$BASE_DOCKERFILE" "$BASE_REQUIREMENTS" | shasum -a 256 | awk '{print "sha256:" $1}'
+    dockerfile_sha="$(shasum -a 256 "$BASE_DOCKERFILE" | awk '{print $1}')"
+    requirements_sha="$(shasum -a 256 "$BASE_REQUIREMENTS" | awk '{print $1}')"
   fi
+  printf 'Dockerfile.ml=%s\nrequirements.ml.txt=%s\n' "$dockerfile_sha" "$requirements_sha" \
+    | (sha256sum 2>/dev/null || shasum -a 256) | awk '{print "sha256:" $1}'
 }
 
 bump_app_patch() {

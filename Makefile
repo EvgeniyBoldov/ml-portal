@@ -10,6 +10,7 @@ COMPOSE_DEV := docker compose -f docker-compose.yml
 
 .PHONY: help env \
 	dev-base dev-up dev-down dev-restart dev-logs dev-ps dev-build dev-build-no-cache dev-migrate dev-beat-up dev-beat-down \
+	base-hash \
 	up down restart logs ps build build-no-cache migrate \
 	test test-api test-backend test-frontend test-unit test-integration \
 	test-runtime-core test-runtime-integration test-runtime-eval test-backend-10-10-gate test-e2e test-e2e-ui \
@@ -28,6 +29,7 @@ help:
 	@echo "    make dev-build           Build local development images"
 	@echo "    make dev-migrate         Apply migrations in the local stack"
 	@echo "    make dev-beat-up         Start the optional local Celery scheduler"
+	@echo "    make base-hash            Calculate the base input hash"
 	@echo ""
 	@echo "  Tests (require make dev-up):"
 	@echo "    make test                Backend + frontend unit and integration tests"
@@ -91,6 +93,9 @@ dev-beat-up:
 
 dev-beat-down:
 	$(COMPOSE_DEV) stop beat
+
+base-hash:
+	@bash -c 'source scripts/release/common.sh; base_input_sha'
 
 up: dev-up
 down: dev-down

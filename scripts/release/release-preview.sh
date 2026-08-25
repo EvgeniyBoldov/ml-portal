@@ -22,6 +22,8 @@ printf '%s\n' \
   "Next app release:    ${next_app_tag}" \
   "Current base:        ${BASE_IMAGE_TAG}" \
   "Next base:           ${next_base_tag}" \
+  "Stored base SHA:      ${BASE_INPUT_SHA}" \
+  "Calculated base SHA:  ${current_base_sha}" \
   "Base inputs:         ${base_state}" \
   "Current DB revision:  ${DB_REVISION}" \
   "Current source SHA:   ${SOURCE_SHA}"

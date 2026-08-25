@@ -44,7 +44,7 @@ db_heads="$(docker run --rm --entrypoint alembic "$api_image" heads | awk '/\(he
 head_count="$(printf '%s\n' "$db_heads" | sed '/^$/d' | wc -l | tr -d ' ')"
 test "$head_count" = "1" || fail "Release requires exactly one Alembic head; found ${head_count}."
 db_revision="$db_heads"
-source_sha="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+source_sha="$(git -C "$REPO_ROOT" rev-parse source/main)"
 
 git -C "$REPO_ROOT" fetch origin main
 test "$(git -C "$REPO_ROOT" rev-parse origin/main)" = "$origin_release_sha" || \
