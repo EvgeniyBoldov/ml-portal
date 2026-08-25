@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/common.sh"
 
-"${script_dir}/release-check.sh"
+bash "${script_dir}/release-check.sh"
 load_release_file
 
 origin_release_sha="$(git -C "$REPO_ROOT" rev-parse origin/main)"
