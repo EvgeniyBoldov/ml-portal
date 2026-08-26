@@ -12,6 +12,28 @@ from app.agents.runtime_graph import (
 )
 
 
+def test_mcp_jsonrpc_error_is_not_converted_to_an_empty_success_result():
+    try:
+        DirectOperationExecutor._mcp_tool_result_or_raise(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "error": {"code": -32000, "message": "Jira MCP request failed"},
+            }
+        )
+        raise AssertionError("Expected JSON-RPC error to fail the tool call")
+    except ValueError as exc:
+        assert str(exc) == "MCP tool call failed (code -32000): Jira MCP request failed"
+
+
+def test_mcp_response_without_result_is_not_converted_to_an_empty_success_result():
+    try:
+        DirectOperationExecutor._mcp_tool_result_or_raise({"jsonrpc": "2.0", "id": 2})
+        raise AssertionError("Expected missing MCP result to fail the tool call")
+    except ValueError as exc:
+        assert str(exc) == "Invalid MCP tools/call response: missing result object"
+
+
 def test_merge_mcp_args_injects_credential_access_context_when_broker_enabled():
     operation_slug = "netbox.get_device"
     target = ProviderExecutionTarget(

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
+import re
 import uuid
 from typing import Any, Dict
 from urllib.parse import quote, urlparse, urlunparse
@@ -14,6 +16,7 @@ from helpers.secret_broker import SecretBrokerClient, extract_credential_access
 
 
 app = FastAPI(title="Atlassian Jira MCP Shim", version="1.0.0")
+logger = logging.getLogger("mcp.atlassian.jira")
 
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() == "true"
 JIRA_CA_BUNDLE = (os.environ.get("JIRA_CA_BUNDLE") or "").strip()
@@ -23,6 +26,18 @@ MAX_RESULTS = int(os.environ.get("JIRA_MCP_MAX_RESULTS", "50"))
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "atlassian-jira-mcp-shim", "version": "1.0.0"}
 SESSIONS: set[str] = set()
+
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)(authorization|token|pat|api[_-]?token|access[_-]?token|api[_-]?key|password|secret)"
+    r"(\s*[\"']?\s*[:=]\s*)(?:[\"'][^\"']*[\"']|(?:bearer|basic)\s+[^\s,;]+|[^\s,;]+)"
+)
+
+
+def _safe_error_message(exc: BaseException) -> str:
+    """Make an operator-useful error safe for container logs."""
+    message = str(exc).replace("\n", " ").replace("\r", " ")
+    redacted = _SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}***", message)
+    return redacted[:500]
 
 
 def _jsonrpc_ok(rpc_id: Any, result: Any) -> dict[str, Any]:
@@ -85,10 +100,17 @@ async def _resolve_runtime_access(arguments: Dict[str, Any]) -> tuple[str, dict[
     access = extract_credential_access(arguments)
     if access:
         resolved = await SecretBrokerClient(timeout_s=BROKER_TIMEOUT_SECONDS).resolve(access)
+        logger.info(
+            "jira_mcp_credentials_resolved source=broker auth_type=%s owner_type=%s credential_id=%s",
+            resolved.auth_type or "unknown",
+            resolved.owner_type or "unknown",
+            resolved.credential_id or "unknown",
+        )
         return _extract_base_url(resolved.payload, arguments), _extract_auth(resolved.payload)
 
     instance_context = arguments.get("instance_context")
     if isinstance(instance_context, dict) and isinstance(instance_context.get("credentials"), dict):
+        logger.warning("jira_mcp_credentials_resolved source=legacy_raw_payload")
         credentials = instance_context["credentials"]
         return _extract_base_url(credentials, arguments), _extract_auth(credentials)
     raise ValueError("No Jira credentials: expected broker credential_access or legacy instance_context.credentials")
@@ -368,5 +390,13 @@ async def mcp_root(
         else:
             return _jsonrpc_err(rpc_id, -32601, f"Unknown tool: {tool_name}")
         return _jsonrpc_ok(rpc_id, _tool_result(data))
-    except (ValueError, httpx.HTTPError):
+    except (ValueError, httpx.HTTPError) as exc:
+        logger.warning(
+            "jira_mcp_request_failed rpc_id=%s method=%s tool=%s error_type=%s error=%s",
+            rpc_id,
+            method,
+            tool_name if method == "tools/call" else None,
+            type(exc).__name__,
+            _safe_error_message(exc),
+        )
         return _jsonrpc_err(rpc_id, -32000, "Jira MCP request failed")

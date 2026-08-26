@@ -44,3 +44,15 @@ def test_jira_tools_are_bounded_and_write_tools_are_not_read_only():
 
 def test_issue_key_is_url_encoded_before_becoming_a_path_segment():
     assert jira_server._issue_path_key("OPS-1/../../admin") == "OPS-1%2F..%2F..%2Fadmin"
+
+
+def test_jira_mcp_error_log_message_redacts_credentials():
+    message = jira_server._safe_error_message(
+        ValueError('Broker failed: token="secret-token" password=secret-password Authorization: Bearer abc123')
+    )
+
+    assert "secret-token" not in message
+    assert "secret-password" not in message
+    assert "abc123" not in message
+    assert "token=***" in message
+    assert "password=***" in message

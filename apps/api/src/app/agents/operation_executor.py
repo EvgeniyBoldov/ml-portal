@@ -179,7 +179,29 @@ class DirectOperationExecutor:
                 f"MCP tool call failed with HTTP {response.status_code} after {attempts} attempts"
             )
         data = _parse_mcp_response_body(response.text)
-        return data.get("result") or {}
+        return self._mcp_tool_result_or_raise(data)
+
+    @staticmethod
+    def _mcp_tool_result_or_raise(response_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a valid MCP tools/call result or surface its JSON-RPC error.
+
+        MCP servers commonly keep HTTP 200 for protocol-level errors.  Treating
+        an absent ``result`` as an empty object turns authentication, broker and
+        provider failures into false successful tool calls.
+        """
+        error = response_payload.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message") or "MCP RPC error")
+            code = error.get("code")
+            suffix = f" (code {code})" if code is not None else ""
+            raise ValueError(f"MCP tool call failed{suffix}: {message}")
+        if error:
+            raise ValueError("MCP tool call failed: MCP RPC error")
+
+        result = response_payload.get("result")
+        if not isinstance(result, dict):
+            raise ValueError("Invalid MCP tools/call response: missing result object")
+        return result
 
     @staticmethod
     def _tool_result_from_payload(payload: Dict[str, Any]) -> ToolResult:
