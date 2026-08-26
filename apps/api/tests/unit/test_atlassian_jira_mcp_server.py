@@ -29,6 +29,10 @@ def test_normalize_base_url_removes_jira_rest_api_suffix():
     assert jira_server._normalize_base_url("https://jira.example/jira/rest/api/3") == "https://jira.example/jira"
 
 
+def test_jira_host_for_logs_excludes_path_and_query():
+    assert jira_server._jira_host("https://jira.internal.example/jira?token=secret") == "jira.internal.example"
+
+
 def test_broker_credential_payload_uses_pat_and_never_needs_container_secret():
     headers = jira_server._extract_auth({"pat": "short-lived-pat"})
     assert headers == {"Authorization": "Bearer short-lived-pat"}

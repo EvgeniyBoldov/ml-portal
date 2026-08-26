@@ -40,6 +40,28 @@ def _safe_error_message(exc: BaseException) -> str:
     return redacted[:500]
 
 
+def _jira_host(base_url: str) -> str:
+    """Return only the destination hostname for diagnostic logs."""
+    return urlparse(base_url).hostname or "unknown"
+
+
+def _auth_scheme(headers: dict[str, str]) -> str:
+    return headers.get("Authorization", "").split(" ", 1)[0].lower() or "none"
+
+
+@app.on_event("startup")
+async def log_startup() -> None:
+    logger.info(
+        "jira_mcp_started verify_ssl=%s ca_bundle_configured=%s jira_timeout_seconds=%s "
+        "broker_timeout_seconds=%s max_results=%s",
+        VERIFY_SSL,
+        bool(JIRA_CA_BUNDLE),
+        REQUEST_TIMEOUT_SECONDS,
+        BROKER_TIMEOUT_SECONDS,
+        MAX_RESULTS,
+    )
+
+
 def _jsonrpc_ok(rpc_id: Any, result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
 
@@ -100,19 +122,30 @@ async def _resolve_runtime_access(arguments: Dict[str, Any]) -> tuple[str, dict[
     access = extract_credential_access(arguments)
     if access:
         resolved = await SecretBrokerClient(timeout_s=BROKER_TIMEOUT_SECONDS).resolve(access)
+        base_url = _extract_base_url(resolved.payload, arguments)
+        auth_headers = _extract_auth(resolved.payload)
         logger.info(
-            "jira_mcp_credentials_resolved source=broker auth_type=%s owner_type=%s credential_id=%s",
+            "jira_mcp_credentials_resolved source=broker auth_type=%s auth_scheme=%s "
+            "owner_type=%s credential_id=%s jira_host=%s",
             resolved.auth_type or "unknown",
+            _auth_scheme(auth_headers),
             resolved.owner_type or "unknown",
             resolved.credential_id or "unknown",
+            _jira_host(base_url),
         )
-        return _extract_base_url(resolved.payload, arguments), _extract_auth(resolved.payload)
+        return base_url, auth_headers
 
     instance_context = arguments.get("instance_context")
     if isinstance(instance_context, dict) and isinstance(instance_context.get("credentials"), dict):
-        logger.warning("jira_mcp_credentials_resolved source=legacy_raw_payload")
         credentials = instance_context["credentials"]
-        return _extract_base_url(credentials, arguments), _extract_auth(credentials)
+        base_url = _extract_base_url(credentials, arguments)
+        auth_headers = _extract_auth(credentials)
+        logger.warning(
+            "jira_mcp_credentials_resolved source=legacy_raw_payload auth_scheme=%s jira_host=%s",
+            _auth_scheme(auth_headers),
+            _jira_host(base_url),
+        )
+        return base_url, auth_headers
     raise ValueError("No Jira credentials: expected broker credential_access or legacy instance_context.credentials")
 
 
@@ -141,18 +174,42 @@ async def _jira_request(
     body: dict[str, Any] | None = None,
 ) -> Any:
     verify: bool | str = JIRA_CA_BUNDLE if JIRA_CA_BUNDLE else VERIFY_SSL
+    jira_host = _jira_host(base_url)
     request_headers = {"Accept": "application/json", **headers}
     if body is not None:
         request_headers["Content-Type"] = "application/json"
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, verify=verify) as client:
-        response = await client.request(
+    logger.info(
+        "jira_mcp_upstream_request_started jira_host=%s method=%s path=%s has_body=%s",
+        jira_host,
+        method,
+        path,
+        body is not None,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, verify=verify) as client:
+            response = await client.request(
+                method,
+                f"{base_url}{path}",
+                headers=request_headers,
+                params=params,
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "jira_mcp_upstream_request_failed jira_host=%s method=%s error_type=%s error=%s",
+            jira_host,
             method,
-            f"{base_url}{path}",
-            headers=request_headers,
-            params=params,
-            json=body,
+            type(exc).__name__,
+            _safe_error_message(exc),
         )
+        raise
     if response.status_code >= 400:
+        logger.warning(
+            "jira_mcp_upstream_response_error jira_host=%s method=%s status_code=%s",
+            jira_host,
+            method,
+            response.status_code,
+        )
         raise ValueError(f"Jira request failed with HTTP {response.status_code}")
     if response.status_code == 204 or not response.content:
         return {"ok": True}
@@ -301,6 +358,7 @@ async def mcp_root(
             session_id = str(uuid.uuid4())
             SESSIONS.add(session_id)
             response.headers["mcp-session-id"] = session_id
+            logger.info("jira_mcp_session_initialized rpc_id=%s", rpc_id)
             return _jsonrpc_ok(
                 rpc_id,
                 {
@@ -314,12 +372,14 @@ async def mcp_root(
                 },
             )
         if not mcp_session_id or mcp_session_id not in SESSIONS:
+            logger.warning("jira_mcp_session_not_initialized rpc_id=%s method=%s", rpc_id, method)
             return _jsonrpc_err(rpc_id, -32002, "Session not initialized")
         if method == "tools/list":
             return _jsonrpc_ok(rpc_id, {"tools": TOOLS})
         if method != "tools/call":
             return _jsonrpc_err(rpc_id, -32601, f"Method not found: {method}")
         tool_name, arguments = params.get("name"), params.get("arguments") or {}
+        logger.info("jira_mcp_tool_call_started rpc_id=%s tool=%s", rpc_id, tool_name)
         base_url, auth_headers = await _resolve_runtime_access(arguments)
         if tool_name == "jira_search_issues":
             jql = str(arguments.get("jql") or "").strip()
