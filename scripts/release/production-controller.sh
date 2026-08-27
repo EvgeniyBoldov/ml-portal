@@ -141,6 +141,12 @@ status() {
     test -f "${STATE_DIR}/last-deploy.env" && cat "${STATE_DIR}/last-deploy.env"
     return
   fi
+  if test ! -x "${release_dir}/scripts/release/deploy.sh"; then
+    echo "ACTIVE_RELEASE=$(basename "$release_dir")"
+    echo "STATUS_ERROR=active release helper is missing: ${release_dir}/scripts/release/deploy.sh"
+    test -f "${STATE_DIR}/last-deploy.env" && cat "${STATE_DIR}/last-deploy.env"
+    return 0
+  fi
   PROD_ENV_FILE="$PROD_ENV_FILE" ML_PORTAL_APP_ROOT="$APP_ROOT" ML_PORTAL_STATE_DIR="$STATE_DIR" \
     bash "$(release_helper "$release_dir")" status
 }

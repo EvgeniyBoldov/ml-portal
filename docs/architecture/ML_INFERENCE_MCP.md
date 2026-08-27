@@ -27,7 +27,7 @@ Input:
 }
 ```
 
-The detailed facade response must include a stable `model_id`, the prediction
+The detailed facade response must include a stable `id`, the prediction
 purpose and applicability, `input_schema`, output semantics, a deployed
 version/alias, quality metadata, and warnings or non-applicability limits.
 Catalog results are paginated and must not expose an unbounded registry dump.
@@ -36,7 +36,7 @@ Example detailed result:
 
 ```json
 {
-  "model_id": "customer-default-risk",
+  "id": "customer-default-risk",
   "display_name": "Customer default risk",
   "description": "Estimates the probability of default within 30 days for active loans.",
   "applicability": {
@@ -53,16 +53,12 @@ Example detailed result:
 ### `model.predict`
 
 Runs one model selected by its stable identifier. `inputs` must conform to the
-schema returned by `model.info`. `version` can pin a deployed version or alias;
-otherwise the facade applies its documented default. `request_id` is optional
-for idempotency and tracing.
+schema returned by `model.info`; the facade selects the deployed version.
 
 ```json
 {
-  "model_id": "customer-default-risk",
-  "version": "production",
-  "inputs": {"loan_id": "loan-123"},
-  "request_id": "optional-caller-trace-id"
+  "model": "customer-default-risk",
+  "input": {"loan_id": "loan-123"}
 }
 ```
 
@@ -70,10 +66,13 @@ The facade response has this minimum shape:
 
 ```json
 {
-  "prediction": {"default_probability": 0.23},
-  "model": {"model_id": "customer-default-risk", "version": "17"},
-  "request_id": "facade-trace-id",
-  "warnings": []
+  "id": "resp_abc123",
+  "object": "response",
+  "created_at": 1787750100,
+  "status": "completed",
+  "model": "customer-default-risk",
+  "model_version": "17",
+  "output": [{"type": "prediction", "content": {"prediction": 1}}]
 }
 ```
 
@@ -87,7 +86,7 @@ The instance URL identifies the facade base URL. The shim calls:
 
 - `GET /v1/models?limit=<n>&cursor=<opaque>` for the catalog;
 - `GET /v1/models/{model_id}` for a detailed card;
-- `POST /v1/predict` with the `model.predict` payload.
+- `POST /v1/responses` with `{"model": ..., "input": ...}`.
 
 The paths are configurable using `ML_INFERENCE_MODELS_PATH` and
 `ML_INFERENCE_PREDICT_PATH`. The facade returns JSON only. Its own HTTP status

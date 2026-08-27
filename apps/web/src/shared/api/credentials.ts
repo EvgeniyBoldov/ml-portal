@@ -25,6 +25,20 @@ export interface CredentialCreate {
   owner_platform?: boolean;
 }
 
+export interface ProfileCredentialCreate {
+  instance_id: string;
+  auth_type: string;
+  payload: Record<string, string>;
+}
+
+export interface CredentialInstance {
+  id: string;
+  slug: string;
+  name: string;
+  connector_type: string;
+  provider_kind?: string | null;
+}
+
 export interface CredentialUpdate {
   auth_type?: string;
   payload?: Record<string, any>;
@@ -47,6 +61,17 @@ export const credentialsApi = {
   async listProfile(level: 'user' | 'tenant' = 'user'): Promise<Credential[]> {
     const rows = await apiRequest<Array<Credential & { tool_instance_id?: string }>>(`/profile/credentials?level=${level}`);
     return rows.map((row) => ({ ...row, instance_id: row.instance_id || row.tool_instance_id || '' }));
+  },
+
+  async listProfileInstances(): Promise<CredentialInstance[]> {
+    return apiRequest<CredentialInstance[]>('/profile/credential-instances');
+  },
+
+  async createProfile(data: ProfileCredentialCreate): Promise<Credential> {
+    return apiRequest('/profile/credentials', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   },
   async list(params: CredentialListParams = {}): Promise<Credential[]> {
     const sp = new URLSearchParams();

@@ -124,6 +124,7 @@ export const qk = {
     all: () => ['profile'] as const,
     facts: () => ['profile', 'facts'] as const,
     credentials: (level: 'user' | 'tenant') => ['profile', 'credentials', level] as const,
+    credentialInstances: () => ['profile', 'credential-instances'] as const,
   },
   rbac: {
     all: () => ['rbac'] as const,

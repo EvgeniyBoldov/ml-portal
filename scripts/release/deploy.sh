@@ -76,6 +76,31 @@ load_release_manifest() {
   load_release_file
 }
 
+host_env_value() {
+  local key="$1"
+  awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); exit }' "$PROD_ENV_FILE"
+}
+
+validate_host_mounts() {
+  local nginx_dir ssl_dir models_dir
+  nginx_dir="$(host_env_value NGINX_CONF_DIR)"
+  ssl_dir="$(host_env_value SSL_CERT_DIR)"
+  models_dir="$(host_env_value MODELS_ROOT)"
+
+  test -n "$nginx_dir" || fail "NGINX_CONF_DIR is required in $PROD_ENV_FILE"
+  test "$nginx_dir" = /* || fail "NGINX_CONF_DIR must be an absolute host path"
+  test -f "$nginx_dir/prod.conf" || fail "Missing nginx config: $nginx_dir/prod.conf"
+  test -f "$nginx_dir/files.conf" || fail "Missing nginx config: $nginx_dir/files.conf"
+
+  test -n "$ssl_dir" || fail "SSL_CERT_DIR is required in $PROD_ENV_FILE"
+  test "$ssl_dir" = /* || fail "SSL_CERT_DIR must be an absolute host path"
+  test -d "$ssl_dir" || fail "Missing TLS directory: $ssl_dir"
+
+  test -n "$models_dir" || fail "MODELS_ROOT is required in $PROD_ENV_FILE"
+  test "$models_dir" = /* || fail "MODELS_ROOT must be an absolute host path"
+  test -d "$models_dir" || fail "Missing models directory: $models_dir"
+}
+
 compose() {
   docker compose \
     --project-name "$COMPOSE_PROJECT" \
@@ -105,6 +130,7 @@ validate_release_bundle() {
   RELEASE_DIR="$release_dir"
   load_release_manifest "$release_dir"
   export PROD_ENV_FILE
+  validate_host_mounts
   release_phase_start "validate release $(release_id_from_dir "$release_dir")"
   compose config --quiet
   require_expected_services

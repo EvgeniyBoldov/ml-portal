@@ -60,18 +60,27 @@ class ApiTokenCreatedResponse(ApiTokenResponse):
 
 
 class CredentialCreate(BaseModel):
-    tool_instance_id: str
+    instance_id: UUID
     auth_type: str = "token"
-    encrypted_payload: dict
+    payload: dict
 
 
 class CredentialResponse(BaseModel):
     id: str
-    tool_instance_id: str
-    tool_name: Optional[str] = None
+    instance_id: str
     auth_type: str
     is_active: bool
     created_at: datetime
+
+
+class CredentialInstanceResponse(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    connector_type: str
+
+    class Config:
+        from_attributes = True
 
 
 class UserFactResponse(BaseModel):
@@ -421,15 +430,25 @@ async def list_user_credentials(level: str = "user", current_user: UserCtx = Dep
             CredentialResponse(
                 id=str(cred.id),
                 instance_id=str(cred.instance_id),
-                owner_user_id=str(cred.owner_user_id) if cred.owner_user_id else None,
-                owner_tenant_id=str(cred.owner_tenant_id) if cred.owner_tenant_id else None,
-                owner_platform=cred.owner_platform,
                 auth_type=cred.auth_type,
                 is_active=cred.is_active,
                 created_at=cred.created_at,
             )
             for cred, instance in rows
         ]
+
+
+@router.get("/credential-instances", response_model=List[CredentialInstanceResponse])
+async def list_credential_instances(current_user: UserCtx = Depends(get_current_user)):
+    """List sanitized active remote sources that can receive a user credential."""
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(ToolInstance)
+            .where(ToolInstance.is_active.is_(True), ToolInstance.placement == "remote")
+            .order_by(ToolInstance.name.asc())
+        )
+        return list(result.scalars().all())
 
 
 @router.post("/credentials", response_model=CredentialResponse, status_code=status.HTTP_201_CREATED)
@@ -444,19 +463,23 @@ async def create_user_credential(
     async with session_factory() as session:
         # Verify tool instance exists and is active
         result = await session.execute(
-            select(ToolInstance).where(ToolInstance.id == UUID(data.tool_instance_id))
+            select(ToolInstance).where(
+                ToolInstance.id == data.instance_id,
+                ToolInstance.is_active.is_(True),
+                ToolInstance.placement == "remote",
+            )
         )
         instance = result.scalar_one_or_none()
         if not instance:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Tool instance not found"
+                detail="Active remote tool instance not found"
             )
         
-        encrypted = crypto.encrypt(data.encrypted_payload)
+        encrypted = crypto.encrypt(data.payload)
         
         credential = Credential(
-            instance_id=UUID(data.tool_instance_id),
+            instance_id=data.instance_id,
             owner_user_id=UUID(current_user.id),
             owner_platform=False,
             auth_type=data.auth_type,
@@ -470,9 +493,6 @@ async def create_user_credential(
         return CredentialResponse(
             id=str(credential.id),
             instance_id=str(credential.instance_id),
-            owner_user_id=str(credential.owner_user_id),
-            owner_tenant_id=None,
-            owner_platform=False,
             auth_type=credential.auth_type,
             is_active=credential.is_active,
             created_at=credential.created_at,

@@ -51,3 +51,34 @@ def test_mcp_rejects_oversized_facade_results():
             ml_server._assert_bounded({"prediction": "too large"})
     finally:
         ml_server.MAX_RESPONSE_BYTES = original
+
+
+def test_facade_contract_uses_openai_style_model_and_response_shapes():
+    catalog = {"object": "list", "data": [{"id": "credit-scoring", "object": "model"}]}
+    card = {
+        "id": "credit-scoring",
+        "object": "model",
+        "input_schema": {},
+        "output_schema": {},
+        "deployment": {"version": "18", "status": "active"},
+    }
+    response = {
+        "id": "resp_abc123",
+        "object": "response",
+        "created_at": 1787750100,
+        "status": "completed",
+        "model": "credit-scoring",
+        "model_version": "18",
+        "output": [{"type": "prediction", "content": {"prediction": 1}}],
+    }
+
+    assert ml_server._validate_info_response(catalog, model_id=None) == catalog
+    assert ml_server._validate_info_response(card, model_id="credit-scoring") == card
+    assert ml_server._validate_predict_response(response) == response
+
+
+def test_facade_contract_rejects_legacy_prediction_shape():
+    with pytest.raises(ValueError, match="invalid prediction response"):
+        ml_server._validate_predict_response(
+            {"prediction": 1, "model": {"model_id": "credit-scoring", "version": "18"}}
+        )

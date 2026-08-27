@@ -310,10 +310,25 @@ services:
       - "${NGINX_PORT_HTTPS:-443}:443"
     volumes:
       # Nginx configs — maintained on the server, not inside the image
-      - ${NGINX_CONF_DIR:-./infra/nginx}/prod.conf:/etc/nginx/conf.d/default.conf:ro
-      - ${NGINX_CONF_DIR:-./infra/nginx}/files.conf:/etc/nginx/conf.d/files.conf:ro
+      - type: bind
+        source: ${NGINX_CONF_DIR:?NGINX_CONF_DIR is required}/prod.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NGINX_CONF_DIR:?NGINX_CONF_DIR is required}/files.conf
+        target: /etc/nginx/conf.d/files.conf
+        read_only: true
+        bind:
+          create_host_path: false
       # TLS certificates — managed externally (certbot, vault, etc.)
-      - ${SSL_CERT_DIR:-./infra/ssl}:/etc/ssl/certs:ro
+      - type: bind
+        source: ${SSL_CERT_DIR:?SSL_CERT_DIR is required}
+        target: /etc/ssl/certs
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       api:
         condition: service_healthy

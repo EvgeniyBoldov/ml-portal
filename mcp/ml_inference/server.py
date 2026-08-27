@@ -21,7 +21,7 @@ BROKER_TIMEOUT_SECONDS = int(os.environ.get("MCP_SECRET_BROKER_TIMEOUT_SECONDS",
 MAX_MODELS_PER_PAGE = int(os.environ.get("ML_INFERENCE_MAX_MODELS_PER_PAGE", "100"))
 MAX_RESPONSE_BYTES = int(os.environ.get("ML_INFERENCE_MAX_RESPONSE_BYTES", "262144"))
 MODELS_PATH = os.environ.get("ML_INFERENCE_MODELS_PATH", "/v1/models")
-PREDICT_PATH = os.environ.get("ML_INFERENCE_PREDICT_PATH", "/v1/predict")
+PREDICT_PATH = os.environ.get("ML_INFERENCE_PREDICT_PATH", "/v1/responses")
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "ml-inference-mcp-shim", "version": "1.0.0"}
 SESSIONS: set[str] = set()
@@ -116,15 +116,21 @@ def _validate_info_response(data: Any, *, model_id: str | None) -> dict[str, Any
     if not isinstance(data, dict):
         raise ValueError("ML inference facade returned an invalid model info response")
     if model_id:
-        if not isinstance(data.get("model_id"), str) or not isinstance(data.get("input_schema"), dict):
+        if not isinstance(data.get("id"), str) or not isinstance(data.get("input_schema"), dict):
             raise ValueError("ML inference facade returned an invalid detailed model card")
-    elif not isinstance(data.get("models"), list):
+    elif data.get("object") != "list" or not isinstance(data.get("data"), list):
         raise ValueError("ML inference facade returned an invalid model catalog")
     return data
 
 
 def _validate_predict_response(data: Any) -> dict[str, Any]:
-    if not isinstance(data, dict) or "prediction" not in data or not isinstance(data.get("model"), dict):
+    if (
+        not isinstance(data, dict)
+        or data.get("object") != "response"
+        or not isinstance(data.get("id"), str)
+        or data.get("status") != "completed"
+        or not isinstance(data.get("output"), list)
+    ):
         raise ValueError("ML inference facade returned an invalid prediction response")
     return data
 
@@ -139,9 +145,7 @@ async def _facade_request(
     body: dict[str, Any] | None = None,
 ) -> Any:
     verify: bool | str = ML_INFERENCE_CA_BUNDLE if ML_INFERENCE_CA_BUNDLE else VERIFY_SSL
-    headers = {"Accept": "application/json", **auth_headers}
-    if body is not None:
-        headers["Content-Type"] = "application/json"
+    headers = {"Accept": "application/json", "Content-Type": "application/json", **auth_headers}
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, verify=verify) as client:
         response = await client.request(method, f"{base_url}{path}", headers=headers, params=params, json=body)
     if response.status_code >= 400:
@@ -178,8 +182,8 @@ TOOLS = [
         "outputSchema": {
             "type": "object",
             "oneOf": [
-                {"required": ["models"]},
-                {"required": ["model_id", "input_schema", "output_schema", "deployment", "quality"]},
+                {"required": ["object", "data"]},
+                {"required": ["id", "object", "input_schema", "output_schema", "deployment"]},
             ],
         },
         "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
@@ -194,24 +198,21 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "model_id": {"type": "string", "description": "Stable identifier returned by model.info."},
-                "version": {"type": "string", "description": "Optional deployed version or alias such as production."},
                 "inputs": {"type": "object", "description": "Model input that conforms to the input_schema returned by model.info."},
-                "request_id": {"type": "string", "description": "Optional caller-provided idempotency and trace identifier."},
             },
             "required": ["model_id", "inputs"],
         },
         "outputSchema": {
             "type": "object",
-            "required": ["prediction", "model", "request_id", "warnings"],
+            "required": ["id", "object", "created_at", "status", "model", "model_version", "output"],
             "properties": {
-                "prediction": {},
-                "model": {
-                    "type": "object",
-                    "required": ["model_id", "version"],
-                    "properties": {"model_id": {"type": "string"}, "version": {"type": "string"}},
-                },
-                "request_id": {"type": "string"},
-                "warnings": {"type": "array", "items": {"type": "string"}},
+                "id": {"type": "string"},
+                "object": {"const": "response"},
+                "created_at": {"type": "number"},
+                "status": {"type": "string"},
+                "model": {"type": "string"},
+                "model_version": {"type": "string"},
+                "output": {"type": "array"},
             },
         },
         "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False},
@@ -276,11 +277,7 @@ async def mcp_root(
                 raise ValueError("model_id is required")
             if not isinstance(inputs, dict):
                 raise ValueError("inputs must be an object")
-            body: dict[str, Any] = {"model_id": model_id, "inputs": inputs}
-            for key in ("version", "request_id"):
-                value = arguments.get(key)
-                if isinstance(value, str) and value.strip():
-                    body[key] = value.strip()
+            body: dict[str, Any] = {"model": model_id, "input": inputs}
             data = _validate_predict_response(await _facade_request(
                 base_url=base_url, auth_headers=auth_headers, method="POST", path=PREDICT_PATH, body=body
             ))
