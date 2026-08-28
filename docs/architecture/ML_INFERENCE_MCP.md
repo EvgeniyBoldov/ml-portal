@@ -93,6 +93,10 @@ The paths are configurable using `ML_INFERENCE_MODELS_PATH` and
 codes are authoritative for validation, authorization, availability, and
 model-level errors.
 
+For schema validation failures, the facade error fields (`message`, `type`,
+`param`, and `code`) are the source of truth; the shim must not add secrets,
+request payloads, or provider internals to the MCP result.
+
 ## Instance and credentials
 
 Create an ML inference MCP tool instance whose data-instance URL is the facade
