@@ -1,6 +1,6 @@
 # Copy to .gitlab-ci.yml in the production GitLab repository.
-# The protected shell runner has no Docker group membership. It may invoke only
-# the root-owned /usr/local/sbin/ml-portal-deploy controller through sudo.
+# The runner invokes only the root-owned /usr/local/sbin/ml-portal-deploy
+# controller directly and must run as root because the image has no sudo.
 
 stages:
   - validate
@@ -22,8 +22,6 @@ validate-production-release:
 
 deploy-production:
   stage: deploy
-  tags:
-    - production
   resource_group: production
   environment:
     name: production
@@ -43,9 +41,9 @@ deploy-production:
     - test -x /usr/local/sbin/ml-portal-deploy
   script:
     # Do not add git pull here. A retry must deploy this exact commit state.
-    - sudo --non-interactive /usr/local/sbin/ml-portal-deploy deploy --source "$CI_PROJECT_DIR" --release "$CI_COMMIT_SHA"
+    - /usr/local/sbin/ml-portal-deploy deploy --source "$CI_PROJECT_DIR" --release "$CI_COMMIT_SHA"
   after_script:
-    - sudo --non-interactive /usr/local/sbin/ml-portal-deploy status > deployment-status.env || true
+    - /usr/local/sbin/ml-portal-deploy status > deployment-status.env || true
   artifacts:
     when: always
     expire_in: 90 days
@@ -54,8 +52,6 @@ deploy-production:
 
 rollback-production:
   stage: deploy
-  tags:
-    - production
   resource_group: production
   environment:
     name: production
@@ -67,9 +63,9 @@ rollback-production:
   allow_failure: false
   manual_confirmation: "Restore the previous application release? Database migrations are not rolled back."
   script:
-    - sudo --non-interactive /usr/local/sbin/ml-portal-deploy rollback
+    - /usr/local/sbin/ml-portal-deploy rollback
   after_script:
-    - sudo --non-interactive /usr/local/sbin/ml-portal-deploy status > deployment-status.env || true
+    - /usr/local/sbin/ml-portal-deploy status > deployment-status.env || true
   artifacts:
     when: always
     expire_in: 90 days
