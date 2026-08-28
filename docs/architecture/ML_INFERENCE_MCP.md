@@ -1,8 +1,8 @@
 # ML inference MCP contract
 
-`ml-inference-mcp-shim` makes registered ML prediction capabilities available
-to the Agent Runtime. It is an adapter to the ML team's inference facade, not a
-replacement for MLflow, Airflow, model monitoring, or model deployment.
+`ml-inference-mcp-shim` exposes registered ML prediction capabilities to the
+Agent Runtime. It translates the MCP tool contract into calls to the ML team's
+inference facade; it does not replace MLflow, Airflow, model monitoring, or deployment.
 
 The ML engineer owns training, deployment, quality monitoring, model
 applicability, and the metadata exposed by the facade. The agent uses that
@@ -105,3 +105,7 @@ no bearer token. Raw credentials are never returned by either tool.
 The MCP adapter limits catalog page size and JSON response size. These limits,
 timeouts, TLS verification and endpoint paths are deployment configuration,
 not model-specific agent arguments.
+
+User credentials are added through the personal account and are bound to the
+selected active remote source; the MCP adapter receives them only through the
+broker flow and never exposes the stored secret in tool output.
