@@ -65,6 +65,8 @@ class RuntimeProgressStreamer:
                 return "Формирую план выполнения"
             if mode == "replan" or iteration_type == "replan":
                 return "Перепланирую выполнение"
+            if mode == "checkpoint" or iteration_type == "checkpoint":
+                return "Определяю следующие шаги"
             if mode == "resume" or iteration_type == "execution":
                 return "Выполняю план"
             return "Планирую выполнение"

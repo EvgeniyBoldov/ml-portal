@@ -15,7 +15,7 @@ from app.schemas.tool_instances import (
     CredentialUpdate,
     CredentialResponse,
 )
-from app.schemas.credentials import CredentialSummaryResponse
+from app.schemas.credentials import CredentialDeduplicationResponse, CredentialSummaryResponse
 
 router = APIRouter(tags=["credentials"])
 logger = get_logger(__name__)
@@ -113,6 +113,22 @@ async def list_credentials(
     for cred in creds:
         response.append(await _to_credential_response(service, cred.id))
     return response
+
+
+@router.post("/deduplicate-active", response_model=CredentialDeduplicationResponse)
+async def deduplicate_active_credentials(
+    instance_id: Optional[UUID] = Query(None, description="Restrict cleanup to one tool instance"),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Keep the newest active credential per instance/owner scope."""
+    report = await CredentialService(db).deduplicate_active_credentials(instance_id=instance_id)
+    await db.commit()
+    return CredentialDeduplicationResponse(
+        instance_id=report.instance_id,
+        groups_deduplicated=report.groups_deduplicated,
+        deactivated_credential_ids=report.deactivated_credential_ids,
+    )
 
 
 @router.post("", response_model=CredentialResponse, status_code=status.HTTP_201_CREATED)

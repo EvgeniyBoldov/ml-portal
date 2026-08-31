@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Dict, Optional, Protocol
 
 from app.runtime.orchestrator_contracts import (
+    AgentExecutionResult,
     AgentTaskResult,
+    PlanNodeKind,
     PlanRequest,
     TaskConfirmationRequired,
     TaskExecutionError,
@@ -15,6 +17,7 @@ from app.runtime.orchestrator_contracts import (
     TaskSuccessAction,
 )
 from app.runtime.plan_store import SqlPlanStore
+from app.runtime.task_result_reducer import TaskAttemptResultReducer
 from uuid import UUID, uuid4
 from app.models.runtime_observability import RuntimePlannerInvocation
 from app.runtime.events import RuntimeEvent, RuntimeEventType
@@ -36,7 +39,7 @@ class Planner(Protocol):
 
 
 class TaskExecutor(Protocol):
-    async def execute_task(self, *, request: TaskRequest) -> AgentTaskResult: ...
+    async def execute_attempt(self, *, request: TaskRequest) -> AgentExecutionResult: ...
 
 
 class OrchestratorEvent(dict):
@@ -100,6 +103,7 @@ class GraphOrchestrator:
                  logging_level: str = "brief") -> None:
         self.store, self.planner, self.executor = store, planner, executor
         self.max_attempts = max(1, max_attempts)
+        self.task_result_reducer = TaskAttemptResultReducer()
         self.retry_delay_seconds = max(1, retry_delay_seconds)
         self.event_sink = event_sink
         self.budget_service = budget_service
@@ -206,13 +210,19 @@ class GraphOrchestrator:
                 payload["outcome"] = outcome
             return OrchestratorEvent(**payload)
 
-        async def revise(*, reason: str, last_failure: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        async def revise(
+            *,
+            reason: str,
+            last_failure: Optional[Dict[str, Any]] = None,
+            checkpoint_task: Optional[Any] = None,
+        ) -> Optional[str]:
             nonlocal iteration_number, active_iteration_id, active_iteration_type, active_step_number, iteration_open
             current = await self.store.snapshot(plan_id)
+            revision_mode = "checkpoint" if checkpoint_task is not None else "replan"
             iteration_number += 1
             iteration_entity_id = make_iteration_id(str(root_run_id), iteration_number)
             active_iteration_id = iteration_entity_id
-            active_iteration_type = "replan"
+            active_iteration_type = revision_mode
             active_step_number = 2
             iteration_open = True
             planner_step_id = make_step_id(iteration_entity_id, 1, "replan")
@@ -221,7 +231,7 @@ class GraphOrchestrator:
             checkpoint_id = make_checkpoint_id(str(root_run_id), "planner", str(invocation_id))
             await observe("orchestrator_checkpoint_started", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                           parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"kind": "planner", "mode": "replan", "reason": reason, "revision": current["revision"]}, trigger=reason)
+                          payload={"kind": "planner", "mode": revision_mode, "reason": reason, "revision": current["revision"]}, trigger=reason)
             self.store.session.add(RuntimePlannerInvocation(
                 id=invocation_id, run_id=root_run_id, orchestrator_id=orchestrator_id,
                 plan_id=plan_id, trigger=reason, status="running", revision_before=current["revision"],
@@ -229,11 +239,20 @@ class GraphOrchestrator:
             ))
             await self.store.session.flush()
             await observe("planner_invocation_started", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id, payload={"trigger": reason, "revision": current["revision"]}, trigger=reason)
-            await observe("planner_iteration_start", entity_type="planner_iteration", entity_id=iteration_entity_id, parent_type="orchestrator", parent_id=orchestrator_id, payload={"iteration": iteration_number, "iteration_number": iteration_number, "iteration_type": "replan", "mode": "replan"}, trigger=reason)
-            await observe("step_start", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "kind": "plan", "title": "Перепланировать", "objective": reason}, trigger=reason)
+            await observe("planner_iteration_start", entity_type="planner_iteration", entity_id=iteration_entity_id, parent_type="orchestrator", parent_id=orchestrator_id, payload={"iteration": iteration_number, "iteration_number": iteration_number, "iteration_type": revision_mode, "mode": revision_mode}, trigger=reason)
+            await observe("step_start", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "kind": "planner_checkpoint" if checkpoint_task is not None else "plan", "title": checkpoint_task.intent if checkpoint_task is not None else "Перепланировать", "objective": checkpoint_task.instructions if checkpoint_task is not None else reason, "task_id": checkpoint_task.task_id if checkpoint_task is not None else None}, trigger=reason)
             await observe("agent_start", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "executor_type": "planner", "executor_name": "Планер", "task_title": reason}, trigger=reason)
             await observe("rbac_snapshot", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"rbac": planner_rbac_audit}, trigger=reason)
             try:
+                checkpoint = None
+                if checkpoint_task is not None:
+                    checkpoint_task_data = current.get("tasks", {}).get(checkpoint_task.task_id, {})
+                    checkpoint = {
+                        "task_id": checkpoint_task.task_id,
+                        "intent": checkpoint_task.intent,
+                        "instructions": checkpoint_task.instructions,
+                        "depends_on": list(checkpoint_task_data.get("depends_on") or []),
+                    }
                 patch = await self.planner.plan(request=PlanRequest(
                     goal=goal,
                     available_agents=available_agents,
@@ -253,16 +272,28 @@ class GraphOrchestrator:
                     run_id=root_run_id,
                     plan_id=plan_id,
                     trace_parent_id=checkpoint_id,
+                    checkpoint=checkpoint,
                 ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
                 await observe("planner_decision", entity_type="planner_iteration", entity_id=iteration_entity_id,
                               parent_type="orchestrator", parent_id=orchestrator_id,
-                              payload={"mode": "replan", "decision": patch.decision.value,
+                              payload={"mode": revision_mode, "decision": patch.decision.value,
                                        "revision_before": current["revision"], "task_count": len(patch.tasks),
                                        "remove_task_count": len(patch.remove_task_ids)}, trigger=reason)
                 decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason=reason) if self.budget_service else None
                 if decision is not None and not decision.allowed:
                     raise RuntimeError("plan revision budget exceeded")
-                updated = await self.store.apply_patch(plan_id, patch, reason=reason, planner_invocation_id=str(invocation_id))
+                if checkpoint_task is not None:
+                    await self.store.complete_planner_checkpoint(
+                        plan_id,
+                        checkpoint_task.task_id,
+                        patch,
+                        reason=reason,
+                        planner_invocation_id=str(invocation_id),
+                    )
+                    updated_revision = (await self.store.snapshot(plan_id))["revision"]
+                else:
+                    updated = await self.store.apply_patch(plan_id, patch, reason=reason, planner_invocation_id=str(invocation_id))
+                    updated_revision = updated.revision
             except Exception as exc:
                 failure = {"code": type(exc).__name__, "message": str(exc), "trigger": reason}
                 invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
@@ -280,7 +311,7 @@ class GraphOrchestrator:
                               payload=terminal_error, trigger=reason)
                 await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                               parent_type="orchestrator", parent_id=orchestrator_id,
-                              payload={"kind": "planner", "mode": "replan", "status": "failed", "reason": str(exc)}, trigger=reason)
+                              payload={"kind": "planner", "mode": revision_mode, "status": "failed", "reason": str(exc)}, trigger=reason)
                 await observe("agent_end", entity_type="agent_execution", entity_id=planner_executor_id,
                               parent_type="step", parent_id=planner_step_id,
                               payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "status": "failed"}, trigger=reason)
@@ -290,18 +321,18 @@ class GraphOrchestrator:
                 return str(exc)
             invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
             if invocation:
-                invocation.status, invocation.revision_after, invocation.finished_at = "completed", updated.revision, datetime.now(timezone.utc)
+                invocation.status, invocation.revision_after, invocation.finished_at = "completed", updated_revision, datetime.now(timezone.utc)
             await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"status": "completed", "revision_before": current["revision"], "revision_after": updated.revision}, trigger=reason)
+                          payload={"status": "completed", "revision_before": current["revision"], "revision_after": updated_revision}, trigger=reason)
             await observe("plan_patch_applied", entity_type="plan", entity_id=str(plan_id), parent_type="agent_execution", parent_id=planner_executor_id,
-                          payload={"mode": "replan", "revision_before": current["revision"], "revision_after": updated.revision,
+                          payload={"mode": revision_mode, "revision_before": current["revision"], "revision_after": updated_revision,
                                    "decision": patch.decision.value, "patch": patch.model_dump(mode="json")}, trigger=reason)
             if patch.decision.value == "ask_user":
                 await observe("waiting_input", entity_type="interaction", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_entity_id,
                               payload={"question": patch.question, "interaction_kind": "clarify"}, trigger=reason)
             await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                           parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"kind": "planner", "mode": "replan", "status": "completed", "revision": updated.revision}, trigger=reason)
+                          payload={"kind": "planner", "mode": revision_mode, "status": "completed", "revision": updated_revision}, trigger=reason)
             await observe("agent_end", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "status": "completed"}, trigger=reason)
             await observe("step_end", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "status": "completed", "outcome": "success"}, trigger=reason)
             return None
@@ -511,16 +542,70 @@ class GraphOrchestrator:
             if active_iteration_id is None:
                 raise RuntimeError("task execution requires an active planner iteration")
             task_id = task.task_id
+            if (getattr(task, "kind", None) or PlanNodeKind.AGENT.value) == PlanNodeKind.PLANNER.value:
+                await observe(
+                    "task_started",
+                    entity_type="task",
+                    entity_id=task_id,
+                    parent_type="plan",
+                    parent_id=str(plan_id),
+                    payload={"task_id": task_id, "kind": PlanNodeKind.PLANNER.value, "intent": task.intent},
+                    trigger="planner_checkpoint",
+                )
+                yield OrchestratorEvent(
+                    type="task_started",
+                    entity_type="task",
+                    entity_id=task_id,
+                    parent_entity_type="plan",
+                    parent_entity_id=str(plan_id),
+                    plan_id=str(plan_id),
+                    task_id=task_id,
+                    intent=task.intent,
+                    kind=PlanNodeKind.PLANNER.value,
+                )
+                closed = close_active_iteration(status="completed", outcome="planner_checkpoint")
+                if closed is not None:
+                    yield closed
+                replan_error = await revise(reason="planner_checkpoint", checkpoint_task=task)
+                if replan_error:
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
+                    return
+                await observe(
+                    "task_completed",
+                    entity_type="task",
+                    entity_id=task_id,
+                    parent_type="plan",
+                    parent_id=str(plan_id),
+                    payload={"task_id": task_id, "kind": PlanNodeKind.PLANNER.value, "summary": "Planner checkpoint completed"},
+                    trigger="planner_checkpoint",
+                )
+                yield OrchestratorEvent(
+                    type="task_completed",
+                    entity_type="task",
+                    entity_id=task_id,
+                    parent_entity_type="plan",
+                    parent_entity_id=str(plan_id),
+                    plan_id=str(plan_id),
+                    task_id=task_id,
+                    outcome=TaskOutcome.COMPLETED.value,
+                    kind=PlanNodeKind.PLANNER.value,
+                )
+                continue
             snapshot = await self.store.snapshot(plan_id)
             dependencies = {}
             for dep in snapshot["tasks"].get(task_id, {}).get("depends_on", []):
                 result_data = snapshot["tasks"].get(dep, {}).get("result", {})
                 if not isinstance(result_data, dict):
                     continue
+                verified = dict(result_data.get("verified") or {})
                 dependencies[dep] = {
-                    "summary": result_data.get("summary", ""),
+                    "outcome": result_data.get("outcome"),
+                    "status": snapshot["tasks"].get(dep, {}).get("status"),
+                    "description": result_data.get("summary", result_data.get("description", "")),
                     "outputs": result_data.get("outputs", {}),
-                    "evidence": result_data.get("evidence", {}),
+                    "verified_receipts": list(verified.get("receipts") or []),
+                    "verified_evidence": dict(verified.get("evidence") or {}),
+                    "artifacts": list(verified.get("artifacts") or []),
                 }
             request = TaskRequest(task_id=task_id, intent=task.intent, instructions=task.instructions,
                                   executor=task.executor, inputs={
@@ -544,7 +629,8 @@ class GraphOrchestrator:
                                       )
                                       if planner_kwargs.get("durable_memory_snapshot") is not None
                                       else []
-                                  ), expected_outputs=list(task.expected_outputs or []))
+                                  ), expected_outputs=list(task.expected_outputs or []),
+                                  freshness_policy=snapshot["tasks"].get(task_id, {}).get("freshness_policy", "allow_memory"))
             checkpoint_id = make_checkpoint_id(str(root_run_id), "task", f"{task_id}:{task.attempts}")
             executor_id = make_agent_execution_id(active_iteration_id, task_id, task.attempts)
             await observe("orchestrator_checkpoint_started", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
@@ -581,10 +667,30 @@ class GraphOrchestrator:
                 task_executor_kwargs["lifecycle_agent_execution_id"] = executor_id
                 task_executor_kwargs["runtime_log_parent"] = {"entity_type": "step", "entity_id": step_id}
                 task_executor_kwargs["iteration_id"] = active_iteration_id
-                result = await self.executor.execute_task(request=request, **task_executor_kwargs)
+                execute_attempt = getattr(self.executor, "execute_attempt", None)
+                execution_or_result = await (
+                    execute_attempt(request=request, **task_executor_kwargs)
+                    if callable(execute_attempt)
+                    else self.executor.execute_task(request=request, **task_executor_kwargs)
+                )
+                if isinstance(execution_or_result, AgentExecutionResult):
+                    execution = execution_or_result
+                    result = self.task_result_reducer.reduce(request=request, execution=execution)
+                    bind_attempt = getattr(self.store, "record_execution_result", None)
+                    if callable(bind_attempt):
+                        await bind_attempt(
+                            plan_id,
+                            task_id,
+                            execution=execution,
+                            agent_execution_id=executor_id,
+                        )
+                else:
+                    # Legacy test executors already return a task-level result.
+                    result = execution_or_result
             except Exception as exc:
                 if isinstance(exc, TaskConfirmationRequired):
                     confirmation = dict(exc.payload or {})
+                    confirmation["task_id"] = task_id
                     await self.store.pause_task_for_confirmation(
                         plan_id,
                         task_id,
@@ -665,8 +771,17 @@ class GraphOrchestrator:
                         return
                 continue
             await self.store.apply_result(plan_id, task_id, result)
+            runtime_state = planner_kwargs.get("runtime_state")
+            if runtime_state is not None and hasattr(runtime_state, "add_task_result"):
+                runtime_state.add_task_result({
+                    "task_id": task_id,
+                    "outcome": result.outcome.value,
+                    "description": result.description,
+                    "outputs": result.model_dump(mode="json").get("outputs", {}),
+                    "verified": result.verified,
+                })
             result_event = "task_completed" if result.outcome.value == "completed" else "status"
-            await observe(result_event, entity_type="task", entity_id=task_id, parent_type="plan", parent_id=str(plan_id), payload={"outcome": result.outcome.value, "summary": result.summary, "outputs": result.outputs}, trigger=result.outcome.value)
+            await observe(result_event, entity_type="task", entity_id=task_id, parent_type="plan", parent_id=str(plan_id), payload={"outcome": result.outcome.value, "summary": result.summary, "outputs": result.model_dump(mode="json").get("outputs", {})}, trigger=result.outcome.value)
             await observe("attempt_succeeded", entity_type="attempt", entity_id=attempt_entity_id, parent_type="task", parent_id=task_id, payload={"outcome": result.outcome.value, "attempt_number": task.attempts})
             await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
                           parent_type="orchestrator", parent_id=orchestrator_id,
@@ -723,7 +838,16 @@ class GraphOrchestrator:
     @staticmethod
     def _completed_outputs(plan: Dict[str, Any]) -> Dict[str, Any]:
         return {
-            task_id: dict(task.get("result", {}).get("outputs", {}))
+            task_id: {
+                "outcome": task.get("result", {}).get("outcome"),
+                "summary": task.get("result", {}).get("summary", ""),
+                "outputs": task.get("result", {}).get("outputs", {}),
+                "verified": {
+                    key: value
+                    for key, value in dict(task.get("result", {}).get("verified", {})).items()
+                    if key in {"receipts", "evidence", "artifacts", "fresh_retrieval"}
+                },
+            }
             for task_id, task in dict(plan.get("tasks") or {}).items()
             if task.get("status") == "completed" and isinstance(task.get("result"), dict)
         }
@@ -752,8 +876,8 @@ class GraphOrchestrator:
                 "truncated": bool(item.get("truncated")),
             })
         for task in dict(plan.get("tasks") or {}).values():
-            outputs = dict(task.get("result", {}).get("outputs", {})) if isinstance(task.get("result"), dict) else {}
-            for item in [*(outputs.get("artifacts", []) or []), *(outputs.get("attachments", []) or [])]:
+            verified = dict(task.get("result", {}).get("verified", {})) if isinstance(task.get("result"), dict) else {}
+            for item in verified.get("artifacts", []) or []:
                 if isinstance(item, dict) and item.get("artifact_id") and item.get("status") != "deleted":
                     artifacts.append(dict(item))
         seen: set[str] = set()

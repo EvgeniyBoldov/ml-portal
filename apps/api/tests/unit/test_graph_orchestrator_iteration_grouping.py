@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 
 from app.runtime.orchestrator import GraphOrchestrator
-from app.runtime.orchestrator_contracts import AgentTaskResult, TaskOutcome
+from app.runtime.orchestrator_contracts import AgentExecutionCompletion, AgentExecutionResult, TaskOutcome
 
 
 class FakeStore:
@@ -42,8 +42,11 @@ class FakeStore:
 
 
 class FakeExecutor:
-    async def execute_task(self, *, request, **kwargs):
-        return AgentTaskResult(outcome=TaskOutcome.COMPLETED, summary=f"{request.task_id} done")
+    async def execute_attempt(self, *, request, **kwargs):
+        return AgentExecutionResult(
+            completion=AgentExecutionCompletion.FULFILLED,
+            description=f"{request.task_id} done",
+        )
 
 
 def test_pending_needs_require_a_declared_output_producer() -> None:

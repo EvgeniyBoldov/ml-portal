@@ -14,6 +14,7 @@ from app.runtime.orchestrator import GraphOrchestrator
 from app.runtime.plan_store import SqlPlanStore
 from app.runtime.turn_state import RuntimeTurnState
 from app.runtime.memory.service import MemorySnapshot
+from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 
 
 class GraphPlanningOutcomeKind(str, Enum):
@@ -85,7 +86,32 @@ class GraphPlanningStage:
         resume_user_response: Optional[str] = None
         if plan.status == "waiting_input":
             if resume_action == "confirm":
-                await self._store.resume_waiting_tasks(plan.id, user_input="")
+                paused_action = (
+                    runtime_state.continuation.get("paused_action")
+                    if isinstance(runtime_state.continuation, dict) and isinstance(runtime_state.continuation.get("paused_action"), dict)
+                    else {}
+                )
+                paused_context = (
+                    runtime_state.continuation.get("paused_context")
+                    if isinstance(runtime_state.continuation, dict) and isinstance(runtime_state.continuation.get("paused_context"), dict)
+                    else {}
+                )
+                confirmation_task_id = str(
+                    paused_context.get("task_id") or paused_action.get("task_id") or ""
+                ).strip()
+                if not confirmation_task_id:
+                    raise ValueError("confirmation resume is missing task_id")
+                operation_fingerprint = RuntimeHitlProtocolService.extract_operation_fingerprint(
+                    paused_action,
+                    paused_context,
+                )
+                if not operation_fingerprint:
+                    raise ValueError("confirmation resume is missing operation_fingerprint")
+                await self._store.resume_confirmation_task(
+                    plan.id,
+                    confirmation_task_id,
+                    operation_fingerprint=operation_fingerprint,
+                )
             else:
                 # request_text is the original chat content on a continuation;
                 # RuntimeTurnState holds the actual answer from the checkpoint.

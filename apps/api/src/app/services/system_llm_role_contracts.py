@@ -77,7 +77,7 @@ def _enrich_schema_with_contract_metadata(schema: Dict[str, Any], role: SystemLL
     if role == SystemLLMRoleType.PLANNER:
         props = schema.get("properties", {})
         if "tasks" in props:
-            props["tasks"]["description"] = "Complete task graph mutation; every task has executor, intent, instructions, dependencies and needs."
+            props["tasks"]["description"] = "Complete graph mutation. agent nodes require executor; planner nodes are dependency checkpoints with intent and instructions only."
 
     elif role == SystemLLMRoleType.FACT_EXTRACTOR:
         # Add scope enum to fact items

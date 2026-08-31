@@ -42,7 +42,7 @@ def test_collections_card_includes_remote_tables_preview():
     assert "`services`" in card
 
 
-def test_collections_card_skips_collections_without_operations():
+def test_collections_card_keeps_collection_discovery_without_operations():
     builder = CapabilityCardBuilder()
     item = SimpleNamespace(
         collection_slug="ticket_network",
@@ -63,7 +63,9 @@ def test_collections_card_skips_collections_without_operations():
 
     card = builder._build_collections_card([item], [])  # noqa: SLF001
 
-    assert card == ""
+    assert "## Доступные коллекции" in card
+    assert "`ticket_network`" in card
+    assert "`tenwork_tickets`" in card
 
 
 def test_collections_card_groups_collection_operations_with_descriptions():

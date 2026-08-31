@@ -39,7 +39,7 @@
   background: var(--trace-surface-raised);
 }
 .iteration-decision { --phase-color: var(--trace-phase-planning); }
-.iteration-replan { --phase-color: var(--trace-phase-replanning); }
+.iteration-replan, .iteration-checkpoint { --phase-color: var(--trace-phase-replanning); }
 .iteration-execution { --phase-color: var(--trace-phase-execution); }
 .iteration-synthesis, .iteration-extraction, .iteration-preparation { --phase-color: var(--trace-phase-replanning); }
 .iterationHeader { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: center; gap: var(--space-2); min-height: 42px; padding: 0 var(--space-3); border-bottom: 1px solid var(--border); }

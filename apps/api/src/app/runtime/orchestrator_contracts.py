@@ -57,11 +57,46 @@ class TaskOutcome(str, Enum):
     UNFULFILLABLE = "unfulfillable"
 
 
+class PlanNodeKind(str, Enum):
+    """Execution role of a persisted plan node."""
+
+    AGENT = "agent"
+    PLANNER = "planner"
+
+
 class TaskSuccessAction(str, Enum):
     """What the orchestrator does after a successfully completed task."""
 
     CONTINUE = "continue"
     REPLAN = "replan"
+
+
+class FreshnessPolicy(str, Enum):
+    """Whether a task may finish from its bounded memory/context alone."""
+
+    ALLOW_MEMORY = "allow_memory"
+    REQUIRE_RETRIEVAL = "require_retrieval"
+
+
+class TaskOutputFulfillment(str, Enum):
+    """Evidence class required to satisfy one planned task output."""
+
+    TASK_RESULT = "task_result"
+    VERIFIED_RECEIPT = "verified_receipt"
+    ARTIFACT = "artifact"
+
+
+class AgentExecutionStatus(str, Enum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+
+
+class AgentExecutionCompletion(str, Enum):
+    FULFILLED = "fulfilled"
+    NEEDS = "needs"
+    UNFULFILLABLE = "unfulfillable"
 
 
 class PlannerDecisionKind(str, Enum):
@@ -94,13 +129,15 @@ class TaskOutputSpec(BaseModel):
     description: str = Field(..., min_length=1)
     json_schema: Dict[str, Any] = Field(default_factory=dict, alias="schema")
     required: bool = True
+    fulfillment: TaskOutputFulfillment = TaskOutputFulfillment.TASK_RESULT
 
     model_config = {"populate_by_name": True}
 
 
 class PlannedTask(BaseModel):
     task_id: str = Field(..., min_length=1)
-    executor: str = Field(..., min_length=1)
+    kind: PlanNodeKind = PlanNodeKind.AGENT
+    executor: Optional[str] = Field(default=None, min_length=1)
     intent: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
@@ -108,8 +145,27 @@ class PlannedTask(BaseModel):
     depends_on: List[str] = Field(default_factory=list)
     needs: List[NeedSpec] = Field(default_factory=list)
     on_success: TaskSuccessAction = TaskSuccessAction.CONTINUE
+    freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
 
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_kind(self) -> "PlannedTask":
+        if self.kind == PlanNodeKind.AGENT:
+            if not self.executor:
+                raise ValueError("agent task requires executor")
+            return self
+        if self.executor:
+            raise ValueError("planner checkpoint cannot declare executor")
+        if self.inputs:
+            raise ValueError("planner checkpoint cannot declare inputs")
+        if self.expected_outputs:
+            raise ValueError("planner checkpoint cannot declare expected_outputs")
+        if self.on_success != TaskSuccessAction.CONTINUE:
+            raise ValueError("planner checkpoint cannot declare on_success")
+        if self.freshness_policy != FreshnessPolicy.ALLOW_MEMORY:
+            raise ValueError("planner checkpoint cannot require retrieval")
+        return self
 
 
 class PlanPatch(BaseModel):
@@ -163,6 +219,7 @@ class PlanRequest(BaseModel):
     run_id: Optional[UUID] = None
     plan_id: Optional[UUID] = None
     trace_parent_id: Optional[str] = None
+    checkpoint: Optional[Dict[str, Any]] = None
 
 
 class TaskRequest(BaseModel):
@@ -176,30 +233,111 @@ class TaskRequest(BaseModel):
     dependency_outputs: Dict[str, Any] = Field(default_factory=dict)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
+    freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
 
 
-class AgentTaskResult(BaseModel):
-    """Valid output of an agent execution attempt.
+class TaskOutputValue(BaseModel):
+    """One declared, keyed output of a completed agent execution."""
+
+    description: Optional[str] = None
+    text: Optional[str] = None
+    data: Optional[Any] = None
+    artifacts: List[Dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_content(self) -> "TaskOutputValue":
+        if self.text is None and self.data is None and not self.artifacts:
+            raise ValueError("task output requires text, data, or artifacts")
+        return self
+
+
+class AgentExecutionResult(BaseModel):
+    """Normalized terminal result of one agent executor run.
+
+    It is intentionally distinct from the logical task result.  ``needs`` is
+    always present; a completed execution with needs is a successful agent
+    execution that did not yet fulfil its task.
+    """
+
+    status: AgentExecutionStatus = AgentExecutionStatus.COMPLETED
+    completion: AgentExecutionCompletion
+    description: str = Field(..., min_length=1)
+    outputs: Dict[str, TaskOutputValue] = Field(default_factory=dict)
+    needs: List[NeedSpec] = Field(default_factory=list)
+    checkpoint: Dict[str, Any] = Field(default_factory=dict)
+    receipt_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    # Assigned by runtime after the agent's JSON has been validated; agents do
+    # not get authority to declare this field.
+    verified: Dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_completion(self) -> "AgentExecutionResult":
+        if self.status != AgentExecutionStatus.COMPLETED:
+            raise ValueError("terminal task completion must use completed execution status")
+        if self.completion == AgentExecutionCompletion.NEEDS and not self.needs:
+            raise ValueError("needs completion requires at least one need")
+        if self.completion == AgentExecutionCompletion.FULFILLED and self.needs:
+            raise ValueError("fulfilled completion cannot contain unresolved needs")
+        return self
+
+
+class TaskResult(BaseModel):
+    """Runtime-owned result and lifecycle decision for a logical task.
 
     Technical exceptions, provider timeouts and invalid protocol responses do
     not use this model; they are represented by ``TaskAttemptFailure``.
     """
 
     outcome: TaskOutcome
-    summary: str = ""
-    outputs: Dict[str, Any] = Field(default_factory=dict)
+    description: str = Field(default="", alias="summary")
+    outputs: Dict[str, TaskOutputValue] = Field(default_factory=dict)
+    partial_completion: Optional[str] = None
     checkpoint: Dict[str, Any] = Field(default_factory=dict)
     needs: List[NeedSpec] = Field(default_factory=list)
     reason_code: Optional[str] = None
-    evidence: Dict[str, Any] = Field(default_factory=dict)
+    verified: Dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_outputs(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        outputs = normalized.get("outputs")
+        if outputs is None:
+            verified = normalized.get("verified")
+            if isinstance(verified, dict):
+                outputs = verified.get("outputs")
+        if isinstance(outputs, dict):
+            normalized["outputs"] = {
+                str(key): raw if isinstance(raw, TaskOutputValue) or isinstance(raw, dict) and any(
+                    field in raw for field in ("text", "data", "artifacts")
+                ) else {"data": raw}
+                for key, raw in outputs.items()
+            }
+        return normalized
+
+    @property
+    def summary(self) -> str:
+        """Compatibility accessor for trace/presentation callers."""
+        return self.description
 
     @model_validator(mode="after")
-    def validate_outcome(self) -> "AgentTaskResult":
+    def validate_outcome(self) -> "TaskResult":
         if self.outcome == TaskOutcome.COMPLETED and self.needs:
             raise ValueError("completed task cannot contain unresolved needs")
         if self.outcome == TaskOutcome.NEEDS_DEPENDENCY and not self.needs:
             raise ValueError("needs_dependency requires at least one need")
         return self
+
+
+# Compatibility name for callers during the task-result migration.  The
+# executor now returns AgentExecutionResult; this name denotes task state.
+AgentTaskResult = TaskResult
 
 
 class TaskAttemptFailure(BaseModel):
@@ -240,7 +378,7 @@ class TaskConfirmationRequired(RuntimeError):
         super().__init__(str(self.payload.get("summary") or self.payload.get("message") or "Operation requires confirmation"))
 
 
-def parse_agent_task_result(content: str) -> AgentTaskResult:
+def parse_agent_execution_result(content: str) -> AgentExecutionResult:
     """Parse the exact JSON protocol; prose and markdown are rejected."""
     text = str(content or "").strip()
     if not text:
@@ -251,7 +389,15 @@ def parse_agent_task_result(content: str) -> AgentTaskResult:
         raise ValueError("agent task result must be strict JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError("agent task result must be a JSON object")
-    return AgentTaskResult.model_validate(payload)
+    return AgentExecutionResult.model_validate(payload)
+
+
+def parse_agent_task_result(content: str) -> TaskResult:
+    """Compatibility parser for persisted task-result fixtures only."""
+    text = str(content or "").strip()
+    if not text:
+        raise ValueError("task result is empty")
+    return TaskResult.model_validate_json(text)
 
 
 class PlannerPortProtocol:

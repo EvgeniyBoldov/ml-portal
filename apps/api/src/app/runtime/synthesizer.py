@@ -487,8 +487,11 @@ class Synthesizer:
         """Collect file.generate attachments from all agent results."""
         result: List[Dict[str, Any]] = []
         seen_artifact_ids: set[str] = set()
-        for item in runtime_state.agent_results:
+        task_projection = runtime_state.task_results or runtime_state.agent_results
+        for item in task_projection:
             item_attachments = item.get("attachments")
+            if not isinstance(item_attachments, list):
+                item_attachments = (item.get("verified") or {}).get("artifacts")
             if isinstance(item_attachments, list):
                 for att in item_attachments:
                     artifact_id = str(att.get("artifact_id") or "").strip() if isinstance(att, dict) else ""
@@ -551,9 +554,13 @@ class Synthesizer:
         runtime_state: RuntimeTurnState,
     ) -> str:
         parts: List[str] = []
-        for item in runtime_state.agent_results:
-            if bool(item.get("success", True)) and str(item.get("summary") or "").strip():
-                parts.append(str(item.get("summary") or "").strip())
+        task_projection = runtime_state.task_results or runtime_state.agent_results
+        for item in task_projection:
+            completed = item.get("outcome") in (None, "completed")
+            if completed and bool(item.get("success", True)):
+                summary = str(item.get("description") or item.get("summary") or "").strip()
+                if summary:
+                    parts.append(summary)
         if not parts and runtime_state.runtime_facts:
             parts = [item.text for item in runtime_state.runtime_facts[-10:]]
         result = "\n\n".join(parts)

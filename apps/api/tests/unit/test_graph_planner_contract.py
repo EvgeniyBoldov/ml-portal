@@ -2,7 +2,7 @@ import pytest
 
 from pydantic import ValidationError
 
-from app.runtime.orchestrator_contracts import PlanPatch, PlannedTask, PlannerDecisionKind
+from app.runtime.orchestrator_contracts import PlanNodeKind, PlanPatch, PlannedTask, PlannerDecisionKind
 from app.runtime.planner.graph_planner import PlannerGraphOutput
 from app.runtime.input_builders import PlannerInputBuilder
 
@@ -145,6 +145,30 @@ def test_graph_task_can_request_replan_after_success() -> None:
     assert task.on_success.value == "replan"
 
 
+def test_planner_checkpoint_is_a_control_node_without_an_executor() -> None:
+    task = PlannedTask.model_validate({
+        "task_id": "after_discovery",
+        "kind": "planner",
+        "intent": "Assess findings",
+        "instructions": "Determine the next graph segment",
+        "depends_on": ["discover"],
+    })
+
+    assert task.kind is PlanNodeKind.PLANNER
+    assert task.executor is None
+
+
+def test_planner_checkpoint_rejects_agent_fields() -> None:
+    with pytest.raises(ValidationError, match="cannot declare executor"):
+        PlannedTask.model_validate({
+            "task_id": "after_discovery",
+            "kind": "planner",
+            "executor": "planner",
+            "intent": "Assess findings",
+            "instructions": "Determine the next graph segment",
+        })
+
+
 def test_planner_input_hides_persistence_fields() -> None:
     payload = PlannerInputBuilder().build_graph_request(type("Request", (), {
         "goal": "Inspect sources",
@@ -175,3 +199,38 @@ def test_planner_input_hides_persistence_fields() -> None:
         "status": "active",
         "tasks": {"inspect": {"task_id": "inspect", "status": "completed"}},
     }
+    assert "completed_outputs" not in payload
+
+
+def test_planner_input_keeps_full_graph_and_checkpoint_metadata() -> None:
+    payload = PlannerInputBuilder().build_graph_request(type("Request", (), {
+        "goal": "Assess tickets",
+        "trigger": "planner_checkpoint",
+        "plan": {
+            "revision": 2,
+            "status": "active",
+            "tasks": {
+                "discover": {
+                    "task_id": "discover",
+                    "status": "completed",
+                    "result": {"outputs": {"tickets": [{"key": "OPS-1"}]}},
+                },
+            },
+        },
+        "completed_outputs": {"discover": {"tickets": [{"key": "OPS-1"}]}},
+        "available_artifacts": [],
+        "needs": [],
+        "last_failure": None,
+        "user_response": None,
+        "available_agents": [],
+        "memory_context": [],
+        "checkpoint": {
+            "task_id": "after_discovery",
+            "intent": "Assess tickets",
+            "instructions": "Determine next steps",
+            "depends_on": ["discover"],
+        },
+    })())
+
+    assert payload["plan"]["tasks"]["discover"]["result"]["outputs"]["tickets"] == [{"key": "OPS-1"}]
+    assert payload["checkpoint"]["task_id"] == "after_discovery"

@@ -8,6 +8,7 @@ export function TaskViewer({ task }: { task?: PlanTaskViewModel }) {
   if (!task) return <InspectorEmptyState message="Описание задачи для этого исполнителя не записано в журнал." />;
   const goal = task.objective ?? task.instructions ?? task.intent;
   return <InspectorFieldGroup>
+    {task.kind === 'planner' ? <InspectorFieldRow label="Тип">Контрольная точка планера</InspectorFieldRow> : null}
     {goal ? <InspectorFieldRow label="Цель"><InspectorTextBlock text={goal} /></InspectorFieldRow> : null}
     {task.intent ? <InspectorFieldRow label="Назначение"><InspectorScalar value={task.intent} /></InspectorFieldRow> : null}
     {task.instructions && task.instructions !== goal ? <InspectorFieldRow label="Инструкции"><InspectorTextBlock text={task.instructions} /></InspectorFieldRow> : null}

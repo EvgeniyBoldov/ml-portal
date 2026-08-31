@@ -35,6 +35,59 @@ class CredentialRepository:
         await self.session.delete(credential)
         await self.session.flush()
 
+    async def lock_active_for_owner(
+        self,
+        *,
+        instance_id: UUID,
+        owner_user_id: Optional[UUID],
+        owner_tenant_id: Optional[UUID],
+        owner_platform: bool,
+        exclude_id: Optional[UUID] = None,
+    ) -> List[Credential]:
+        """Lock active credentials for exactly one owner scope.
+
+        The caller owns the replacement/deduplication policy; this repository
+        method only provides a transaction-safe selection boundary.
+        """
+        conditions = [Credential.instance_id == instance_id, Credential.is_active.is_(True)]
+        if owner_platform:
+            conditions.append(Credential.owner_platform.is_(True))
+        elif owner_user_id is not None:
+            conditions.append(Credential.owner_user_id == owner_user_id)
+        else:
+            conditions.append(Credential.owner_tenant_id == owner_tenant_id)
+        if exclude_id is not None:
+            conditions.append(Credential.id != exclude_id)
+        result = await self.session.execute(
+            select(Credential)
+            .where(and_(*conditions))
+            .order_by(Credential.updated_at.desc(), Credential.created_at.desc(), Credential.id.desc())
+            .with_for_update()
+        )
+        return list(result.scalars().all())
+
+    async def lock_all_active(
+        self,
+        *,
+        instance_id: Optional[UUID] = None,
+    ) -> List[Credential]:
+        """Lock the active credential set for an operator-controlled dedup run."""
+        stmt = select(Credential).where(Credential.is_active.is_(True))
+        if instance_id is not None:
+            stmt = stmt.where(Credential.instance_id == instance_id)
+        result = await self.session.execute(
+            stmt.order_by(
+                Credential.instance_id,
+                Credential.owner_platform.desc(),
+                Credential.owner_user_id,
+                Credential.owner_tenant_id,
+                Credential.updated_at.desc(),
+                Credential.created_at.desc(),
+                Credential.id.desc(),
+            ).with_for_update()
+        )
+        return list(result.scalars().all())
+
     async def list_credentials(
         self,
         skip: int = 0,
@@ -102,7 +155,7 @@ class CredentialRepository:
         stmt = (
             select(Credential)
             .where(and_(*base, Credential.owner_user_id == user_id))
-            .order_by(Credential.updated_at.desc(), Credential.created_at.desc())
+            .order_by(Credential.updated_at.desc(), Credential.created_at.desc(), Credential.id.desc())
             .limit(1)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
@@ -113,7 +166,7 @@ class CredentialRepository:
         stmt = (
             select(Credential)
             .where(and_(*base, Credential.owner_tenant_id == tenant_id))
-            .order_by(Credential.updated_at.desc(), Credential.created_at.desc())
+            .order_by(Credential.updated_at.desc(), Credential.created_at.desc(), Credential.id.desc())
             .limit(1)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
@@ -122,7 +175,7 @@ class CredentialRepository:
         stmt = (
             select(Credential)
             .where(and_(*base, Credential.owner_platform == True))
-            .order_by(Credential.updated_at.desc(), Credential.created_at.desc())
+            .order_by(Credential.updated_at.desc(), Credential.created_at.desc(), Credential.id.desc())
             .limit(1)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()

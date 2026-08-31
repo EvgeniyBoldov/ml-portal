@@ -44,13 +44,13 @@ async def test_operation_executor_reuses_from_tool_ledger():
     call = ToolCall(
         id="call-2",
         tool_name="collection.sql.execute",
-        arguments={"query": "select 1"},
+        arguments={"query": "select 1", "collection_slug": "sql-demo"},
     )
     ledger = ToolLedger()
     ledger.register_call(
         operation="collection.sql.execute",
         call_id="call-1",
-        arguments={"query": "select 1"},
+        arguments={"query": "select 1", "collection_slug": "sql-demo"},
         iteration=1,
         agent_slug="mon.net",
         phase_id=None,

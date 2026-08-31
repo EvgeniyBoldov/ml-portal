@@ -73,6 +73,9 @@ class RuntimeTurnState(BaseModel):
     memory_bundle: MemoryBundle = Field(default_factory=MemoryBundle)
 
     planner_steps: List[Dict[str, Any]] = Field(default_factory=list)
+    # Runtime-owned projection of logical task results.  Agent executors do
+    # not write the legacy ``agent_results`` transport directly.
+    task_results: List[Dict[str, Any]] = Field(default_factory=list)
     agent_results: List[Dict[str, Any]] = Field(default_factory=list)
     iteration_results: List[PlannerIterationResult] = Field(default_factory=list)
     runtime_facts: List[RuntimeFact] = Field(default_factory=list)
@@ -181,6 +184,11 @@ class RuntimeTurnState(BaseModel):
         self.agent_results.append(dict(result or {}))
         if len(self.agent_results) > MAX_RUNTIME_RESULTS:
             self.agent_results = self.agent_results[-MAX_RUNTIME_RESULTS:]
+
+    def add_task_result(self, result: Dict[str, Any]) -> None:
+        self.task_results.append(dict(result or {}))
+        if len(self.task_results) > MAX_RUNTIME_RESULTS:
+            self.task_results = self.task_results[-MAX_RUNTIME_RESULTS:]
 
     def add_iteration_result(self, result: Dict[str, Any]) -> None:
         entry = PlannerIterationResult.model_validate(result or {})
@@ -301,6 +309,7 @@ class RuntimeTurnState(BaseModel):
             "attachments": [item.model_dump(mode="json") for item in self.attachment_contexts[-max_items:]],
             "facts": [item.text for item in self.runtime_facts[-max_items:]],
             "agent_results": list(self.agent_results[-max_items:]),
+            "task_results": list(self.task_results[-max_items:]),
             "iteration_results": [item.model_dump() for item in self.iteration_results[-max_items:]],
             "open_questions": list(self.open_questions[-max_items:]),
             "recent_actions": list(self.recent_action_signatures[-max_items:]),
@@ -335,6 +344,7 @@ class RuntimeTurnState(BaseModel):
             "planner_steps": len(self.planner_steps),
             "task_journal": len(self.task_journal),
             "agent_results": len(self.agent_results),
+            "task_results": len(self.task_results),
             "iteration_results": len(self.iteration_results),
             "runtime_facts": len(self.runtime_facts),
             "open_questions": list(self.open_questions[-5:]),

@@ -19,9 +19,11 @@ from app.models.runtime_plan import (
     RuntimeTaskNeed,
 )
 from app.runtime.orchestrator_contracts import (
+    AgentExecutionResult,
     AgentTaskResult,
     AttemptStatus,
     PlanPatch,
+    PlanNodeKind,
     PlanStatus,
     PlannedTask,
     RequirementStatus,
@@ -153,6 +155,7 @@ class InMemoryPlanStore:
         existing = [
             PlannedTask(
                 task_id=task_id,
+                kind=task.get("kind", PlanNodeKind.AGENT.value),
                 intent=task["intent"],
                 instructions=task["instructions"],
                 executor=task["executor"],
@@ -161,6 +164,7 @@ class InMemoryPlanStore:
                 depends_on=task.get("depends_on", []),
                 needs=task.get("needs", []),
                 on_success=task.get("on_success", "continue"),
+                freshness_policy=task.get("freshness_policy", "allow_memory"),
             )
             for task_id, task in plan["tasks"].items()
             if task_id not in set(patch.remove_task_ids)
@@ -211,6 +215,7 @@ class InMemoryPlanStore:
                     else old.get("result") if old else None
                 ),
                 "attempts": old.get("attempts", 0) if old else 0,
+                "kind": effective_task.kind.value,
                 "planned_order": old.get("planned_order", index) if old else index,
             }
             for need in effective_task.needs:
@@ -297,6 +302,27 @@ class InMemoryPlanStore:
     def claim_ready(self, plan_id: str) -> Optional[Dict[str, Any]]:
         return next(iter(self.claim_ready_batch(plan_id, limit=1)), None)
 
+    def record_execution_result(
+        self,
+        plan_id: str,
+        task_id: str,
+        *,
+        execution: AgentExecutionResult,
+        agent_execution_id: Optional[str] = None,
+    ) -> None:
+        task = self.get(plan_id)["tasks"].get(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        attempts = self.attempts.setdefault(task_id, [])
+        if not attempts:
+            raise PlanValidationError(f"task {task_id} has no active attempt")
+        attempts[-1].update({
+            "status": AttemptStatus.SUCCEEDED.value,
+            "execution_result": execution.model_dump(mode="json"),
+            "agent_execution_id": agent_execution_id,
+            "finished_at": _now().isoformat(),
+        })
+
     def apply_result(self, plan_id: str, task_id: str, result: AgentTaskResult) -> Dict[str, Any]:
         plan = self.get(plan_id)
         task = plan["tasks"].get(task_id)
@@ -320,7 +346,7 @@ class InMemoryPlanStore:
                 raise PlanValidationError(
                     f"task {task_id} is missing required outputs: {missing_outputs}"
                 )
-        task["result"] = result.model_dump(mode="json")
+        task["result"] = result.model_dump(mode="json", by_alias=True)
         task["checkpoint"] = dict(result.checkpoint)
         if result.outcome == TaskOutcome.COMPLETED:
             task["status"] = TaskStatus.COMPLETED.value
@@ -334,7 +360,7 @@ class InMemoryPlanStore:
                     key = req.get("key") or req.get("need_key")
                     if key in result.outputs:
                         req["status"] = RequirementStatus.RESOLVED.value
-                        req["resolved_value"] = result.outputs[key]
+                        req["resolved_value"] = result.outputs[key].model_dump(mode="json")
                         req["resolver_task_id"] = task_id
         elif result.outcome == TaskOutcome.NEEDS_DEPENDENCY:
             task["status"] = TaskStatus.WAITING_DEPENDENCY.value
@@ -366,12 +392,59 @@ class InMemoryPlanStore:
         self._refresh_plan_status(plan_id)
         return task
 
+    def complete_planner_checkpoint(
+        self,
+        plan_id: str,
+        task_id: str,
+        patch: PlanPatch,
+        *,
+        reason: str = "planner_checkpoint",
+        planner_invocation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        task = self.get(plan_id)["tasks"].get(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        if task.get("kind", PlanNodeKind.AGENT.value) != PlanNodeKind.PLANNER.value:
+            raise PlanValidationError(f"task {task_id} is not a planner checkpoint")
+        if task.get("status") != TaskStatus.RUNNING.value:
+            raise PlanValidationError(f"planner checkpoint {task_id} is not running")
+        if patch.decision.value == "revise_plan" and not patch.tasks:
+            raise PlanValidationError("planner checkpoint must add nodes or complete the plan")
+        plan = self.apply_patch(plan_id, patch, reason=reason, planner_invocation_id=planner_invocation_id)
+        task["status"] = TaskStatus.COMPLETED.value
+        task["result"] = {"outcome": TaskOutcome.COMPLETED.value, "summary": "Planner checkpoint completed", "outputs": {}}
+        if plan["status"] == PlanStatus.ACTIVE.value:
+            self._refresh_plan_status(plan_id)
+        return task
+
     def resume_task(self, plan_id: str, task_id: str) -> Dict[str, Any]:
         task = self.get(plan_id)["tasks"].get(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
         if task["status"] not in {TaskStatus.WAITING_DEPENDENCY.value, TaskStatus.WAITING_USER.value, TaskStatus.WAITING_RETRY.value}:
             raise PlanValidationError(f"task {task_id} is not resumable")
+        task["status"] = TaskStatus.PENDING.value
+        self.get(plan_id)["status"] = PlanStatus.ACTIVE.value
+        self.refresh_ready(plan_id)
+        return task
+
+    def resume_confirmation_task(
+        self,
+        plan_id: str,
+        task_id: str,
+        *,
+        operation_fingerprint: str,
+    ) -> Dict[str, Any]:
+        """Reactivate only the task bound to the confirmed operation."""
+        task = self.get(plan_id)["tasks"].get(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        confirmation = dict(task.get("checkpoint") or {}).get("confirmation")
+        stored_fingerprint = str(confirmation.get("operation_fingerprint") or "").strip() if isinstance(confirmation, dict) else ""
+        if task.get("status") != TaskStatus.WAITING_USER.value or not stored_fingerprint:
+            raise PlanValidationError(f"task {task_id} is not waiting for confirmation")
+        if stored_fingerprint != operation_fingerprint:
+            raise PlanValidationError(f"confirmation fingerprint does not match task {task_id}")
         task["status"] = TaskStatus.PENDING.value
         self.get(plan_id)["status"] = PlanStatus.ACTIVE.value
         self.refresh_ready(plan_id)
@@ -482,11 +555,13 @@ class SqlPlanStore:
                 "resolved_value": need.resolved_value,
             })
         combined = {row.task_id: PlannedTask(
-            task_id=row.task_id, intent=row.intent, instructions=row.instructions,
+            task_id=row.task_id, kind=row.kind or PlanNodeKind.AGENT.value, intent=row.intent, instructions=row.instructions,
             executor=row.executor, inputs=row.inputs or {},
+            expected_outputs=row.expected_outputs or [],
             depends_on=dependencies_by_task[row.task_id],
             needs=needs_by_task_row.get(row.id, []),
             on_success=row.on_success,
+            freshness_policy=row.freshness_policy or "allow_memory",
         ) for row in existing_rows if row.task_id in existing_ids}
         # ``revise_plan`` is a delta: a supplied task replaces its own
         # definition and dependencies; omitted tasks stay untouched.
@@ -525,17 +600,21 @@ class SqlPlanStore:
                         task = RuntimePlanTask(
                             plan_id=plan_id, task_id=effective_item.task_id, intent=effective_item.intent,
                             instructions=effective_item.instructions, executor=effective_item.executor, inputs=effective_item.inputs,
+                            kind=effective_item.kind.value,
                             expected_outputs=[output.model_dump(mode="json", by_alias=True) for output in effective_item.expected_outputs],
                             on_success=effective_item.on_success.value,
+                            freshness_policy=effective_item.freshness_policy.value,
                             planned_order=index, status=TaskStatus.PENDING.value,
                         )
                         self.session.add(task)
                         await self.session.flush()
                     else:
                         task.intent, task.instructions, task.executor = effective_item.intent, effective_item.instructions, effective_item.executor
+                        task.kind = effective_item.kind.value
                         task.inputs = effective_item.inputs
                         task.expected_outputs = [output.model_dump(mode="json", by_alias=True) for output in effective_item.expected_outputs]
                         task.on_success = effective_item.on_success.value
+                        task.freshness_policy = effective_item.freshness_policy.value
                         task.planned_order = index
                         # A replan may replace a failed/unfulfillable task
                         # with another executor.  The new definition must be
@@ -645,6 +724,7 @@ class SqlPlanStore:
         task_rows = task_result.scalars().all()
         tasks = {task.task_id: {
             "task_id": task.task_id,
+            "kind": task.kind or PlanNodeKind.AGENT.value,
             "intent": task.intent,
             "instructions": task.instructions,
             "executor": task.executor,
@@ -652,6 +732,7 @@ class SqlPlanStore:
             "inputs": task.inputs or {},
             "expected_outputs": task.expected_outputs or [],
             "on_success": task.on_success,
+            "freshness_policy": task.freshness_policy or "allow_memory",
             "checkpoint": task.checkpoint or {},
             "result": task.result,
                 "attempts": task.attempts,
@@ -687,6 +768,42 @@ class SqlPlanStore:
             "last_failure": plan.last_failure,
         }
 
+    async def complete_planner_checkpoint(
+        self,
+        plan_id: UUID,
+        task_id: str,
+        patch: PlanPatch,
+        *,
+        reason: str = "planner_checkpoint",
+        planner_invocation_id: Optional[str] = None,
+    ) -> RuntimePlanTask:
+        lookup = await self.session.execute(select(RuntimePlanTask).where(
+            RuntimePlanTask.plan_id == plan_id,
+            RuntimePlanTask.task_id == task_id,
+        ).with_for_update())
+        task = lookup.scalar_one_or_none()
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        if (task.kind or PlanNodeKind.AGENT.value) != PlanNodeKind.PLANNER.value:
+            raise PlanValidationError(f"task {task_id} is not a planner checkpoint")
+        if task.status != TaskStatus.RUNNING.value:
+            raise PlanValidationError(f"planner checkpoint {task_id} is not running")
+        if patch.decision.value == "revise_plan" and not patch.tasks:
+            raise PlanValidationError("planner checkpoint must add nodes or complete the plan")
+        plan = await self.apply_patch(
+            plan_id, patch, reason=reason, planner_invocation_id=planner_invocation_id,
+        )
+        task.status = TaskStatus.COMPLETED.value
+        task.result = {
+            "outcome": TaskOutcome.COMPLETED.value,
+            "summary": "Planner checkpoint completed",
+            "outputs": {},
+        }
+        if plan.status == PlanStatus.ACTIVE.value:
+            await self._refresh_status(plan_id)
+        await self.session.flush()
+        return task
+
     async def claim_ready_batch(self, plan_id: UUID, limit: int = 1) -> List[RuntimePlanTask]:
         """Atomically claim an ordered batch of dependency-ready tasks."""
         snapshot = await self.snapshot(plan_id)
@@ -718,6 +835,36 @@ class SqlPlanStore:
     async def claim_ready(self, plan_id: UUID) -> Optional[RuntimePlanTask]:
         return next(iter(await self.claim_ready_batch(plan_id, limit=1)), None)
 
+    async def record_execution_result(
+        self,
+        plan_id: UUID,
+        task_id: str,
+        *,
+        execution: AgentExecutionResult,
+        agent_execution_id: Optional[str] = None,
+    ) -> RuntimeTaskAttempt:
+        lookup = await self.session.execute(select(RuntimePlanTask).where(
+            RuntimePlanTask.plan_id == plan_id,
+            RuntimePlanTask.task_id == task_id,
+        ).with_for_update())
+        task = lookup.scalar_one_or_none()
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        attempt_lookup = await self.session.execute(select(RuntimeTaskAttempt).where(
+            RuntimeTaskAttempt.task_row_id == task.id,
+            RuntimeTaskAttempt.attempt_number == task.attempts,
+        ).with_for_update())
+        attempt = attempt_lookup.scalar_one_or_none()
+        if attempt is None:
+            raise PlanValidationError(f"task {task_id} has no active attempt")
+        attempt.execution_result = execution.model_dump(mode="json")
+        attempt.status = AttemptStatus.SUCCEEDED.value
+        attempt.finished_at = _now()
+        if agent_execution_id:
+            attempt.agent_execution_id = UUID(str(agent_execution_id))
+        await self.session.flush()
+        return attempt
+
     async def resume_waiting_tasks(self, plan_id: UUID, *, user_input: str) -> None:
         """Resume the same persisted plan after a chat continuation."""
         rows = (await self.session.execute(
@@ -740,6 +887,34 @@ class SqlPlanStore:
         if plan is not None and rows:
             plan.status = PlanStatus.ACTIVE.value
         await self.session.flush()
+
+    async def resume_confirmation_task(
+        self,
+        plan_id: UUID,
+        task_id: str,
+        *,
+        operation_fingerprint: str,
+    ) -> RuntimePlanTask:
+        """Reactivate exactly the task paused by an operation confirmation."""
+        lookup = await self.session.execute(select(RuntimePlanTask).where(
+            RuntimePlanTask.plan_id == plan_id,
+            RuntimePlanTask.task_id == task_id,
+        ).with_for_update())
+        task = lookup.scalar_one_or_none()
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        confirmation = dict(task.checkpoint or {}).get("confirmation")
+        stored_fingerprint = str(confirmation.get("operation_fingerprint") or "").strip() if isinstance(confirmation, dict) else ""
+        if task.status != TaskStatus.WAITING_USER.value or not stored_fingerprint:
+            raise PlanValidationError(f"task {task_id} is not waiting for confirmation")
+        if stored_fingerprint != operation_fingerprint:
+            raise PlanValidationError(f"confirmation fingerprint does not match task {task_id}")
+        task.status = TaskStatus.PENDING.value
+        plan = await self.session.get(RuntimePlan, plan_id, with_for_update=True)
+        if plan is not None:
+            plan.status = PlanStatus.ACTIVE.value
+        await self.session.flush()
+        return task
 
     async def pause_task_for_confirmation(
         self,
@@ -854,7 +1029,7 @@ class SqlPlanStore:
                     and task_id in task_snapshot["tasks"].get(consumer_task_id, {}).get("depends_on", [])
                 ):
                     need.status = RequirementStatus.RESOLVED.value
-                    need.resolved_value = produced[need.need_key]
+                    need.resolved_value = produced[need.need_key].model_dump(mode="json")
                     need.resolver_task_id = task_id
         elif result.outcome == TaskOutcome.NEEDS_DEPENDENCY:
             row.status = TaskStatus.WAITING_DEPENDENCY.value

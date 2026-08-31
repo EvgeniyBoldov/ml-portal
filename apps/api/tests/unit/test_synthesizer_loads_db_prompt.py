@@ -93,13 +93,13 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
 async def test_synthesizer_finalizes_deduplicated_attachment_download_urls():
     synth = Synthesizer(session=SimpleNamespace(), llm_client=_LLMClientProbe([]))
     state = _runtime_state()
-    state.agent_results = [{
-        "success": True,
-        "summary": "Файл готов",
-        "attachments": [
+    state.task_results = [{
+        "outcome": "completed",
+        "description": "Файл готов",
+        "verified": {"artifacts": [
             {"artifact_id": "artifact-1", "file_name": "result.txt"},
             {"artifact_id": "artifact-1", "file_name": "result.txt"},
-        ],
+        ]},
     }]
 
     events = [
@@ -211,8 +211,8 @@ async def test_synthesizer_honors_platform_chunk_size_override_for_short_circuit
     llm = _LLMClientProbe([])
     synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)
     state = _runtime_state()
-    state.agent_results = [
-        {"success": True, "summary": "x" * 47},
+    state.task_results = [
+        {"outcome": "completed", "description": "x" * 47},
     ]
 
     events = [

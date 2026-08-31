@@ -34,6 +34,15 @@ class CredentialReference:
     owner_type: str  # "user" | "tenant" | "platform"
 
 
+@dataclass(frozen=True)
+class CredentialDeduplicationReport:
+    """Non-secret result of an operator-controlled active-credential cleanup."""
+
+    instance_id: Optional[UUID]
+    groups_deduplicated: int
+    deactivated_credential_ids: List[UUID]
+
+
 class CredentialService:
     """
     Сервис для управления credentials v2 (owner-based).
@@ -72,6 +81,16 @@ class CredentialService:
             encrypted_payload = self.crypto.encrypt(payload)
         except CryptoError as e:
             raise CredentialError(f"Failed to encrypt credentials: {e}")
+
+        # A replacement is atomic within the request transaction: retain the
+        # historical rows, but leave only the newly supplied credential active
+        # for this instance/owner scope.
+        await self._deactivate_active_for_owner(
+            instance_id=instance_id,
+            owner_user_id=owner_user_id,
+            owner_tenant_id=owner_tenant_id,
+            owner_platform=owner_platform,
+        )
 
         credential = Credential(
             instance_id=instance_id,
@@ -122,6 +141,14 @@ class CredentialService:
                 raise CredentialError(f"Failed to encrypt credentials: {e}")
 
         if is_active is not None:
+            if is_active:
+                await self._deactivate_active_for_owner(
+                    instance_id=cred.instance_id,
+                    owner_user_id=cred.owner_user_id,
+                    owner_tenant_id=cred.owner_tenant_id,
+                    owner_platform=cred.owner_platform,
+                    exclude_id=cred.id,
+                )
             cred.is_active = is_active
 
         return await self.repo.update(cred)
@@ -209,6 +236,66 @@ class CredentialService:
             user_id=user_id,
             tenant_id=tenant_id,
         )
+
+    async def deduplicate_active_credentials(
+        self,
+        *,
+        instance_id: Optional[UUID] = None,
+    ) -> CredentialDeduplicationReport:
+        """Keep the newest active row per instance/owner scope.
+
+        This is deliberately an application-level, admin-only operation rather
+        than an Alembic data migration: credentials are tenant/user data and
+        must not be silently changed while schema migrations run.
+        """
+        rows = await self.repo.lock_all_active(instance_id=instance_id)
+        keeper_by_scope: dict[tuple[UUID, str, Optional[UUID]], Credential] = {}
+        deactivated: list[UUID] = []
+        groups: set[tuple[UUID, str, Optional[UUID]]] = set()
+        for credential in rows:
+            key = self._owner_scope_key(credential)
+            if key not in keeper_by_scope:
+                keeper_by_scope[key] = credential
+                continue
+            credential.is_active = False
+            deactivated.append(credential.id)
+            groups.add(key)
+        if deactivated:
+            await self.session.flush()
+        return CredentialDeduplicationReport(
+            instance_id=instance_id,
+            groups_deduplicated=len(groups),
+            deactivated_credential_ids=deactivated,
+        )
+
+    async def _deactivate_active_for_owner(
+        self,
+        *,
+        instance_id: UUID,
+        owner_user_id: Optional[UUID],
+        owner_tenant_id: Optional[UUID],
+        owner_platform: bool,
+        exclude_id: Optional[UUID] = None,
+    ) -> None:
+        active = await self.repo.lock_active_for_owner(
+            instance_id=instance_id,
+            owner_user_id=owner_user_id,
+            owner_tenant_id=owner_tenant_id,
+            owner_platform=owner_platform,
+            exclude_id=exclude_id,
+        )
+        for credential in active:
+            credential.is_active = False
+        if active:
+            await self.session.flush()
+
+    @staticmethod
+    def _owner_scope_key(credential: Credential) -> tuple[UUID, str, Optional[UUID]]:
+        if credential.owner_platform:
+            return (credential.instance_id, "platform", None)
+        if credential.owner_user_id is not None:
+            return (credential.instance_id, "user", credential.owner_user_id)
+        return (credential.instance_id, "tenant", credential.owner_tenant_id)
 
     async def _decrypt(self, cred: Credential) -> DecryptedCredentials:
         """Helper to decrypt credentials"""

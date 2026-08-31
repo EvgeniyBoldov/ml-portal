@@ -17,6 +17,7 @@ def test_constraints_prompt_hides_sandbox_notes_by_default():
         exec_request=_exec_request(),
         policy_limits=SimpleNamespace(
             max_steps=1,
+            max_llm_calls=1,
             max_tool_calls_total=1,
             max_wall_time_ms=1,
             tool_timeout_ms=1,
@@ -37,6 +38,7 @@ def test_constraints_prompt_includes_sandbox_notes_when_flag_enabled():
         exec_request=_exec_request(),
         policy_limits=SimpleNamespace(
             max_steps=1,
+            max_llm_calls=1,
             max_tool_calls_total=1,
             max_wall_time_ms=1,
             tool_timeout_ms=1,

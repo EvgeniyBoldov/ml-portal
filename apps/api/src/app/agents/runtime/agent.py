@@ -45,6 +45,7 @@ from app.agents.protocol import (
     parse_llm_response,
     parse_native_tool_calls,
 )
+from app.agents.operation_publication import PUBLIC_RETRIEVAL_OPERATIONS
 from app.agents.runtime.tools import ConfirmationRequiredError
 from app.agents.runtime.base import BaseRuntime
 from app.agents.runtime.published_capabilities import (
@@ -343,6 +344,23 @@ class AgentToolRuntime(BaseRuntime):
         # same call id so one user-visible request remains one journal entity.
         pending_llm_call_id: Optional[str] = None
         pending_logical_llm_call_id: Optional[str] = None
+        freshness_reminder_sent = False
+        require_retrieval = str(ctx.extra.get("task_freshness_policy") or "allow_memory") == "require_retrieval"
+
+        def has_fresh_retrieval_receipt() -> bool:
+            ledger = ctx.extra.get("runtime_tool_ledger")
+            phase_id = str(ctx.extra.get("task_freshness_phase_id") or "")
+            for entry in getattr(ledger, "entries", []):
+                if phase_id and getattr(entry, "phase_id", None) != phase_id:
+                    continue
+                if getattr(entry, "status", None) != "succeeded" or not getattr(entry, "success", False):
+                    continue
+                operation = str(getattr(entry, "operation", "") or "")
+                if operation.startswith("instance."):
+                    operation = operation.removeprefix("instance.").split(".", 1)[-1]
+                if operation in PUBLIC_RETRIEVAL_OPERATIONS:
+                    return True
+            return False
 
         try:
             for step in range(policy.max_llm_calls):
@@ -678,81 +696,30 @@ class AgentToolRuntime(BaseRuntime):
                     parsed = parse_llm_response(raw_response, strict=strict_protocol)
 
                 if not parsed.has_tool_calls:
-                    if available_operations and not loop_state.tool_outputs:
-                        loop_state.steps_without_successful_tool_result += 1
-                        if loop_state.steps_without_successful_tool_result >= max_steps_without_success:
-                            limit_message = (
-                                "Agent repeatedly skipped required operation calls"
-                            )
-                            yield RuntimeEvent.error(
-                                limit_message,
-                                recoverable=False,
-                                error_code=RuntimeErrorCode.AGENT_REQUIRED_OPERATION_CALL_MISSING,
-                                retryable=False,
-                                user_message=limit_message,
-                                operator_message=limit_message,
-                                source="runtime",
-                            )
-                            await run_session.record_event("budget_snapshot", _build_budget_snapshot_payload(
-                                owner_id=budget_owner_id,
-                                reason="limit_exceeded",
-                                step=step + 1,
-                                policy=policy,
-                                loop_state=loop_state,
-                                start_time=loop_state.start_time,
-                                delta={},
-                            ))
-                            await run_session.finish("failed", limit_message)
-                            return
-                        if step + 1 >= policy.max_llm_calls:
-                            yield RuntimeEvent.error(
-                                "Agent failed to call required operations before answering",
-                                recoverable=False,
-                                error_code=RuntimeErrorCode.AGENT_REQUIRED_OPERATION_CALL_MISSING,
-                                retryable=False,
-                                user_message="Agent failed to call required operations before answering",
-                                operator_message="Agent failed to call required operations before answering",
-                                source="runtime",
-                            )
-                            await run_session.finish(
-                                "failed",
-                                "no operation call before final answer",
-                            )
-                            return
-
+                    # A task may answer from the bounded memory/dependency
+                    # context even when operations happen to be available.
+                    # Freshness is the only exception, and gets exactly one
+                    # targeted opportunity to retrieve before runtime decides
+                    # that the business dependency is unavailable.
+                    if require_retrieval and not freshness_reminder_sent and not has_fresh_retrieval_receipt():
+                        freshness_reminder_sent = True
                         llm_messages.append({"role": "assistant", "content": raw_response})
-                        llm_messages.append(
-                            {
-                                "role": "user",
-                                "content": self._required_operation_retry_instruction(
-                                    platform_config=platform_config,
-                                    sandbox_overrides=sandbox_ov,
-                                ),
-                            }
-                        )
+                        llm_messages.append({
+                            "role": "user",
+                            "content": "This task requires fresh retrieval. Use an available retrieval operation now; memory and prior context alone cannot complete it.",
+                        })
                         if native_tool_calling:
                             loop_state.force_tool_choice = True
-                        retry_payload = {
-                            "step": step + 1,
-                            "reason": "no_tool_call_before_answer",
-                            "available_operations": serialize_published_operations(available_operations),
-                            "llm_call_id": llm_call_id,
-                            "logical_llm_call_id": logical_llm_call_id,
-                            "entity_type": "llm_call",
-                            "entity_id": llm_call_id,
-                            "parent_entity_type": "agent_execution",
-                            "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
-                        }
-                        await run_session.record_event(
-                            "protocol_retry",
-                            retry_payload,
-                        )
-                        yield RuntimeEvent(RuntimeEventType.PROTOCOL_RETRY, retry_payload)
-                        loop_state.retry_count += 1
                         pending_llm_call_id = llm_call_id
                         pending_logical_llm_call_id = logical_llm_call_id
+                        await run_session.record_event("protocol_retry", {
+                            "step": step + 1,
+                            "reason": "fresh_retrieval_required",
+                            "llm_call_id": llm_call_id,
+                            "logical_llm_call_id": logical_llm_call_id,
+                        })
+                        yield RuntimeEvent(RuntimeEventType.PROTOCOL_RETRY, {"reason": "fresh_retrieval_required"})
                         continue
-
                     # No operation calls — agent decided to answer directly
                     await ctx.log_intent(
                         self._intent_message(

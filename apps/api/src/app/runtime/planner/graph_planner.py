@@ -19,8 +19,10 @@ from app.runtime.orchestrator_contracts import (
     PlanRequest,
     PlannedTask,
     PlannerDecisionKind,
+    PlanNodeKind,
     TaskOutputSpec,
     TaskSuccessAction,
+    FreshnessPolicy,
 )
 from app.runtime.input_builders import PlannerInputBuilder
 
@@ -34,19 +36,23 @@ class PlannerPlannedTask(BaseModel):
     """
 
     task_id: str = Field(..., min_length=1)
-    executor: str = Field(..., min_length=1)
+    kind: PlanNodeKind = PlanNodeKind.AGENT
+    executor: Optional[str] = Field(default=None, min_length=1)
     intent: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
     depends_on: List[str] = Field(default_factory=list)
     on_success: TaskSuccessAction = TaskSuccessAction.CONTINUE
+    freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
 
     model_config = {"extra": "forbid"}
 
-    def to_runtime_task(self) -> PlannedTask:
-        return PlannedTask(
+    @model_validator(mode="after")
+    def validate_kind(self) -> "PlannerPlannedTask":
+        PlannedTask(
             task_id=self.task_id,
+            kind=self.kind,
             executor=self.executor,
             intent=self.intent,
             instructions=self.instructions,
@@ -55,6 +61,23 @@ class PlannerPlannedTask(BaseModel):
             depends_on=self.depends_on,
             needs=[],
             on_success=self.on_success,
+            freshness_policy=self.freshness_policy,
+        )
+        return self
+
+    def to_runtime_task(self) -> PlannedTask:
+        return PlannedTask(
+            task_id=self.task_id,
+            kind=self.kind,
+            executor=self.executor,
+            intent=self.intent,
+            instructions=self.instructions,
+            inputs=self.inputs,
+            expected_outputs=self.expected_outputs,
+            depends_on=self.depends_on,
+            needs=[],
+            on_success=self.on_success,
+            freshness_policy=self.freshness_policy,
         )
 
 

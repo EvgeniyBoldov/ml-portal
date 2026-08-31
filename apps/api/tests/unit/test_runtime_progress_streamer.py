@@ -22,4 +22,5 @@ def _description(mode: str, iteration_type: str) -> str:
 def test_planner_iteration_progress_uses_iteration_mode() -> None:
     assert _description("initial", "decision") == "Формирую план выполнения"
     assert _description("replan", "replan") == "Перепланирую выполнение"
+    assert _description("checkpoint", "checkpoint") == "Определяю следующие шаги"
     assert _description("resume", "execution") == "Выполняю план"

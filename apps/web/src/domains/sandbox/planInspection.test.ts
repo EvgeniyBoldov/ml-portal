@@ -17,8 +17,8 @@ describe('plan inspection projection', () => {
       rationale: 'Первая попытка не удалась',
       trigger: undefined,
       tasks: [
-        { taskId: 'discover', title: 'Найти шаблон', intent: undefined, objective: 'Выбрать готовый шаблон', instructions: undefined, executor: 'viewer', status: 'Готово', dependencies: [], expectedOutputs: [], inputs: undefined },
-        { taskId: 'fill', title: 'Заполнить шаблон', intent: undefined, objective: 'Создать файл', instructions: undefined, executor: 'net.enginer', status: undefined, dependencies: ['Найти шаблон'], expectedOutputs: ['Готовый файл'], inputs: undefined },
+        { taskId: 'discover', kind: 'agent', title: 'Найти шаблон', intent: undefined, objective: 'Выбрать готовый шаблон', instructions: undefined, executor: 'viewer', status: 'Готово', dependencies: [], expectedOutputs: [], inputs: undefined },
+        { taskId: 'fill', kind: 'agent', title: 'Заполнить шаблон', intent: undefined, objective: 'Создать файл', instructions: undefined, executor: 'net.enginer', status: undefined, dependencies: ['Найти шаблон'], expectedOutputs: ['Готовый файл'], inputs: undefined },
       ],
       removedTasks: ['obsolete'],
     });
@@ -32,7 +32,7 @@ describe('plan inspection projection', () => {
       executor: 'net.enginer',
       task_inputs: { row_id: 'template-1' },
     })).toEqual({
-      taskId: 'fill',
+      taskId: 'fill', kind: 'agent',
       title: 'fill_template',
       intent: 'fill_template',
       objective: undefined,
@@ -42,6 +42,17 @@ describe('plan inspection projection', () => {
       dependencies: [],
       expectedOutputs: [],
       inputs: { row_id: 'template-1' },
+    });
+  });
+
+  it('projects a planner checkpoint as a control node', () => {
+    expect(projectPlanTask({
+      task_id: 'after-discovery', kind: 'planner', intent: 'Assess findings',
+      instructions: 'Determine following work', depends_on: ['discover'],
+    })).toEqual({
+      taskId: 'after-discovery', kind: 'planner', title: 'Assess findings', intent: 'Assess findings',
+      objective: undefined, instructions: 'Determine following work', executor: 'planner',
+      status: undefined, dependencies: ['discover'], expectedOutputs: [], inputs: undefined,
     });
   });
 });

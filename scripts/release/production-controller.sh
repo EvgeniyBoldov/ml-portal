@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Install this file as /usr/local/sbin/ml-portal-deploy (root:root, mode 0750).
-# It is the only command the production GitLab Runner may invoke directly.
+# It is the only command the production GitLab Runner may invoke through sudo.
 
 set -Eeuo pipefail
 

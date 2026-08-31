@@ -417,6 +417,7 @@ export const traceResultStatusLabel = (status: TraceResultStatus): string => ({
 const isEndEvent = (type: string): boolean => type.endsWith('_end') || type.endsWith('_finished');
 const iterationLabel = (type: string, number: number): string => {
   if (type === 'replan') return 'Перепланирование';
+  if (type === 'checkpoint') return 'Контрольная точка';
   if (type === 'decision') return number > 1 ? 'Перепланирование' : 'Планирование';
   if (type === 'execution') return 'Исполнение';
   if (type === 'synthesis') return 'Подготовка ответа';
@@ -1334,6 +1335,8 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         || (executorRuns.some((executor) => executor.executorSlug === 'planner') ? 'decision' : 'execution');
       const task = iterationType === 'replan'
         ? 'Корректировка плана'
+        : iterationType === 'checkpoint'
+          ? 'Определение следующих шагов'
         : executorRuns.map((executor) => executor.task).find(Boolean)
         || asString(start.payload.task_title)
         || asString(start.payload.goal)

@@ -9,9 +9,9 @@ from app.agents.runtime.agent import AgentToolRuntime
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.events import RuntimeEvent
 from app.runtime.orchestrator_contracts import (
-    TaskOutputSpec,
+    AgentExecutionCompletion,
+    AgentExecutionResult,
     TaskExecutionError,
-    TaskOutcome,
     TaskRequest,
 )
 
@@ -29,16 +29,11 @@ def _request() -> TaskRequest:
 async def test_retryable_agent_error_uses_technical_task_failure_path() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
 
-    async def emit_retryable_error(*, runtime_state, **_kwargs):
-        runtime_state.agent_results.append(
-            {
-                "success": False,
-                "summary": "Agent LLM call failed: llm_rate_limited",
-                "error_code": "llm_rate_limited",
-                "retryable": True,
-                "retry_after_ms": 2_000,
-            }
-        )
+    async def emit_retryable_error(*, ctx, **_kwargs):
+        ctx.extra["agent_execution_failure"] = {
+            "code": "llm_rate_limited", "message": "Agent LLM call failed: llm_rate_limited",
+            "retryable": True, "retry_after_ms": 2_000,
+        }
         yield RuntimeEvent.error(
             "Agent LLM call failed: llm_rate_limited",
             retryable=True,
@@ -46,10 +41,10 @@ async def test_retryable_agent_error_uses_technical_task_failure_path() -> None:
         )
 
     executor.execute = emit_retryable_error  # type: ignore[method-assign]
-    state = SimpleNamespace(agent_results=[])
+    state = SimpleNamespace()
 
     with pytest.raises(TaskExecutionError) as raised:
-        await executor.execute_task(
+        await executor.execute_attempt(
             request=_request(),
             runtime_state=state,
             messages=[],
@@ -64,24 +59,20 @@ async def test_retryable_agent_error_uses_technical_task_failure_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_retryable_agent_error_remains_unfulfillable() -> None:
+async def test_business_unfulfillable_is_a_normal_execution_result() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
 
-    async def emit_non_retryable_error(*, runtime_state, **_kwargs):
-        runtime_state.agent_results.append(
-            {
-                "success": False,
-                "summary": "Agent request exceeds provider limits",
-                "error_code": "llm_request_too_large",
-                "retryable": False,
-            }
+    async def emit_non_retryable_error(*, ctx, **_kwargs):
+        ctx.extra["agent_execution_result"] = AgentExecutionResult(
+            completion=AgentExecutionCompletion.UNFULFILLABLE,
+            description="Agent request exceeds provider limits",
         )
-        yield RuntimeEvent.error("Agent request exceeds provider limits", retryable=False)
+        yield RuntimeEvent.status("done")
 
     executor.execute = emit_non_retryable_error  # type: ignore[method-assign]
-    state = SimpleNamespace(agent_results=[])
+    state = SimpleNamespace()
 
-    result = await executor.execute_task(
+    result = await executor.execute_attempt(
         request=_request(),
         runtime_state=state,
         messages=[],
@@ -90,8 +81,7 @@ async def test_non_retryable_agent_error_remains_unfulfillable() -> None:
         tenant_id=AsyncMock(),
     )
 
-    assert result.outcome is TaskOutcome.UNFULFILLABLE
-    assert result.reason_code == "llm_request_too_large"
+    assert result.completion is AgentExecutionCompletion.UNFULFILLABLE
 
 
 def test_agent_retry_delay_respects_provider_hint() -> None:
@@ -116,23 +106,21 @@ def test_artifact_only_response_detects_unencoded_file_names() -> None:
 
 
 @pytest.mark.asyncio
-async def test_artifact_binds_semantic_expected_output_key() -> None:
+async def test_agent_execution_keeps_runtime_verified_artifacts() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
-    request = _request()
-    request.expected_outputs = [TaskOutputSpec(key="completed_request", description="Filled form")]
 
-    async def emit_success(*, runtime_state, **_kwargs):
-        runtime_state.agent_results.append({
-            "success": True,
-            "summary": "form filled",
-            "attachments": [{"artifact_id": "artifact-1", "file_name": "request.xlsx"}],
-        })
+    async def emit_success(*, ctx, **_kwargs):
+        ctx.extra["agent_execution_result"] = AgentExecutionResult(
+            completion=AgentExecutionCompletion.FULFILLED,
+            description="form filled",
+            verified={"artifacts": [{"artifact_id": "artifact-1", "file_name": "request.xlsx"}]},
+        )
         yield RuntimeEvent.status("done")
 
     executor.execute = emit_success  # type: ignore[method-assign]
-    state = SimpleNamespace(agent_results=[])
-    result = await executor.execute_task(
-        request=request,
+    state = SimpleNamespace()
+    result = await executor.execute_attempt(
+        request=_request(),
         runtime_state=state,
         messages=[],
         ctx=SimpleNamespace(extra={}),
@@ -140,26 +128,25 @@ async def test_artifact_binds_semantic_expected_output_key() -> None:
         tenant_id=AsyncMock(),
     )
 
-    assert result.outputs["completed_request"] == result.outputs["attachments"][0]
+    assert result.verified["artifacts"][0]["artifact_id"] == "artifact-1"
 
 
 @pytest.mark.asyncio
-async def test_summary_binds_semantic_expected_output_key_for_data_agent() -> None:
+async def test_agent_execution_keeps_declared_data_output() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
-    request = _request()
-    request.expected_outputs = [TaskOutputSpec(key="device_info", description="Device details")]
 
-    async def emit_success(*, runtime_state, **_kwargs):
-        runtime_state.agent_results.append({
-            "success": True,
-            "summary": "i121-mgmt-sw05: active, 172.25.253.18/25",
-        })
+    async def emit_success(*, ctx, **_kwargs):
+        ctx.extra["agent_execution_result"] = AgentExecutionResult(
+            completion=AgentExecutionCompletion.FULFILLED,
+            description="i121-mgmt-sw05: active, 172.25.253.18/25",
+            outputs={"device_info": {"text": "i121-mgmt-sw05: active, 172.25.253.18/25"}},
+        )
         yield RuntimeEvent.status("done")
 
     executor.execute = emit_success  # type: ignore[method-assign]
-    state = SimpleNamespace(agent_results=[])
-    result = await executor.execute_task(
-        request=request,
+    state = SimpleNamespace()
+    result = await executor.execute_attempt(
+        request=_request(),
         runtime_state=state,
         messages=[],
         ctx=SimpleNamespace(extra={}),
@@ -167,4 +154,4 @@ async def test_summary_binds_semantic_expected_output_key_for_data_agent() -> No
         tenant_id=AsyncMock(),
     )
 
-    assert result.outputs["device_info"] == result.summary
+    assert result.outputs["device_info"].text == result.description

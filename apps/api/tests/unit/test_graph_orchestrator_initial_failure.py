@@ -52,7 +52,7 @@ class _InvalidPlanner:
 
 
 class _UnusedExecutor:
-    async def execute_task(self, **_kwargs):
+    async def execute_attempt(self, **_kwargs):
         raise AssertionError("task execution must not start after planner failure")
 
 

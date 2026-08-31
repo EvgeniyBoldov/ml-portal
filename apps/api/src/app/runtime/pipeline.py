@@ -814,22 +814,25 @@ class RuntimePipeline:
         When RUNTIME_MEMORY_INLINE is False (default), the actual writeback
         is off-loaded to Celery for lower SSE latency.
         """
-        # Sync agent_results from runtime_state to turn_mem
+        # Sync logical task results from runtime_state to the legacy memory
+        # transport.  The transport remains a summary-only compatibility
+        # surface; executors do not write it directly.
+        task_projection = runtime_state.task_results or runtime_state.agent_results
         turn_mem.agent_results = [
             AgentResultSnippet(
-                agent=str(item.get("agent_slug") or item.get("agent") or ""),
-                summary=str(item.get("summary") or ""),
-                success=bool(item.get("success", True)),
-                artifacts=list(item.get("artifacts") or []),
+                agent=str(item.get("executor") or item.get("agent_slug") or item.get("agent") or ""),
+                summary=str(item.get("description") or item.get("summary") or ""),
+                success=item.get("outcome") in (None, "completed") and bool(item.get("success", True)),
+                artifacts=list(item.get("artifacts") or (item.get("verified") or {}).get("artifacts") or []),
             )
-            for item in runtime_state.agent_results
+            for item in task_projection
         ]
         turn_mem.artifacts = [
             item.model_dump(mode="json") for item in runtime_state.attachment_contexts
         ] + [
             artifact
-            for item in runtime_state.agent_results
-            for artifact in (item.get("artifacts") or [])
+            for item in task_projection
+            for artifact in (item.get("artifacts") or (item.get("verified") or {}).get("artifacts") or [])
             if isinstance(artifact, dict)
         ]
         turn_mem.fact_run_ref = str(runtime_state.run_id)

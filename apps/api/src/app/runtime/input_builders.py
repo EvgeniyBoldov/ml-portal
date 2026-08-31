@@ -43,13 +43,15 @@ class PlannerInputBuilder:
             "mode": "replan" if planner_plan["has_existing_graph"] else "initial",
             "replan_reason": request.trigger,
             "plan": planner_plan,
-            "completed_outputs": request.completed_outputs or {},
             "available_artifacts": self._normalize_artifacts(request.available_artifacts or []),
             "needs": request.needs or [],
             "last_failure": request.last_failure,
             "memory_context": request.memory_context or [],
             "available_agents": agents,
         }
+        checkpoint = getattr(request, "checkpoint", None)
+        if isinstance(checkpoint, dict) and checkpoint:
+            payload["checkpoint"] = checkpoint
         user_response = str(getattr(request, "user_response", "") or "").strip()
         if user_response:
             payload["user_response"] = user_response
@@ -210,8 +212,11 @@ class SynthesizerInputBuilder:
                             rag_sources.append(dict(item.metadata["source"]))
 
         generated_files: List[Dict[str, Any]] = []
-        for item in state.agent_results:
+        task_projection = state.task_results or state.agent_results
+        for item in task_projection:
             item_attachments = item.get("attachments")
+            if not isinstance(item_attachments, list):
+                item_attachments = (item.get("verified") or {}).get("artifacts")
             if isinstance(item_attachments, list):
                 for att in item_attachments[-10:]:
                     if not isinstance(att, dict):

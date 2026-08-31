@@ -150,8 +150,8 @@ may perform a bounded read-only contextual tool loop before emitting that
 patch. Tool requests/results are typed, budgeted, redacted and journalled
 through the existing runtime logger.
 
-Successful task completion is not equivalent to terminal run completion. A
-planned task declares:
+Successful task completion is not equivalent to terminal run completion. An
+agent node may declare:
 
 ```text
 on_success = continue | replan
@@ -161,6 +161,12 @@ on_success = continue | replan
   when all its tasks are terminal;
 - `replan` sends the task's bounded outputs to the planner as
   `completed_outputs`, which creates the next plan revision.
+
+For a multi-task discovery phase, planner creates a separate `kind=planner`
+checkpoint node with dependencies on the discovery tasks. When it becomes
+ready, the runtime returns the full persisted plan graph (task results and
+artifact references, never file bodies) to planner and applies the next graph
+revision before completing the checkpoint.
 
 The planner needs an explicit `complete` decision for a replan whose context
 task already made the answer sufficient. An empty `apply_graph` is never a
@@ -179,8 +185,8 @@ project-memory tools.
 
 For a simple file summary the planner creates one context-reader task with
 `on_success=continue`; once that task completes, normal finalization produces
-the answer. For a file analysis that changes the next action, the reader task
-uses `on_success=replan` and returns a bounded structured context result.
+the answer. For a file analysis that changes the next action, the reader can
+feed a planner checkpoint that determines the following graph segment.
 
 ## Writeback and administration
 

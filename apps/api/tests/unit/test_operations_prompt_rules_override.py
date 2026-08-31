@@ -143,16 +143,16 @@ def test_operation_prompt_renderer_keeps_prompt_minimal_and_collection_aware():
         )()
     )
 
-    assert schema["function"]["name"] == "instance.reglament.collection.document.search"
+    assert schema["function"]["name"] == "collection.document.search"
     assert "Document Search" in schema["function"]["description"]
-    assert "bound to collection: reglament (document)" in schema["function"]["description"]
+    assert "requires collection_slug target (document)" in schema["function"]["description"]
     assert "result: documents" in schema["function"]["description"]
     assert "use this first when the task asks for document contents" in schema["function"]["description"]
     assert "exact call name" not in schema["function"]["description"]
     assert "canonical:" not in schema["function"]["description"]
     assert "x-runtime" not in schema
-    assert "collection_slug" not in schema["function"]["parameters"].get("properties", {})
-    assert "collection_slug" not in schema["function"]["parameters"].get("required", [])
+    assert "collection_slug" in schema["function"]["parameters"].get("properties", {})
+    assert "collection_slug" in schema["function"]["parameters"].get("required", [])
 
 
 def test_operation_prompt_renderer_publishes_public_collection_info_schema():

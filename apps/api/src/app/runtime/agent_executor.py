@@ -30,15 +30,17 @@ from app.agents.execution_preflight import ExecutionMode, ExecutionPreflight
 from app.core.config import get_settings
 from app.agents.operation_executor import DirectOperationExecutor
 from app.agents.runtime.agent import AgentToolRuntime
+from app.agents.operation_publication import PUBLIC_RETRIEVAL_OPERATIONS
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
-from app.runtime.contracts import AgentAnswerStatus, NeedSpec
+from app.runtime.contracts import NeedSpec
 from app.runtime.orchestrator_contracts import (
+    AgentExecutionResult,
     AgentTaskResult,
     TaskConfirmationRequired,
     TaskExecutionError,
-    TaskOutcome,
     TaskRequest,
+    parse_agent_execution_result,
 )
 from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.error_payloads import build_debug_payload
@@ -46,7 +48,6 @@ from app.agents.runtime.published_capabilities import (
     serialize_published_collections,
     serialize_published_operations,
 )
-from app.runtime.error_surface import build_user_safe_error_message
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.events import OrchestrationPhase
 from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
@@ -130,25 +131,11 @@ class AgentExecutor:
                 else str(exc)
             )
             logger.warning("Sub-agent preflight failed for %s: %s", agent_slug, error_message)
-            state.add_agent_result(
-                {
-                    "agent_slug": agent_slug,
-                    "summary": f"preflight_failed: {error_message}",
-                    "success": False,
-                    "outcome": "failed",
-                    "sufficient_for_phase": False,
-                    "missing_inputs": [],
-                    "error": error_message,
-                    "error_code": RuntimeErrorCode.AGENT_PRECHECK_FAILED.value,
-                    "retryable": False,
-                    "iteration": state.iter_count,
-                    "phase_id": task.task_id,
-                    "debug": {
-                        "exception_type": type(exc).__name__,
-                        "traceback": debug_traceback,
-                    },
-                }
-            )
+            ctx.extra["agent_execution_failure"] = {
+                "code": RuntimeErrorCode.AGENT_PRECHECK_FAILED.value,
+                "message": error_message,
+                "retryable": False,
+            }
             yield RuntimeEvent.error(
                 f"Sub-agent {agent_slug} unavailable: {error_message}",
                 recoverable=False,
@@ -165,20 +152,9 @@ class AgentExecutor:
 
         if sub_request.mode == ExecutionMode.UNAVAILABLE:
             msg = "sub_agent_unavailable"
-            state.add_agent_result(
-                {
-                    "agent_slug": agent_slug,
-                    "summary": msg,
-                    "success": False,
-                    "outcome": "failed",
-                    "sufficient_for_phase": False,
-                    "missing_inputs": [],
-                    "error": msg,
-                    "error_code": RuntimeErrorCode.AGENT_UNAVAILABLE.value,
-                    "retryable": False,
-                    "iteration": state.iter_count,
-                    "phase_id": task.task_id,
-                }
+            ctx.extra["agent_execution_result"] = AgentExecutionResult(
+                completion="unfulfillable",
+                description=msg,
             )
             yield RuntimeEvent.status(msg, agent=agent_slug)
             return
@@ -207,25 +183,21 @@ class AgentExecutor:
         ctx.extra["runtime_tool_reuse_enabled"] = bool(
             (platform_config or {}).get("runtime_tool_reuse_enabled", True),
         )
+        ctx.extra["task_freshness_policy"] = task.freshness_policy.value
+        ctx.extra["task_freshness_phase_id"] = task.task_id
+        ledger_start = len(state.tool_ledger.entries)
 
         # Fast-path fallback: do not spend LLM calls when planner chose CALL_AGENT,
         # but the sub-agent ended up with zero executable operations.
-        if not sub_request.resolved_operations:
+        if not sub_request.resolved_operations and task.freshness_policy.value == "allow_memory":
+            # No operations is not an execution error for a reasoning task.
+            # The normal model path below can still return a bounded answer.
+            pass
+        elif not sub_request.resolved_operations:
             msg = "sub_agent_no_operations"
-            state.add_agent_result(
-                {
-                    "agent_slug": agent_slug,
-                    "summary": msg,
-                    "success": False,
-                    "outcome": "failed",
-                    "sufficient_for_phase": False,
-                    "missing_inputs": [],
-                    "error": msg,
-                    "error_code": RuntimeErrorCode.AGENT_NO_OPERATIONS.value,
-                    "retryable": False,
-                    "iteration": state.iter_count,
-                    "phase_id": task.task_id,
-                }
+            ctx.extra["agent_execution_result"] = AgentExecutionResult(
+                completion="unfulfillable",
+                description=msg,
             )
             yield RuntimeEvent.status(msg, agent=agent_slug)
             return
@@ -345,109 +317,33 @@ class AgentExecutor:
                 debug=build_debug_payload(exc=exc),
             )
 
-        # 4. Summarize into AgentResult and enrich memory.
+        # 4. Normalize the terminal task contract.  Agent prose is not an
+        # implicit task result: graph tasks must end with strict JSON.
         raw_summary = final_content or "".join(buffered_answer)
-        # Keep only a bounded internal preview for task state and orchestration.
-        # This is not the user-facing response and must not replace the
-        # canonical FINAL/attachment transport.
-        summary_preview = raw_summary.strip()[:800]
-
-        # Parse structured needs from agent output if present
-        needs = self._parse_needs_from_content(raw_summary)
-        structured = self._parse_structured_response(raw_summary)
-        structured_outputs = structured.get("outputs") if isinstance(structured.get("outputs"), dict) else {}
-        structured_evidence = structured.get("evidence") if isinstance(structured.get("evidence"), dict) else {}
-        missing_inputs = [n.key for n in needs]
-
-        # Determine status/completion_kind based on success and needs
         if not success:
-            status = AgentAnswerStatus.FAILED
-            completion_kind = "error"
-        elif needs:
-            status = AgentAnswerStatus.NEEDS_INPUT
-            completion_kind = "paused_need"
-        else:
-            status = AgentAnswerStatus.COMPLETE
-            completion_kind = "answered"
-
-        # Invariant: paused_need never closes a phase — planner must route needs
-        sufficient_for_phase = (
-            False
-            if status == AgentAnswerStatus.NEEDS_INPUT
-            else bool(success and summary_preview)
-        )
-
-        outcome = "completed" if success else "failed"
-        if success and attachments and self._is_url_only_response(summary_preview):
-            # Artifact delivery is a structured transport concern.  Do not
-            # promote an agent-invented storage URL to the user-facing answer;
-            # the final event carries the canonical download URL separately.
-            names = [
-                str(item.get("file_name") or "file")
-                for item in attachments[:5]
-                if isinstance(item, dict)
-            ]
-            result_summary = "Создан файл: " + ", ".join(names)
-        elif summary_preview:
-            result_summary = summary_preview
-        elif success and attachments:
-            names = [
-                str(item.get("file_name") or "file")
-                for item in attachments[:5]
-                if isinstance(item, dict)
-            ]
-            result_summary = "Создан файл: " + ", ".join(names)
-        else:
-            result_summary = "no_output" if success else (final_error or "failed")
-
-        # A reused tool result may be observed more than once when a model
-        # repeats an already completed native tool call. Keep one attachment
-        # per artifact so synthesis and the final event stay deterministic.
-        attachments = self._dedupe_artifacts(attachments)
-        attachments = [
-            item for item in attachments
-            if str(item.get("artifact_id") or "") not in state.deleted_artifact_ids
-        ]
-        artifacts = [
-            item for item in self._dedupe_artifacts(artifacts)
-            if str(item.get("artifact_id") or "") not in state.deleted_artifact_ids
-        ]
-
-        state.add_agent_result(
-            {
-                "agent_slug": agent_slug,
-                "summary": result_summary,
-                "phase_id": task.task_id,
-                "iteration": state.iter_count,
-                "success": success,
-                "outcome": outcome,
-                "status": status.value,
-                "completion_kind": completion_kind,
-                "sufficient_for_phase": sufficient_for_phase,
-                "missing_inputs": missing_inputs,
-                "needs": [n.model_dump() for n in needs],
-                "outputs": {
-                    **structured_outputs,
-                    "attachments": attachments,
-                    "artifacts": artifacts,
-                },
-                "evidence": structured_evidence,
-                "error": final_error,
-                "error_code": final_error_code,
-                "retryable": final_retryable,
+            ctx.extra["agent_execution_failure"] = {
+                "code": final_error_code or "agent_failed",
+                "message": final_error or "Task execution failed",
+                "retryable": bool(final_retryable),
                 "retry_after_ms": final_retry_after_ms,
-                "user_safe_error": (
-                    build_user_safe_error_message(
-                        retryable=final_retryable,
-                        error_code=final_error_code,
-                    )
-                    if not success
-                    else None
-                ),
-                "attachments": attachments,
-                "artifacts": artifacts,
             }
-        )
+        else:
+            try:
+                execution = parse_agent_execution_result(raw_summary)
+            except ValueError as exc:
+                ctx.extra["agent_execution_failure"] = {
+                    "code": "agent_task_completion_invalid",
+                    "message": str(exc),
+                    "retryable": True,
+                }
+            else:
+                verified = self._verified_task_result(
+                    task=task,
+                    ledger_entries=state.tool_ledger.entries[ledger_start:],
+                )
+                ctx.extra["agent_execution_result"] = execution.model_copy(
+                    update={"verified": verified, "receipt_refs": list(verified.get("receipts") or [])}
+                )
 
         # Store sources in runtime_state for synthesizer access
         if sub_sources:
@@ -479,7 +375,7 @@ class AgentExecutor:
             # Limit to 50
             sources_section.items = sources_section.items[-50:]
 
-    async def execute_task(
+    async def execute_attempt(
         self,
         *,
         request: TaskRequest,
@@ -494,13 +390,12 @@ class AgentExecutor:
         lifecycle_agent_execution_id: Optional[str] = None,
         runtime_log_parent: Optional[Dict[str, str]] = None,
         **_: Any,
-    ) -> AgentTaskResult:
-        """Consume the agent stream and expose the graph task-result protocol.
+    ) -> AgentExecutionResult:
+        """Consume one executor stream and return its normalized result.
 
         Every agent event is persisted by the root sink before the graph turns
         the terminal result into a state transition.
         """
-        before = len(runtime_state.agent_results)
         confirmation_payload: Optional[Dict[str, Any]] = None
         logger = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
         if runtime_log_parent:
@@ -526,86 +421,73 @@ class AgentExecutor:
                     await logger.emit(event, phase=OrchestrationPhase.AGENT)
         if confirmation_payload is not None:
             raise TaskConfirmationRequired(confirmation_payload)
-        payload = runtime_state.agent_results[-1] if len(runtime_state.agent_results) > before else {}
-        raw_needs = payload.get("needs") if isinstance(payload, dict) else []
-        task_needs = []
-        for item in raw_needs if isinstance(raw_needs, list) else []:
-            if not isinstance(item, dict):
+        failure = ctx.extra.pop("agent_execution_failure", None)
+        if isinstance(failure, dict):
+            retry_after_ms = failure.get("retry_after_ms")
+            raise TaskExecutionError(
+                code=str(failure.get("code") or "agent_failed"),
+                message=str(failure.get("message") or "Task execution failed"),
+                retryable=bool(failure.get("retryable")),
+                details={"retry_after_ms": retry_after_ms}
+                if isinstance(retry_after_ms, int) and retry_after_ms > 0 else {},
+            )
+        execution = ctx.extra.pop("agent_execution_result", None)
+        if not isinstance(execution, AgentExecutionResult):
+            raise TaskExecutionError(
+                code="agent_task_completion_missing",
+                message="Agent did not return a terminal task completion",
+                retryable=True,
+            )
+        return execution
+
+    async def execute_task(self, **kwargs: Any) -> AgentTaskResult:
+        """Compatibility adapter for legacy direct task-executor callers."""
+        from app.runtime.task_result_reducer import TaskAttemptResultReducer
+
+        request = kwargs["request"]
+        execution = await self.execute_attempt(**kwargs)
+        return TaskAttemptResultReducer().reduce(request=request, execution=execution)
+
+    @staticmethod
+    def _verified_task_result(*, task: TaskRequest, ledger_entries: List[Any]) -> Dict[str, Any]:
+        """Project only receipts observed by runtime during this attempt."""
+        receipts: List[Dict[str, Any]] = []
+        evidence: Dict[str, Any] = {}
+        artifacts: List[Dict[str, Any]] = []
+        memory_candidates: List[Dict[str, Any]] = []
+        fresh_retrieval = False
+        for entry in ledger_entries:
+            if getattr(entry, "status", None) != "succeeded" or not getattr(entry, "success", False):
                 continue
-            task_needs.append({
-                "ref": str(item.get("ref") or item.get("key") or "need"),
-                "key": str(item.get("key") or "need"),
-                "kind": str(item.get("kind") or "data"),
-                "description": str(item.get("description") or item.get("key") or "Need additional input"),
-                "schema": dict(item.get("schema") or {}),
-                "required": bool(item.get("required", True)),
-                "context": dict(item.get("context") or {}),
-            })
-        if task_needs:
-            return AgentTaskResult(
-                outcome=TaskOutcome.NEEDS_DEPENDENCY,
-                summary=str(payload.get("summary") or ""),
-                outputs=dict(payload.get("outputs") or {}),
-                checkpoint=dict(payload.get("checkpoint") or {}),
-                needs=task_needs,
-                evidence=dict(payload.get("evidence") or {}),
-            )
-        if not bool(payload.get("success", False)):
-            retryable = bool(payload.get("retryable"))
-            error_code = str(payload.get("error_code") or "agent_failed")
-            summary = str(payload.get("summary") or "Task execution failed")
-            if retryable:
-                retry_after_ms = payload.get("retry_after_ms")
-                details = (
-                    {"retry_after_ms": retry_after_ms}
-                    if isinstance(retry_after_ms, int) and retry_after_ms > 0
-                    else {}
-                )
-                raise TaskExecutionError(
-                    code=error_code,
-                    message=summary,
-                    retryable=True,
-                    details=details,
-                )
-            return AgentTaskResult(
-                outcome=TaskOutcome.UNFULFILLABLE,
-                summary=summary,
-                reason_code=error_code,
-            )
-        outputs = {
-            **dict(payload.get("outputs") or {}),
-            "summary": str(payload.get("summary") or ""),
-            "attachments": list(payload.get("attachments") or []),
-            "artifacts": list(payload.get("artifacts") or []),
+            operation = str(getattr(entry, "operation", "") or "")
+            normalized = operation.removeprefix("instance.").split(".", 1)[-1] if operation.startswith("instance.") else operation
+            is_retrieval = normalized in PUBLIC_RETRIEVAL_OPERATIONS
+            fresh_retrieval = fresh_retrieval or is_retrieval
+            receipt = {
+                "call_id": str(getattr(entry, "call_id", "")),
+                "operation": operation,
+                "result_fingerprint": getattr(entry, "result_fingerprint", None),
+                "result_preview": getattr(entry, "result_preview", None),
+                "retrieval": is_retrieval,
+            }
+            receipts.append(receipt)
+            evidence[receipt["call_id"]] = {"operation": operation, "result_fingerprint": receipt["result_fingerprint"]}
+            artifacts.extend(AgentExecutor._extract_artifacts(getattr(entry, "result_data", None)))
+            if normalized in {"project_memory.mark", "memory.mark"}:
+                memory_candidates.append({
+                    "call_id": receipt["call_id"],
+                    "result_fingerprint": receipt["result_fingerprint"],
+                    "status": "accepted_candidate",
+                })
+        artifacts = AgentExecutor._dedupe_artifacts(artifacts)
+        return {
+            "status": "observed",
+            "fresh_retrieval": fresh_retrieval,
+            "receipts": receipts,
+            "evidence": evidence,
+            "artifacts": artifacts,
+            "memory_candidates": memory_candidates,
         }
-        # Agents that fill or generate files naturally return an artifact
-        # attachment, while the planner may have named that result
-        # semantically (for example ``completed_request``).  Bind missing
-        # required output keys to the produced artifact so the graph contract
-        # remains usable by downstream tasks and finalization.
-        attachments = outputs["attachments"] or outputs["artifacts"]
-        if attachments:
-            value: Any = attachments[0] if len(attachments) == 1 else attachments
-            for spec in request.expected_outputs:
-                key = spec.key
-                if spec.required and key not in outputs:
-                    outputs[key] = value
-        # Read-only/data agents commonly return their result as the final
-        # answer text rather than a structured ``outputs`` object.  Preserve
-        # that successful result under the planner's required output key so
-        # the graph contract does not fail after the agent has already emitted
-        # its final answer.
-        summary = str(payload.get("summary") or "").strip()
-        if summary:
-            for spec in request.expected_outputs:
-                if spec.required and spec.key not in outputs:
-                    outputs[spec.key] = summary
-        return AgentTaskResult(
-            outcome=TaskOutcome.COMPLETED,
-            summary=str(payload.get("summary") or ""),
-            outputs=outputs,
-            evidence=dict(payload.get("evidence") or {}),
-        )
 
     # ---------------------------------------------------------------- helpers --
 
@@ -728,10 +610,21 @@ class AgentExecutor:
             dependency_lines = ["[Dependency outputs]"]
             remaining = 8000
             for task_id, output in list(task.dependency_outputs.items())[:8]:
+                if not isinstance(output, dict):
+                    continue
+                projection = {
+                    "outcome": output.get("outcome"),
+                    "status": output.get("status"),
+                    "description": str(output.get("description") or "")[:1200],
+                    "outputs": output.get("outputs") or {},
+                    "receipts": list(output.get("verified_receipts") or [])[:8],
+                    "evidence": output.get("verified_evidence") or {},
+                    "artifacts": list(output.get("artifacts") or [])[:8],
+                }
                 try:
-                    rendered = json.dumps(output, ensure_ascii=False, default=str)
+                    rendered = json.dumps(projection, ensure_ascii=False, default=str)
                 except (TypeError, ValueError):
-                    rendered = str(output).strip()
+                    rendered = str(projection).strip()
                 if rendered:
                     rendered = rendered[: min(4000, remaining)]
                     dependency_lines.append(f"- {task_id}: {rendered}")
@@ -757,10 +650,7 @@ class AgentExecutor:
         for dependency in task.dependency_outputs.values():
             if not isinstance(dependency, dict):
                 continue
-            output = dependency.get("outputs")
-            if not isinstance(output, dict):
-                continue
-            for artifact in [*(output.get("artifacts") or []), *(output.get("attachments") or [])]:
+            for artifact in dependency.get("artifacts") or []:
                 if isinstance(artifact, dict) and artifact.get("artifact_id"):
                     attachment_items.append({
                         "ref": {
@@ -787,6 +677,18 @@ class AgentExecutor:
                     attachment_lines.append(snippet)
             if len(attachment_lines) > 1:
                 final_query = "\n\n".join(["\n".join(attachment_lines), final_query])
+
+        output_contract = [
+            "[Terminal task completion contract]",
+            "After work, return exactly one JSON object and no prose or markdown.",
+            "Required fields: completion (fulfilled|needs|unfulfillable), description, needs (array), outputs (object), checkpoint (object).",
+            "Each outputs key contains text, data, and/or artifacts. Use needs=[] when fulfilled or unfulfillable.",
+        ]
+        if task.expected_outputs:
+            output_contract.append("Expected output keys: " + ", ".join(
+                f"{item.key} ({item.fulfillment.value})" for item in task.expected_outputs
+            ))
+        final_query = "\n\n".join(["\n".join(output_contract), final_query])
 
         non_system.append({"role": "user", "content": final_query})
         return non_system

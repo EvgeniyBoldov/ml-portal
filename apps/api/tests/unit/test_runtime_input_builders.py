@@ -69,7 +69,7 @@ def test_graph_planner_input_builder_uses_persisted_plan_contract():
     ))
 
     assert set(payload) == {
-        "goal", "mode", "replan_reason", "plan", "completed_outputs", "available_artifacts",
+        "goal", "mode", "replan_reason", "plan", "available_artifacts",
         "needs", "last_failure", "memory_context", "available_agents",
     }
     assert payload["mode"] == "replan"
@@ -189,18 +189,16 @@ def test_synthesizer_input_builder_builds_structured_payload_with_files_and_sour
         current_user_query="canonical q",
         memory_bundle=state_memory_bundle(),
     )
-    state.agent_results = [
+    state.task_results = [
         {
-            "agent_slug": "net.enginer",
-            "summary": "Prepared a config file",
-            "success": True,
-            "attachments": [
+            "outcome": "completed",
+            "description": "Prepared a config file",
+            "verified": {"artifacts": [
                 {
                     "artifact_id": "11111111-1111-1111-1111-111111111111",
                     "file_name": "example.txt",
-                    "download_url": "/api/v1/files/chatatt_11111111-1111-1111-1111-111111111111/download",
                 }
-            ],
+            ]},
         }
     ]
     state.add_runtime_fact("runtime fact")

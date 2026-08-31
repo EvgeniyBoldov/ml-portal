@@ -183,6 +183,10 @@ below the answer and do not require the synthesizer to emit markdown links.
   provider bodies and tracebacks remain application-log diagnostics.
 - RBAC, budget, limit, plan and checkpoint state are snapshots owned by the
   entity making the decision.
+- A persisted plan node may be `agent` or `planner`. A planner node is an
+  explicit graph checkpoint: its lifecycle is visible as a task with
+  `kind=planner`, followed by a planner iteration with `iteration_type=checkpoint`.
+  It is not an agent execution, confirmation gate or user-input interaction.
 - Worker boundaries transport JSON `RuntimeLogContext`, never a live logger or
   database session. The worker reconstructs a logger with a session factory,
   retains `run_id`, and uses task attempt/idempotency keys for retries.

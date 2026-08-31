@@ -145,10 +145,11 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 ```
 1. `ChatStreamService` или sandbox создаёт `ToolContext`.
 2. `RuntimePipeline` загружает platform snapshot и строит turn memory.
-3. Planner генерирует semantic action (`apply_graph`, `ask_user`, `complete` или `fail`); runtime преобразует его в строгий `PlanPatch` с текущей revision. Каждый task содержит `executor`, `intent`, `instructions`, `depends_on` и `needs`.
-4. Orchestrator выбирает одну ready task и создаёт `RuntimeTaskAttempt`.
-5. Для task выполняется `ExecutionPreflight`, затем `AgentExecutor` возвращает строгий `AgentTaskResult`.
-6. Технический сбой сохраняется отдельно и может быть retried; `unfulfillable` является валидным бизнес-результатом.
+3. Planner генерирует semantic action (`apply_graph`, `ask_user`, `complete` или `fail`); runtime преобразует его в строгий `PlanPatch` с текущей revision. Узел графа имеет `kind=agent` или `kind=planner`.
+4. `agent` содержит `executor`, `intent`, `instructions`, `depends_on` и `needs`; `planner` является checkpoint-узлом с intent/instructions и dependencies, который возвращает управление planner-у после их успешного выполнения.
+5. Orchestrator выбирает один ready node и создаёт `RuntimeTaskAttempt`. Для `agent` выполняется `ExecutionPreflight`, затем `AgentExecutor` возвращает строгий `AgentExecutionResult`; `TaskAttemptResultReducer` централизованно превращает его в runtime-owned `TaskResult` и lifecycle задачи. Для `planner` создаётся следующая revision того же persisted graph. `AgentExecutionResult` содержит description, needs и опциональные text/data/artifacts; `TaskResult` — outcome и проверенные поля. Task имеет `freshness_policy`: `allow_memory` допускает ответ без операции, а `require_retrieval` требует успешный receipt канонической retrieval-операции именно в текущем attempt. Dependency input — ограниченная типизированная проекция: status/outcome, description, declared outputs, receipt/evidence summaries и opaque artifacts отдельно; только verified fields участвуют в contract checks.
+6. Planner checkpoint получает весь persisted graph с JSON results и artifact references, но не содержимое файлов. Его patch и completion checkpoint применяются в одной transaction boundary.
+7. Технический сбой сохраняется отдельно и может быть retried; `unfulfillable` является валидным бизнес-результатом. Approval остаётся task-local pause, а `ask_user` — pause плана; это не planner nodes.
 7. Checkpoint и outputs открывают зависимости или возобновляют логическую task новым attempt.
 8. FinalizationStage формирует финальный ответ только после terminal plan; sandbox сохраняет и стримит canonical journal events, chat стримит только пользовательский transport.
 

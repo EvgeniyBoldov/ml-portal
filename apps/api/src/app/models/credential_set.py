@@ -85,11 +85,11 @@ class Credential(Base):
             name="ck_credential_auth_type"
         ),
         Index("ix_credential_user_lookup", "owner_user_id", "instance_id",
-              postgresql_where="is_active = true"),
+              unique=True, postgresql_where="is_active = true AND owner_user_id IS NOT NULL"),
         Index("ix_credential_tenant_lookup", "owner_tenant_id", "instance_id",
-              postgresql_where="is_active = true"),
+              unique=True, postgresql_where="is_active = true AND owner_tenant_id IS NOT NULL"),
         Index("ix_credential_platform_lookup", "owner_platform", "instance_id",
-              postgresql_where="is_active = true"),
+              unique=True, postgresql_where="is_active = true AND owner_platform = true"),
     )
 
     def __repr__(self) -> str:

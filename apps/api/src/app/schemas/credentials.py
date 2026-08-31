@@ -49,3 +49,9 @@ class CredentialSummaryResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CredentialDeduplicationResponse(BaseModel):
+    instance_id: Optional[UUID] = None
+    groups_deduplicated: int
+    deactivated_credential_ids: list[UUID] = Field(default_factory=list)

@@ -95,10 +95,11 @@ class FinalizationStage:
             return explicit
 
         successful_summaries: list[str] = []
-        for item in runtime_state.agent_results:
-            if not bool(item.get("success", True)):
+        task_projection = runtime_state.task_results or runtime_state.agent_results
+        for item in task_projection:
+            if item.get("outcome") not in (None, "completed") or not bool(item.get("success", True)):
                 continue
-            summary = str(item.get("summary") or "").strip()
+            summary = str(item.get("description") or item.get("summary") or "").strip()
             if summary:
                 successful_summaries.append(summary)
         if successful_summaries:
@@ -128,7 +129,8 @@ class FinalizationStage:
 
     @staticmethod
     def _latest_failure(runtime_state: RuntimeTurnState) -> dict:
-        for item in reversed(runtime_state.agent_results):
+        task_projection = runtime_state.task_results or runtime_state.agent_results
+        for item in reversed(task_projection):
             if isinstance(item, dict) and not bool(item.get("success", True)):
                 return dict(item)
         return {}

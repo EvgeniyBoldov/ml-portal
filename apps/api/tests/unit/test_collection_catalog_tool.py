@@ -218,7 +218,7 @@ async def test_collection_info_builder_uses_runtime_resolved_operations():
     assert payload["collection"]["usage_rules"] == "Find template, inspect schema, then fill."
     assert payload["readiness"]["status"] == "ready"
     assert payload["tools"][0]["tool_name"] == "collection.template.fill"
-    assert payload["tools"][0]["invoke_as"] == "instance.local-template-tools.collection.template.fill"
+    assert payload["tools"][0]["invoke_as"] == "collection.template.fill"
     assert payload["contracts"]["workflow"]
     assert payload["runtime_enrichment"]["status"] == "ready"
     assert payload["runtime_enrichment"]["data"]["row_count"] == 3

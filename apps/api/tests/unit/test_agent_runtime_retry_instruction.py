@@ -67,7 +67,9 @@ def test_successful_collection_info_activates_only_returned_tools():
         ),
         result=ToolResult.ok({
             "collection": {"slug": "jira"},
-            "tools": [{"invoke_as": search.operation_slug}],
+            # collection.info publishes the canonical operation name; the
+            # runtime maps it to its opaque provider-scoped operation slug.
+            "tools": [{"invoke_as": search.operation}],
         }),
         available_operations=[info, search, hidden],
         loop_state=loop_state,
