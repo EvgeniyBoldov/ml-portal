@@ -187,6 +187,12 @@ class AgentExecutor:
         ctx.extra["task_freshness_phase_id"] = task.task_id
         ledger_start = len(state.tool_ledger.entries)
 
+        # Published agent versions may still contain a legacy output-format
+        # instruction (for example, return a bare download URL).  A graph task
+        # has a stricter runtime-owned terminal protocol, so append it to the
+        # system prompt where it takes precedence over that stale instruction.
+        sub_request.prompt = self._with_terminal_contract_prompt(sub_request.prompt, task)
+
         # Fast-path fallback: do not spend LLM calls when planner chose CALL_AGENT,
         # but the sub-agent ended up with zero executable operations.
         if not sub_request.resolved_operations and task.freshness_policy.value == "allow_memory":
@@ -682,7 +688,10 @@ class AgentExecutor:
             "[Terminal task completion contract]",
             "After work, return exactly one JSON object and no prose or markdown.",
             "Required fields: completion (fulfilled|needs|unfulfillable), description, needs (array), outputs (object), checkpoint (object).",
-            "Each outputs key contains text, data, and/or artifacts. Use needs=[] when fulfilled or unfulfillable.",
+            "Each outputs value must be an object containing only optional description plus at least one of text, data, or artifacts. "
+            "For example: {\"answer\": {\"data\": {\"status\": \"done\"}}}. "
+            "For an artifact expected output, do not declare artifact IDs: report completion in text or data; runtime binds only the verified artifact from the tool ledger. "
+            "Use needs=[] when fulfilled or unfulfillable.",
         ]
         if task.expected_outputs:
             output_contract.append("Expected output keys: " + ", ".join(
@@ -692,6 +701,21 @@ class AgentExecutor:
 
         non_system.append({"role": "user", "content": final_query})
         return non_system
+
+    @staticmethod
+    def _with_terminal_contract_prompt(prompt: str, task: TaskRequest) -> str:
+        expected = ", ".join(
+            f"{item.key} ({item.fulfillment.value})" for item in task.expected_outputs
+        ) or "none"
+        return "\n\n".join(part for part in [
+            str(prompt or "").strip(),
+            "# RUNTIME TASK COMPLETION CONTRACT\n"
+            "This contract overrides any conflicting agent Output Format. "
+            "Your final response must be exactly one JSON object with completion, description, needs, outputs, and checkpoint. "
+            "Every outputs value must contain only optional description plus at least one of text, data, or artifacts; unknown keys are invalid. "
+            "For an artifact output, never claim artifact IDs: runtime binds only verified tool-ledger artifacts. "
+            f"Expected output keys: {expected}.",
+        ] if part)
 
     @staticmethod
     def _parse_structured_response(raw: str) -> Dict[str, Any]:

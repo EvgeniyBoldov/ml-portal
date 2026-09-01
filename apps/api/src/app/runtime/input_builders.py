@@ -4,12 +4,79 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+from app.runtime.redactor import RuntimeRedactor
 from app.runtime.turn_state import RuntimeTurnState
 
 
 MAX_CONVERSATION_SUMMARY_CHARS = 3000
 MAX_POLICIES_TEXT_CHARS = 1200
 MAX_AGENT_DESCRIPTION_CHARS = 280
+MAX_SYNTHESIS_TASK_RESULTS = 12
+MAX_SYNTHESIS_OUTPUTS_PER_TASK = 12
+MAX_SYNTHESIS_VALUE_DEPTH = 4
+MAX_SYNTHESIS_VALUE_ITEMS = 20
+MAX_SYNTHESIS_TEXT_CHARS = 2_000
+
+
+class SynthesisInputProjection:
+    """Bounded, runtime-owned task-result view safe for the synthesizer."""
+
+    _redactor = RuntimeRedactor()
+
+    @classmethod
+    def build(cls, task_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        projected: List[Dict[str, Any]] = []
+        for raw in task_results[-MAX_SYNTHESIS_TASK_RESULTS:]:
+            if not isinstance(raw, dict):
+                continue
+            outputs = raw.get("outputs") if isinstance(raw.get("outputs"), dict) else {}
+            safe_outputs: Dict[str, Dict[str, Any]] = {}
+            for key, output in list(outputs.items())[:MAX_SYNTHESIS_OUTPUTS_PER_TASK]:
+                if not isinstance(output, dict):
+                    continue
+                value: Dict[str, Any] = {}
+                if output.get("description") is not None:
+                    value["description"] = cls._text(cls._redactor.redact(output["description"]))
+                if output.get("text") is not None:
+                    value["text"] = cls._text(cls._redactor.redact(output["text"]))
+                if output.get("data") is not None:
+                    value["data"] = cls._value(cls._redactor.redact(output["data"]))
+                if value:
+                    safe_outputs[str(key)] = value
+            verified = raw.get("verified") if isinstance(raw.get("verified"), dict) else {}
+            projected.append({
+                "task_id": cls._text(raw.get("task_id"), 160),
+                "outcome": cls._text(raw.get("outcome"), 80),
+                "description": cls._text(cls._redactor.redact(raw.get("description") or raw.get("summary"))),
+                "outputs": safe_outputs,
+                "evidence": {
+                    "fresh_retrieval": bool(verified.get("fresh_retrieval")),
+                    "receipt_count": len(verified.get("receipts") or []),
+                },
+            })
+        return projected
+
+    @staticmethod
+    def _text(value: Any, limit: int = MAX_SYNTHESIS_TEXT_CHARS) -> str:
+        text = str(value or "").strip()
+        return text if len(text) <= limit else text[:limit]
+
+    @classmethod
+    def _value(cls, value: Any, depth: int = 0) -> Any:
+        if depth >= MAX_SYNTHESIS_VALUE_DEPTH:
+            return "[truncated]"
+        if isinstance(value, str):
+            return cls._text(value)
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, list):
+            return [cls._value(item, depth + 1) for item in value[:MAX_SYNTHESIS_VALUE_ITEMS]]
+        if isinstance(value, dict):
+            return {
+                cls._text(key, 160): cls._value(item, depth + 1)
+                for key, item in list(value.items())[:MAX_SYNTHESIS_VALUE_ITEMS]
+            }
+        return cls._text(value)
 
 
 class PlannerInputBuilder:
@@ -257,6 +324,7 @@ class SynthesizerInputBuilder:
 
         payload: Dict[str, Any] = {
             "answer_brief": str(answer_brief or state.answer_brief or "").strip(),
+            "task_results": SynthesisInputProjection.build(task_projection),
             "generated_files": unique_files[-10:],
             "rag_sources": rag_sources[:20],
             "task_journal": task_journal_summary,

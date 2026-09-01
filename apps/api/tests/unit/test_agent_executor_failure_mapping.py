@@ -13,6 +13,7 @@ from app.runtime.orchestrator_contracts import (
     AgentExecutionResult,
     TaskExecutionError,
     TaskRequest,
+    parse_agent_execution_result,
 )
 
 
@@ -103,6 +104,31 @@ def test_artifact_only_response_detects_unencoded_file_names() -> None:
     assert AgentExecutor._is_url_only_response(
         "https://storage.cloud.local/artifacts/artifact-1/filled_Заявка на сетевую связность (6).xlsx"
     )
+
+
+def test_terminal_result_rejects_unknown_output_fields() -> None:
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        parse_agent_execution_result(
+            '{"completion":"fulfilled","description":"ready","needs":[],'
+            '"outputs":{"result":{"task_result":"created"}},"checkpoint":{}}'
+        )
+
+
+def test_terminal_result_accepts_explicit_data_output() -> None:
+    result = parse_agent_execution_result(
+        '{"completion":"fulfilled","description":"ready","needs":[],'
+        '"outputs":{"result":{"data":{"status":"created"}}},"checkpoint":{}}'
+    )
+
+    assert result.outputs["result"].data == {"status": "created"}
+
+
+def test_runtime_terminal_contract_overrides_legacy_agent_output_format() -> None:
+    request = _request()
+    prompt = AgentExecutor._with_terminal_contract_prompt("# Output Format\nReturn a URL", request)
+
+    assert "This contract overrides any conflicting agent Output Format" in prompt
+    assert prompt.endswith("Expected output keys: none.")
 
 
 @pytest.mark.asyncio

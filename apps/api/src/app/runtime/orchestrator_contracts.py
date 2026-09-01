@@ -244,6 +244,11 @@ class TaskOutputValue(BaseModel):
     data: Optional[Any] = None
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)
 
+    # Terminal output values are an executor protocol, not a free-form
+    # extension point.  Unknown keys must fail the attempt instead of being
+    # silently discarded by Pydantic and later looking like an empty result.
+    model_config = {"extra": "forbid"}
+
     @model_validator(mode="after")
     def require_content(self) -> "TaskOutputValue":
         if self.text is None and self.data is None and not self.artifacts:

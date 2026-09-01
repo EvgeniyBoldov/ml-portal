@@ -100,3 +100,35 @@ def test_verified_artifact_is_runtime_owned_not_agent_declared() -> None:
 
     assert result.outcome is TaskOutcome.COMPLETED
     assert result.outputs["report"].artifacts == [artifact]
+
+
+def test_declared_artifact_is_replaced_by_verified_ledger_artifact() -> None:
+    verified = {"artifact_id": "artifact-verified", "file_name": "report.xlsx"}
+    result = TaskAttemptResultReducer().reduce(
+        request=_request(expected_outputs=[TaskOutputSpec(
+            key="report",
+            description="Generated report",
+            fulfillment=TaskOutputFulfillment.ARTIFACT,
+        )]),
+        execution=_execution(
+            outputs={"report": TaskOutputValue(artifacts=[{"artifact_id": "invented"}])},
+            verified={"artifacts": [verified]},
+        ),
+    )
+
+    assert result.outcome is TaskOutcome.COMPLETED
+    assert result.outputs["report"].artifacts == [verified]
+
+
+def test_declared_artifact_without_verified_ledger_artifact_does_not_fulfil_contract() -> None:
+    result = TaskAttemptResultReducer().reduce(
+        request=_request(expected_outputs=[TaskOutputSpec(
+            key="report",
+            description="Generated report",
+            fulfillment=TaskOutputFulfillment.ARTIFACT,
+        )]),
+        execution=_execution(outputs={"report": TaskOutputValue(artifacts=[{"artifact_id": "invented"}])}),
+    )
+
+    assert result.outcome is TaskOutcome.UNFULFILLABLE
+    assert result.reason_code == "required_output_missing"

@@ -49,6 +49,14 @@ class FakeExecutor:
         )
 
 
+class TaskResultCollector:
+    def __init__(self) -> None:
+        self.results = []
+
+    def add_task_result(self, result) -> None:
+        self.results.append(result)
+
+
 def test_pending_needs_require_a_declared_output_producer() -> None:
     pending_needs = [{"task_id": "consumer", "key": "regulation_content"}]
     unchanged = {
@@ -92,3 +100,25 @@ async def test_groups_ready_tasks_under_one_execution_iteration():
     assert len(starts) == len(ends) == 1
     assert [event["step_number"] for event in step_starts] == [1, 2]
     assert {event["parent_entity_id"] for event in step_starts} == {starts[0]["entity_id"]}
+
+
+@pytest.mark.asyncio
+async def test_completed_task_results_reach_terminal_plan_for_finalization():
+    store = FakeStore()
+    runtime_state = TaskResultCollector()
+    orchestrator = GraphOrchestrator(store=store, planner=object(), executor=FakeExecutor())
+
+    events = [
+        event
+        async for event in orchestrator.run(
+            plan_id=store.plan_id,
+            goal="Complete and synthesize",
+            available_agents=[],
+            planner_kwargs={"runtime_state": runtime_state},
+        )
+    ]
+
+    assert [result["task_id"] for result in runtime_state.results] == ["collect", "review"]
+    assert [result["outcome"] for result in runtime_state.results] == ["completed", "completed"]
+    assert events[-1]["type"] == "plan_terminal"
+    assert events[-1]["status"] == "completed"

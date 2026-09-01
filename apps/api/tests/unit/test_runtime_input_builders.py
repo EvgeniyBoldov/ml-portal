@@ -191,8 +191,16 @@ def test_synthesizer_input_builder_builds_structured_payload_with_files_and_sour
     )
     state.task_results = [
         {
+            "task_id": "write_request",
             "outcome": "completed",
             "description": "Prepared a config file",
+            "outputs": {
+                "request": {
+                    "text": "Request data prepared",
+                    "data": {"destination": "10.0.0.1", "password": "must-not-reach-synthesizer"},
+                    "artifacts": [{"artifact_id": "agent-claimed"}],
+                }
+            },
             "verified": {"artifacts": [
                 {
                     "artifact_id": "11111111-1111-1111-1111-111111111111",
@@ -212,6 +220,16 @@ def test_synthesizer_input_builder_builds_structured_payload_with_files_and_sour
     assert messages[0]["content"] == "sys"
     payload = json.loads(messages[1]["content"])
     assert payload["answer_brief"] == "brief"
+    assert payload["task_results"] == [{
+        "task_id": "write_request",
+        "outcome": "completed",
+        "description": "Prepared a config file",
+        "outputs": {"request": {
+            "text": "Request data prepared",
+            "data": {"destination": "10.0.0.1", "password": "***"},
+        }},
+        "evidence": {"fresh_retrieval": False, "receipt_count": 0},
+    }]
     assert payload["generated_files"][0]["file_name"] == "example.txt"
     assert "download_url" not in payload["generated_files"][0]
     assert payload["rag_sources"][0]["source_name"] == "Doc One"

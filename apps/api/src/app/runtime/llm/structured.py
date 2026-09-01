@@ -810,7 +810,10 @@ class StructuredLLMCall:
                     "Для project knowledge используй только ключ проекта из memory_context.type=project. "
                     "Если проект для знания нужен, но ключ отсутствует или контекст неоднозначен, верни ask_user "
                     "с одним вопросом вместо догадки. Когда вызываешь executor=knowledge, передай точный project_key "
-                    "в task.inputs."
+                    "в task.inputs.\n"
+                    "Если задача должна создать скачиваемый файл (например, заполнение шаблона или file.generate), "
+                    "объяви соответствующий expected_output с fulfillment=artifact. Artifact подтверждается только "
+                    "успешной runtime-операцией, а не текстом агента."
                 )
             parts.append(
                 "# RUNTIME RESPONSE CONTRACT\n"

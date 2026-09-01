@@ -105,9 +105,15 @@ class TaskAttemptResultReducer:
         for spec in request.expected_outputs:
             value = outputs.get(spec.key)
             if spec.fulfillment == TaskOutputFulfillment.ARTIFACT:
-                if value is None and artifacts:
+                # Artifact authority belongs to the runtime tool ledger.  An
+                # LLM may describe the generated file but cannot claim an
+                # artifact identifier in its terminal JSON.
+                if artifacts:
                     value = TaskOutputValue(artifacts=artifacts)
                     outputs[spec.key] = value
+                else:
+                    value = None
+                    outputs.pop(spec.key, None)
                 if value is None or not value.artifacts:
                     if spec.required:
                         missing.append(spec.key)

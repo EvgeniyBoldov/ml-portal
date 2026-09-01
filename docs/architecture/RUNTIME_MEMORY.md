@@ -97,7 +97,7 @@ Planner and agents have different memory needs.
 | --- | --- | --- |
 | Planner | Selected user/tenant context | Glossary/project resolution and exact project memory through canonical system operations |
 | Agent | Task-filtered user/tenant context | Project memory, files and RAG through canonical tools |
-| Synthesizer | No durable memory by default; only final task results and allowed evidence | None |
+| Synthesizer | No durable memory by default; only bounded runtime-owned projections of final task results, verified artifacts and allowed evidence | None |
 
 The planner receives structured `memory_context` in its planning payload, not
 a prose dump. It contains only bounded user role/responsibility/preferences
