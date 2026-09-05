@@ -24,7 +24,6 @@ from typing import (
     AsyncIterator,
     Dict,
     List,
-    Literal,
     Optional,
     Protocol,
     runtime_checkable,
@@ -85,16 +84,15 @@ class TaskFailureClassifier(Protocol):
 
 @runtime_checkable
 class SynthesizerPort(Protocol):
-    """Renders the final answer stream from RuntimeTurnState."""
+    """Renders the terminal synthesis checkpoint from final-plan context."""
 
     def stream(
         self,
         *,
         runtime_state: RuntimeTurnState,
         run_id: UUID,
+        synthesis_context: Dict[str, Any],
         model: Optional[str] = None,
-        answer_brief: Optional[str] = None,
-        final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"] = "synthesize",
         platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
         budget_registry: Optional[BudgetRegistry] = None,

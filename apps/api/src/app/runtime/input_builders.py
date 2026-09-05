@@ -4,81 +4,12 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-from app.runtime.redactor import RuntimeRedactor
 from app.runtime.turn_state import RuntimeTurnState
 
 
 MAX_CONVERSATION_SUMMARY_CHARS = 3000
 MAX_POLICIES_TEXT_CHARS = 1200
 MAX_AGENT_DESCRIPTION_CHARS = 280
-MAX_SYNTHESIS_TASK_RESULTS = 12
-MAX_SYNTHESIS_OUTPUTS_PER_TASK = 12
-MAX_SYNTHESIS_VALUE_DEPTH = 4
-MAX_SYNTHESIS_VALUE_ITEMS = 20
-MAX_SYNTHESIS_TEXT_CHARS = 2_000
-
-
-class SynthesisInputProjection:
-    """Bounded, runtime-owned task-result view safe for the synthesizer."""
-
-    _redactor = RuntimeRedactor()
-
-    @classmethod
-    def build(cls, task_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        projected: List[Dict[str, Any]] = []
-        for raw in task_results[-MAX_SYNTHESIS_TASK_RESULTS:]:
-            if not isinstance(raw, dict):
-                continue
-            outputs = raw.get("outputs") if isinstance(raw.get("outputs"), dict) else {}
-            safe_outputs: Dict[str, Dict[str, Any]] = {}
-            for key, output in list(outputs.items())[:MAX_SYNTHESIS_OUTPUTS_PER_TASK]:
-                if not isinstance(output, dict):
-                    continue
-                value: Dict[str, Any] = {}
-                if output.get("description") is not None:
-                    value["description"] = cls._text(cls._redactor.redact(output["description"]))
-                if output.get("text") is not None:
-                    value["text"] = cls._text(cls._redactor.redact(output["text"]))
-                if output.get("data") is not None:
-                    value["data"] = cls._value(cls._redactor.redact(output["data"]))
-                if value:
-                    safe_outputs[str(key)] = value
-            verified = raw.get("verified") if isinstance(raw.get("verified"), dict) else {}
-            projected.append({
-                "task_id": cls._text(raw.get("task_id"), 160),
-                "outcome": cls._text(raw.get("outcome"), 80),
-                "description": cls._text(cls._redactor.redact(raw.get("description") or raw.get("summary"))),
-                "outputs": safe_outputs,
-                "evidence": {
-                    "fresh_retrieval": bool(verified.get("fresh_retrieval")),
-                    "receipt_count": len(verified.get("receipts") or []),
-                },
-            })
-        return projected
-
-    @staticmethod
-    def _text(value: Any, limit: int = MAX_SYNTHESIS_TEXT_CHARS) -> str:
-        text = str(value or "").strip()
-        return text if len(text) <= limit else text[:limit]
-
-    @classmethod
-    def _value(cls, value: Any, depth: int = 0) -> Any:
-        if depth >= MAX_SYNTHESIS_VALUE_DEPTH:
-            return "[truncated]"
-        if isinstance(value, str):
-            return cls._text(value)
-        if value is None or isinstance(value, (bool, int, float)):
-            return value
-        if isinstance(value, list):
-            return [cls._value(item, depth + 1) for item in value[:MAX_SYNTHESIS_VALUE_ITEMS]]
-        if isinstance(value, dict):
-            return {
-                cls._text(key, 160): cls._value(item, depth + 1)
-                for key, item in list(value.items())[:MAX_SYNTHESIS_VALUE_ITEMS]
-            }
-        return cls._text(value)
-
-
 class PlannerInputBuilder:
     """Build structured planner payload from runtime state."""
 
@@ -113,8 +44,20 @@ class PlannerInputBuilder:
             "available_artifacts": self._normalize_artifacts(request.available_artifacts or []),
             "needs": request.needs or [],
             "last_failure": request.last_failure,
+            # Replanning must see the durable outputs that led to this
+            # revision. They are planner context, not another synthesis input.
+            "completed_outputs": request.completed_outputs or {},
             "memory_context": request.memory_context or [],
             "available_agents": agents,
+            "terminal_synthesis": {
+                "kind": "synthesis",
+                "executor": None,
+                "purpose": (
+                    "Mandatory single terminal checkpoint. Describe the user's "
+                    "actual question and the required direction of the final answer; "
+                    "do not put research facts here."
+                ),
+            },
         }
         checkpoint = getattr(request, "checkpoint", None)
         if isinstance(checkpoint, dict) and checkpoint:
@@ -259,97 +202,20 @@ class PlannerInputBuilder:
 
 
 class SynthesizerInputBuilder:
-    """Build user-facing synthesis prompt from runtime state."""
+    """Render the already validated final-plan synthesis context."""
 
     def build(
         self,
         *,
-        runtime_state: RuntimeTurnState,
-        answer_brief: Optional[str],
+        synthesis_context: Dict[str, Any],
         system_prompt: str,
     ) -> List[Dict[str, str]]:
-        state = runtime_state
-
-        rag_sources: List[Dict[str, Any]] = []
-        if state.memory_bundle and state.memory_bundle.sections:
-            for section in state.memory_bundle.sections:
-                if section.name == "sources" and section.items:
-                    for item in section.items[:20]:
-                        if isinstance(item.metadata, dict) and isinstance(item.metadata.get("source"), dict):
-                            rag_sources.append(dict(item.metadata["source"]))
-
-        generated_files: List[Dict[str, Any]] = []
-        task_projection = state.task_results or state.agent_results
-        for item in task_projection:
-            item_attachments = item.get("attachments")
-            if not isinstance(item_attachments, list):
-                item_attachments = (item.get("verified") or {}).get("artifacts")
-            if isinstance(item_attachments, list):
-                for att in item_attachments[-10:]:
-                    if not isinstance(att, dict):
-                        continue
-                    generated_files.append(
-                        {
-                            "artifact_id": att.get("artifact_id"),
-                            "file_name": att.get("file_name") or att.get("name") or "file",
-                            "content_type": att.get("content_type") or "",
-                            "size_bytes": att.get("size_bytes"),
-                        }
-                    )
-
-        unique_files: List[Dict[str, Any]] = []
-        seen_artifacts: set[str] = set()
-        for item in generated_files:
-            artifact_id = str(item.get("artifact_id") or "").strip()
-            if (
-                not artifact_id
-                or item.get("status") == "deleted"
-                or artifact_id in state.deleted_artifact_ids
-                or artifact_id in seen_artifacts
-            ):
-                continue
-            seen_artifacts.add(artifact_id)
-            unique_files.append(item)
-
-        # Build task journal summary for synthesizer
-        task_journal_summary = []
-        for t in state.task_journal:
-            task_journal_summary.append({
-                "task_id": t.task_id,
-                "title": t.title,
-                "assigned_agent": t.assigned_agent,
-                "status": t.status,
-                "summary": t.summary,
-            })
-
-        payload: Dict[str, Any] = {
-            "answer_brief": str(answer_brief or state.answer_brief or "").strip(),
-            "task_results": SynthesisInputProjection.build(task_projection),
-            "generated_files": unique_files[-10:],
-            "rag_sources": rag_sources[:20],
-            "task_journal": task_journal_summary,
-            "language_hint": self._detect_language_hint(state.current_user_query or state.goal or ""),
-            "style_constraints": {
-                "concise": True,
-                "preserve_lists": True,
-                "preserve_order": True,
-            },
-        }
-
         import json
-
-        user_content = json.dumps(payload, ensure_ascii=False, default=str, indent=2)
 
         return [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
+            {
+                "role": "user",
+                "content": json.dumps(synthesis_context, ensure_ascii=False, default=str, indent=2),
+            },
         ]
-
-    @staticmethod
-    def _detect_language_hint(text: str) -> Optional[str]:
-        sample = str(text or "").strip()
-        if not sample:
-            return None
-        if re.search(r"[А-Яа-яЁё]", sample):
-            return "ru"
-        return None

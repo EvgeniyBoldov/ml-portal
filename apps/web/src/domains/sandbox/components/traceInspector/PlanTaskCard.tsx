@@ -12,7 +12,7 @@ function statusTone(status?: string): 'neutral' | 'success' | 'warn' | 'danger' 
 
 function TaskMeta({ task }: { task: PlanTaskViewModel }) {
   return <div className={styles.meta}>
-    <span>{task.kind === 'planner' ? 'Контрольная точка: планер' : task.executor ? `Исполнитель: ${task.executor}` : 'Исполнитель не назначен'}</span>
+    <span>{task.kind === 'planner' ? 'Контрольная точка: планер' : task.kind === 'synthesis' ? 'Финальный синтез ответа' : task.executor ? `Исполнитель: ${task.executor}` : 'Исполнитель не назначен'}</span>
     {task.dependencies.map((dependency) => <span key={dependency}>После: {dependency}</span>)}
   </div>;
 }
@@ -32,6 +32,7 @@ function TaskHeader({ task }: { task: PlanTaskViewModel }) {
       <span className={styles.taskId}>{task.taskId}</span>
       <span className={styles.title}>{task.title}</span>
       {task.kind === 'planner' ? <Badge tone="info" size="small">Контрольная точка</Badge> : null}
+      {task.kind === 'synthesis' ? <Badge tone="success" size="small">Финальный ответ</Badge> : null}
     </div>
     {task.status ? <Badge tone={statusTone(task.status)} size="small">{task.status}</Badge> : null}
   </div>;

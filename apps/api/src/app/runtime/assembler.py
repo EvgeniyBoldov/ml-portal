@@ -25,7 +25,6 @@ from app.runtime.memory.writer import MemoryWriter
 from app.runtime.memory.preparer import MemoryPreparer
 from app.runtime.planner.graph_planner import GraphPlanner
 from app.runtime.ports import SynthesizerPort, TaskExecutionPort
-from app.runtime.stages import FinalizationStage
 from app.runtime.synthesizer import Synthesizer
 from app.runtime.orchestrator import GraphOrchestrator
 from app.runtime.plan_store import SqlPlanStore
@@ -96,10 +95,8 @@ class PipelineAssembler:
                 store=store,
                 planner=self.graph_planner,
                 executor=self.agent_executor,
+                synthesizer=self.synthesizer,
                 budget_service=RuntimeBudgetService(self._session),
             ),
             max_steps=max_steps,
         )
-
-    def build_finalization_stage(self) -> FinalizationStage:
-        return FinalizationStage(synthesizer=self.synthesizer)

@@ -132,7 +132,6 @@ export function llmOutcome(payload: Record<string, unknown>, toolCallCount = 0):
     const tasks = Array.isArray(planData.tasks) ? planData.tasks.length : 0;
     return { kind: 'plan', label: action === 'revise_plan' ? 'Корректировка плана' : 'План', count: tasks || undefined };
   }
-  if (isPlanningDecision && (action === 'complete' || action === 'complete_plan')) return { kind: 'complete', label: 'Ответ' };
   return { kind: 'answer', label: 'Ответ' };
 }
 

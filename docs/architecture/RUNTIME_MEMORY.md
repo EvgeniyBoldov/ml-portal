@@ -184,13 +184,13 @@ operations such as `file.read`, `memory.lookup`, `memory.read`, RAG search and
 project-memory tools.
 
 For a simple file summary the planner creates one context-reader task with
-`on_success=continue`; once that task completes, normal finalization produces
-the answer. For a file analysis that changes the next action, the reader can
+`on_success=continue`; once all current tasks complete, the terminal synthesis
+checkpoint produces the answer. For a file analysis that changes the next action, the reader can
 feed a planner checkpoint that determines the following graph segment.
 
 ## Writeback and administration
 
-After terminal finalization, `MemoryWriter` receives the bounded turn material
+After terminal synthesis, `MemoryWriter` receives the bounded turn material
 and runs the write pipeline:
 
 ```text

@@ -89,7 +89,6 @@ class RuntimeTurnState(BaseModel):
     recent_action_signatures: List[str] = Field(default_factory=list)
 
     status: str = "running"
-    answer_brief: Optional[str] = None
     final_answer: Optional[str] = None
     final_error: Optional[str] = None
     deleted_artifact_ids: List[str] = Field(default_factory=list)
@@ -315,7 +314,6 @@ class RuntimeTurnState(BaseModel):
             "recent_actions": list(self.recent_action_signatures[-max_items:]),
             "task_journal": [t.model_dump() for t in self.task_journal[-max_items:]],
             "recent_tool_calls": self.tool_ledger.compact_view(max_items=max_items),
-            "answer_brief": (self.answer_brief or "")[:300],
         }
 
     def compact_view(self) -> Dict[str, Any]:
@@ -338,7 +336,6 @@ class RuntimeTurnState(BaseModel):
             "status": self.status,
             "iter_count": self.iter_count,
             "used_tool_calls": self.used_tool_calls,
-            "answer_brief": (self.answer_brief or "")[:300],
             "final_answer": (self.final_answer or "")[:300],
             "final_error": (self.final_error or "")[:300],
             "planner_steps": len(self.planner_steps),

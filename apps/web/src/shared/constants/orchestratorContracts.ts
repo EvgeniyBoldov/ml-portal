@@ -28,61 +28,68 @@ export const PLANNER_INPUT_CONTRACT = {
         required: ['slug'],
       },
     },
+    terminal_synthesis: {
+      type: 'object',
+      description: 'Встроенный terminal node без executor. Planner обязан включить ровно один kind=synthesis в итоговый граф.',
+      properties: {
+        kind: { const: 'synthesis' },
+        executor: { type: 'null' },
+        purpose: { type: 'string' },
+      },
+      required: ['kind', 'executor', 'purpose'],
+    },
   },
-  required: ['goal', 'trigger', 'plan', 'completed_outputs', 'needs', 'last_failure', 'available_agents'],
+  required: ['goal', 'trigger', 'plan', 'completed_outputs', 'needs', 'last_failure', 'available_agents', 'terminal_synthesis'],
 };
 
 export const SYNTHESIZER_INPUT_CONTRACT = {
   type: 'object',
   properties: {
-    answer_brief: {
-      type: 'string',
-      description: 'Канонический черновик ответа пользователю. Synthesizer редактирует форму, но не меняет смысл.',
+    synthesis_task: {
+      type: 'object',
+      description: 'Терминальная задача планировщика: какой смысл вопроса пользователя и в каком направлении отвечать.',
+      properties: {
+        task_id: { type: 'string' },
+        intent: { type: 'string' },
+        instructions: { type: 'string' },
+      },
+      required: ['task_id', 'intent', 'instructions'],
     },
-    generated_files: {
+    completed_task_reports: {
       type: 'array',
-      description: 'Файлы, которые нужно явно упомянуть или отдать ссылкой пользователю',
+      description: 'Все актуальные успешно завершённые agent-задачи final plan; это единственный фактический контекст ответа.',
       items: {
         type: 'object',
         properties: {
-          artifact_id: { type: 'string', description: 'Непрозрачный идентификатор артефакта' },
-          file_name: { type: 'string', description: 'Имя файла для показа в ответе' },
-          download_url: { type: 'string', description: 'Ссылка на скачивание файла' },
-          content_type: { type: 'string', description: 'MIME-тип файла' },
-          size_bytes: { type: ['integer', 'null'], description: 'Размер файла в байтах' },
+          task_id: { type: 'string' },
+          intent: { type: 'string' },
+          instructions: { type: 'string' },
+          report: { type: 'object', description: 'Канонический отчёт агента: description и outputs.' },
+        },
+        required: ['task_id', 'intent', 'instructions', 'report'],
+      },
+    },
+    artifacts: {
+      type: 'array',
+      description: 'Только verified metadata уже созданных файлов; файлы не читаются повторно.',
+      items: {
+        type: 'object',
+        properties: {
+          artifact_id: { type: 'string' },
+          file_name: { type: 'string' },
+          content_type: { type: 'string' },
+          size_bytes: { type: ['integer', 'null'] },
         },
         required: ['artifact_id', 'file_name'],
       },
     },
-    rag_sources: {
+    sources: {
       type: 'array',
-      description: 'Структурированные источники из RAG/документного поиска для цитирования',
-      items: {
-        type: 'object',
-        properties: {
-          source_id: { type: 'string', description: 'Идентификатор источника' },
-          source_name: { type: 'string', description: 'Отображаемое имя документа/источника' },
-          text: { type: 'string', description: 'Короткий фрагмент или snippet' },
-          page: { type: ['integer', 'null'], description: 'Номер страницы, если известен' },
-          score: { type: ['number', 'null'], description: 'Оценка релевантности' },
-        },
-      },
-    },
-    language_hint: {
-      type: ['string', 'null'],
-      description: 'Подсказка по языку итогового ответа',
-    },
-    style_constraints: {
-      type: ['object', 'null'],
-      description: 'Ограничения на форму итогового текста',
-      properties: {
-        concise: { type: 'boolean', description: 'Сделать ответ компактным' },
-        preserve_lists: { type: 'boolean', description: 'Сохранять списки из answer_brief' },
-        preserve_order: { type: 'boolean', description: 'Сохранять порядок тезисов из answer_brief' },
-      },
+      description: 'Разрешённые source metadata для цитирования.',
+      items: { type: 'object' },
     },
   },
-  required: ['answer_brief', 'generated_files', 'rag_sources'],
+  required: ['synthesis_task', 'completed_task_reports', 'artifacts', 'sources'],
 };
 
 export const FACT_EXTRACTOR_INPUT_CONTRACT = {

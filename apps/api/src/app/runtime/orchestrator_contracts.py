@@ -31,6 +31,7 @@ class TaskStatus(str, Enum):
     WAITING_USER = "waiting_user"
     WAITING_RETRY = "waiting_retry"
     COMPLETED = "completed"
+    SUPERSEDED = "superseded"
     UNFULFILLABLE = "unfulfillable"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -62,6 +63,7 @@ class PlanNodeKind(str, Enum):
 
     AGENT = "agent"
     PLANNER = "planner"
+    SYNTHESIS = "synthesis"
 
 
 class TaskSuccessAction(str, Enum):
@@ -105,7 +107,6 @@ class PlannerDecisionKind(str, Enum):
     CREATE_PLAN = "create_plan"
     REVISE_PLAN = "revise_plan"
     ASK_USER = "ask_user"
-    COMPLETE_PLAN = "complete_plan"
     FAIL_PLAN = "fail_plan"
 
 
@@ -155,16 +156,22 @@ class PlannedTask(BaseModel):
             if not self.executor:
                 raise ValueError("agent task requires executor")
             return self
+        node_name = "planner checkpoint" if self.kind == PlanNodeKind.PLANNER else "synthesis checkpoint"
         if self.executor:
-            raise ValueError("planner checkpoint cannot declare executor")
+            raise ValueError(f"{node_name} cannot declare executor")
         if self.inputs:
-            raise ValueError("planner checkpoint cannot declare inputs")
+            raise ValueError(f"{node_name} cannot declare inputs")
         if self.expected_outputs:
-            raise ValueError("planner checkpoint cannot declare expected_outputs")
+            raise ValueError(f"{node_name} cannot declare expected_outputs")
         if self.on_success != TaskSuccessAction.CONTINUE:
-            raise ValueError("planner checkpoint cannot declare on_success")
+            raise ValueError(f"{node_name} cannot declare on_success")
         if self.freshness_policy != FreshnessPolicy.ALLOW_MEMORY:
-            raise ValueError("planner checkpoint cannot require retrieval")
+            raise ValueError(f"{node_name} cannot require retrieval")
+        if self.kind == PlanNodeKind.SYNTHESIS:
+            if self.depends_on:
+                raise ValueError("synthesis checkpoint cannot declare dependencies")
+            if self.needs:
+                raise ValueError("synthesis checkpoint cannot declare needs")
         return self
 
 
@@ -177,7 +184,6 @@ class PlanPatch(BaseModel):
     tasks: List[PlannedTask] = Field(default_factory=list)
     remove_task_ids: List[str] = Field(default_factory=list)
     question: Optional[str] = None
-    answer_brief: Optional[str] = None
     failure_reason: Optional[str] = None
     rationale: str = ""
     trigger: Optional[str] = None
@@ -200,8 +206,6 @@ class PlanPatch(BaseModel):
             raise ValueError("ask_user requires a question")
         if self.decision == PlannerDecisionKind.FAIL_PLAN and not self.failure_reason:
             raise ValueError("fail_plan requires failure_reason")
-        if self.decision == PlannerDecisionKind.COMPLETE_PLAN and (self.tasks or self.remove_task_ids):
-            raise ValueError("complete_plan cannot mutate tasks")
         return self
 
 

@@ -43,6 +43,21 @@ def _runtime_state() -> RuntimeTurnState:
     )
 
 
+def _synthesis_context(*, artifacts=None) -> dict:
+    return {
+        "synthesis_task": {
+            "task_id": "synthesize",
+            "intent": "Answer the user's request",
+            "instructions": "Give a direct answer from the completed reports.",
+        },
+        "completed_task_reports": [
+            {"task_id": "inspect", "intent": "Inspect", "instructions": "Read", "report": {"description": "Found data", "outputs": {}}},
+        ],
+        "artifacts": artifacts or [],
+        "sources": [],
+    }
+
+
 @pytest.mark.asyncio
 async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     llm = _LLMClientProbe(["hello ", "world"])
@@ -72,7 +87,7 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
         events = [event async for event in synth.stream(
             runtime_state=state,
             run_id=state.run_id,
-            answer_brief="force full synthesis path",
+            synthesis_context=_synthesis_context(),
         )]
 
     assert llm.calls, "chat_stream was not called"
@@ -91,24 +106,18 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
 
 @pytest.mark.asyncio
 async def test_synthesizer_finalizes_deduplicated_attachment_download_urls():
-    synth = Synthesizer(session=SimpleNamespace(), llm_client=_LLMClientProbe([]))
+    synth = Synthesizer(session=SimpleNamespace(), llm_client=_LLMClientProbe(["Файл готов"]))
     state = _runtime_state()
-    state.task_results = [{
-        "outcome": "completed",
-        "description": "Файл готов",
-        "verified": {"artifacts": [
-            {"artifact_id": "artifact-1", "file_name": "result.txt"},
-            {"artifact_id": "artifact-1", "file_name": "result.txt"},
-        ]},
-    }]
 
     events = [
         event
         async for event in synth.stream(
             runtime_state=state,
             run_id=state.run_id,
-            answer_brief="Файл готов",
-            final_answer_strategy="use_agent_result",
+            synthesis_context=_synthesis_context(artifacts=[
+                {"artifact_id": "artifact-1", "file_name": "result.txt"},
+                {"artifact_id": "artifact-1", "file_name": "result.txt"},
+            ]),
         )
     ]
 
@@ -135,7 +144,7 @@ async def test_synthesizer_falls_back_when_db_role_load_fails():
         events = [event async for event in synth.stream(
             runtime_state=state,
             run_id=state.run_id,
-            answer_brief="force full synthesis path",
+            synthesis_context=_synthesis_context(),
         )]
 
     assert llm.calls, "chat_stream was not called on fallback"
@@ -191,7 +200,7 @@ async def test_synthesizer_retries_retryable_stream_error_before_fallback():
             async for event in synth.stream(
                 runtime_state=state,
                 run_id=state.run_id,
-                answer_brief="force full synthesis path",
+                synthesis_context=_synthesis_context(),
             )
         ]
 
@@ -207,24 +216,24 @@ async def test_synthesizer_retries_retryable_stream_error_before_fallback():
 
 
 @pytest.mark.asyncio
-async def test_synthesizer_honors_platform_chunk_size_override_for_short_circuit():
+async def test_synthesizer_empty_response_is_an_explicit_error():
     llm = _LLMClientProbe([])
     synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)
     state = _runtime_state()
-    state.task_results = [
-        {"outcome": "completed", "description": "x" * 47},
-    ]
 
     events = [
         event
         async for event in synth.stream(
             runtime_state=state,
             run_id=state.run_id,
-            answer_brief="x" * 47,
-            platform_config={"runtime": {"synth_chunk_size": 5}},
+            synthesis_context=_synthesis_context(),
         )
     ]
 
-    deltas = [ev.data.get("content", "") for ev in events if ev.type.value == "delta"]
-    assert deltas
-    assert all(len(chunk) <= 5 for chunk in deltas)
+    assert not any(event.type is RuntimeEventType.FINAL for event in events)
+    assert any(
+        event.type is RuntimeEventType.ERROR
+        and event.data["error_code"] == "synthesizer_empty_response"
+        for event in events
+    )
+    assert state.final_error == "synthesizer_empty_response"

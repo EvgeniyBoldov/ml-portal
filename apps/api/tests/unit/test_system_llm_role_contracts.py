@@ -17,7 +17,7 @@ def test_planner_contract_matches_runtime_model() -> None:
     assert contract["format"] == "json"
     assert set(contract["schema"]["properties"]) == set(PlannerGraphOutput.model_fields)
     assert set(contract["schema"]["properties"]["action"]["enum"]) == {
-        "apply_graph", "ask_user", "complete", "fail",
+        "apply_graph", "ask_user", "fail",
     }
 
 

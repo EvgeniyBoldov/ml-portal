@@ -120,7 +120,15 @@ class _PendingNeedStore:
                         "required": True,
                         "status": "pending",
                     }],
-                }
+                },
+                "synthesize": {
+                    "task_id": "synthesize",
+                    "kind": "synthesis",
+                    "status": "pending",
+                    "depends_on": [],
+                    "expected_outputs": [],
+                    "needs": [],
+                },
             },
         }
 
@@ -145,6 +153,31 @@ class _UnchangedPendingNeedPlanner:
             expected_revision=request.plan["revision"],
             decision=PlannerDecisionKind.REVISE_PLAN,
         )
+
+
+class _LegacyPlanStore(_InitialPlanStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.status = "active"
+
+    async def snapshot(self, plan_id):
+        assert plan_id == self.plan_id
+        return {
+            "root_run_id": str(self.root_run_id),
+            "status": self.status,
+            "revision": 4,
+            "last_failure": self.failure,
+            "tasks": {
+                "legacy_agent": {
+                    "task_id": "legacy_agent",
+                    "kind": "agent",
+                    "status": "ready",
+                },
+            },
+        }
+
+    async def claim_ready(self, _plan_id):
+        raise AssertionError("legacy graph must fail before task scheduling")
 
 
 @pytest.mark.asyncio
@@ -241,3 +274,26 @@ async def test_pending_need_replan_fails_without_a_producer_or_user_question():
     assert store.failure["code"] == "unresolvable_dependency"
     assert events[-1]["type"] == "plan_terminal"
     assert events[-1]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_legacy_persisted_graph_without_synthesis_checkpoint_fails_on_resume():
+    store = _LegacyPlanStore()
+    orchestrator = GraphOrchestrator(
+        store=store,
+        planner=_InvalidPlanner(),
+        executor=_UnusedExecutor(),
+    )
+
+    events = [
+        event
+        async for event in orchestrator.run(
+            plan_id=store.plan_id,
+            goal="Legacy graph",
+            available_agents=[],
+        )
+    ]
+
+    assert store.status == "failed"
+    assert store.failure["code"] == "plan_contract_invalid"
+    assert events == [{"type": "plan_terminal", "plan_id": str(store.plan_id), "status": "failed"}]

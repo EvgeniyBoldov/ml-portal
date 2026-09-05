@@ -89,44 +89,11 @@ class PlannerGraphOutput(BaseModel):
     the response has passed semantic validation.
     """
 
-    action: Literal["apply_graph", "ask_user", "complete", "fail"]
+    action: Literal["apply_graph", "ask_user", "fail"]
     tasks: List[PlannerPlannedTask] = Field(default_factory=list)
     remove_task_ids: List[str] = Field(default_factory=list)
     question: Optional[str] = None
-    answer_brief: Optional[str] = None
     failure_reason: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_lifecycle_output(cls, value: Any) -> Any:
-        """Accept stale administrator prompts without restoring their contract.
-
-        The generated JSON Schema exposes only ``action``.  This narrow input
-        adapter lets an already-saved legacy prompt finish its transition while
-        keeping revision and other lifecycle fields outside the runtime API.
-        """
-        if not isinstance(value, dict):
-            return value
-        normalized = dict(value)
-        # Some OpenAI-compatible models serialize optional collection fields
-        # as JSON null even though the runtime contract exposes them as lists.
-        # Treat null as the empty collection before Pydantic validation. This
-        # prevents StructuredLLMCall from spending all retries on the same
-        # harmless protocol mismatch.
-        for field_name in ("tasks", "remove_task_ids"):
-            if normalized.get(field_name) is None:
-                normalized[field_name] = []
-        legacy_action = normalized.get("action") or normalized.get("decision")
-        mapping = {
-            "create_plan": "apply_graph",
-            "revise_plan": "apply_graph",
-            "ask_user": "ask_user",
-            "complete_plan": "complete",
-            "fail_plan": "fail",
-        }
-        if legacy_action in mapping:
-            normalized["action"] = mapping[legacy_action]
-        return normalized
 
     @model_validator(mode="after")
     def validate_semantic_output(self) -> "PlannerGraphOutput":
@@ -159,7 +126,6 @@ class PlannerGraphOutput(BaseModel):
                 else PlannerDecisionKind.CREATE_PLAN
             ),
             "ask_user": PlannerDecisionKind.ASK_USER,
-            "complete": PlannerDecisionKind.COMPLETE_PLAN,
             "fail": PlannerDecisionKind.FAIL_PLAN,
         }[self.action]
         return PlanPatch(
@@ -168,7 +134,6 @@ class PlannerGraphOutput(BaseModel):
             tasks=[task.to_runtime_task() for task in self.tasks],
             remove_task_ids=self.remove_task_ids,
             question=self.question,
-            answer_brief=self.answer_brief,
             failure_reason=self.failure_reason,
         )
 

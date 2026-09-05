@@ -177,7 +177,7 @@ Flow:
    planner; it never writes facts and returns an empty fallback on failure.
 3. Planner receives only the bounded `planner_memory_context`; it does not
    query memory tables or receive a full storage dump.
-4. After terminal finalization, `finalize_memory` runs asynchronously through
+4. After terminal synthesis, `finalize_memory` runs asynchronously through
    `FactExtractor -> FactCompactor -> FactReconciler` and persists evidence-
    backed facts using supersede semantics.
 

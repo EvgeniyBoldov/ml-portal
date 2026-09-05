@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,7 @@ def _now() -> datetime:
 
 TERMINAL_TASK_STATUSES = {
     TaskStatus.COMPLETED.value,
+    TaskStatus.SUPERSEDED.value,
     TaskStatus.UNFULFILLABLE.value,
     TaskStatus.FAILED.value,
     TaskStatus.CANCELLED.value,
@@ -60,6 +61,9 @@ class TaskNotFoundError(KeyError):
 def validate_task_graph(tasks: Iterable[PlannedTask]) -> None:
     """Reject unknown dependencies and cycles before touching persistence."""
     task_list = list(tasks)
+    synthesis_nodes = [item for item in task_list if item.kind == PlanNodeKind.SYNTHESIS]
+    if len(synthesis_nodes) != 1:
+        raise PlanValidationError("an active runtime plan requires exactly one synthesis checkpoint")
     ids = {item.task_id for item in task_list}
     for item in task_list:
         if len(item.depends_on) != len(set(item.depends_on)):
@@ -93,6 +97,12 @@ def validate_task_graph(tasks: Iterable[PlannedTask]) -> None:
 def task_is_ready(task: Dict[str, Any], all_tasks: Dict[str, Dict[str, Any]]) -> bool:
     if task.get("status") not in {TaskStatus.PENDING.value, TaskStatus.READY.value}:
         return False
+    if task.get("kind") == PlanNodeKind.SYNTHESIS.value:
+        return all(
+            task_id == task.get("task_id")
+            or item.get("status") in {TaskStatus.COMPLETED.value, TaskStatus.SUPERSEDED.value}
+            for task_id, item in all_tasks.items()
+        )
     dependencies_ready = all(
         all_tasks.get(dep, {}).get("status") == TaskStatus.COMPLETED.value
         for dep in task.get("depends_on", [])
@@ -136,7 +146,6 @@ class InMemoryPlanStore:
             "revision": 0,
             "tasks": {},
             "needs": {},
-            "answer_brief": None,
             "last_failure": None,
         }
         self.plans[plan_id] = plan
@@ -171,10 +180,15 @@ class InMemoryPlanStore:
         ]
         merged = {task.task_id: task for task in existing}
         merged.update({task.task_id: task for task in patch.tasks})
-        validate_task_graph(merged.values())
+        if patch.decision.value in {"create_plan", "revise_plan"}:
+            validate_task_graph(merged.values())
 
         for task_id in patch.remove_task_ids:
-            plan["tasks"].pop(task_id, None)
+            task = plan["tasks"].get(task_id)
+            if task and task.get("status") == TaskStatus.COMPLETED.value:
+                task["status"] = TaskStatus.SUPERSEDED.value
+            else:
+                plan["tasks"].pop(task_id, None)
         for index, task in enumerate(patch.tasks):
             old = plan["tasks"].get(task.task_id)
             if old and old.get("status") in {TaskStatus.RUNNING.value, TaskStatus.COMPLETED.value}:
@@ -230,8 +244,6 @@ class InMemoryPlanStore:
             plan["goal"] = patch.goal
         if patch.decision.value == "ask_user":
             plan["status"] = PlanStatus.WAITING_INPUT.value
-        elif patch.decision.value == "complete_plan":
-            plan["status"] = PlanStatus.COMPLETED.value
         elif patch.decision.value == "fail_plan":
             plan["status"] = PlanStatus.FAILED.value
         else:
@@ -240,8 +252,6 @@ class InMemoryPlanStore:
             for need in plan["needs"].values():
                 if need.get("status") == RequirementStatus.PENDING.value:
                     need["status"] = RequirementStatus.WAITING_USER.value
-        if patch.answer_brief is not None:
-            plan["answer_brief"] = patch.answer_brief
         self.revisions[plan_id].append({
             "revision": plan["revision"],
             "reason": reason,
@@ -526,10 +536,10 @@ class SqlPlanStore:
         protected_removals = {
             row.task_id for row in existing_rows
             if row.task_id in set(patch.remove_task_ids)
-            and row.status in {TaskStatus.RUNNING.value, TaskStatus.COMPLETED.value}
+            and row.status == TaskStatus.RUNNING.value
         }
         if protected_removals:
-            raise PlanValidationError(f"cannot remove active or completed tasks: {sorted(protected_removals)}")
+            raise PlanValidationError(f"cannot remove active tasks: {sorted(protected_removals)}")
         existing_ids = {row.task_id for row in existing_rows if row.task_id not in set(patch.remove_task_ids)}
         dependencies_by_task: Dict[str, List[str]] = {task_id: [] for task_id in existing_ids}
         dep_rows = (await self.session.execute(
@@ -566,10 +576,20 @@ class SqlPlanStore:
         # ``revise_plan`` is a delta: a supplied task replaces its own
         # definition and dependencies; omitted tasks stay untouched.
         combined.update({item.task_id: item.model_copy(deep=True) for item in patch.tasks})
-        validate_task_graph(combined.values())
+        if patch.decision.value in {"create_plan", "revise_plan"}:
+            validate_task_graph(combined.values())
         try:
             async with self.session.begin_nested():
                 if patch.remove_task_ids:
+                    await self.session.execute(
+                        update(RuntimePlanTask)
+                        .where(
+                            RuntimePlanTask.plan_id == plan_id,
+                            RuntimePlanTask.task_id.in_(patch.remove_task_ids),
+                            RuntimePlanTask.status == TaskStatus.COMPLETED.value,
+                        )
+                        .values(status=TaskStatus.SUPERSEDED.value)
+                    )
                     await self.session.execute(
                         delete(RuntimePlanTask).where(
                             RuntimePlanTask.plan_id == plan_id,
@@ -647,7 +667,6 @@ class SqlPlanStore:
                 plan.revision += 1
                 plan.status = {
                     "ask_user": PlanStatus.WAITING_INPUT.value,
-                    "complete_plan": PlanStatus.COMPLETED.value,
                     "fail_plan": PlanStatus.FAILED.value,
                 }.get(patch.decision.value, PlanStatus.ACTIVE.value)
                 if patch.decision.value == "ask_user":
@@ -661,8 +680,6 @@ class SqlPlanStore:
                         )
                         .values(status=RequirementStatus.WAITING_USER.value)
                     )
-                if patch.answer_brief is not None:
-                    plan.answer_brief = patch.answer_brief
                 self.session.add(RuntimePlanRevision(
                     plan_id=plan_id, revision=plan.revision, reason=reason,
                     patch=patch.model_dump(mode="json", by_alias=True), planner_invocation_id=planner_invocation_id,

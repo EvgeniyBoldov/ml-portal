@@ -1,6 +1,6 @@
 export interface PlanTaskViewModel {
   taskId: string;
-  kind: 'agent' | 'planner';
+  kind: 'agent' | 'planner' | 'synthesis';
   title: string;
   intent?: string;
   objective?: string;
@@ -40,13 +40,13 @@ const text = (value: unknown): string | undefined => typeof value === 'string' &
 export function planDecisionLabel(value: unknown): string | undefined {
   const decision = text(value);
   if (!decision) return undefined;
-  return ({ create_plan: 'Сформировать план', revise_plan: 'Перепланировать', ask_user: 'Запросить уточнение', complete_plan: 'Завершить план', fail_plan: 'Остановить план' } as Record<string, string>)[decision] ?? decision;
+  return ({ create_plan: 'Сформировать план', revise_plan: 'Перепланировать', ask_user: 'Запросить уточнение', fail_plan: 'Остановить план' } as Record<string, string>)[decision] ?? decision;
 }
 
 export function taskStatusLabel(value: unknown): string | undefined {
   const status = text(value);
   if (!status) return undefined;
-  return ({ pending: 'Ожидает', ready: 'Готова к запуску', running: 'Выполняется', completed: 'Готово', failed: 'Ошибка', unfulfillable: 'Невыполнима', waiting_user: 'Ожидает пользователя', waiting_dependency: 'Ожидает зависимость' } as Record<string, string>)[status] ?? status;
+  return ({ pending: 'Ожидает', ready: 'Готова к запуску', running: 'Выполняется', completed: 'Готово', superseded: 'Заменена планом', failed: 'Ошибка', unfulfillable: 'Невыполнима', waiting_user: 'Ожидает пользователя', waiting_dependency: 'Ожидает зависимость' } as Record<string, string>)[status] ?? status;
 }
 
 function dependencyValues(value: unknown, taskNames?: Map<string, string>): string[] {
@@ -60,7 +60,8 @@ function dependencyValues(value: unknown, taskNames?: Map<string, string>): stri
 export function projectPlanTask(value: unknown, fallbackTaskId = 'task'): PlanTaskViewModel {
   const task = record(value);
   const taskId = text(task.task_id ?? task.id) ?? fallbackTaskId;
-  const kind = text(task.kind) === 'planner' ? 'planner' : 'agent';
+  const rawKind = text(task.kind);
+  const kind = rawKind === 'planner' || rawKind === 'synthesis' ? rawKind : 'agent';
   const intent = text(task.intent);
   const objective = text(task.objective ?? task.description ?? task.task_objective);
   const title = text(task.title ?? task.name ?? intent ?? objective ?? taskId) ?? 'Задача без названия';
@@ -71,7 +72,7 @@ export function projectPlanTask(value: unknown, fallbackTaskId = 'task'): PlanTa
     intent,
     objective,
     instructions: text(task.instructions ?? task.task_instructions),
-    executor: kind === 'planner' ? 'planner' : text(task.executor ?? task.agent_slug ?? task.assigned_agent),
+    executor: kind === 'planner' ? 'planner' : kind === 'synthesis' ? 'synthesizer' : text(task.executor ?? task.agent_slug ?? task.assigned_agent),
     status: taskStatusLabel(task.status),
     dependencies: dependencyValues(task.depends_on ?? task.dependencies),
     expectedOutputs: kind === 'agent' && Array.isArray(task.expected_outputs)

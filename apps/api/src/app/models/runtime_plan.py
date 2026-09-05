@@ -26,7 +26,6 @@ class RuntimePlan(Base):
     goal: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    answer_brief: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_failure: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)

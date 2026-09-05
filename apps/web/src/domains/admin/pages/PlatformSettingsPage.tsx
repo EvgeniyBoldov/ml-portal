@@ -101,13 +101,6 @@ const FALLBACK_NUMERIC_FIELDS: FieldConfig[] = [
     label: 'Max iters по умолчанию',
     description: 'Используется, если execution limits не задали лимит шагов агента.',
   },
-  {
-    key: 'synth_chunk_size',
-    type: 'number',
-    label: 'Размер синтез-чанка',
-    description: 'Размер чанка для synth delta streaming в short-circuit/fallback путях.',
-    min: 1,
-  },
 ];
 
 const RUN_LIMIT_FIELDS: FieldConfig[] = [

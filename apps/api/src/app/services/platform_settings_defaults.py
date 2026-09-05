@@ -24,7 +24,6 @@ PLATFORM_INTENT_MESSAGES: Dict[str, str] = {
 }
 
 PLATFORM_DEFAULT_MAX_ITERS = 25
-PLATFORM_SYNTH_CHUNK_SIZE = 20
 
 PLATFORM_FALLBACK_SETTINGS: Dict[str, Any] = {
     "native_tool_calling": True,
@@ -32,7 +31,6 @@ PLATFORM_FALLBACK_SETTINGS: Dict[str, Any] = {
     "operations_rules_text": PLATFORM_OPERATION_RULES_TEXT,
     "intent_messages": PLATFORM_INTENT_MESSAGES,
     "default_max_iters": PLATFORM_DEFAULT_MAX_ITERS,
-    "synth_chunk_size": PLATFORM_SYNTH_CHUNK_SIZE,
 }
 
 
@@ -60,7 +58,6 @@ def _settings_to_dict(settings: Any) -> Dict[str, Any]:
             "default_max_iters",
             "operations_rules_text",
             "intent_messages",
-            "synth_chunk_size",
             "chat_upload_max_bytes",
             "chat_upload_allowed_extensions",
             "created_at",
@@ -94,7 +91,6 @@ def build_platform_runtime_config(settings: Any) -> Dict[str, Any]:
         "operations_rules_text": effective.get("operations_rules_text"),
         "intent_messages": effective.get("intent_messages"),
         "runtime": {
-            "synth_chunk_size": effective.get("synth_chunk_size"),
             "default_max_iters": effective.get("default_max_iters"),
         },
         "chat_upload_max_bytes": effective.get("chat_upload_max_bytes"),

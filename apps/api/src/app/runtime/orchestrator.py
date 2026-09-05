@@ -18,9 +18,10 @@ from app.runtime.orchestrator_contracts import (
 )
 from app.runtime.plan_store import SqlPlanStore
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
+from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
 from uuid import UUID, uuid4
 from app.models.runtime_observability import RuntimePlannerInvocation
-from app.runtime.events import RuntimeEvent, RuntimeEventType
+from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.core.logging import get_logger
 from app.runtime.entity_ids import (
     agent_execution_id as make_agent_execution_id,
@@ -46,6 +47,10 @@ class OrchestratorEvent(dict):
     """Small event DTO used by the engine; runtime event adapters can wrap it."""
 
     def to_runtime_event(self) -> RuntimeEvent:
+        if self.get("type") == "_runtime_event":
+            runtime_event = self.get("runtime_event")
+            if isinstance(runtime_event, RuntimeEvent):
+                return runtime_event
         event_name = str(self.get("type") or "")
         try:
             event_type = RuntimeEventType(event_name)
@@ -97,11 +102,12 @@ class GraphOrchestrator:
     """Persisted graph scheduler; all task lifecycle changes go through SQL."""
 
     def __init__(self, *, store: SqlPlanStore, planner: Planner, executor: TaskExecutor,
+                 synthesizer: Optional[Any] = None,
                  max_attempts: int = 3, retry_delay_seconds: int = 60,
                  event_sink: Optional[Any] = None,
                  budget_service: Optional[Any] = None,
                  logging_level: str = "brief") -> None:
-        self.store, self.planner, self.executor = store, planner, executor
+        self.store, self.planner, self.executor, self.synthesizer = store, planner, executor, synthesizer
         self.max_attempts = max(1, max_attempts)
         self.task_result_reducer = TaskAttemptResultReducer()
         self.retry_delay_seconds = max(1, retry_delay_seconds)
@@ -152,6 +158,19 @@ class GraphOrchestrator:
         root_run_id = UUID(str(plan["root_run_id"]))
         iteration_number = 1
         orchestrator_id = planner_orchestrator_id(str(root_run_id))
+
+        if plan.get("tasks"):
+            synthesis_count = sum(
+                1 for task in plan["tasks"].values()
+                if task.get("kind") == PlanNodeKind.SYNTHESIS.value
+            )
+            if synthesis_count != 1:
+                await self.store.mark_failed(plan_id, {
+                    "code": "plan_contract_invalid",
+                    "message": "persisted plan does not contain exactly one synthesis checkpoint",
+                })
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed")
+                return
 
         async def observe(event_type: str, *, entity_type: str, entity_id: str, parent_type: Optional[str] = None, parent_id: Optional[str] = None, payload: Optional[Dict[str, Any]] = None, trigger: Optional[str] = None) -> None:
             # These lifecycle events are yielded below and therefore persisted
@@ -590,6 +609,100 @@ class GraphOrchestrator:
                     outcome=TaskOutcome.COMPLETED.value,
                     kind=PlanNodeKind.PLANNER.value,
                 )
+                continue
+            if getattr(task, "kind", None) == PlanNodeKind.SYNTHESIS.value:
+                if self.synthesizer is None:
+                    await self.store.mark_failed(plan_id, {
+                        "code": "synthesis_executor_missing",
+                        "message": "terminal synthesis executor is not configured",
+                    })
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed")
+                    return
+                task_id = task.task_id
+                checkpoint_id = make_checkpoint_id(str(root_run_id), "task", f"{task_id}:{task.attempts}")
+                step_id = make_step_id(active_iteration_id, active_step_number, task_id)
+                yield OrchestratorEvent(
+                    type="task_started", entity_type="task", entity_id=task_id,
+                    parent_entity_type="plan", parent_entity_id=str(plan_id),
+                    plan_id=str(plan_id), task_id=task_id, attempt=task.attempts,
+                )
+                yield OrchestratorEvent(
+                    type="step_start", entity_id=step_id, entity_type="step",
+                    parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
+                    step_number=active_step_number, kind="synthesis", title=task.intent,
+                    objective=task.instructions,
+                )
+                snapshot = await self.store.snapshot(plan_id)
+                runtime_state = planner_kwargs.get("runtime_state")
+                if runtime_state is None:
+                    raise RuntimeError("synthesis checkpoint requires runtime state")
+                runtime_cfg = dict((planner_kwargs.get("platform_config") or {}).get("runtime") or {})
+                try:
+                    synthesis_context = SynthesisContextBuilder(
+                        max_chars=int(runtime_cfg.get("synthesis_context_max_chars") or 120_000)
+                    ).build(plan=snapshot, synthesis_task_id=task_id)
+                except (TypeError, ValueError, SynthesisContextError) as exc:
+                    runtime_state.final_error = "synthesis_context_invalid"
+                    await self.store.mark_failed(plan_id, {
+                        "code": "synthesis_context_invalid",
+                        "message": str(exc),
+                    })
+                    yield OrchestratorEvent(
+                        type="_runtime_event",
+                        runtime_event=RuntimeEvent.error(
+                            "Не удалось подготовить контекст итогового ответа.",
+                            recoverable=False,
+                            error_code="synthesis_context_invalid",
+                            user_message="Не удалось подготовить контекст итогового ответа.",
+                            operator_message=str(exc),
+                            source="runtime",
+                        ),
+                        phase=OrchestrationPhase.SYNTHESIS.value,
+                    )
+                    yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
+                                            parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
+                                            step_number=active_step_number, status="failed", outcome="synthesis_context_invalid")
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed")
+                    return
+                synthesis_failed = False
+                async for synthesis_event in self.synthesizer.stream(
+                    runtime_state=runtime_state,
+                    run_id=root_run_id,
+                    synthesis_context=synthesis_context,
+                    model=planner_kwargs.get("model"),
+                    platform_config=planner_kwargs.get("platform_config"),
+                    sandbox_overrides=planner_kwargs.get("sandbox_overrides"),
+                    budget_registry=planner_kwargs.get("budget_registry"),
+                    budget_resolver=planner_kwargs.get("budget_resolver"),
+                    logging_level=self.logging_level,
+                ):
+                    synthesis_failed = synthesis_failed or synthesis_event.type == RuntimeEventType.ERROR
+                    yield OrchestratorEvent(
+                        type="_runtime_event", runtime_event=synthesis_event,
+                        phase=OrchestrationPhase.SYNTHESIS.value,
+                    )
+                if synthesis_failed or not str(runtime_state.final_answer or "").strip():
+                    await self.store.mark_failed(plan_id, {
+                        "code": "synthesis_failed",
+                        "message": str(runtime_state.final_error or "synthesis did not produce a final answer"),
+                    })
+                    yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
+                                            parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
+                                            step_number=active_step_number, status="failed", outcome="synthesis_failed")
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed")
+                    return
+                synthesis_result = AgentTaskResult(
+                    outcome=TaskOutcome.COMPLETED,
+                    description="Final answer delivered by synthesis checkpoint",
+                )
+                await self.store.apply_result(plan_id, task_id, synthesis_result)
+                yield OrchestratorEvent(type="task_completed", entity_type="task", entity_id=task_id,
+                                        parent_entity_type="plan", parent_entity_id=str(plan_id),
+                                        plan_id=str(plan_id), task_id=task_id, outcome=TaskOutcome.COMPLETED.value)
+                yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
+                                        parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
+                                        step_number=active_step_number, status="completed", outcome="completed")
+                active_step_number += 1
                 continue
             snapshot = await self.store.snapshot(plan_id)
             dependencies = {}

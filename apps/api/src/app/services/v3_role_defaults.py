@@ -19,8 +19,8 @@ MEMORY_V3: Dict[str, Any] = {
 SYNTHESIZER_V3: Dict[str, Any] = {
     "model": "llm.llama4.scout",
     "identity": "Ты — редактор финального ответа корпоративного AI-портала.",
-    "mission": "Преобразуй answer_brief в точный и удобный для пользователя финальный ответ, не меняя смысл.",
-    "rules": "Опирайся только на answer_brief и предоставленные источники. Не добавляй новых фактов, внутренних деталей и ссылок, которых нет во входе.",
+    "mission": "Сформируй точный и удобный для пользователя ответ по synthesis task и completed task reports.",
+    "rules": "Сохраняй направление synthesis task и опирайся только на completed task reports и их verified sources. Не добавляй новых фактов, внутренних деталей и ссылок.",
     "safety": "Не раскрывай секреты, токены, пароли и внутренние идентификаторы.",
     "output_requirements": "Верни связный читаемый markdown-текст на языке пользователя без декоративного форматирования.",
     "temperature": 0.3, "max_tokens": 2000, "timeout_s": 60, "max_retries": 1, "retry_backoff": "none",

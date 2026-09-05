@@ -263,7 +263,7 @@ class AgentExecutor:
                     if bool(runtime_event.data.get("success")):
                         artifacts.extend(self._extract_artifacts(result_payload))
 
-                    # Collect downloadable attachments for downstream synthesis
+                    # Collect verified attachments for terminal synthesis delivery.
                     operation_name = str(runtime_event.data.get("tool") or "")
                     if (
                         operation_name in ("file.delete", "file_delete")
@@ -346,12 +346,14 @@ class AgentExecutor:
                 verified = self._verified_task_result(
                     task=task,
                     ledger_entries=state.tool_ledger.entries[ledger_start:],
+                    sources=sub_sources,
                 )
                 ctx.extra["agent_execution_result"] = execution.model_copy(
                     update={"verified": verified, "receipt_refs": list(verified.get("receipts") or [])}
                 )
 
-        # Store sources in runtime_state for synthesizer access
+        # Keep sources available to memory/writeback. Synthesis receives the
+        # verified per-task projection persisted with its final plan instead.
         if sub_sources:
             if not state.memory_bundle:
                 state.memory_bundle = MemoryBundle(sections=[])
@@ -455,7 +457,9 @@ class AgentExecutor:
         return TaskAttemptResultReducer().reduce(request=request, execution=execution)
 
     @staticmethod
-    def _verified_task_result(*, task: TaskRequest, ledger_entries: List[Any]) -> Dict[str, Any]:
+    def _verified_task_result(
+        *, task: TaskRequest, ledger_entries: List[Any], sources: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         """Project only receipts observed by runtime during this attempt."""
         receipts: List[Dict[str, Any]] = []
         evidence: Dict[str, Any] = {}
@@ -492,6 +496,7 @@ class AgentExecutor:
             "receipts": receipts,
             "evidence": evidence,
             "artifacts": artifacts,
+            "sources": [dict(item) for item in sources if isinstance(item, dict)],
             "memory_candidates": memory_candidates,
         }
 

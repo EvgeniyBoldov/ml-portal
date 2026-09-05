@@ -81,7 +81,6 @@ class PlatformSettingsService:
         default_max_iters: Optional[int] = ...,
         operations_rules_text: Optional[str] = ...,
         intent_messages: Optional[Dict[str, str]] = ...,
-        synth_chunk_size: Optional[int] = ...,
         # === Chat File Upload ===
         chat_upload_max_bytes: Optional[int] = ...,
         chat_upload_allowed_extensions: Optional[str] = ...,
@@ -113,9 +112,6 @@ class PlatformSettingsService:
             settings.operations_rules_text = operations_rules_text
         if intent_messages is not ...:
             settings.intent_messages = intent_messages
-        if synth_chunk_size is not ...:
-            settings.synth_chunk_size = synth_chunk_size
-
         if chat_upload_max_bytes is not ...:
             settings.chat_upload_max_bytes = chat_upload_max_bytes
         if chat_upload_allowed_extensions is not ...:

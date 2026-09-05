@@ -45,7 +45,7 @@ facts + effective user/tenant scope -> MemoryService -> MemorySnapshot
                                    -> MemoryBuilder -> planner/agent context
 ```
 
-Write path после terminal finalization:
+Write path после terminal synthesis:
 
 ```text
 turn evidence -> FactExtractor -> FactCompactor -> FactReconciler -> facts

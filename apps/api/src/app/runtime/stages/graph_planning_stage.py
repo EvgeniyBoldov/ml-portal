@@ -18,7 +18,7 @@ from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolServic
 
 
 class GraphPlanningOutcomeKind(str, Enum):
-    NEEDS_FINAL = "needs_final"
+    COMPLETED = "completed"
     PAUSED = "paused"
     FAILED = "failed"
 
@@ -27,11 +27,9 @@ class GraphPlanningOutcomeKind(str, Enum):
 class GraphPlanningOutcome:
     kind: GraphPlanningOutcomeKind
     stop_reason: PipelineStopReason
-    answer_brief: Optional[str] = None
     pause_question: Optional[str] = None
     pause_message: Optional[str] = None
     pause_context: Optional[Dict[str, Any]] = None
-    final_answer_strategy: str = "synthesize"
 
 
 class GraphPlanningStage:
@@ -139,6 +137,8 @@ class GraphPlanningStage:
             "force_replan": resume_user_response is not None,
             "resume_user_response": resume_user_response,
             "runtime_limits": effective_runtime_limits,
+            "budget_registry": ctx.extra.get("runtime_budget_registry"),
+            "budget_resolver": ctx.extra.get("runtime_budget_resolver"),
         }
         async for event in self._orchestrator.run(
             plan_id=plan.id,
@@ -160,14 +160,18 @@ class GraphPlanningStage:
                     runtime_event.data.get("message") or runtime_event.data.get("summary") or ""
                 ).strip() or None
                 confirmation_context = dict(runtime_event.data or {})
-            yield PhasedEvent(runtime_event, OrchestrationPhase.PLANNER)
+            phase = event.get("phase")
+            try:
+                event_phase = OrchestrationPhase(str(phase)) if phase else OrchestrationPhase.PLANNER
+            except ValueError:
+                event_phase = OrchestrationPhase.PLANNER
+            yield PhasedEvent(runtime_event, event_phase)
         snapshot = await self._store.snapshot(plan.id)
         status = str(snapshot["status"])
         if status == "completed":
             self.outcome = GraphPlanningOutcome(
-                kind=GraphPlanningOutcomeKind.NEEDS_FINAL,
+                kind=GraphPlanningOutcomeKind.COMPLETED,
                 stop_reason=PipelineStopReason.COMPLETED,
-                answer_brief=None,
             )
         elif status == "waiting_input":
             is_confirmation = confirmation_context is not None

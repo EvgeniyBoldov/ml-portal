@@ -19,7 +19,13 @@ def test_graph_task_accepts_only_canonical_fields() -> None:
                 "executor": "viewer",
                 "expected_outputs": [{"key": "answer", "description": "Answer"}],
                 "needs": [{"key": "input", "description": "Input", "required": False}],
-            }
+            },
+            {
+                "task_id": "synthesize",
+                "kind": "synthesis",
+                "intent": "Answer the user's request",
+                "instructions": "Give a direct answer using the completed reports.",
+            },
         ],
     }
 
@@ -42,16 +48,9 @@ def test_planner_output_preserves_enum_decision_for_plan_store() -> None:
     assert patch.expected_revision == 0
 
 
-def test_planner_output_normalizes_legacy_decision_without_accepting_its_revision() -> None:
-    output = PlannerGraphOutput.model_validate({
-        "decision": "create_plan",
-        "expected_revision": 99,
-    })
-
-    patch = output.to_plan_patch(plan={"revision": 0, "tasks": {}})
-
-    assert patch.decision is PlannerDecisionKind.CREATE_PLAN
-    assert patch.expected_revision == 0
+def test_planner_output_rejects_legacy_decision_shape() -> None:
+    with pytest.raises(ValidationError):
+        PlannerGraphOutput.model_validate({"decision": "create_plan"})
 
 
 def test_graph_task_rejects_removed_vocabulary() -> None:
@@ -73,15 +72,13 @@ def test_planner_output_uses_revise_for_existing_plan() -> None:
     assert patch.expected_revision == 3
 
 
-def test_planner_output_normalizes_null_collection_fields() -> None:
-    output = PlannerGraphOutput.model_validate({
-        "action": "apply_graph",
-        "tasks": None,
-        "remove_task_ids": None,
-    })
-
-    assert output.tasks == []
-    assert output.remove_task_ids == []
+def test_planner_output_rejects_null_collection_fields() -> None:
+    with pytest.raises(ValidationError):
+        PlannerGraphOutput.model_validate({
+            "action": "apply_graph",
+            "tasks": None,
+            "remove_task_ids": None,
+        })
 
 
 def test_planner_output_rejects_runtime_needs() -> None:
@@ -116,21 +113,9 @@ def test_planner_schema_hides_runtime_needs_but_runtime_patch_keeps_contract() -
     assert patch.tasks[0].needs == []
 
 
-def test_planner_output_allows_explicit_completion_without_mutation() -> None:
-    patch = PlannerGraphOutput.model_validate({"action": "complete"}).to_plan_patch(
-        plan={"revision": 1, "tasks": {"reader": {}}}
-    )
-
-    assert patch.decision is PlannerDecisionKind.COMPLETE_PLAN
-
-
-def test_complete_plan_rejects_graph_mutation() -> None:
+def test_planner_output_rejects_removed_completion_action() -> None:
     with pytest.raises(ValidationError):
-        PlanPatch.model_validate({
-            "expected_revision": 1,
-            "decision": "complete_plan",
-            "tasks": [{"task_id": "extra", "executor": "reader", "intent": "x", "instructions": "x"}],
-        })
+        PlannerGraphOutput.model_validate({"action": "complete"})
 
 
 def test_graph_task_can_request_replan_after_success() -> None:
@@ -169,6 +154,27 @@ def test_planner_checkpoint_rejects_agent_fields() -> None:
         })
 
 
+def test_synthesis_checkpoint_is_executorless_and_has_no_dependencies() -> None:
+    task = PlannedTask.model_validate({
+        "task_id": "synthesize",
+        "kind": "synthesis",
+        "intent": "Answer the actual user question",
+        "instructions": "State the conclusion and relevant caveats.",
+    })
+
+    assert task.kind is PlanNodeKind.SYNTHESIS
+    assert task.executor is None
+
+    with pytest.raises(ValidationError, match="cannot declare dependencies"):
+        PlannedTask.model_validate({
+            "task_id": "synthesize",
+            "kind": "synthesis",
+            "intent": "Answer",
+            "instructions": "Answer",
+            "depends_on": ["inspect"],
+        })
+
+
 def test_planner_input_hides_persistence_fields() -> None:
     payload = PlannerInputBuilder().build_graph_request(type("Request", (), {
         "goal": "Inspect sources",
@@ -199,7 +205,8 @@ def test_planner_input_hides_persistence_fields() -> None:
         "status": "active",
         "tasks": {"inspect": {"task_id": "inspect", "status": "completed"}},
     }
-    assert "completed_outputs" not in payload
+    assert payload["completed_outputs"] == {}
+    assert payload["terminal_synthesis"]["kind"] == "synthesis"
 
 
 def test_planner_input_keeps_full_graph_and_checkpoint_metadata() -> None:

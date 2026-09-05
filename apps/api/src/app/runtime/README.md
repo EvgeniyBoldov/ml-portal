@@ -9,8 +9,7 @@
 3. Stages execute in order:
    - `orchestrator.py` / `plan_store.py` — deterministic plan control and task lifecycle
    - `planner/*` — planner contract and graph patch generation
-   - `stages/finalization_stage.py` — synthesizer after terminal plan
-   - `stages/finalization_stage.py` — synthesizer for NEEDS_FINAL outcomes
+   - terminal `kind=synthesis` node — synthesizer inside the persisted graph
 4. State is persisted through ports (`ports.py`) and adapters (services/repos).
 5. Output events are normalized in `events.py` and wrapped with envelope (`envelope.py`).
 
@@ -22,7 +21,8 @@
 - `orchestrator_contracts.py`: planner/orchestrator/task/result contracts.
 - `plan_store.py`: transactional graph state, dependencies, checkpoint and attempts.
 - `turn_state.py`: current-turn memory/context DTO; it is not the persisted plan.
-- `synthesizer.py`: final answer synthesis and role prompt/model params loading.
+- `synthesis_context.py`: complete, redacted reports selected by the final plan.
+- `synthesizer.py`: final answer synthesis at the terminal graph checkpoint.
 
 ## Ports and Adapters
 
@@ -88,7 +88,8 @@ Runtime-config keys currently used by orchestrator/agent flows:
 - `required_operation_retry_instruction` — text injected on protocol retry when agent skipped required tool call.
 - `operations_rules_text` — full override of "mandatory operation rules" block appended to tool prompt.
 - `intent_messages` — map of runtime intent templates (`agent_start`, `final_answer`, `tool_call`).
-- `runtime.synth_chunk_size` — default chunk size for synthesizer delta streaming in short-circuit/fallback paths.
+- `runtime.synthesis_context_max_chars` — hard limit for the complete final-plan
+  report; exceeding it fails explicitly instead of truncating context.
 
 ## Collection Readiness
 

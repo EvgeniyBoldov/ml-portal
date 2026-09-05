@@ -60,12 +60,6 @@ class PlatformSettings(Base):
         nullable=True,
         comment="Runtime intent message templates (agent_start/final_answer/operation_call)",
     )
-    synth_chunk_size: Mapped[Optional[int]] = mapped_column(
-        Integer,
-        nullable=True,
-        comment="Default synthesizer delta chunk size for short-circuit/fallback streaming",
-    )
-    
     # === Chat File Upload ===
     chat_upload_max_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     chat_upload_allowed_extensions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

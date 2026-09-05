@@ -791,7 +791,6 @@ export interface PlatformSettings {
   operations_rules_text?: string;
   intent_messages?: Record<string, string>;
   default_max_iters?: number;
-  synth_chunk_size?: number;
   // Global Caps / Rails
   abs_max_plan_steps?: number;
   abs_max_concurrency?: number;
@@ -814,7 +813,6 @@ export interface PlatformSettingsUpdate {
   operations_rules_text?: string;
   intent_messages?: Record<string, string>;
   default_max_iters?: number;
-  synth_chunk_size?: number;
   abs_max_plan_steps?: number;
   abs_max_concurrency?: number;
   abs_max_task_runtime_s?: number;

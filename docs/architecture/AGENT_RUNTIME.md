@@ -111,7 +111,7 @@ class ExecutionPreflight:
 ```python
 class RuntimePipeline:
     async def execute(...) -> AsyncGenerator[RuntimeEvent, None]:
-        # platform snapshot -> memory -> planning -> agent execution -> finalization
+        # platform snapshot -> memory -> planning -> agent execution -> synthesis checkpoint
 ```
 
 ## Tool Contract
@@ -151,7 +151,7 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 6. Planner checkpoint получает весь persisted graph с JSON results и artifact references, но не содержимое файлов. Его patch и completion checkpoint применяются в одной transaction boundary.
 7. Технический сбой сохраняется отдельно и может быть retried; `unfulfillable` является валидным бизнес-результатом. Approval остаётся task-local pause, а `ask_user` — pause плана; это не planner nodes.
 7. Checkpoint и outputs открывают зависимости или возобновляют логическую task новым attempt.
-8. FinalizationStage формирует финальный ответ только после terminal plan. Synthesizer получает bounded runtime-owned projection финальных `TaskResult` (description, declared text/data и safe evidence summary) и verified artifact metadata, но никогда не сырые agent results, tool arguments или tool results. Sandbox сохраняет и стримит canonical journal events, chat стримит только пользовательский transport.
+8. Терминальный `kind=synthesis` checkpoint — обычный узел persisted graph без executor. Он получает свою task-интенцию/инструкцию и complete runtime-owned projection всех актуальных успешно завершённых agent-задач final plan, плюс verified artifact metadata и sources. Он не читает артефакты заново и не получает сырые agent/tool results, технический journal, failed/unfulfillable/retry-задачи. Sandbox сохраняет и стримит canonical journal events, chat стримит только пользовательский transport.
 
 ### Memory lifecycle
 
@@ -168,7 +168,7 @@ project and project-memory-key matching; project rules are never injected into
 the automatic turn snapshot. A failed selection falls back to an empty
 optional context and does not fail the main turn.
 
-After finalization, the chat path emits the answer and dispatches
+After the terminal synthesis checkpoint, the chat path emits the answer and dispatches
 `finalize_memory` asynchronously. That worker runs `FactExtractor`,
 `FactCompactor` and `FactReconciler`; evidence is deduplicated into
 `FactObservation`, active rows use supersede semantics, and only confirmed
@@ -496,7 +496,7 @@ context_snapshot: {
 - planner `orchestrator_start` — `inputs.goal`, `system_prompt`, `limits`, `rbac`, `meta.role=planner`
 - `planner_iteration_start` — `inputs.goal`, `inputs.iteration_intent`, `limits`, `meta.attempt`, `meta.available_agents`
 - `agent_start` — `inputs.goal`, `inputs.agent_input`, `system_prompt`, `limits`, `rbac`, `meta.role`, `meta.agent_slug`
-- `synthesis_start` — `inputs.goal`, `inputs.planner_hint`, `system_prompt`, `limits`, `meta.role=synthesizer`
+- `synthesis_start` — `inputs.synthesis_task`, `inputs.completed_task_count`, `system_prompt`, `limits`, `meta.role=synthesizer`
 - memory `orchestrator_start` — `inputs.user_request`, `limits`, `meta.role=memory`, `meta.components`
 - memory component `agent_start` — `inputs.user_request`, `system_prompt`, `limits`, `meta.role`, `meta.agent_slug`
 

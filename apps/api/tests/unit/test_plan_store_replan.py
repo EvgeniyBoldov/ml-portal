@@ -7,12 +7,22 @@ from app.runtime.orchestrator_contracts import (
     PlanPatch,
     PlannedTask,
     PlannerDecisionKind,
+    PlanNodeKind,
     TaskOutputSpec,
     TaskOutputValue,
     TaskOutcome,
     TaskResult,
 )
 from app.runtime.plan_store import InMemoryPlanStore, PlanValidationError
+
+
+def _synthesis_task() -> PlannedTask:
+    return PlannedTask(
+        task_id="synthesize",
+        kind=PlanNodeKind.SYNTHESIS,
+        intent="Answer the user's actual request",
+        instructions="Use the completed task reports to give the final answer.",
+    )
 
 
 def test_replan_reactivates_replaced_unfulfillable_task() -> None:
@@ -26,7 +36,7 @@ def test_replan_reactivates_replaced_unfulfillable_task() -> None:
     )
     store.apply_patch(
         plan["id"],
-        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[task]),
+        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[task, _synthesis_task()]),
     )
     claimed = store.claim_ready(plan["id"])
     assert claimed is not None
@@ -67,7 +77,7 @@ def test_required_need_blocks_task_until_provider_output_resolves_it() -> None:
     )
     store.apply_patch(
         plan["id"],
-        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[provider, consumer]),
+        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[provider, consumer, _synthesis_task()]),
     )
     claimed = store.claim_ready(plan["id"])
     assert claimed is not None and claimed["task_id"] == "provider"
@@ -103,7 +113,7 @@ def test_task_result_without_required_output_does_not_complete_task() -> None:
     )
     store.apply_patch(
         plan["id"],
-        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[task]),
+        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[task, _synthesis_task()]),
     )
     assert store.claim_ready(plan["id"])
     with pytest.raises(PlanValidationError, match="missing required outputs"):
@@ -129,7 +139,7 @@ def test_user_resolves_waiting_need_and_reactivates_only_its_task() -> None:
     )
     store.apply_patch(
         plan["id"],
-        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[task]),
+        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[task, _synthesis_task()]),
     )
     store.apply_patch(
         plan["id"],
@@ -158,7 +168,7 @@ def test_planner_checkpoint_completes_and_extends_the_graph() -> None:
     )
     store.apply_patch(
         plan["id"],
-        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[discover, checkpoint]),
+        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[discover, checkpoint, _synthesis_task()]),
     )
     assert store.claim_ready(plan["id"])["task_id"] == "discover"
     store.apply_result(
@@ -207,7 +217,7 @@ def test_confirmation_resume_reactivates_only_bound_task() -> None:
     )
     store.apply_patch(
         plan["id"],
-        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[confirmed, unrelated]),
+        PlanPatch(expected_revision=0, decision=PlannerDecisionKind.CREATE_PLAN, tasks=[confirmed, unrelated, _synthesis_task()]),
     )
     assert store.claim_ready(plan["id"])["task_id"] == "apply_change"
     task = store.get(plan["id"])["tasks"]["apply_change"]

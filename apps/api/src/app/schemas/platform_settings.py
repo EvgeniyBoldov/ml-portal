@@ -36,12 +36,6 @@ class PlatformSettingsBase(BaseModel):
         None,
         description="Runtime intent message templates, e.g. agent_start/final_answer/operation_call",
     )
-    synth_chunk_size: Optional[int] = Field(
-        None,
-        ge=1,
-        description="Default synthesizer delta chunk size",
-    )
-    
     # === Chat File Upload ===
     chat_upload_max_bytes: Optional[int] = Field(None, description="Max upload size for chat attachments in bytes")
     chat_upload_allowed_extensions: Optional[str] = Field(

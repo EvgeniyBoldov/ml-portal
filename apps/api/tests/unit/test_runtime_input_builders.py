@@ -70,7 +70,8 @@ def test_graph_planner_input_builder_uses_persisted_plan_contract():
 
     assert set(payload) == {
         "goal", "mode", "replan_reason", "plan", "available_artifacts",
-        "needs", "last_failure", "memory_context", "available_agents",
+        "needs", "last_failure", "completed_outputs", "memory_context", "available_agents",
+        "terminal_synthesis",
     }
     assert payload["mode"] == "replan"
     assert payload["replan_reason"] == "technical_failure"
@@ -78,6 +79,8 @@ def test_graph_planner_input_builder_uses_persisted_plan_contract():
     assert payload["available_agents"] == [{
         "slug": "viewer", "description": "Просмотр данных", "tags": [], "provides_keys": [],
     }]
+    assert payload["completed_outputs"] == {"inspect": {"status": "completed"}}
+    assert payload["terminal_synthesis"]["kind"] == "synthesis"
 
 
 def test_graph_planner_input_builder_normalizes_artifact_contexts():
@@ -178,113 +181,17 @@ def test_planner_input_builder_includes_attachment_contexts():
     ]
 
 
-def test_synthesizer_input_builder_builds_structured_payload_with_files_and_sources():
-    memory = _memory()
-    state = RuntimeTurnState.from_seed(
-        run_id=memory.run_id,
-        chat_id=memory.chat_id,
-        user_id=memory.user_id,
-        tenant_id=memory.tenant_id,
-        goal="canonical goal",
-        current_user_query="canonical q",
-        memory_bundle=state_memory_bundle(),
-    )
-    state.task_results = [
-        {
-            "task_id": "write_request",
-            "outcome": "completed",
-            "description": "Prepared a config file",
-            "outputs": {
-                "request": {
-                    "text": "Request data prepared",
-                    "data": {"destination": "10.0.0.1", "password": "must-not-reach-synthesizer"},
-                    "artifacts": [{"artifact_id": "agent-claimed"}],
-                }
-            },
-            "verified": {"artifacts": [
-                {
-                    "artifact_id": "11111111-1111-1111-1111-111111111111",
-                    "file_name": "example.txt",
-                }
-            ]},
-        }
-    ]
-    state.add_runtime_fact("runtime fact")
-    memory.memory_state["runtime_turn_state"] = state.model_dump(mode="json")
-
+def test_synthesizer_input_builder_serializes_only_the_prebuilt_context():
+    context = {
+        "synthesis_task": {"task_id": "answer", "intent": "Answer the request", "instructions": "Be concise"},
+        "completed_task_reports": [{"task_id": "inspect", "report": {"description": "Found it"}}],
+        "artifacts": [{"artifact_id": "artifact-1", "file_name": "example.txt"}],
+        "sources": [{"source_id": "doc-1", "source_name": "Doc One"}],
+    }
     messages = SynthesizerInputBuilder().build(
-        runtime_state=state,
-        answer_brief="brief",
+        synthesis_context=context,
         system_prompt="sys",
     )
     assert messages[0]["content"] == "sys"
     payload = json.loads(messages[1]["content"])
-    assert payload["answer_brief"] == "brief"
-    assert payload["task_results"] == [{
-        "task_id": "write_request",
-        "outcome": "completed",
-        "description": "Prepared a config file",
-        "outputs": {"request": {
-            "text": "Request data prepared",
-            "data": {"destination": "10.0.0.1", "password": "***"},
-        }},
-        "evidence": {"fresh_retrieval": False, "receipt_count": 0},
-    }]
-    assert payload["generated_files"][0]["file_name"] == "example.txt"
-    assert "download_url" not in payload["generated_files"][0]
-    assert payload["rag_sources"][0]["source_name"] == "Doc One"
-    assert payload["language_hint"] is None
-    assert payload["style_constraints"]["concise"] is True
-    assert "available_agents" not in payload
-    assert "agent_results" not in payload
-    assert "runtime_facts" not in payload
-    assert "planner_hint" not in payload
-    assert "conversation_summary" not in payload
-
-
-def test_synthesizer_input_builder_detects_russian_language_hint():
-    state = RuntimeTurnState.from_seed(
-        run_id=uuid4(),
-        chat_id=uuid4(),
-        user_id=uuid4(),
-        tenant_id=uuid4(),
-        goal="Подготовить ответ",
-        current_user_query="Сформируй короткий итог",
-        memory_bundle=MemoryBundle(),
-    )
-
-    messages = SynthesizerInputBuilder().build(
-        runtime_state=state,
-        answer_brief="Короткий итог",
-        system_prompt="sys",
-    )
-
-    payload = json.loads(messages[1]["content"])
-    assert payload["language_hint"] == "ru"
-
-
-def state_memory_bundle():
-    from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
-
-    return MemoryBundle(
-        sections=[
-            MemorySection(
-                name="facts",
-                priority=10,
-                items=[MemoryItem(text="x", source="s")],
-                budget_used_chars=1,
-            ),
-            MemorySection(
-                name="sources",
-                priority=20,
-                items=[
-                    MemoryItem(
-                        text="Doc One",
-                        source="agent",
-                        metadata={"source": {"source_id": "doc-1", "source_name": "Doc One", "text": "snippet"}},
-                    )
-                ],
-                budget_used_chars=7,
-            ),
-        ]
-    )
+    assert payload == context

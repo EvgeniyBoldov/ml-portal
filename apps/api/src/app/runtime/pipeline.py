@@ -9,7 +9,7 @@ Responsibilities (and NOTHING else):
     4. Initialize `RuntimeTurnState` as the single source of truth.
     5. Run the persisted graph planning stage until the plan pauses or reaches
        a terminal state.
-    6. Run FinalizationStage for NEEDS_FINAL outcomes (synthesizer).
+    6. Let the terminal synthesis checkpoint produce the final answer.
     7. Hand off to `MemoryWriter.finalize` to persist extracted facts.
 
 Triage is gone. The planner absorbs clarify.
@@ -604,24 +604,25 @@ class RuntimePipeline:
                     phase=OrchestrationPhase.PIPELINE,
                 )
             else:
-                # A failed graph has no FINAL event. Emit an explicit safe
-                # transport error so chat clients do not observe a silent EOF.
-                yield await emitter.emit(
-                    RuntimeEvent.error(
-                        "Runtime execution failed",
-                        recoverable=True,
-                        error_code="runtime_execution_failed",
-                        retryable=True,
-                        user_message=(
-                            "Во время выполнения запроса возникли временные проблемы. "
-                            "Попробуйте повторить запрос позже."
+                # Synthesis already emitted its concrete safe error. Other
+                # graph failures still need one transport-level error.
+                if not runtime_state.final_error:
+                    yield await emitter.emit(
+                        RuntimeEvent.error(
+                            "Runtime execution failed",
+                            recoverable=True,
+                            error_code="runtime_execution_failed",
+                            retryable=True,
+                            user_message=(
+                                "Во время выполнения запроса возникли временные проблемы. "
+                                "Попробуйте повторить запрос позже."
+                            ),
+                            source="runtime",
+                            parent_entity_type="run",
+                            parent_entity_id=run_id_str,
                         ),
-                        source="runtime",
-                        parent_entity_type="run",
-                        parent_entity_id=run_id_str,
-                    ),
-                    phase=OrchestrationPhase.PIPELINE,
-                )
+                        phase=OrchestrationPhase.PIPELINE,
+                    )
             if await_background_tail:
                 yield await emitter.emit(
                     RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
@@ -629,7 +630,7 @@ class RuntimePipeline:
                 )
             return
 
-        # --- Finalization -----------------------------------------------
+        # The terminal synthesis checkpoint already emitted the final answer.
         yield await emitter.emit(
             RuntimeEvent.orchestrator_end(
                 orchestrator_id=orchestrator_id,
@@ -639,22 +640,6 @@ class RuntimePipeline:
             phase=OrchestrationPhase.PLANNER,
         )
 
-        if planning_outcome.kind == GraphPlanningOutcomeKind.NEEDS_FINAL:
-            async for ev in self._run_finalization(
-                runtime_state=runtime_state,
-                stop_reason=planning_outcome.stop_reason,
-                answer_brief=planning_outcome.answer_brief,
-                final_answer_strategy=planning_outcome.final_answer_strategy,
-                model=request.model,
-                platform_config=platform.config,
-                sandbox_overrides=request.sandbox_overrides,
-                emitter=emitter,
-                run_id=run_id,
-                budget_registry=budget_registry,
-                budget_resolver=budget_resolver,
-                logging_level=run_logging_level,
-            ):
-                yield ev
         if await_background_tail:
             # Sandbox/trace mode consumes the full runtime tail after final answer.
             async for memory_ev in self._finalize_memory(
@@ -748,51 +733,6 @@ class RuntimePipeline:
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
-
-    async def _run_finalization(
-        self,
-        *,
-        runtime_state: RuntimeTurnState,
-        stop_reason: PipelineStopReason,
-        answer_brief: Optional[str],
-        final_answer_strategy: Literal["synthesize", "verbatim", "use_agent_result"],
-        model: Optional[str],
-        platform_config: Optional[Dict[str, Any]] = None,
-        sandbox_overrides: Optional[Dict[str, Any]] = None,
-        emitter: RuntimeEventLogger,
-        run_id: Optional[UUID] = None,
-        budget_registry: Optional[BudgetRegistry] = None,
-        budget_resolver: Optional[BudgetResolver] = None,
-        logging_level: Optional[str] = None,
-    ) -> AsyncGenerator[RuntimeEvent, None]:
-        effective_run_id = run_id or runtime_state.run_id
-        final_stage = self._assembler.build_finalization_stage()
-        async for phased in final_stage.run(
-            runtime_state=runtime_state,
-            stop_reason=stop_reason,
-            answer_brief=answer_brief,
-            final_answer_strategy=final_answer_strategy,
-            model=model,
-            platform_config=platform_config,
-            sandbox_overrides=sandbox_overrides,
-            budget_registry=budget_registry,
-            budget_resolver=budget_resolver,
-            run_synthesizer=True,
-            logging_level=logging_level,
-        ):
-            ev = phased.event
-            # Tag FINAL events with stop_reason so downstream can distinguish
-            # a failed-but-synthesized turn from a genuinely completed one.
-            if ev.type == RuntimeEventType.FINAL and stop_reason != PipelineStopReason.COMPLETED:
-                ev = RuntimeEvent.final(
-                    ev.data.get("content", ""),
-                    sources=ev.data.get("sources"),
-                    run_id=ev.data.get("run_id"),
-                    attachments=ev.data.get("attachments"),
-                    stop_reason=stop_reason.value,
-                )
-                phased = PhasedEvent(ev, phased.phase)
-            yield await emitter.emit(phased.event, phase=phased.phase)
 
     async def _finalize_memory(
         self,
