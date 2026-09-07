@@ -42,8 +42,13 @@ Production VM получает образы только из внутренне
 
 ## 4. Применение миграций
 
+Перед миграцией release-controller автоматически останавливает все application-сервисы
+(включая API, worker и nginx), оставляя stateful-сервисы запущенными. После успешной
+миграции он запускает новый application release. Если миграция завершается ошибкой,
+controller автоматически пытается вернуть предыдущий application release.
+
 Pipeline применяет только `alembic upgrade $DB_REVISION` из release-файла до
-переключения application-сервисов. API-контейнер не выполняет миграции при
+запуска нового application release. API-контейнер не выполняет миграции при
 каждом рестарте. Миграции обычно должны быть backward-compatible: rollback
 контейнеров не откатывает БД. Исключение — migration `0100_strict_iterative_runtime`:
 она удаляет несовместимые runtime-plan данные и необратима.

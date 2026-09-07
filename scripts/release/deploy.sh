@@ -166,6 +166,12 @@ apply_migrations() {
   release_phase_end
 }
 
+stop_application_services() {
+  release_phase_start "stop application services before migration"
+  compose stop "${APPLICATION_SERVICES[@]}" || return
+  release_phase_end
+}
+
 start_application_services() {
   release_phase_start "start application services"
   compose up -d --no-deps --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "${APPLICATION_SERVICES[@]}" || return
@@ -230,11 +236,26 @@ rollback_application() {
 
 deploy() {
   local old_current=""
+  local application_stopped=0
   validate_release_bundle "$RELEASE_DIR"
   old_current="$(current_release_dir || true)"
   verify_stateful_services
+
+  if ! stop_application_services; then
+    fail "Application services could not be stopped before database migration."
+  fi
+  application_stopped=1
+
   if ! apply_migrations; then
     record_result migration_failed "$RELEASE_DIR"
+    if test "$application_stopped" -eq 1 && test -n "$old_current"; then
+      release_log "Database migration failed. Restoring previous application release."
+      if ! rollback_to_release "$old_current"; then
+        record_result rollback_failed "$RELEASE_DIR"
+        fail "Database migration failed and previous application release could not be restored."
+      fi
+      record_result migration_failed_restored "$RELEASE_DIR"
+    fi
     fail "Database migration failed before application replacement."
   fi
 
