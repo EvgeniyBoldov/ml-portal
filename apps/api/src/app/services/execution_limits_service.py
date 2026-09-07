@@ -21,7 +21,7 @@ CODE_DEFAULT_EXECUTION_LIMITS = {
     "llm_output_tokens_max": 4_096,
     "llm_context_window_max": 16_384,
     "llm_timeout_s": 30,
-    "plan_revisions_max": 25,
+    "iterations_max": 25,
     "task_attempts_total_max": 3,
     "agent_runs_total_max": 25,
     "llm_calls_total_max": 100,
@@ -48,7 +48,7 @@ class ExecutionLimitsPayload:
     llm_output_tokens_max: Optional[int] = None
     llm_context_window_max: Optional[int] = None
     llm_timeout_s: Optional[int] = None
-    plan_revisions_max: Optional[int] = None
+    iterations_max: Optional[int] = None
     task_attempts_total_max: Optional[int] = None
     agent_runs_total_max: Optional[int] = None
     llm_calls_total_max: Optional[int] = None

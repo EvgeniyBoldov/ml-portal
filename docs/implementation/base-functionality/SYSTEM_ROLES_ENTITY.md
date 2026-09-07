@@ -2,128 +2,62 @@
 
 ## Purpose
 
-This document defines system orchestration roles as a standalone platform concept.
+This document defines the active system LLM roles of the runtime and their
+strict boundaries. They coordinate or support execution; none is a business
+agent or an owner of domain tools.
 
-It describes:
-- what `triage`, `planner`, and `summary` roles are,
-- their boundaries and contracts,
-- how they connect to agent runtime without owning domain execution.
+The active role set is `planner`, `memory`, `fact_extractor`,
+`fact_compactor` and `synthesizer`. Historical `triage`, `summary` and
+`summary_compactor` roles are not part of the active runtime contract.
 
-This document is intentionally limited to system roles.
-It does not define full RBAC, operation metadata internals, or collection semantics.
+## Role responsibilities
 
-## Definition
+### Planner
 
-`System Roles` are internal orchestrator personas that manage runtime flow quality and control:
-- `triage` decides execution path,
-- `planner` decides only the next orchestration step,
-- `summary` maintains compact context and execution journal.
+Planner produces one immutable `IterationProposal`. It receives the goal,
+bounded memory, available agents/artifacts and the execution ledger. It returns
+only agent tasks, bindings, resolutions for earlier incomplete work, and one
+terminal: `planner` or `synthesis`.
 
-They are not business agents and do not own domain-specific tool behavior.
+Planner does not execute tools, mutate task state, create a confirmation gate,
+or appear as a task node. When a prior task is incomplete, it must explicitly
+continue it with new task ids, accept named partial outputs, exclude scope, or
+report a limitation.
 
-## Role Responsibilities
+### Memory Preparer
 
-### 1. Triage
+Memory Preparer selects bounded indexes of confirmed facts, projects and
+glossary entries for the planner. It neither writes facts nor decides routing,
+task lifecycle or user-visible answers. A failure produces an empty optional
+memory projection rather than failing the run.
 
-Triage is the entry classifier for a user request.
+### Fact Extractor and Fact Compactor
 
-It is responsible for:
-- choosing one of: `final | clarify | orchestrate`,
-- selecting path intent: direct answer, doc-backed answer, or delegated agent path,
-- producing confidence and reasoning fields for traceability.
+These post-turn roles prepare evidence-backed durable-memory candidates.
+Extractor identifies supported candidate facts; Compactor deduplicates and
+selects a compaction action. `FactReconciler`, not an LLM role, owns durable
+persistence. Neither role changes the execution plan or acts as evidence for a
+current task result.
 
-Triage is not responsible for:
-- executing tools,
-- validating tool schemas,
-- bypassing permission boundaries.
+### Synthesizer
 
-### 2. Planner
+Synthesizer receives a bounded synthesis context: synthesis brief, completed
+reports, explicitly accepted partial outputs, verified references and current
+user-visible limitations. It writes the final user answer only. It does not
+plan, invoke tools, choose agents, hide limitations or add facts.
 
-Planner is a **next-step planner**, not a long-horizon multi-step planner.
+## Shared contract rules
 
-This is intentional:
-- models are limited,
-- short-horizon planning is more stable,
-- replanning on each step gives better control and recovery.
+- Structured roles use typed Pydantic DTOs and generated JSON schemas.
+- Synthesizer uses a plain-text contract and accepts only the prepared context.
+- Runtime owns task lifecycle, retries, dependency blocking, confirmations and
+  verification of artifacts/evidence.
+- Roles consume normalized bounded DTOs, never raw ORM rows, tool journals,
+  credentials or provider diagnostics.
 
-It is responsible for:
-- selecting only one next action from allowed orchestration vocabulary,
-- tracking phased progress against execution outline,
-- avoiding loops and triggering controlled finalization.
+## Relation to agents and policy
 
-Planner is not responsible for:
-- direct domain tool execution as product behavior,
-- direct access policy decisions,
-- semantic normalization of discovered capabilities.
-
-### 3. Summary
-
-Summary is both:
-- context compressor,
-- step journal for planner stability.
-
-It is responsible for:
-- maintaining compact conversation state,
-- preserving execution state needed for replanning,
-- storing step-level history:
-  - goal,
-  - which agents were called,
-  - with which task/input,
-  - what result was returned,
-- preserving key facts, open questions, and partial conclusions,
-- reducing context size growth over long interactions.
-
-Summary is not responsible for:
-- policy decisions,
-- routing decisions,
-- execution of domain operations.
-
-## Contracts
-
-System roles must operate via strict structured contracts:
-- typed input payloads,
-- typed output payloads,
-- validation and trace logging.
-
-Contract discipline is required to keep orchestration stable across model changes.
-
-For `summary`, contract should explicitly include execution-journal fields, not only free-form conversation compression.
-
-## Relation To Agent Layer
-
-System roles orchestrate the process around agents.
-They do not replace agent entity responsibilities.
-
-Agent remains the execution persona.
-System roles provide flow control around agent execution.
-
-Important boundary:
-- system role logic must not depend on internal agent prompt structure,
-- system role logic must not depend on internal tool implementation structure.
-
-System roles consume normalized runtime views (available actions, execution journal, outcomes), not raw component internals.
-
-## Relation To Policy Layer
-
-System roles may propose actions.
-Policy and runtime gates decide if actions are allowed.
-
-System roles should never be the final authority for destructive/write execution.
-
-## Non-goals
-
-- no domain schema ownership,
-- no direct RBAC ownership,
-- no direct operation safety ownership,
-- no per-tenant hardcoded branching in prompts as architecture.
-- no dependency on specific agent/tool internal schema for basic orchestration logic.
-
-## Stage Decision (Current)
-
-For current base-functional stage:
-- keep three roles explicit: `triage`, `planner`, `summary`,
-- keep `planner` in next-step mode (single actionable step per iteration),
-- extend `summary` to execution-journal role for anti-loop and better replanning,
-- keep contracts structured and versionable,
-- keep role boundaries strict so business-agent logic does not leak into orchestration roles,
-- keep orchestration stable even when agent/tool internals evolve.
+Agents execute the immutable tasks assigned by planner. Policy and runtime
+gates decide whether an operation may execute; a system role can neither
+bypass nor approve a destructive operation. A confirmation is a task-local
+runtime state, not a planner or synthesizer decision.

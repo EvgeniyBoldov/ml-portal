@@ -10,6 +10,7 @@ starlette==0.37.2
 # Data Validation and Settings
 pydantic==2.8.2
 pydantic-settings==2.4.0
+jsonschema>=4.23.0
 
 # Database ORM and Migrations
 SQLAlchemy==2.0.32

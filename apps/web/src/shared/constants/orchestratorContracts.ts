@@ -1,21 +1,9 @@
 export const PLANNER_INPUT_CONTRACT = {
   type: 'object',
   properties: {
-    goal: { type: 'string', description: 'Текущая цель текущего плана' },
-    trigger: { type: ['string', 'null'], description: 'Причина вызова planner: initial или причина репланирования' },
-    plan: {
-      type: 'object',
-      description: 'Текущее сохранённое состояние графа: revision, tasks, outputs и статусы',
-      properties: {
-        revision: { type: 'integer', description: 'Версия плана, обязательная для expected_revision' },
-        tasks: { type: 'object', description: 'Задачи текущего графа' },
-        outputs: { type: 'object', description: 'Результаты задач текущего графа' },
-      },
-      required: ['revision', 'tasks', 'outputs'],
-    },
-    completed_outputs: { type: 'object', description: 'Новые завершённые результаты для решения planner' },
-    needs: { type: 'array', description: 'Незакрытые потребности задач' },
-    last_failure: { type: ['object', 'null'], description: 'Последняя техническая или агентская ошибка' },
+    goal: { type: 'string', description: 'Цель runtime run' },
+    trigger: { type: 'string', description: 'Причина planner invocation' },
+    execution_ledger: { type: 'object', description: 'Полный структурный ledger задач, попыток, needs и resolutions' },
     available_agents: {
       type: 'array',
       description: 'Доступные агенты для вызова',
@@ -28,32 +16,46 @@ export const PLANNER_INPUT_CONTRACT = {
         required: ['slug'],
       },
     },
-    terminal_synthesis: {
-      type: 'object',
-      description: 'Встроенный terminal node без executor. Planner обязан включить ровно один kind=synthesis в итоговый граф.',
-      properties: {
-        kind: { const: 'synthesis' },
-        executor: { type: 'null' },
-        purpose: { type: 'string' },
-      },
-      required: ['kind', 'executor', 'purpose'],
+    available_artifacts: {
+      type: 'array',
+      description: 'Доступные runtime-owned attachment metadata и безопасные snippets.',
+      items: { type: 'object' },
     },
+    memory_context: {
+      type: 'array',
+      description: 'Отобранная runtime-проекция долговременной памяти.',
+      items: { type: 'object' },
+    },
+    iteration_contract: { type: 'object', description: 'Tasks are agents only; terminal is planner or synthesis.' },
   },
-  required: ['goal', 'trigger', 'plan', 'completed_outputs', 'needs', 'last_failure', 'available_agents', 'terminal_synthesis'],
+  required: [
+    'goal',
+    'trigger',
+    'execution_ledger',
+    'available_agents',
+    'available_artifacts',
+    'memory_context',
+    'iteration_contract',
+  ],
 };
 
 export const SYNTHESIZER_INPUT_CONTRACT = {
   type: 'object',
   properties: {
-    synthesis_task: {
+    user_question: {
+      type: 'string',
+      description: 'Неизменяемая исходная цель runtime run.',
+    },
+    synthesis_brief: {
       type: 'object',
-      description: 'Терминальная задача планировщика: какой смысл вопроса пользователя и в каком направлении отвечать.',
+      description: 'Цель и требования финального ответа, заданные terminal=synthesis iteration.',
       properties: {
-        task_id: { type: 'string' },
-        intent: { type: 'string' },
-        instructions: { type: 'string' },
+        user_question: { type: 'string' },
+        planned_work: { type: 'string' },
+        purpose: { type: 'string' },
+        answer_requirements: { type: 'string' },
       },
-      required: ['task_id', 'intent', 'instructions'],
+      required: ['user_question', 'planned_work', 'purpose', 'answer_requirements'],
     },
     completed_task_reports: {
       type: 'array',
@@ -63,11 +65,26 @@ export const SYNTHESIZER_INPUT_CONTRACT = {
         properties: {
           task_id: { type: 'string' },
           intent: { type: 'string' },
-          instructions: { type: 'string' },
-          report: { type: 'object', description: 'Канонический отчёт агента: description и outputs.' },
+          description: { type: 'string' },
+          outputs: { type: 'object', description: 'Runtime-owned outputs.' },
         },
-        required: ['task_id', 'intent', 'instructions', 'report'],
+        required: ['task_id', 'intent', 'description', 'outputs'],
       },
+    },
+    plan_outline: {
+      type: 'array',
+      description: 'Порядок и terminal завершённых итераций без внутренних task payloads.',
+      items: { type: 'object' },
+    },
+    resolution_decisions: {
+      type: 'array',
+      description: 'Актуальные решения по partial и незавершённым задачам.',
+      items: { type: 'object' },
+    },
+    limitations: {
+      type: 'array',
+      description: 'Актуальные user-visible ограничения, которые нельзя скрывать.',
+      items: { type: 'object' },
     },
     artifacts: {
       type: 'array',
@@ -89,7 +106,16 @@ export const SYNTHESIZER_INPUT_CONTRACT = {
       items: { type: 'object' },
     },
   },
-  required: ['synthesis_task', 'completed_task_reports', 'artifacts', 'sources'],
+  required: [
+    'user_question',
+    'synthesis_brief',
+    'plan_outline',
+    'resolution_decisions',
+    'completed_task_reports',
+    'limitations',
+    'artifacts',
+    'sources',
+  ],
 };
 
 export const FACT_EXTRACTOR_INPUT_CONTRACT = {

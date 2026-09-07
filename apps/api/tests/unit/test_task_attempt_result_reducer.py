@@ -1,7 +1,7 @@
 from app.runtime.orchestrator_contracts import (
     AgentExecutionCompletion,
     AgentExecutionResult,
-    NeedSpec,
+    DiscoveredNeed,
     TaskOutputFulfillment,
     TaskOutputSpec,
     TaskOutputValue,
@@ -65,12 +65,12 @@ def test_need_is_successful_execution_but_waiting_task_result() -> None:
         execution=AgentExecutionResult(
             completion=AgentExecutionCompletion.NEEDS,
             description="Need the target system",
-            needs=[NeedSpec(key="target", description="Target system")],
+            needs=[DiscoveredNeed(ref="target", key="target", description="Target system")],
         ),
     )
 
     assert result.outcome is TaskOutcome.NEEDS_DEPENDENCY
-    assert result.partial_completion == "Need the target system"
+    assert result.description == "Need the target system"
 
 
 def test_agent_declared_output_does_not_satisfy_verified_receipt_contract() -> None:
@@ -79,6 +79,7 @@ def test_agent_declared_output_does_not_satisfy_verified_receipt_contract() -> N
             key="current_policy",
             description="Current policy",
             fulfillment=TaskOutputFulfillment.VERIFIED_RECEIPT,
+            receipt_operations=["collection.document.search"],
         )]),
         execution=_execution(outputs={"current_policy": TaskOutputValue(text="invented")}),
     )

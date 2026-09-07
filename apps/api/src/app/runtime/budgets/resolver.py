@@ -28,9 +28,7 @@ class BudgetResolver:
     async def resolve_run(self, platform_config: Dict[str, Any], sandbox_overrides: Optional[Dict[str, Any]] = None) -> RunLimits:
         limits = await self._limits_service.resolve_runtime((sandbox_overrides or {}).get("runtime_limits"))
         return RunLimits(
-            # The existing graph store consumes plan revisions including the
-            # initial plan, hence max_replans becomes +1 at this boundary.
-            plan_revisions=_as_optional_int((limits.max_replans or 0) + 1),
+            iterations=_as_optional_int(limits.max_iterations),
             task_attempts=_as_optional_int(limits.max_task_executions),
             wall_time_ms=_as_optional_int(limits.wall_time_ms_max),
             max_parallel_tasks=_as_optional_int(limits.max_parallel_tasks) or 1,

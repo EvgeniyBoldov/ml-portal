@@ -5,9 +5,8 @@ This is NOT a persisted entity.
 Named `TurnMemory` because it carries per-turn memory payload assembled
 before planning and persisted after finalization. It lives for the duration of one
 pipeline turn, is produced by `MemoryBuilder` at the top and consumed
-by `MemoryWriter` at the bottom. The Planner and Synthesizer mutate
-its `agent_results` / `planner_steps` / `final_answer` fields as the
-turn progresses; everything else is a read-only snapshot taken at
+by `MemoryWriter` at the bottom. The pipeline writes its bounded logical-task
+projection to `agent_results` for memory finalization; everything else is a read-only snapshot taken at
 `MemoryBuilder.build` time.
 
 Keeping this a plain dataclass (not pydantic) keeps field access cheap
@@ -51,9 +50,6 @@ class TurnMemory:
 
     # --- mutated during the turn by the pipeline --------------------------
     agent_results: List[AgentResultSnippet] = field(default_factory=list)
-    planner_steps: List[Dict[str, Any]] = field(default_factory=list)
-    final_answer: Optional[str] = None
-    final_error: Optional[str] = None
     memory_diagnostics: Dict[str, Any] = field(default_factory=dict)
 
     # --- convenience ------------------------------------------------------

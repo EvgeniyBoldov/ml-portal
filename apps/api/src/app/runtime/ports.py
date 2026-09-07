@@ -33,11 +33,10 @@ from uuid import UUID
 from app.agents.context import ToolContext
 from app.runtime.orchestrator_contracts import (
     AgentExecutionResult,
-    PlanPatch,
+    IterationProposal,
     PlanRequest,
     TaskAttemptFailure,
     TaskRequest,
-    PlannerDecisionKind,
 )
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.events import RuntimeEvent
@@ -55,10 +54,9 @@ from app.runtime.turn_state import RuntimeTurnState
 class PlannerPort(Protocol):
     """Planner boundary for the canonical persisted execution graph."""
 
-    async def plan(self, *, request: PlanRequest, **kwargs: Any) -> PlanPatch: ...
+    async def plan(self, *, request: PlanRequest, **kwargs: Any) -> IterationProposal: ...
 
 
-@runtime_checkable
 @runtime_checkable
 class TaskExecutionPort(Protocol):
     """Executes one agent attempt; the runtime reduces it to task state."""
@@ -76,8 +74,6 @@ class TaskFailureClassifier(Protocol):
 # --------------------------------------------------------------------------- #
 
 
-@runtime_checkable
-# --------------------------------------------------------------------------- #
 # Synthesizer                                                                  #
 # --------------------------------------------------------------------------- #
 

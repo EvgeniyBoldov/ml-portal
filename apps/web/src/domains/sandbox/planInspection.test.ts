@@ -2,25 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { projectPlan, projectPlanTask } from './planInspection';
 
 describe('plan inspection projection', () => {
-  it('projects planner patch into stable task cards', () => {
-    expect(projectPlan({ revision: 2, patch: {
-      decision: 'revise_plan', goal: 'Подготовить заявку', rationale: 'Первая попытка не удалась',
+  it('projects an immutable iteration into stable task cards', () => {
+    expect(projectPlan({ iteration: 2, terminal: 'planner', trigger: 'task_failure', proposal: {
       tasks: [
         { task_id: 'discover', title: 'Найти шаблон', objective: 'Выбрать готовый шаблон', agent_slug: 'viewer', status: 'completed' },
         { task_id: 'fill', title: 'Заполнить шаблон', objective: 'Создать файл', agent_slug: 'net.enginer', depends_on: ['discover'], expected_outputs: [{ key: 'artifact', description: 'Готовый файл' }] },
-      ],
-      remove_task_ids: ['obsolete'],
+      ], terminal: 'planner',
     } })).toEqual({
-      revision: 2,
-      decision: 'Перепланировать',
-      goal: 'Подготовить заявку',
-      rationale: 'Первая попытка не удалась',
-      trigger: undefined,
+      iteration: 2,
+      terminal: 'planner',
+      goal: undefined,
+      trigger: 'task_failure',
       tasks: [
         { taskId: 'discover', kind: 'agent', title: 'Найти шаблон', intent: undefined, objective: 'Выбрать готовый шаблон', instructions: undefined, executor: 'viewer', status: 'Готово', dependencies: [], expectedOutputs: [], inputs: undefined },
         { taskId: 'fill', kind: 'agent', title: 'Заполнить шаблон', intent: undefined, objective: 'Создать файл', instructions: undefined, executor: 'net.enginer', status: undefined, dependencies: ['Найти шаблон'], expectedOutputs: ['Готовый файл'], inputs: undefined },
       ],
-      removedTasks: ['obsolete'],
     });
   });
 
@@ -45,14 +41,4 @@ describe('plan inspection projection', () => {
     });
   });
 
-  it('projects a planner checkpoint as a control node', () => {
-    expect(projectPlanTask({
-      task_id: 'after-discovery', kind: 'planner', intent: 'Assess findings',
-      instructions: 'Determine following work', depends_on: ['discover'],
-    })).toEqual({
-      taskId: 'after-discovery', kind: 'planner', title: 'Assess findings', intent: 'Assess findings',
-      objective: undefined, instructions: 'Determine following work', executor: 'planner',
-      status: undefined, dependencies: ['discover'], expectedOutputs: [], inputs: undefined,
-    });
-  });
 });

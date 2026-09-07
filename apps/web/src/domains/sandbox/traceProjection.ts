@@ -5,7 +5,7 @@ import { callPresentation } from './callPresentation';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
 
 export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
-export type TraceStageKind = 'plan_revision' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
+export type TraceStageKind = 'iteration' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
 export type TraceStepKind = 'planner_decision' | 'task_execution' | 'memory_selection' | 'memory_write' | 'synthesis';
 export type TraceExecutorKind = 'planner' | 'agent' | 'memory_selector' | 'fact_extractor' | 'fact_compactor' | 'synthesizer';
 export type TraceInspectorTabId = 'info' | 'plan' | 'task' | 'memory' | 'facts' | 'result' | 'prompt' | 'rbac' | 'limits' | 'preflight' | 'request' | 'response' | 'error' | 'raw';
@@ -334,7 +334,7 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => (
     : undefined
 );
 const limitLabels: Record<string, string> = {
-  agent_steps: 'Шаги агента', planner_steps: 'Шаги планера', plan_revisions: 'Ревизии плана',
+  agent_steps: 'Шаги агента', iterations: 'Итерации',
   task_attempts: 'Попытки задач', agent_runs: 'Запуски агентов', llm_calls: 'Вызовы LLM',
   tool_calls: 'Вызовы инструментов', tokens_in: 'Входные токены', tokens_out: 'Выходные токены',
   tokens_total: 'Всего токенов', retries: 'Повторы', wall_time_ms: 'Время выполнения',
@@ -753,7 +753,6 @@ function responseViewFor(
   kind: TraceCallKind,
   response: RuntimeJournalEvent | undefined,
   linkedToolCalls: RuntimeJournalEvent[],
-  toolCallCount: number | undefined,
 ): TraceCallResponse | undefined {
   if (!response) return undefined;
   const payload = response.payload;
@@ -801,7 +800,6 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
       isTool ? event.event_type === 'tool_call' :
         isError ? event.event_type === 'error' :
           event.event_type === 'waiting_input' || event.event_type === 'confirmation_required' || event.event_type === 'question_answer'
-            || (event.event_type === 'planner_step' && ['clarify', 'ask_user'].includes(asString(event.payload.kind)))
   ));
   if (!request) return null;
   // A retry-chain may intentionally reuse one llm_call entity.  The latest
@@ -899,7 +897,7 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
     tokensTotal: presentation.tokensTotal,
   };
   call.requestView = requestViewFor(call.kind, request.payload);
-  call.responseView = responseViewFor(call.kind, response, linkedToolCalls, toolCallCount);
+  call.responseView = responseViewFor(call.kind, response, linkedToolCalls);
   call.errorView = presentation.error;
   return call;
 }
@@ -996,8 +994,7 @@ function directCallsFor(
       || event.event_type === 'tool_call'
       || event.event_type === 'waiting_input'
       || event.event_type === 'confirmation_required'
-      || event.event_type === 'error'
-      || (event.event_type === 'planner_step' && ['clarify', 'ask_user'].includes(asString(event.payload.kind))))
+      || event.event_type === 'error')
     .filter((event) => !excludedEventIds.has(event.id))
     .map((event) => {
       const existing = event.entity_type && event.entity_id
@@ -1228,31 +1225,54 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
   return executor;
 }
 
-function parentMatchesExecutor(event: RuntimeJournalEvent, executorIds: Set<string>): boolean {
-  const parentId = asString(event.parent_entity_id ?? event.payload.parent_entity_id);
-  const parentType = asString(event.parent_entity_type ?? event.payload.parent_entity_type);
-  return parentType === 'agent_execution' && executorIds.has(parentId);
-}
-
-function planForStage(state: SandboxTraceState, executors: TraceExecutorRun[]): PlanViewModel | undefined {
-  const plannerIds = new Set(executors
-    .filter((executor) => executor.executorSlug === 'planner')
-    .map((executor) => executor.entity.id));
-  if (!plannerIds.size) return undefined;
+function planForStage(state: SandboxTraceState, iteration: TraceEntity): PlanViewModel | undefined {
   const events = state.eventIdsBySequence
     .map((id) => state.eventsById[id])
     .filter((event): event is RuntimeJournalEvent => Boolean(event));
   const planEvent = [...events].reverse().find((event) => (
-    (event.event_type === 'plan_created' || event.event_type === 'plan_patch_applied')
-    && parentMatchesExecutor(event, plannerIds)
+    event.event_type === 'plan_iteration_applied'
+    && (
+      (asString(event.parent_entity_type ?? event.payload.parent_entity_type) === 'planner_iteration'
+        && asString(event.parent_entity_id ?? event.payload.parent_entity_id) === iteration.id)
+      || asString(event.payload.iteration_id) === iteration.id
+    )
   ));
   if (planEvent) return projectPlan(planEvent.payload);
   const plannerResponse = [...events].reverse().find((event) => (
     event.event_type === 'llm_response'
     && event.payload.purpose === 'planning_decision'
-    && parentMatchesExecutor(event, plannerIds)
+    && asString(event.parent_entity_type ?? event.payload.parent_entity_type) === 'planner_iteration'
+    && asString(event.parent_entity_id ?? event.payload.parent_entity_id) === iteration.id
   ));
   return plannerResponse ? projectPlan(llmResponseContent(plannerResponse.payload)) : undefined;
+}
+
+function plannerExecutorFor(state: SandboxTraceState, iteration: TraceEntity): TraceExecutorRun | null {
+  const start = startFor(state, iteration);
+  if (!start) return null;
+  const calls = groupLogicalLlmCalls(iteration.childKeys
+    .map((key) => state.entitiesByKey[key])
+    .filter((child): child is TraceEntity => Boolean(child))
+    .map((child) => callFor(state, child))
+    .filter((call): call is TraceCall => Boolean(call)));
+  if (calls.length === 0) return null;
+  const result = executorResultFor(state, iteration, 'Планер', 'planner', calls);
+  const metrics = metricsFor(state, iteration);
+  return {
+    entity: iteration,
+    inspectorKey: `executor:planner:${iteration.key}`,
+    start,
+    task: 'Принятие решения по плану',
+    executorType: 'PLANNER',
+    executorName: 'Планер',
+    executorSlug: 'planner',
+    kind: 'planner',
+    calls,
+    result,
+    info: executorInfoFor(result, calls, metrics.elapsedMs),
+    metrics,
+    prompt: promptFor(eventsFor(state, iteration), calls),
+  };
 }
 
 function taskPresentationForExecutor(executor: TraceExecutorRun, plan?: PlanViewModel): PlanTaskViewModel {
@@ -1330,7 +1350,9 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           .map((child) => executorFor(state, child))
           .filter((executor): executor is TraceExecutorRun => Boolean(executor))
       ));
-      const executorRuns = executorRunsByStep.flat();
+      const plannerExecutor = plannerExecutorFor(state, entity);
+      const executorRuns = [plannerExecutor, ...executorRunsByStep.flat()]
+        .filter((executor): executor is TraceExecutorRun => Boolean(executor));
       const iterationType = asString(start.payload.iteration_type)
         || (executorRuns.some((executor) => executor.executorSlug === 'planner') ? 'decision' : 'execution');
       const task = iterationType === 'replan'
@@ -1341,7 +1363,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         || asString(start.payload.task_title)
         || asString(start.payload.goal)
         || 'Выполнение задачи';
-      const plan = planForStage(state, executorRuns);
+      const plan = planForStage(state, entity);
       for (const executor of executorRuns) executor.taskPresentation = taskPresentationForExecutor(executor, plan);
       const stage: TraceStage = {
         entity,
@@ -1350,7 +1372,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         iterationNumber: number,
         stepNumber: 0,
         iterationType,
-        kind: 'plan_revision',
+        kind: 'iteration',
         label: iterationLabel(iterationType, number),
         task,
         plan,
@@ -1358,7 +1380,23 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         executorRuns,
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
       };
-      stage.steps = stepEntities.map((stepEntity, index) => {
+      const plannerSteps: TraceStep[] = plannerExecutor ? [{
+        key: `${entity.key}:planner-decision`,
+        entity,
+        stage,
+        number: 1,
+        kind: 'planner_decision',
+        title: 'Принятие решения по плану',
+        taskPresentation: projectPlanTask({
+          task_id: `planner-${number}`,
+          title: 'Принятие решения по плану',
+          executor: 'planner',
+          status: taskStatusLabel(plannerExecutor.entity.status),
+        }),
+        executorRuns: [plannerExecutor],
+        metrics: plannerExecutor.metrics,
+      }] : [];
+      stage.steps = [...plannerSteps, ...stepEntities.map((stepEntity, index) => {
         const stepStart = startFor(state, stepEntity);
         const payload = stepStart?.payload ?? {};
         const stepExecutors = executorRunsByStep[index];
@@ -1369,7 +1407,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           key: stepEntity.key,
           entity: stepEntity,
           stage,
-          number: asNumber(payload.step_number) ?? index + 1,
+          number: asNumber(payload.step_number) ?? index + 1 + plannerSteps.length,
           kind: stepKindFor(stage.kind, executor),
           taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
           title,
@@ -1379,7 +1417,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           executorRuns: stepExecutors,
           metrics: aggregateMetrics(metricsFor(state, stepEntity), stepExecutors.map((executor) => executor.metrics)),
         };
-      });
+      })];
       stage.stepNumber = stage.steps[0]?.number ?? 0;
       return stage;
     })

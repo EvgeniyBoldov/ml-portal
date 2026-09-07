@@ -8,21 +8,31 @@
 2. `assembler.py` builds per-turn dependencies (`PipelineAssembler`).
 3. Stages execute in order:
    - `orchestrator.py` / `plan_store.py` — deterministic plan control and task lifecycle
-   - `planner/*` — planner contract and graph patch generation
-   - terminal `kind=synthesis` node — synthesizer inside the persisted graph
+   - `planner/*` — planner contract and immutable iteration generation
+   - iteration terminal (`planner` or `synthesis`) — next decision or response
 4. State is persisted through ports (`ports.py`) and adapters (services/repos).
 5. Output events are normalized in `events.py` and wrapped with envelope (`envelope.py`).
 
 ## Responsibility Split
 
-- `pipeline.py`: orchestration only (stage order, terminal handling and resume entry points).
+- `pipeline.py`: orchestration only (stage order, terminal handling and continuation entry points).
 - `assembler.py`: dependency wiring, cached services, stage factories.
 - `platform_config.py`: load platform snapshot (`policy`, routable agents, config degradation).
 - `orchestrator_contracts.py`: planner/orchestrator/task/result contracts.
-- `plan_store.py`: transactional graph state, dependencies, checkpoint and attempts.
+- `plan_store.py`: transactional iteration state, dependencies, terminal claims and attempts.
 - `turn_state.py`: current-turn memory/context DTO; it is not the persisted plan.
-- `synthesis_context.py`: complete, redacted reports selected by the final plan.
-- `synthesizer.py`: final answer synthesis at the terminal graph checkpoint.
+- `synthesis_context.py`: complete, redacted reports and accepted partial outputs selected by explicit planner resolutions.
+- `synthesizer.py`: final answer synthesis at the terminal iteration.
+
+Task lifecycle is runtime-owned. `ready` is derived from dependencies;
+retryable failures remain `waiting_retry` until `next_retry_at`, failed
+dependencies propagate to `blocked`, and an unsuccessful task always routes
+the completed iteration back to planner. Synthesis runs only when the current
+iteration completed successfully; it receives successful reports, explicitly
+accepted partial outputs and current user-visible limitations. A synthesis
+provider/context failure is a terminal plan failure after the synthesizer's
+own retry policy is exhausted; it is not presented to the planner as a fake
+task result or a mutable rewrite of the terminal iteration.
 
 ## Ports and Adapters
 
@@ -80,16 +90,19 @@ Notes:
 - Policy limits: `platform_config.py` (`max_steps`, `max_wall_time_ms`).
 - Stage behavior: `stages/*.py`.
 - Event contract/envelope: `events.py`, `envelope.py`.
-- Resume behavior: `resume.py`.
-- Budget contract: `budget.py` (`RuntimeBudget`, `RuntimeBudgetTracker`).
+- Confirmation continuation behavior: `pipeline.py`, `orchestrator.py` and HITL protocol adapters.
+- Budget contract: `budgets/schema.py`, `budgets/ledger.py` and
+  `budgets/resolver.py`. Budget snapshots use the canonical runtime event stream;
+  there is no second transactional budget journal.
 - Redaction: `redactor.py` (`RuntimeRedactor`) for trace/prompt/tool/context surfaces.
 
 Runtime-config keys currently used by orchestrator/agent flows:
 - `required_operation_retry_instruction` — text injected on protocol retry when agent skipped required tool call.
 - `operations_rules_text` — full override of "mandatory operation rules" block appended to tool prompt.
 - `intent_messages` — map of runtime intent templates (`agent_start`, `final_answer`, `tool_call`).
-- `runtime.synthesis_context_max_chars` — hard limit for the complete final-plan
-  report; exceeding it fails explicitly instead of truncating context.
+- The final-plan report has a runtime-owned hard size limit (currently
+  `120_000` characters); exceeding it fails explicitly instead of truncating
+  or silently dropping evidence.
 
 ## Collection Readiness
 

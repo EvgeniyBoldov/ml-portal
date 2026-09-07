@@ -16,7 +16,7 @@ class RuntimeProgressStreamer:
         RuntimeEventType.RUN_START: "Запускаю выполнение",
         RuntimeEventType.ORCHESTRATOR_START: "Запускаю планирование",
         RuntimeEventType.PLAN_CREATED: "План готов",
-        RuntimeEventType.PLAN_PATCH_APPLIED: "Обновляю план",
+        RuntimeEventType.PLAN_ITERATION_APPLIED: "Формирую следующую итерацию",
         RuntimeEventType.TASK_STARTED: "Начинаю задачу",
         RuntimeEventType.AGENT_START: "Запускаю агента",
         RuntimeEventType.LLM_REQUEST: "Анализирую задачу",

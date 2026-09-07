@@ -22,7 +22,7 @@ def serialize_limits(limits: EntityLimits | RunLimits | Dict[str, Any] | None) -
         source = limits
     else:
         source = {
-            "plan_revisions": getattr(limits, "plan_revisions", None),
+            "iterations": getattr(limits, "iterations", None),
             "task_attempts": getattr(limits, "task_attempts", None),
             "agent_runs": getattr(limits, "agent_runs", None),
             "llm_calls": getattr(limits, "llm_calls", None),

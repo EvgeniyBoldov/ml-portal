@@ -28,6 +28,7 @@ def _operation(*, requires_confirmation: bool = True) -> ResolvedOperation:
         operation="netbox.delete_device",
         name="Delete device",
         description="Delete Netbox device",
+        scope="system",
         input_schema={"type": "object", "required": ["id"]},
         data_instance_id=target.data_instance_id,
         data_instance_slug=target.data_instance_slug,

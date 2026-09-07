@@ -5,7 +5,6 @@ All planner/stage ports consume this state directly.
 """
 from __future__ import annotations
 
-import hashlib
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -15,41 +14,19 @@ from app.runtime.memory.components import MemoryBundle, MemorySection
 from app.runtime.memory.tool_ledger import ToolLedger
 from app.runtime.project_memory_candidates import ProjectMemoryCandidate
 from app.runtime.contracts import (
-    AgentAnswerStatus,
     AttachmentContext,
     ExecutionMode,
-    TaskJournalEntry,
-    TaskJournalNeed,
 )
 
 
 # Runtime limits — single source of truth (replaces divergent limits from legacy WorkingMemory)
 MAX_RUNTIME_FACTS = 60
-MAX_RUNTIME_PLANNER_STEPS = 80
 MAX_RUNTIME_RESULTS = 30
-MAX_RUNTIME_ACTION_SIGNATURES = 12
-MAX_RUNTIME_ITERATION_RESULTS = 80
-LOOP_THRESHOLD = 3  # Now configurable via RuntimeBudget.loop_threshold
 
 
 class RuntimeFact(BaseModel):
     text: str = Field(min_length=1, description="Fact text must be non-empty")
     source: str = "runtime"
-
-
-class PlannerIterationResult(BaseModel):
-    iteration: int = 0
-    step_kind: str = ""
-    agent_slug: Optional[str] = None
-    phase_id: Optional[str] = None
-    outcome: str = "unknown"  # success | failed | partial | needs_input | final | aborted
-    summary: str = ""
-    missing_inputs: List[str] = Field(default_factory=list)
-    question: Optional[str] = None
-    sufficient_for_phase: bool = False
-    retryable: Optional[bool] = None
-    error_code: Optional[str] = None
-    signature: str = ""
 
 
 class RuntimeTurnState(BaseModel):
@@ -65,28 +42,14 @@ class RuntimeTurnState(BaseModel):
     current_user_query: str = ""
     attachment_contexts: List[AttachmentContext] = Field(default_factory=list)
     continuation: Dict[str, Any] = Field(default_factory=dict)
-    outline: Optional[Dict[str, Any]] = None
-    current_phase_id: Optional[str] = None
-    completed_phase_ids: List[str] = Field(default_factory=list)
-    blocked_phase_ids: List[str] = Field(default_factory=list)
-
     memory_bundle: MemoryBundle = Field(default_factory=MemoryBundle)
 
-    planner_steps: List[Dict[str, Any]] = Field(default_factory=list)
-    # Runtime-owned projection of logical task results.  Agent executors do
-    # not write the legacy ``agent_results`` transport directly.
+    # Runtime-owned projection of logical task results for memory writeback.
     task_results: List[Dict[str, Any]] = Field(default_factory=list)
-    agent_results: List[Dict[str, Any]] = Field(default_factory=list)
-    iteration_results: List[PlannerIterationResult] = Field(default_factory=list)
     runtime_facts: List[RuntimeFact] = Field(default_factory=list)
     project_memory_candidates: List[ProjectMemoryCandidate] = Field(default_factory=list)
     tool_ledger: ToolLedger = Field(default_factory=ToolLedger)
-    open_questions: List[str] = Field(default_factory=list)
-    task_journal: List[TaskJournalEntry] = Field(default_factory=list)
-
-    iter_count: int = 0
     used_tool_calls: int = 0
-    recent_action_signatures: List[str] = Field(default_factory=list)
 
     status: str = "running"
     final_answer: Optional[str] = None
@@ -168,61 +131,10 @@ class RuntimeTurnState(BaseModel):
         if len(self.runtime_facts) > MAX_RUNTIME_FACTS:
             self.runtime_facts = self.runtime_facts[-MAX_RUNTIME_FACTS:]
 
-    def add_planner_step(self, step: Dict[str, Any]) -> None:
-        self.planner_steps.append(dict(step or {}))
-        if len(self.planner_steps) > MAX_RUNTIME_PLANNER_STEPS:
-            self.planner_steps = self.planner_steps[-MAX_RUNTIME_PLANNER_STEPS:]
-
-        if str((step or {}).get("kind") or "") == "call_agent":
-            signature = self._step_signature(step)
-            self.recent_action_signatures.append(signature)
-            if len(self.recent_action_signatures) > MAX_RUNTIME_ACTION_SIGNATURES:
-                self.recent_action_signatures = self.recent_action_signatures[-MAX_RUNTIME_ACTION_SIGNATURES:]
-
-    def add_agent_result(self, result: Dict[str, Any]) -> None:
-        self.agent_results.append(dict(result or {}))
-        if len(self.agent_results) > MAX_RUNTIME_RESULTS:
-            self.agent_results = self.agent_results[-MAX_RUNTIME_RESULTS:]
-
     def add_task_result(self, result: Dict[str, Any]) -> None:
         self.task_results.append(dict(result or {}))
         if len(self.task_results) > MAX_RUNTIME_RESULTS:
             self.task_results = self.task_results[-MAX_RUNTIME_RESULTS:]
-
-    def add_iteration_result(self, result: Dict[str, Any]) -> None:
-        entry = PlannerIterationResult.model_validate(result or {})
-        self.iteration_results.append(entry)
-        if len(self.iteration_results) > MAX_RUNTIME_ITERATION_RESULTS:
-            self.iteration_results = self.iteration_results[-MAX_RUNTIME_ITERATION_RESULTS:]
-
-    def latest_iteration_result(self) -> Optional[PlannerIterationResult]:
-        if not self.iteration_results:
-            return None
-        return self.iteration_results[-1]
-
-    def detect_loop(self, threshold: Optional[int] = None) -> bool:
-        effective = threshold if threshold is not None else LOOP_THRESHOLD
-        if len(self.recent_action_signatures) < effective:
-            return False
-        tail = self.recent_action_signatures[-effective:]
-        return len(set(tail)) == 1
-
-    def can_finalize(self) -> bool:
-        """True when no must_do phase remains unfinished AND no active tasks block finalization."""
-        # Legacy phase guard
-        if self.outline:
-            for phase in self.outline.get("phases", []):
-                if not phase.get("must_do", True):
-                    continue
-                if phase.get("allow_final_after"):
-                    continue
-                if phase.get("phase_id") not in self.completed_phase_ids:
-                    return False
-        # Task journal guard: cannot finalize while there are pending/in_progress/paused_need tasks
-        for task in self.task_journal:
-            if task.status in ("pending", "in_progress", "paused_need"):
-                return False
-        return True
 
     def record_tool_call(
         self,
@@ -237,7 +149,7 @@ class RuntimeTurnState(BaseModel):
             operation=tool,
             call_id=call_id,
             arguments=arguments,
-            iteration=self.iter_count,
+            iteration=0,
             agent_slug=agent_slug,
             phase_id=phase_id,
         )
@@ -261,61 +173,6 @@ class RuntimeTurnState(BaseModel):
         if artifact_id and artifact_id not in self.deleted_artifact_ids:
             self.deleted_artifact_ids.append(artifact_id)
 
-    def get_or_create_task(self, task_id: str, **defaults: Any) -> TaskJournalEntry:
-        for t in self.task_journal:
-            if t.task_id == task_id:
-                return t
-        entry = TaskJournalEntry(task_id=task_id, **defaults)
-        self.task_journal.append(entry)
-        return entry
-
-    def find_task_by_agent_and_phase(
-        self,
-        agent_slug: str,
-        phase_id: Optional[str] = None,
-        status: Optional[str] = None,
-    ) -> Optional[TaskJournalEntry]:
-        for t in reversed(self.task_journal):
-            if t.assigned_agent != agent_slug:
-                continue
-            if phase_id is not None and t.task_id != str(phase_id or ""):
-                continue
-            if status is not None and t.status != status:
-                continue
-            return t
-        return None
-
-    def pending_needs(self) -> List[TaskJournalNeed]:
-        result: List[TaskJournalNeed] = []
-        for t in self.task_journal:
-            for n in t.needs:
-                if n.status == "pending":
-                    result.append(n)
-        return result
-
-    def unresolved_tasks(self) -> List[TaskJournalEntry]:
-        return [t for t in self.task_journal if t.status in ("pending", "in_progress", "paused_need")]
-
-    def all_needs_resolved(self, task: TaskJournalEntry) -> bool:
-        return all(n.status == "resolved" for n in task.needs)
-
-    def planner_snapshot(self, *, max_items: int = 10) -> Dict[str, Any]:
-        return {
-            "goal": self.goal,
-            "execution_mode": self.execution_mode.value,
-            "iter_count": self.iter_count,
-            "continuation": dict(self.continuation or {}),
-            "attachments": [item.model_dump(mode="json") for item in self.attachment_contexts[-max_items:]],
-            "facts": [item.text for item in self.runtime_facts[-max_items:]],
-            "agent_results": list(self.agent_results[-max_items:]),
-            "task_results": list(self.task_results[-max_items:]),
-            "iteration_results": [item.model_dump() for item in self.iteration_results[-max_items:]],
-            "open_questions": list(self.open_questions[-max_items:]),
-            "recent_actions": list(self.recent_action_signatures[-max_items:]),
-            "task_journal": [t.model_dump() for t in self.task_journal[-max_items:]],
-            "recent_tool_calls": self.tool_ledger.compact_view(max_items=max_items),
-        }
-
     def compact_view(self) -> Dict[str, Any]:
         """Return compact diagnostics view with bounded size.
 
@@ -334,33 +191,13 @@ class RuntimeTurnState(BaseModel):
             "continuation": dict(self.continuation or {}),
             "attachments": [item.model_dump(mode="json") for item in self.attachment_contexts[-5:]],
             "status": self.status,
-            "iter_count": self.iter_count,
             "used_tool_calls": self.used_tool_calls,
             "final_answer": (self.final_answer or "")[:300],
             "final_error": (self.final_error or "")[:300],
-            "planner_steps": len(self.planner_steps),
-            "task_journal": len(self.task_journal),
-            "agent_results": len(self.agent_results),
             "task_results": len(self.task_results),
-            "iteration_results": len(self.iteration_results),
             "runtime_facts": len(self.runtime_facts),
-            "open_questions": list(self.open_questions[-5:]),
             "tool_ledger": self.tool_ledger.compact_view(max_items=8),
             "memory_bundle": self.memory_bundle.compact_view(),
         }
 
-    @staticmethod
-    def _step_signature(step: Dict[str, Any]) -> str:
-        kind = str((step or {}).get("kind") or "-")
-        agent_slug = str((step or {}).get("agent_slug") or "-")
-        phase_id = str((step or {}).get("phase_id") or "-")
-        # Include a stable hash of the full query to distinguish different calls
-        # to the same agent while keeping signature length fixed.
-        agent_input = (step or {}).get("agent_input") or {}
-        query = " ".join(str(agent_input.get("query") or "").split())
-        query_hash = hashlib.md5(query.encode("utf-8")).hexdigest()[:12] if query else "-"
-        question = " ".join(str((step or {}).get("question") or "").split())
-        question_hash = hashlib.md5(question.encode("utf-8")).hexdigest()[:12] if question else "-"
-        payload = f"{kind}|{agent_slug}|{phase_id}|{query_hash}|{question_hash}"
-        return hashlib.md5(payload.encode("utf-8")).hexdigest()[:12]
     model_config = ConfigDict(arbitrary_types_allowed=True)

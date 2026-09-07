@@ -123,9 +123,13 @@ class StructuredLLMCall:
         tenant_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
         agent_execution_id: Optional[UUID] = None,
+        trace_parent_entity_type: str = "agent_execution",
+        trace_parent_entity_id: Optional[str] = None,
         event_sink: Optional[Callable[[RuntimeEvent], Awaitable[None]]] = None,
         fallback_factory: Optional[Callable[[str], T]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
+        budget_registry: Optional[Any] = None,
+        budget_entity_id: Optional[str] = None,
     ) -> StructuredCallResult[T]:
         """Execute the role with structured JSON payload, validate output against `schema`.
 
@@ -241,9 +245,30 @@ class StructuredLLMCall:
         # compatibility with consumers that group historical traces.
         logical_llm_call_id = str(uuid4())
         llm_call_id = str(uuid4())
+        resolved_trace_parent_id = str(trace_parent_entity_id or agent_execution_id or "")
+        trace_identity: Dict[str, Any] = {
+            "parent_entity_type": trace_parent_entity_type,
+            "parent_entity_id": resolved_trace_parent_id,
+        }
+        if agent_execution_id is not None:
+            trace_identity["agent_execution_id"] = str(agent_execution_id)
 
         for attempt in range(max_retries + 1):
             attempt_started = time.monotonic()
+
+            def consume_attempt_time() -> int:
+                duration_ms = int((time.monotonic() - attempt_started) * 1000)
+                if budget_registry is not None and budget_entity_id and duration_ms > 0:
+                    budget_registry.consume(
+                        budget_entity_id, "wall_time_ms", duration_ms, reason="llm_time",
+                    )
+                return duration_ms
+
+            if budget_registry is not None and budget_entity_id:
+                budget_registry.consume(budget_entity_id, "llm_calls", 1, reason="llm_call")
+                budget_registry.consume(budget_entity_id, "tokens_in", input_tokens, reason="llm_input")
+                if attempt:
+                    budget_registry.consume(budget_entity_id, "retries", 1, reason="llm_retry")
             attempt_request_bytes = len(json.dumps(
                 {"messages": messages, "params": params},
                 ensure_ascii=False,
@@ -272,7 +297,7 @@ class StructuredLLMCall:
             async def emit_protocol_retry(
                 *, reason: str, retry_after_ms: Optional[int] = None
             ) -> None:
-                if event_sink is None or agent_execution_id is None or attempt >= max_retries:
+                if event_sink is None or not resolved_trace_parent_id or attempt >= max_retries:
                     return
                 await event_sink(RuntimeEvent(
                     RuntimeEventType.PROTOCOL_RETRY,
@@ -280,9 +305,7 @@ class StructuredLLMCall:
                         "entity_type": "llm_call",
                         "entity_id": llm_call_id,
                         "logical_llm_call_id": logical_llm_call_id,
-                        "parent_entity_type": "agent_execution",
-                        "parent_entity_id": str(agent_execution_id),
-                        "agent_execution_id": str(agent_execution_id),
+                        **trace_identity,
                         "agent_slug": role_key,
                         "attempt": attempt + 1,
                         "max_attempts": max_retries + 1,
@@ -309,13 +332,11 @@ class StructuredLLMCall:
                 )
                 await asyncio.sleep(retry_delay_ms / 1000)
 
-            if event_sink is not None and agent_execution_id is not None:
+            if event_sink is not None and resolved_trace_parent_id:
                 await event_sink(RuntimeEvent.llm_request(
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
-                    parent_entity_type="agent_execution",
-                    parent_entity_id=str(agent_execution_id),
-                    agent_execution_id=str(agent_execution_id),
+                    **trace_identity,
                     agent_slug=role_key,
                     purpose="planning_decision" if role_key == "planner" else role_key,
                     model=model,
@@ -333,6 +354,7 @@ class StructuredLLMCall:
                     timeout=timeout_s,
                 )
             except asyncio.CancelledError:
+                attempt_duration_ms = consume_attempt_time()
                 logger.warning(
                     "Structured LLM attempt cancelled role=%s model=%s attempt=%s/%s "
                     "timeout_s=%s attempt_elapsed_ms=%s total_elapsed_ms=%s task_cancelling=%s "
@@ -342,13 +364,14 @@ class StructuredLLMCall:
                     attempt + 1,
                     max_retries + 1,
                     timeout_s,
-                    int((time.monotonic() - attempt_started) * 1000),
+                    attempt_duration_ms,
                     int((time.monotonic() - start) * 1000),
                     asyncio.current_task().cancelling() if asyncio.current_task() else None,
                     llm_call_id,
                 )
                 raise
             except asyncio.TimeoutError:
+                attempt_duration_ms = consume_attempt_time()
                 timeout_exc = asyncio.TimeoutError(f"llm_timeout after {timeout_s}s")
                 last_exception = timeout_exc
                 last_traceback = traceback.format_exc()
@@ -361,17 +384,15 @@ class StructuredLLMCall:
                     attempt + 1,
                     max_retries + 1,
                     timeout_s,
-                    int((time.monotonic() - attempt_started) * 1000),
+                    attempt_duration_ms,
                     int((time.monotonic() - start) * 1000),
                     llm_call_id,
                 )
-                if event_sink is not None and agent_execution_id is not None:
+                if event_sink is not None and resolved_trace_parent_id:
                     await event_sink(RuntimeEvent.llm_response(
                         llm_call_id=llm_call_id,
                         logical_llm_call_id=logical_llm_call_id,
-                        parent_entity_type="agent_execution",
-                        parent_entity_id=str(agent_execution_id),
-                        agent_execution_id=str(agent_execution_id),
+                        **trace_identity,
                         agent_slug=role_key,
                         purpose="planning_decision" if role_key == "planner" else role_key,
                         model=model,
@@ -388,6 +409,7 @@ class StructuredLLMCall:
                 await wait_before_retry()
                 continue
             except Exception as exc:  # network / upstream failure
+                consume_attempt_time()
                 last_exception = exc
                 last_traceback = traceback.format_exc()
                 last_error = f"{type(exc).__name__}: {exc}"
@@ -404,13 +426,11 @@ class StructuredLLMCall:
                     or self._is_non_retryable_llm_error(exc)
                 )
                 will_retry = adaptive_retry or (provider_retryable and not fail_fast and attempt < max_retries)
-                if event_sink is not None and agent_execution_id is not None:
+                if event_sink is not None and resolved_trace_parent_id:
                     await event_sink(RuntimeEvent.llm_response(
                         llm_call_id=llm_call_id,
                         logical_llm_call_id=logical_llm_call_id,
-                        parent_entity_type="agent_execution",
-                        parent_entity_id=str(agent_execution_id),
-                        agent_execution_id=str(agent_execution_id),
+                        **trace_identity,
                         agent_slug=role_key,
                         purpose="planning_decision" if role_key == "planner" else role_key,
                         model=model,
@@ -447,13 +467,18 @@ class StructuredLLMCall:
             last_exception = None
             last_traceback = None
             raw_response = self._extract_text(response)
-            if event_sink is not None and agent_execution_id is not None:
+            attempt_duration_ms = int((time.monotonic() - attempt_started) * 1000)
+            if budget_registry is not None and budget_entity_id:
+                output_tokens = estimate_tokens(raw_response)
+                budget_registry.consume(budget_entity_id, "tokens_out", output_tokens, reason="llm_output")
+                budget_registry.consume(budget_entity_id, "tokens_total", input_tokens + output_tokens, reason="llm_total")
+                if attempt_duration_ms > 0:
+                    budget_registry.consume(budget_entity_id, "wall_time_ms", attempt_duration_ms, reason="llm_time")
+            if event_sink is not None and resolved_trace_parent_id:
                 await event_sink(RuntimeEvent.llm_response(
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
-                    parent_entity_type="agent_execution",
-                    parent_entity_id=str(agent_execution_id),
-                    agent_execution_id=str(agent_execution_id),
+                    **trace_identity,
                     agent_slug=role_key,
                     purpose="planning_decision" if role_key == "planner" else role_key,
                     model=model,
@@ -484,13 +509,11 @@ class StructuredLLMCall:
                 continue
 
             duration_ms = int((time.monotonic() - start) * 1000)
-            if event_sink is not None and agent_execution_id is not None:
+            if event_sink is not None and resolved_trace_parent_id:
                 await event_sink(RuntimeEvent.llm_response(
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
-                    parent_entity_type="agent_execution",
-                    parent_entity_id=str(agent_execution_id),
-                    agent_execution_id=str(agent_execution_id),
+                    **trace_identity,
                     agent_slug=role_key,
                     purpose="planning_decision" if role_key == "planner" else role_key,
                     model=model,
@@ -798,25 +821,23 @@ class StructuredLLMCall:
             if role_type == SystemLLMRoleType.PLANNER.value:
                 parts.append(
                     "# PLANNER RUNTIME CONTRACT\n"
-                    "Планер не формирует пользовательский ответ и не завершает план напрямую. "
-                    "Для любого normal plan, включая простой, добавь ровно один terminal "
-                    "kind=synthesis без executor, inputs, expected_outputs, needs и depends_on. "
-                    "Его intent/instructions задают перефразированный вопрос пользователя, "
-                    "цель и направление финального ответа; факты в него не помещай. "
-                    "Остальные рабочие задачи используют executor только из available_agents.\n"
+                    "Планер не формирует пользовательский ответ и возвращает полную неизменяемую iteration proposal. "
+                    "Задачи iteration всегда агентские. terminal=planner возвращает управление планеру; "
+                    "terminal=synthesis завершает run и требует synthesis_brief. "
+                    "Если в iteration есть неуспешная задача, runtime вызовет planner независимо от terminal. "
+                    "Рабочие задачи используют executor только из available_agents.\n"
                     "Планер НИКОГДА не создаёт поле needs и не объявляет новые зависимости-данные. "
                     "needs создаёт только исполнитель задачи после фактической попытки работы. "
-                    "Если во входе есть pending needs, разреши каждую из них только одним способом: "
-                    "добавь задачу-производитель с expected_outputs, содержащим тот же key, и свяжи её "
-                    "с ожидающей задачей через depends_on; либо верни ask_user с одним конкретным вопросом; "
-                    "либо верни fail. Не повторяй неизменный граф при pending needs.\n"
+                    "Если во входе есть pending needs, закрывай их только явным binding. "
+                    "Неполные результаты и неуспешные задачи должны получить явное resolution в следующем решении планера.\n"
                     "Для project knowledge используй только ключ проекта из memory_context.type=project. "
-                    "Если проект для знания нужен, но ключ отсутствует или контекст неоднозначен, верни ask_user "
-                    "с одним вопросом вместо догадки. Когда вызываешь executor=knowledge, передай точный project_key "
+                    "Если проект для знания нужен, но ключ отсутствует или контекст неоднозначен, заверши iteration "
+                    "terminal=planner и создай задачу получения недостающих данных. Когда вызываешь executor=knowledge, передай точный project_key "
                     "в task.inputs.\n"
                     "Если задача должна создать скачиваемый файл (например, заполнение шаблона или file.generate), "
                     "объяви соответствующий expected_output с fulfillment=artifact. Artifact подтверждается только "
-                    "успешной runtime-операцией, а не текстом агента."
+                    "успешной runtime-операцией, а не текстом агента. Для fulfillment=verified_receipt обязательно "
+                    "перечисли допустимые canonical operation names в receipt_operations; чужой успешный receipt не засчитывается."
                 )
             parts.append(
                 "# RUNTIME RESPONSE CONTRACT\n"

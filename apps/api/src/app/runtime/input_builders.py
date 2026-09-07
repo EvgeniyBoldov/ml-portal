@@ -1,26 +1,20 @@
 """Runtime input builders for planner/synthesizer surfaces."""
 from __future__ import annotations
 
-import re
-from typing import Any, Dict, List, Optional
-
-from app.runtime.turn_state import RuntimeTurnState
+from typing import Any, Dict, List
 
 
-MAX_CONVERSATION_SUMMARY_CHARS = 3000
-MAX_POLICIES_TEXT_CHARS = 1200
 MAX_AGENT_DESCRIPTION_CHARS = 280
+
+
 class PlannerInputBuilder:
-    """Build structured planner payload from runtime state."""
+    """Build the sole planner payload: the iterative execution ledger."""
 
     def build_graph_request(self, request: Any) -> Dict[str, Any]:
-        """Canonical compact payload for graph planning and replanning.
-
-        Keep this intentionally independent from ``RuntimeTurnState`` so the
-        planner can be resumed from a persisted plan in a worker process.
-        """
+        """Canonical payload for every planner invocation."""
+        context = request.context
         agents = []
-        for item in request.available_agents or []:
+        for item in context.available_agents or []:
             if not item.get("slug"):
                 continue
             agents.append({
@@ -29,145 +23,21 @@ class PlannerInputBuilder:
                 "tags": list(item.get("tags") or []),
                 "provides_keys": list(item.get("provides_keys") or []),
             })
-        plan = dict(request.plan or {})
-        tasks = plan.get("tasks") if isinstance(plan.get("tasks"), dict) else {}
-        planner_plan = {
-            "has_existing_graph": bool(tasks) or int(plan.get("revision") or 0) > 0,
-            "status": plan.get("status"),
-            "tasks": tasks,
-        }
         payload = {
-            "goal": request.goal,
-            "mode": "replan" if planner_plan["has_existing_graph"] else "initial",
-            "replan_reason": request.trigger,
-            "plan": planner_plan,
-            "available_artifacts": self._normalize_artifacts(request.available_artifacts or []),
-            "needs": request.needs or [],
-            "last_failure": request.last_failure,
-            # Replanning must see the durable outputs that led to this
-            # revision. They are planner context, not another synthesis input.
-            "completed_outputs": request.completed_outputs or {},
-            "memory_context": request.memory_context or [],
+            "goal": context.goal,
+            "trigger": context.trigger,
+            "execution_ledger": context.execution_ledger,
+            "available_artifacts": self._normalize_artifacts(context.available_artifacts),
+            "memory_context": context.memory_context,
             "available_agents": agents,
-            "terminal_synthesis": {
-                "kind": "synthesis",
-                "executor": None,
-                "purpose": (
-                    "Mandatory single terminal checkpoint. Describe the user's "
-                    "actual question and the required direction of the final answer; "
-                    "do not put research facts here."
-                ),
+            "iteration_contract": {
+                "tasks_are_agents_only": True,
+                "terminal": ["planner", "synthesis"],
+                "synthesis_requires_brief": True,
+                "partial_results_require_resolution": True,
             },
         }
-        checkpoint = getattr(request, "checkpoint", None)
-        if isinstance(checkpoint, dict) and checkpoint:
-            payload["checkpoint"] = checkpoint
-        user_response = str(getattr(request, "user_response", "") or "").strip()
-        if user_response:
-            payload["user_response"] = user_response
         return payload
-
-    def build(
-        self,
-        *,
-        runtime_state: RuntimeTurnState,
-        available_agents: List[Dict[str, Any]],
-        outline: Optional[Dict[str, Any]],
-        platform_config: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        state = runtime_state
-
-        # Conversation context from memory_bundle if available
-        conversation_summary = ""
-        if state.memory_bundle and state.memory_bundle.sections:
-            for section in state.memory_bundle.sections:
-                if section.name == "conversation" and section.items:
-                    conversation_summary = section.items[0].text[:MAX_CONVERSATION_SUMMARY_CHARS]
-                    break
-
-        # Collect pending needs for routing
-        pending_needs = state.pending_needs()
-
-        # Build task journal compact view (last 10 items)
-        task_journal_summary: List[Dict[str, Any]] = []
-        for t in state.task_journal[-10:]:
-            task_journal_summary.append({
-                "task_id": t.task_id,
-                "title": t.title,
-                "assigned_agent": t.assigned_agent,
-                "status": t.status,
-                "needs": [{"ref": n.ref, "key": n.key, "status": n.status} for n in t.needs],
-            })
-
-        return {
-            "goal": state.goal,
-            "current_user_query": state.current_user_query,
-            "execution_mode": state.execution_mode.value,
-            "attachments": [
-                {
-                    "file_name": item.ref.file_name,
-                    "artifact_id": item.ref.artifact_id,
-                    "content_type": item.ref.content_type,
-                    "size_bytes": item.ref.size_bytes,
-                    "snippet": item.snippet,
-                    "snippet_status": item.snippet_status,
-                    "readable": item.readable,
-                    "truncated": item.truncated,
-                }
-                for item in (state.attachment_contexts or [])
-            ],
-            "conversation_summary": conversation_summary,
-            "continuation": dict(state.continuation or {}) or None,
-            "available_agents": [
-                {
-                    "slug": item.get("slug"),
-                    "description": self._trim_text(
-                        item.get("description", ""),
-                        MAX_AGENT_DESCRIPTION_CHARS,
-                    ),
-                    "tags": list(item.get("tags") or []),
-                    "provides_keys": list(item.get("provides_keys") or []),
-                    **(
-                        {
-                            "capability_summary": self._trim_text(
-                                item.get("capability_summary", ""),
-                                MAX_AGENT_DESCRIPTION_CHARS,
-                            )
-                        }
-                        if item.get("capability_summary")
-                        else {}
-                    ),
-                    **(
-                        {"collections": list(item.get("collections") or [])}
-                        if item.get("collections")
-                        else {}
-                    ),
-                    **(
-                        {"system_operations": list(item.get("system_operations") or [])}
-                        if item.get("system_operations")
-                        else {}
-                    ),
-                }
-                for item in available_agents
-                if item.get("slug")
-            ],
-            "execution_outline": outline,
-            "memory": state.planner_snapshot(),
-            "last_iteration_result": (
-                state.iteration_results[-1].model_dump()
-                if state.iteration_results
-                else None
-            ),
-            "task_journal": task_journal_summary,
-            "pending_needs": [
-                {"ref": n.ref, "key": n.key, "description": n.description}
-                for n in pending_needs[-10:]
-            ],
-            "policies": self._trim_text(
-                (platform_config or {}).get("policies_text") or "default",
-                MAX_POLICIES_TEXT_CHARS,
-            ),
-        }
 
     @staticmethod
     def _trim_text(value: Any, limit: int) -> str:

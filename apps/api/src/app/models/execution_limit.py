@@ -37,7 +37,7 @@ class ExecutionLimit(Base):
     # For platform scope uses literal "global".
     scope_ref: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
-    plan_revisions_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    iterations_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     task_attempts_total_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     agent_runs_total_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     llm_calls_total_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -80,7 +80,7 @@ class RuntimeExecutionLimits(Base):
     scope_ref: Mapped[str] = mapped_column(String(32), nullable=False, unique=True, default="global")
     wall_time_ms_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_parallel_tasks: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    max_replans: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_iterations: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_task_executions: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

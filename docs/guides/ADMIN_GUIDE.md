@@ -75,7 +75,7 @@
 
 - `Настройки платформы -> Лимиты`
   - только platform-level execution limits (LLM + Runtime).
-- `Оркестрация -> Planner / Synthesizer / Fact Extractor / Summary Compactor`
+- `Оркестрация -> Planner / Memory / Synthesizer / Fact Extractor / Fact Compactor`
   - у каждой системной роли свои execution limits (LLM + Runtime) и свой prompt contract.
 - `Память` (facts)
   - runtime memory имеет scopes `user`, `tenant`, `project`;

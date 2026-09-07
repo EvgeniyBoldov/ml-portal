@@ -18,7 +18,7 @@ GLOBAL = "global"
 RUNTIME_CODE_DEFAULTS = {
     "wall_time_ms_max": 300_000,
     "max_parallel_tasks": 1,
-    "max_replans": 3,
+    "max_iterations": 4,
     "max_task_executions": 100,
 }
 AGENT_CODE_DEFAULTS = {"llm_calls_max": 10, "tool_calls_max": 50, "wall_time_ms_max": 300_000}
@@ -29,7 +29,7 @@ ORCHESTRATOR_CODE_DEFAULTS = {"llm_calls_max": 12, "tool_calls_max": None, "wall
 class RuntimeLimits:
     wall_time_ms_max: Optional[int] = None
     max_parallel_tasks: Optional[int] = None
-    max_replans: Optional[int] = None
+    max_iterations: Optional[int] = None
     max_task_executions: Optional[int] = None
 
 
@@ -53,7 +53,7 @@ class RuntimeLimitsService:
 
     async def resolve_runtime(self, override: Optional[dict] = None) -> RuntimeLimits:
         row = await self._runtime_row()
-        values = self._resolve_values(RUNTIME_CODE_DEFAULTS, row, override, allow_zero={"max_replans"})
+        values = self._resolve_values(RUNTIME_CODE_DEFAULTS, row, override, allow_zero={"max_iterations"})
         return RuntimeLimits(**values)
 
     async def update_runtime(self, values: RuntimeLimits, fields: set[str]) -> RuntimeExecutionLimits:

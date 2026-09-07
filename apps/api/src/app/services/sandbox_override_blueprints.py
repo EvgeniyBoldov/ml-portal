@@ -93,7 +93,7 @@ def _runtime_limit_fields(prefix: str = "runtime_limits") -> List[Dict[str, Any]
     return [
         _field("wall_time_ms_max", "Wall time (ms)", f"{prefix}.wall_time_ms_max", field_type="integer"),
         _field("max_parallel_tasks", "Max parallel tasks", f"{prefix}.max_parallel_tasks", field_type="integer"),
-        _field("max_replans", "Max replans", f"{prefix}.max_replans", field_type="integer"),
+        _field("max_iterations", "Max iterations", f"{prefix}.max_iterations", field_type="integer"),
         _field("max_task_executions", "Max task executions", f"{prefix}.max_task_executions", field_type="integer"),
     ]
 

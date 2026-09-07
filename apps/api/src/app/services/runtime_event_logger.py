@@ -23,7 +23,7 @@ from app.services.runtime_progress_streamer import RuntimeProgressStreamer
 
 _IDENTITY_ENTITY_TYPES = {
     "run", "orchestrator", "planner_iteration", "step", "agent_execution",
-    "attempt", "orchestrator_checkpoint", "synthesis_run", "llm_call",
+    "attempt", "synthesis_run", "llm_call",
     "tool_call", "interaction", "memory_component", "error",
 }
 
@@ -53,10 +53,10 @@ class RuntimeLoggingLevel(StrEnum):
 
 _BRIEF_EVENTS = frozenset({
     "run_start", "run_end", "orchestrator_start", "orchestrator_end",
-    "planner_iteration_start", "planner_iteration_end", "planner_invocation_started", "planner_invocation_finished", "step_start", "step_end",
-    "agent_start", "agent_end", "planner_decision", "plan_created", "plan_patch_applied",
-    "plan_waiting_input", "plan_completed", "plan_failed", "task_ready", "task_claimed",
-    "task_started", "task_paused", "task_resumed", "task_completed", "task_unfulfillable",
+    "planner_iteration_start", "planner_iteration_end", "step_start", "step_end",
+    "agent_start", "agent_end", "plan_created", "plan_iteration_applied",
+    "plan_waiting_input", "plan_completed", "plan_failed",
+    "task_started", "task_paused", "task_resumed", "task_completed", "task_needs_dependency", "task_blocked", "task_unfulfillable",
     "task_failed", "attempt_started", "attempt_succeeded", "attempt_failed",
     "attempt_retry_scheduled", "preflight_snapshot", "rbac_snapshot", "limits_snapshot",
     "preflight_started", "preflight_completed", "preflight_failed",
@@ -183,7 +183,7 @@ class RuntimeEventLogger:
         if self.context.entity_type == "run":
             root_events = {
                 "run_start", "orchestrator_start", "planner_iteration_start",
-                "plan_created", "plan_patch_applied", "task_started",
+                "plan_created", "plan_iteration_applied", "task_started",
                 "task_completed", "plan_completed", "confirmation_required",
                 "waiting_input", "error",
             }

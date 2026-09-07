@@ -595,13 +595,25 @@ class OperationExecutionFacade:
         schema: Dict[str, Any],
     ) -> Optional[OperationValidationError]:
         validator = _jsonschema.Draft202012Validator(schema)
-        error = next(iter(validator.iter_errors(arguments)), None)
-        if error is None:
+        errors = list(validator.iter_errors(arguments))
+        if not errors:
             return None
-        field_path = "$" + "".join(
-            f"[{p!r}]" if isinstance(p, str) else f"[{p}]"
-            for p in error.absolute_path
-        ) if error.absolute_path else "$"
+        # Keep the runtime error contract deterministic across validator
+        # versions.  Unknown fields are envelope errors and take precedence
+        # over errors inside otherwise known fields, matching the built-in
+        # validator used by minimal deployments.
+        error = min(
+            enumerate(errors),
+            key=lambda item: (0 if item[1].validator == "additionalProperties" else 1, item[0]),
+        )[1]
+        field_path = "$"
+        for part in error.absolute_path:
+            if isinstance(part, str) and part.isidentifier():
+                field_path += f".{part}"
+            elif isinstance(part, str):
+                field_path += f"[{part!r}]"
+            else:
+                field_path += f"[{part}]"
         return OperationValidationError(
             code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
             message=error.message,

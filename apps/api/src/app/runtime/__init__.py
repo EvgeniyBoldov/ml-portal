@@ -8,7 +8,7 @@ Design goals:
     * Componentized memory: MemoryBundle assembled per-turn from MemoryComponents
     * Planner produces a persisted task graph; orchestrator owns execution
     * Task attempts distinguish technical failures from valid agent outcomes
-    * Clean contracts: PlanPatch, TaskRequest, AgentExecutionResult, TaskResult, RuntimeTurnState
+    * Clean contracts: IterationProposal, TaskRequest, AgentExecutionResult, TaskResult, RuntimeTurnState
 """
 from app.runtime.events import RuntimeEvent, RuntimeEventType, OrchestrationPhase
 from app.runtime.contracts import (
@@ -17,8 +17,7 @@ from app.runtime.contracts import (
 )
 from app.runtime.orchestrator_contracts import (
     AgentExecutionResult,
-    AgentTaskResult,
-    PlanPatch,
+    IterationProposal,
     PlanRequest,
     TaskAttemptFailure,
     TaskRequest,
@@ -44,10 +43,9 @@ __all__ = [
     "RuntimeEventType",
     "OrchestrationPhase",
     "PipelineStopReason",
-    "PlanPatch",
+    "IterationProposal",
     "PlanRequest",
     "TaskRequest",
-    "AgentTaskResult",
     "AgentExecutionResult",
     "TaskResult",
     "TaskAttemptFailure",

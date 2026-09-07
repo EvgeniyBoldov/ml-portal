@@ -43,12 +43,6 @@ class RuntimeHitlPolicyContractService:
             },
             "conditions": [
                 {
-                    "condition_id": "ask_user_action",
-                    "decision": "require_input",
-                    "when": "Planner returns ask_user next action",
-                    "reason": "Runtime pauses and waits for user's answer.",
-                },
-                {
                     "condition_id": "loop_detected",
                     "decision": "require_input",
                     "when": "Repeated action loop detected",
@@ -56,9 +50,9 @@ class RuntimeHitlPolicyContractService:
                 },
                 {
                     "condition_id": "max_iters_reached",
-                    "decision": "block",
+                    "decision": "finalize",
                     "when": "Iteration counter reaches max_iters",
-                    "reason": "Runtime stops to avoid endless execution.",
+                    "reason": "Runtime reserves planner and synthesis calls for a final bounded answer.",
                 },
                 {
                     "condition_id": "operation_requires_confirmation",

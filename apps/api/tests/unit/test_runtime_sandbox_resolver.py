@@ -30,7 +30,7 @@ def test_sandbox_runtime_overrides_include_limits_and_agent_limits():
                 "ov-platform": {
                     "entity_type": "orchestration",
                     "entity_id": None,
-                    "field_path": "platform_limits.plan_revisions_max",
+                    "field_path": "platform_limits.iterations_max",
                     "value_json": 12,
                 },
                 "ov-agent": {
@@ -51,6 +51,6 @@ def test_sandbox_runtime_overrides_include_limits_and_agent_limits():
 
     runtime_overrides = resolver.to_runtime_overrides(agent_version=agent_version)
 
-    assert runtime_overrides["platform_limits"]["plan_revisions_max"] == 12
+    assert runtime_overrides["platform_limits"]["iterations_max"] == 12
     assert runtime_overrides["agent_limits"]["agent_tool_calls_max"] == 7
     assert runtime_overrides["orchestrator_limits"]["planner"]["planner_retries_max"] == 3

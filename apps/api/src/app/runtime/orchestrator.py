@@ -1,1002 +1,527 @@
-"""Deterministic orchestration loop for the canonical plan graph."""
+"""Thin execution loop for the strict iterative runtime."""
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Dict, Optional, Protocol
+from uuid import UUID
 
-from app.runtime.orchestrator_contracts import (
-    AgentExecutionResult,
-    AgentTaskResult,
-    PlanNodeKind,
-    PlanRequest,
-    TaskConfirmationRequired,
-    TaskExecutionError,
-    TaskAttemptFailure,
-    TaskOutcome,
-    TaskRequest,
-    TaskSuccessAction,
-)
-from app.runtime.plan_store import SqlPlanStore
-from app.runtime.task_result_reducer import TaskAttemptResultReducer
-from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
-from uuid import UUID, uuid4
-from app.models.runtime_observability import RuntimePlannerInvocation
-from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
-from app.core.logging import get_logger
+from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.entity_ids import (
-    agent_execution_id as make_agent_execution_id,
-    attempt_id as make_attempt_id,
-    checkpoint_id as make_checkpoint_id,
-    planner_iteration_id as make_iteration_id,
-    planner_orchestrator_id,
-    step_id as make_step_id,
+    agent_execution_id, planner_iteration_id, runtime_attempt_id, step_id,
 )
-
-logger = get_logger(__name__)
+from app.runtime.orchestrator_contracts import (
+    AgentExecutionResult, IterationProposal, PlanRequest, PlannerContext,
+    SchedulerActionKind, TaskAttemptFailure, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
+)
+from app.runtime.plan_store import PlanValidationError
+from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
+from app.runtime.task_result_reducer import TaskAttemptResultReducer
 
 
 class Planner(Protocol):
-    async def plan(self, *, request: PlanRequest, **kwargs: Any): ...
+    async def plan(self, *, request: PlanRequest, **kwargs: Any) -> IterationProposal: ...
 
 
 class TaskExecutor(Protocol):
-    async def execute_attempt(self, *, request: TaskRequest) -> AgentExecutionResult: ...
+    async def execute_attempt(self, *, request: TaskRequest, **kwargs: Any) -> AgentExecutionResult: ...
 
 
 class OrchestratorEvent(dict):
-    """Small event DTO used by the engine; runtime event adapters can wrap it."""
-
     def to_runtime_event(self) -> RuntimeEvent:
-        if self.get("type") == "_runtime_event":
-            runtime_event = self.get("runtime_event")
-            if isinstance(runtime_event, RuntimeEvent):
-                return runtime_event
+        if self.get("type") == "_runtime_event" and isinstance(self.get("runtime_event"), RuntimeEvent):
+            return self["runtime_event"]
         event_name = str(self.get("type") or "")
+        plan_id = str(self.get("plan_id") or "")
+        task_id = str(self.get("task_id") or "")
+        if event_name in {"iteration_created", "planner_checkpoint_completed"}:
+            iteration_id = self.get("applied_iteration_id") or self.get("iteration_id")
+            return RuntimeEvent.plan_lifecycle(
+                RuntimeEventType.PLAN_ITERATION_APPLIED,
+                plan_id=plan_id,
+                parent_entity_type="planner_iteration",
+                parent_entity_id=iteration_id,
+                trigger=self.get("trigger"),
+                iteration_id=iteration_id,
+                terminal=self.get("terminal"),
+                proposal=self.get("proposal"),
+            )
+        if event_name == "plan_terminal":
+            status = str(self.get("status") or "")
+            event_type = {
+                "completed": RuntimeEventType.PLAN_COMPLETED,
+                "failed": RuntimeEventType.PLAN_FAILED,
+                "waiting_input": RuntimeEventType.PLAN_WAITING_INPUT,
+            }.get(status)
+            if event_type is not None:
+                return RuntimeEvent.plan_lifecycle(
+                    event_type,
+                    plan_id=plan_id,
+                    status=status,
+                    error_code=(self.get("error_code") or "runtime_execution_failed") if status == "failed" else None,
+                )
+        if event_name in {"task_started", "task_completed"}:
+            outcome = str(self.get("outcome") or "")
+            lifecycle_type = {
+                "needs_dependency": RuntimeEventType.TASK_NEEDS_DEPENDENCY,
+                "unfulfillable": RuntimeEventType.TASK_UNFULFILLABLE,
+            }.get(outcome, RuntimeEventType.TASK_STARTED if event_name == "task_started" else RuntimeEventType.TASK_COMPLETED)
+            return RuntimeEvent.task_lifecycle(
+                lifecycle_type,
+                plan_id=plan_id,
+                task_id=task_id,
+                outcome=self.get("outcome"),
+            )
+        if event_name in {"task_blocked", "task_paused", "task_resumed", "task_failed"}:
+            lifecycle_type = {
+                "task_blocked": RuntimeEventType.TASK_BLOCKED,
+                "task_paused": RuntimeEventType.TASK_PAUSED,
+                "task_resumed": RuntimeEventType.TASK_RESUMED,
+                "task_failed": RuntimeEventType.TASK_FAILED,
+            }[event_name]
+            return RuntimeEvent.task_lifecycle(
+                lifecycle_type, plan_id=plan_id, task_id=task_id,
+                attempt=self.get("attempt"),
+            )
+        if event_name == "task_attempt_failed":
+            error = self.get("error") if isinstance(self.get("error"), dict) else {}
+            attempt = int(self.get("attempt") or 0)
+            return RuntimeEvent.attempt_lifecycle(
+                RuntimeEventType.ATTEMPT_FAILED,
+                task_id=task_id, attempt_id=runtime_attempt_id(task_id, attempt),
+                plan_id=plan_id, attempt=attempt, error_code=error.get("code"), retryable=bool(error.get("retryable")),
+            )
+        if event_name in {"task_attempt_started", "task_attempt_succeeded"}:
+            attempt = int(self.get("attempt") or 0)
+            return RuntimeEvent.attempt_lifecycle(
+                RuntimeEventType.ATTEMPT_STARTED if event_name == "task_attempt_started" else RuntimeEventType.ATTEMPT_SUCCEEDED,
+                task_id=task_id, attempt_id=runtime_attempt_id(task_id, attempt),
+                plan_id=plan_id, attempt=attempt,
+            )
+        if event_name == "task_retry_scheduled":
+            attempt = int(self.get("attempt") or 0)
+            return RuntimeEvent.attempt_lifecycle(
+                RuntimeEventType.ATTEMPT_RETRY_SCHEDULED,
+                task_id=task_id, attempt_id=runtime_attempt_id(task_id, attempt),
+                plan_id=plan_id, attempt=attempt,
+            )
+        if event_name == "confirmation_required":
+            payload = dict(self)
+            payload.pop("type", None)
+            payload.update({"entity_type": "task", "entity_id": task_id, "parent_entity_type": "plan", "parent_entity_id": plan_id})
+            return RuntimeEvent(RuntimeEventType.CONFIRMATION_REQUIRED, payload)
         try:
             event_type = RuntimeEventType(event_name)
         except ValueError:
             return RuntimeEvent.status("orchestrator", **dict(self))
         payload = dict(self)
         payload.pop("type", None)
-        if event_type is RuntimeEventType.PLANNER_ITERATION_START:
-            return RuntimeEvent.planner_iteration_start(
-                iteration_id=str(payload.pop("entity_id")),
-                orchestrator_id=str(payload.pop("parent_entity_id")),
-                iteration=int(payload.pop("iteration", 0)),
-                iteration_type=str(payload.pop("iteration_type", payload.pop("mode", "decision"))),
-                **payload,
-            )
-        if event_type is RuntimeEventType.PLANNER_ITERATION_END:
-            return RuntimeEvent.planner_iteration_end(
-                iteration_id=str(payload.pop("entity_id")),
-                orchestrator_id=str(payload.pop("parent_entity_id")),
-                iteration=int(payload.pop("iteration", 0)),
-                status=str(payload.pop("status", "completed")),
-                iteration_type=str(payload.pop("iteration_type", payload.pop("mode", "decision"))),
-                **payload,
-            )
-        if event_type is RuntimeEventType.AGENT_START:
-            return RuntimeEvent.agent_start(
-                agent_execution_id=str(payload.pop("agent_execution_id", payload.pop("entity_id"))),
-                parent_entity_type=str(payload.pop("parent_entity_type")),
-                parent_entity_id=str(payload.pop("parent_entity_id")),
-                agent_slug=str(payload.pop("agent_slug")),
-                executor_type=str(payload.pop("executor_type", "agent")),
-                executor_name=payload.pop("executor_name", None),
-                task_title=payload.pop("task_title", None),
-                **payload,
-            )
-        if event_type is RuntimeEventType.AGENT_END:
-            return RuntimeEvent.agent_end(
-                agent_execution_id=str(payload.pop("agent_execution_id", payload.pop("entity_id"))),
-                parent_entity_type=str(payload.pop("parent_entity_type")),
-                parent_entity_id=str(payload.pop("parent_entity_id")),
-                agent_slug=str(payload.pop("agent_slug")),
-                status=str(payload.pop("status", "completed")),
-                **payload,
-            )
         return RuntimeEvent(event_type, payload)
 
 
 class GraphOrchestrator:
-    """Persisted graph scheduler; all task lifecycle changes go through SQL."""
+    """Executes typed store decisions; it never derives task state from text."""
 
-    def __init__(self, *, store: SqlPlanStore, planner: Planner, executor: TaskExecutor,
-                 synthesizer: Optional[Any] = None,
-                 max_attempts: int = 3, retry_delay_seconds: int = 60,
-                 event_sink: Optional[Any] = None,
-                 budget_service: Optional[Any] = None,
+    def __init__(self, *, store: Any, planner: Planner, executor: TaskExecutor,
+                 synthesizer: Optional[Any] = None, max_attempts: int = 3,
+                 retry_delay_seconds: int = 60, event_sink: Optional[Any] = None,
                  logging_level: str = "brief") -> None:
-        self.store, self.planner, self.executor, self.synthesizer = store, planner, executor, synthesizer
+        self.store = store
+        self.planner = planner
+        self.executor = executor
+        self.synthesizer = synthesizer
         self.max_attempts = max(1, max_attempts)
-        self.task_result_reducer = TaskAttemptResultReducer()
         self.retry_delay_seconds = max(1, retry_delay_seconds)
         self.event_sink = event_sink
-        self.budget_service = budget_service
         self.logging_level = logging_level
+        self.reducer = TaskAttemptResultReducer()
+
+    async def _planner_request(self, *, plan_id: UUID, goal: str, trigger: str,
+                               available_agents: list[dict[str, Any]], available_artifacts: list[dict[str, Any]],
+                               planner_kwargs: Dict[str, Any]) -> PlanRequest:
+        snapshot = await self.store.snapshot(plan_id)
+        ledger = self._planner_ledger(snapshot)
+        ledger_size = len(json.dumps(ledger, ensure_ascii=False, default=str))
+        max_ledger_chars = int(planner_kwargs.get("planner_ledger_max_chars") or 160_000)
+        if ledger_size > max_ledger_chars:
+            raise PlanValidationError(
+                f"planner execution ledger exceeds hard limit ({ledger_size}>{max_ledger_chars})"
+            )
+        return PlanRequest(
+            context=PlannerContext(goal=goal, trigger=trigger, execution_ledger=ledger,
+                                   available_agents=available_agents, available_artifacts=available_artifacts,
+                                   memory_context=list(planner_kwargs.get("planner_memory_context") or [])),
+            plan_id=plan_id,
+            run_id=UUID(str(snapshot["root_run_id"])),
+        )
 
     @staticmethod
-    def _has_declared_resolvers(
-        plan: Dict[str, Any], pending_needs: list[Dict[str, Any]]
-    ) -> bool:
-        """Return whether every pending runtime need has a graph producer.
+    def _planner_ledger(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """A complete structural index. No status or failure is silently dropped."""
+        tasks = []
+        for task_id, task in sorted(dict(snapshot.get("tasks") or {}).items(), key=lambda item: (item[1].get("iteration_id", ""), item[1].get("planned_order", 0), item[0])):
+            result = task.get("result") if isinstance(task.get("result"), dict) else {}
+            verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
+            # Agent transcripts and internal telemetry are not planner context.
+            # The planner receives only runtime-owned evidence metadata.
+            evidence = {key: verified.get(key) for key in ("receipts", "evidence", "artifacts", "sources", "fresh_retrieval") if key in verified}
+            tasks.append({"task_id": task_id, "iteration_id": task.get("iteration_id"), "intent": task.get("intent"),
+                          "executor": task.get("executor"), "instructions": task.get("instructions"), "inputs": task.get("inputs", {}),
+                          "expected_outputs": task.get("expected_outputs", []), "freshness_policy": task.get("freshness_policy"),
+                          "status": task.get("status"), "depends_on": task.get("depends_on", []), "attempts": task.get("attempts", 0),
+                          "result": {"description": result.get("description"), "reason_code": result.get("reason_code"), "outputs": result.get("outputs", {}), "limitation": result.get("limitation"), "evidence": evidence}})
+        return {"plan_status": snapshot.get("status"), "iterations": snapshot.get("iterations", []), "tasks": tasks,
+                "needs": snapshot.get("needs", []), "bindings": snapshot.get("bindings", []),
+                "resolutions": snapshot.get("resolutions", [])}
 
-        ``needs`` are discovered by executors, never declared by the planner.
-        A replan is therefore useful only when it adds (or connects) a task
-        that explicitly promises the missing output.  Without this check a
-        planner can re-emit an unchanged graph until the revision budget is
-        exhausted.
-        """
-        tasks = plan.get("tasks", {})
-        if not isinstance(tasks, dict):
-            return False
-        for need in pending_needs:
-            task = tasks.get(need.get("task_id"))
-            if not isinstance(task, dict):
-                return False
-            key = need.get("key")
-            if not isinstance(key, str) or not key:
-                return False
-            for producer_id in task.get("depends_on", []):
-                producer = tasks.get(producer_id)
-                if not isinstance(producer, dict):
-                    continue
-                outputs = producer.get("expected_outputs", [])
-                if any(
-                    isinstance(output, dict) and output.get("key") == key
-                    for output in outputs
-                ):
-                    break
-            else:
-                return False
-        return True
+    @staticmethod
+    def _latest_resolutions(resolutions: list[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """One task has one current disposition: the latest iteration wins."""
+        latest: Dict[str, Dict[str, Any]] = {}
+        for item in resolutions:
+            task_id = str(item.get("task_id") or "")
+            if task_id:
+                latest[task_id] = item
+        return latest
+
+    @staticmethod
+    def _compile(proposal: IterationProposal, available_agents: list[dict[str, Any]], ledger: Dict[str, Any]) -> IterationProposal:
+        available = {str(item.get("slug") or "") for item in available_agents if isinstance(item, dict)}
+        unknown = sorted({task.executor for task in proposal.tasks if task.executor not in available})
+        if unknown:
+            raise PlanValidationError(f"planner selected unavailable executors: {unknown}")
+        prior_tasks = {str(item.get("task_id")): item for item in ledger.get("tasks", [])}
+        need_items = {(str(item.get("task_id")), str(item.get("ref"))): item for item in ledger.get("needs", [])}
+        proposed = {task.task_id: task for task in proposal.tasks}
+        for resolution in proposal.resolutions:
+            prior = prior_tasks.get(resolution.task_id)
+            if prior is None or prior.get("status") == "completed":
+                raise PlanValidationError(f"resolution must target a prior incomplete task: {resolution.task_id}")
+            outputs = set((prior.get("result") or {}).get("outputs") or {})
+            if any(key not in outputs for key in resolution.output_keys):
+                raise PlanValidationError(f"resolution accepts an absent output on {resolution.task_id}")
+        resolution_map = {item.task_id: item for item in proposal.resolutions}
+        def continuation_completed(item: Dict[str, Any]) -> bool:
+            replacements = item.get("replacement_task_ids") or []
+            return bool(replacements) and all(
+                prior_tasks.get(str(task_id), {}).get("status") == "completed"
+                for task_id in replacements
+            )
+
+        latest_resolutions = GraphOrchestrator._latest_resolutions(list(ledger.get("resolutions", [])))
+        previously_resolved = {
+            task_id for task_id, item in latest_resolutions.items()
+            if item.get("action") in {"accept_partial", "exclude_from_scope", "report_unresolved"}
+            or (item.get("action") == "continue_with_tasks" and continuation_completed(item))
+        }
+        unresolved = {
+            task_id for task_id, task in prior_tasks.items()
+            if task.get("status") != "completed" and task_id not in previously_resolved
+        }
+        proposed_resolutions = {item.task_id for item in proposal.resolutions}
+        if missing := unresolved - proposed_resolutions:
+            raise PlanValidationError(f"iteration must resolve prior incomplete tasks: {sorted(missing)}")
+        bound_inputs: set[tuple[str, str]] = set()
+        for binding in proposal.bindings:
+            need = need_items.get((binding.need_task_id, binding.need_ref))
+            if need is None:
+                raise PlanValidationError("binding targets an unknown discovered need")
+            producer, consumer = proposed.get(binding.producer_task_id), proposed.get(binding.consumer_task_id)
+            if producer is None or consumer is None:
+                raise PlanValidationError("binding producer and consumer must belong to the new iteration")
+            if binding.producer_task_id not in consumer.depends_on:
+                raise PlanValidationError("binding consumer must depend on producer")
+            output_spec = next((item for item in producer.expected_outputs if item.key == binding.output_key), None)
+            if output_spec is None or not output_spec.required:
+                raise PlanValidationError("binding output is not declared by producer")
+            need_schema = need.get("schema") if isinstance(need.get("schema"), dict) else {}
+            if need_schema and output_spec.json_schema != need_schema:
+                raise PlanValidationError("binding producer output schema must equal the discovered need schema")
+            resolution = resolution_map.get(binding.need_task_id)
+            if resolution is None or resolution.action.value != "continue_with_tasks":
+                raise PlanValidationError("binding need task must be continued with replacement tasks")
+            if binding.consumer_task_id not in resolution.replacement_task_ids:
+                raise PlanValidationError("binding consumer must be a replacement for the need task")
+            target = (binding.consumer_task_id, binding.consumer_input_key)
+            if target in bound_inputs or binding.consumer_input_key in consumer.inputs:
+                raise PlanValidationError("binding writes a duplicate consumer input")
+            bound_inputs.add(target)
+        return proposal
+
+    async def _invoke_planner(self, *, plan_id: UUID, goal: str, trigger: str,
+                              available_agents: list[dict[str, Any]], available_artifacts: list[dict[str, Any]],
+                              planner_kwargs: Dict[str, Any]) -> IterationProposal:
+        request = await self._planner_request(plan_id=plan_id, goal=goal, trigger=trigger,
+                                              available_agents=available_agents, available_artifacts=available_artifacts,
+                                              planner_kwargs=planner_kwargs)
+        iteration_number = len(request.context.execution_ledger.get("iterations", [])) + 1
+        iteration_entity_id = UUID(planner_iteration_id(str(request.run_id), iteration_number))
+        planner_kwargs.setdefault("event_sink", self.event_sink)
+        proposal = await self.planner.plan(
+            request=request,
+            planner_iteration_trace_id=str(iteration_entity_id),
+            **planner_kwargs,
+        )
+        proposal = self._compile(proposal, available_agents, request.context.execution_ledger)
+        if proposal.synthesis_brief is not None and proposal.synthesis_brief.user_question != goal:
+            raise PlanValidationError("synthesis brief user_question must equal the immutable plan goal")
+        await self.store.apply_iteration(plan_id, proposal, iteration_id=iteration_entity_id)
+        return proposal
 
     async def run(self, *, plan_id: UUID, goal: str, available_agents: list[dict[str, Any]],
-                  available_artifacts: Optional[list[dict[str, Any]]] = None,
-                  max_steps: int = 80, planner_kwargs: Optional[Dict[str, Any]] = None) -> AsyncIterator[OrchestratorEvent]:
-        plan = await self.store.snapshot(plan_id)
-        root_run_id = UUID(str(plan["root_run_id"]))
-        iteration_number = 1
-        orchestrator_id = planner_orchestrator_id(str(root_run_id))
-
-        if plan.get("tasks"):
-            synthesis_count = sum(
-                1 for task in plan["tasks"].values()
-                if task.get("kind") == PlanNodeKind.SYNTHESIS.value
-            )
-            if synthesis_count != 1:
-                await self.store.mark_failed(plan_id, {
-                    "code": "plan_contract_invalid",
-                    "message": "persisted plan does not contain exactly one synthesis checkpoint",
-                })
-                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed")
-                return
-
-        async def observe(event_type: str, *, entity_type: str, entity_id: str, parent_type: Optional[str] = None, parent_id: Optional[str] = None, payload: Optional[Dict[str, Any]] = None, trigger: Optional[str] = None) -> None:
-            # These lifecycle events are yielded below and therefore persisted
-            # by RuntimeEventLogger.  All other observations use the same
-            # root journal through ``event_sink``.
-            if event_type in {"plan_created", "task_started", "task_completed", "task_unfulfillable"}:
-                return
-            if self.event_sink is None:
-                return
-            await self.event_sink(RuntimeEvent(
-                RuntimeEventType(event_type),
-                {
-                    "entity_type": entity_type,
-                    "entity_id": entity_id,
-                    "parent_entity_type": parent_type,
-                    "parent_entity_id": parent_id,
-                    "trigger": trigger,
-                    **(payload or {}),
-                },
+                  available_artifacts: Optional[list[dict[str, Any]]] = None, max_steps: int = 80,
+                  max_task_executions: Optional[int] = None,
+                  planner_kwargs: Optional[Dict[str, Any]] = None) -> AsyncIterator[OrchestratorEvent]:
+        planner_kwargs = dict(planner_kwargs or {})
+        artifacts = list(available_artifacts or [])
+        async def fail(code: str, exc: BaseException | str) -> None:
+            await self.store.mark_failed(plan_id, code, str(exc))
+        await self.store.recover_stale_claims(
+            plan_id,
+            stale_before=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        snapshot = await self.store.snapshot(plan_id)
+        if not snapshot.get("iterations"):
+            planner_parent = str(planner_kwargs.get("planner_budget_entity_id") or snapshot["root_run_id"])
+            trace_iteration_id = planner_iteration_id(str(snapshot["root_run_id"]), 1)
+            yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_start(
+                iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1,
             ))
-        planner_kwargs = planner_kwargs or {}
-        force_replan = bool(planner_kwargs.get("force_replan"))
-        resume_user_response = str(planner_kwargs.get("resume_user_response") or "").strip() or None
-        limits = dict(planner_kwargs.get("runtime_limits") or {})
-        planner_rbac_audit = dict(planner_kwargs.get("planner_rbac_audit") or {})
-        llm_kwargs = {
-            key: planner_kwargs[key]
-            for key in ("chat_id", "tenant_id", "user_id", "agent_execution_id", "sandbox_overrides")
-            if key in planner_kwargs
-        }
-        # A planner iteration represents one planner decision and the task
-        # steps executed against that decision.  It is deliberately not a
-        # synonym for one claimed task.
-        active_iteration_id: Optional[str] = None
-        active_iteration_type = "execution"
-        active_step_number = 1
-        iteration_open = False
-
-        def close_active_iteration(*, status: str, outcome: Optional[str] = None) -> Optional[OrchestratorEvent]:
-            nonlocal iteration_open
-            if not iteration_open or active_iteration_id is None:
-                return None
-            iteration_open = False
-            payload: Dict[str, Any] = {
-                "type": "planner_iteration_end",
-                "entity_id": active_iteration_id,
-                "planner_iteration_id": active_iteration_id,
-                "parent_entity_type": "orchestrator",
-                "parent_entity_id": orchestrator_id,
-                "iteration": iteration_number,
-                "iteration_number": iteration_number,
-                "iteration_type": active_iteration_type,
-                "status": status,
-            }
-            if outcome:
-                payload["outcome"] = outcome
-            return OrchestratorEvent(**payload)
-
-        async def revise(
-            *,
-            reason: str,
-            last_failure: Optional[Dict[str, Any]] = None,
-            checkpoint_task: Optional[Any] = None,
-        ) -> Optional[str]:
-            nonlocal iteration_number, active_iteration_id, active_iteration_type, active_step_number, iteration_open
-            current = await self.store.snapshot(plan_id)
-            revision_mode = "checkpoint" if checkpoint_task is not None else "replan"
-            iteration_number += 1
-            iteration_entity_id = make_iteration_id(str(root_run_id), iteration_number)
-            active_iteration_id = iteration_entity_id
-            active_iteration_type = revision_mode
-            active_step_number = 2
-            iteration_open = True
-            planner_step_id = make_step_id(iteration_entity_id, 1, "replan")
-            planner_executor_id = make_agent_execution_id(iteration_entity_id, "planner", iteration_number)
-            invocation_id = uuid4()
-            checkpoint_id = make_checkpoint_id(str(root_run_id), "planner", str(invocation_id))
-            await observe("orchestrator_checkpoint_started", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
-                          parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"kind": "planner", "mode": revision_mode, "reason": reason, "revision": current["revision"]}, trigger=reason)
-            self.store.session.add(RuntimePlannerInvocation(
-                id=invocation_id, run_id=root_run_id, orchestrator_id=orchestrator_id,
-                plan_id=plan_id, trigger=reason, status="running", revision_before=current["revision"],
-                context_snapshot={"goal": goal, "last_failure": last_failure},
-            ))
-            await self.store.session.flush()
-            await observe("planner_invocation_started", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id, payload={"trigger": reason, "revision": current["revision"]}, trigger=reason)
-            await observe("planner_iteration_start", entity_type="planner_iteration", entity_id=iteration_entity_id, parent_type="orchestrator", parent_id=orchestrator_id, payload={"iteration": iteration_number, "iteration_number": iteration_number, "iteration_type": revision_mode, "mode": revision_mode}, trigger=reason)
-            await observe("step_start", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "kind": "planner_checkpoint" if checkpoint_task is not None else "plan", "title": checkpoint_task.intent if checkpoint_task is not None else "Перепланировать", "objective": checkpoint_task.instructions if checkpoint_task is not None else reason, "task_id": checkpoint_task.task_id if checkpoint_task is not None else None}, trigger=reason)
-            await observe("agent_start", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "executor_type": "planner", "executor_name": "Планер", "task_title": reason}, trigger=reason)
-            await observe("rbac_snapshot", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"rbac": planner_rbac_audit}, trigger=reason)
             try:
-                checkpoint = None
-                if checkpoint_task is not None:
-                    checkpoint_task_data = current.get("tasks", {}).get(checkpoint_task.task_id, {})
-                    checkpoint = {
-                        "task_id": checkpoint_task.task_id,
-                        "intent": checkpoint_task.intent,
-                        "instructions": checkpoint_task.instructions,
-                        "depends_on": list(checkpoint_task_data.get("depends_on") or []),
-                    }
-                patch = await self.planner.plan(request=PlanRequest(
-                    goal=goal,
-                    available_agents=available_agents,
-                    plan=current,
-                    completed_outputs=self._completed_outputs(current),
-                    available_artifacts=self._available_artifacts(current, available_artifacts),
-                    needs=[
-                        {"task_id": task_id, **need}
-                        for task_id, task in current.get("tasks", {}).items()
-                        for need in task.get("needs", [])
-                        if isinstance(need, dict)
-                    ],
-                    last_failure=last_failure,
-                    user_response=resume_user_response if reason == "user_input" else None,
-                    memory_context=list(planner_kwargs.get("planner_memory_context") or []),
-                    trigger=reason,
-                    run_id=root_run_id,
-                    plan_id=plan_id,
-                    trace_parent_id=checkpoint_id,
-                    checkpoint=checkpoint,
-                ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
-                await observe("planner_decision", entity_type="planner_iteration", entity_id=iteration_entity_id,
-                              parent_type="orchestrator", parent_id=orchestrator_id,
-                              payload={"mode": revision_mode, "decision": patch.decision.value,
-                                       "revision_before": current["revision"], "task_count": len(patch.tasks),
-                                       "remove_task_count": len(patch.remove_task_ids)}, trigger=reason)
-                decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason=reason) if self.budget_service else None
-                if decision is not None and not decision.allowed:
-                    raise RuntimeError("plan revision budget exceeded")
-                if checkpoint_task is not None:
-                    await self.store.complete_planner_checkpoint(
-                        plan_id,
-                        checkpoint_task.task_id,
-                        patch,
-                        reason=reason,
-                        planner_invocation_id=str(invocation_id),
-                    )
-                    updated_revision = (await self.store.snapshot(plan_id))["revision"]
-                else:
-                    updated = await self.store.apply_patch(plan_id, patch, reason=reason, planner_invocation_id=str(invocation_id))
-                    updated_revision = updated.revision
+                proposal = await self._invoke_planner(plan_id=plan_id, goal=goal, trigger="initial", available_agents=available_agents,
+                                                      available_artifacts=artifacts, planner_kwargs=planner_kwargs)
+                yield OrchestratorEvent(type="iteration_created", plan_id=str(plan_id), trigger="initial", terminal=proposal.terminal.value,
+                                        iteration_id=(await self.store.snapshot(plan_id))["iterations"][-1]["id"], proposal=proposal.model_dump(mode="json"))
+                yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
+                    iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1, status="completed",
+                ))
             except Exception as exc:
-                failure = {"code": type(exc).__name__, "message": str(exc), "trigger": reason}
-                invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
-                if invocation is not None:
-                    invocation.status = "failed"
-                    invocation.error = str(exc)
-                    invocation.finished_at = datetime.now(timezone.utc)
-                await self.store.mark_failed(plan_id, failure)
-                await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
-                              payload={"status": "failed", "revision_before": current["revision"], "error_code": type(exc).__name__}, trigger=reason)
-                terminal_error = {"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}
-                if getattr(exc, "llm_call_id", None):
-                    terminal_error["llm_call_id"] = str(exc.llm_call_id)
-                await observe("error", entity_type="error", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_entity_id,
-                              payload=terminal_error, trigger=reason)
-                await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
-                              parent_type="orchestrator", parent_id=orchestrator_id,
-                              payload={"kind": "planner", "mode": revision_mode, "status": "failed", "reason": str(exc)}, trigger=reason)
-                await observe("agent_end", entity_type="agent_execution", entity_id=planner_executor_id,
-                              parent_type="step", parent_id=planner_step_id,
-                              payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "status": "failed"}, trigger=reason)
-                await observe("step_end", entity_type="step", entity_id=planner_step_id,
-                              parent_type="planner_iteration", parent_id=iteration_entity_id,
-                              payload={"step_number": 1, "status": "failed", "outcome": "plan_patch_invalid"}, trigger=reason)
-                return str(exc)
-            invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
-            if invocation:
-                invocation.status, invocation.revision_after, invocation.finished_at = "completed", updated_revision, datetime.now(timezone.utc)
-            await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"status": "completed", "revision_before": current["revision"], "revision_after": updated_revision}, trigger=reason)
-            await observe("plan_patch_applied", entity_type="plan", entity_id=str(plan_id), parent_type="agent_execution", parent_id=planner_executor_id,
-                          payload={"mode": revision_mode, "revision_before": current["revision"], "revision_after": updated_revision,
-                                   "decision": patch.decision.value, "patch": patch.model_dump(mode="json")}, trigger=reason)
-            if patch.decision.value == "ask_user":
-                await observe("waiting_input", entity_type="interaction", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_entity_id,
-                              payload={"question": patch.question, "interaction_kind": "clarify"}, trigger=reason)
-            await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
-                          parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"kind": "planner", "mode": revision_mode, "status": "completed", "revision": updated_revision}, trigger=reason)
-            await observe("agent_end", entity_type="agent_execution", entity_id=planner_executor_id, parent_type="step", parent_id=planner_step_id, payload={"agent_execution_id": planner_executor_id, "agent_slug": "planner", "status": "completed"}, trigger=reason)
-            await observe("step_end", entity_type="step", entity_id=planner_step_id, parent_type="planner_iteration", parent_id=iteration_entity_id, payload={"step_number": 1, "status": "completed", "outcome": "success"}, trigger=reason)
-            return None
-        if force_replan:
-            replan_error = await revise(reason="user_input")
-            if replan_error:
-                closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
-                if closed is not None:
-                    yield closed
-                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
+                yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
+                    iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1, status="failed",
+                ))
+                await fail("initial_planning_failed", exc)
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="initial_planning_failed")
                 return
-            plan = await self.store.snapshot(plan_id)
-
-        if not plan["tasks"] and not force_replan:
-            invocation_id = uuid4()
-            checkpoint_id = make_checkpoint_id(str(root_run_id), "planner", str(invocation_id))
-            await observe("orchestrator_checkpoint_started", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
-                          parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"kind": "planner", "mode": "initial", "revision": plan["revision"]}, trigger="initial")
-            self.store.session.add(RuntimePlannerInvocation(
-                id=invocation_id, run_id=root_run_id, orchestrator_id=orchestrator_id,
-                plan_id=plan_id, trigger="initial", status="running", revision_before=plan["revision"], context_snapshot={"goal": goal},
-            ))
-            await self.store.session.flush()
-            await observe("planner_invocation_started", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id, payload={"trigger": "initial", "revision": plan["revision"]}, trigger="initial")
-            iteration_id = make_iteration_id(str(root_run_id), iteration_number)
-            active_iteration_id = iteration_id
-            active_iteration_type = "decision"
-            active_step_number = 2
-            iteration_open = True
-            step_id = make_step_id(iteration_id, 1, "plan")
-            planner_executor_id = make_agent_execution_id(iteration_id, "planner", 1)
-            yield OrchestratorEvent(type="planner_iteration_start", entity_id=iteration_id,
-                                    planner_iteration_id=iteration_id, parent_entity_type="orchestrator",
-                                    parent_entity_id=orchestrator_id, iteration=iteration_number,
-                                    iteration_number=iteration_number, iteration_type="decision", mode="initial")
-            yield OrchestratorEvent(type="step_start", entity_id=step_id, entity_type="step",
-                                    parent_entity_type="planner_iteration", parent_entity_id=iteration_id,
-                                    step_number=1, kind="plan", title="Сформировать план", objective=goal)
-            yield OrchestratorEvent(type="agent_start", entity_id=planner_executor_id,
-                                    agent_execution_id=planner_executor_id, parent_entity_type="step",
-                                    parent_entity_id=step_id, agent_slug="planner", role="planner",
-                                    executor_type="planner", executor_name="Планер", task_title=goal)
-            yield OrchestratorEvent(type="rbac_snapshot", entity_type="agent_execution", entity_id=planner_executor_id,
-                                    parent_entity_type="step", parent_entity_id=step_id,
-                                    rbac=planner_rbac_audit)
-            try:
-                patch = await self.planner.plan(request=PlanRequest(
-                    goal=goal, available_agents=available_agents, plan=plan,
-                    completed_outputs=self._completed_outputs(plan),
-                    memory_context=list(planner_kwargs.get("planner_memory_context") or []),
-                    available_artifacts=self._available_artifacts(plan, available_artifacts),
-                    trigger="initial", run_id=root_run_id, plan_id=plan_id,
-                    trace_parent_id=iteration_id,
-                ), **{**llm_kwargs, "agent_execution_id": UUID(planner_executor_id), "event_sink": self.event_sink})
-                await observe("planner_decision", entity_type="planner_iteration", entity_id=iteration_id,
-                              parent_type="orchestrator", parent_id=orchestrator_id,
-                              payload={"mode": "initial", "decision": patch.decision.value,
-                                       "revision_before": plan["revision"], "task_count": len(patch.tasks),
-                                       "remove_task_count": len(patch.remove_task_ids)}, trigger="initial")
-                if self.budget_service is not None:
-                    decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="plan_revisions", limit=limits.get("plan_revisions"), reason="initial_plan")
-                    if not decision.allowed:
-                        raise RuntimeError("plan revision budget exceeded")
-                updated = await self.store.apply_patch(plan_id, patch, reason="initial_plan", planner_invocation_id=str(invocation_id))
-            except Exception as exc:
-                failure = {"code": type(exc).__name__, "message": str(exc), "trigger": "initial"}
-                invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
-                if invocation is not None:
-                    invocation.status = "failed"
-                    invocation.error = str(exc)
-                    invocation.finished_at = datetime.now(timezone.utc)
-                await self.store.mark_failed(plan_id, failure)
-                await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
-                              payload={"status": "failed", "revision_before": plan["revision"], "error_code": type(exc).__name__}, trigger="initial")
-                terminal_error = {"error": str(exc), "error_code": "plan_patch_invalid", "recoverable": False}
-                if getattr(exc, "llm_call_id", None):
-                    terminal_error["llm_call_id"] = str(exc.llm_call_id)
-                await observe("error", entity_type="error", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_id,
-                              payload=terminal_error, trigger="initial")
-                await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
-                              parent_type="orchestrator", parent_id=orchestrator_id,
-                              payload={"kind": "planner", "mode": "initial", "status": "failed", "reason": str(exc)}, trigger="initial")
-                yield OrchestratorEvent(type="agent_end", entity_id=planner_executor_id,
-                                        agent_execution_id=planner_executor_id, parent_entity_type="step",
-                                        parent_entity_id=step_id, agent_slug="planner", role="planner", status="failed")
-                yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                        parent_entity_type="planner_iteration", parent_entity_id=iteration_id,
-                                        step_number=1, status="failed", outcome="plan_patch_invalid")
-                closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
-                if closed is not None:
-                    yield closed
-                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=str(exc))
+        # ``max_steps`` is the iteration budget. Task count is deliberately
+        # independent: a large valid iteration must not be mistaken for a loop.
+        for _ in range(max(80, max_steps * 100)):
+            before_decision = await self.store.snapshot(plan_id)
+            decision = await self.store.next_decision(plan_id)
+            after_decision = await self.store.snapshot(plan_id)
+            for changed_task_id, changed_task in dict(after_decision.get("tasks") or {}).items():
+                previous = dict(before_decision.get("tasks") or {}).get(changed_task_id, {})
+                if previous.get("status") != "blocked" and changed_task.get("status") == "blocked":
+                    yield OrchestratorEvent(type="task_blocked", plan_id=str(plan_id), task_id=changed_task_id)
+            if decision.kind == SchedulerActionKind.TERMINAL:
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status=decision.reason)
                 return
-            invocation = await self.store.session.get(RuntimePlannerInvocation, invocation_id, with_for_update=True)
-            if invocation is not None:
-                invocation.status = "completed"
-                invocation.revision_after = updated.revision
-                invocation.finished_at = datetime.now(timezone.utc)
-            await observe("planner_invocation_finished", entity_type="planner_invocation", entity_id=str(invocation_id), parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"status": "completed", "revision_before": plan["revision"], "revision_after": updated.revision}, trigger="initial")
-            await observe("plan_created", entity_type="plan", entity_id=str(plan_id), parent_type="agent_execution", parent_id=planner_executor_id,
-                          payload={"revision_before": plan["revision"], "revision_after": updated.revision,
-                                   "mode": "initial", "decision": patch.decision.value, "patch": patch.model_dump(mode="json")}, trigger="initial")
-            if patch.decision.value == "ask_user":
-                await observe("waiting_input", entity_type="interaction", entity_id=str(uuid4()), parent_type="planner_iteration", parent_id=iteration_id,
-                              payload={"question": patch.question, "interaction_kind": "clarify"}, trigger="initial")
-            await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
-                          parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"kind": "planner", "mode": "initial", "status": "completed", "revision": updated.revision}, trigger="initial")
-            yield OrchestratorEvent(type="agent_end", entity_id=planner_executor_id,
-                                    agent_execution_id=planner_executor_id, parent_entity_type="step",
-                                    parent_entity_id=step_id, agent_slug="planner", role="planner", status="completed")
-            yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                    parent_entity_type="planner_iteration", parent_entity_id=iteration_id,
-                                    step_number=1, status="completed", outcome="success", summary="План сформирован")
-            yield OrchestratorEvent(type="plan_created", entity_type="plan", entity_id=str(plan_id),
-                                    parent_entity_type="agent_execution", parent_entity_id=planner_executor_id,
-                                    plan_id=str(plan_id), revision_before=plan["revision"], revision_after=updated.revision, mode="initial",
-                                    patch=patch.model_dump(mode="json"))
-        elif not force_replan:
-            # A resumed persisted plan has no new planner call in this run,
-            # but its task steps still need one explicit execution iteration.
-            active_iteration_id = make_iteration_id(str(root_run_id), iteration_number)
-            active_iteration_type = "execution"
-            active_step_number = 1
-            iteration_open = True
-            yield OrchestratorEvent(type="planner_iteration_start", entity_id=active_iteration_id,
-                                    planner_iteration_id=active_iteration_id, parent_entity_type="orchestrator",
-                                    parent_entity_id=orchestrator_id, iteration=iteration_number,
-                                    iteration_number=iteration_number, iteration_type="execution", mode="resume")
-        for _ in range(max_steps):
-            plan = await self.store.snapshot(plan_id)
-            if plan["status"] in {"completed", "waiting_input", "failed", "cancelled"}:
-                closed = close_active_iteration(status=plan["status"])
-                if closed is not None:
-                    yield closed
-                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status=plan["status"])
+            if decision.kind == SchedulerActionKind.WAIT_INPUT:
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
                 return
-            task = await self.store.claim_ready(plan_id)
-            if task is None:
-                pending_needs = [
-                    {
-                        "task_id": task_id,
-                        **need,
-                    }
-                    for task_id, task_data in plan.get("tasks", {}).items()
-                    for need in task_data.get("needs", [])
-                    if need.get("required", True)
-                    and need.get("status") != "resolved"
-                ]
-                if pending_needs:
-                    closed = close_active_iteration(status="needs_dependency", outcome="needs_dependency")
-                    if closed is not None:
-                        yield closed
-                    replan_error = await revise(reason="pending_need")
-                    if replan_error:
-                        closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
-                        if closed is not None:
-                            yield closed
-                        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
-                        return
-                    revised_plan = await self.store.snapshot(plan_id)
-                    if revised_plan["status"] == "active" and not self._has_declared_resolvers(
-                        revised_plan, pending_needs
-                    ):
-                        failure = {
-                            "code": "unresolvable_dependency",
-                            "message": "planner did not declare a producer or request user input for pending needs",
-                            "needs": [
-                                {"task_id": need["task_id"], "key": need["key"]}
-                                for need in pending_needs
-                            ],
-                        }
-                        await self.store.mark_failed(plan_id, failure)
-                        await observe(
-                            "error",
-                            entity_type="error",
-                            entity_id=str(uuid4()),
-                            parent_type="planner_iteration",
-                            parent_id=active_iteration_id,
-                            payload={
-                                "error": failure["message"],
-                                "error_code": failure["code"],
-                                "recoverable": False,
-                            },
-                            trigger="pending_need",
-                        )
-                        closed = close_active_iteration(
-                            status="failed", outcome="unresolvable_dependency"
-                        )
-                        if closed is not None:
-                            yield closed
-                        yield OrchestratorEvent(
-                            type="plan_terminal",
-                            plan_id=str(plan_id),
-                            status="failed",
-                            error=failure["message"],
-                        )
-                        return
+            if decision.kind == SchedulerActionKind.WAIT_RETRY:
+                if decision.retry_at:
+                    retry_at = datetime.fromisoformat(decision.retry_at)
+                    delay = max(0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+                    if delay:
+                        await asyncio.sleep(min(delay, 30))
                     continue
-                closed = close_active_iteration(status="stalled")
-                if closed is not None:
-                    yield closed
-                yield OrchestratorEvent(type="plan_stalled", plan_id=str(plan_id))
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_checkpoint")
                 return
-            if active_iteration_id is None:
-                raise RuntimeError("task execution requires an active planner iteration")
-            task_id = task.task_id
-            if (getattr(task, "kind", None) or PlanNodeKind.AGENT.value) == PlanNodeKind.PLANNER.value:
-                await observe(
-                    "task_started",
-                    entity_type="task",
-                    entity_id=task_id,
-                    parent_type="plan",
-                    parent_id=str(plan_id),
-                    payload={"task_id": task_id, "kind": PlanNodeKind.PLANNER.value, "intent": task.intent},
-                    trigger="planner_checkpoint",
-                )
-                yield OrchestratorEvent(
-                    type="task_started",
-                    entity_type="task",
-                    entity_id=task_id,
-                    parent_entity_type="plan",
-                    parent_entity_id=str(plan_id),
-                    plan_id=str(plan_id),
-                    task_id=task_id,
-                    intent=task.intent,
-                    kind=PlanNodeKind.PLANNER.value,
-                )
-                closed = close_active_iteration(status="completed", outcome="planner_checkpoint")
-                if closed is not None:
-                    yield closed
-                replan_error = await revise(reason="planner_checkpoint", checkpoint_task=task)
-                if replan_error:
-                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
+            if decision.kind == SchedulerActionKind.INVOKE_PLANNER:
+                current_snapshot = await self.store.snapshot(plan_id)
+                iteration_count = len(current_snapshot.get("iterations", []))
+                if iteration_count >= max_steps:
+                    await fail("iteration_limit_exceeded", "Planner iteration limit exceeded")
+                    yield OrchestratorEvent(
+                        type="plan_terminal", plan_id=str(plan_id), status="failed",
+                        error_code="iteration_limit_exceeded",
+                    )
                     return
-                await observe(
-                    "task_completed",
-                    entity_type="task",
-                    entity_id=task_id,
-                    parent_type="plan",
-                    parent_id=str(plan_id),
-                    payload={"task_id": task_id, "kind": PlanNodeKind.PLANNER.value, "summary": "Planner checkpoint completed"},
-                    trigger="planner_checkpoint",
-                )
-                yield OrchestratorEvent(
-                    type="task_completed",
-                    entity_type="task",
-                    entity_id=task_id,
-                    parent_entity_type="plan",
-                    parent_entity_id=str(plan_id),
-                    plan_id=str(plan_id),
-                    task_id=task_id,
-                    outcome=TaskOutcome.COMPLETED.value,
-                    kind=PlanNodeKind.PLANNER.value,
-                )
-                continue
-            if getattr(task, "kind", None) == PlanNodeKind.SYNTHESIS.value:
-                if self.synthesizer is None:
-                    await self.store.mark_failed(plan_id, {
-                        "code": "synthesis_executor_missing",
-                        "message": "terminal synthesis executor is not configured",
-                    })
-                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed")
-                    return
-                task_id = task.task_id
-                checkpoint_id = make_checkpoint_id(str(root_run_id), "task", f"{task_id}:{task.attempts}")
-                step_id = make_step_id(active_iteration_id, active_step_number, task_id)
-                yield OrchestratorEvent(
-                    type="task_started", entity_type="task", entity_id=task_id,
-                    parent_entity_type="plan", parent_entity_id=str(plan_id),
-                    plan_id=str(plan_id), task_id=task_id, attempt=task.attempts,
-                )
-                yield OrchestratorEvent(
-                    type="step_start", entity_id=step_id, entity_type="step",
-                    parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
-                    step_number=active_step_number, kind="synthesis", title=task.intent,
-                    objective=task.instructions,
-                )
-                snapshot = await self.store.snapshot(plan_id)
-                runtime_state = planner_kwargs.get("runtime_state")
-                if runtime_state is None:
-                    raise RuntimeError("synthesis checkpoint requires runtime state")
-                runtime_cfg = dict((planner_kwargs.get("platform_config") or {}).get("runtime") or {})
+                await self.store.claim_checkpoint(plan_id, decision.kind)
+                next_iteration_number = len(current_snapshot.get("iterations", [])) + 1
+                planner_parent = str(planner_kwargs.get("planner_budget_entity_id") or current_snapshot["root_run_id"])
+                trace_iteration_id = planner_iteration_id(str(current_snapshot["root_run_id"]), next_iteration_number)
+                yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_start(
+                    iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=next_iteration_number,
+                ))
                 try:
-                    synthesis_context = SynthesisContextBuilder(
-                        max_chars=int(runtime_cfg.get("synthesis_context_max_chars") or 120_000)
-                    ).build(plan=snapshot, synthesis_task_id=task_id)
-                except (TypeError, ValueError, SynthesisContextError) as exc:
-                    runtime_state.final_error = "synthesis_context_invalid"
-                    await self.store.mark_failed(plan_id, {
-                        "code": "synthesis_context_invalid",
-                        "message": str(exc),
-                    })
-                    yield OrchestratorEvent(
-                        type="_runtime_event",
-                        runtime_event=RuntimeEvent.error(
-                            "Не удалось подготовить контекст итогового ответа.",
-                            recoverable=False,
-                            error_code="synthesis_context_invalid",
-                            user_message="Не удалось подготовить контекст итогового ответа.",
-                            operator_message=str(exc),
-                            source="runtime",
-                        ),
-                        phase=OrchestrationPhase.SYNTHESIS.value,
-                    )
-                    yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                            parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
-                                            step_number=active_step_number, status="failed", outcome="synthesis_context_invalid")
-                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed")
-                    return
-                synthesis_failed = False
-                async for synthesis_event in self.synthesizer.stream(
-                    runtime_state=runtime_state,
-                    run_id=root_run_id,
-                    synthesis_context=synthesis_context,
-                    model=planner_kwargs.get("model"),
-                    platform_config=planner_kwargs.get("platform_config"),
-                    sandbox_overrides=planner_kwargs.get("sandbox_overrides"),
-                    budget_registry=planner_kwargs.get("budget_registry"),
-                    budget_resolver=planner_kwargs.get("budget_resolver"),
-                    logging_level=self.logging_level,
-                ):
-                    synthesis_failed = synthesis_failed or synthesis_event.type == RuntimeEventType.ERROR
-                    yield OrchestratorEvent(
-                        type="_runtime_event", runtime_event=synthesis_event,
-                        phase=OrchestrationPhase.SYNTHESIS.value,
-                    )
-                if synthesis_failed or not str(runtime_state.final_answer or "").strip():
-                    await self.store.mark_failed(plan_id, {
-                        "code": "synthesis_failed",
-                        "message": str(runtime_state.final_error or "synthesis did not produce a final answer"),
-                    })
-                    yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                            parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
-                                            step_number=active_step_number, status="failed", outcome="synthesis_failed")
-                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed")
-                    return
-                synthesis_result = AgentTaskResult(
-                    outcome=TaskOutcome.COMPLETED,
-                    description="Final answer delivered by synthesis checkpoint",
-                )
-                await self.store.apply_result(plan_id, task_id, synthesis_result)
-                yield OrchestratorEvent(type="task_completed", entity_type="task", entity_id=task_id,
-                                        parent_entity_type="plan", parent_entity_id=str(plan_id),
-                                        plan_id=str(plan_id), task_id=task_id, outcome=TaskOutcome.COMPLETED.value)
-                yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                        parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
-                                        step_number=active_step_number, status="completed", outcome="completed")
-                active_step_number += 1
-                continue
-            snapshot = await self.store.snapshot(plan_id)
-            dependencies = {}
-            for dep in snapshot["tasks"].get(task_id, {}).get("depends_on", []):
-                result_data = snapshot["tasks"].get(dep, {}).get("result", {})
-                if not isinstance(result_data, dict):
+                    proposal = await self._invoke_planner(plan_id=plan_id, goal=goal, trigger=decision.reason or "planner_checkpoint",
+                                                          available_agents=available_agents, available_artifacts=artifacts, planner_kwargs=planner_kwargs)
+                    yield OrchestratorEvent(type="planner_checkpoint_completed", plan_id=str(plan_id), iteration_id=decision.iteration_id,
+                                            trigger=decision.reason, terminal=proposal.terminal.value,
+                                            applied_iteration_id=(await self.store.snapshot(plan_id))["iterations"][-1]["id"], proposal=proposal.model_dump(mode="json"))
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
+                        iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=next_iteration_number, status="completed",
+                    ))
                     continue
-                verified = dict(result_data.get("verified") or {})
-                dependencies[dep] = {
-                    "outcome": result_data.get("outcome"),
-                    "status": snapshot["tasks"].get(dep, {}).get("status"),
-                    "description": result_data.get("summary", result_data.get("description", "")),
-                    "outputs": result_data.get("outputs", {}),
-                    "verified_receipts": list(verified.get("receipts") or []),
-                    "verified_evidence": dict(verified.get("evidence") or {}),
-                    "artifacts": list(verified.get("artifacts") or []),
-                }
-            request = TaskRequest(task_id=task_id, intent=task.intent, instructions=task.instructions,
-                                  executor=task.executor, inputs={
-                                      **(task.inputs or {}),
-                                      "resolved_needs": [
-                                          {
-                                              "ref": need.get("ref") or need.get("key"),
-                                              "key": need.get("key"),
-                                              "value": need.get("resolved_value"),
-                                              "resolver_task_id": need.get("resolver_task_id"),
-                                          }
-                                          for need in snapshot["tasks"].get(task_id, {}).get("needs", [])
-                                          if need.get("status") == "resolved"
-                                      ],
-                                  },
-                                  needs=snapshot["tasks"].get(task_id, {}).get("needs", []),
-                                  checkpoint=task.checkpoint or {}, dependency_outputs=dependencies,
-                                  memory_context=(
-                                      planner_kwargs["durable_memory_snapshot"].agent_context(
-                                          query=f"{task.intent} {task.instructions}"
-                                      )
-                                      if planner_kwargs.get("durable_memory_snapshot") is not None
-                                      else []
-                                  ), expected_outputs=list(task.expected_outputs or []),
-                                  freshness_policy=snapshot["tasks"].get(task_id, {}).get("freshness_policy", "allow_memory"))
-            checkpoint_id = make_checkpoint_id(str(root_run_id), "task", f"{task_id}:{task.attempts}")
-            executor_id = make_agent_execution_id(active_iteration_id, task_id, task.attempts)
-            await observe("orchestrator_checkpoint_started", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
-                          parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"kind": "task", "task_id": task_id, "attempt": task.attempts, "executor": task.executor})
-            await observe("task_started", entity_type="task", entity_id=task_id, parent_type="plan", parent_id=str(plan_id), payload={"attempt": task.attempts, "checkpoint_id": checkpoint_id})
-            attempt_entity_id = make_attempt_id(task_id, task.attempts)
-            await observe("attempt_started", entity_type="attempt", entity_id=attempt_entity_id, parent_type="task", parent_id=task_id, payload={"attempt": task.attempts, "attempt_number": task.attempts})
-            if self.budget_service is not None:
-                decision = await self.budget_service.consume(run_id=root_run_id, owner_type="run", owner_id=str(root_run_id), metric="task_attempts", limit=limits.get("task_attempts"), reason="task_started")
-                if not decision.allowed:
-                    raise RuntimeError("task attempt budget exceeded")
-            yield OrchestratorEvent(type="task_started", entity_type="task", entity_id=task_id,
-                                    parent_entity_type="plan", parent_entity_id=str(plan_id),
-                                    plan_id=str(plan_id), task_id=task_id, attempt=task.attempts)
-            step_number = active_step_number
-            step_id = make_step_id(active_iteration_id, step_number, task_id)
-            yield OrchestratorEvent(type="step_start", entity_id=step_id, entity_type="step",
-                                    parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
-                                    step_number=step_number, kind="call_agent", title=task.intent, objective=task.instructions,
-                                    intent=task.intent, inputs=task.inputs or {})
-            yield OrchestratorEvent(type="agent_start", entity_id=executor_id, agent_execution_id=executor_id,
-                                    parent_entity_type="step", parent_entity_id=step_id,
-                                    agent_slug=task.executor, task_id=task_id, attempt=task.attempts,
-                                    task_title=task.intent, task_objective=task.instructions,
-                                    executor_type="agent", executor_name=task.executor,
-                                    task_inputs=task.inputs or {}, expected_outputs=[
-                                        item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-                                        for item in (task.expected_outputs or [])
-                                    ])
-            try:
-                task_executor_kwargs = dict(planner_kwargs)
-                task_executor_kwargs["runtime_run_id"] = str(root_run_id)
-                task_executor_kwargs["lifecycle_agent_execution_id"] = executor_id
-                task_executor_kwargs["runtime_log_parent"] = {"entity_type": "step", "entity_id": step_id}
-                task_executor_kwargs["iteration_id"] = active_iteration_id
-                execute_attempt = getattr(self.executor, "execute_attempt", None)
-                execution_or_result = await (
-                    execute_attempt(request=request, **task_executor_kwargs)
-                    if callable(execute_attempt)
-                    else self.executor.execute_task(request=request, **task_executor_kwargs)
-                )
-                if isinstance(execution_or_result, AgentExecutionResult):
-                    execution = execution_or_result
-                    result = self.task_result_reducer.reduce(request=request, execution=execution)
-                    bind_attempt = getattr(self.store, "record_execution_result", None)
-                    if callable(bind_attempt):
-                        await bind_attempt(
-                            plan_id,
-                            task_id,
-                            execution=execution,
-                            agent_execution_id=executor_id,
-                        )
-                else:
-                    # Legacy test executors already return a task-level result.
-                    result = execution_or_result
-            except Exception as exc:
-                if isinstance(exc, TaskConfirmationRequired):
-                    confirmation = dict(exc.payload or {})
-                    confirmation["task_id"] = task_id
-                    await self.store.pause_task_for_confirmation(
-                        plan_id,
-                        task_id,
-                        confirmation=confirmation,
+                except Exception as exc:
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
+                        iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=next_iteration_number, status="failed",
+                    ))
+                    await fail("planner_checkpoint_failed", exc)
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="planner_checkpoint_failed")
+                    return
+            if decision.kind == SchedulerActionKind.INVOKE_SYNTHESIS:
+                if self.synthesizer is None:
+                    await fail("synthesizer_missing", "terminal synthesis executor is not configured")
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesizer_missing")
+                    return
+                iteration = await self.store.claim_checkpoint(plan_id, decision.kind)
+                try:
+                    context_limit = int(planner_kwargs.get("synthesis_context_max_chars") or 120_000)
+                    runtime_state = planner_kwargs.get("runtime_state")
+                    context = SynthesisContextBuilder(max_chars=context_limit).build(
+                        plan=await self.store.snapshot(plan_id),
+                        iteration_id=str(iteration.id if hasattr(iteration, "id") else iteration["id"]),
+                        deleted_artifact_ids=list(getattr(runtime_state, "deleted_artifact_ids", []) or []),
                     )
-                    await observe(
-                        "task_paused",
-                        entity_type="task",
-                        entity_id=task_id,
-                        parent_type="plan",
-                        parent_id=str(plan_id),
-                        payload={"reason": "waiting_confirmation"},
-                        trigger="waiting_confirmation",
+                except (TypeError, ValueError, SynthesisContextError) as exc:
+                    await fail("synthesis_context_invalid", exc)
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesis_context_invalid")
+                    return
+                snapshot = await self.store.snapshot(plan_id)
+                try:
+                    async for event in self.synthesizer.stream(runtime_state=runtime_state, run_id=UUID(str(snapshot["root_run_id"])), synthesis_context=context,
+                                                               model=planner_kwargs.get("model"), platform_config=planner_kwargs.get("platform_config"),
+                                                               sandbox_overrides=planner_kwargs.get("sandbox_overrides"), logging_level=self.logging_level,
+                                                               budget_registry=planner_kwargs.get("budget_registry"), budget_resolver=planner_kwargs.get("budget_resolver")):
+                        yield OrchestratorEvent(type="_runtime_event", runtime_event=event)
+                except Exception as exc:
+                    await fail("synthesis_failed", exc)
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesis_failed")
+                    return
+                if not getattr(runtime_state, "final_answer", None):
+                    await fail("synthesis_failed", "synthesis did not produce a final answer")
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesis_failed")
+                    return
+                await self.store.complete_synthesis(plan_id)
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="completed")
+                return
+            if decision.kind == SchedulerActionKind.EXECUTE_TASK:
+                if max_task_executions is not None:
+                    current = await self.store.snapshot(plan_id)
+                    attempts_used = sum(
+                        int(task.get("attempts") or 0)
+                        for task in dict(current.get("tasks") or {}).values()
                     )
-                    yield OrchestratorEvent(
-                        type="confirmation_required",
-                        entity_type="interaction",
-                        entity_id=str(uuid4()),
+                    if attempts_used >= max_task_executions:
+                        await fail("task_execution_limit_exceeded", "Task execution limit exceeded")
+                        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="task_execution_limit_exceeded")
+                        return
+                task = await self.store.claim_task(plan_id, decision.task_id)
+                task_id = task.task_id if hasattr(task, "task_id") else task["task_id"]
+                attempt = task.attempts if hasattr(task, "attempts") else task["attempts"]
+                iteration_id = str(task.iteration_id if hasattr(task, "iteration_id") else task["iteration_id"])
+                planned_order = int(task.planned_order if hasattr(task, "planned_order") else task.get("planned_order", 0))
+                execution_id = agent_execution_id(iteration_id, task_id, attempt)
+                current_step_id = step_id(iteration_id, planned_order + 1, f"{task_id}:{attempt}")
+                await self.store.link_attempt_execution(plan_id, task_id, UUID(execution_id))
+                yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_start(
+                    step_id=current_step_id, iteration_id=iteration_id, kind="agent_task",
+                    title=(task.intent if hasattr(task, "intent") else task.get("intent")),
+                    objective=(task.instructions if hasattr(task, "instructions") else task.get("instructions")),
+                ))
+                yield OrchestratorEvent(type="task_started", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                yield OrchestratorEvent(type="task_attempt_started", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                task_executor = task.executor if hasattr(task, "executor") else task.get("executor")
+                task_intent = task.intent if hasattr(task, "intent") else task.get("intent")
+                yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_start(
+                    agent_execution_id=execution_id,
+                    parent_entity_type="step",
+                    parent_entity_id=current_step_id,
+                    agent_slug=str(task_executor or "agent"),
+                    task_title=str(task_intent or task_id),
+                    task_id=task_id,
+                    attempt=attempt,
+                ))
+                try:
+                    request = TaskRequest.model_validate(await self.store.task_request(plan_id, task_id))
+                    request = request.model_copy(update={"memory_context": list(planner_kwargs.get("planner_memory_context") or [])})
+                    execution = await self.executor.execute_attempt(
+                        request=request,
+                        lifecycle_agent_execution_id=execution_id,
+                        runtime_log_parent={"entity_type": "step", "entity_id": current_step_id},
+                        **planner_kwargs,
+                    )
+                    if not isinstance(execution, AgentExecutionResult):
+                        raise TypeError("executor must return AgentExecutionResult")
+                    result = self.reducer.reduce(request=request, execution=execution)
+                    await self.store.finish_attempt(plan_id, task_id, execution=execution, result=result)
+                    runtime_state = planner_kwargs.get("runtime_state")
+                    if runtime_state is not None and hasattr(runtime_state, "add_task_result"):
+                        runtime_state.add_task_result({"task_id": task_id, **result.model_dump(mode="json")})
+                    yield OrchestratorEvent(type="task_attempt_succeeded", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                    yield OrchestratorEvent(type="task_completed", plan_id=str(plan_id), task_id=task_id, outcome=result.outcome.value)
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
+                        agent_execution_id=execution_id,
                         parent_entity_type="step",
-                        parent_entity_id=step_id,
-                        **confirmation,
-                    )
-                    yield OrchestratorEvent(type="agent_end", entity_id=executor_id,
-                                            agent_execution_id=executor_id, parent_entity_type="step", parent_entity_id=step_id,
-                                            agent_slug=task.executor, task_id=task_id, status="waiting_confirmation")
-                    yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                            parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
-                                            step_number=step_number, status="waiting_confirmation", outcome="waiting_confirmation")
-                    closed = close_active_iteration(status="waiting_confirmation", outcome="waiting_confirmation")
-                    if closed is not None:
-                        yield closed
+                        parent_entity_id=current_step_id,
+                        agent_slug=str(task_executor or "agent"),
+                        status="completed",
+                        outcome=result.outcome.value,
+                        task_id=task_id,
+                        attempt=attempt,
+                    ))
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(
+                        step_id=current_step_id, iteration_id=iteration_id, status="completed",
+                        outcome=result.outcome.value, summary=result.description,
+                    ))
+                except TaskConfirmationRequired as exc:
+                    await self.store.pause_confirmation(plan_id, task_id, exc.payload)
+                    yield OrchestratorEvent(type="task_paused", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
+                        agent_execution_id=execution_id,
+                        parent_entity_type="step",
+                        parent_entity_id=current_step_id,
+                        agent_slug=str(task_executor or "agent"),
+                        status="paused",
+                        outcome="confirmation_required",
+                        task_id=task_id,
+                        attempt=attempt,
+                    ))
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(
+                        step_id=current_step_id, iteration_id=iteration_id, status="paused",
+                        outcome="confirmation_required", summary="Task requires confirmation",
+                    ))
+                    yield OrchestratorEvent(type="confirmation_required", plan_id=str(plan_id), task_id=task_id, **exc.payload)
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
                     return
-                if isinstance(exc, TaskExecutionError):
-                    failure = TaskAttemptFailure(
-                        code=exc.code,
-                        message=str(exc) or "task execution failed",
-                        retryable=exc.retryable,
-                        details=exc.details,
-                    )
-                else:
-                    failure = TaskAttemptFailure(
-                        code=type(exc).__name__,
-                        message=str(exc) or "task execution failed",
-                        retryable=True,
-                    )
-                retry_after_ms = failure.details.get("retry_after_ms")
-                retry_delay = self.retry_delay_seconds
-                if isinstance(retry_after_ms, int) and retry_after_ms > 0:
-                    retry_delay = max(1, min(30, (retry_after_ms + 999) // 1000))
-                await self.store.record_failure(plan_id, task_id, failure,
-                    retry_at=datetime.now(timezone.utc) + timedelta(seconds=retry_delay),
-                    max_attempts=self.max_attempts)
-                await observe("attempt_failed", entity_type="attempt", entity_id=attempt_entity_id, parent_type="task", parent_id=task_id, payload={"error": failure.model_dump(mode="json")}, trigger="technical_failure")
-                await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
-                              parent_type="orchestrator", parent_id=orchestrator_id,
-                              payload={"kind": "task", "task_id": task_id, "attempt": task.attempts, "status": "failed_technical", "error": failure.model_dump(mode="json")}, trigger="technical_failure")
-                yield OrchestratorEvent(type="agent_end", entity_id=executor_id, agent_execution_id=executor_id,
-                                        parent_entity_type="step", parent_entity_id=step_id,
-                                        agent_slug=task.executor, task_id=task_id, status="failed",
-                                        task_title=task.intent, task_objective=task.instructions)
-                yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                        parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
-                                        step_number=step_number, status="failed", outcome="technical_failure", summary=failure.message)
-                yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id,
-                                        error=failure.model_dump(mode="json"))
-                active_step_number += 1
-                if not failure.retryable or task.attempts >= self.max_attempts:
-                    closed = close_active_iteration(status="failed", outcome="technical_failure")
-                    if closed is not None:
-                        yield closed
-                    replan_error = await revise(reason="technical_failure", last_failure=failure.model_dump(mode="json"))
-                    if replan_error:
-                        closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
-                        if closed is not None:
-                            yield closed
-                        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
-                        return
+                except TaskExecutionError as exc:
+                    failure = TaskAttemptFailure(code=exc.code, message=str(exc), retryable=exc.retryable, details=exc.details)
+                    retry_after_ms = exc.details.get("retry_after_ms") if isinstance(exc.details, dict) else None
+                    retry_delay = max(0, int(retry_after_ms) / 1000) if isinstance(retry_after_ms, int) else self.retry_delay_seconds
+                    failed_task = await self.store.finish_failure(plan_id, task_id, failure, max_attempts=self.max_attempts, retry_at=datetime.now(timezone.utc) + timedelta(seconds=retry_delay))
+                    yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id, attempt=(failed_task.attempts if hasattr(failed_task, "attempts") else failed_task.get("attempts")), error=failure.model_dump(mode="json"))
+                    failed_status = failed_task.status if hasattr(failed_task, "status") else failed_task.get("status")
+                    yield OrchestratorEvent(type=("task_retry_scheduled" if failed_status == "waiting_retry" else "task_failed"), plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
+                        agent_execution_id=execution_id,
+                        parent_entity_type="step",
+                        parent_entity_id=current_step_id,
+                        agent_slug=str(task_executor or "agent"),
+                        status="failed",
+                        outcome="retry_scheduled" if failed_status == "waiting_retry" else "failed",
+                        task_id=task_id,
+                        attempt=attempt,
+                    ))
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(step_id=current_step_id, iteration_id=iteration_id, status=failed_status, outcome="failed", summary="Task execution failed"))
+                except Exception as exc:
+                    failure = TaskAttemptFailure(code=type(exc).__name__, message=str(exc) or "task execution failed", retryable=False)
+                    failed_task = await self.store.finish_failure(plan_id, task_id, failure, max_attempts=self.max_attempts)
+                    yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id, attempt=(failed_task.attempts if hasattr(failed_task, "attempts") else failed_task.get("attempts")), error=failure.model_dump(mode="json"))
+                    yield OrchestratorEvent(type="task_failed", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
+                        agent_execution_id=execution_id,
+                        parent_entity_type="step",
+                        parent_entity_id=current_step_id,
+                        agent_slug=str(task_executor or "agent"),
+                        status="failed",
+                        outcome="failed",
+                        task_id=task_id,
+                        attempt=attempt,
+                    ))
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(step_id=current_step_id, iteration_id=iteration_id, status="failed", outcome="failed", summary="Task execution failed"))
                 continue
-            await self.store.apply_result(plan_id, task_id, result)
-            runtime_state = planner_kwargs.get("runtime_state")
-            if runtime_state is not None and hasattr(runtime_state, "add_task_result"):
-                runtime_state.add_task_result({
-                    "task_id": task_id,
-                    "outcome": result.outcome.value,
-                    "description": result.description,
-                    "outputs": result.model_dump(mode="json").get("outputs", {}),
-                    "verified": result.verified,
-                })
-            result_event = "task_completed" if result.outcome.value == "completed" else "status"
-            await observe(result_event, entity_type="task", entity_id=task_id, parent_type="plan", parent_id=str(plan_id), payload={"outcome": result.outcome.value, "summary": result.summary, "outputs": result.model_dump(mode="json").get("outputs", {})}, trigger=result.outcome.value)
-            await observe("attempt_succeeded", entity_type="attempt", entity_id=attempt_entity_id, parent_type="task", parent_id=task_id, payload={"outcome": result.outcome.value, "attempt_number": task.attempts})
-            await observe("orchestrator_checkpoint_finished", entity_type="orchestrator_checkpoint", entity_id=checkpoint_id,
-                          parent_type="orchestrator", parent_id=orchestrator_id,
-                          payload={"kind": "task", "task_id": task_id, "attempt": task.attempts, "status": result.outcome.value, "summary": result.summary}, trigger=result.outcome.value)
-            yield OrchestratorEvent(type="agent_end", entity_id=executor_id, agent_execution_id=executor_id,
-                                    parent_entity_type="step", parent_entity_id=step_id,
-                                    agent_slug=task.executor, task_id=task_id,
-                                    task_title=task.intent, task_objective=task.instructions,
-                                    summary=result.summary,
-                                    outcome=result.outcome.value,
-                                    status="completed" if result.outcome.value == "completed" else result.outcome.value)
-            yield OrchestratorEvent(type="step_end", entity_id=step_id, entity_type="step",
-                                    parent_entity_type="planner_iteration", parent_entity_id=active_iteration_id,
-                                    step_number=step_number, status="completed" if result.outcome.value == "completed" else result.outcome.value,
-                                    outcome=result.outcome.value, summary=result.summary,
-                                    sufficient_for_phase=result.outcome.value == "completed")
-            yield OrchestratorEvent(type=("task_completed" if result.outcome.value == "completed" else "task_unfulfillable"),
-                                    entity_type="task", entity_id=task_id,
-                                    parent_entity_type="plan", parent_entity_id=str(plan_id),
-                                    plan_id=str(plan_id), task_id=task_id, outcome=result.outcome.value)
-            active_step_number += 1
-            success_action = getattr(task, "on_success", TaskSuccessAction.CONTINUE.value)
-            if (
-                result.outcome == TaskOutcome.COMPLETED
-                and str(getattr(success_action, "value", success_action)) == TaskSuccessAction.REPLAN.value
-            ):
-                closed = close_active_iteration(status="completed", outcome="replan")
-                if closed is not None:
-                    yield closed
-                replan_error = await revise(reason="task_completed")
-                if replan_error:
-                    closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
-                    if closed is not None:
-                        yield closed
-                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
-                    return
-                continue
-            if result.outcome in {TaskOutcome.NEEDS_DEPENDENCY, TaskOutcome.UNFULFILLABLE}:
-                closed = close_active_iteration(status=result.outcome.value, outcome=result.outcome.value)
-                if closed is not None:
-                    yield closed
-                replan_error = await revise(reason=result.outcome.value)
-                if replan_error:
-                    closed = close_active_iteration(status="failed", outcome="plan_patch_invalid")
-                    if closed is not None:
-                        yield closed
-                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error=replan_error)
-                    return
-        closed = close_active_iteration(status="max_steps")
-        if closed is not None:
-            yield closed
-        yield OrchestratorEvent(type="max_steps", plan_id=str(plan_id))
-
-    @staticmethod
-    def _completed_outputs(plan: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            task_id: {
-                "outcome": task.get("result", {}).get("outcome"),
-                "summary": task.get("result", {}).get("summary", ""),
-                "outputs": task.get("result", {}).get("outputs", {}),
-                "verified": {
-                    key: value
-                    for key, value in dict(task.get("result", {}).get("verified", {})).items()
-                    if key in {"receipts", "evidence", "artifacts", "fresh_retrieval"}
-                },
-            }
-            for task_id, task in dict(plan.get("tasks") or {}).items()
-            if task.get("status") == "completed" and isinstance(task.get("result"), dict)
-        }
-
-    @staticmethod
-    def _available_artifacts(
-        plan: Dict[str, Any],
-        input_artifacts: Optional[list[dict[str, Any]]] = None,
-    ) -> list[dict[str, Any]]:
-        artifacts: list[dict[str, Any]] = []
-        for item in input_artifacts or []:
-            if not isinstance(item, dict):
-                continue
-            ref = item.get("ref") if isinstance(item.get("ref"), dict) else item
-            artifact_id = str(ref.get("artifact_id") or item.get("artifact_id") or "").strip()
-            if not artifact_id or str(ref.get("status") or item.get("status") or "active") == "deleted":
-                continue
-            artifacts.append({
-                "artifact_id": artifact_id,
-                "file_name": ref.get("file_name") or item.get("file_name") or "artifact",
-                "content_type": ref.get("content_type") or item.get("content_type"),
-                "size_bytes": ref.get("size_bytes") or item.get("size_bytes"),
-                "snippet": item.get("snippet") or "",
-                "snippet_status": item.get("snippet_status") or "missing",
-                "readable": bool(item.get("readable")),
-                "truncated": bool(item.get("truncated")),
-            })
-        for task in dict(plan.get("tasks") or {}).values():
-            verified = dict(task.get("result", {}).get("verified", {})) if isinstance(task.get("result"), dict) else {}
-            for item in verified.get("artifacts", []) or []:
-                if isinstance(item, dict) and item.get("artifact_id") and item.get("status") != "deleted":
-                    artifacts.append(dict(item))
-        seen: set[str] = set()
-        return [
-            item for item in artifacts
-            if isinstance(item, dict)
-            and (artifact_id := str(item.get("artifact_id") or "").strip())
-            and not (artifact_id in seen or seen.add(artifact_id))
-        ]
+        await fail("scheduler_action_limit_exceeded", "iteration did not reach a terminal decision")
+        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="scheduler_action_limit_exceeded")

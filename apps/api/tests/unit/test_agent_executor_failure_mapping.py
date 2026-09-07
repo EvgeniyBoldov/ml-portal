@@ -67,6 +67,10 @@ async def test_business_unfulfillable_is_a_normal_execution_result() -> None:
         ctx.extra["agent_execution_result"] = AgentExecutionResult(
             completion=AgentExecutionCompletion.UNFULFILLABLE,
             description="Agent request exceeds provider limits",
+            limitation={
+                "code": "provider_limits_exceeded",
+                "message": "Провайдер не может выполнить этот запрос из-за ограничений.",
+            },
         )
         yield RuntimeEvent.status("done")
 
@@ -100,6 +104,12 @@ def test_artifact_producing_operation_names_are_recognized_canonically() -> None
     assert not AgentExecutor._creates_downloadable_artifact("file.read")
 
 
+def test_artifact_deleting_operation_names_are_recognized_canonically() -> None:
+    assert AgentExecutor._deletes_artifact("file.delete")
+    assert AgentExecutor._deletes_artifact("instance.local-system-tools.file.delete")
+    assert not AgentExecutor._deletes_artifact("file.read")
+
+
 def test_artifact_only_response_detects_unencoded_file_names() -> None:
     assert AgentExecutor._is_url_only_response(
         "https://storage.cloud.local/artifacts/artifact-1/filled_Заявка на сетевую связность (6).xlsx"
@@ -117,7 +127,7 @@ def test_terminal_result_rejects_unknown_output_fields() -> None:
 def test_terminal_result_accepts_explicit_data_output() -> None:
     result = parse_agent_execution_result(
         '{"completion":"fulfilled","description":"ready","needs":[],'
-        '"outputs":{"result":{"data":{"status":"created"}}},"checkpoint":{}}'
+        '"outputs":{"result":{"data":{"status":"created"}}}}'
     )
 
     assert result.outputs["result"].data == {"status": "created"}
@@ -128,7 +138,7 @@ def test_runtime_terminal_contract_overrides_legacy_agent_output_format() -> Non
     prompt = AgentExecutor._with_terminal_contract_prompt("# Output Format\nReturn a URL", request)
 
     assert "This contract overrides any conflicting agent Output Format" in prompt
-    assert prompt.endswith("Expected output keys: none.")
+    assert prompt.endswith("Expected outputs (including required/schema): [].")
 
 
 @pytest.mark.asyncio

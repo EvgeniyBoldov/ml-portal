@@ -83,7 +83,9 @@ It exposes these immutable projections:
 
 - `MemorySnapshot`: user and tenant context for one runtime run;
 - `PlannerMemoryContext`: the planner-specific projection of that snapshot;
-- `AgentMemoryContext`: a task-filtered projection of that snapshot;
+- `AgentMemoryContext`: the bounded run-selected projection supplied to a
+  task; task instructions and tool retrieval further narrow its use, but the
+  runtime does not claim a second per-task selector;
 - `ProjectMemoryContext`: a bounded, query-relevant project projection when
   project candidates are available.
 
@@ -97,17 +99,18 @@ Planner and agents have different memory needs.
 | --- | --- | --- |
 | Planner | Selected user/tenant context | Glossary/project resolution and exact project memory through canonical system operations |
 | Agent | Task-filtered user/tenant context | Project memory, files and RAG through canonical tools |
-| Synthesizer | No durable memory by default; only bounded runtime-owned projections of final task results, verified artifacts and allowed evidence | None |
+| Synthesizer | No durable memory by default; bounded completed reports, verified artifacts, allowed evidence and task limitations | None |
 
 The planner receives structured `memory_context` in its planning payload, not
 a prose dump. It contains only bounded user role/responsibility/preferences
 and tenant terminology/conventions/default process rules selected for this
 request. It never receives all project rules.
 
-The agent adapter selects only entries relevant to task intent, instructions,
-dependency outputs and the current query. Its output is rendered into the
-agent prompt through the existing prompt assembler; unrelated profile data is
-not injected.
+The runtime passes the bounded context already selected for the current run to
+the agent prompt. Task intent, instructions and dependency outputs delimit how
+it is used; further project-specific information must be obtained through the
+canonical tools. The runtime does not promise a separate per-task semantic
+selector.
 
 ## Project-memory tools
 
@@ -140,37 +143,27 @@ existing callers during migration; new prompts and plans must use
 If one term resolves to multiple projects, `memory.lookup` returns
 `ambiguous_projects` and does not read any of them. If several distinct
 projects are identified in one request, it returns all of them as separate
-groups. An ambiguous or missing project result causes the planner to use its
-existing `ask_user` decision and resume after the user supplies the project.
+groups. An ambiguous or missing project result is recorded in the execution
+ledger; planner creates the required data-gathering work or reports the
+remaining limitation through terminal synthesis.
 
 ## Planner and task lifecycle
 
-`GraphPlanner` remains the only producer of `PlanPatch`, but its planning call
-may perform a bounded read-only contextual tool loop before emitting that
-patch. Tool requests/results are typed, budgeted, redacted and journalled
+`GraphPlanner` is the only producer of `IterationProposal`. Its planning call
+may perform a bounded read-only contextual tool loop before emitting the
+proposal. Tool requests/results are typed, budgeted, redacted and journalled
 through the existing runtime logger.
 
-Successful task completion is not equivalent to terminal run completion. An
-agent node may declare:
+An iteration contains agent tasks and one terminal property. `terminal=planner`
+returns the full structural execution ledger to the planner after its tasks are
+terminal. `terminal=synthesis` produces the answer only when every task in the
+iteration completed; any failed, blocked, unfulfillable or missing-dependency
+task deterministically returns control to planner instead.
 
-```text
-on_success = continue | replan
-```
-
-- `continue` runs already-declared dependent tasks; a plan naturally completes
-  when all its tasks are terminal;
-- `replan` sends the task's bounded outputs to the planner as
-  `completed_outputs`, which creates the next plan revision.
-
-For a multi-task discovery phase, planner creates a separate `kind=planner`
-checkpoint node with dependencies on the discovery tasks. When it becomes
-ready, the runtime returns the full persisted plan graph (task results and
-artifact references, never file bodies) to planner and applies the next graph
-revision before completing the checkpoint.
-
-The planner needs an explicit `complete` decision for a replan whose context
-task already made the answer sufficient. An empty `apply_graph` is never a
-completion signal.
+Planner receives every persisted task outcome across the run. It makes an
+explicit resolution for incomplete work: continue via named new tasks, accept
+named partial outputs, exclude part of the requested scope, or report the
+remaining limitation. Runtime never infers this decision from result text.
 
 Dependency outputs must be injected into a dependent agent's task context as
 bounded summaries, extracted facts, evidence and opaque artifact references.
@@ -183,10 +176,9 @@ not to planner execution. It is a normal configured agent with safe system
 operations such as `file.read`, `memory.lookup`, `memory.read`, RAG search and
 project-memory tools.
 
-For a simple file summary the planner creates one context-reader task with
-`on_success=continue`; once all current tasks complete, the terminal synthesis
-checkpoint produces the answer. For a file analysis that changes the next action, the reader can
-feed a planner checkpoint that determines the following graph segment.
+For a simple file summary the planner creates one context-reader task and an
+iteration with `terminal=synthesis`. For a file analysis that changes the next
+action, it creates an iteration with `terminal=planner`.
 
 ## Writeback and administration
 

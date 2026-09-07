@@ -9,7 +9,7 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.services.system_llm_role_examples import get_role_examples
 
 if TYPE_CHECKING:
-    from app.runtime.planner.graph_planner import PlannerGraphOutput
+    from app.runtime.orchestrator_contracts import IterationProposal
     from app.runtime.memory.fact_extractor import _LLMFactOutput
 
 
@@ -55,8 +55,8 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
     model: Type[BaseModel] | None = None
 
     if role == SystemLLMRoleType.PLANNER:
-        from app.runtime.planner.graph_planner import PlannerGraphOutput
-        model = PlannerGraphOutput
+        from app.runtime.orchestrator_contracts import IterationProposal
+        model = IterationProposal
     elif role == SystemLLMRoleType.FACT_EXTRACTOR:
         from app.runtime.memory.fact_extractor import _LLMFactOutput
         model = _LLMFactOutput
@@ -77,7 +77,7 @@ def _enrich_schema_with_contract_metadata(schema: Dict[str, Any], role: SystemLL
     if role == SystemLLMRoleType.PLANNER:
         props = schema.get("properties", {})
         if "tasks" in props:
-            props["tasks"]["description"] = "Complete graph mutation. agent nodes require executor; planner nodes are dependency checkpoints with intent and instructions only."
+            props["tasks"]["description"] = "Immutable iteration tasks. Every task is agent work and requires an available executor; planner and synthesis are terminal invocations, not task nodes."
 
     elif role == SystemLLMRoleType.FACT_EXTRACTOR:
         # Add scope enum to fact items

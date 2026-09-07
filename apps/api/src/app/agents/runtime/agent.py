@@ -21,6 +21,34 @@ from uuid import UUID, uuid4
 MAX_OPERATION_RESULT_PREVIEW_CHARS = 4096
 
 
+def _artifact_refs(value: Any, *, limit: int = 20) -> List[Dict[str, Any]]:
+    """Extract the small runtime-owned artifact projection before SSE truncation."""
+    result: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def visit(item: Any) -> None:
+        if len(result) >= limit:
+            return
+        if isinstance(item, dict):
+            artifact_id = str(item.get("artifact_id") or "").strip()
+            if artifact_id and artifact_id not in seen:
+                seen.add(artifact_id)
+                result.append({
+                    "artifact_id": artifact_id,
+                    "file_name": item.get("file_name") or item.get("filename") or item.get("name") or "artifact",
+                    "content_type": item.get("content_type") or "",
+                    "size_bytes": item.get("size_bytes"),
+                })
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return result
+
+
 @dataclass
 class AgentLoopState:
     """Mutable state for one agent execution loop."""
@@ -1116,6 +1144,7 @@ class AgentToolRuntime(BaseRuntime):
             actor_entity_id=agent_execution_id,
             reused=bool(result.metadata.get("reused")),
             reused_from_call_id=result.metadata.get("reused_from_call_id"),
+            artifact_refs=_artifact_refs(result.data) if result.success else None,
             error_code=raw_error_code,
             retryable=result.metadata.get("retryable"),
             safe_message=None if result.success else str(result.error or ""),

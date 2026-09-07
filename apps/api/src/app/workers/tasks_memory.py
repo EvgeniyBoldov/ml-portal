@@ -217,7 +217,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
         runtime_logger = None
         if payload.runtime_log_context:
             runtime_logger = RuntimeEventJournalFactory.restore_worker(payload.runtime_log_context)
-        metric_keys = ("planner_steps", "agent_steps", "tool_calls", "tokens_in", "tokens_out", "tokens_total", "retries", "wall_time_ms")
+        metric_keys = ("agent_steps", "tool_calls", "tokens_in", "tokens_out", "tokens_total", "retries", "wall_time_ms")
 
         async def _publish(event: RuntimeEvent) -> None:
             if runtime_logger is None:

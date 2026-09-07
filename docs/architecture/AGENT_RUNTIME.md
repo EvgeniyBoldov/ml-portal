@@ -6,19 +6,18 @@
 
 `ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> PipelineAssembler -> GraphPlanner -> SqlPlanStore -> GraphOrchestrator -> AgentExecutor -> DirectOperationExecutor`
 
-Канонический планировщик теперь возвращает не следующий шаг, а смысловую
-мутацию сохраняемого графа: `PlannerGraphOutput -> PlanPatch -> SqlPlanStore`.
-`PlannerGraphOutput` не содержит revision, trigger, goal или идентификаторы:
-runtime добавляет CAS-ревизию из snapshot непосредственно перед транзакционным
-применением `PlanPatch`.
+Канонический планировщик возвращает не следующий шаг, а предложение
+сохраняемой итерации: `IterationProposal -> IterationCompiler -> SqlPlanStore`.
+`IterationProposal` не содержит lifecycle, trigger, goal или идентификаторы:
+runtime добавляет идентификаторы и транзакционно сохраняет iteration.
 `GraphOrchestrator` единолично меняет статусы задач, фиксирует
-попытки, checkpoint и различает технический failure от бизнес-результата
+попытки, terminal invocation и различает технический failure от бизнес-результата
 `unfulfillable`. Выполнение v1 последовательное; зависимости уже являются
 частью контракта и готовы к будущему параллельному scheduler.
 
 Это важно: агентный runtime больше не является одним простым tool-call loop. Он уже включает:
 - preflight разрешение доступных агентов/коллекций/операций,
-- persisted planner task graph with dependency/checkpoint pause handling,
+- persisted iterative task graph with dependency and explicit-pause handling,
 - sub-agent operation loop,
 - canonical event journal and pause handling.
 
@@ -111,7 +110,7 @@ class ExecutionPreflight:
 ```python
 class RuntimePipeline:
     async def execute(...) -> AsyncGenerator[RuntimeEvent, None]:
-        # platform snapshot -> memory -> planning -> agent execution -> synthesis checkpoint
+        # platform snapshot -> memory -> planning -> agent execution -> terminal synthesis
 ```
 
 ## Tool Contract
@@ -145,13 +144,22 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 ```
 1. `ChatStreamService` или sandbox создаёт `ToolContext`.
 2. `RuntimePipeline` загружает platform snapshot и строит turn memory.
-3. Planner генерирует semantic action (`apply_graph`, `ask_user`, `complete` или `fail`); runtime преобразует его в строгий `PlanPatch` с текущей revision. Узел графа имеет `kind=agent` или `kind=planner`.
-4. `agent` содержит `executor`, `intent`, `instructions`, `depends_on` и `needs`; `planner` является checkpoint-узлом с intent/instructions и dependencies, который возвращает управление planner-у после их успешного выполнения.
-5. Orchestrator выбирает один ready node и создаёт `RuntimeTaskAttempt`. Для `agent` выполняется `ExecutionPreflight`, затем `AgentExecutor` возвращает строгий `AgentExecutionResult`; `TaskAttemptResultReducer` централизованно превращает его в runtime-owned `TaskResult` и lifecycle задачи. Для `planner` создаётся следующая revision того же persisted graph. Каждое declared output содержит только `text`, `data` и/или `artifacts`; неизвестное поле делает attempt технически невалидным. Artifact fulfillment строится исключительно из verified tool ledger, а не из JSON агента. `TaskResult` — outcome и проверенные поля. Task имеет `freshness_policy`: `allow_memory` допускает ответ без операции, а `require_retrieval` требует успешный receipt канонической retrieval-операции именно в текущем attempt. Dependency input — ограниченная типизированная проекция: status/outcome, description, declared outputs, receipt/evidence summaries и opaque artifacts отдельно; только verified fields участвуют в contract checks.
-6. Planner checkpoint получает весь persisted graph с JSON results и artifact references, но не содержимое файлов. Его patch и completion checkpoint применяются в одной transaction boundary.
-7. Технический сбой сохраняется отдельно и может быть retried; `unfulfillable` является валидным бизнес-результатом. Approval остаётся task-local pause, а `ask_user` — pause плана; это не planner nodes.
-7. Checkpoint и outputs открывают зависимости или возобновляют логическую task новым attempt.
-8. Терминальный `kind=synthesis` checkpoint — обычный узел persisted graph без executor. Он получает свою task-интенцию/инструкцию и complete runtime-owned projection всех актуальных успешно завершённых agent-задач final plan, плюс verified artifact metadata и sources. Он не читает артефакты заново и не получает сырые agent/tool results, технический journal, failed/unfulfillable/retry-задачи. Sandbox сохраняет и стримит canonical journal events, chat стримит только пользовательский transport.
+3. Planner генерирует полную неизменяемую iteration proposal: только агентские задачи, bindings, решения по незавершённой работе и terminal — `planner` либо `synthesis`.
+4. Terminal является свойством iteration, а не task. `planner` создаёт следующую iteration. `synthesis` запрашивает финальную сборку ответа и требует synthesis brief: вопрос, планировавшаяся работа, её цель и требования к ответу. Run становится `completed` только после успешного synthesis.
+5. Store возвращает typed scheduler decision. Orchestrator только исполняет его: создаёт attempt, вызывает агента, применяет один атомарный result либо вызывает planner/synthesizer. Каждое declared output содержит только `text`, `data` и/или `artifacts`; artifact fulfillment строится исключительно из verified tool ledger. `verified_receipt` засчитывается только для операции из обязательного `receipt_operations` этого output.
+6. `waiting_retry` ожидает свой срок, а `waiting_confirmation` приостанавливает только адресную задачу. Для terminal `needs_dependency`, `unfulfillable`, `failed`, `blocked` или `cancelled` runtime завершает независимые задачи, блокирует зависимые и вызывает planner. Он не интерпретирует partial results и не решает, достаточно ли их для ответа.
+7. Planner получает полный структурный ledger всех задач и попыток. Для каждой незавершённой работы он явно выбирает продолжение, принятие partial outputs, исключение части объёма или сообщение ограничения пользователю.
+8. Synthesis получает successful reports всех iteration, явно принятые partial outputs, verified artifacts/sources и актуальные user-visible limitations. Сырые agent/tool journal и технические ошибки не передаются.
+
+Оркестратор поддерживает явные task-статусы `pending`, `running`,
+`waiting_retry`, `waiting_confirmation`, `needs_dependency`, `blocked`,
+`completed`, `unfulfillable`, `failed` и `cancelled`.
+`ready` вычисляется по зависимостям и не является отдельным источником истины.
+Retry переводит задачу обратно в исполнение только после `next_retry_at`;
+задача с неуспешной зависимостью получает `blocked`. Synthesis запускается
+после достижения конечного статуса всеми агентными задачами и получает
+отдельную bounded-проекцию `limitations` с безопасными причинами
+неуспешных ветвей.
 
 ### Memory lifecycle
 
@@ -168,7 +176,7 @@ project and project-memory-key matching; project rules are never injected into
 the automatic turn snapshot. A failed selection falls back to an empty
 optional context and does not fail the main turn.
 
-After the terminal synthesis checkpoint, the chat path emits the answer and dispatches
+After terminal synthesis, the chat path emits the answer and dispatches
 `finalize_memory` asynchronously. That worker runs `FactExtractor`,
 `FactCompactor` and `FactReconciler`; evidence is deduplicated into
 `FactObservation`, active rows use supersede semantics, and only confirmed
@@ -189,12 +197,13 @@ Preflight, operation execution and agent-triggered document extraction are
 also journalled semantic boundaries. Extraction is a child of `tool_call`;
 independent RAG ingestion keeps its own job-status/event contract.
 The canonical trace presentation hierarchy is
-`run -> orchestrator -> plan_revision -> step -> agent_execution -> llm_call|tool_call|interaction|error|snapshot`.
+`run -> planner orchestrator -> planner_iteration -> planner llm_call` и
+`planner_iteration -> step -> agent_execution -> llm_call|tool_call|interaction|error|snapshot`.
 `task` and `attempt` are persisted execution-control entities, not a competing
 trace containment chain: lifecycle rows retain their plan parent and carry
-explicit task/attempt references to the corresponding executor run. Until the
-breaking terminology migration, emitted `planner_iteration`/`iteration` rows
-are the legacy wire name for `plan_revision`.
+explicit task/attempt references to the corresponding executor run.
+`planner_iteration` events describe planner calls; они не являются отдельной
+моделью плана или ревизией.
 
 ### Progress delivery
 
@@ -289,14 +298,15 @@ target-specific execution binding.
 ## Pause / resume
 
 ### Каноническое поведение
-- Runtime может остановиться на `waiting_input` или `waiting_confirmation`.
-- Pause state сохраняется в transport state и canonical checkpoint/plan state.
-- Continuation всегда переиспользует исходный runtime run и тот же
-  `RuntimePipeline`; это не новый пользовательский запрос и не новый root run.
+- Runtime приостанавливает только задачу со статусом `waiting_confirmation`.
+- Confirmation pause сохраняется с fingerprint операции и возобновляет тот же
+  runtime run и ту же задачу.
+- Пользовательское уточнение не является paused plan: synthesis возвращает
+  текущий безопасный результат или limitation, а следующий ввод создаёт новый
+  root run.
 
-Перед повторным запуском исполнителя строится неизменяемый `resume_checkpoint`.
-Он хранит исходную цель отдельно от пользовательского ввода, поэтому ответ на
-уточнение не может стать новым `goal`.
+Перед подтверждённым повторным запуском исполнитель получает исходный task
+request и проверенный fingerprint операции.
 
 ### Контракт paused_action / paused_context
 - Backend должен сохранять полный paused-state через `RuntimeHitlProtocolService.build_paused_from_stop`.
@@ -307,9 +317,9 @@ target-specific execution binding.
 - **Chat**: `POST /chats/runs/{id}/resume` → SSE-стрим (не JSON).
 - **Sandbox**: `POST /sandbox/sessions/{sid}/runs/{rid}/resume` → SSE-стрим, тот же `RuntimePipeline`, тот же run_id (не создавать новый).
 - Sandbox resume продолжает тот же sandbox run id; chat continuation не создаёт root journal run.
-- Оба endpoint принимают один payload: `{ "action": "input" | "confirm" | "cancel", "input"?: string }`.
-  Для `waiting_input` допустимы `input` (непустое поле `input`) и `cancel`;
-  для `waiting_confirmation` — `confirm` и `cancel`.
+- Оба endpoint принимают payload `{ "action": "confirm" | "cancel" }` для
+  адресной confirmation pause. Свободный пользовательский текст не является
+  resume payload и запускает новый run.
 - Подтверждение выполняется только signed confirmation token, выпущенным из
   сохранённого pause state; raw fingerprints и отдельный confirm endpoint не
   являются transport contract.
@@ -361,7 +371,8 @@ LLM-extracted evidence.
 
 Для baseline-проверки качества runtime добавлен каркас evaluation harness:
 - `app/services/runtime_evaluation_harness.py`
-- кейсы задают required/forbidden operations и ожидаемые event-типы (`final`, `waiting_input`, `error`)
+- кейсы задают required/forbidden operations и ожидаемые event-типы (`final`,
+  `confirmation_required`, `error`)
 - результат вычисляет score и диагностические notes
 
 Назначение:
@@ -455,7 +466,6 @@ context_snapshot: {
   system_prompt?: string
   system_prompt_hash?: string
   limits?: {
-    planner_steps?: number
     agent_steps?: number
     tool_calls?: number
     tokens_in?: number

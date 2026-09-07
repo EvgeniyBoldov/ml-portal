@@ -135,7 +135,7 @@ Run inspector contract:
 - each projected executor carries its curated terminal result (status, safe
   message, output, dependencies, artifacts and operation counters); result
   Viewers render that model and never search journal events themselves;
-- the projection assigns stage (`plan_revision`, memory preparation/writeback,
+- the projection assigns stage (`iteration`, memory preparation/writeback,
   synthesis), step and executor presentation kinds and returns the ordered tab
   policy with the selected target. The inspector renders that policy and does
   not branch on an executor slug;
@@ -233,11 +233,11 @@ Bad group boundaries:
 6. Emit the same trace primitives as production, with higher visibility.
 
 Paused-run rule:
-- `waiting_input` and `waiting_confirmation` are persisted sandbox-run states,
-  not completed runs. Their pause action/context remain available until the
-  run is resumed or cancelled.
+- A task-local `waiting_confirmation` is a persisted sandbox-run state, not a
+  completed run. Its confirmation action/context remain available until the
+  run is resumed or cancelled. Free-form clarification starts a new run.
 - Resume continues the same sandbox run and clears the persisted pause only
-  after its immutable resume checkpoint has been constructed.
+  after its immutable resume snapshot has been constructed.
 - A paused run is cancelled by the common resume payload
   `{ "action": "cancel" }`; the dedicated cancel endpoint is only for an
   actively running execution. Aborting a browser stream is not a cancellation

@@ -11,7 +11,9 @@ Runtime trace is modeled as a tree of logical execution entities with atomic exe
 - Containers capture hierarchy and launch context.
 - Steps capture one execution action with input/output/spend/error.
 - Transport events are not promoted to business trace nodes unless they have operator meaning.
-- Clarification flows are represented as a dedicated `dialog` container that may own the LLM question step and the `question_answer` step together.
+- A confirmation is represented as task-local interaction events. Free-form
+  clarification is a completed user turn; a later user message starts a new
+  run and is not attached to the prior execution tree.
 
 ## Why
 

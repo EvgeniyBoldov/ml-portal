@@ -144,7 +144,7 @@ ML Portal — мульти-тенантная AI-платформа для ко�
 2. Если есть вложения, сначала валидируются и связываются с chat turn.
 3. Платформа определяет agent profile и контекст выполнения.
 4. Runtime pipeline собирает execution request (policy, collections, tools, permissions, credentials).
-5. Agent Runtime запускает triage → preflight → planner/runtime loop.
+5. Agent Runtime запускает memory preparation → preflight → planner/runtime loop.
 6. События выполнения и ответ стримятся пользователю.
 7. Результат, метаданные и file outputs фиксируются в истории/run logs.
 
@@ -164,11 +164,12 @@ ML Portal — мульти-тенантная AI-платформа для ко�
 
 ## 5.4 Pause / Resume flow
 
-1. Runtime может остановиться на `waiting_input` или `waiting_confirmation`.
-2. Пауза фиксируется в `agent_run` и `chat_turn` вместе с pause context.
-3. Пользователь подтверждает действие или отправляет уточнение.
-4. Продолжение сейчас запускается как новый chat turn в том же чате с сохранением истории.
-5. Настоящий mid-run checkpoint resume пока не реализован и рассматривается как отдельный этап развития ядра.
+1. Runtime останавливается только для адресного `waiting_confirmation` операции.
+2. Пауза фиксируется в runtime plan и `chat_turn` вместе с fingerprint операции.
+3. Подтверждение или отказ возобновляет тот же runtime run; отказ становится
+   terminal outcome задачи и возвращает управление planner.
+4. Уточняющий пользовательский вопрос завершается synthesis-ответом; следующий
+   ввод создаёт новый run в том же чате.
 
 ## 6. Какие данные где хранятся и зачем
 

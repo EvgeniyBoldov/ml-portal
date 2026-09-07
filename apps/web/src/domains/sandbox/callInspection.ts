@@ -1,7 +1,7 @@
 export type DisplayEntry = { label: string; value: unknown };
 export type ParsedContent = { text?: string; data?: unknown; kind: 'text' | 'json' | 'tool_call' };
 export type ToolNameMap = ReadonlyMap<string, string>;
-export type LlmOutcomeKind = 'tools' | 'answer' | 'clarify' | 'plan' | 'complete' | 'empty' | 'error';
+export type LlmOutcomeKind = 'tools' | 'answer' | 'clarify' | 'plan' | 'empty' | 'error';
 export type LlmOutcome = { kind: LlmOutcomeKind; label: string; count?: number };
 
 const HIDDEN_KEYS = new Set([
@@ -121,16 +121,11 @@ export function llmOutcome(payload: Record<string, unknown>, toolCallCount = 0):
   const parsed = parseCallContent(content);
   const data = asRecord(parsed.data);
   if (parsed.kind === 'tool_call' || (data.tool !== undefined && data.arguments !== undefined)) return { kind: 'tools', label: 'Вызов инструментов', count: 1 };
-  const nestedPlan = asRecord(data.plan);
-  const planData = Object.keys(nestedPlan).length ? nestedPlan : data;
-  const action = String(planData.action ?? planData.decision ?? data.action ?? data.decision ?? '').trim();
-  const hasTasks = Array.isArray(planData.tasks);
-  const isPlanAction = action === 'apply_graph' || action === 'create_plan' || action === 'revise_plan';
   const isPlanningDecision = payload.purpose === 'planning_decision';
-  if (isPlanningDecision && (action === 'ask_user' || action === 'clarify')) return { kind: 'clarify', label: 'Уточнение' };
-  if (hasTasks && (isPlanAction || isPlanningDecision || Object.keys(nestedPlan).length > 0)) {
-    const tasks = Array.isArray(planData.tasks) ? planData.tasks.length : 0;
-    return { kind: 'plan', label: action === 'revise_plan' ? 'Корректировка плана' : 'План', count: tasks || undefined };
+  const terminal = String(data.terminal ?? '').trim();
+  if (isPlanningDecision && Array.isArray(data.tasks) && (terminal === 'planner' || terminal === 'synthesis')) {
+    const tasks = data.tasks.length;
+    return { kind: 'plan', label: terminal === 'planner' ? 'Следующая итерация' : 'Итерация', count: tasks || undefined };
   }
   return { kind: 'answer', label: 'Ответ' };
 }

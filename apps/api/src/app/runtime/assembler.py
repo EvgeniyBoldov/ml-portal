@@ -29,7 +29,6 @@ from app.runtime.synthesizer import Synthesizer
 from app.runtime.orchestrator import GraphOrchestrator
 from app.runtime.plan_store import SqlPlanStore
 from app.runtime.stages.graph_planning_stage import GraphPlanningStage
-from app.services.runtime_budget_service import RuntimeBudgetService
 
 
 class PipelineAssembler:
@@ -96,7 +95,6 @@ class PipelineAssembler:
                 planner=self.graph_planner,
                 executor=self.agent_executor,
                 synthesizer=self.synthesizer,
-                budget_service=RuntimeBudgetService(self._session),
             ),
             max_steps=max_steps,
         )

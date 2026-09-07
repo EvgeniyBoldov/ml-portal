@@ -1,68 +1,22 @@
-# Единый граф выполнения плана
+# Execution graph
 
-## Цель
+This companion note follows the immutable iteration runtime. The authoritative
+specification is `docs/architecture/AGENT_RUNTIME.md`.
 
-Показывать пользователю один живой граф выполнения для всего run, а не
-последовательность ревизий плана. Ревизии и patch остаются внутренним
-механизмом оркестратора и источником аудита, но не являются частью основной
-модели интерфейса.
+## Canonical model
 
-## Пользовательская модель
+An iteration contains immutable agent tasks and one terminal property:
+`planner` requests the next iteration after all current tasks are terminal;
+`synthesis` returns the final response only when every current task completed.
 
-Вершина графа — задача. Задачи бывают двух видов:
+Planner and synthesis are terminal invocations, not task nodes. Failed,
+blocked, cancelled, unfulfillable and `needs_dependency` tasks return control
+to planner. That decision must explicitly continue the work, accept named
+partial outputs, exclude scope, or report the limitation.
 
-- `kind=agent` — работа, выполняемая агентом;
-- `kind=planner` — контрольная точка или перепланирование.
+`task_id` is immutable and unique within a run. Tasks are never replaced or
+removed; later work uses new IDs. The persisted iteration proposal, attempts,
+dependencies, needs, bindings and resolutions form the audit trail.
 
-Каждая задача изменяет свой статус в течение run: выполняется, завершена,
-ожидает данные/пользователя/retry, невыполнима или завершилась ошибкой.
-Завершённая, невыполнимая и упавшая задача остаётся вершиной графа навсегда.
-
-```text
-[Найти тикеты ✕]
-         │ причина перепланирования
-         ▼
-[Планер: скорректировать дальнейшие шаги]
-         │
-         ├─────────────► [Найти тикеты в источнике B]
-         └─────────────► [Проверить доступы]
-```
-
-Контрольная точка строится так же, но её входящие рёбра — обычные зависимости:
-
-```text
-[Найти тикеты] ─┐
-                ├──► [Планер: определить дальнейшие шаги] ──► [Составить приоритеты]
-[Найти встречи] ┘
-```
-
-`need` не является отдельной вершиной: состояние ожидания отображается на
-задаче. Если для need существует задача-поставщик, связь от неё показывается
-пунктиром.
-
-## Инварианты backend
-
-- `task_id` уникален в пределах run и является идентификатором вершины.
-- Терминальные задачи нельзя заменять или удалять.
-- При исправлении после ошибки планер создаёт новую задачу с новым `task_id`,
-  а не перезаписывает исходную.
-- Pending-задачу допустимо уточнить до первого запуска.
-- Автоматическое перепланирование материализуется как задача
-  `kind=planner`, связанная с задачей-причиной.
-- Patch/revision сохраняются для optimistic locking, аудита и восстановления,
-  но не выводятся в основной UI графа.
-
-## UI
-
-В trace остаётся компактный список и инспектор задачи. Рядом со скачиванием
-лога добавляется кнопка «Открыть план», открывающая отдельный read-only
-viewer/canvas:
-
-- все задачи текущего run, включая исторические terminal-задачи;
-- реальные зависимости и связи `ошибка -> planner -> новые задачи`;
-- цвета и иконки статуса, planner-узлы в виде контрольных точек;
-- обновление по runtime-событиям во время выполнения;
-- tooltip/side panel с intent, исполнителем, ожиданиями и кратким результатом.
-
-Viewer не редактирует граф и не требует показывать пользователю номера
-ревизий.
+The trace shows iterations and agent tasks, their dependencies, executor,
+status and safe result summaries. It has no parallel patch/revision graph.

@@ -20,7 +20,6 @@ from app.runtime.operation_errors import RuntimeErrorCode
 class OrchestrationPhase(str, Enum):
     """Which phase of the pipeline produced the event."""
 
-    TRIAGE = "triage"
     PREFLIGHT = "preflight"
     PLANNER = "planner"
     AGENT = "agent"
@@ -37,15 +36,11 @@ class RuntimeEventType(str, Enum):
     # Lifecycle — orchestrator (planner loop)
     ORCHESTRATOR_START = "orchestrator_start"
     ORCHESTRATOR_END = "orchestrator_end"
-    ORCHESTRATOR_CHECKPOINT_STARTED = "orchestrator_checkpoint_started"
-    ORCHESTRATOR_CHECKPOINT_FINISHED = "orchestrator_checkpoint_finished"
     # Lifecycle — planner iteration
     PLANNER_ITERATION_START = "planner_iteration_start"
     PLANNER_ITERATION_END = "planner_iteration_end"
     STEP_START = "step_start"
     STEP_END = "step_end"
-    PLANNER_INVOCATION_STARTED = "planner_invocation_started"
-    PLANNER_INVOCATION_FINISHED = "planner_invocation_finished"
     # Lifecycle — agent
     AGENT_START = "agent_start"
     AGENT_END = "agent_end"
@@ -54,7 +49,6 @@ class RuntimeEventType(str, Enum):
     SYNTHESIS_END = "synthesis_end"
     # Progress
     STATUS = "status"
-    PLANNER_DECISION = "planner_decision"
     PROTOCOL_RETRY = "protocol_retry"
     INTENT = "intent"
     BUDGET_SNAPSHOT = "budget_snapshot"
@@ -86,16 +80,16 @@ class RuntimeEventType(str, Enum):
     ERROR = "error"
     # Canonical persisted plan/task lifecycle
     PLAN_CREATED = "plan_created"
-    PLAN_PATCH_APPLIED = "plan_patch_applied"
+    PLAN_ITERATION_APPLIED = "plan_iteration_applied"
     PLAN_WAITING_INPUT = "plan_waiting_input"
     PLAN_COMPLETED = "plan_completed"
     PLAN_FAILED = "plan_failed"
-    TASK_READY = "task_ready"
-    TASK_CLAIMED = "task_claimed"
     TASK_STARTED = "task_started"
     TASK_PAUSED = "task_paused"
     TASK_RESUMED = "task_resumed"
     TASK_COMPLETED = "task_completed"
+    TASK_NEEDS_DEPENDENCY = "task_needs_dependency"
+    TASK_BLOCKED = "task_blocked"
     TASK_UNFULFILLABLE = "task_unfulfillable"
     TASK_FAILED = "task_failed"
     ATTEMPT_STARTED = "attempt_started"
@@ -257,7 +251,7 @@ class RuntimeEvent:
     def plan_lifecycle(cls, event_type: RuntimeEventType, *, plan_id: str, **extra: Any) -> "RuntimeEvent":
         if event_type not in {
             RuntimeEventType.PLAN_CREATED,
-            RuntimeEventType.PLAN_PATCH_APPLIED,
+            RuntimeEventType.PLAN_ITERATION_APPLIED,
             RuntimeEventType.PLAN_WAITING_INPUT,
             RuntimeEventType.PLAN_COMPLETED,
             RuntimeEventType.PLAN_FAILED,
@@ -268,12 +262,12 @@ class RuntimeEvent:
     @classmethod
     def task_lifecycle(cls, event_type: RuntimeEventType, *, plan_id: str, task_id: str, **extra: Any) -> "RuntimeEvent":
         allowed = {
-            RuntimeEventType.TASK_READY,
-            RuntimeEventType.TASK_CLAIMED,
             RuntimeEventType.TASK_STARTED,
             RuntimeEventType.TASK_PAUSED,
             RuntimeEventType.TASK_RESUMED,
             RuntimeEventType.TASK_COMPLETED,
+            RuntimeEventType.TASK_NEEDS_DEPENDENCY,
+            RuntimeEventType.TASK_BLOCKED,
             RuntimeEventType.TASK_UNFULFILLABLE,
             RuntimeEventType.TASK_FAILED,
         }
@@ -304,20 +298,6 @@ class RuntimeEvent:
             "parent_entity_id": task_id,
             **extra,
         })
-
-    @classmethod
-    def planner_step(cls, *, iteration: int, kind: str, payload: Dict[str, Any]) -> "RuntimeEvent":
-        return cls(
-            RuntimeEventType.PLANNER_DECISION,
-            {"iteration": iteration, "kind": kind, **payload},
-        )
-
-    @classmethod
-    def planner_decision(cls, *, iteration: int, kind: str, payload: Dict[str, Any]) -> "RuntimeEvent":
-        return cls(
-            RuntimeEventType.PLANNER_DECISION,
-            {"iteration": iteration, "kind": kind, **payload},
-        )
 
     @classmethod
     def budget_snapshot(
@@ -456,6 +436,7 @@ class RuntimeEvent:
         reused: Optional[bool] = None,
         reused_from_call_id: Optional[str] = None,
         truncated: Optional[bool] = None,
+        artifact_refs: Optional[list[dict[str, Any]]] = None,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {
             "entity_type": "tool_call",
@@ -468,6 +449,8 @@ class RuntimeEvent:
         }
         if sources is not None:
             payload["sources"] = list(sources)
+        if artifact_refs:
+            payload["artifact_refs"] = list(artifact_refs)
         if error_code is not None:
             payload["error_code"] = (
                 error_code.value if isinstance(error_code, RuntimeErrorCode) else str(error_code)

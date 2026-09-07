@@ -33,10 +33,9 @@ from app.agents.runtime.agent import AgentToolRuntime
 from app.agents.operation_publication import PUBLIC_RETRIEVAL_OPERATIONS
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
-from app.runtime.contracts import NeedSpec
 from app.runtime.orchestrator_contracts import (
     AgentExecutionResult,
-    AgentTaskResult,
+    DiscoveredNeed,
     TaskConfirmationRequired,
     TaskExecutionError,
     TaskRequest,
@@ -113,7 +112,7 @@ class AgentExecutor:
                     agent_slug=agent_slug,
                     user_id=user_id,
                     tenant_id=tenant_id,
-                    request_text=str(task.inputs.get("query") or task.instructions or state.goal)[:500],
+                    request_text=str(task.instructions or state.goal)[:500],
                     allow_partial=True,
                     platform_config=platform_config,
                     include_routable_agents=False,
@@ -155,6 +154,7 @@ class AgentExecutor:
             ctx.extra["agent_execution_result"] = AgentExecutionResult(
                 completion="unfulfillable",
                 description=msg,
+                limitation={"code": msg, "message": "The selected agent is unavailable.", "action": "none"},
             )
             yield RuntimeEvent.status(msg, agent=agent_slug)
             return
@@ -204,6 +204,7 @@ class AgentExecutor:
             ctx.extra["agent_execution_result"] = AgentExecutionResult(
                 completion="unfulfillable",
                 description=msg,
+                limitation={"code": msg, "message": "The selected agent has no compatible operation.", "action": "none"},
             )
             yield RuntimeEvent.status(msg, agent=agent_slug)
             return
@@ -219,7 +220,6 @@ class AgentExecutor:
         # 3. Run sub-agent tool loop and forward canonical runtime events.
         buffered_answer: List[str] = []
         sub_sources: List[dict] = []
-        attachments: List[Dict[str, Any]] = []
         artifacts: List[Dict[str, Any]] = []
         final_content = ""
         final_error: Optional[str] = None
@@ -260,28 +260,23 @@ class AgentExecutor:
                         if isinstance(src, dict):
                             sub_sources.append(dict(src))
 
-                    if bool(runtime_event.data.get("success")):
-                        artifacts.extend(self._extract_artifacts(result_payload))
-
                     # Collect verified attachments for terminal synthesis delivery.
                     operation_name = str(runtime_event.data.get("tool") or "")
-                    if (
-                        operation_name in ("file.delete", "file_delete")
-                        and bool(runtime_event.data.get("success"))
-                        and isinstance(result_payload, dict)
-                    ):
-                        state.mark_artifact_deleted(str(result_payload.get("artifact_id") or ""))
+                    if self._deletes_artifact(operation_name) and bool(runtime_event.data.get("success")):
+                        deleted_refs = [
+                            item for item in runtime_event.data.get("artifact_refs") or []
+                            if isinstance(item, dict)
+                        ]
+                        if deleted_refs:
+                            for item in deleted_refs:
+                                state.mark_artifact_deleted(str(item.get("artifact_id") or ""))
+                        elif isinstance(result_payload, dict):
+                            state.mark_artifact_deleted(str(result_payload.get("artifact_id") or ""))
                     if self._creates_downloadable_artifact(operation_name) and bool(runtime_event.data.get("success")):
-                        if isinstance(result_payload, dict):
-                            artifact_id = result_payload.get("artifact_id")
-                            if artifact_id:
-                                attachments.append({
-                                    "artifact_id": artifact_id,
-                                    "file_name": result_payload.get("file_name") or result_payload.get("filename") or "file",
-                                    "download_url": f"/api/v1/files/{artifact_id}/download",
-                                    "content_type": result_payload.get("content_type") or "",
-                                    "size_bytes": result_payload.get("size_bytes"),
-                                })
+                        artifacts.extend(
+                            item for item in runtime_event.data.get("artifact_refs") or []
+                            if isinstance(item, dict)
+                        )
 
                 if runtime_event.type == RuntimeEventType.DELTA:
                     buffered_answer.append(str(runtime_event.data.get("content", "")))
@@ -347,6 +342,7 @@ class AgentExecutor:
                     task=task,
                     ledger_entries=state.tool_ledger.entries[ledger_start:],
                     sources=sub_sources,
+                    verified_artifacts=artifacts,
                 )
                 ctx.extra["agent_execution_result"] = execution.model_copy(
                     update={"verified": verified, "receipt_refs": list(verified.get("receipts") or [])}
@@ -448,17 +444,10 @@ class AgentExecutor:
             )
         return execution
 
-    async def execute_task(self, **kwargs: Any) -> AgentTaskResult:
-        """Compatibility adapter for legacy direct task-executor callers."""
-        from app.runtime.task_result_reducer import TaskAttemptResultReducer
-
-        request = kwargs["request"]
-        execution = await self.execute_attempt(**kwargs)
-        return TaskAttemptResultReducer().reduce(request=request, execution=execution)
-
     @staticmethod
     def _verified_task_result(
-        *, task: TaskRequest, ledger_entries: List[Any], sources: List[Dict[str, Any]]
+        *, task: TaskRequest, ledger_entries: List[Any], sources: List[Dict[str, Any]],
+        verified_artifacts: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Project only receipts observed by runtime during this attempt."""
         receipts: List[Dict[str, Any]] = []
@@ -476,20 +465,20 @@ class AgentExecutor:
             receipt = {
                 "call_id": str(getattr(entry, "call_id", "")),
                 "operation": operation,
+                "canonical_operation": normalized,
                 "result_fingerprint": getattr(entry, "result_fingerprint", None),
                 "result_preview": getattr(entry, "result_preview", None),
                 "retrieval": is_retrieval,
             }
             receipts.append(receipt)
             evidence[receipt["call_id"]] = {"operation": operation, "result_fingerprint": receipt["result_fingerprint"]}
-            artifacts.extend(AgentExecutor._extract_artifacts(getattr(entry, "result_data", None)))
             if normalized in {"project_memory.mark", "memory.mark"}:
                 memory_candidates.append({
                     "call_id": receipt["call_id"],
                     "result_fingerprint": receipt["result_fingerprint"],
                     "status": "accepted_candidate",
                 })
-        artifacts = AgentExecutor._dedupe_artifacts(artifacts)
+        artifacts = AgentExecutor._dedupe_artifacts(list(verified_artifacts or []))
         return {
             "status": "observed",
             "fresh_retrieval": fresh_retrieval,
@@ -512,35 +501,14 @@ class AgentExecutor:
         )
 
     @staticmethod
+    def _deletes_artifact(operation_name: str) -> bool:
+        normalized = str(operation_name or "").strip()
+        return normalized in {"file.delete", "file_delete"} or normalized.endswith(".file.delete")
+
+    @staticmethod
     def _is_url_only_response(content: str) -> bool:
         """Detect an artifact-only agent response without trusting its URL."""
         return bool(re.fullmatch(r"https?://[^\r\n]+", str(content or "").strip().strip("`")))
-
-    @staticmethod
-    def _extract_artifacts(payload: Any, *, limit: int = 20) -> List[Dict[str, Any]]:
-        """Extract safe opaque file references from successful tool output."""
-        result: List[Dict[str, Any]] = []
-
-        def visit(value: Any) -> None:
-            if len(result) >= limit:
-                return
-            if isinstance(value, dict):
-                artifact_id = str(value.get("artifact_id") or "").strip()
-                if artifact_id:
-                    result.append({
-                        "artifact_id": artifact_id,
-                        "file_name": value.get("file_name") or value.get("filename") or value.get("name") or value.get("title") or "artifact",
-                        "content_type": value.get("content_type"),
-                        "size_bytes": value.get("size_bytes"),
-                    })
-                for child in value.values():
-                    visit(child)
-            elif isinstance(value, list):
-                for child in value:
-                    visit(child)
-
-        visit(payload)
-        return AgentExecutor._dedupe_artifacts(result)[:limit]
 
     @staticmethod
     def _dedupe_artifacts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -559,12 +527,12 @@ class AgentExecutor:
         goal: str,
         attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
-        """Compose sub-agent messages: inherit conversation context; pass planner's
-        specific input as the last user turn.
+        """Compose sub-agent messages with the immutable task input contract.
 
-        For recall calls (dozvon) injects resolved_needs and prior_summary from
-        agent_input so the agent can continue its task with fresh data."""
-        query = task.inputs.get("query") or task.instructions
+        The complete typed ``task.inputs`` object is rendered as the final
+        task-input block; there is no special legacy recall-input path.
+        """
+        query = task.instructions
         if not query:
             query = goal or (outer_messages[-1].get("content", "") if outer_messages else "")
 
@@ -602,15 +570,7 @@ class AgentExecutor:
         # Build the final user message: inject recall context if present
         parts: List[str] = []
         if task.inputs:
-            prior_summary = task.inputs.get("prior_summary")
-            if prior_summary:
-                parts.append(f"[Previous work summary]\n{prior_summary}")
-            resolved_needs = task.inputs.get("resolved_needs")
-            if isinstance(resolved_needs, list) and resolved_needs:
-                parts.append("[Resolved needs]")
-                for rn in resolved_needs:
-                    if isinstance(rn, dict):
-                        parts.append(f"- {rn.get('key')}: {rn.get('value')}")
+            parts.append("[Task inputs]\n" + json.dumps(task.inputs, ensure_ascii=False, default=str)[:8000])
         if parts:
             parts.append(f"[Task]\n{query}")
             final_query = "\n\n".join(parts)
@@ -628,9 +588,9 @@ class AgentExecutor:
                     "status": output.get("status"),
                     "description": str(output.get("description") or "")[:1200],
                     "outputs": output.get("outputs") or {},
-                    "receipts": list(output.get("verified_receipts") or [])[:8],
-                    "evidence": output.get("verified_evidence") or {},
-                    "artifacts": list(output.get("artifacts") or [])[:8],
+                    "receipts": list((output.get("verified") or {}).get("receipts") or [])[:8],
+                    "evidence": (output.get("verified") or {}).get("evidence") or {},
+                    "artifacts": list((output.get("verified") or {}).get("artifacts") or [])[:8],
                 }
                 try:
                     rendered = json.dumps(projection, ensure_ascii=False, default=str)
@@ -661,7 +621,7 @@ class AgentExecutor:
         for dependency in task.dependency_outputs.values():
             if not isinstance(dependency, dict):
                 continue
-            for artifact in dependency.get("artifacts") or []:
+            for artifact in (dependency.get("verified") or {}).get("artifacts") or []:
                 if isinstance(artifact, dict) and artifact.get("artifact_id"):
                     attachment_items.append({
                         "ref": {
@@ -692,16 +652,19 @@ class AgentExecutor:
         output_contract = [
             "[Terminal task completion contract]",
             "After work, return exactly one JSON object and no prose or markdown.",
-            "Required fields: completion (fulfilled|needs|unfulfillable), description, needs (array), outputs (object), checkpoint (object).",
+            "Required fields: completion (fulfilled|needs|unfulfillable), description, needs (array), outputs (object), and limitation for unfulfillable.",
             "Each outputs value must be an object containing only optional description plus at least one of text, data, or artifacts. "
             "For example: {\"answer\": {\"data\": {\"status\": \"done\"}}}. "
             "For an artifact expected output, do not declare artifact IDs: report completion in text or data; runtime binds only the verified artifact from the tool ledger. "
             "Use needs=[] when fulfilled or unfulfillable.",
+            "For completion=unfulfillable also provide limitation={code,message,action}; action is one of reconfigure_credentials, grant_access, provide_input, retry_later, none.",
+            "A need must contain ref, key, kind (data|artifact|decision), description, schema, required, and context.",
         ]
         if task.expected_outputs:
-            output_contract.append("Expected output keys: " + ", ".join(
-                f"{item.key} ({item.fulfillment.value})" for item in task.expected_outputs
-            ))
+            output_contract.append(
+                "Expected outputs (follow required and schema exactly):\n" +
+                json.dumps([item.model_dump(mode="json", by_alias=True) for item in task.expected_outputs], ensure_ascii=False)
+            )
         final_query = "\n\n".join(["\n".join(output_contract), final_query])
 
         non_system.append({"role": "user", "content": final_query})
@@ -709,17 +672,18 @@ class AgentExecutor:
 
     @staticmethod
     def _with_terminal_contract_prompt(prompt: str, task: TaskRequest) -> str:
-        expected = ", ".join(
-            f"{item.key} ({item.fulfillment.value})" for item in task.expected_outputs
-        ) or "none"
+        expected = json.dumps(
+            [item.model_dump(mode="json", by_alias=True) for item in task.expected_outputs],
+            ensure_ascii=False,
+        )
         return "\n\n".join(part for part in [
             str(prompt or "").strip(),
             "# RUNTIME TASK COMPLETION CONTRACT\n"
             "This contract overrides any conflicting agent Output Format. "
-            "Your final response must be exactly one JSON object with completion, description, needs, outputs, and checkpoint. "
+            "Your final response must be exactly one JSON object with completion, description, needs, outputs, and (for unfulfillable) limitation. "
             "Every outputs value must contain only optional description plus at least one of text, data, or artifacts; unknown keys are invalid. "
             "For an artifact output, never claim artifact IDs: runtime binds only verified tool-ledger artifacts. "
-            f"Expected output keys: {expected}.",
+            f"Expected outputs (including required/schema): {expected}.",
         ] if part)
 
     @staticmethod
@@ -739,7 +703,7 @@ class AgentExecutor:
         return {}
 
     @staticmethod
-    def _parse_needs_from_content(raw: str) -> List[NeedSpec]:
+    def _parse_needs_from_content(raw: str) -> List[DiscoveredNeed]:
         """Extract structured needs from agent output.
 
         Supports two shapes:
@@ -781,11 +745,11 @@ class AgentExecutor:
         return []
 
     @staticmethod
-    def _extract_needs_from_dict(parsed: Dict[str, Any]) -> List[NeedSpec]:
+    def _extract_needs_from_dict(parsed: Dict[str, Any]) -> List[DiscoveredNeed]:
         needs_data = parsed.get("needs")
         if not isinstance(needs_data, list):
             return []
-        result: List[NeedSpec] = []
+        result: List[DiscoveredNeed] = []
         for item in needs_data:
             if not isinstance(item, dict):
                 continue
@@ -793,7 +757,7 @@ class AgentExecutor:
             if not key:
                 continue
             result.append(
-                NeedSpec(
+                DiscoveredNeed(
                     ref=str(item.get("ref") or key),
                     kind=str(item.get("kind") or "data"),
                     key=key,
@@ -830,7 +794,6 @@ class AgentExecutor:
                 "instructions": task.instructions,
                 "inputs": task.inputs,
                 "dependency_outputs": task.dependency_outputs,
-                "needs": [need.model_dump(mode="json", by_alias=True) for need in task.needs],
             },
             prompt={"system_prompt": sub_request.prompt} if sub_request.prompt else None,
             rbac=deepcopy(collection_filter_audit) if isinstance(collection_filter_audit, dict) else None,

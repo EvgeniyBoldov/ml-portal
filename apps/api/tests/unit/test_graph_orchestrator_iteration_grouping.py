@@ -1,136 +1,120 @@
-from types import SimpleNamespace
+from __future__ import annotations
+
 from uuid import uuid4
 
 import pytest
 
 from app.runtime.orchestrator import GraphOrchestrator
-from app.runtime.orchestrator_contracts import AgentExecutionCompletion, AgentExecutionResult, TaskOutcome
-from app.runtime.events import RuntimeEvent
+from app.runtime.orchestrator_contracts import (
+    AgentExecutionCompletion, AgentExecutionResult, IterationProposal,
+    PlannedTask, SynthesisBrief, TerminalKind,
+)
+from app.runtime.plan_store import InMemoryPlanStore
 
 
-class FakeStore:
+class AsyncMemoryStore:
     def __init__(self) -> None:
-        self.plan_id = uuid4()
-        self.root_run_id = uuid4()
-        self.tasks = [
-            SimpleNamespace(task_id="collect", kind="agent", executor="viewer", intent="Collect", instructions="Collect data", inputs={}, expected_outputs=[], checkpoint={}, attempts=1),
-            SimpleNamespace(task_id="review", kind="agent", executor="reviewer", intent="Review", instructions="Review data", inputs={}, expected_outputs=[], checkpoint={}, attempts=1),
-            SimpleNamespace(task_id="synthesize", kind="synthesis", executor=None, intent="Answer user", instructions="Answer from reports", inputs={}, expected_outputs=[], checkpoint={}, attempts=1),
-        ]
-        self.completed: set[str] = set()
+        self.inner = InMemoryPlanStore()
+        self.plan = self.inner.create(goal="goal", root_run_id=str(uuid4()), tenant_id="tenant")
 
-    async def snapshot(self, plan_id):
-        assert plan_id == self.plan_id
-        task_data = {
-            "collect": {"task_id": "collect", "kind": "agent", "planned_order": 0, "intent": "Collect", "instructions": "Collect data", "status": "completed" if "collect" in self.completed else "ready", "inputs": {}, "needs": [], "result": {"summary": "collect done", "outputs": {}} if "collect" in self.completed else None},
-            "review": {"task_id": "review", "kind": "agent", "planned_order": 1, "intent": "Review", "instructions": "Review data", "status": "completed" if "review" in self.completed else "ready", "inputs": {}, "needs": [], "result": {"summary": "review done", "outputs": {}} if "review" in self.completed else None},
-            "synthesize": {"task_id": "synthesize", "kind": "synthesis", "planned_order": 2, "intent": "Answer user", "instructions": "Answer from reports", "status": "completed" if "synthesize" in self.completed else "pending", "inputs": {}, "needs": [], "result": None},
-        }
-        return {
-            "root_run_id": str(self.root_run_id),
-            "status": "completed" if len(self.completed) == 3 else "active",
-            "tasks": task_data,
-            "revision": 1,
-            "last_failure": None,
-        }
-
-    async def claim_ready(self, plan_id):
-        assert plan_id == self.plan_id
-        return self.tasks.pop(0) if self.tasks else None
-
-    async def apply_result(self, plan_id, task_id, result):
-        assert plan_id == self.plan_id
-        assert result.outcome is TaskOutcome.COMPLETED
-        self.completed.add(task_id)
+    async def snapshot(self, plan_id): return self.inner.snapshot(str(plan_id))
+    async def apply_iteration(self, plan_id, proposal, **kwargs): return self.inner.apply_iteration(str(plan_id), proposal, **kwargs)
+    async def next_decision(self, plan_id): return self.inner.next_decision(str(plan_id))
+    async def claim_task(self, plan_id, task_id): return self.inner.claim_task(str(plan_id), task_id)
+    async def claim_checkpoint(self, plan_id, kind): return self.inner.claim_checkpoint(str(plan_id), kind)
+    async def task_request(self, plan_id, task_id): return self.inner.task_request(str(plan_id), task_id)
+    async def finish_attempt(self, plan_id, task_id, **kwargs): return self.inner.finish_attempt(str(plan_id), task_id, **kwargs)
+    async def finish_failure(self, plan_id, task_id, failure, **kwargs): return self.inner.finish_failure(str(plan_id), task_id, failure, **kwargs)
+    async def complete_synthesis(self, plan_id): return self.inner.complete_synthesis(str(plan_id))
+    async def mark_failed(self, plan_id, code, message): return self.inner.mark_failed(str(plan_id), code, message)
+    async def recover_stale_claims(self, plan_id, **kwargs): return self.inner.recover_stale_claims(str(plan_id), **kwargs)
+    async def link_attempt_execution(self, plan_id, task_id, agent_execution_id): return self.inner.link_attempt_execution(str(plan_id), task_id, agent_execution_id)
 
 
-class FakeExecutor:
+class Planner:
+    async def plan(self, *, request, **kwargs):
+        return IterationProposal(tasks=[], terminal=TerminalKind.SYNTHESIS, synthesis_brief=SynthesisBrief(user_question="goal", planned_work="none", purpose="answer", answer_requirements="short"))
+
+
+class Executor:
     async def execute_attempt(self, *, request, **kwargs):
-        return AgentExecutionResult(
-            completion=AgentExecutionCompletion.FULFILLED,
-            description=f"{request.task_id} done",
-        )
+        return AgentExecutionResult(completion=AgentExecutionCompletion.FULFILLED, description="done")
 
 
-class FakeSynthesizer:
-    async def stream(self, *, runtime_state, run_id, **_kwargs):
-        runtime_state.final_answer = "final answer"
-        yield RuntimeEvent.final("final answer", sources=[], run_id=str(run_id), attachments=[])
+class Synthesizer:
+    async def stream(self, *, runtime_state, run_id, **kwargs):
+        runtime_state.final_answer = "answer"
+        from app.runtime.events import RuntimeEvent
+        yield RuntimeEvent.final("answer", sources=[], run_id=str(run_id), attachments=[])
 
 
-class TaskResultCollector:
-    def __init__(self) -> None:
-        self.results = []
-        self.final_answer = None
-        self.final_error = None
-
-    def add_task_result(self, result) -> None:
-        self.results.append(result)
-
-
-def test_pending_needs_require_a_declared_output_producer() -> None:
-    pending_needs = [{"task_id": "consumer", "key": "regulation_content"}]
-    unchanged = {
-        "tasks": {
-            "consumer": {"depends_on": [], "expected_outputs": []},
-        }
-    }
-    resolved_by_graph = {
-        "tasks": {
-            "consumer": {"depends_on": ["reader"], "expected_outputs": []},
-            "reader": {
-                "expected_outputs": [
-                    {"key": "regulation_content", "description": "Regulation text"}
-                ]
-            },
-        }
-    }
-
-    assert not GraphOrchestrator._has_declared_resolvers(unchanged, pending_needs)
-    assert GraphOrchestrator._has_declared_resolvers(resolved_by_graph, pending_needs)
+class State:
+    final_answer = None
 
 
 @pytest.mark.asyncio
-async def test_groups_ready_tasks_under_one_execution_iteration():
-    store = FakeStore()
-    orchestrator = GraphOrchestrator(store=store, planner=object(), executor=FakeExecutor(), synthesizer=FakeSynthesizer())
-
-    events = [
-        event
-        async for event in orchestrator.run(
-            plan_id=store.plan_id,
-            goal="Test grouping",
-            available_agents=[],
-            planner_kwargs={"runtime_state": TaskResultCollector()},
-        )
-    ]
-
-    starts = [event for event in events if event["type"] == "planner_iteration_start"]
-    ends = [event for event in events if event["type"] == "planner_iteration_end"]
-    step_starts = [event for event in events if event["type"] == "step_start"]
-
-    assert len(starts) == len(ends) == 1
-    assert [event["step_number"] for event in step_starts] == [1, 2, 3]
-    assert {event["parent_entity_id"] for event in step_starts} == {starts[0]["entity_id"]}
-
-
-@pytest.mark.asyncio
-async def test_completed_task_results_reach_terminal_synthesis_checkpoint():
-    store = FakeStore()
-    runtime_state = TaskResultCollector()
-    orchestrator = GraphOrchestrator(store=store, planner=object(), executor=FakeExecutor(), synthesizer=FakeSynthesizer())
-
-    events = [
-        event
-        async for event in orchestrator.run(
-            plan_id=store.plan_id,
-            goal="Complete and synthesize",
-            available_agents=[],
-            planner_kwargs={"runtime_state": runtime_state},
-        )
-    ]
-
-    assert [result["task_id"] for result in runtime_state.results] == ["collect", "review"]
-    assert [result["outcome"] for result in runtime_state.results] == ["completed", "completed"]
-    assert events[-1]["type"] == "plan_terminal"
+async def test_empty_synthesis_iteration_ends_without_checkpoint_task() -> None:
+    store = AsyncMemoryStore()
+    events = [event async for event in GraphOrchestrator(store=store, planner=Planner(), executor=Executor(), synthesizer=Synthesizer()).run(plan_id=store.plan["id"], goal="goal", available_agents=[], planner_kwargs={"runtime_state": State()})]
     assert events[-1]["status"] == "completed"
+    assert store.inner.get(store.plan["id"])["tasks"] == {}
+    trace_iteration_id = events[0]["runtime_event"].data["entity_id"]
+    assert store.inner.get(store.plan["id"])["iterations"][0]["id"] == trace_iteration_id
+
+
+@pytest.mark.asyncio
+async def test_task_trace_closes_the_agent_and_step_under_the_persisted_iteration() -> None:
+    class TaskPlanner:
+        async def plan(self, *, request, **kwargs):
+            return IterationProposal(
+                tasks=[PlannedTask(
+                    task_id="work", executor="research", intent="inspect", instructions="inspect",
+                )],
+                terminal=TerminalKind.SYNTHESIS,
+                synthesis_brief=SynthesisBrief(
+                    user_question="goal", planned_work="inspect", purpose="answer", answer_requirements="short",
+                ),
+            )
+
+    store = AsyncMemoryStore()
+    events = [event async for event in GraphOrchestrator(
+        store=store, planner=TaskPlanner(), executor=Executor(), synthesizer=Synthesizer(),
+    ).run(
+        plan_id=store.plan["id"], goal="goal", available_agents=[{"slug": "research"}],
+        planner_kwargs={"runtime_state": State()},
+    )]
+    runtime_events = [event["runtime_event"] for event in events if event.get("type") == "_runtime_event"]
+    iteration_id = store.inner.get(store.plan["id"])["iterations"][0]["id"]
+    step_start = next(event for event in runtime_events if event.type.value == "step_start")
+    agent_start = next(event for event in runtime_events if event.type.value == "agent_start")
+    agent_end = next(event for event in runtime_events if event.type.value == "agent_end")
+    step_end = next(event for event in runtime_events if event.type.value == "step_end")
+
+    assert step_start.data["parent_entity_id"] == iteration_id
+    assert agent_start.data["parent_entity_id"] == step_start.data["entity_id"]
+    assert agent_end.data["entity_id"] == agent_start.data["entity_id"]
+    assert step_end.data["entity_id"] == step_start.data["entity_id"]
+
+
+@pytest.mark.asyncio
+async def test_iteration_limit_never_creates_a_hidden_finalize_iteration() -> None:
+    class ContinuePlanner:
+        calls = 0
+
+        async def plan(self, *, request, **kwargs):
+            self.calls += 1
+            return IterationProposal(tasks=[], terminal=TerminalKind.PLANNER)
+
+    store = AsyncMemoryStore()
+    planner = ContinuePlanner()
+    events = [event async for event in GraphOrchestrator(
+        store=store, planner=planner, executor=Executor(), synthesizer=Synthesizer(),
+    ).run(
+        plan_id=store.plan["id"], goal="goal", available_agents=[], max_steps=1,
+        planner_kwargs={"runtime_state": State()},
+    )]
+
+    assert planner.calls == 1
+    assert len(store.inner.get(store.plan["id"])["iterations"]) == 1
+    assert store.inner.get(store.plan["id"])["last_failure"]["code"] == "iteration_limit_exceeded"
+    assert events[-1]["error_code"] == "iteration_limit_exceeded"

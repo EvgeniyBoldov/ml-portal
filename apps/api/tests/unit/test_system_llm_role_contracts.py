@@ -11,14 +11,13 @@ from app.services.system_llm_role_contracts import (
 
 
 def test_planner_contract_matches_runtime_model() -> None:
-    from app.runtime.planner.graph_planner import PlannerGraphOutput
+    from app.runtime.orchestrator_contracts import IterationProposal
 
     contract = build_response_contract(SystemLLMRoleType.PLANNER)
     assert contract["format"] == "json"
-    assert set(contract["schema"]["properties"]) == set(PlannerGraphOutput.model_fields)
-    assert set(contract["schema"]["properties"]["action"]["enum"]) == {
-        "apply_graph", "ask_user", "fail",
-    }
+    assert set(contract["schema"]["properties"]) == set(IterationProposal.model_fields)
+    assert contract["schema"]["properties"]["terminal"]
+    IterationProposal.model_validate(contract["examples_v2"]["outputs"]["default"])
 
 
 @pytest.mark.parametrize(

@@ -2,9 +2,13 @@
 
 ## System LLM Role Contracts
 
-Response contracts for orchestration roles (Planner, Fact Extractor, Summary Compactor, Synthesizer, etc.) are generated dynamically from Pydantic models:
+Response contracts for active runtime roles (Planner, Memory Preparer, Fact
+Extractor, Fact Compactor and Synthesizer) are generated dynamically from
+Pydantic models:
 
-- **Source of truth**: Pydantic models (`PlannerLLMOutput`, `_LLMFactOutput`, `_LLMSummaryOutput`, `TriageDecision`) define the JSON schema
+- **Source of truth**: Pydantic models (`IterationProposal`,
+  `_PreparationOutput`, `_LLMFactOutput`, `_CompactionOutput`) define the JSON
+  schema for structured roles
 - **Schema generation**: `build_response_contract()` in `app/services/system_llm_role_contracts.py` generates JSON Schema via `model_json_schema()`
 - **Enrichment**: Schema is enriched with contract metadata (`x_when` for conditional fields, `oneOf` for discriminated unions)
 - **Startup validation**: `validate_role_contracts()` runs on startup and blocks app launch if schema divergence detected
@@ -12,7 +16,8 @@ Response contracts for orchestration roles (Planner, Fact Extractor, Summary Com
 
 ### Contract Types
 
-- **JSON contracts**: Used by Planner, Fact Extractor, Summary Compactor, Triage — render as structured form fields
+- **JSON contracts**: Used by Planner, Memory Preparer, Fact Extractor and
+  Fact Compactor — render as structured form fields
 - **Plain text contracts**: Used by Synthesizer — render as criteria/forbidden lists
 - **Markdown contracts**: Reserved for future roles
 

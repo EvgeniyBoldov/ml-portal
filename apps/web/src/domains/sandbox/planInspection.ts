@@ -1,6 +1,6 @@
 export interface PlanTaskViewModel {
   taskId: string;
-  kind: 'agent' | 'planner' | 'synthesis';
+  kind: 'agent';
   title: string;
   intent?: string;
   objective?: string;
@@ -13,13 +13,11 @@ export interface PlanTaskViewModel {
 }
 
 export interface PlanViewModel {
-  revision?: number;
-  decision?: string;
+  iteration?: number;
+  terminal?: string;
   goal?: string;
-  rationale?: string;
   trigger?: string;
   tasks: PlanTaskViewModel[];
-  removedTasks: string[];
 }
 
 const record = (value: unknown): Record<string, unknown> => {
@@ -37,16 +35,10 @@ const record = (value: unknown): Record<string, unknown> => {
 
 const text = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
-export function planDecisionLabel(value: unknown): string | undefined {
-  const decision = text(value);
-  if (!decision) return undefined;
-  return ({ create_plan: 'Сформировать план', revise_plan: 'Перепланировать', ask_user: 'Запросить уточнение', fail_plan: 'Остановить план' } as Record<string, string>)[decision] ?? decision;
-}
-
 export function taskStatusLabel(value: unknown): string | undefined {
   const status = text(value);
   if (!status) return undefined;
-  return ({ pending: 'Ожидает', ready: 'Готова к запуску', running: 'Выполняется', completed: 'Готово', superseded: 'Заменена планом', failed: 'Ошибка', unfulfillable: 'Невыполнима', waiting_user: 'Ожидает пользователя', waiting_dependency: 'Ожидает зависимость' } as Record<string, string>)[status] ?? status;
+  return ({ pending: 'Ожидает', running: 'Выполняется', waiting_retry: 'Ожидает повтора', waiting_confirmation: 'Ожидает подтверждения', needs_dependency: 'Требуются данные', blocked: 'Заблокирована', completed: 'Готово', failed: 'Ошибка', unfulfillable: 'Невыполнима', cancelled: 'Отменена' } as Record<string, string>)[status] ?? status;
 }
 
 function dependencyValues(value: unknown, taskNames?: Map<string, string>): string[] {
@@ -60,8 +52,7 @@ function dependencyValues(value: unknown, taskNames?: Map<string, string>): stri
 export function projectPlanTask(value: unknown, fallbackTaskId = 'task'): PlanTaskViewModel {
   const task = record(value);
   const taskId = text(task.task_id ?? task.id) ?? fallbackTaskId;
-  const rawKind = text(task.kind);
-  const kind = rawKind === 'planner' || rawKind === 'synthesis' ? rawKind : 'agent';
+  const kind = 'agent' as const;
   const intent = text(task.intent);
   const objective = text(task.objective ?? task.description ?? task.task_objective);
   const title = text(task.title ?? task.name ?? intent ?? objective ?? taskId) ?? 'Задача без названия';
@@ -72,7 +63,7 @@ export function projectPlanTask(value: unknown, fallbackTaskId = 'task'): PlanTa
     intent,
     objective,
     instructions: text(task.instructions ?? task.task_instructions),
-    executor: kind === 'planner' ? 'planner' : kind === 'synthesis' ? 'synthesizer' : text(task.executor ?? task.agent_slug ?? task.assigned_agent),
+    executor: text(task.executor ?? task.agent_slug ?? task.assigned_agent),
     status: taskStatusLabel(task.status),
     dependencies: dependencyValues(task.depends_on ?? task.dependencies),
     expectedOutputs: kind === 'agent' && Array.isArray(task.expected_outputs)
@@ -84,16 +75,14 @@ export function projectPlanTask(value: unknown, fallbackTaskId = 'task'): PlanTa
 
 export function projectPlan(value: unknown): PlanViewModel {
   const event = record(value);
-  const patch = record(event.patch ?? event.plan ?? event.effective_plan ?? value);
-  const taskRecords = Array.isArray(patch.tasks) ? patch.tasks.map(record) : [];
+  const proposal = record(event.proposal ?? event);
+  const taskRecords = Array.isArray(proposal.tasks) ? proposal.tasks.map(record) : [];
   const taskNames = new Map(taskRecords.map((task) => [text(task.task_id) ?? '', text(task.title) ?? text(task.task_id) ?? 'Задача']));
-  const taskById = (id: unknown): string => taskNames.get(String(id)) ?? String(id);
   return {
-    revision: typeof event.revision === 'number' ? event.revision : typeof patch.expected_revision === 'number' ? patch.expected_revision + 1 : undefined,
-    decision: planDecisionLabel(patch.decision ?? event.decision),
-    goal: text(patch.goal ?? event.goal),
-    rationale: text(patch.rationale ?? event.rationale),
-    trigger: text(patch.trigger ?? event.trigger ?? event.mode),
+    iteration: typeof event.sequence === 'number' ? event.sequence : typeof event.iteration === 'number' ? event.iteration : undefined,
+    terminal: text(proposal.terminal ?? event.terminal),
+    goal: text(event.goal),
+    trigger: text(event.trigger),
     tasks: taskRecords.map((task) => {
       const projected = projectPlanTask(task);
       return {
@@ -101,6 +90,5 @@ export function projectPlan(value: unknown): PlanViewModel {
         dependencies: dependencyValues(task.depends_on ?? task.dependencies, taskNames),
       };
     }),
-    removedTasks: Array.isArray(patch.remove_task_ids) ? patch.remove_task_ids.map(taskById) : [],
   };
 }

@@ -36,8 +36,8 @@ logger = get_logger(__name__)
 # `system_llm_roles` rather than this constant.
 _FALLBACK_SYSTEM_PROMPT = (
     "Ты — редактор финального ответа корпоративного AI-портала. "
-    "Ответь на вопрос и в направлении, заданных synthesis task, используя "
-    "только completed task reports. Не добавляй новые факты."
+    "Ответь на вопрос и в направлении, заданных synthesis brief, используя "
+    "только runtime-owned reports. Не добавляй новые факты."
 )
 _FILE_DELIVERY_RULE = (
     "Сгенерированные файлы доставляются интерфейсом отдельными вложениями. "
@@ -110,6 +110,10 @@ class Synthesizer:
         budget_resolver: Optional[BudgetResolver] = None,
         logging_level: Optional[str] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
+        # Completion belongs to this invocation only. A resumed/reused turn
+        # state must never make a failed synthesis look successful.
+        runtime_state.final_answer = None
+        runtime_state.final_error = None
         synthesis_run_id = str(uuid4())
         synthesis_status = "completed"
 
@@ -158,7 +162,7 @@ class Synthesizer:
             run_id=str(run_id),
             context_snapshot=compact_snapshot(
                 inputs={
-                    "synthesis_task": synthesis_context.get("synthesis_task", {}),
+                    "synthesis_brief": synthesis_context.get("synthesis_brief", {}),
                     "completed_task_count": len(synthesis_context.get("completed_task_reports", [])),
                 },
                 prompt=prompt_snapshot(synth_prompt, logging_level),
@@ -208,6 +212,7 @@ class Synthesizer:
         logical_llm_call_id = str(uuid4())
         for attempt in range(max_retries + 1):
             retry_scheduled = False
+            emitted_delta = False
             # Emit before opening the stream so a provider timeout/error still has
             # a stable LLM child in the sandbox journal.
             yield RuntimeEvent.llm_request(
@@ -234,18 +239,20 @@ class Synthesizer:
             ):
                 if isinstance(stream_event, StreamDelta):
                     if stream_event.chunk:
+                        emitted_delta = True
                         yield RuntimeEvent.delta(stream_event.chunk)
                     continue
                 if isinstance(stream_event, StreamError):
+                    may_retry = stream_event.recoverable and attempt < max_retries and not emitted_delta
                     yield RuntimeEvent.llm_response(
                         llm_call_id=llm_call_id,
                         logical_llm_call_id=logical_llm_call_id,
                         model=effective_model or "unknown",
                         error_type=stream_event.error_type,
                         error_code=stream_event.code,
-                        retryable=stream_event.recoverable,
-                        status=("waiting_retry" if stream_event.recoverable and attempt < max_retries else "failed"),
-                        terminal=not (stream_event.recoverable and attempt < max_retries),
+                        retryable=may_retry,
+                        status=("waiting_retry" if may_retry else "failed"),
+                        terminal=not may_retry,
                         attempt=attempt + 1,
                         max_attempts=max_retries + 1,
                         retry_after_ms=stream_event.retry_after_ms,
@@ -255,7 +262,7 @@ class Synthesizer:
                         actor_type="synthesizer",
                         actor_entity_id=synthesis_run_id,
                     )
-                    if stream_event.recoverable and attempt < max_retries:
+                    if may_retry:
                         retry_delay_ms = self._retry_delay_ms(
                             attempt=attempt,
                             retry_after_ms=stream_event.retry_after_ms,
@@ -301,6 +308,48 @@ class Synthesizer:
                     )
                     return
                 if isinstance(stream_event, StreamTurn):
+                    if stream_event.partial:
+                        synthesis_status = "failed"
+                        runtime_state.final_error = "synthesizer_partial_response"
+                        yield RuntimeEvent.llm_response(
+                            llm_call_id=stream_event.llm_call_id,
+                            logical_llm_call_id=logical_llm_call_id,
+                            model=effective_model or stream_event.model or "unknown",
+                            content=stream_event.content,
+                            response_length=stream_event.response_length,
+                            tokens_in=stream_event.tokens_in,
+                            tokens_out=stream_event.tokens_out,
+                            tokens_total=stream_event.tokens_total,
+                            duration_ms=stream_event.duration_ms,
+                            error_code="synthesizer_partial_response",
+                            safe_message="The synthesis stream ended before completion.",
+                            retryable=False,
+                            status="failed",
+                            terminal=True,
+                            attempt=attempt + 1,
+                            max_attempts=max_retries + 1,
+                            parent_entity_type="synthesis_run",
+                            parent_entity_id=synthesis_run_id,
+                            purpose="final_answer",
+                            actor_type="synthesizer",
+                            actor_entity_id=synthesis_run_id,
+                        )
+                        yield RuntimeEvent.error(
+                            "Не удалось завершить итоговый ответ.",
+                            recoverable=False,
+                            error_code="synthesizer_partial_response",
+                            user_message="Не удалось завершить итоговый ответ.",
+                            operator_message=stream_event.error_message or "Synthesis stream ended after partial output",
+                            source="llm",
+                            parent_entity_type="synthesis_run",
+                            parent_entity_id=synthesis_run_id,
+                        )
+                        yield RuntimeEvent.synthesis_end(
+                            synthesis_id=synthesis_run_id,
+                            run_id=str(run_id),
+                            status=synthesis_status,
+                        )
+                        return
                     full = (stream_event.content or "").strip()
                     if budget_registry is not None:
                         delta_payload: Dict[str, int] = {}

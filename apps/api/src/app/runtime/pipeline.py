@@ -548,9 +548,9 @@ class RuntimePipeline:
 
         # --- Planning (single decision engine) --------------------------
         planning_stage = self._assembler.build_graph_planning_stage(
-            # One initial plan plus the configured number of replans. This is
+            # One initial iteration plus the configured iteration limit. This is
             # a loop guard, not a graph-size/task-count limit.
-            max_steps=run_limits_v2.plan_revisions or 1,
+            max_steps=run_limits_v2.iterations or 1,
         )
         async for phased in planning_stage.run(
             runtime_state=runtime_state,
@@ -754,10 +754,9 @@ class RuntimePipeline:
         When RUNTIME_MEMORY_INLINE is False (default), the actual writeback
         is off-loaded to Celery for lower SSE latency.
         """
-        # Sync logical task results from runtime_state to the legacy memory
-        # transport.  The transport remains a summary-only compatibility
-        # surface; executors do not write it directly.
-        task_projection = runtime_state.task_results or runtime_state.agent_results
+        # Convert runtime-owned logical task results to the memory writer's
+        # bounded evidence DTO.
+        task_projection = runtime_state.task_results
         turn_mem.agent_results = [
             AgentResultSnippet(
                 agent=str(item.get("executor") or item.get("agent_slug") or item.get("agent") or ""),
@@ -965,7 +964,7 @@ class RuntimePipeline:
 
                     def _limits_payload(entity_limits) -> Optional[dict[str, int]]:
                         payload = {
-                            "plan_revisions": getattr(entity_limits, "plan_revisions", None),
+                            "iterations": getattr(entity_limits, "iterations", None),
                             "task_attempts": getattr(entity_limits, "task_attempts", None),
                             "agent_runs": getattr(entity_limits, "agent_runs", None),
                             "llm_calls": getattr(entity_limits, "llm_calls", None),

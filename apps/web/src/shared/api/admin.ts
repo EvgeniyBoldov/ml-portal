@@ -839,7 +839,7 @@ export const platformSettingsApi = {
 export interface RuntimeLimits {
   wall_time_ms_max?: number | null;
   max_parallel_tasks?: number | null;
-  max_replans?: number | null;
+  max_iterations?: number | null;
   max_task_executions?: number | null;
   sources?: Record<string, string>;
 }

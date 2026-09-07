@@ -6,6 +6,7 @@ from typing import Any, Dict
 from app.runtime.orchestrator_contracts import (
     AgentExecutionCompletion,
     AgentExecutionResult,
+    DiscoveredNeed,
     FreshnessPolicy,
     TaskOutputFulfillment,
     TaskOutputValue,
@@ -26,13 +27,12 @@ class TaskAttemptResultReducer:
         verified: Dict[str, Any] | None = None,
     ) -> TaskResult:
         verified = dict(verified if verified is not None else execution.verified)
+        outputs, missing, invalid = self._fulfilled_outputs(request, execution, verified)
         if execution.completion == AgentExecutionCompletion.NEEDS:
             return TaskResult(
                 outcome=TaskOutcome.NEEDS_DEPENDENCY,
                 description=execution.description,
-                outputs=dict(execution.outputs),
-                partial_completion=execution.description,
-                checkpoint=execution.checkpoint,
+                outputs=outputs,
                 needs=execution.needs,
                 verified=verified,
             )
@@ -40,37 +40,33 @@ class TaskAttemptResultReducer:
             return TaskResult(
                 outcome=TaskOutcome.UNFULFILLABLE,
                 description=execution.description,
-                outputs=dict(execution.outputs),
-                partial_completion=execution.description,
-                checkpoint=execution.checkpoint,
+                outputs=outputs,
+                limitation=execution.limitation,
                 verified=verified,
             )
         if request.freshness_policy == FreshnessPolicy.REQUIRE_RETRIEVAL and not verified.get("fresh_retrieval"):
             return TaskResult(
                 outcome=TaskOutcome.NEEDS_DEPENDENCY,
                 description=execution.description,
-                outputs=dict(execution.outputs),
-                partial_completion=execution.description,
-                checkpoint=execution.checkpoint,
-                needs=[{
-                    "ref": "fresh_retrieval",
-                    "key": "fresh_retrieval",
-                    "kind": "data",
-                    "description": "A successful compatible retrieval is required for this task attempt.",
-                }],
+                outputs=outputs,
+                needs=[DiscoveredNeed(
+                    ref="fresh_retrieval",
+                    key="fresh_retrieval",
+                    kind="data",
+                    description="A successful compatible retrieval is required for this task attempt.",
+                )],
                 reason_code="fresh_retrieval_missing",
+                limitation={"code": "fresh_retrieval_missing", "message": "A fresh retrieval is required to complete this task.", "action": "retry_later"},
                 verified=verified,
             )
 
-        outputs, missing, invalid = self._fulfilled_outputs(request, execution, verified)
         if invalid:
             return TaskResult(
                 outcome=TaskOutcome.UNFULFILLABLE,
                 description=execution.description,
                 outputs=outputs,
-                partial_completion=execution.description,
-                checkpoint=execution.checkpoint,
                 reason_code="output_schema_invalid",
+                limitation={"code": "output_schema_invalid", "message": "The task result did not satisfy the required output format.", "action": "none"},
                 verified=verified,
             )
         if missing:
@@ -78,16 +74,14 @@ class TaskAttemptResultReducer:
                 outcome=TaskOutcome.UNFULFILLABLE,
                 description=execution.description,
                 outputs=outputs,
-                partial_completion=execution.description,
-                checkpoint=execution.checkpoint,
                 reason_code="required_output_missing",
+                limitation={"code": "required_output_missing", "message": "The task result did not include a required output.", "action": "none"},
                 verified=verified,
             )
         return TaskResult(
             outcome=TaskOutcome.COMPLETED,
             description=execution.description,
             outputs=outputs,
-            checkpoint=execution.checkpoint,
             verified=verified,
         )
 
@@ -97,11 +91,15 @@ class TaskAttemptResultReducer:
         execution: AgentExecutionResult,
         verified: Dict[str, Any],
     ) -> tuple[Dict[str, TaskOutputValue], list[str], list[str]]:
-        outputs = dict(execution.outputs)
+        declared_keys = {spec.key for spec in request.expected_outputs}
+        outputs = {
+            key: value for key, value in execution.outputs.items()
+            if key in declared_keys
+        }
         missing: list[str] = []
         invalid: list[str] = []
         artifacts = list(verified.get("artifacts") or [])
-        has_receipt = bool(verified.get("receipts"))
+        receipts = [item for item in verified.get("receipts") or [] if isinstance(item, dict)]
         for spec in request.expected_outputs:
             value = outputs.get(spec.key)
             if spec.fulfillment == TaskOutputFulfillment.ARTIFACT:
@@ -119,7 +117,12 @@ class TaskAttemptResultReducer:
                         missing.append(spec.key)
                     continue
             elif spec.fulfillment == TaskOutputFulfillment.VERIFIED_RECEIPT:
-                if value is None or not has_receipt:
+                matching_receipts = [
+                    receipt for receipt in receipts
+                    if str(receipt.get("operation") or "") in spec.receipt_operations
+                    or str(receipt.get("canonical_operation") or "") in spec.receipt_operations
+                ]
+                if value is None or not matching_receipts:
                     if spec.required:
                         missing.append(spec.key)
                     continue
@@ -127,44 +130,31 @@ class TaskAttemptResultReducer:
                 missing.append(spec.key)
                 continue
             if value is not None and spec.json_schema:
-                payload = value.data if value.data is not None else value.model_dump(mode="json")
+                payload = (
+                    value.data
+                    if value.data is not None
+                    else value.text
+                    if value.text is not None
+                    else value.artifacts
+                )
                 if not TaskAttemptResultReducer._matches_schema(payload, spec.json_schema):
                     invalid.append(spec.key)
+                    outputs.pop(spec.key, None)
+                    continue
                 outputs[spec.key] = value
         return outputs, missing, invalid
 
     @staticmethod
     def _matches_schema(value: Any, schema: Dict[str, Any]) -> bool:
-        """Bounded validation for the task contract's common JSON Schema subset.
+        """Validate the planner-declared JSON Schema before accepting output."""
+        try:
+            import jsonschema
 
-        Task output schemas are planner-facing shape hints, not a second
-        arbitrary code execution surface.  Keep this deliberately small until
-        the API image ships a shared JSON-schema validator.
-        """
-        expected_type = schema.get("type")
-        type_matches = {
-            "object": lambda item: isinstance(item, dict),
-            "array": lambda item: isinstance(item, list),
-            "string": lambda item: isinstance(item, str),
-            "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool),
-            "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
-            "boolean": lambda item: isinstance(item, bool),
-            "null": lambda item: item is None,
-        }
-        if isinstance(expected_type, str) and expected_type in type_matches and not type_matches[expected_type](value):
+            jsonschema.Draft202012Validator(schema).validate(value)
+            return True
+        except ImportError:
+            # A declared schema is a hard runtime contract. Running without
+            # its validator must fail closed instead of accepting a subset.
             return False
-        enum = schema.get("enum")
-        if isinstance(enum, list) and value not in enum:
+        except Exception:
             return False
-        if isinstance(value, dict):
-            required = schema.get("required")
-            if isinstance(required, list) and any(key not in value for key in required if isinstance(key, str)):
-                return False
-            properties = schema.get("properties")
-            if isinstance(properties, dict):
-                for key, child_schema in properties.items():
-                    if key in value and isinstance(child_schema, dict) and not TaskAttemptResultReducer._matches_schema(value[key], child_schema):
-                        return False
-        if isinstance(value, list) and isinstance(schema.get("items"), dict):
-            return all(TaskAttemptResultReducer._matches_schema(item, schema["items"]) for item in value)
-        return True

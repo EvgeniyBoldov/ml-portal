@@ -9,6 +9,8 @@ from app.services.extractors.base import BaseExtractor, ExtractResult
 def _decode_best_effort(data: bytes) -> Tuple[str, str, List[str]]:
     """Decode bytes to str using charset-normalizer (fallback to utf-8)."""
     warnings: List[str] = []
+    if data.isascii():
+        return data.decode("ascii"), "ascii", warnings
     try:
         from charset_normalizer import from_bytes as cn_from_bytes  # type: ignore
 

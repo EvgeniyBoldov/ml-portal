@@ -8,7 +8,7 @@ from typing import Optional
 class EntityLimits:
     """Limits for one concrete execution entity."""
 
-    plan_revisions: Optional[int] = None
+    iterations: Optional[int] = None
     task_attempts: Optional[int] = None
     agent_runs: Optional[int] = None
     llm_calls: Optional[int] = None
@@ -23,7 +23,7 @@ class EntityLimits:
 class RunLimits:
     """Hard caps for the whole run."""
 
-    plan_revisions: Optional[int] = None
+    iterations: Optional[int] = None
     task_attempts: Optional[int] = None
     agent_runs: Optional[int] = None
     llm_calls: Optional[int] = None
@@ -35,7 +35,7 @@ class RunLimits:
 
     def as_entity_limits(self) -> EntityLimits:
         return EntityLimits(
-            plan_revisions=self.plan_revisions,
+            iterations=self.iterations,
             task_attempts=self.task_attempts,
             agent_runs=self.agent_runs,
             llm_calls=self.llm_calls,

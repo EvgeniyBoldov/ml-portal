@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class RuntimeLimitsUpdate(BaseModel):
     wall_time_ms_max: Optional[int] = Field(default=None, ge=1)
     max_parallel_tasks: Optional[int] = Field(default=None, ge=1)
-    max_replans: Optional[int] = Field(default=None, ge=0)
+    max_iterations: Optional[int] = Field(default=None, ge=1)
     max_task_executions: Optional[int] = Field(default=None, ge=1)
 
     model_config = ConfigDict(extra="forbid")

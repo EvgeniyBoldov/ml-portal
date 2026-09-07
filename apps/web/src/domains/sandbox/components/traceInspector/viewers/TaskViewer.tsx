@@ -1,5 +1,5 @@
 import { InspectorFieldGroup, InspectorFieldRow, InspectorJsonBlock, InspectorScalar, InspectorTextBlock } from '@/shared/ui/Inspector';
-import type { PlanTaskViewModel } from '../../../planInspection';
+import type { PlanTaskViewModel } from '@domains/sandbox/planInspection';
 import { InspectorEmptyState } from '../InspectorPrimitives';
 
 const list = (value: string[]): string => value.join('\n');
@@ -8,8 +8,6 @@ export function TaskViewer({ task }: { task?: PlanTaskViewModel }) {
   if (!task) return <InspectorEmptyState message="Описание задачи для этого исполнителя не записано в журнал." />;
   const goal = task.objective ?? task.instructions ?? task.intent;
   return <InspectorFieldGroup>
-    {task.kind === 'planner' ? <InspectorFieldRow label="Тип">Контрольная точка планера</InspectorFieldRow> : null}
-    {task.kind === 'synthesis' ? <InspectorFieldRow label="Тип">Финальный синтез ответа</InspectorFieldRow> : null}
     {goal ? <InspectorFieldRow label="Цель"><InspectorTextBlock text={goal} /></InspectorFieldRow> : null}
     {task.intent ? <InspectorFieldRow label="Назначение"><InspectorScalar value={task.intent} /></InspectorFieldRow> : null}
     {task.instructions && task.instructions !== goal ? <InspectorFieldRow label="Инструкции"><InspectorTextBlock text={task.instructions} /></InspectorFieldRow> : null}

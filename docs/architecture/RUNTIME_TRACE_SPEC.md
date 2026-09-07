@@ -19,28 +19,28 @@ Every row has an event `id`, `run_id`, monotonic `sequence`, `event_type`,
 The canonical sandbox presentation hierarchy is:
 
 ```text
-run → orchestrator → plan_revision → step → agent_execution → LLM/tool/interaction/error/snapshot
+run → planner orchestrator → planner_iteration → planner LLM call
+                                             └→ step → agent_execution → LLM/tool/interaction/error/snapshot
 ```
 
-`plan_revision` is the operator-facing trace entity for one planner decision
+`iteration` is the operator-facing trace entity for one planner decision
 and its execution wave. `task` and `attempt` remain persisted runtime
 control-plane entities: task lifecycle events retain their plan parent and
 carry explicit task/attempt references to the executor run. They are not a
 second competing containment hierarchy for the trace UI.
 
-The current event/entity names `planner_iteration` and `iteration` are legacy
-wire terminology for `plan_revision` until the planned breaking rename. The
-trace projector may map those canonical rows to `plan_revision`, but new
-emitters must not create a parallel hierarchy. Revision and step ids are stable
-strings scoped by root run. Executor ids are UUIDs. Parallel executor runs
+`planner_iteration` identifies the planner invocation that produced an
+iteration. It is not a revision or a second graph hierarchy. Iteration and step
+ids are stable strings scoped by root run. Executor ids are UUIDs. Parallel executor runs
 receive independent immutable logger scopes.
 
-For the sandbox execution graph, an `agent_start` payload creates the
+The planner's structured LLM call is a direct child of the
+`planner_iteration` that it produces. For the sandbox execution graph, an `agent_start` payload creates the
 `agent_execution` entity and also carries the
 operator-facing executor identity: `executor_type`, `executor_name`,
 `agent_slug`, and the task title/objective. `llm_request`/`llm_response` share
 one `llm_call` entity; `tool_call`/`tool_result` share one `tool_call` entity.
-Both call entities are direct children of the executor run that initiated them.
+Agent-owned call entities are direct children of the executor run that initiated them.
 This is an explicit journal contract, not a frontend inference rule.
 
 Each user-visible LLM request has one stable `llm_call_id` from its initial
@@ -57,19 +57,19 @@ a terminal `llm_response`; the plaintext-protocol fallback emits a correlated
 `protocol_retry` and reuses the same call ID. A fallback must never leave its
 `llm_request` in a running state.
 
-Every started plan revision, step and executor has a terminal event. Step start
+Every started iteration, step and executor has a terminal event. Step start
 contains goal/intent, inputs and risk; step end contains outcome, summary and
 sufficiency. Executor end contains a safe result summary, `completion_kind`,
 `sufficient_for_phase`, missing inputs/needs, attachments/artifacts, output
 preview and retry/error classification.
 
-Plan creation and revision events are owned by the planner executor run that
-produced them (and therefore are also contained by its plan revision). Their payload
-includes `revision_before`, `revision_after`, mode/trigger and redacted plan patch.
-`planner_decision` records the normalized semantic action; `protocol_retry`
-records only retry number and safe error classification. Task lifecycle rows
-keep their plan parent and include the task/attempt references used by the
-corresponding executor run.
+Iteration creation is owned by the planner invocation that produced it. Its
+`plan_iteration_applied` payload includes trigger, terminal and a redacted
+iteration proposal. Planner invocation lifecycle records the call itself;
+there is no patch/revision decision event. `protocol_retry` records only retry
+number and safe error classification. Task lifecycle rows keep their plan
+parent and include the task/attempt references used by the corresponding
+executor run.
 
 Preflight is represented by `preflight_started`, terminal
 `preflight_completed`/`preflight_failed`, and a redacted capability/RBAC/limit
@@ -181,12 +181,12 @@ below the answer and do not require the synthesizer to emit markdown links.
   `llm_response` containing a safe `error_code`, `retryable` and provider
   status where available, followed by the canonical runtime `error`. Raw
   provider bodies and tracebacks remain application-log diagnostics.
-- RBAC, budget, limit, plan and checkpoint state are snapshots owned by the
+- RBAC, budget, limit, plan and terminal-invocation state are snapshots owned by the
   entity making the decision.
-- A persisted plan node may be `agent` or `planner`. A planner node is an
-  explicit graph checkpoint: its lifecycle is visible as a task with
-  `kind=planner`, followed by a planner iteration with `iteration_type=checkpoint`.
-  It is not an agent execution, confirmation gate or user-input interaction.
+- Persisted plan tasks are always `agent` tasks. Planner and synthesis are
+  terminal invocations of an iteration, recorded as lifecycle events rather
+  than task nodes. They are not agent executions, confirmation gates or
+  user-input interactions.
 - Worker boundaries transport JSON `RuntimeLogContext`, never a live logger or
   database session. The worker reconstructs a logger with a session factory,
   retains `run_id`, and uses task attempt/idempotency keys for retries.

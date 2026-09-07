@@ -1,13 +1,8 @@
-"""Canonical contracts for the runtime planner/orchestrator boundary.
-
-The planner describes a graph.  The orchestrator is the only component that
-executes tasks and mutates their lifecycle.  These contracts deliberately keep
-technical execution failures separate from a valid agent result.
-"""
+"""Strict contracts for the iterative planner/runtime protocol."""
 from __future__ import annotations
 
-from enum import Enum
 import json
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
@@ -23,25 +18,28 @@ class PlanStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class IterationStatus(str, Enum):
+    ACTIVE = "active"
+    CLOSED = "closed"
+
+
 class TaskStatus(str, Enum):
     PENDING = "pending"
-    READY = "ready"
     RUNNING = "running"
-    WAITING_DEPENDENCY = "waiting_dependency"
-    WAITING_USER = "waiting_user"
     WAITING_RETRY = "waiting_retry"
+    WAITING_CONFIRMATION = "waiting_confirmation"
     COMPLETED = "completed"
-    SUPERSEDED = "superseded"
+    NEEDS_DEPENDENCY = "needs_dependency"
     UNFULFILLABLE = "unfulfillable"
     FAILED = "failed"
+    BLOCKED = "blocked"
     CANCELLED = "cancelled"
 
 
-class RequirementStatus(str, Enum):
-    PENDING = "pending"
-    RESOLVED = "resolved"
-    WAITING_USER = "waiting_user"
-    UNRESOLVABLE = "unresolvable"
+TERMINAL_TASK_STATUSES = frozenset({
+    TaskStatus.COMPLETED, TaskStatus.NEEDS_DEPENDENCY, TaskStatus.UNFULFILLABLE,
+    TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED,
+})
 
 
 class AttemptStatus(str, Enum):
@@ -58,41 +56,44 @@ class TaskOutcome(str, Enum):
     UNFULFILLABLE = "unfulfillable"
 
 
-class PlanNodeKind(str, Enum):
-    """Execution role of a persisted plan node."""
-
-    AGENT = "agent"
+class TerminalKind(str, Enum):
     PLANNER = "planner"
     SYNTHESIS = "synthesis"
 
 
-class TaskSuccessAction(str, Enum):
-    """What the orchestrator does after a successfully completed task."""
+class SchedulerActionKind(str, Enum):
+    EXECUTE_TASK = "execute_task"
+    WAIT_RETRY = "wait_retry"
+    WAIT_INPUT = "wait_input"
+    INVOKE_PLANNER = "invoke_planner"
+    INVOKE_SYNTHESIS = "invoke_synthesis"
+    TERMINAL = "terminal"
 
-    CONTINUE = "continue"
-    REPLAN = "replan"
+
+class ResolutionAction(str, Enum):
+    CONTINUE_WITH_TASKS = "continue_with_tasks"
+    ACCEPT_PARTIAL = "accept_partial"
+    EXCLUDE_FROM_SCOPE = "exclude_from_scope"
+    REPORT_UNRESOLVED = "report_unresolved"
+
+
+class LimitationAction(str, Enum):
+    RECONFIGURE_CREDENTIALS = "reconfigure_credentials"
+    GRANT_ACCESS = "grant_access"
+    PROVIDE_INPUT = "provide_input"
+    RETRY_LATER = "retry_later"
+    NONE = "none"
 
 
 class FreshnessPolicy(str, Enum):
-    """Whether a task may finish from its bounded memory/context alone."""
-
     ALLOW_MEMORY = "allow_memory"
     REQUIRE_RETRIEVAL = "require_retrieval"
 
 
 class TaskOutputFulfillment(str, Enum):
-    """Evidence class required to satisfy one planned task output."""
-
     TASK_RESULT = "task_result"
     VERIFIED_RECEIPT = "verified_receipt"
     ARTIFACT = "artifact"
-
-
-class AgentExecutionStatus(str, Enum):
-    COMPLETED = "completed"
-    FAILED = "failed"
-    TIMED_OUT = "timed_out"
-    CANCELLED = "cancelled"
 
 
 class AgentExecutionCompletion(str, Enum):
@@ -101,28 +102,23 @@ class AgentExecutionCompletion(str, Enum):
     UNFULFILLABLE = "unfulfillable"
 
 
-class PlannerDecisionKind(str, Enum):
-    """The only terminal decisions a planner may return to the orchestrator."""
-
-    CREATE_PLAN = "create_plan"
-    REVISE_PLAN = "revise_plan"
-    ASK_USER = "ask_user"
-    FAIL_PLAN = "fail_plan"
+class UserLimitation(BaseModel):
+    code: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1)
+    action: LimitationAction = LimitationAction.NONE
+    model_config = {"extra": "forbid"}
 
 
-class NeedSpec(BaseModel):
-    ref: str = Field(default="", description="Stable local reference for this need")
+class DiscoveredNeed(BaseModel):
+    """A missing agent input. Its lifecycle is never agent-authored."""
+    ref: str = Field(..., min_length=1)
     key: str = Field(..., min_length=1)
     kind: Literal["data", "artifact", "decision"] = "data"
     description: str = Field(..., min_length=1)
     json_schema: Dict[str, Any] = Field(default_factory=dict, alias="schema")
     required: bool = True
     context: Dict[str, Any] = Field(default_factory=dict)
-    resolved_value: Optional[Any] = None
-    resolved_by: Optional[str] = None
-    resolved_at_iteration: Optional[int] = None
-
-    model_config = {"populate_by_name": True}
+    model_config = {"extra": "forbid", "populate_by_name": True}
 
 
 class TaskOutputSpec(BaseModel):
@@ -131,99 +127,147 @@ class TaskOutputSpec(BaseModel):
     json_schema: Dict[str, Any] = Field(default_factory=dict, alias="schema")
     required: bool = True
     fulfillment: TaskOutputFulfillment = TaskOutputFulfillment.TASK_RESULT
+    receipt_operations: List[str] = Field(default_factory=list)
+    model_config = {"extra": "forbid", "populate_by_name": True}
 
-    model_config = {"populate_by_name": True}
+    @model_validator(mode="after")
+    def validate_fulfillment(self) -> "TaskOutputSpec":
+        if any(not item or item != item.strip() for item in self.receipt_operations):
+            raise ValueError("receipt_operations must contain non-empty canonical names")
+        if len(self.receipt_operations) != len(set(self.receipt_operations)):
+            raise ValueError("receipt_operations must be unique")
+        if self.fulfillment == TaskOutputFulfillment.VERIFIED_RECEIPT and not self.receipt_operations:
+            raise ValueError("verified_receipt output requires receipt_operations")
+        if self.fulfillment != TaskOutputFulfillment.VERIFIED_RECEIPT and self.receipt_operations:
+            raise ValueError("receipt_operations are allowed only for verified_receipt outputs")
+        return self
 
 
 class PlannedTask(BaseModel):
+    """An immutable agent task. Planner and synthesis are not graph nodes."""
     task_id: str = Field(..., min_length=1)
-    kind: PlanNodeKind = PlanNodeKind.AGENT
-    executor: Optional[str] = Field(default=None, min_length=1)
+    executor: str = Field(..., min_length=1)
     intent: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
     depends_on: List[str] = Field(default_factory=list)
-    needs: List[NeedSpec] = Field(default_factory=list)
-    on_success: TaskSuccessAction = TaskSuccessAction.CONTINUE
     freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
+    model_config = {"extra": "forbid"}
 
+
+class NeedBinding(BaseModel):
+    need_task_id: str = Field(..., min_length=1)
+    need_ref: str = Field(..., min_length=1)
+    producer_task_id: str = Field(..., min_length=1)
+    output_key: str = Field(..., min_length=1)
+    consumer_task_id: str = Field(..., min_length=1)
+    consumer_input_key: str = Field(..., min_length=1)
+    model_config = {"extra": "forbid"}
+
+
+class TaskResolution(BaseModel):
+    """Planner's explicit disposition of one prior incomplete task."""
+    task_id: str = Field(..., min_length=1)
+    action: ResolutionAction
+    output_keys: List[str] = Field(default_factory=list)
+    replacement_task_ids: List[str] = Field(default_factory=list)
+    reason: str = Field(..., min_length=1)
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
-    def validate_kind(self) -> "PlannedTask":
-        if self.kind == PlanNodeKind.AGENT:
-            if not self.executor:
-                raise ValueError("agent task requires executor")
-            return self
-        node_name = "planner checkpoint" if self.kind == PlanNodeKind.PLANNER else "synthesis checkpoint"
-        if self.executor:
-            raise ValueError(f"{node_name} cannot declare executor")
-        if self.inputs:
-            raise ValueError(f"{node_name} cannot declare inputs")
-        if self.expected_outputs:
-            raise ValueError(f"{node_name} cannot declare expected_outputs")
-        if self.on_success != TaskSuccessAction.CONTINUE:
-            raise ValueError(f"{node_name} cannot declare on_success")
-        if self.freshness_policy != FreshnessPolicy.ALLOW_MEMORY:
-            raise ValueError(f"{node_name} cannot require retrieval")
-        if self.kind == PlanNodeKind.SYNTHESIS:
-            if self.depends_on:
-                raise ValueError("synthesis checkpoint cannot declare dependencies")
-            if self.needs:
-                raise ValueError("synthesis checkpoint cannot declare needs")
+    def validate_action(self) -> "TaskResolution":
+        if self.action == ResolutionAction.ACCEPT_PARTIAL and not self.output_keys:
+            raise ValueError("accept_partial requires output_keys")
+        if self.action != ResolutionAction.ACCEPT_PARTIAL and self.output_keys:
+            raise ValueError("only accept_partial may specify output_keys")
+        if self.action == ResolutionAction.CONTINUE_WITH_TASKS and not self.replacement_task_ids:
+            raise ValueError("continue_with_tasks requires replacement_task_ids")
+        if self.action != ResolutionAction.CONTINUE_WITH_TASKS and self.replacement_task_ids:
+            raise ValueError("only continue_with_tasks may specify replacement_task_ids")
         return self
 
 
-class PlanPatch(BaseModel):
-    """A complete, validated mutation proposed by the planner."""
+class SynthesisBrief(BaseModel):
+    user_question: str = Field(..., min_length=1)
+    planned_work: str = Field(..., min_length=1)
+    purpose: str = Field(..., min_length=1)
+    answer_requirements: str = Field(..., min_length=1)
+    model_config = {"extra": "forbid"}
 
-    expected_revision: int = Field(..., ge=0)
-    decision: PlannerDecisionKind = PlannerDecisionKind.REVISE_PLAN
-    goal: Optional[str] = Field(default=None, min_length=1)
+
+class IterationProposal(BaseModel):
     tasks: List[PlannedTask] = Field(default_factory=list)
-    remove_task_ids: List[str] = Field(default_factory=list)
-    question: Optional[str] = None
-    failure_reason: Optional[str] = None
-    rationale: str = ""
-    trigger: Optional[str] = None
+    terminal: TerminalKind
+    synthesis_brief: Optional[SynthesisBrief] = None
+    bindings: List[NeedBinding] = Field(default_factory=list)
+    resolutions: List[TaskResolution] = Field(default_factory=list)
+    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
-    def validate_patch(self) -> "PlanPatch":
-        task_ids = [task.task_id for task in self.tasks]
-        if len(task_ids) != len(set(task_ids)):
-            raise ValueError("plan patch contains duplicate task ids")
+    def validate_iteration(self) -> "IterationProposal":
+        ids = [task.task_id for task in self.tasks]
+        if len(ids) != len(set(ids)):
+            raise ValueError("iteration contains duplicate task ids")
+        if self.terminal == TerminalKind.SYNTHESIS and self.synthesis_brief is None:
+            raise ValueError("synthesis terminal requires synthesis_brief")
+        if self.terminal == TerminalKind.PLANNER and self.synthesis_brief is not None:
+            raise ValueError("planner terminal cannot include synthesis_brief")
+        known = set(ids)
         for task in self.tasks:
+            output_keys = [output.key for output in task.expected_outputs]
+            if len(output_keys) != len(set(output_keys)):
+                raise ValueError(f"task {task.task_id} contains duplicate expected output keys")
+            # Artifact identifiers are issued by the runtime, not by the
+            # agent.  One artifact output gives that runtime-issued set one
+            # unambiguous owner; allowing several would make every output
+            # falsely claim the same artifacts.
+            artifact_outputs = sum(
+                output.fulfillment == TaskOutputFulfillment.ARTIFACT
+                for output in task.expected_outputs
+            )
+            if artifact_outputs > 1:
+                raise ValueError(f"task {task.task_id} may declare at most one artifact output")
             if len(task.depends_on) != len(set(task.depends_on)):
                 raise ValueError(f"task {task.task_id} contains duplicate dependencies")
             if task.task_id in task.depends_on:
                 raise ValueError(f"task {task.task_id} cannot depend on itself")
-        if set(self.remove_task_ids) & set(task_ids):
-            raise ValueError("plan patch cannot create and remove the same task")
-        if self.decision == PlannerDecisionKind.CREATE_PLAN and self.expected_revision != 0:
-            raise ValueError("create_plan is valid only for revision zero")
-        if self.decision == PlannerDecisionKind.ASK_USER and not self.question:
-            raise ValueError("ask_user requires a question")
-        if self.decision == PlannerDecisionKind.FAIL_PLAN and not self.failure_reason:
-            raise ValueError("fail_plan requires failure_reason")
+            if unknown := set(task.depends_on) - known:
+                raise ValueError(f"task {task.task_id} has unknown dependencies: {sorted(unknown)}")
+        if len({item.task_id for item in self.resolutions}) != len(self.resolutions):
+            raise ValueError("iteration contains duplicate task resolutions")
+        for resolution in self.resolutions:
+            unknown = set(resolution.replacement_task_ids) - known
+            if unknown:
+                raise ValueError(f"resolution references unknown replacement tasks: {sorted(unknown)}")
         return self
 
 
-class PlanRequest(BaseModel):
-    goal: str = Field(..., min_length=1)
+class PlannerContext(BaseModel):
+    goal: str
+    trigger: str
+    execution_ledger: Dict[str, Any]
     available_agents: List[Dict[str, Any]] = Field(default_factory=list)
-    plan: Dict[str, Any] = Field(default_factory=dict)
-    completed_outputs: Dict[str, Any] = Field(default_factory=dict)
     available_artifacts: List[Dict[str, Any]] = Field(default_factory=list)
-    needs: List[Dict[str, Any]] = Field(default_factory=list)
-    last_failure: Optional[Dict[str, Any]] = None
-    user_response: Optional[str] = None
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
-    trigger: Optional[str] = None
+    model_config = {"extra": "forbid"}
+
+
+class PlanRequest(BaseModel):
+    context: PlannerContext
     run_id: Optional[UUID] = None
     plan_id: Optional[UUID] = None
     trace_parent_id: Optional[str] = None
-    checkpoint: Optional[Dict[str, Any]] = None
+    model_config = {"extra": "forbid"}
+
+
+class SchedulerDecision(BaseModel):
+    kind: SchedulerActionKind
+    task_id: Optional[str] = None
+    iteration_id: Optional[str] = None
+    retry_at: Optional[str] = None
+    reason: Optional[str] = None
+    model_config = {"extra": "forbid"}
 
 
 class TaskRequest(BaseModel):
@@ -232,25 +276,18 @@ class TaskRequest(BaseModel):
     intent: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
-    needs: List[NeedSpec] = Field(default_factory=list)
-    checkpoint: Dict[str, Any] = Field(default_factory=dict)
     dependency_outputs: Dict[str, Any] = Field(default_factory=dict)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
     freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
+    model_config = {"extra": "forbid"}
 
 
 class TaskOutputValue(BaseModel):
-    """One declared, keyed output of a completed agent execution."""
-
     description: Optional[str] = None
     text: Optional[str] = None
     data: Optional[Any] = None
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)
-
-    # Terminal output values are an executor protocol, not a free-form
-    # extension point.  Unknown keys must fail the attempt instead of being
-    # silently discarded by Pydantic and later looking like an empty result.
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
@@ -261,92 +298,39 @@ class TaskOutputValue(BaseModel):
 
 
 class AgentExecutionResult(BaseModel):
-    """Normalized terminal result of one agent executor run.
-
-    It is intentionally distinct from the logical task result.  ``needs`` is
-    always present; a completed execution with needs is a successful agent
-    execution that did not yet fulfil its task.
-    """
-
-    status: AgentExecutionStatus = AgentExecutionStatus.COMPLETED
     completion: AgentExecutionCompletion
     description: str = Field(..., min_length=1)
     outputs: Dict[str, TaskOutputValue] = Field(default_factory=dict)
-    needs: List[NeedSpec] = Field(default_factory=list)
-    checkpoint: Dict[str, Any] = Field(default_factory=dict)
+    needs: List[DiscoveredNeed] = Field(default_factory=list)
     receipt_refs: List[Dict[str, Any]] = Field(default_factory=list)
-    # Assigned by runtime after the agent's JSON has been validated; agents do
-    # not get authority to declare this field.
+    limitation: Optional[UserLimitation] = None
     verified: Dict[str, Any] = Field(default_factory=dict)
-
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_completion(self) -> "AgentExecutionResult":
-        if self.status != AgentExecutionStatus.COMPLETED:
-            raise ValueError("terminal task completion must use completed execution status")
         if self.completion == AgentExecutionCompletion.NEEDS and not self.needs:
             raise ValueError("needs completion requires at least one need")
         if self.completion == AgentExecutionCompletion.FULFILLED and self.needs:
             raise ValueError("fulfilled completion cannot contain unresolved needs")
+        if self.completion != AgentExecutionCompletion.NEEDS and self.needs:
+            raise ValueError("only needs completion may contain unresolved needs")
+        if self.completion == AgentExecutionCompletion.UNFULFILLABLE and self.limitation is None:
+            raise ValueError("unfulfillable completion requires a limitation")
+        if self.completion != AgentExecutionCompletion.UNFULFILLABLE and self.limitation is not None:
+            raise ValueError("only unfulfillable completion may contain a limitation")
         return self
 
 
 class TaskResult(BaseModel):
-    """Runtime-owned result and lifecycle decision for a logical task.
-
-    Technical exceptions, provider timeouts and invalid protocol responses do
-    not use this model; they are represented by ``TaskAttemptFailure``.
-    """
-
     outcome: TaskOutcome
-    description: str = Field(default="", alias="summary")
+    description: str = Field(..., min_length=1)
     outputs: Dict[str, TaskOutputValue] = Field(default_factory=dict)
-    partial_completion: Optional[str] = None
-    checkpoint: Dict[str, Any] = Field(default_factory=dict)
-    needs: List[NeedSpec] = Field(default_factory=list)
+    needs: List[DiscoveredNeed] = Field(default_factory=list)
     reason_code: Optional[str] = None
+    limitation: Optional[UserLimitation] = None
     verified: Dict[str, Any] = Field(default_factory=dict)
-
-    model_config = {"populate_by_name": True}
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_outputs(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        normalized = dict(value)
-        outputs = normalized.get("outputs")
-        if outputs is None:
-            verified = normalized.get("verified")
-            if isinstance(verified, dict):
-                outputs = verified.get("outputs")
-        if isinstance(outputs, dict):
-            normalized["outputs"] = {
-                str(key): raw if isinstance(raw, TaskOutputValue) or isinstance(raw, dict) and any(
-                    field in raw for field in ("text", "data", "artifacts")
-                ) else {"data": raw}
-                for key, raw in outputs.items()
-            }
-        return normalized
-
-    @property
-    def summary(self) -> str:
-        """Compatibility accessor for trace/presentation callers."""
-        return self.description
-
-    @model_validator(mode="after")
-    def validate_outcome(self) -> "TaskResult":
-        if self.outcome == TaskOutcome.COMPLETED and self.needs:
-            raise ValueError("completed task cannot contain unresolved needs")
-        if self.outcome == TaskOutcome.NEEDS_DEPENDENCY and not self.needs:
-            raise ValueError("needs_dependency requires at least one need")
-        return self
-
-
-# Compatibility name for callers during the task-result migration.  The
-# executor now returns AgentExecutionResult; this name denotes task state.
-AgentTaskResult = TaskResult
+    model_config = {"extra": "forbid"}
 
 
 class TaskAttemptFailure(BaseModel):
@@ -355,40 +339,22 @@ class TaskAttemptFailure(BaseModel):
     retryable: bool = False
     timed_out: bool = False
     details: Dict[str, Any] = Field(default_factory=dict)
+    model_config = {"extra": "forbid"}
 
 
 class TaskExecutionError(RuntimeError):
-    """Technical task failure which the orchestrator may safely retry.
-
-    A valid ``AgentTaskResult`` represents a completed business decision.  A
-    provider outage, timeout, or transport failure is not such a decision and
-    must remain on the task-attempt failure path.
-    """
-
-    def __init__(
-        self,
-        *,
-        code: str,
-        message: str,
-        retryable: bool,
-        details: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    def __init__(self, *, code: str, message: str, retryable: bool, details: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(message)
-        self.code = code
-        self.retryable = retryable
-        self.details = dict(details or {})
+        self.code, self.retryable, self.details = code, retryable, dict(details or {})
 
 
 class TaskConfirmationRequired(RuntimeError):
-    """A task reached an operation gate and must resume from its checkpoint."""
-
     def __init__(self, payload: Dict[str, Any]) -> None:
         self.payload = dict(payload or {})
         super().__init__(str(self.payload.get("summary") or self.payload.get("message") or "Operation requires confirmation"))
 
 
 def parse_agent_execution_result(content: str) -> AgentExecutionResult:
-    """Parse the exact JSON protocol; prose and markdown are rejected."""
     text = str(content or "").strip()
     if not text:
         raise ValueError("agent returned an empty task result")
@@ -399,17 +365,3 @@ def parse_agent_execution_result(content: str) -> AgentExecutionResult:
     if not isinstance(payload, dict):
         raise ValueError("agent task result must be a JSON object")
     return AgentExecutionResult.model_validate(payload)
-
-
-def parse_agent_task_result(content: str) -> TaskResult:
-    """Compatibility parser for persisted task-result fixtures only."""
-    text = str(content or "").strip()
-    if not text:
-        raise ValueError("task result is empty")
-    return TaskResult.model_validate_json(text)
-
-
-class PlannerPortProtocol:
-    """Documentation-only protocol marker; concrete async ports live in ports.py."""
-
-    pass

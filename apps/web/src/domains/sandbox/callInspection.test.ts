@@ -42,15 +42,14 @@ describe('call inspection projection', () => {
     expect(llmResponseStatus({ content: 'answer', error_type: 'ProviderError' })).toBe('error');
   });
 
-  it('classifies LLM outcomes by returned action instead of text presence', () => {
+  it('classifies strict iteration proposals without interpreting legacy actions', () => {
     expect(llmOutcome({ content: '' }, 2)).toEqual({ kind: 'tools', label: 'Вызов инструментов', count: 2 });
-    expect(llmOutcome({ purpose: 'planning_decision', content: '{"action":"apply_graph","tasks":[{},{}]}' })).toEqual({ kind: 'plan', label: 'План', count: 2 });
-    expect(llmOutcome({ purpose: 'planning_decision', content: '{"action":"revise_plan","tasks":[{}]}' })).toEqual({ kind: 'plan', label: 'Корректировка плана', count: 1 });
-    expect(llmOutcome({ purpose: 'tool_decision_or_answer', content: '{"action":"apply_graph","tasks":[{"task_id":"fill"}]}' })).toEqual({ kind: 'plan', label: 'План', count: 1 });
-    expect(llmOutcome({ purpose: 'tool_decision_or_answer', content: '{"plan":{"tasks":[{"task_id":"fill"}]}}' })).toEqual({ kind: 'plan', label: 'План', count: 1 });
+    expect(llmOutcome({ purpose: 'planning_decision', content: '{"terminal":"synthesis","tasks":[{},{}]}' })).toEqual({ kind: 'plan', label: 'Итерация', count: 2 });
+    expect(llmOutcome({ purpose: 'planning_decision', content: '{"terminal":"planner","tasks":[{}]}' })).toEqual({ kind: 'plan', label: 'Следующая итерация', count: 1 });
+    expect(llmOutcome({ purpose: 'tool_decision_or_answer', content: '{"terminal":"synthesis","tasks":[{"task_id":"fill"}]}' })).toEqual({ kind: 'answer', label: 'Ответ' });
+    expect(llmOutcome({ purpose: 'planning_decision', content: '{"proposal":{"terminal":"synthesis","tasks":[{"task_id":"fill"}]}}' })).toEqual({ kind: 'answer', label: 'Ответ' });
     expect(llmOutcome({ purpose: 'tool_decision_or_answer', content: '{"tool":"file.read","arguments":{"artifact_id":"a"}}' })).toEqual({ kind: 'tools', label: 'Вызов инструментов', count: 1 });
-    expect(llmOutcome({ purpose: 'planning_decision', content: '{"action":"ask_user"}' })).toEqual({ kind: 'clarify', label: 'Уточнение' });
-    expect(llmOutcome({ purpose: 'planning_decision', content: '{"action":"complete"}' })).toEqual({ kind: 'complete', label: 'Ответ' });
+    expect(llmOutcome({ purpose: 'planning_decision', content: '{"action":"complete"}' })).toEqual({ kind: 'answer', label: 'Ответ' });
     expect(llmOutcome({ content: '' })).toEqual({ kind: 'empty', label: 'Пусто' });
   });
 });

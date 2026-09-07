@@ -44,11 +44,14 @@ Production VM получает образы только из внутренне
 
 Pipeline применяет только `alembic upgrade $DB_REVISION` из release-файла до
 переключения application-сервисов. API-контейнер не выполняет миграции при
-каждом рестарте. Миграции должны быть backward-compatible: rollback контейнеров
-не откатывает БД.
+каждом рестарте. Миграции обычно должны быть backward-compatible: rollback
+контейнеров не откатывает БД. Исключение — migration `0100_strict_iterative_runtime`:
+она удаляет несовместимые runtime-plan данные и необратима.
 
 - [ ] Миграции прошли без ошибок.
 - [ ] Нет "pending" миграций.
+- [ ] Перед `0100` создана проверенная backup-копия БД; активные runtime runs
+  и confirmation pauses завершены или отменены, а rollback release не планируется.
 
 ## 5. Запуск и smoke
 

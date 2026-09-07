@@ -106,7 +106,7 @@ const FALLBACK_NUMERIC_FIELDS: FieldConfig[] = [
 const RUN_LIMIT_FIELDS: FieldConfig[] = [
   { key: 'wall_time_ms_max', type: 'number', label: 'Wall time (ms)', description: 'Максимальное время выполнения run.' },
   { key: 'max_parallel_tasks', type: 'number', label: 'Параллельные задачи', description: 'Максимум одновременно исполняемых задач.' },
-  { key: 'max_replans', type: 'number', label: 'Перепланирования', description: 'Максимум перепланирований после первоначального плана.' },
+  { key: 'max_iterations', type: 'number', label: 'Итерации выполнения', description: 'Максимум итераций runtime, включая первоначальную.' },
   { key: 'max_task_executions', type: 'number', label: 'Запуски задач', description: 'Максимум фактических запусков задач, включая повторы.' },
 ];
 
@@ -233,7 +233,7 @@ export function PlatformSettingsPage() {
   const models: Model[] = modelsData?.items ?? [];
 
   // Platform settings
-  const { data: platformSettings, isLoading: settingsLoading } = usePlatformSettings();
+  const { data: platformSettings } = usePlatformSettings();
   const updateSettings = useUpdatePlatformSettings();
   const fillPlatformDefaults = useFillPlatformSettingsDefaults();
 

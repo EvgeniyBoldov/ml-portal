@@ -570,7 +570,7 @@ async def resume_sandbox_run(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     action = data.action.value
 
-    if data.action is RuntimeResumeAction.CANCEL:
+    if data.action is RuntimeResumeAction.CANCEL and str(run.status or "") != "waiting_confirmation":
         await svc.finish_run(run_id, "cancelled", "Cancelled by user")
         await db.commit()
 

@@ -237,3 +237,47 @@ async def test_synthesizer_empty_response_is_an_explicit_error():
         for event in events
     )
     assert state.final_error == "synthesizer_empty_response"
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_never_finalizes_or_retries_a_partial_stream() -> None:
+    synth = Synthesizer(session=SimpleNamespace(), llm_client=_LLMClientProbe([]))
+    state = _runtime_state()
+    state.final_answer = "stale answer"
+    calls = 0
+
+    async def partial_stream(**_kwargs):
+        nonlocal calls
+        calls += 1
+        yield StreamTurn(
+            llm_call_id="partial-call",
+            model="gpt-test",
+            content="incomplete",
+            response_length=10,
+            partial=True,
+            error_message="connection lost",
+        )
+
+    synth._streaming_call.invoke_stream = partial_stream
+    with (
+        patch(
+            "app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
+            new=AsyncMock(return_value={"prompt": "SYNTH-PROMPT", "model": "gpt-test"}),
+        ),
+        patch(
+            "app.services.model_call_config_service.ModelCallConfigService.resolve",
+            new=AsyncMock(return_value=SimpleNamespace(max_retries=2)),
+        ),
+    ):
+        events = [event async for event in synth.stream(
+            runtime_state=state,
+            run_id=state.run_id,
+            synthesis_context=_synthesis_context(),
+        )]
+
+    assert calls == 1
+    assert state.final_answer is None
+    assert state.final_error == "synthesizer_partial_response"
+    assert not any(event.type is RuntimeEventType.FINAL for event in events)
+    assert events[-1].type is RuntimeEventType.SYNTHESIS_END
+    assert events[-1].data["status"] == "failed"

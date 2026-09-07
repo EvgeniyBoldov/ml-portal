@@ -104,11 +104,10 @@ owner и evidence, обновляет observations/support count, подтвер
 `superseded_by IS NULL` и `status=confirmed`. Факты с evidence и revisions
 выбираются через `MemoryService`, а не прямым запросом prompt builder-а.
 
-### Summary Compactor
-Роль обновления структурного summary диалога (`goals`, `done`, `entities`, `open_questions`).
-
-### Triage
-Роль первичной классификации запроса: `final` / `clarify` / `orchestrate`.
+### Memory Preparer
+Системная роль, выбирающая ограниченные индексы confirmed facts, проектов и
+глоссария для planner. Она не пишет факты и не классифицирует пользовательский
+запрос в отдельный routing flow.
 
 ## Контракты
 

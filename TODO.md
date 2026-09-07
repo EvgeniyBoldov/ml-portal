@@ -16,9 +16,9 @@
   внутренний результат задачи, bounded trace/progress summary и пользовательский
   ответ; сохранить лимит только там, где он служит конкретному bounded contract.
 
-## Planned breaking migration
+## Runtime terminology
 
-- В отдельном breaking release переименовать legacy wire terminology
-  `iteration`/`planner_iteration` в `PlanRevision` без смешения версии плана,
-  визуального этапа и параллельной волны выполнения. До миграции projector
-  продолжает отображать legacy rows как `plan_revision`.
+- `iteration` — каноническая единица planner decision и её execution wave.
+  Не вводить `PlanRevision` или patch как альтернативную модель runtime/UI.
+- `planner_iteration` остаётся именем trace invocation; это не task и не
+  отдельная версия плана.

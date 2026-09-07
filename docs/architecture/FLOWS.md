@@ -149,15 +149,18 @@ Binding rule:
 ## 7. Pause / Resume Flow
 
 Flow:
-1. Runtime stops on `waiting_input` or `waiting_confirmation`.
-2. Pause context is persisted in `agent_run` and `chat_turn`.
-3. User confirms or provides additional input.
-4. Current production path resumes by creating a new continuation turn in the same chat.
-5. New run uses the accumulated chat history as context.
+1. Runtime stops on a task-local `waiting_confirmation` only; it does not use
+   a paused-plan path for free-form clarification.
+2. Pause context and operation fingerprint are persisted in the runtime plan and `chat_turn`.
+3. User confirms or rejects that exact operation.
+4. Confirmation resumes the same runtime run; rejection is recorded as a
+   `cancelled` task with the runtime-owned `confirmation_rejected` limitation
+   and triggers the planner checkpoint.
 
 Binding rule:
 - pause/resume is part of the chat execution contract,
-- true checkpoint resume is a separate future capability and should not be implied by the current flow.
+- free-form clarification is not a paused plan: synthesis answers with the
+  current limitation and the next user message begins a new run.
 
 ## 8. Why This Document Exists
 

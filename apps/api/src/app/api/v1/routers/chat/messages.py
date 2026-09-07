@@ -235,7 +235,7 @@ async def resume_run(
     except RuntimeResumeValidationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    if body.action is RuntimeResumeAction.CANCEL:
+    if body.action is RuntimeResumeAction.CANCEL and str(turn.pause_status or "") != "waiting_confirmation":
         await turn_service.cancel_turn(turn.id, error_message="Cancelled by user")
         await session.commit()
         async def _cancel_gen() -> AsyncGenerator[str, None]:
