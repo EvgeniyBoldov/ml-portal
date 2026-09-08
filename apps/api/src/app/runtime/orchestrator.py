@@ -13,7 +13,7 @@ from app.runtime.entity_ids import (
     runtime_attempt_id, runtime_task_id, step_id,
 )
 from app.runtime.orchestrator_contracts import (
-    AgentExecutionResult, IterationProposal, PlanRequest, PlannerContext,
+    TaskExecutionReceipt, IterationProposal, PlanRequest, PlannerContext,
     SchedulerActionKind, TaskAttemptFailure, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
 )
 from app.runtime.plan_store import PlanValidationError
@@ -26,7 +26,7 @@ class Planner(Protocol):
 
 
 class TaskExecutor(Protocol):
-    async def execute_attempt(self, *, request: TaskRequest, **kwargs: Any) -> AgentExecutionResult: ...
+    async def execute_attempt(self, *, request: TaskRequest, **kwargs: Any) -> TaskExecutionReceipt: ...
 
 
 class OrchestratorEvent(dict):
@@ -95,12 +95,17 @@ class OrchestratorEvent(dict):
                     status=status,
                     error_code=(self.get("error_code") or "runtime_execution_failed") if status == "failed" else None,
                 )
-        if event_name in {"task_started", "task_completed"}:
+        if event_name in {"task_started", "task_completed", "task_needs_dependency", "task_unfulfillable"}:
             outcome = str(self.get("outcome") or "")
             lifecycle_type = {
                 "needs_dependency": RuntimeEventType.TASK_NEEDS_DEPENDENCY,
                 "unfulfillable": RuntimeEventType.TASK_UNFULFILLABLE,
-            }.get(outcome, RuntimeEventType.TASK_STARTED if event_name == "task_started" else RuntimeEventType.TASK_COMPLETED)
+            }.get(outcome, {
+                "task_started": RuntimeEventType.TASK_STARTED,
+                "task_completed": RuntimeEventType.TASK_COMPLETED,
+                "task_needs_dependency": RuntimeEventType.TASK_NEEDS_DEPENDENCY,
+                "task_unfulfillable": RuntimeEventType.TASK_UNFULFILLABLE,
+            }[event_name])
             return RuntimeEvent.task_lifecycle(
                 lifecycle_type,
                 plan_id=plan_id,
@@ -638,25 +643,27 @@ class GraphOrchestrator:
                     request = request.model_copy(update={"memory_context": list(planner_kwargs.get("planner_memory_context") or [])})
                     execution = await self.executor.execute_attempt(
                         request=request,
+                        runtime_plan_id=str(plan_id),
                         lifecycle_agent_execution_id=execution_id,
                         runtime_log_parent={"entity_type": "step", "entity_id": current_step_id},
                         **planner_kwargs,
                     )
-                    if not isinstance(execution, AgentExecutionResult):
-                        raise TypeError("executor must return AgentExecutionResult")
-                    result = self.reducer.reduce(request=request, execution=execution)
+                    if not isinstance(execution, TaskExecutionReceipt):
+                        raise TypeError("executor must return TaskExecutionReceipt")
+                    result = self.reducer.reduce(request=request, declaration=execution.declaration, verified=execution.verified)
                     await self.store.finish_attempt(plan_id, task_id, execution=execution, result=result)
                     runtime_state = planner_kwargs.get("runtime_state")
                     if runtime_state is not None and hasattr(runtime_state, "add_task_result"):
                         runtime_state.add_task_result({"task_id": task_id, **result.model_dump(mode="json")})
-                    yield OrchestratorEvent(type="task_attempt_succeeded", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
-                    yield OrchestratorEvent(type="task_completed", plan_id=str(plan_id), task_id=task_id, attempt=attempt, outcome=result.outcome.value, **trace_links)
+                    if result.outcome.value == "completed":
+                        yield OrchestratorEvent(type="task_attempt_succeeded", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
+                    yield OrchestratorEvent(type={"completed": "task_completed", "needs_dependency": "task_needs_dependency", "unfulfillable": "task_unfulfillable"}[result.outcome.value], plan_id=str(plan_id), task_id=task_id, attempt=attempt, outcome=result.outcome.value, **trace_links)
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
                         agent_execution_id=execution_id,
                         parent_entity_type="step",
                         parent_entity_id=current_step_id,
                         agent_slug=str(task_executor or "agent"),
-                        status="completed",
+                        status="completed" if result.outcome.value == "completed" else "failed",
                         outcome=result.outcome.value,
                         plan_id=str(plan_id), iteration_id=iteration_id,
                         task_entity_id=task_entity_id, attempt_id=current_attempt_id,
@@ -665,7 +672,7 @@ class GraphOrchestrator:
                         attempt=attempt,
                     ))
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(
-                        step_id=current_step_id, iteration_id=iteration_id, status="completed",
+                        step_id=current_step_id, iteration_id=iteration_id, status="completed" if result.outcome.value == "completed" else "failed",
                         outcome=result.outcome.value, summary=result.description,
                         plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
                         attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,

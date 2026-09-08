@@ -44,7 +44,7 @@ TERMINAL_TASK_STATUSES = frozenset({
 
 class AttemptStatus(str, Enum):
     RUNNING = "running"
-    SUCCEEDED = "succeeded"
+    COMPLETED = "completed"
     FAILED = "failed"
     TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"
@@ -283,53 +283,63 @@ class TaskRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class TaskOutputValue(BaseModel):
-    description: Optional[str] = None
-    text: Optional[str] = None
-    data: Optional[Any] = None
-    artifacts: List[Dict[str, Any]] = Field(default_factory=list)
-    model_config = {"extra": "forbid"}
-
-    @model_validator(mode="after")
-    def require_content(self) -> "TaskOutputValue":
-        if self.text is None and self.data is None and not self.artifacts:
-            raise ValueError("task output requires text, data, or artifacts")
-        return self
-
-
-class AgentExecutionResult(BaseModel):
-    completion: AgentExecutionCompletion
+class EvidenceSelection(BaseModel):
+    result_ref: str = Field(..., min_length=1)
+    output_keys: List[str] = Field(default_factory=list)
     description: str = Field(..., min_length=1)
-    outputs: Dict[str, TaskOutputValue] = Field(default_factory=dict)
-    needs: List[DiscoveredNeed] = Field(default_factory=list)
-    receipt_refs: List[Dict[str, Any]] = Field(default_factory=list)
-    limitation: Optional[UserLimitation] = None
-    verified: Dict[str, Any] = Field(default_factory=dict)
     model_config = {"extra": "forbid"}
 
+
+class ArtifactSelection(BaseModel):
+    artifact_ref: str = Field(..., min_length=1)
+    output_key: str = Field(..., min_length=1)
+    description: str = Field(..., min_length=1)
+    model_config = {"extra": "forbid"}
+
+
+class TaskCompletionDeclaration(BaseModel):
+    """Agent-authored claim. Runtime alone verifies it and computes TaskResult."""
+    completion_claim: AgentExecutionCompletion = Field(..., alias="completion")
+    report: str = Field(..., min_length=1)
+    outputs: Dict[str, Any] = Field(default_factory=dict)
+    evidence_selections: List[EvidenceSelection] = Field(default_factory=list)
+    artifact_selections: List[ArtifactSelection] = Field(default_factory=list)
+    needs: List[DiscoveredNeed] = Field(default_factory=list)
+    limitation: Optional[UserLimitation] = None
+    model_config = {"extra": "forbid", "populate_by_name": True}
+
     @model_validator(mode="after")
-    def validate_completion(self) -> "AgentExecutionResult":
-        if self.completion == AgentExecutionCompletion.NEEDS and not self.needs:
+    def validate_completion(self) -> "TaskCompletionDeclaration":
+        if self.completion_claim == AgentExecutionCompletion.NEEDS and not self.needs:
             raise ValueError("needs completion requires at least one need")
-        if self.completion == AgentExecutionCompletion.FULFILLED and self.needs:
+        if self.completion_claim == AgentExecutionCompletion.FULFILLED and self.needs:
             raise ValueError("fulfilled completion cannot contain unresolved needs")
-        if self.completion != AgentExecutionCompletion.NEEDS and self.needs:
+        if self.completion_claim != AgentExecutionCompletion.NEEDS and self.needs:
             raise ValueError("only needs completion may contain unresolved needs")
-        if self.completion == AgentExecutionCompletion.UNFULFILLABLE and self.limitation is None:
+        if self.completion_claim == AgentExecutionCompletion.UNFULFILLABLE and self.limitation is None:
             raise ValueError("unfulfillable completion requires a limitation")
-        if self.completion != AgentExecutionCompletion.UNFULFILLABLE and self.limitation is not None:
+        if self.completion_claim != AgentExecutionCompletion.UNFULFILLABLE and self.limitation is not None:
             raise ValueError("only unfulfillable completion may contain a limitation")
         return self
+
+
+class TaskExecutionReceipt(BaseModel):
+    """Runtime-owned pairing of an agent declaration with observed evidence."""
+    declaration: TaskCompletionDeclaration
+    verified: Dict[str, Any] = Field(default_factory=dict)
+    model_config = {"extra": "forbid"}
 
 
 class TaskResult(BaseModel):
     outcome: TaskOutcome
     description: str = Field(..., min_length=1)
-    outputs: Dict[str, TaskOutputValue] = Field(default_factory=dict)
+    outputs: Dict[str, Any] = Field(default_factory=dict)
     needs: List[DiscoveredNeed] = Field(default_factory=list)
     reason_code: Optional[str] = None
     limitation: Optional[UserLimitation] = None
     verified: Dict[str, Any] = Field(default_factory=dict)
+    evidence_selections: List[EvidenceSelection] = Field(default_factory=list)
+    artifact_selections: List[ArtifactSelection] = Field(default_factory=list)
     model_config = {"extra": "forbid"}
 
 
@@ -354,7 +364,7 @@ class TaskConfirmationRequired(RuntimeError):
         super().__init__(str(self.payload.get("summary") or self.payload.get("message") or "Operation requires confirmation"))
 
 
-def parse_agent_execution_result(content: str) -> AgentExecutionResult:
+def parse_task_completion_declaration(content: str) -> TaskCompletionDeclaration:
     text = str(content or "").strip()
     if not text:
         raise ValueError("agent returned an empty task result")
@@ -364,24 +374,30 @@ def parse_agent_execution_result(content: str) -> AgentExecutionResult:
         raise ValueError("agent task result must be strict JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError("agent task result must be a JSON object")
-    outputs = payload.get("outputs")
-    if isinstance(outputs, list):
-        # Some tool-calling models reliably return an output declaration list
-        # (``[{"key": "answer", "data": ...}]``), even though the runtime
-        # contract requires a mapping.  It is an unambiguous representation,
-        # so normalize it at the boundary instead of retrying an otherwise
-        # completed external operation solely to change JSON shape.
-        normalized_outputs: Dict[str, Any] = {}
-        for item in outputs:
-            if not isinstance(item, dict):
-                raise ValueError("agent task outputs list must contain objects")
-            output_key = str(item.get("key") or "").strip()
-            if not output_key:
-                raise ValueError("agent task output is missing key")
-            if output_key in normalized_outputs:
-                raise ValueError(f"agent task outputs contain duplicate key: {output_key}")
-            normalized_outputs[output_key] = {
-                key: value for key, value in item.items() if key != "key"
-            }
-        payload = {**payload, "outputs": normalized_outputs}
-    return AgentExecutionResult.model_validate(payload)
+    return TaskCompletionDeclaration.model_validate(payload)
+
+
+def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
+    """The only LLM-facing terminal schema: output values are direct payloads."""
+    output_properties = {
+        item.key: item.json_schema
+        for item in request.expected_outputs
+        if item.fulfillment == TaskOutputFulfillment.TASK_RESULT
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "completion": {"enum": [item.value for item in AgentExecutionCompletion]},
+            "report": {"type": "string", "minLength": 1},
+            "outputs": {
+                "type": "object", "additionalProperties": False,
+                "properties": output_properties,
+            },
+            "evidence_selections": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {"result_ref": {"type": "string", "minLength": 1}, "output_keys": {"type": "array", "items": {"type": "string"}}, "description": {"type": "string", "minLength": 1}}, "required": ["result_ref", "description"]}},
+            "artifact_selections": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {"artifact_ref": {"type": "string", "minLength": 1}, "output_key": {"type": "string", "minLength": 1}, "description": {"type": "string", "minLength": 1}}, "required": ["artifact_ref", "output_key", "description"]}},
+            "needs": {"type": "array", "items": {"type": "object"}},
+            "limitation": {"type": "object"},
+        },
+        "required": ["completion", "report", "outputs", "needs"],
+    }

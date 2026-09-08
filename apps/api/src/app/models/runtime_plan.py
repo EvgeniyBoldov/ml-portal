@@ -147,6 +147,28 @@ class RuntimeTaskAttempt(Base):
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class RuntimeToolResult(Base):
+    """Runtime-owned operation result retained for an attempt and its audit window."""
+    __tablename__ = "runtime_tool_results"
+    __table_args__ = (
+        UniqueConstraint("attempt_id", "result_ref", name="uq_runtime_tool_result_ref"),
+        Index("ix_runtime_tool_results_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    attempt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("runtime_task_attempts.id", ondelete="CASCADE"), nullable=False, index=True)
+    result_ref: Mapped[str] = mapped_column(String(64), nullable=False)
+    call_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    operation: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    success: Mapped[bool] = mapped_column(nullable=False)
+    result_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    payload_ref: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class RuntimePause(Base):
     __tablename__ = "runtime_pauses"
 

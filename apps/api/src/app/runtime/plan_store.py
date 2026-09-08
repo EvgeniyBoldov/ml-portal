@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID, uuid4
 
@@ -11,11 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.runtime_plan import (
     RuntimeNeedBinding, RuntimePause, RuntimePlan, RuntimePlanIteration,
-    RuntimePlanTask, RuntimeTaskAttempt, RuntimeTaskDependency, RuntimeTaskNeed,
+    RuntimePlanTask, RuntimeTaskAttempt, RuntimeToolResult, RuntimeTaskDependency, RuntimeTaskNeed,
     RuntimeTaskResolution,
 )
 from app.runtime.orchestrator_contracts import (
-    AgentExecutionResult, AttemptStatus, IterationProposal, IterationStatus,
+    TaskExecutionReceipt, AttemptStatus, IterationProposal, IterationStatus,
     PlanStatus, ResolutionAction, SchedulerActionKind, SchedulerDecision,
     TERMINAL_TASK_STATUSES, TaskAttemptFailure, TaskOutcome, TaskResult, TaskStatus,
     TerminalKind,
@@ -44,14 +44,8 @@ def _safe_failure_limitation(code: str) -> Dict[str, Any]:
 
 
 def _binding_value(value: Any) -> Any:
-    """Unwrap a persisted TaskOutputValue to the schema-validated value."""
-    if not isinstance(value, dict):
-        return value
-    if value.get("data") is not None:
-        return value["data"]
-    if value.get("text") is not None:
-        return value["text"]
-    return list(value.get("artifacts") or [])
+    """Outputs are direct schema-validated values in the normalized protocol."""
+    return value
 
 
 def validate_iteration(proposal: IterationProposal) -> None:
@@ -241,7 +235,7 @@ class InMemoryPlanStore:
         iteration["checkpoint_claimed_at"] = _now().isoformat()
         return deepcopy(iteration)
 
-    def finish_attempt(self, plan_id: str, task_id: str, *, execution: AgentExecutionResult, result: TaskResult) -> Dict[str, Any]:
+    def finish_attempt(self, plan_id: str, task_id: str, *, execution: TaskExecutionReceipt, result: TaskResult) -> Dict[str, Any]:
         plan, task = self.get(plan_id), self.get(plan_id)["tasks"].get(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
@@ -259,7 +253,7 @@ class InMemoryPlanStore:
             task["status"] = TaskStatus.UNFULFILLABLE.value
         task["result"] = result.model_dump(mode="json")
         attempt = plan["attempts"][task_id][-1]
-        attempt.update({"status": AttemptStatus.SUCCEEDED.value, "execution_result": execution.model_dump(mode="json"), "finished_at": _now().isoformat()})
+        attempt.update({"status": AttemptStatus.COMPLETED.value, "execution_result": execution.model_dump(mode="json"), "finished_at": _now().isoformat()})
         return deepcopy(task)
 
     def finish_failure(self, plan_id: str, task_id: str, failure: TaskAttemptFailure, *, max_attempts: int, retry_at: Optional[datetime] = None) -> Dict[str, Any]:
@@ -555,7 +549,7 @@ class SqlPlanStore:
         pause.status, pause.resolved_at, plan.status = "rejected", _now(), PlanStatus.ACTIVE.value
         await self._session.flush()
 
-    async def finish_attempt(self, plan_id: UUID, task_id: str, *, execution: AgentExecutionResult, result: TaskResult) -> RuntimePlanTask:
+    async def finish_attempt(self, plan_id: UUID, task_id: str, *, execution: TaskExecutionReceipt, result: TaskResult) -> RuntimePlanTask:
         await self._plan(plan_id, lock=True)
         row = (await self._session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id).with_for_update())).scalar_one_or_none()
         if row is None or row.status != TaskStatus.RUNNING.value:
@@ -573,7 +567,23 @@ class SqlPlanStore:
             row.status = TaskStatus.UNFULFILLABLE.value
         row.result = result.model_dump(mode="json")
         attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(RuntimeTaskAttempt.task_row_id == row.id, RuntimeTaskAttempt.attempt_number == row.attempts).with_for_update())).scalar_one()
-        attempt.status, attempt.execution_result, attempt.finished_at = AttemptStatus.SUCCEEDED.value, execution.model_dump(mode="json"), _now()
+        attempt.status, attempt.execution_result, attempt.finished_at = AttemptStatus.COMPLETED.value, execution.model_dump(mode="json"), _now()
+        expires_at = _now() + timedelta(hours=24)
+        for item in result.verified.get("result_records") or []:
+            if not isinstance(item, dict) or not item.get("result_ref"):
+                continue
+            self._session.add(RuntimeToolResult(
+                attempt_id=attempt.id,
+                result_ref=str(item["result_ref"]),
+                call_id=str(item.get("call_id") or ""),
+                operation=str(item.get("operation") or ""),
+                status=str(item.get("status") or "unknown"),
+                success=bool(item.get("success")),
+                result_fingerprint=(str(item["result_fingerprint"]) if item.get("result_fingerprint") else None),
+                payload=item.get("payload"),
+                payload_ref=item.get("payload_ref"),
+                expires_at=expires_at,
+            ))
         await self._session.flush()
         return row
 

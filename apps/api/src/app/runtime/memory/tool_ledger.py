@@ -24,6 +24,7 @@ MAX_RESULT_CACHE_CHARS = 24_000
 
 class ToolLedgerEntry(BaseModel):
     call_id: str
+    result_ref: str
     operation: str
     args_fingerprint: str
     args_preview: str
@@ -65,6 +66,7 @@ class ToolLedger(BaseModel):
 
         entry = ToolLedgerEntry(
             call_id=call_id,
+            result_ref=f"result_{len(self.entries) + 1}",
             operation=operation,
             args_fingerprint=args_fingerprint,
             args_preview=args_preview,
@@ -109,6 +111,7 @@ class ToolLedger(BaseModel):
                 {
                     "operation": item.operation,
                     "call_id": item.call_id,
+                    "result_ref": item.result_ref,
                     "status": item.status,
                     "success": item.success,
                     "duplicate_of_call_id": item.duplicate_of_call_id,

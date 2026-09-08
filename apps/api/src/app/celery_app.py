@@ -105,6 +105,10 @@ def build_default_beat_schedule() -> dict:
             "task": "app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions",
             "schedule": 600.0,  # 10 minutes
         },
+        "runtime-tool-results-expired-cleanup": {
+            "task": "app.workers.tasks_cleanup.cleanup_expired_runtime_tool_results",
+            "schedule": 3600.0,  # 1 hour
+        },
         "orphaned-chat-attachments-cleanup": {
             "task": "app.workers.tasks_cleanup.cleanup_orphaned_chat_attachments",
             "schedule": 3600.0,  # 1 hour

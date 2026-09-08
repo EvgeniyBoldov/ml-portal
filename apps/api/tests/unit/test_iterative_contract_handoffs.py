@@ -6,7 +6,7 @@ import pytest
 from app.runtime.orchestrator import GraphOrchestrator, OrchestratorEvent
 from app.runtime.entity_ids import runtime_attempt_id, runtime_task_id
 from app.runtime.orchestrator_contracts import (
-    AgentExecutionResult, IterationProposal, NeedBinding, PlannedTask,
+    EvidenceSelection, TaskCompletionDeclaration, IterationProposal, NeedBinding, PlannedTask,
     TaskRequest, TaskResolution, TerminalKind,
 )
 from app.runtime.plan_store import InMemoryPlanStore, PlanValidationError
@@ -36,21 +36,21 @@ def test_agent_receives_task_inputs_and_complete_output_contract() -> None:
     assert '"project_key": "project-1"' in message
     assert "Structured finding" in message
     assert '"required": ["name"]' in message
-    assert "Never emit null" in message
+    assert "direct output values" in message
 
 
 def test_partial_artifact_is_runtime_verified_before_synthesis() -> None:
     request = _task(expected_outputs=[{
         "key": "file", "description": "Generated file", "fulfillment": "artifact",
     }])
-    execution = AgentExecutionResult(
+    execution = TaskCompletionDeclaration(
         completion="unfulfillable",
-        description="partial result",
-        outputs={"file": {"artifacts": [{"artifact_id": "agent-claimed"}]}},
+        report="partial result",
+        outputs={},
         limitation={"code": "incomplete", "message": "The operation did not finish."},
     )
 
-    result = TaskAttemptResultReducer().reduce(request=request, execution=execution)
+    result = TaskAttemptResultReducer().reduce(request=request, declaration=execution, verified={})
 
     assert result.outputs == {}
 
@@ -88,13 +88,13 @@ def test_reducer_drops_undeclared_outputs_and_validates_text_as_bound_value() ->
     request = _task(expected_outputs=[{
         "key": "name", "description": "Name", "schema": {"type": "string"},
     }])
-    execution = AgentExecutionResult(
+    execution = TaskCompletionDeclaration(
         completion="fulfilled",
-        description="done",
-        outputs={"name": {"text": "Alice"}, "internal": {"text": "must not escape"}},
+        report="done",
+        outputs={"name": "Alice", "internal": "must not escape"},
     )
 
-    result = TaskAttemptResultReducer().reduce(request=request, execution=execution)
+    result = TaskAttemptResultReducer().reduce(request=request, declaration=execution, verified={})
 
     assert result.outcome.value == "completed"
     assert set(result.outputs) == {"name"}
@@ -105,18 +105,13 @@ def test_verified_receipt_must_match_the_declared_operation() -> None:
         "key": "write", "description": "Write receipt",
         "fulfillment": "verified_receipt", "receipt_operations": ["file.generate"],
     }])
-    execution = AgentExecutionResult(
-        completion="fulfilled", description="done", outputs={"write": {"text": "done"}},
-        verified={"receipts": [{"operation": "file.read"}]},
+    execution = TaskCompletionDeclaration(
+        completion="fulfilled", report="done", outputs={},
+        evidence_selections=[EvidenceSelection(result_ref="result_1", description="write receipt")],
     )
 
-    rejected = TaskAttemptResultReducer().reduce(request=request, execution=execution)
-    accepted = TaskAttemptResultReducer().reduce(
-        request=request,
-        execution=execution.model_copy(update={
-            "verified": {"receipts": [{"canonical_operation": "file.generate"}]},
-        }),
-    )
+    rejected = TaskAttemptResultReducer().reduce(request=request, declaration=execution, verified={"receipts": [{"result_ref": "result_1", "operation": "file.read"}]})
+    accepted = TaskAttemptResultReducer().reduce(request=request, declaration=execution, verified={"receipts": [{"result_ref": "result_1", "canonical_operation": "file.generate"}]})
 
     assert rejected.outcome.value == "unfulfillable"
     assert accepted.outcome.value == "completed"
@@ -126,7 +121,7 @@ def test_binding_injects_the_schema_validated_value_not_its_storage_wrapper() ->
     store = InMemoryPlanStore()
     plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
     plan["tasks"] = {
-        "producer": {"result": {"outputs": {"value": {"description": None, "text": None, "data": {"id": 7}, "artifacts": []}}}},
+        "producer": {"result": {"outputs": {"value": {"id": 7}}}},
         "consumer": {
             "task_id": "consumer", "executor": "research", "intent": "use", "instructions": "use",
             "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory",

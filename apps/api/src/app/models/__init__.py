@@ -55,7 +55,7 @@ from .periodic_task import PeriodicTask
 from .runtime_observability import RuntimeExecutionEvent, RuntimeEventSequence
 from .runtime_plan import (
     RuntimeNeedBinding, RuntimePause, RuntimePlan, RuntimePlanIteration,
-    RuntimePlanTask, RuntimeTaskAttempt, RuntimeTaskDependency, RuntimeTaskNeed,
+    RuntimePlanTask, RuntimeTaskAttempt, RuntimeToolResult, RuntimeTaskDependency, RuntimeTaskNeed,
     RuntimeTaskResolution,
 )
 
@@ -145,6 +145,6 @@ __all__ = [
     "RuntimeTaskNeed",
     "RuntimeNeedBinding",
     "RuntimeTaskResolution",
-    "RuntimeTaskAttempt",
+    "RuntimeTaskAttempt", "RuntimeToolResult",
     "RuntimePause",
 ]

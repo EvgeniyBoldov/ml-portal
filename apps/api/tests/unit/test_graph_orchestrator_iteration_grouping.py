@@ -6,7 +6,7 @@ import pytest
 
 from app.runtime.orchestrator import GraphOrchestrator
 from app.runtime.orchestrator_contracts import (
-    AgentExecutionCompletion, AgentExecutionResult, IterationProposal,
+    TaskCompletionDeclaration, TaskExecutionReceipt, IterationProposal,
     PlannedTask, SynthesisBrief, TaskExecutionError, TaskResolution, TerminalKind,
 )
 from app.runtime.plan_store import InMemoryPlanStore
@@ -38,7 +38,7 @@ class Planner:
 
 class Executor:
     async def execute_attempt(self, *, request, **kwargs):
-        return AgentExecutionResult(completion=AgentExecutionCompletion.FULFILLED, description="done")
+        return TaskExecutionReceipt(declaration=TaskCompletionDeclaration(completion="fulfilled", report="done"), verified={})
 
 
 class Synthesizer:

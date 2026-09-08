@@ -32,14 +32,17 @@ from app.agents.operation_executor import DirectOperationExecutor
 from app.agents.runtime.agent import AgentToolRuntime
 from app.agents.operation_publication import PUBLIC_RETRIEVAL_OPERATIONS
 from app.core.http.clients import LLMClientProtocol
+from app.adapters.s3_client import s3_manager
 from app.core.logging import get_logger
 from app.runtime.orchestrator_contracts import (
-    AgentExecutionResult,
+    TaskCompletionDeclaration,
+    TaskExecutionReceipt,
     DiscoveredNeed,
     TaskConfirmationRequired,
     TaskExecutionError,
     TaskRequest,
-    parse_agent_execution_result,
+    parse_task_completion_declaration,
+    task_completion_json_schema,
 )
 from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.error_payloads import build_debug_payload
@@ -52,6 +55,7 @@ from app.runtime.events import OrchestrationPhase
 from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
 from app.runtime.operation_errors import RuntimeErrorCode
 from app.runtime.turn_state import RuntimeTurnState
+from app.runtime.result_store import RuntimeToolResultStore
 
 logger = get_logger(__name__)
 
@@ -91,6 +95,7 @@ class AgentExecutor:
         platform_config: Optional[Dict[str, Any]] = None,
         model: Optional[str] = None,
         agent_version_id: Optional[UUID] = None,
+        runtime_plan_id: Optional[str] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         agent_slug = task.executor
         if not agent_slug:
@@ -151,9 +156,9 @@ class AgentExecutor:
 
         if sub_request.mode == ExecutionMode.UNAVAILABLE:
             msg = "sub_agent_unavailable"
-            ctx.extra["agent_execution_result"] = AgentExecutionResult(
+            ctx.extra["agent_execution_result"] = TaskCompletionDeclaration(
                 completion="unfulfillable",
-                description=msg,
+                report=msg,
                 limitation={"code": msg, "message": "The selected agent is unavailable.", "action": "none"},
             )
             yield RuntimeEvent.status(msg, agent=agent_slug)
@@ -179,6 +184,9 @@ class AgentExecutor:
         if lifecycle_agent_execution_id:
             ctx.extra["lifecycle_agent_execution_id"] = lifecycle_agent_execution_id
         ctx.extra["runtime_tool_ledger"] = state.tool_ledger
+        ctx.extra["runtime_result_store"] = RuntimeToolResultStore(self.session)
+        ctx.extra["runtime_plan_id"] = runtime_plan_id
+        ctx.extra["runtime_task_id"] = task.task_id
         ctx.extra["runtime_turn_state"] = state
         ctx.extra["runtime_tool_reuse_enabled"] = bool(
             (platform_config or {}).get("runtime_tool_reuse_enabled", True),
@@ -201,9 +209,9 @@ class AgentExecutor:
             pass
         elif not sub_request.resolved_operations:
             msg = "sub_agent_no_operations"
-            ctx.extra["agent_execution_result"] = AgentExecutionResult(
+            ctx.extra["agent_execution_result"] = TaskCompletionDeclaration(
                 completion="unfulfillable",
-                description=msg,
+                report=msg,
                 limitation={"code": msg, "message": "The selected agent has no compatible operation.", "action": "none"},
             )
             yield RuntimeEvent.status(msg, agent=agent_slug)
@@ -330,7 +338,11 @@ class AgentExecutor:
             }
         else:
             try:
-                execution = parse_agent_execution_result(raw_summary)
+                execution = await self._commit_declaration(
+                    task=task,
+                    model=model,
+                    observed=self._commit_observation(ledger_entries=state.tool_ledger.entries[ledger_start:], artifacts=artifacts),
+                )
             except ValueError as exc:
                 ctx.extra["agent_execution_failure"] = {
                     "code": "agent_task_completion_invalid",
@@ -344,9 +356,9 @@ class AgentExecutor:
                     sources=sub_sources,
                     verified_artifacts=artifacts,
                 )
-                ctx.extra["agent_execution_result"] = execution.model_copy(
-                    update={"verified": verified, "receipt_refs": list(verified.get("receipts") or [])}
-                )
+                await self._externalize_large_results(verified, lifecycle_agent_execution_id or task.task_id)
+                ctx.extra["agent_execution_result"] = execution
+                ctx.extra["agent_execution_verified"] = verified
 
         # Keep sources available to memory/writeback. Synthesis receives the
         # verified per-task projection persisted with its final plan instead.
@@ -394,7 +406,7 @@ class AgentExecutor:
         lifecycle_agent_execution_id: Optional[str] = None,
         runtime_log_parent: Optional[Dict[str, str]] = None,
         **_: Any,
-    ) -> AgentExecutionResult:
+    ) -> TaskExecutionReceipt:
         """Consume one executor stream and return its normalized result.
 
         Every agent event is persisted by the root sink before the graph turns
@@ -436,13 +448,108 @@ class AgentExecutor:
                 if isinstance(retry_after_ms, int) and retry_after_ms > 0 else {},
             )
         execution = ctx.extra.pop("agent_execution_result", None)
-        if not isinstance(execution, AgentExecutionResult):
+        verified = ctx.extra.pop("agent_execution_verified", {})
+        if not isinstance(execution, TaskCompletionDeclaration):
             raise TaskExecutionError(
                 code="agent_task_completion_missing",
                 message="Agent did not return a terminal task completion",
                 retryable=True,
             )
-        return execution
+        return TaskExecutionReceipt(declaration=execution, verified=verified if isinstance(verified, dict) else {})
+
+    def _commit_observation(self, *, ledger_entries: List[Any], artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Bounded, runtime-authored evidence projection for the tool-free commit pass."""
+        results = []
+        for entry in ledger_entries:
+            if getattr(entry, "status", None) != "succeeded" or not getattr(entry, "success", False):
+                continue
+            results.append({
+                "result_ref": str(getattr(entry, "result_ref", None) or getattr(entry, "call_id", "")),
+                "operation": str(getattr(entry, "operation", "")),
+                "result_preview": str(getattr(entry, "result_preview", "") or "")[:1200],
+            })
+        manifests = [{
+            "artifact_ref": str(item.get("artifact_id") or ""),
+            "file_name": str(item.get("file_name") or item.get("name") or "artifact"),
+            "content_type": str(item.get("content_type") or ""),
+            "size_bytes": item.get("size_bytes"),
+        } for item in self._dedupe_artifacts(artifacts)]
+        return {"results": results[:20], "artifacts": manifests[:20]}
+
+    @staticmethod
+    async def _externalize_large_results(verified: Dict[str, Any], scope: str) -> None:
+        """Keep large tool payloads in backend object storage, never in task JSONB."""
+        settings = get_settings()
+        bucket = settings.S3_BUCKET_CHAT_UPLOADS
+        for record in verified.get("result_records") or []:
+            if not isinstance(record, dict) or record.get("payload") is None:
+                continue
+            try:
+                body = json.dumps(record["payload"], ensure_ascii=False, default=str).encode("utf-8")
+            except (TypeError, ValueError):
+                continue
+            if len(body) <= 4096:
+                continue
+            result_ref = str(record.get("result_ref") or "result")
+            key = f"runtime/results/{scope}/{result_ref}.json"
+            uploaded = await s3_manager.upload_content_sync(
+                bucket=bucket,
+                key=key,
+                content=body,
+                content_type="application/json",
+                metadata={"runtime_result": "true", "result_ref": result_ref},
+            )
+            if uploaded:
+                record["payload_ref"] = {"bucket": bucket, "key": key, "size_bytes": len(body), "content_type": "application/json"}
+                record["payload"] = None
+
+    async def _commit_declaration(
+        self,
+        *,
+        task: TaskRequest,
+        model: Optional[str],
+        observed: Dict[str, Any],
+    ) -> TaskCompletionDeclaration:
+        """Run the terminal commit independently from the tool-decision loop.
+
+        This call has no tool payload and therefore cannot execute operations.
+        Retrying it never replays an already completed operation attempt.
+        """
+        commit_prompt = self._with_terminal_contract_prompt(
+            "You are in the commit phase. Tools are disabled. Use only the runtime observation below; "
+            "do not invent unseen data or artifact references.",
+            task,
+        )
+        messages = [
+            {"role": "system", "content": commit_prompt},
+            {"role": "user", "content": json.dumps({
+                "task": {"instructions": task.instructions, "inputs": task.inputs},
+                "runtime_observation": observed,
+            }, ensure_ascii=False, default=str)},
+        ]
+        last_error: Optional[Exception] = None
+        for _attempt in range(2):
+            try:
+                content = await self._tool_runtime.llm.call(
+                    messages=messages,
+                    model=model,
+                    temperature=0.0,
+                    max_tokens=1800,
+                    timeout_s=30,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "task_completion_declaration",
+                            "schema": task_completion_json_schema(task),
+                            "strict": False,
+                        },
+                    },
+                )
+                return parse_task_completion_declaration(content)
+            except Exception as exc:
+                last_error = exc
+                messages.append({"role": "user", "content": "Return the declaration again as one valid JSON object matching the schema. Do not add prose."})
+        raise ValueError(f"commit declaration invalid: {last_error}")
 
     @staticmethod
     def _verified_task_result(
@@ -463,6 +570,7 @@ class AgentExecutor:
             is_retrieval = normalized in PUBLIC_RETRIEVAL_OPERATIONS
             fresh_retrieval = fresh_retrieval or is_retrieval
             receipt = {
+                "result_ref": str(getattr(entry, "result_ref", None) or getattr(entry, "call_id", "")),
                 "call_id": str(getattr(entry, "call_id", "")),
                 "operation": operation,
                 "canonical_operation": normalized,
@@ -479,6 +587,8 @@ class AgentExecutor:
                     "status": "accepted_candidate",
                 })
         artifacts = AgentExecutor._dedupe_artifacts(list(verified_artifacts or []))
+        for artifact in artifacts:
+            artifact["artifact_ref"] = str(artifact.get("artifact_id") or "")
         return {
             "status": "observed",
             "fresh_retrieval": fresh_retrieval,
@@ -487,6 +597,18 @@ class AgentExecutor:
             "artifacts": artifacts,
             "sources": [dict(item) for item in sources if isinstance(item, dict)],
             "memory_candidates": memory_candidates,
+            "result_records": [
+                {
+                    "result_ref": str(getattr(entry, "result_ref", None) or getattr(entry, "call_id", "")),
+                    "call_id": str(getattr(entry, "call_id", "")),
+                    "operation": str(getattr(entry, "operation", "")),
+                    "status": str(getattr(entry, "status", "")),
+                    "success": bool(getattr(entry, "success", False)),
+                    "payload": getattr(entry, "result_data", None),
+                    "result_fingerprint": getattr(entry, "result_fingerprint", None),
+                }
+                for entry in ledger_entries
+            ],
         }
 
     # ---------------------------------------------------------------- helpers --
@@ -640,30 +762,21 @@ class AgentExecutor:
                 file_name = str(ref.get("file_name") or "file").strip()
                 artifact_id = str(ref.get("artifact_id") or "").strip()
                 snippet_status = str(item.get("snippet_status") or "missing").strip()
-                snippet = str(item.get("snippet") or "").strip()
                 attachment_lines.append(
                     f"- {file_name} (artifact_id={artifact_id}; snippet_status={snippet_status})"
                 )
-                if snippet:
-                    attachment_lines.append(snippet)
             if len(attachment_lines) > 1:
                 final_query = "\n\n".join(["\n".join(attachment_lines), final_query])
 
         output_contract = [
-            "[Terminal task completion contract]",
-            "After work, return exactly one JSON object and no prose or markdown.",
-            "Required fields: completion (fulfilled|needs|unfulfillable), description, needs (array), outputs (object), and limitation for unfulfillable.",
-            "outputs MUST be a JSON object keyed by output key, never an array. "
-            "The value of data (or text, when data is absent) is validated directly against that output's declared JSON Schema. "
-            "For example, for an array schema: {\"outputs\": {\"jira_tasks\": {\"data\": []}}}.",
-            "Never emit null for a value unless that output's declared JSON Schema explicitly permits null. "
-            "For a string field that has no value, omit it when optional; when required, return a string such as an empty string, not null.",
-            "Each outputs value must be an object containing only optional description plus at least one of text, data, or artifacts. "
-            "For example: {\"answer\": {\"data\": {\"status\": \"done\"}}}. "
-            "For an artifact expected output, do not declare artifact IDs: report completion in text or data; runtime binds only the verified artifact from the tool ledger. "
-            "Use needs=[] when fulfilled or unfulfillable.",
-            "For completion=unfulfillable also provide limitation={code,message,action}; action is one of reconfigure_credentials, grant_access, provide_input, retry_later, none.",
-            "A need must contain ref, key, kind (data|artifact|decision), description, schema, required, and context.",
+            "[Terminal task completion declaration]",
+            "Return exactly one JSON object and no prose or markdown.",
+            "The runtime owns tool execution, evidence and artifact storage. Do not copy raw tool results into outputs.",
+            "Use direct output values: outputs.<key> is the value itself, never {data,text,artifacts}.",
+            "Select only relevant runtime results with evidence_selections=[{result_ref,output_keys,description}] and relevant files with artifact_selections=[{artifact_ref,output_key,description}].",
+            "completion is fulfilled, needs, or unfulfillable. fulfilled requires every required output; needs requires non-empty needs; unfulfillable requires limitation.",
+            "Required fields are completion, report, outputs, evidence_selections, artifact_selections, and needs. limitation is required only for unfulfillable.",
+            "A need has ref, key, kind (data|artifact|decision), description, schema, required, and context.",
         ]
         if task.expected_outputs:
             output_contract.append(
@@ -683,14 +796,15 @@ class AgentExecutor:
         )
         return "\n\n".join(part for part in [
             str(prompt or "").strip(),
-            "# RUNTIME TASK COMPLETION CONTRACT\n"
-            "This contract overrides any conflicting agent Output Format. "
-            "Your final response must be exactly one JSON object with completion, description, needs, outputs, and (for unfulfillable) limitation. "
-            "outputs must be a JSON object keyed by output key, never an array. "
-            "Every outputs value must contain only optional description plus at least one of text, data, or artifacts; unknown keys are invalid. "
-            "Never emit null for a value unless its declared JSON Schema explicitly permits null. "
-            "For an artifact output, never claim artifact IDs: runtime binds only verified tool-ledger artifacts. "
-            f"Expected outputs (including required/schema): {expected}.",
+            "# RUNTIME TASK COMPLETION DECLARATION\n"
+            "This contract overrides any conflicting output format. Return one strict JSON object only. "
+            "The runtime, not the agent, executes tools and owns their evidence and artifacts. "
+            "outputs is a JSON object of direct values keyed by expected output key: never use data/text/artifacts wrappers. "
+            "Select relevant runtime evidence only via evidence_selections ({result_ref,output_keys,description}) and artifacts only via artifact_selections ({artifact_ref,output_key,description}). "
+            "Use completion=fulfilled only when required outputs are present; completion=needs only with non-empty needs; completion=unfulfillable only with limitation. "
+            f"Expected outputs (including required/schema): {expected}. "
+            "Your declaration must conform to this JSON Schema: "
+            f"{json.dumps(task_completion_json_schema(task), ensure_ascii=False)}.",
         ] if part)
 
     @staticmethod

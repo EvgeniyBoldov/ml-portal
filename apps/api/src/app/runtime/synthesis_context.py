@@ -69,7 +69,16 @@ class SynthesisContextBuilder:
                 reports.append({"task_id": task_id, "intent": self._redact(task.get("intent")), "description": self._redact(description or "Accepted partial output."), "outputs": self._redact(selected)})
                 verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
                 if status == TaskStatus.COMPLETED.value:
-                    artifacts.extend(self._artifact_projection(verified.get("artifacts")))
+                    selected_refs = {
+                        str(selection.get("artifact_ref") or "")
+                        for selection in result.get("artifact_selections") or []
+                        if isinstance(selection, dict)
+                    }
+                    artifacts.extend(self._artifact_projection([
+                        artifact for artifact in verified.get("artifacts") or []
+                        if isinstance(artifact, dict)
+                        and str(artifact.get("artifact_ref") or artifact.get("artifact_id") or "") in selected_refs
+                    ]))
                     sources.extend(self._source_projection(verified.get("sources")))
                 else:
                     artifacts.extend(self._artifact_projection([

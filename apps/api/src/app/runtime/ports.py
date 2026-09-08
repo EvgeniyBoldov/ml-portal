@@ -32,7 +32,7 @@ from uuid import UUID
 
 from app.agents.context import ToolContext
 from app.runtime.orchestrator_contracts import (
-    AgentExecutionResult,
+    TaskExecutionReceipt,
     IterationProposal,
     PlanRequest,
     TaskAttemptFailure,
@@ -61,7 +61,7 @@ class PlannerPort(Protocol):
 class TaskExecutionPort(Protocol):
     """Executes one agent attempt; the runtime reduces it to task state."""
 
-    async def execute_attempt(self, *, request: TaskRequest, **kwargs: Any) -> AgentExecutionResult: ...
+    async def execute_attempt(self, *, request: TaskRequest, **kwargs: Any) -> TaskExecutionReceipt: ...
 
 
 @runtime_checkable

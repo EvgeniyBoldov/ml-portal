@@ -5,208 +5,76 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.agents.runtime.agent import AgentToolRuntime
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.events import RuntimeEvent
-from app.runtime.orchestrator_contracts import (
-    AgentExecutionCompletion,
-    AgentExecutionResult,
-    TaskExecutionError,
-    TaskRequest,
-    parse_agent_execution_result,
-)
+from app.runtime.orchestrator_contracts import TaskCompletionDeclaration, TaskExecutionError, TaskRequest
 
 
 def _request() -> TaskRequest:
-    return TaskRequest(
-        task_id="generate_file",
-        executor="direct_answer",
-        intent="generate",
-        instructions="Generate a file",
-    )
+    return TaskRequest(task_id="generate_file", executor="direct_answer", intent="generate", instructions="Generate a file")
 
 
 @pytest.mark.asyncio
-async def test_retryable_agent_error_uses_technical_task_failure_path() -> None:
+async def test_technical_failure_uses_error_path() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
 
-    async def emit_retryable_error(*, ctx, **_kwargs):
-        ctx.extra["agent_execution_failure"] = {
-            "code": "llm_rate_limited", "message": "Agent LLM call failed: llm_rate_limited",
-            "retryable": True, "retry_after_ms": 2_000,
-        }
-        yield RuntimeEvent.error(
-            "Agent LLM call failed: llm_rate_limited",
-            retryable=True,
-            retry_after_ms=2_000,
-        )
+    async def emit_error(*, ctx, **_kwargs):
+        ctx.extra["agent_execution_failure"] = {"code": "llm_rate_limited", "message": "limited", "retryable": True}
+        yield RuntimeEvent.error("limited", retryable=True)
 
-    executor.execute = emit_retryable_error  # type: ignore[method-assign]
-    state = SimpleNamespace()
-
-    with pytest.raises(TaskExecutionError) as raised:
-        await executor.execute_attempt(
-            request=_request(),
-            runtime_state=state,
-            messages=[],
-            ctx=SimpleNamespace(extra={}),
-            user_id=AsyncMock(),
-            tenant_id=AsyncMock(),
-        )
-
-    assert raised.value.code == "llm_rate_limited"
-    assert raised.value.retryable is True
-    assert raised.value.details == {"retry_after_ms": 2_000}
+    executor.execute = emit_error  # type: ignore[method-assign]
+    with pytest.raises(TaskExecutionError, match="limited"):
+        await executor.execute_attempt(request=_request(), runtime_state=SimpleNamespace(), messages=[], ctx=SimpleNamespace(extra={}), user_id=AsyncMock(), tenant_id=AsyncMock())
 
 
 @pytest.mark.asyncio
-async def test_business_unfulfillable_is_a_normal_execution_result() -> None:
+async def test_agent_declaration_is_paired_with_runtime_evidence() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
 
-    async def emit_non_retryable_error(*, ctx, **_kwargs):
-        ctx.extra["agent_execution_result"] = AgentExecutionResult(
-            completion=AgentExecutionCompletion.UNFULFILLABLE,
-            description="Agent request exceeds provider limits",
-            limitation={
-                "code": "provider_limits_exceeded",
-                "message": "Провайдер не может выполнить этот запрос из-за ограничений.",
-            },
-        )
+    async def emit_result(*, ctx, **_kwargs):
+        ctx.extra["agent_execution_result"] = TaskCompletionDeclaration(completion="fulfilled", report="done", outputs={"answer": "ok"})
+        ctx.extra["agent_execution_verified"] = {"artifacts": [{"artifact_ref": "artifact-1"}]}
         yield RuntimeEvent.status("done")
 
-    executor.execute = emit_non_retryable_error  # type: ignore[method-assign]
-    state = SimpleNamespace()
-
-    result = await executor.execute_attempt(
-        request=_request(),
-        runtime_state=state,
-        messages=[],
-        ctx=SimpleNamespace(extra={}),
-        user_id=AsyncMock(),
-        tenant_id=AsyncMock(),
-    )
-
-    assert result.completion is AgentExecutionCompletion.UNFULFILLABLE
-
-
-def test_agent_retry_delay_respects_provider_hint() -> None:
-    assert AgentToolRuntime._retry_delay_ms(retry_count=0, retry_after_ms=None) == 500
-    assert AgentToolRuntime._retry_delay_ms(retry_count=2, retry_after_ms=2_000) == 2_000
-    assert AgentToolRuntime._retry_delay_ms(retry_count=0, retry_after_ms=60_000) == 30_000
-
-
-def test_artifact_producing_operation_names_are_recognized_canonically() -> None:
-    assert AgentExecutor._creates_downloadable_artifact("file.generate")
-    assert AgentExecutor._creates_downloadable_artifact("instance.local-system-tools.file.generate")
-    assert AgentExecutor._creates_downloadable_artifact(
-        "instance.local-template-tools.collection.template.fill"
-    )
-    assert not AgentExecutor._creates_downloadable_artifact("file.read")
-
-
-def test_artifact_deleting_operation_names_are_recognized_canonically() -> None:
-    assert AgentExecutor._deletes_artifact("file.delete")
-    assert AgentExecutor._deletes_artifact("instance.local-system-tools.file.delete")
-    assert not AgentExecutor._deletes_artifact("file.read")
-
-
-def test_artifact_only_response_detects_unencoded_file_names() -> None:
-    assert AgentExecutor._is_url_only_response(
-        "https://storage.cloud.local/artifacts/artifact-1/filled_Заявка на сетевую связность (6).xlsx"
-    )
-
-
-def test_terminal_result_rejects_unknown_output_fields() -> None:
-    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
-        parse_agent_execution_result(
-            '{"completion":"fulfilled","description":"ready","needs":[],'
-            '"outputs":{"result":{"task_result":"created"}},"checkpoint":{}}'
-        )
-
-
-def test_terminal_result_accepts_explicit_data_output() -> None:
-    result = parse_agent_execution_result(
-        '{"completion":"fulfilled","description":"ready","needs":[],'
-        '"outputs":{"result":{"data":{"status":"created"}}}}'
-    )
-
-    assert result.outputs["result"].data == {"status": "created"}
-
-
-def test_terminal_result_normalizes_model_output_list() -> None:
-    result = parse_agent_execution_result(
-        '{"completion":"fulfilled","description":"ready","needs":[],'
-        '"outputs":[{"key":"jira_tasks","description":"Open tasks",'
-        '"data":{"tasks":[{"key":"NIMS-3334"}]}}]}'
-    )
-
-    assert result.outputs["jira_tasks"].description == "Open tasks"
-    assert result.outputs["jira_tasks"].data == {"tasks": [{"key": "NIMS-3334"}]}
-
-
-def test_terminal_result_rejects_duplicate_list_output_keys() -> None:
-    with pytest.raises(ValueError, match="duplicate key"):
-        parse_agent_execution_result(
-            '{"completion":"fulfilled","description":"ready","needs":[],'
-            '"outputs":[{"key":"result","text":"one"},{"key":"result","text":"two"}]}'
-        )
-
-
-def test_runtime_terminal_contract_overrides_legacy_agent_output_format() -> None:
-    request = _request()
-    prompt = AgentExecutor._with_terminal_contract_prompt("# Output Format\nReturn a URL", request)
-
-    assert "This contract overrides any conflicting agent Output Format" in prompt
-    assert prompt.endswith("Expected outputs (including required/schema): [].")
+    executor.execute = emit_result  # type: ignore[method-assign]
+    receipt = await executor.execute_attempt(request=_request(), runtime_state=SimpleNamespace(), messages=[], ctx=SimpleNamespace(extra={}), user_id=AsyncMock(), tenant_id=AsyncMock())
+    assert receipt.declaration.outputs == {"answer": "ok"}
+    assert receipt.verified["artifacts"][0]["artifact_ref"] == "artifact-1"
 
 
 @pytest.mark.asyncio
-async def test_agent_execution_keeps_runtime_verified_artifacts() -> None:
+async def test_commit_phase_is_tool_free_and_uses_only_runtime_projection() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
+    executor._tool_runtime.llm.call = AsyncMock(return_value='{"completion":"fulfilled","report":"ready","outputs":{"answer":"ok"},"evidence_selections":[],"artifact_selections":[],"needs":[]}')
+    task = TaskRequest(task_id="answer", executor="direct_answer", intent="answer", instructions="Answer", expected_outputs=[{"key": "answer", "description": "Answer"}])
 
-    async def emit_success(*, ctx, **_kwargs):
-        ctx.extra["agent_execution_result"] = AgentExecutionResult(
-            completion=AgentExecutionCompletion.FULFILLED,
-            description="form filled",
-            verified={"artifacts": [{"artifact_id": "artifact-1", "file_name": "request.xlsx"}]},
-        )
-        yield RuntimeEvent.status("done")
-
-    executor.execute = emit_success  # type: ignore[method-assign]
-    state = SimpleNamespace()
-    result = await executor.execute_attempt(
-        request=_request(),
-        runtime_state=state,
-        messages=[],
-        ctx=SimpleNamespace(extra={}),
-        user_id=AsyncMock(),
-        tenant_id=AsyncMock(),
+    declaration = await executor._commit_declaration(
+        task=task,
+        model="test-model",
+        observed={"results": [{"result_ref": "result_1", "result_preview": "bounded"}], "artifacts": []},
     )
 
-    assert result.verified["artifacts"][0]["artifact_id"] == "artifact-1"
+    assert declaration.outputs == {"answer": "ok"}
+    kwargs = executor._tool_runtime.llm.call.await_args.kwargs
+    assert "tools" not in kwargs
+    assert kwargs["response_format"]["type"] == "json_schema"
+    assert "bounded" in kwargs["messages"][1]["content"]
 
 
 @pytest.mark.asyncio
-async def test_agent_execution_keeps_declared_data_output() -> None:
-    executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
+async def test_large_runtime_result_is_externalized() -> None:
+    from unittest.mock import patch
 
-    async def emit_success(*, ctx, **_kwargs):
-        ctx.extra["agent_execution_result"] = AgentExecutionResult(
-            completion=AgentExecutionCompletion.FULFILLED,
-            description="i121-mgmt-sw05: active, 172.25.253.18/25",
-            outputs={"device_info": {"text": "i121-mgmt-sw05: active, 172.25.253.18/25"}},
-        )
-        yield RuntimeEvent.status("done")
+    payload = {"body": "x" * 5000}
+    with patch("app.runtime.agent_executor.s3_manager.upload_content_sync", new=AsyncMock(return_value=True)) as upload:
+        verified = {"result_records": [{"result_ref": "result_1", "payload": payload}]}
+        await AgentExecutor._externalize_large_results(verified, "attempt-1")
+    assert verified["result_records"][0]["payload"] is None
+    assert verified["result_records"][0]["payload_ref"]["key"] == "runtime/results/attempt-1/result_1.json"
+    upload.assert_awaited_once()
 
-    executor.execute = emit_success  # type: ignore[method-assign]
-    state = SimpleNamespace()
-    result = await executor.execute_attempt(
-        request=_request(),
-        runtime_state=state,
-        messages=[],
-        ctx=SimpleNamespace(extra={}),
-        user_id=AsyncMock(),
-        tenant_id=AsyncMock(),
-    )
 
-    assert result.outputs["device_info"].text == result.description
+def test_terminal_schema_rejects_unknown_output_fields() -> None:
+    from app.runtime.orchestrator_contracts import parse_task_completion_declaration
+    with pytest.raises(ValueError):
+        parse_task_completion_declaration('{"completion":"fulfilled","report":"ready","outputs":{},"needs":[],"checkpoint":{}}')

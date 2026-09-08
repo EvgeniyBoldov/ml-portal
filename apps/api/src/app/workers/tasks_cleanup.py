@@ -12,6 +12,7 @@ from sqlalchemy import delete, select, func, text
 
 from app.models.audit_log import AuditLog
 from app.models.runtime_observability import RuntimeExecutionEvent, RuntimeEventSequence
+from app.models.runtime_plan import RuntimeToolResult
 from app.models.chat import Chats
 from app.models.sandbox import SandboxSession
 from app.models.tenant import Tenants
@@ -155,6 +156,31 @@ def cleanup_expired_sandbox_sessions(self):
     except Exception as e:
         logger.error(f"Failed to cleanup expired sandbox sessions: {e}", exc_info=True)
         raise self.retry(exc=e)
+
+
+@shared_task(
+    name="app.workers.tasks_cleanup.cleanup_expired_runtime_tool_results",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def cleanup_expired_runtime_tool_results(self):
+    """Remove raw operation payloads after the 24-hour task-result retention window."""
+    import asyncio
+
+    async def _cleanup():
+        async with get_worker_session() as session:
+            result = await session.execute(
+                delete(RuntimeToolResult).where(RuntimeToolResult.expires_at < datetime.now(timezone.utc))
+            )
+            await session.commit()
+            return int(result.rowcount or 0)
+
+    try:
+        return asyncio.run(_cleanup())
+    except Exception as exc:
+        logger.error("Failed to clean expired runtime tool results: %s", exc, exc_info=True)
+        raise self.retry(exc=exc)
 
 
 @shared_task(
@@ -332,6 +358,11 @@ def run_all_cleanup():
         results["sandbox_sessions"] = cleanup_expired_sandbox_sessions.delay().get(timeout=300)
     except Exception as e:
         results["sandbox_sessions"] = f"error: {e}"
+
+    try:
+        results["runtime_tool_results"] = cleanup_expired_runtime_tool_results.delay().get(timeout=300)
+    except Exception as e:
+        results["runtime_tool_results"] = f"error: {e}"
 
     try:
         results["detached_chat_attachments"] = cleanup_expired_detached_chat_attachments.delay().get(timeout=300)

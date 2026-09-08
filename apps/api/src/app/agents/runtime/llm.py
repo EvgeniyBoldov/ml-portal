@@ -40,6 +40,7 @@ class LLMAdapter:
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         timeout_s: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Non-streaming LLM call. Returns plain text response."""
         try:
@@ -48,6 +49,8 @@ class LLMAdapter:
                 params["max_tokens"] = max_tokens
             if tools:
                 params["tools"] = tools
+            if response_format:
+                params["response_format"] = response_format
             request = self._client.chat(messages=messages, model=model, params=params,
                                         options=LLMCallOptions(timeout_s=timeout_s))
             response = await asyncio.wait_for(request, timeout=timeout_s) if timeout_s else await request
