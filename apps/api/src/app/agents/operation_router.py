@@ -113,10 +113,10 @@ class OperationRouter:
                 "collection_type": str(collection.collection_type),
                 "instance_slug": str(getattr(instance, "slug", "")),
             }
-            logger.info("preflight_collection_started", extra=collection_log_context)
+            logger.debug("preflight_collection_started", extra=collection_log_context)
             if readiness_reason != "ready":
                 result.missing.collections.append(f"{collection.slug} ({readiness_reason})")
-                logger.info(
+                logger.debug(
                     "preflight_collection_skipped",
                     extra={**collection_log_context, "reason": readiness_reason, "duration_ms": int((monotonic() - collection_started) * 1000)},
                 )
@@ -124,9 +124,9 @@ class OperationRouter:
             provider_for_execution = provider if provider is not None else instance
             collection_id = str(collection.id)
             collection_slug = str(collection.slug)
-            logger.info("preflight_collection_stage_started", extra={**collection_log_context, "stage": "status_snapshot"})
+            logger.debug("preflight_collection_stage_started", extra={**collection_log_context, "stage": "status_snapshot"})
             status_snapshot = await self.collection_status_snapshot.get_status_snapshot(collection)
-            logger.info("preflight_collection_stage_completed", extra={**collection_log_context, "stage": "status_snapshot", "duration_ms": int((monotonic() - collection_started) * 1000)})
+            logger.debug("preflight_collection_stage_completed", extra={**collection_log_context, "stage": "status_snapshot", "duration_ms": int((monotonic() - collection_started) * 1000)})
             if not self.runtime_rbac_resolver.is_collection_allowed(
                 effective_permissions=effective_permissions,
                 collection_slug=collection_slug,
@@ -147,7 +147,7 @@ class OperationRouter:
             )
             result.resolved_data_instances.append(resolved_instance)
 
-            logger.info("preflight_collection_stage_started", extra={**collection_log_context, "stage": "operation_resolution"})
+            logger.debug("preflight_collection_stage_started", extra={**collection_log_context, "stage": "operation_resolution"})
             operations = await self.operation_resolver.resolve_for_collection(
                 collection=collection,
                 instance=instance,
@@ -157,7 +157,7 @@ class OperationRouter:
                 user_id=user_id,
                 tenant_id=tenant_id,
             )
-            logger.info("preflight_collection_stage_completed", extra={**collection_log_context, "stage": "operation_resolution", "duration_ms": int((monotonic() - collection_started) * 1000), "operations_count": len(operations)})
+            logger.debug("preflight_collection_stage_completed", extra={**collection_log_context, "stage": "operation_resolution", "duration_ms": int((monotonic() - collection_started) * 1000), "operations_count": len(operations)})
             readiness = self.collection_readiness_builder.build(
                 collection=collection,
                 data_instance=instance,
@@ -170,7 +170,7 @@ class OperationRouter:
                 result.missing.credentials.append(instance.slug)
             if not operations:
                 result.missing.tools.append(f"{instance.slug} (no operations)")
-                logger.info("preflight_collection_completed", extra={**collection_log_context, "duration_ms": int((monotonic() - collection_started) * 1000), "operations_count": 0})
+                logger.debug("preflight_collection_completed", extra={**collection_log_context, "duration_ms": int((monotonic() - collection_started) * 1000), "operations_count": 0})
                 continue
 
             for operation, credential_context in operations:
@@ -198,7 +198,7 @@ class OperationRouter:
                     context_payload=context_payload,
                     credential=credential_context,
                 )
-            logger.info("preflight_collection_completed", extra={**collection_log_context, "duration_ms": int((monotonic() - collection_started) * 1000), "operations_count": len(operations)})
+            logger.debug("preflight_collection_completed", extra={**collection_log_context, "duration_ms": int((monotonic() - collection_started) * 1000), "operations_count": len(operations)})
 
         # System tools (file.*) must be available even when no data instances exist.
         await self._resolve_system_tools(

@@ -133,6 +133,25 @@ def test_terminal_result_accepts_explicit_data_output() -> None:
     assert result.outputs["result"].data == {"status": "created"}
 
 
+def test_terminal_result_normalizes_model_output_list() -> None:
+    result = parse_agent_execution_result(
+        '{"completion":"fulfilled","description":"ready","needs":[],'
+        '"outputs":[{"key":"jira_tasks","description":"Open tasks",'
+        '"data":{"tasks":[{"key":"NIMS-3334"}]}}]}'
+    )
+
+    assert result.outputs["jira_tasks"].description == "Open tasks"
+    assert result.outputs["jira_tasks"].data == {"tasks": [{"key": "NIMS-3334"}]}
+
+
+def test_terminal_result_rejects_duplicate_list_output_keys() -> None:
+    with pytest.raises(ValueError, match="duplicate key"):
+        parse_agent_execution_result(
+            '{"completion":"fulfilled","description":"ready","needs":[],'
+            '"outputs":[{"key":"result","text":"one"},{"key":"result","text":"two"}]}'
+        )
+
+
 def test_runtime_terminal_contract_overrides_legacy_agent_output_format() -> None:
     request = _request()
     prompt = AgentExecutor._with_terminal_contract_prompt("# Output Format\nReturn a URL", request)

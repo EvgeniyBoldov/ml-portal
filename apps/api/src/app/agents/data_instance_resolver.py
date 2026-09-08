@@ -54,7 +54,7 @@ class CollectionRuntimeResolver:
         # collection turns preflight into repeated writes/lookups and can wait
         # behind a concurrent collection-admin transaction.
         local_service_cache: Dict[str, ToolInstance] = {}
-        logger.info(
+        logger.debug(
             "preflight_collection_sources_started",
             extra={"collections_count": len(collections)},
         )
@@ -64,7 +64,7 @@ class CollectionRuntimeResolver:
                 "collection_slug": str(getattr(collection, "slug", "") or ""),
                 "collection_type": str(getattr(collection, "collection_type", "") or ""),
             }
-            logger.info("preflight_collection_source_started", extra=collection_context)
+            logger.debug("preflight_collection_source_started", extra=collection_context)
             instance = await self._resolve_collection_source(
                 collection,
                 local_service_cache=local_service_cache,
@@ -107,7 +107,7 @@ class CollectionRuntimeResolver:
                         runtime_domain=runtime_domain,
                     )
                 )
-                logger.info(
+                logger.debug(
                     "preflight_collection_source_completed",
                     extra={
                         **collection_context,
@@ -132,7 +132,7 @@ class CollectionRuntimeResolver:
                             runtime_domain=runtime_domain,
                         )
                     )
-                    logger.info(
+                    logger.debug(
                         "preflight_collection_source_completed",
                         extra={
                             **collection_context,
@@ -152,7 +152,7 @@ class CollectionRuntimeResolver:
                     runtime_domain=runtime_domain,
                 )
             )
-            logger.info(
+            logger.debug(
                 "preflight_collection_source_completed",
                 extra={
                     **collection_context,
@@ -162,7 +162,7 @@ class CollectionRuntimeResolver:
                     "duration_ms": int((monotonic() - collection_started) * 1000),
                 },
             )
-        logger.info(
+        logger.debug(
             "preflight_collection_sources_completed",
             extra={
                 "collections_count": len(collections),

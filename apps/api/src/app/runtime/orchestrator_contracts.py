@@ -364,4 +364,24 @@ def parse_agent_execution_result(content: str) -> AgentExecutionResult:
         raise ValueError("agent task result must be strict JSON") from exc
     if not isinstance(payload, dict):
         raise ValueError("agent task result must be a JSON object")
+    outputs = payload.get("outputs")
+    if isinstance(outputs, list):
+        # Some tool-calling models reliably return an output declaration list
+        # (``[{"key": "answer", "data": ...}]``), even though the runtime
+        # contract requires a mapping.  It is an unambiguous representation,
+        # so normalize it at the boundary instead of retrying an otherwise
+        # completed external operation solely to change JSON shape.
+        normalized_outputs: Dict[str, Any] = {}
+        for item in outputs:
+            if not isinstance(item, dict):
+                raise ValueError("agent task outputs list must contain objects")
+            output_key = str(item.get("key") or "").strip()
+            if not output_key:
+                raise ValueError("agent task output is missing key")
+            if output_key in normalized_outputs:
+                raise ValueError(f"agent task outputs contain duplicate key: {output_key}")
+            normalized_outputs[output_key] = {
+                key: value for key, value in item.items() if key != "key"
+            }
+        payload = {**payload, "outputs": normalized_outputs}
     return AgentExecutionResult.model_validate(payload)

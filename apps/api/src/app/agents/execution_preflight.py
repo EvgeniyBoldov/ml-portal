@@ -177,7 +177,7 @@ class ExecutionPreflight:
 
         try:
             # 1. Resolve agent + version
-            logger.info(
+            logger.debug(
                 "preflight_stage_started",
                 extra={"agent_slug": agent_slug, "stage": "agent_resolution"},
             )
@@ -187,7 +187,7 @@ class ExecutionPreflight:
                 agent_version_id=agent_version_id,
                 include_routable_agents=include_routable_agents,
             )
-            logger.info(
+            logger.debug(
                 "preflight_stage_completed",
                 extra={"agent_slug": agent_slug, "stage": "agent_resolution", "duration_ms": int((time.time() - start_time) * 1000)},
             )
@@ -198,7 +198,7 @@ class ExecutionPreflight:
                 (platform_config or {}).get("default_collection_allow", True)
             )
             operations_started = time.time()
-            logger.info(
+            logger.debug(
                 "preflight_stage_started",
                 extra={"agent_slug": agent_slug, "stage": "operation_resolution"},
             )
@@ -209,7 +209,7 @@ class ExecutionPreflight:
                 effective_permissions_override=effective_permissions_override,
                 default_collection_allow=default_collection_allow,
             )
-            logger.info(
+            logger.debug(
                 "preflight_stage_completed",
                 extra={
                     "agent_slug": agent_slug,
@@ -248,7 +248,7 @@ class ExecutionPreflight:
 
             # 3. Build available_actions from resolved operations
             actions_started = time.time()
-            logger.info(
+            logger.debug(
                 "preflight_stage_started",
                 extra={"agent_slug": agent_slug, "stage": "available_actions"},
             )
@@ -258,7 +258,7 @@ class ExecutionPreflight:
                 include_routable_agents=include_routable_agents,
                 routable_agents_override=routable_agents_override,
             )
-            logger.info(
+            logger.debug(
                 "preflight_stage_completed",
                 extra={"agent_slug": agent_slug, "stage": "available_actions", "duration_ms": int((time.time() - actions_started) * 1000)},
             )
@@ -488,7 +488,7 @@ class ExecutionPreflight:
             "before_count": before_count,
             "after_count": len(filtered_instances),
         }
-        logger.info("Runtime RBAC agent collection filter: %s", audit_payload)
+        logger.debug("Runtime RBAC agent collection filter: %s", audit_payload)
 
         if len(filtered_instances) == before_count:
             return None, audit_payload
@@ -603,4 +603,4 @@ class ExecutionPreflight:
         }
         if decision.get("error_message"):
             safe["error"] = str(decision["error_message"])
-        logger.info("runtime_preflight_decision", extra={"decision": safe})
+        logger.debug("runtime_preflight_decision", extra={"decision": safe})

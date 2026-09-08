@@ -653,6 +653,8 @@ class AgentExecutor:
             "[Terminal task completion contract]",
             "After work, return exactly one JSON object and no prose or markdown.",
             "Required fields: completion (fulfilled|needs|unfulfillable), description, needs (array), outputs (object), and limitation for unfulfillable.",
+            "outputs MUST be a JSON object keyed by output key, never an array. "
+            "For example: {\"outputs\": {\"jira_tasks\": {\"data\": {\"tasks\": []}}}}.",
             "Each outputs value must be an object containing only optional description plus at least one of text, data, or artifacts. "
             "For example: {\"answer\": {\"data\": {\"status\": \"done\"}}}. "
             "For an artifact expected output, do not declare artifact IDs: report completion in text or data; runtime binds only the verified artifact from the tool ledger. "
@@ -681,6 +683,7 @@ class AgentExecutor:
             "# RUNTIME TASK COMPLETION CONTRACT\n"
             "This contract overrides any conflicting agent Output Format. "
             "Your final response must be exactly one JSON object with completion, description, needs, outputs, and (for unfulfillable) limitation. "
+            "outputs must be a JSON object keyed by output key, never an array. "
             "Every outputs value must contain only optional description plus at least one of text, data, or artifacts; unknown keys are invalid. "
             "For an artifact output, never claim artifact IDs: runtime binds only verified tool-ledger artifacts. "
             f"Expected outputs (including required/schema): {expected}.",
