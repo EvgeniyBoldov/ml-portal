@@ -194,6 +194,16 @@ class GraphOrchestrator:
         prior_tasks = {str(item.get("task_id")): item for item in ledger.get("tasks", [])}
         need_items = {(str(item.get("task_id")), str(item.get("ref"))): item for item in ledger.get("needs", [])}
         proposed = {task.task_id: task for task in proposal.tasks}
+        # A completed task has no open disposition left to resolve. Models
+        # sometimes repeat an ``accept_partial`` resolution when moving from
+        # terminal=planner to terminal=synthesis; treating that harmless
+        # duplicate as a planning failure aborts an otherwise valid run.
+        effective_resolutions = [
+            resolution for resolution in proposal.resolutions
+            if prior_tasks.get(resolution.task_id, {}).get("status") != "completed"
+        ]
+        if len(effective_resolutions) != len(proposal.resolutions):
+            proposal = proposal.model_copy(update={"resolutions": effective_resolutions})
         for resolution in proposal.resolutions:
             prior = prior_tasks.get(resolution.task_id)
             if prior is None or prior.get("status") == "completed":

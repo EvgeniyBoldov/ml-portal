@@ -169,6 +169,37 @@ def test_binding_schema_must_match_the_discovered_need() -> None:
         GraphOrchestrator._compile(proposal, [{"slug": "research"}], ledger)
 
 
+def test_completed_task_resolution_is_ignored_when_planner_moves_to_synthesis() -> None:
+    proposal = IterationProposal(
+        terminal=TerminalKind.SYNTHESIS,
+        synthesis_brief={
+            "user_question": "goal",
+            "planned_work": "inspect",
+            "purpose": "answer",
+            "answer_requirements": "summary",
+        },
+        resolutions=[TaskResolution(
+            task_id="task",
+            action="accept_partial",
+            output_keys=["answer"],
+            reason="already completed",
+        )],
+    )
+    ledger = {
+        "tasks": [{
+            "task_id": "task",
+            "status": "completed",
+            "result": {"outputs": {"answer": {"text": "done"}}},
+        }],
+        "resolutions": [],
+        "needs": [],
+    }
+
+    compiled = GraphOrchestrator._compile(proposal, [], ledger)
+
+    assert compiled.resolutions == []
+
+
 def test_attempt_failure_event_has_exact_attempt_identifier() -> None:
     event = OrchestratorEvent(type="task_attempt_failed", plan_id="plan", task_id="task", attempt=2, error={"code": "timeout"}).to_runtime_event()
 
