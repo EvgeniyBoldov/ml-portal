@@ -10,6 +10,7 @@ from app.agents.context import ToolContext
 from app.runtime.contracts import PipelineRequest, PipelineStopReason
 from app.runtime.envelope import PhasedEvent
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
+from app.runtime.entity_ids import runtime_task_id
 from app.runtime.orchestrator import GraphOrchestrator
 from app.runtime.plan_store import SqlPlanStore
 from app.runtime.turn_state import RuntimeTurnState
@@ -142,11 +143,15 @@ class GraphPlanningStage:
             "planner_budget_entity_id": planner_entity_id,
         }
         if resumed_task_id:
+            resume_snapshot = await self._store.snapshot(plan.id)
+            resumed_task = dict(resume_snapshot.get("tasks") or {}).get(resumed_task_id, {})
             yield PhasedEvent(
                 RuntimeEvent.task_lifecycle(
                     RuntimeEventType.TASK_RESUMED,
                     plan_id=str(plan.id),
                     task_id=resumed_task_id,
+                    task_entity_id=runtime_task_id(str(plan.id), resumed_task_id),
+                    iteration_id=str(resumed_task.get("iteration_id") or "") or None,
                 ),
                 OrchestrationPhase.PLANNER,
             )

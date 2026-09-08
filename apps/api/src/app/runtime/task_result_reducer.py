@@ -66,7 +66,14 @@ class TaskAttemptResultReducer:
                 description=execution.description,
                 outputs=outputs,
                 reason_code="output_schema_invalid",
-                limitation={"code": "output_schema_invalid", "message": "The task result did not satisfy the required output format.", "action": "none"},
+                limitation={
+                    "code": "output_schema_invalid",
+                    "message": (
+                        "The task result did not satisfy the declared JSON Schema for: "
+                        + ", ".join(invalid)
+                    ),
+                    "action": "none",
+                },
                 verified=verified,
             )
         if missing:

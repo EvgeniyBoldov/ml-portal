@@ -75,3 +75,24 @@ def test_step_is_a_stable_parent_for_executor_and_has_terminal_outcome() -> None
     assert started.data["parent_entity_type"] == ended.data["parent_entity_type"] == "planner_iteration"
     assert started.data["entity_id"] == ended.data["entity_id"] == "step-1"
     assert ended.data["summary"] == "Инвентарь получен"
+
+
+def test_task_and_checkpoint_graph_entities_have_stable_iteration_parents() -> None:
+    task = RuntimeEvent.task_lifecycle(
+        RuntimeEventType.TASK_PLANNED,
+        plan_id="plan-1", iteration_id="iteration-1",
+        task_id="collect", task_entity_id="task-entity-1",
+        status="waiting",
+    )
+    checkpoint = RuntimeEvent.checkpoint_lifecycle(
+        RuntimeEventType.CHECKPOINT_PLANNED,
+        checkpoint_id="checkpoint-1", plan_id="plan-1",
+        iteration_id="iteration-1", declared_next="synthesis",
+        status="waiting",
+    )
+
+    assert task.data["entity_id"] == task.data["task_entity_id"] == "task-entity-1"
+    assert task.data["task_id"] == "collect"
+    assert task.data["parent_entity_id"] == "iteration-1"
+    assert checkpoint.data["entity_id"] == checkpoint.data["checkpoint_id"] == "checkpoint-1"
+    assert checkpoint.data["parent_entity_id"] == "iteration-1"

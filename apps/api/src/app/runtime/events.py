@@ -84,6 +84,7 @@ class RuntimeEventType(str, Enum):
     PLAN_WAITING_INPUT = "plan_waiting_input"
     PLAN_COMPLETED = "plan_completed"
     PLAN_FAILED = "plan_failed"
+    TASK_PLANNED = "task_planned"
     TASK_STARTED = "task_started"
     TASK_PAUSED = "task_paused"
     TASK_RESUMED = "task_resumed"
@@ -96,6 +97,8 @@ class RuntimeEventType(str, Enum):
     ATTEMPT_SUCCEEDED = "attempt_succeeded"
     ATTEMPT_FAILED = "attempt_failed"
     ATTEMPT_RETRY_SCHEDULED = "attempt_retry_scheduled"
+    CHECKPOINT_PLANNED = "checkpoint_planned"
+    CHECKPOINT_DECIDED = "checkpoint_decided"
     REQUIREMENT_CREATED = "requirement_created"
     REQUIREMENT_RESOLVED = "requirement_resolved"
     REQUIREMENT_UNRESOLVABLE = "requirement_unresolvable"
@@ -260,8 +263,13 @@ class RuntimeEvent:
         return cls(event_type, {"entity_id": plan_id, "entity_type": "plan", **extra})
 
     @classmethod
-    def task_lifecycle(cls, event_type: RuntimeEventType, *, plan_id: str, task_id: str, **extra: Any) -> "RuntimeEvent":
+    def task_lifecycle(
+        cls, event_type: RuntimeEventType, *, plan_id: str, task_id: str,
+        task_entity_id: Optional[str] = None, iteration_id: Optional[str] = None,
+        **extra: Any,
+    ) -> "RuntimeEvent":
         allowed = {
+            RuntimeEventType.TASK_PLANNED,
             RuntimeEventType.TASK_STARTED,
             RuntimeEventType.TASK_PAUSED,
             RuntimeEventType.TASK_RESUMED,
@@ -273,16 +281,24 @@ class RuntimeEvent:
         }
         if event_type not in allowed:
             raise ValueError(f"not a task event: {event_type}")
+        entity_id = task_entity_id or task_id
         return cls(event_type, {
-            "entity_id": task_id,
+            "entity_id": entity_id,
             "entity_type": "task",
-            "parent_entity_type": "plan",
-            "parent_entity_id": plan_id,
+            "parent_entity_type": "planner_iteration" if iteration_id else "plan",
+            "parent_entity_id": iteration_id or plan_id,
+            "plan_id": plan_id,
+            "iteration_id": iteration_id,
+            "task_id": task_id,
+            "task_entity_id": entity_id,
             **extra,
         })
 
     @classmethod
-    def attempt_lifecycle(cls, event_type: RuntimeEventType, *, task_id: str, attempt_id: str, **extra: Any) -> "RuntimeEvent":
+    def attempt_lifecycle(
+        cls, event_type: RuntimeEventType, *, task_id: str, attempt_id: str,
+        task_entity_id: Optional[str] = None, **extra: Any,
+    ) -> "RuntimeEvent":
         allowed = {
             RuntimeEventType.ATTEMPT_STARTED,
             RuntimeEventType.ATTEMPT_SUCCEEDED,
@@ -291,11 +307,35 @@ class RuntimeEvent:
         }
         if event_type not in allowed:
             raise ValueError(f"not an attempt event: {event_type}")
+        parent_id = task_entity_id or task_id
         return cls(event_type, {
             "entity_id": attempt_id,
             "entity_type": "attempt",
             "parent_entity_type": "task",
-            "parent_entity_id": task_id,
+            "parent_entity_id": parent_id,
+            "task_id": task_id,
+            "task_entity_id": parent_id,
+            **extra,
+        })
+
+    @classmethod
+    def checkpoint_lifecycle(
+        cls, event_type: RuntimeEventType, *, checkpoint_id: str,
+        plan_id: str, iteration_id: str, **extra: Any,
+    ) -> "RuntimeEvent":
+        if event_type not in {
+            RuntimeEventType.CHECKPOINT_PLANNED,
+            RuntimeEventType.CHECKPOINT_DECIDED,
+        }:
+            raise ValueError(f"not a checkpoint event: {event_type}")
+        return cls(event_type, {
+            "entity_id": checkpoint_id,
+            "entity_type": "checkpoint",
+            "parent_entity_type": "planner_iteration",
+            "parent_entity_id": iteration_id,
+            "checkpoint_id": checkpoint_id,
+            "plan_id": plan_id,
+            "iteration_id": iteration_id,
             **extra,
         })
 

@@ -7,7 +7,7 @@ import pytest
 from app.runtime.orchestrator import GraphOrchestrator
 from app.runtime.orchestrator_contracts import (
     AgentExecutionCompletion, AgentExecutionResult, IterationProposal,
-    PlannedTask, SynthesisBrief, TerminalKind,
+    PlannedTask, SynthesisBrief, TaskExecutionError, TaskResolution, TerminalKind,
 )
 from app.runtime.plan_store import InMemoryPlanStore
 
@@ -84,13 +84,26 @@ async def test_task_trace_closes_the_agent_and_step_under_the_persisted_iteratio
         planner_kwargs={"runtime_state": State()},
     )]
     runtime_events = [event["runtime_event"] for event in events if event.get("type") == "_runtime_event"]
+    canonical_events = [event.to_runtime_event() for event in events]
     iteration_id = store.inner.get(store.plan["id"])["iterations"][0]["id"]
+    task_planned = next(event for event in canonical_events if event.type.value == "task_planned")
+    checkpoint_planned = next(event for event in canonical_events if event.type.value == "checkpoint_planned")
+    checkpoint_decided = next(event for event in canonical_events if event.type.value == "checkpoint_decided")
+    task_completed_index = next(index for index, event in enumerate(canonical_events) if event.type.value == "task_completed")
+    checkpoint_decided_index = canonical_events.index(checkpoint_decided)
+    iteration_end_index = next(index for index, event in enumerate(canonical_events) if event.type.value == "planner_iteration_end")
     step_start = next(event for event in runtime_events if event.type.value == "step_start")
     agent_start = next(event for event in runtime_events if event.type.value == "agent_start")
     agent_end = next(event for event in runtime_events if event.type.value == "agent_end")
     step_end = next(event for event in runtime_events if event.type.value == "step_end")
 
     assert step_start.data["parent_entity_id"] == iteration_id
+    assert task_planned.data["parent_entity_id"] == iteration_id
+    assert task_planned.data["status"] == "waiting"
+    assert checkpoint_decided.data["entity_id"] == checkpoint_planned.data["entity_id"]
+    assert checkpoint_planned.data["declared_next"] == "synthesis"
+    assert checkpoint_decided.data["effective_next"] == "synthesis"
+    assert task_completed_index < checkpoint_decided_index < iteration_end_index
     assert agent_start.data["parent_entity_id"] == step_start.data["entity_id"]
     assert agent_end.data["entity_id"] == agent_start.data["entity_id"]
     assert step_end.data["entity_id"] == step_start.data["entity_id"]
@@ -118,3 +131,53 @@ async def test_iteration_limit_never_creates_a_hidden_finalize_iteration() -> No
     assert len(store.inner.get(store.plan["id"])["iterations"]) == 1
     assert store.inner.get(store.plan["id"])["last_failure"]["code"] == "iteration_limit_exceeded"
     assert events[-1]["error_code"] == "iteration_limit_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_failed_task_overrides_declared_synthesis_checkpoint_with_planner() -> None:
+    class ReplanPlanner:
+        calls = 0
+
+        async def plan(self, *, request, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return IterationProposal(
+                    tasks=[PlannedTask(
+                        task_id="work", executor="research", intent="inspect", instructions="inspect",
+                    )],
+                    terminal=TerminalKind.SYNTHESIS,
+                    synthesis_brief=SynthesisBrief(
+                        user_question="goal", planned_work="inspect", purpose="answer", answer_requirements="short",
+                    ),
+                )
+            return IterationProposal(
+                tasks=[], terminal=TerminalKind.SYNTHESIS,
+                synthesis_brief=SynthesisBrief(
+                    user_question="goal", planned_work="inspection failed", purpose="answer", answer_requirements="report limitation",
+                ),
+                resolutions=[TaskResolution(
+                    task_id="work", action="report_unresolved", reason="agent failed",
+                )],
+            )
+
+    class FailingExecutor:
+        async def execute_attempt(self, *, request, **kwargs):
+            raise TaskExecutionError("agent failed", code="agent_failed", retryable=False)
+
+    store = AsyncMemoryStore()
+    events = [event async for event in GraphOrchestrator(
+        store=store, planner=ReplanPlanner(), executor=FailingExecutor(),
+        synthesizer=Synthesizer(), max_attempts=1,
+    ).run(
+        plan_id=store.plan["id"], goal="goal", available_agents=[{"slug": "research"}],
+        planner_kwargs={"runtime_state": State()},
+    )]
+    decisions = [
+        event.to_runtime_event()
+        for event in events
+        if event.get("type") == "checkpoint_decided"
+    ]
+
+    assert decisions[0].data["declared_next"] == "synthesis"
+    assert decisions[0].data["effective_next"] == "planner"
+    assert decisions[0].data["reason"] == "task_failure"

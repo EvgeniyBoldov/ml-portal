@@ -20,19 +20,48 @@ The canonical sandbox presentation hierarchy is:
 
 ```text
 run → planner orchestrator → planner_iteration → planner LLM call
-                                             └→ step → agent_execution → LLM/tool/interaction/error/snapshot
+                                             ├→ task → attempt
+                                             ├→ step → agent_execution → LLM/tool/interaction/error/snapshot
+                                             └→ checkpoint
 ```
 
 `iteration` is the operator-facing trace entity for one planner decision
-and its execution wave. `task` and `attempt` remain persisted runtime
-control-plane entities: task lifecycle events retain their plan parent and
-carry explicit task/attempt references to the executor run. They are not a
-second competing containment hierarchy for the trace UI.
+and its execution wave. A planned `task` is the canonical executor node: it is
+created in `waiting` state as soon as the proposal is applied, before an agent
+starts. Attempts, steps and agent executions describe work performed for that
+task and carry its linking IDs; they do not create a second task identity. A
+`checkpoint` is the iteration's planned hand-off to planner or synthesis and
+is also materialized before execution.
 
-`planner_iteration` identifies the planner invocation that produced an
-iteration. It is not a revision or a second graph hierarchy. Iteration and step
-ids are stable strings scoped by root run. Executor ids are UUIDs. Parallel executor runs
-receive independent immutable logger scopes.
+`planner_iteration_start` opens before the planner call. The matching
+`planner_iteration_end` is emitted only after all schedulable tasks finish and
+the checkpoint is decided (or when the iteration fails terminally). Thus the
+iteration lifecycle covers the complete execution wave, not only generation
+of the proposal.
+
+The graph join contract is identifier-based. Consumers must not infer these
+relations from sequence proximity, task titles, agent slugs or LLM payloads.
+
+| Field | Meaning |
+| --- | --- |
+| `plan_id` | Persisted control-plane plan UUID. |
+| `iteration_id` | Stable UUID of the planner iteration and task/checkpoint parent. |
+| `task_id` | Human-readable planner-authored logical task key, unique within a plan. |
+| `task_entity_id` | Stable opaque UUID of `(plan_id, task_id)`; canonical graph node ID. |
+| `attempt_id` | Stable opaque UUID of `(task_entity_id, attempt number)`. |
+| `step_id` | Stable opaque UUID of the concrete execution step. |
+| `agent_execution_id` | Stable opaque UUID of the concrete agent run. |
+| `checkpoint_id` | Stable opaque UUID of the terminal decision for one iteration. |
+
+All task lifecycle events carry `plan_id`, `iteration_id`, `task_id` and
+`task_entity_id`. Execution lifecycle events additionally carry every
+applicable `attempt_id`, `step_id` and `agent_execution_id`. The same logical
+entity always reuses the same opaque ID across its lifecycle.
+
+`planner_iteration` identifies the iteration produced by one planner
+invocation. It is not a revision or a second graph hierarchy. Iteration and
+step ids are stable strings scoped by root run. Executor ids are UUIDs.
+Parallel executor runs receive independent immutable logger scopes.
 
 The planner's structured LLM call is a direct child of the
 `planner_iteration` that it produces. For the sandbox execution graph, an `agent_start` payload creates the
@@ -66,10 +95,18 @@ preview and retry/error classification.
 Iteration creation is owned by the planner invocation that produced it. Its
 `plan_iteration_applied` payload includes trigger, terminal and a redacted
 iteration proposal. Planner invocation lifecycle records the call itself;
-there is no patch/revision decision event. `protocol_retry` records only retry
-number and safe error classification. Task lifecycle rows keep their plan
-parent and include the task/attempt references used by the corresponding
-executor run.
+there is no patch/revision decision event. Immediately after it, one
+`task_planned` event is emitted per proposal task and one `checkpoint_planned`
+event is emitted for the proposal terminal. `protocol_retry` records only
+retry number and safe error classification.
+
+`checkpoint_planned` carries `declared_next=planner|synthesis` and
+`status=waiting`. When the scheduler actually crosses that checkpoint it emits
+`checkpoint_decided` with the same `checkpoint_id`, `declared_next`,
+`effective_next` and a machine-readable `reason`. A failed task can therefore
+change a declared synthesis hand-off to `effective_next=planner`; the frontend
+must update that checkpoint only from this event, not directly from an agent
+error. Independent tasks may still run between the error and the decision.
 
 Preflight is represented by `preflight_started`, terminal
 `preflight_completed`/`preflight_failed`, and a redacted capability/RBAC/limit
@@ -183,10 +220,9 @@ below the answer and do not require the synthesizer to emit markdown links.
   provider bodies and tracebacks remain application-log diagnostics.
 - RBAC, budget, limit, plan and terminal-invocation state are snapshots owned by the
   entity making the decision.
-- Persisted plan tasks are always `agent` tasks. Planner and synthesis are
-  terminal invocations of an iteration, recorded as lifecycle events rather
-  than task nodes. They are not agent executions, confirmation gates or
-  user-input interactions.
+- Persisted plan tasks are always `agent` tasks and are trace graph nodes.
+  Planner and synthesis are terminal checkpoint outcomes rather than tasks or
+  agent executions.
 - Worker boundaries transport JSON `RuntimeLogContext`, never a live logger or
   database session. The worker reconstructs a logger with a session factory,
   retains `run_id`, and uses task attempt/idempotency keys for retries.

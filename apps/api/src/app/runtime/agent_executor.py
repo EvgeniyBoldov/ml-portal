@@ -656,6 +656,8 @@ class AgentExecutor:
             "outputs MUST be a JSON object keyed by output key, never an array. "
             "The value of data (or text, when data is absent) is validated directly against that output's declared JSON Schema. "
             "For example, for an array schema: {\"outputs\": {\"jira_tasks\": {\"data\": []}}}.",
+            "Never emit null for a value unless that output's declared JSON Schema explicitly permits null. "
+            "For a string field that has no value, omit it when optional; when required, return a string such as an empty string, not null.",
             "Each outputs value must be an object containing only optional description plus at least one of text, data, or artifacts. "
             "For example: {\"answer\": {\"data\": {\"status\": \"done\"}}}. "
             "For an artifact expected output, do not declare artifact IDs: report completion in text or data; runtime binds only the verified artifact from the tool ledger. "
@@ -686,6 +688,7 @@ class AgentExecutor:
             "Your final response must be exactly one JSON object with completion, description, needs, outputs, and (for unfulfillable) limitation. "
             "outputs must be a JSON object keyed by output key, never an array. "
             "Every outputs value must contain only optional description plus at least one of text, data, or artifacts; unknown keys are invalid. "
+            "Never emit null for a value unless its declared JSON Schema explicitly permits null. "
             "For an artifact output, never claim artifact IDs: runtime binds only verified tool-ledger artifacts. "
             f"Expected outputs (including required/schema): {expected}.",
         ] if part)

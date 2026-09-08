@@ -77,6 +77,7 @@ def test_array_schema_rejects_a_shape_that_wraps_the_array() -> None:
 
     assert result.outcome is TaskOutcome.UNFULFILLABLE
     assert result.reason_code == "output_schema_invalid"
+    assert result.limitation.message == "The task result did not satisfy the declared JSON Schema for: jira_tasks"
 
 
 def test_require_retrieval_keeps_partial_result_when_no_receipt_exists() -> None:

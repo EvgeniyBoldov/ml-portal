@@ -24,7 +24,7 @@ from app.services.runtime_progress_streamer import RuntimeProgressStreamer
 _IDENTITY_ENTITY_TYPES = {
     "run", "orchestrator", "planner_iteration", "step", "agent_execution",
     "attempt", "synthesis_run", "llm_call",
-    "tool_call", "interaction", "memory_component", "error",
+    "tool_call", "interaction", "memory_component", "error", "task", "checkpoint", "plan",
 }
 
 
@@ -56,8 +56,9 @@ _BRIEF_EVENTS = frozenset({
     "planner_iteration_start", "planner_iteration_end", "step_start", "step_end",
     "agent_start", "agent_end", "plan_created", "plan_iteration_applied",
     "plan_waiting_input", "plan_completed", "plan_failed",
-    "task_started", "task_paused", "task_resumed", "task_completed", "task_needs_dependency", "task_blocked", "task_unfulfillable",
+    "task_planned", "task_started", "task_paused", "task_resumed", "task_completed", "task_needs_dependency", "task_blocked", "task_unfulfillable",
     "task_failed", "attempt_started", "attempt_succeeded", "attempt_failed",
+    "checkpoint_planned", "checkpoint_decided",
     "attempt_retry_scheduled", "preflight_snapshot", "rbac_snapshot", "limits_snapshot",
     "preflight_started", "preflight_completed", "preflight_failed",
     "budget_snapshot", "budget_consumed", "budget_rejected", "intent", "final", "error",

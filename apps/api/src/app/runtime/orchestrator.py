@@ -9,7 +9,8 @@ from uuid import UUID
 
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.entity_ids import (
-    agent_execution_id, planner_iteration_id, runtime_attempt_id, step_id,
+    agent_execution_id, iteration_checkpoint_id, planner_iteration_id,
+    runtime_attempt_id, runtime_task_id, step_id,
 )
 from app.runtime.orchestrator_contracts import (
     AgentExecutionResult, IterationProposal, PlanRequest, PlannerContext,
@@ -35,6 +36,10 @@ class OrchestratorEvent(dict):
         event_name = str(self.get("type") or "")
         plan_id = str(self.get("plan_id") or "")
         task_id = str(self.get("task_id") or "")
+        iteration_id = str(self.get("iteration_id") or "") or None
+        task_entity_id = str(self.get("task_entity_id") or "") or (
+            runtime_task_id(plan_id, task_id) if plan_id and task_id else None
+        )
         if event_name in {"iteration_created", "planner_checkpoint_completed"}:
             iteration_id = self.get("applied_iteration_id") or self.get("iteration_id")
             return RuntimeEvent.plan_lifecycle(
@@ -46,6 +51,35 @@ class OrchestratorEvent(dict):
                 iteration_id=iteration_id,
                 terminal=self.get("terminal"),
                 proposal=self.get("proposal"),
+            )
+        if event_name == "task_planned":
+            return RuntimeEvent.task_lifecycle(
+                RuntimeEventType.TASK_PLANNED,
+                plan_id=plan_id,
+                iteration_id=iteration_id,
+                task_id=task_id,
+                task_entity_id=task_entity_id,
+                status="waiting",
+                planned_order=self.get("planned_order"),
+                executor=self.get("executor"),
+                intent=self.get("intent"),
+                instructions=self.get("instructions"),
+                inputs=self.get("inputs"),
+                expected_outputs=self.get("expected_outputs"),
+                depends_on=self.get("depends_on"),
+                depends_on_task_entity_ids=self.get("depends_on_task_entity_ids"),
+                freshness_policy=self.get("freshness_policy"),
+            )
+        if event_name in {"checkpoint_planned", "checkpoint_decided"}:
+            return RuntimeEvent.checkpoint_lifecycle(
+                RuntimeEventType.CHECKPOINT_PLANNED if event_name == "checkpoint_planned" else RuntimeEventType.CHECKPOINT_DECIDED,
+                checkpoint_id=str(self.get("checkpoint_id") or ""),
+                plan_id=plan_id,
+                iteration_id=str(iteration_id or ""),
+                declared_next=self.get("declared_next"),
+                effective_next=self.get("effective_next"),
+                reason=self.get("reason"),
+                status="waiting" if event_name == "checkpoint_planned" else "completed",
             )
         if event_name == "plan_terminal":
             status = str(self.get("status") or "")
@@ -71,7 +105,13 @@ class OrchestratorEvent(dict):
                 lifecycle_type,
                 plan_id=plan_id,
                 task_id=task_id,
+                task_entity_id=task_entity_id,
+                iteration_id=iteration_id,
                 outcome=self.get("outcome"),
+                attempt=self.get("attempt"),
+                attempt_id=self.get("attempt_id"),
+                agent_execution_id=self.get("agent_execution_id"),
+                step_id=self.get("step_id"),
             )
         if event_name in {"task_blocked", "task_paused", "task_resumed", "task_failed"}:
             lifecycle_type = {
@@ -82,34 +122,50 @@ class OrchestratorEvent(dict):
             }[event_name]
             return RuntimeEvent.task_lifecycle(
                 lifecycle_type, plan_id=plan_id, task_id=task_id,
+                task_entity_id=task_entity_id, iteration_id=iteration_id,
                 attempt=self.get("attempt"),
+                attempt_id=self.get("attempt_id"),
+                agent_execution_id=self.get("agent_execution_id"),
+                step_id=self.get("step_id"),
             )
         if event_name == "task_attempt_failed":
             error = self.get("error") if isinstance(self.get("error"), dict) else {}
             attempt = int(self.get("attempt") or 0)
             return RuntimeEvent.attempt_lifecycle(
                 RuntimeEventType.ATTEMPT_FAILED,
-                task_id=task_id, attempt_id=runtime_attempt_id(task_id, attempt),
-                plan_id=plan_id, attempt=attempt, error_code=error.get("code"), retryable=bool(error.get("retryable")),
+                task_id=task_id, task_entity_id=task_entity_id,
+                attempt_id=str(self.get("attempt_id") or runtime_attempt_id(str(task_entity_id), attempt)),
+                plan_id=plan_id, iteration_id=iteration_id, attempt=attempt,
+                agent_execution_id=self.get("agent_execution_id"), step_id=self.get("step_id"),
+                error_code=error.get("code"), retryable=bool(error.get("retryable")),
             )
         if event_name in {"task_attempt_started", "task_attempt_succeeded"}:
             attempt = int(self.get("attempt") or 0)
             return RuntimeEvent.attempt_lifecycle(
                 RuntimeEventType.ATTEMPT_STARTED if event_name == "task_attempt_started" else RuntimeEventType.ATTEMPT_SUCCEEDED,
-                task_id=task_id, attempt_id=runtime_attempt_id(task_id, attempt),
-                plan_id=plan_id, attempt=attempt,
+                task_id=task_id, task_entity_id=task_entity_id,
+                attempt_id=str(self.get("attempt_id") or runtime_attempt_id(str(task_entity_id), attempt)),
+                plan_id=plan_id, iteration_id=iteration_id, attempt=attempt,
+                agent_execution_id=self.get("agent_execution_id"), step_id=self.get("step_id"),
             )
         if event_name == "task_retry_scheduled":
             attempt = int(self.get("attempt") or 0)
             return RuntimeEvent.attempt_lifecycle(
                 RuntimeEventType.ATTEMPT_RETRY_SCHEDULED,
-                task_id=task_id, attempt_id=runtime_attempt_id(task_id, attempt),
-                plan_id=plan_id, attempt=attempt,
+                task_id=task_id, task_entity_id=task_entity_id,
+                attempt_id=str(self.get("attempt_id") or runtime_attempt_id(str(task_entity_id), attempt)),
+                plan_id=plan_id, iteration_id=iteration_id, attempt=attempt,
+                agent_execution_id=self.get("agent_execution_id"), step_id=self.get("step_id"),
             )
         if event_name == "confirmation_required":
             payload = dict(self)
             payload.pop("type", None)
-            payload.update({"entity_type": "task", "entity_id": task_id, "parent_entity_type": "plan", "parent_entity_id": plan_id})
+            payload.update({
+                "entity_type": "task", "entity_id": task_entity_id,
+                "parent_entity_type": "planner_iteration" if iteration_id else "plan",
+                "parent_entity_id": iteration_id or plan_id,
+                "task_entity_id": task_entity_id, "iteration_id": iteration_id,
+            })
             return RuntimeEvent(RuntimeEventType.CONFIRMATION_REQUIRED, payload)
         try:
             event_type = RuntimeEventType(event_name)
@@ -136,6 +192,61 @@ class GraphOrchestrator:
         self.event_sink = event_sink
         self.logging_level = logging_level
         self.reducer = TaskAttemptResultReducer()
+
+    @staticmethod
+    def _iteration_graph_events(
+        *, plan_id: UUID, run_id: str, iteration_id: str,
+        proposal: IterationProposal,
+    ) -> list[OrchestratorEvent]:
+        """Materialize planner intent as stable graph entities before execution."""
+        plan_key = str(plan_id)
+        task_entities = {
+            task.task_id: runtime_task_id(plan_key, task.task_id)
+            for task in proposal.tasks
+        }
+        events = [
+            OrchestratorEvent(
+                type="task_planned",
+                plan_id=plan_key,
+                iteration_id=iteration_id,
+                task_entity_id=task_entities[task.task_id],
+                planned_order=index,
+                **task.model_dump(mode="json"),
+                depends_on_task_entity_ids=[
+                    task_entities[dependency]
+                    for dependency in task.depends_on
+                    if dependency in task_entities
+                ],
+            )
+            for index, task in enumerate(proposal.tasks)
+        ]
+        events.append(OrchestratorEvent(
+            type="checkpoint_planned",
+            plan_id=plan_key,
+            iteration_id=iteration_id,
+            checkpoint_id=iteration_checkpoint_id(run_id, iteration_id),
+            declared_next=proposal.terminal.value,
+        ))
+        return events
+
+    @staticmethod
+    def _checkpoint_decision_event(
+        *, plan_id: UUID, snapshot: dict[str, Any], iteration_id: str,
+        effective_next: str, reason: Optional[str],
+    ) -> OrchestratorEvent:
+        iteration = next(
+            (item for item in snapshot.get("iterations", []) if str(item.get("id")) == iteration_id),
+            {},
+        )
+        return OrchestratorEvent(
+            type="checkpoint_decided",
+            plan_id=str(plan_id),
+            iteration_id=iteration_id,
+            checkpoint_id=iteration_checkpoint_id(str(snapshot["root_run_id"]), iteration_id),
+            declared_next=iteration.get("terminal"),
+            effective_next=effective_next,
+            reason=reason,
+        )
 
     async def _planner_request(self, *, plan_id: UUID, goal: str, trigger: str,
                                available_agents: list[dict[str, Any]], available_artifacts: list[dict[str, Any]],
@@ -301,11 +412,15 @@ class GraphOrchestrator:
             try:
                 proposal = await self._invoke_planner(plan_id=plan_id, goal=goal, trigger="initial", available_agents=available_agents,
                                                       available_artifacts=artifacts, planner_kwargs=planner_kwargs)
+                applied_snapshot = await self.store.snapshot(plan_id)
+                applied_iteration_id = str(applied_snapshot["iterations"][-1]["id"])
                 yield OrchestratorEvent(type="iteration_created", plan_id=str(plan_id), trigger="initial", terminal=proposal.terminal.value,
-                                        iteration_id=(await self.store.snapshot(plan_id))["iterations"][-1]["id"], proposal=proposal.model_dump(mode="json"))
-                yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
-                    iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1, status="completed",
-                ))
+                                        iteration_id=applied_iteration_id, proposal=proposal.model_dump(mode="json"))
+                for graph_event in self._iteration_graph_events(
+                    plan_id=plan_id, run_id=str(applied_snapshot["root_run_id"]),
+                    iteration_id=applied_iteration_id, proposal=proposal,
+                ):
+                    yield graph_event
             except Exception as exc:
                 yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
                     iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1, status="failed",
@@ -322,7 +437,12 @@ class GraphOrchestrator:
             for changed_task_id, changed_task in dict(after_decision.get("tasks") or {}).items():
                 previous = dict(before_decision.get("tasks") or {}).get(changed_task_id, {})
                 if previous.get("status") != "blocked" and changed_task.get("status") == "blocked":
-                    yield OrchestratorEvent(type="task_blocked", plan_id=str(plan_id), task_id=changed_task_id)
+                    changed_iteration_id = str(changed_task.get("iteration_id") or "")
+                    yield OrchestratorEvent(
+                        type="task_blocked", plan_id=str(plan_id), task_id=changed_task_id,
+                        iteration_id=changed_iteration_id,
+                        task_entity_id=runtime_task_id(str(plan_id), changed_task_id),
+                    )
             if decision.kind == SchedulerActionKind.TERMINAL:
                 yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status=decision.reason)
                 return
@@ -342,12 +462,43 @@ class GraphOrchestrator:
                 current_snapshot = await self.store.snapshot(plan_id)
                 iteration_count = len(current_snapshot.get("iterations", []))
                 if iteration_count >= max_steps:
+                    active_iteration = next(
+                        (item for item in current_snapshot.get("iterations", []) if str(item.get("id")) == str(decision.iteration_id)),
+                        {},
+                    )
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
+                        iteration_id=str(decision.iteration_id),
+                        orchestrator_id=str(planner_kwargs.get("planner_budget_entity_id") or current_snapshot["root_run_id"]),
+                        iteration=int(active_iteration.get("sequence") or iteration_count),
+                        status="failed", outcome="iteration_limit_exceeded",
+                        checkpoint_id=iteration_checkpoint_id(
+                            str(current_snapshot["root_run_id"]), str(decision.iteration_id),
+                        ),
+                    ))
                     await fail("iteration_limit_exceeded", "Planner iteration limit exceeded")
                     yield OrchestratorEvent(
                         type="plan_terminal", plan_id=str(plan_id), status="failed",
                         error_code="iteration_limit_exceeded",
                     )
                     return
+                yield self._checkpoint_decision_event(
+                    plan_id=plan_id, snapshot=current_snapshot,
+                    iteration_id=str(decision.iteration_id), effective_next="planner",
+                    reason=decision.reason,
+                )
+                active_iteration = next(
+                    item for item in current_snapshot.get("iterations", [])
+                    if str(item.get("id")) == str(decision.iteration_id)
+                )
+                yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
+                    iteration_id=str(decision.iteration_id),
+                    orchestrator_id=str(planner_kwargs.get("planner_budget_entity_id") or current_snapshot["root_run_id"]),
+                    iteration=int(active_iteration.get("sequence") or iteration_count),
+                    status="completed", outcome="planner", reason=decision.reason,
+                    checkpoint_id=iteration_checkpoint_id(
+                        str(current_snapshot["root_run_id"]), str(decision.iteration_id),
+                    ),
+                ))
                 await self.store.claim_checkpoint(plan_id, decision.kind)
                 next_iteration_number = len(current_snapshot.get("iterations", [])) + 1
                 planner_parent = str(planner_kwargs.get("planner_budget_entity_id") or current_snapshot["root_run_id"])
@@ -358,12 +509,16 @@ class GraphOrchestrator:
                 try:
                     proposal = await self._invoke_planner(plan_id=plan_id, goal=goal, trigger=decision.reason or "planner_checkpoint",
                                                           available_agents=available_agents, available_artifacts=artifacts, planner_kwargs=planner_kwargs)
+                    applied_snapshot = await self.store.snapshot(plan_id)
+                    applied_iteration_id = str(applied_snapshot["iterations"][-1]["id"])
                     yield OrchestratorEvent(type="planner_checkpoint_completed", plan_id=str(plan_id), iteration_id=decision.iteration_id,
                                             trigger=decision.reason, terminal=proposal.terminal.value,
-                                            applied_iteration_id=(await self.store.snapshot(plan_id))["iterations"][-1]["id"], proposal=proposal.model_dump(mode="json"))
-                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
-                        iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=next_iteration_number, status="completed",
-                    ))
+                                            applied_iteration_id=applied_iteration_id, proposal=proposal.model_dump(mode="json"))
+                    for graph_event in self._iteration_graph_events(
+                        plan_id=plan_id, run_id=str(applied_snapshot["root_run_id"]),
+                        iteration_id=applied_iteration_id, proposal=proposal,
+                    ):
+                        yield graph_event
                     continue
                 except Exception as exc:
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
@@ -373,6 +528,25 @@ class GraphOrchestrator:
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="planner_checkpoint_failed")
                     return
             if decision.kind == SchedulerActionKind.INVOKE_SYNTHESIS:
+                synthesis_snapshot = await self.store.snapshot(plan_id)
+                yield self._checkpoint_decision_event(
+                    plan_id=plan_id, snapshot=synthesis_snapshot,
+                    iteration_id=str(decision.iteration_id), effective_next="synthesis",
+                    reason=decision.reason,
+                )
+                active_iteration = next(
+                    item for item in synthesis_snapshot.get("iterations", [])
+                    if str(item.get("id")) == str(decision.iteration_id)
+                )
+                yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
+                    iteration_id=str(decision.iteration_id),
+                    orchestrator_id=str(planner_kwargs.get("planner_budget_entity_id") or synthesis_snapshot["root_run_id"]),
+                    iteration=int(active_iteration.get("sequence") or 1),
+                    status="completed", outcome="synthesis", reason=decision.reason,
+                    checkpoint_id=iteration_checkpoint_id(
+                        str(synthesis_snapshot["root_run_id"]), str(decision.iteration_id),
+                    ),
+                ))
                 if self.synthesizer is None:
                     await fail("synthesizer_missing", "terminal synthesis executor is not configured")
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesizer_missing")
@@ -424,16 +598,27 @@ class GraphOrchestrator:
                 attempt = task.attempts if hasattr(task, "attempts") else task["attempts"]
                 iteration_id = str(task.iteration_id if hasattr(task, "iteration_id") else task["iteration_id"])
                 planned_order = int(task.planned_order if hasattr(task, "planned_order") else task.get("planned_order", 0))
+                task_entity_id = runtime_task_id(str(plan_id), task_id)
+                current_attempt_id = runtime_attempt_id(task_entity_id, attempt)
                 execution_id = agent_execution_id(iteration_id, task_id, attempt)
                 current_step_id = step_id(iteration_id, planned_order + 1, f"{task_id}:{attempt}")
+                trace_links = {
+                    "iteration_id": iteration_id,
+                    "task_entity_id": task_entity_id,
+                    "attempt_id": current_attempt_id,
+                    "agent_execution_id": execution_id,
+                    "step_id": current_step_id,
+                }
                 await self.store.link_attempt_execution(plan_id, task_id, UUID(execution_id))
                 yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_start(
                     step_id=current_step_id, iteration_id=iteration_id, kind="agent_task",
                     title=(task.intent if hasattr(task, "intent") else task.get("intent")),
                     objective=(task.instructions if hasattr(task, "instructions") else task.get("instructions")),
+                    plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
+                    attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
                 ))
-                yield OrchestratorEvent(type="task_started", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
-                yield OrchestratorEvent(type="task_attempt_started", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                yield OrchestratorEvent(type="task_started", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
+                yield OrchestratorEvent(type="task_attempt_started", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
                 task_executor = task.executor if hasattr(task, "executor") else task.get("executor")
                 task_intent = task.intent if hasattr(task, "intent") else task.get("intent")
                 yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_start(
@@ -442,6 +627,9 @@ class GraphOrchestrator:
                     parent_entity_id=current_step_id,
                     agent_slug=str(task_executor or "agent"),
                     task_title=str(task_intent or task_id),
+                    plan_id=str(plan_id), iteration_id=iteration_id,
+                    task_entity_id=task_entity_id, attempt_id=current_attempt_id,
+                    step_id=current_step_id,
                     task_id=task_id,
                     attempt=attempt,
                 ))
@@ -461,8 +649,8 @@ class GraphOrchestrator:
                     runtime_state = planner_kwargs.get("runtime_state")
                     if runtime_state is not None and hasattr(runtime_state, "add_task_result"):
                         runtime_state.add_task_result({"task_id": task_id, **result.model_dump(mode="json")})
-                    yield OrchestratorEvent(type="task_attempt_succeeded", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
-                    yield OrchestratorEvent(type="task_completed", plan_id=str(plan_id), task_id=task_id, outcome=result.outcome.value)
+                    yield OrchestratorEvent(type="task_attempt_succeeded", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
+                    yield OrchestratorEvent(type="task_completed", plan_id=str(plan_id), task_id=task_id, attempt=attempt, outcome=result.outcome.value, **trace_links)
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
                         agent_execution_id=execution_id,
                         parent_entity_type="step",
@@ -470,16 +658,21 @@ class GraphOrchestrator:
                         agent_slug=str(task_executor or "agent"),
                         status="completed",
                         outcome=result.outcome.value,
+                        plan_id=str(plan_id), iteration_id=iteration_id,
+                        task_entity_id=task_entity_id, attempt_id=current_attempt_id,
+                        step_id=current_step_id,
                         task_id=task_id,
                         attempt=attempt,
                     ))
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(
                         step_id=current_step_id, iteration_id=iteration_id, status="completed",
                         outcome=result.outcome.value, summary=result.description,
+                        plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
+                        attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
                     ))
                 except TaskConfirmationRequired as exc:
                     await self.store.pause_confirmation(plan_id, task_id, exc.payload)
-                    yield OrchestratorEvent(type="task_paused", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                    yield OrchestratorEvent(type="task_paused", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
                         agent_execution_id=execution_id,
                         parent_entity_type="step",
@@ -487,14 +680,22 @@ class GraphOrchestrator:
                         agent_slug=str(task_executor or "agent"),
                         status="paused",
                         outcome="confirmation_required",
+                        plan_id=str(plan_id), iteration_id=iteration_id,
+                        task_entity_id=task_entity_id, attempt_id=current_attempt_id,
+                        step_id=current_step_id,
                         task_id=task_id,
                         attempt=attempt,
                     ))
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(
                         step_id=current_step_id, iteration_id=iteration_id, status="paused",
                         outcome="confirmation_required", summary="Task requires confirmation",
+                        plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
+                        attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
                     ))
-                    yield OrchestratorEvent(type="confirmation_required", plan_id=str(plan_id), task_id=task_id, **exc.payload)
+                    yield OrchestratorEvent(type="confirmation_required", **{
+                        "plan_id": str(plan_id), "task_id": task_id,
+                        **trace_links, **exc.payload,
+                    })
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
                     return
                 except TaskExecutionError as exc:
@@ -502,9 +703,9 @@ class GraphOrchestrator:
                     retry_after_ms = exc.details.get("retry_after_ms") if isinstance(exc.details, dict) else None
                     retry_delay = max(0, int(retry_after_ms) / 1000) if isinstance(retry_after_ms, int) else self.retry_delay_seconds
                     failed_task = await self.store.finish_failure(plan_id, task_id, failure, max_attempts=self.max_attempts, retry_at=datetime.now(timezone.utc) + timedelta(seconds=retry_delay))
-                    yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id, attempt=(failed_task.attempts if hasattr(failed_task, "attempts") else failed_task.get("attempts")), error=failure.model_dump(mode="json"))
+                    yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id, attempt=(failed_task.attempts if hasattr(failed_task, "attempts") else failed_task.get("attempts")), error=failure.model_dump(mode="json"), **trace_links)
                     failed_status = failed_task.status if hasattr(failed_task, "status") else failed_task.get("status")
-                    yield OrchestratorEvent(type=("task_retry_scheduled" if failed_status == "waiting_retry" else "task_failed"), plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                    yield OrchestratorEvent(type=("task_retry_scheduled" if failed_status == "waiting_retry" else "task_failed"), plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
                         agent_execution_id=execution_id,
                         parent_entity_type="step",
@@ -512,15 +713,23 @@ class GraphOrchestrator:
                         agent_slug=str(task_executor or "agent"),
                         status="failed",
                         outcome="retry_scheduled" if failed_status == "waiting_retry" else "failed",
+                        plan_id=str(plan_id), iteration_id=iteration_id,
+                        task_entity_id=task_entity_id, attempt_id=current_attempt_id,
+                        step_id=current_step_id,
                         task_id=task_id,
                         attempt=attempt,
                     ))
-                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(step_id=current_step_id, iteration_id=iteration_id, status=failed_status, outcome="failed", summary="Task execution failed"))
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(
+                        step_id=current_step_id, iteration_id=iteration_id, status=failed_status,
+                        outcome="failed", summary="Task execution failed",
+                        plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
+                        attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
+                    ))
                 except Exception as exc:
                     failure = TaskAttemptFailure(code=type(exc).__name__, message=str(exc) or "task execution failed", retryable=False)
                     failed_task = await self.store.finish_failure(plan_id, task_id, failure, max_attempts=self.max_attempts)
-                    yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id, attempt=(failed_task.attempts if hasattr(failed_task, "attempts") else failed_task.get("attempts")), error=failure.model_dump(mode="json"))
-                    yield OrchestratorEvent(type="task_failed", plan_id=str(plan_id), task_id=task_id, attempt=attempt)
+                    yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id, attempt=(failed_task.attempts if hasattr(failed_task, "attempts") else failed_task.get("attempts")), error=failure.model_dump(mode="json"), **trace_links)
+                    yield OrchestratorEvent(type="task_failed", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
                         agent_execution_id=execution_id,
                         parent_entity_type="step",
@@ -528,10 +737,18 @@ class GraphOrchestrator:
                         agent_slug=str(task_executor or "agent"),
                         status="failed",
                         outcome="failed",
+                        plan_id=str(plan_id), iteration_id=iteration_id,
+                        task_entity_id=task_entity_id, attempt_id=current_attempt_id,
+                        step_id=current_step_id,
                         task_id=task_id,
                         attempt=attempt,
                     ))
-                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(step_id=current_step_id, iteration_id=iteration_id, status="failed", outcome="failed", summary="Task execution failed"))
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(
+                        step_id=current_step_id, iteration_id=iteration_id, status="failed",
+                        outcome="failed", summary="Task execution failed",
+                        plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
+                        attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
+                    ))
                 continue
         await fail("scheduler_action_limit_exceeded", "iteration did not reach a terminal decision")
         yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="scheduler_action_limit_exceeded")

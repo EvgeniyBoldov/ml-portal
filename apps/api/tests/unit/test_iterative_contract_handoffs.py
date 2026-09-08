@@ -4,7 +4,7 @@ from app.runtime.agent_executor import AgentExecutor
 import pytest
 
 from app.runtime.orchestrator import GraphOrchestrator, OrchestratorEvent
-from app.runtime.entity_ids import runtime_attempt_id
+from app.runtime.entity_ids import runtime_attempt_id, runtime_task_id
 from app.runtime.orchestrator_contracts import (
     AgentExecutionResult, IterationProposal, NeedBinding, PlannedTask,
     TaskRequest, TaskResolution, TerminalKind,
@@ -36,6 +36,7 @@ def test_agent_receives_task_inputs_and_complete_output_contract() -> None:
     assert '"project_key": "project-1"' in message
     assert "Structured finding" in message
     assert '"required": ["name"]' in message
+    assert "Never emit null" in message
 
 
 def test_partial_artifact_is_runtime_verified_before_synthesis() -> None:
@@ -203,7 +204,10 @@ def test_completed_task_resolution_is_ignored_when_planner_moves_to_synthesis() 
 def test_attempt_failure_event_has_exact_attempt_identifier() -> None:
     event = OrchestratorEvent(type="task_attempt_failed", plan_id="plan", task_id="task", attempt=2, error={"code": "timeout"}).to_runtime_event()
 
-    assert event.data["entity_id"] == runtime_attempt_id("task", 2)
+    task_entity_id = runtime_task_id("plan", "task")
+    assert event.data["entity_id"] == runtime_attempt_id(task_entity_id, 2)
+    assert event.data["parent_entity_id"] == task_entity_id
+    assert event.data["task_id"] == "task"
 
 
 def test_applied_iteration_event_is_owned_by_the_persisted_iteration() -> None:

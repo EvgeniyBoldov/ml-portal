@@ -60,6 +60,11 @@ def checkpoint_id(run_id: str, kind: str, key: str) -> str:
     return _id("checkpoint", run_id, kind, key)
 
 
+def iteration_checkpoint_id(run_id: str, iteration_id: str) -> str:
+    """Stable identity of the decision checkpoint closing one iteration."""
+    return checkpoint_id(run_id, "iteration-terminal", iteration_id)
+
+
 def synthesis_run_id(run_id: str, ordinal: int = 1) -> str:
     return _id("synthesis", run_id, ordinal)
 
