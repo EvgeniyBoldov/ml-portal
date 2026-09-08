@@ -31,6 +31,8 @@ def test_structured_prompt_generates_contract_for_non_synthesizer_roles():
 
     assert "СТАРЫЙ КОНТРАКТ ИЗ БД" in prompt
     assert "Планер не формирует пользовательский ответ" in prompt
+    assert "Если execution_ledger.needs пуст, bindings ОБЯЗАН быть пустым массивом" in prompt
+    assert "consumer_input_key нельзя заранее указывать в inputs" in prompt
     assert "Верни строго валидный JSON" in prompt
     assert '"value"' in prompt
 

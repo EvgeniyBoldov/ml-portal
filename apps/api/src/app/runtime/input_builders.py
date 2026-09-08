@@ -35,6 +35,9 @@ class PlannerInputBuilder:
                 "terminal": ["planner", "synthesis"],
                 "synthesis_requires_brief": True,
                 "partial_results_require_resolution": True,
+                "bindings_require_pending_needs": True,
+                "empty_needs_require_empty_bindings": True,
+                "bound_consumer_inputs_must_be_omitted": True,
             },
         }
         return payload
