@@ -100,6 +100,59 @@ describe('projectTraceStages memory components', () => {
     expect(first.executorRuns[0].taskPresentation).toMatchObject({ executor: 'planner', title: 'Принятие решения по плану' });
   });
 
+  it('shows planned tasks and a checkpoint before task execution starts', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1', iteration_number: 1 }),
+      event(2, 'llm_request', { entity_type: 'llm_call', entity_id: 'planner-call', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', purpose: 'planning_decision' }),
+      event(3, 'llm_response', { entity_type: 'llm_call', entity_id: 'planner-call', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', purpose: 'planning_decision', status: 'completed' }),
+      event(4, 'plan_iteration_applied', {
+        entity_type: 'plan', entity_id: 'plan-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', iteration_id: 'iteration-1',
+        proposal: { terminal: 'synthesis', tasks: [{ task_id: 'network', executor: 'net.engineer', intent: 'fill_template', instructions: 'Заполнить заявку' }] },
+      }),
+      event(5, 'task_planned', {
+        entity_type: 'task', entity_id: 'task-entity-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1',
+        task_id: 'network', executor: 'net.engineer', intent: 'fill_template', instructions: 'Заполнить заявку', status: 'waiting',
+      }),
+      event(6, 'checkpoint_planned', {
+        entity_type: 'checkpoint', entity_id: 'checkpoint-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1',
+        declared_next: 'synthesis', status: 'waiting',
+      }),
+    ]);
+
+    const stage = projectTraceStages(state)[0];
+    expect(stage.entity.status).toBe('running');
+    expect(stage.steps.map((step) => [step.title, step.executorRuns[0]?.entity.status])).toEqual([
+      ['Принятие решения по плану', 'completed'],
+      ['fill_template', 'waiting'],
+      ['Контрольная точка', 'waiting'],
+    ]);
+    expect(stage.steps[1].executorRuns[0].executorName).toBe('net.engineer');
+    expect(stage.steps[2].executorRuns[0].executorType).toBe('CHECKPOINT');
+  });
+
+  it('replaces a planned-task placeholder with its execution by task entity id', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1', iteration_number: 1 }),
+      event(2, 'task_planned', {
+        entity_type: 'task', entity_id: 'task-entity-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1',
+        task_id: 'network', executor: 'net.engineer', intent: 'fill_template', status: 'waiting',
+      }),
+      event(3, 'step_start', {
+        entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1',
+        task_id: 'network', task_entity_id: 'task-entity-1', title: 'Заполнить заявку',
+      }),
+      event(4, 'agent_start', {
+        entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1',
+        task_id: 'network', task_entity_id: 'task-entity-1', agent_slug: 'net.engineer', task_title: 'Заполнить заявку',
+      }),
+    ]);
+
+    const stage = projectTraceStages(state)[0];
+    expect(stage.steps).toHaveLength(1);
+    expect(stage.steps[0]).toMatchObject({ key: 'task:task-entity-1', title: 'Заполнить заявку' });
+    expect(stage.steps[0].executorRuns[0].entity.key).toBe('agent_execution:agent-1');
+  });
+
   it('projects memory context and keeps a minimal task presentation when no plan exists', () => {
     const state = replayRuntimeJournal([
       event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'memory-preparation', role: 'memory_preparation' }),
@@ -235,6 +288,22 @@ describe('projectTraceStages memory components', () => {
     expect(projectTraceStages(state)[0].steps[0].executorRuns[0].result).toMatchObject({
       status: 'failed', statusLabel: 'Ошибка', message: 'Доступ к источнику отсутствует',
     });
+  });
+
+  it('does not show an unfulfillable task as a successful executor', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'viewer' }),
+      event(4, 'agent_end', {
+        entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1',
+        status: 'completed', outcome: 'unfulfillable', summary: 'Недостаточно данных',
+      }),
+    ]);
+
+    const executor = projectTraceStages(state)[0].steps[0].executorRuns[0];
+    expect(executor.entity.status).toBe('unfulfillable');
+    expect(executor.result.status).toBe('unfulfillable');
   });
 
   it('shows snapshot tabs only when the corresponding projection exists', () => {

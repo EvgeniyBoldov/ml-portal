@@ -56,6 +56,13 @@ function insertEventIdBySequence(
 }
 
 function terminalStatus(event: RuntimeJournalEvent): string | undefined {
+  if (event.entity_type === 'task' && event.event_type === 'task_unfulfillable') return 'unfulfillable';
+  if (event.entity_type === 'task' && event.event_type === 'task_blocked') return 'blocked';
+  if (event.entity_type === 'task' && event.event_type === 'task_completed') return 'completed';
+  if (event.entity_type === 'task' && event.event_type === 'task_failed') return 'failed';
+  if ((event.entity_type === 'task' || event.entity_type === 'checkpoint') && stringField(event.payload.status)) {
+    return stringField(event.payload.status) || undefined;
+  }
   if (event.event_type === 'protocol_retry') return 'waiting_retry';
   if (event.event_type === 'llm_request' || event.event_type === 'tool_call') return 'running';
   if (event.event_type === 'tool_result') {

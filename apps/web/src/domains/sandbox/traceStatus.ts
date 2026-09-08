@@ -16,7 +16,7 @@ export function normalizeTraceStatus(status: string | null | undefined): string 
 
 export function traceStatusLabel(status: string | null | undefined): string {
   return ({
-    completed: 'Готово', failed: 'Ошибка', unfulfillable: 'Неисполнимо',
+    completed: 'Готово', failed: 'Ошибка', unfulfillable: 'Неисполнимо', blocked: 'Заблокировано',
     waiting_input: 'Ожидает данных', waiting_confirmation: 'Ожидает подтверждения',
     paused: 'На паузе', stalled: 'Остановлено', aborted: 'Прервано', running: 'Выполняется', unknown: 'Нет результата',
   } as Record<string, string>)[normalizeTraceStatus(status)] ?? String(status);

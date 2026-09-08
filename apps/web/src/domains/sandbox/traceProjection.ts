@@ -1056,7 +1056,8 @@ function executorResultFor(
   const toolCalls = calls.filter((call) => call.kind === 'tool');
   const succeeded = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === true).length;
   const failed = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === false).length;
-  const status = resultStatusOf(resultPayload.status ?? (error ? 'failed' : entity.status));
+  const outcome = resultPayload.outcome ?? resultPayload.completion;
+  const status = resultStatusOf(error ? 'failed' : (outcome ?? resultPayload.status ?? entity.status));
   return {
     name: executorName,
     status,
@@ -1159,9 +1160,12 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     .filter((event) => event.event_type === 'protocol_retry' && event.sequence >= start.sequence && event.sequence <= retryEndSequence)
     .length;
   const latestCall = calls[calls.length - 1];
-  const projectedEntity = entity.status === 'running' && latestCall && latestCall.info.status !== 'running' && latestCall.info.status !== 'waiting_retry'
-    ? { ...entity, status: latestCall.info.status === 'ok' ? 'completed' : 'failed' }
-    : entity;
+  const result = executorResultFor(state, entity, executorName, slug, calls);
+  const projectedEntity = result.status === 'failed' || result.status === 'unfulfillable'
+    ? { ...entity, status: result.status }
+    : entity.status === 'running' && latestCall && latestCall.info.status !== 'running' && latestCall.info.status !== 'waiting_retry'
+      ? { ...entity, status: latestCall.info.status === 'ok' ? 'completed' : 'failed' }
+      : entity;
   const metrics = {
     ...baseMetrics,
     retries: retriesAfterStart || baseMetrics.retries,
@@ -1170,7 +1174,6 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     failedCalls: callMetrics.failedCalls ?? baseMetrics.failedCalls,
   };
   const limits = executorLimitsFor(latestPayload(executorEvents, 'budget_snapshot') ?? latestPayload(executorEvents, 'limits_snapshot'));
-  const result = executorResultFor(state, entity, executorName, slug, calls);
   return {
     entity: projectedEntity,
     inspectorKey: entity.key,
@@ -1256,10 +1259,21 @@ function plannerExecutorFor(state: SandboxTraceState, iteration: TraceEntity): T
     .map((child) => callFor(state, child))
     .filter((call): call is TraceCall => Boolean(call)));
   if (calls.length === 0) return null;
-  const result = executorResultFor(state, iteration, 'Планер', 'planner', calls);
+  // A planner iteration stays open while its planned tasks execute. The
+  // planner executor itself is nevertheless done once its decision call has
+  // completed; do not use the iteration container status for this card.
+  const lastCall = calls[calls.length - 1];
+  const planApplied = state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .some((event) => event?.event_type === 'plan_iteration_applied'
+      && asString(event.payload.iteration_id) === iteration.id);
+  const plannerEntity = (planApplied || lastCall?.info.status === 'ok')
+    ? { ...iteration, status: 'completed' }
+    : iteration;
+  const result = executorResultFor(state, plannerEntity, 'Планер', 'planner', calls);
   const metrics = metricsFor(state, iteration);
   return {
-    entity: iteration,
+    entity: plannerEntity,
     inspectorKey: `executor:planner:${iteration.key}`,
     start,
     task: 'Принятие решения по плану',
@@ -1273,6 +1287,80 @@ function plannerExecutorFor(state: SandboxTraceState, iteration: TraceEntity): T
     metrics,
     prompt: promptFor(eventsFor(state, iteration), calls),
   };
+}
+
+function plannedTaskExecutorFor(
+  state: SandboxTraceState,
+  taskEntity: TraceEntity,
+  plan: PlanViewModel | undefined,
+): TraceExecutorRun | null {
+  const start = eventsFor(state, taskEntity).find((event) => event.event_type === 'task_planned');
+  if (!start) return null;
+  const payload = start.payload;
+  const taskId = asString(payload.task_id) || taskEntity.id;
+  const planned = plan?.tasks.find((task) => task.taskId === taskId);
+  const status = resultStatusOf(taskEntity.status);
+  const result: TraceExecutorResult = {
+    name: asString(payload.executor) || planned?.executor || 'Агент',
+    status,
+    statusLabel: traceResultStatusLabel(status),
+    operations: { total: 0, succeeded: 0, failed: 0 },
+  };
+  const executor: TraceExecutorRun = {
+    entity: taskEntity,
+    inspectorKey: `executor:planned:${taskEntity.key}`,
+    start,
+    task: planned?.title || asString(payload.intent) || asString(payload.instructions) || taskId,
+    executorType: 'AGENT',
+    executorName: asString(payload.executor) || planned?.executor || 'Агент',
+    executorSlug: asString(payload.executor) || planned?.executor || 'unknown',
+    kind: 'agent',
+    calls: [],
+    result,
+    info: executorInfoFor(result, [], undefined),
+    metrics: metricsFor(state, taskEntity),
+  };
+  executor.taskPresentation = planned ?? projectPlanTask(payload, taskId);
+  return executor;
+}
+
+function checkpointExecutorFor(state: SandboxTraceState, checkpoint: TraceEntity): TraceExecutorRun | null {
+  const start = eventsFor(state, checkpoint).find((event) => event.event_type === 'checkpoint_planned');
+  if (!start) return null;
+  const latest = eventsFor(state, checkpoint).at(-1)?.payload ?? start.payload;
+  const next = asString(latest.effective_next) || asString(start.payload.declared_next);
+  const status = resultStatusOf(checkpoint.status);
+  const result: TraceExecutorResult = {
+    name: 'Контрольная точка',
+    status,
+    statusLabel: traceResultStatusLabel(status),
+    output: asString(latest.reason) || undefined,
+    operations: { total: 0, succeeded: 0, failed: 0 },
+  };
+  const task = next === 'synthesis' ? 'Переход к синтезу ответа'
+    : next === 'planner' ? 'Возврат к планированию'
+      : 'Ожидание решения по следующему шагу';
+  const executor: TraceExecutorRun = {
+    entity: checkpoint,
+    inspectorKey: `executor:checkpoint:${checkpoint.key}`,
+    start,
+    task,
+    executorType: 'CHECKPOINT',
+    executorName: 'Контрольная точка',
+    executorSlug: 'checkpoint',
+    kind: 'agent',
+    calls: [],
+    result,
+    info: executorInfoFor(result, [], undefined),
+    metrics: metricsFor(state, checkpoint),
+  };
+  executor.taskPresentation = projectPlanTask({
+    task_id: `checkpoint-${checkpoint.id}`,
+    title: 'Контрольная точка',
+    objective: task,
+    status: checkpoint.status,
+  });
+  return executor;
 }
 
 function taskPresentationForExecutor(executor: TraceExecutorRun, plan?: PlanViewModel): PlanTaskViewModel {
@@ -1343,6 +1431,10 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
       const stepEntities = directChildren
         .filter((child) => child.type === 'step')
         .sort((left, right) => (startFor(state, left)?.sequence ?? 0) - (startFor(state, right)?.sequence ?? 0));
+      const plannedTaskEntities = directChildren
+        .filter((child) => child.type === 'task')
+        .sort((left, right) => (eventsFor(state, left)[0]?.sequence ?? 0) - (eventsFor(state, right)[0]?.sequence ?? 0));
+      const checkpointEntity = directChildren.find((child) => child.type === 'checkpoint');
       const executorRunsByStep = stepEntities.map((stepEntity) => (
         stepEntity.childKeys
           .map((key) => state.entitiesByKey[key])
@@ -1351,8 +1443,23 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           .filter((executor): executor is TraceExecutorRun => Boolean(executor))
       ));
       const plannerExecutor = plannerExecutorFor(state, entity);
-      const executorRuns = [plannerExecutor, ...executorRunsByStep.flat()]
+      const plan = planForStage(state, entity);
+      const stepForTask = (taskEntity: TraceEntity): TraceEntity | undefined => stepEntities.find((stepEntity) => (
+        eventsFor(state, stepEntity).some((event) => asString(event.payload.task_entity_id) === taskEntity.id)
+      ));
+      const plannedTaskSteps = plannedTaskEntities.map((taskEntity) => {
+        const stepEntity = stepForTask(taskEntity);
+        const index = stepEntity ? stepEntities.indexOf(stepEntity) : -1;
+        const executors = index >= 0 ? executorRunsByStep[index] : [];
+        return { taskEntity, stepEntity, executors };
+      });
+      const plannedTaskExecutors = plannedTaskSteps
+        .flatMap(({ taskEntity, executors }) => executors.length ? executors : [plannedTaskExecutorFor(state, taskEntity, plan)])
         .filter((executor): executor is TraceExecutorRun => Boolean(executor));
+      const checkpointExecutor = checkpointEntity ? checkpointExecutorFor(state, checkpointEntity) : null;
+      const executorRuns = [plannerExecutor, ...plannedTaskExecutors, checkpointExecutor, ...executorRunsByStep.flat()]
+        .filter((executor): executor is TraceExecutorRun => Boolean(executor))
+        .filter((executor, index, all) => all.findIndex((candidate) => candidate.inspectorKey === executor.inspectorKey) === index);
       const iterationType = asString(start.payload.iteration_type)
         || (executorRuns.some((executor) => executor.executorSlug === 'planner') ? 'decision' : 'execution');
       const task = iterationType === 'replan'
@@ -1363,7 +1470,6 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         || asString(start.payload.task_title)
         || asString(start.payload.goal)
         || 'Выполнение задачи';
-      const plan = planForStage(state, entity);
       for (const executor of executorRuns) executor.taskPresentation = taskPresentationForExecutor(executor, plan);
       const stage: TraceStage = {
         entity,
@@ -1396,10 +1502,34 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         executorRuns: [plannerExecutor],
         metrics: plannerExecutor.metrics,
       }] : [];
-      stage.steps = [...plannerSteps, ...stepEntities.map((stepEntity, index) => {
+      const taskSteps: TraceStep[] = plannedTaskSteps.map(({ taskEntity, stepEntity, executors }, index) => {
+        const stepStart = stepEntity ? startFor(state, stepEntity) : undefined;
+        const payload = stepStart?.payload ?? eventsFor(state, taskEntity)[0]?.payload ?? {};
+        const executor = executors[0] ?? plannedTaskExecutorFor(state, taskEntity, plan);
+        const planned = plan?.tasks.find((task) => task.taskId === asString(payload.task_id));
+        const title = planned?.title || asString(payload.intent) || asString(payload.title) || executor?.task || 'Запланированная задача';
+        const objective = planned?.objective || asString(payload.instructions) || asString(payload.objective) || undefined;
+        return {
+          key: taskEntity.key,
+          entity: stepEntity ?? taskEntity,
+          stage,
+          number: index + 1 + plannerSteps.length,
+          kind: 'task_execution',
+          taskId: asString(payload.task_id) || undefined,
+          title,
+          objective,
+          inputs: payload.inputs,
+          taskPresentation: planned ?? taskPresentationForStep(payload, title, objective, executor, plan),
+          executorRuns: executor ? [executor] : [],
+          metrics: aggregateMetrics(metricsFor(state, stepEntity ?? taskEntity), executor ? [executor.metrics] : []),
+        };
+      });
+      const unplannedSteps = stepEntities
+        .filter((stepEntity) => !plannedTaskSteps.some((item) => item.stepEntity?.key === stepEntity.key))
+        .map((stepEntity, index) => {
         const stepStart = startFor(state, stepEntity);
         const payload = stepStart?.payload ?? {};
-        const stepExecutors = executorRunsByStep[index];
+        const stepExecutors = executorRunsByStep[stepEntities.indexOf(stepEntity)];
         const executor = stepExecutors[0];
         const title = asString(payload.title) || asString(payload.task_title) || asString(payload.task_objective) || executor?.task || stage.task;
         const objective = asString(payload.objective) || asString(payload.task_objective) || undefined;
@@ -1407,7 +1537,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           key: stepEntity.key,
           entity: stepEntity,
           stage,
-          number: asNumber(payload.step_number) ?? index + 1 + plannerSteps.length,
+          number: asNumber(payload.step_number) ?? index + 1 + plannerSteps.length + taskSteps.length,
           kind: stepKindFor(stage.kind, executor),
           taskId: asString(payload.task_id) || asString(payload.phase_id) || undefined,
           title,
@@ -1417,7 +1547,20 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           executorRuns: stepExecutors,
           metrics: aggregateMetrics(metricsFor(state, stepEntity), stepExecutors.map((executor) => executor.metrics)),
         };
-      })];
+      });
+      const checkpointSteps: TraceStep[] = checkpointExecutor && checkpointEntity ? [{
+        key: checkpointEntity.key,
+        entity: checkpointEntity,
+        stage,
+        number: plannerSteps.length + taskSteps.length + unplannedSteps.length + 1,
+        kind: 'task_execution',
+        title: 'Контрольная точка',
+        objective: checkpointExecutor.task,
+        taskPresentation: checkpointExecutor.taskPresentation!,
+        executorRuns: [checkpointExecutor],
+        metrics: checkpointExecutor.metrics,
+      }] : [];
+      stage.steps = [...plannerSteps, ...taskSteps, ...unplannedSteps, ...checkpointSteps];
       stage.stepNumber = stage.steps[0]?.number ?? 0;
       return stage;
     })

@@ -85,6 +85,25 @@ describe('sandbox trace state', () => {
     expect(state.entitiesByKey['tool_call:tool-1'].status).toBe('failed');
   });
 
+  it('uses lifecycle statuses for planned tasks and checkpoints', () => {
+    let state = emptySandboxTrace();
+    state = applyRuntimeJournalEvent(state, {
+      ...event(1, 'task_planned', 'task', 'task-1', ['planner_iteration', 'iteration-1']),
+      payload: { status: 'waiting' },
+    });
+    state = applyRuntimeJournalEvent(state, {
+      ...event(2, 'checkpoint_planned', 'checkpoint', 'checkpoint-1', ['planner_iteration', 'iteration-1']),
+      payload: { status: 'waiting' },
+    });
+    state = applyRuntimeJournalEvent(state, {
+      ...event(3, 'checkpoint_decided', 'checkpoint', 'checkpoint-1', ['planner_iteration', 'iteration-1']),
+      payload: { status: 'completed' },
+    });
+
+    expect(state.entitiesByKey['task:task-1'].status).toBe('waiting');
+    expect(state.entitiesByKey['checkpoint:checkpoint-1'].status).toBe('completed');
+  });
+
   it('keeps extraction as a canonical child of its tool call', () => {
     let state = emptySandboxTrace();
     state = applyRuntimeJournalEvent(state, event(1, 'run_start', 'run', 'run-1'));
