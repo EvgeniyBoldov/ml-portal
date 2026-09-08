@@ -43,6 +43,18 @@ const isCreate = (type: string): boolean => (
 const isEnd = (type: string): boolean => type.endsWith('_end') || type.endsWith('_finished') || type.endsWith('_completed') || type.endsWith('_failed');
 const isSnapshot = (type: string): boolean => type.endsWith('_snapshot') || type === 'rbac_snapshot' || type === 'limit_snapshot';
 
+function insertEventIdBySequence(
+  eventIds: string[],
+  eventsById: Record<string, RuntimeJournalEvent>,
+  event: RuntimeJournalEvent,
+): string[] {
+  return [...eventIds, event.id].sort((left, right) => {
+    const leftSequence = left === event.id ? event.sequence : eventsById[left]?.sequence ?? 0;
+    const rightSequence = right === event.id ? event.sequence : eventsById[right]?.sequence ?? 0;
+    return leftSequence - rightSequence;
+  });
+}
+
 function terminalStatus(event: RuntimeJournalEvent): string | undefined {
   if (event.event_type === 'protocol_retry') return 'waiting_retry';
   if (event.event_type === 'llm_request' || event.event_type === 'tool_call') return 'running';
@@ -73,8 +85,8 @@ function applyOrderedJournalEvent(state: SandboxTraceState, event: RuntimeJourna
     return {
       ...state, runId: state.runId ?? event.run_id,
       eventsById: { ...state.eventsById, [event.id]: event },
-      eventIdsBySequence: [...state.eventIdsBySequence, event.id],
-      nextSequence: event.sequence + 1,
+      eventIdsBySequence: insertEventIdBySequence(state.eventIdsBySequence, state.eventsById, event),
+      nextSequence: Math.max(state.nextSequence ?? 1, event.sequence + 1),
     };
   }
   const entityKey = keyOf(entityType, entityId);
@@ -105,7 +117,7 @@ function applyOrderedJournalEvent(state: SandboxTraceState, event: RuntimeJourna
   const nextEntity: TraceEntity = {
     ...entity,
     parentKey: entity.parentKey ?? parentKey,
-    eventIds: [...entity.eventIds, event.id],
+    eventIds: insertEventIdBySequence(entity.eventIds, state.eventsById, event),
     status: terminalStatus(event) ?? entity.status,
     snapshotsByKind: isSnapshot(event.event_type)
       ? { ...entity.snapshotsByKind, [event.event_type]: event.id }
@@ -126,32 +138,21 @@ function applyOrderedJournalEvent(state: SandboxTraceState, event: RuntimeJourna
     runId: state.runId ?? event.run_id,
     rootEntityKey: entityType === 'run' ? entityKey : state.rootEntityKey,
     eventsById: { ...state.eventsById, [event.id]: event },
-    eventIdsBySequence: [...state.eventIdsBySequence, event.id],
+    eventIdsBySequence: insertEventIdBySequence(state.eventIdsBySequence, state.eventsById, event),
     entitiesByKey,
-    nextSequence: event.sequence + 1,
+    nextSequence: Math.max(state.nextSequence ?? 1, event.sequence + 1),
     pendingBySequence: state.pendingBySequence,
     protocolError: null,
   };
 }
 
 export function applyRuntimeJournalEvent(state: SandboxTraceState, event: RuntimeJournalEvent): SandboxTraceState {
-  if (state.eventsById[event.id] || state.pendingBySequence[event.sequence]?.id === event.id) return state;
-  const expected = state.nextSequence ?? event.sequence;
-  if (event.sequence < expected) return state;
-  if (event.sequence > expected) {
-    return { ...state, pendingBySequence: { ...state.pendingBySequence, [event.sequence]: event } };
-  }
-
-  let next = applyOrderedJournalEvent(state, event);
-  const pending = { ...next.pendingBySequence };
-  delete pending[event.sequence];
-  next = { ...next, pendingBySequence: pending };
-  while (next.nextSequence !== null && pending[next.nextSequence]) {
-    const queued = pending[next.nextSequence];
-    delete pending[next.nextSequence];
-    next = { ...applyOrderedJournalEvent(next, queued), pendingBySequence: { ...pending } };
-  }
-  return next;
+  if (state.eventsById[event.id]) return state;
+  // Redis Pub/Sub is live-only: frames can arrive out of order or one can be
+  // lost before the terminal DB replay. Entity placeholders make each journal
+  // row independently applicable, so never let one missing sequence freeze
+  // the rest of the visible trace.
+  return applyOrderedJournalEvent({ ...state, pendingBySequence: {} }, event);
 }
 
 export function replayRuntimeJournal(events: RuntimeJournalEvent[]): SandboxTraceState {

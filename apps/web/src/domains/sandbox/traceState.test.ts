@@ -23,13 +23,14 @@ describe('sandbox trace state', () => {
     expect(state.protocolError).toBeNull();
   });
 
-  it('buffers an out-of-order live journal frame until its missing predecessor arrives', () => {
+  it('renders an out-of-order live journal frame and keeps the projection sequence-sorted', () => {
     let state = emptySandboxTrace();
     state = applyRuntimeJournalEvent(state, event(2, 'planner_iteration_start', 'planner_iteration', 'iteration-1', ['run', 'run-1']));
-    expect(state.eventIdsBySequence).toEqual([]);
+    expect(state.eventIdsBySequence).toEqual(['event-2']);
     state = applyRuntimeJournalEvent(state, event(1, 'run_start', 'run', 'run-1'));
 
     expect(state.eventIdsBySequence).toEqual(['event-1', 'event-2']);
+    expect(state.nextSequence).toBe(3);
     expect(state.pendingBySequence).toEqual({});
     expect(state.protocolError).toBeNull();
   });

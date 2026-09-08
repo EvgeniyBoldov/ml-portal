@@ -654,7 +654,8 @@ class AgentExecutor:
             "After work, return exactly one JSON object and no prose or markdown.",
             "Required fields: completion (fulfilled|needs|unfulfillable), description, needs (array), outputs (object), and limitation for unfulfillable.",
             "outputs MUST be a JSON object keyed by output key, never an array. "
-            "For example: {\"outputs\": {\"jira_tasks\": {\"data\": {\"tasks\": []}}}}.",
+            "The value of data (or text, when data is absent) is validated directly against that output's declared JSON Schema. "
+            "For example, for an array schema: {\"outputs\": {\"jira_tasks\": {\"data\": []}}}.",
             "Each outputs value must be an object containing only optional description plus at least one of text, data, or artifacts. "
             "For example: {\"answer\": {\"data\": {\"status\": \"done\"}}}. "
             "For an artifact expected output, do not declare artifact IDs: report completion in text or data; runtime binds only the verified artifact from the tool ledger. "

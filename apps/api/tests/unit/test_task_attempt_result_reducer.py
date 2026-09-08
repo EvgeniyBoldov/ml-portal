@@ -39,6 +39,46 @@ def test_allow_memory_fulfils_without_tool_receipt() -> None:
     assert result.outputs["answer"].text == "known fact"
 
 
+def test_array_schema_validates_the_data_value_without_a_wrapper() -> None:
+    result = TaskAttemptResultReducer().reduce(
+        request=_request(expected_outputs=[TaskOutputSpec(
+            key="jira_tasks",
+            description="Open Jira tasks",
+            json_schema={
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["key", "status", "summary"],
+                    "properties": {
+                        "key": {"type": "string"},
+                        "status": {"type": "string"},
+                        "summary": {"type": "string"},
+                    },
+                },
+            },
+        )]),
+        execution=_execution(outputs={"jira_tasks": TaskOutputValue(data=[{
+            "key": "NIMS-3334", "status": "В работе", "summary": "Интеграция MLFlow",
+        }])}),
+    )
+
+    assert result.outcome is TaskOutcome.COMPLETED
+
+
+def test_array_schema_rejects_a_shape_that_wraps_the_array() -> None:
+    result = TaskAttemptResultReducer().reduce(
+        request=_request(expected_outputs=[TaskOutputSpec(
+            key="jira_tasks",
+            description="Open Jira tasks",
+            json_schema={"type": "array"},
+        )]),
+        execution=_execution(outputs={"jira_tasks": TaskOutputValue(data={"tasks": []})}),
+    )
+
+    assert result.outcome is TaskOutcome.UNFULFILLABLE
+    assert result.reason_code == "output_schema_invalid"
+
+
 def test_require_retrieval_keeps_partial_result_when_no_receipt_exists() -> None:
     result = TaskAttemptResultReducer().reduce(
         request=_request(freshness_policy="require_retrieval"),
