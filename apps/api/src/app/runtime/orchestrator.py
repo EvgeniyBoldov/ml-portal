@@ -360,6 +360,38 @@ class GraphOrchestrator:
             if any(key not in outputs for key in resolution.output_keys):
                 raise PlanValidationError(f"resolution accepts an absent output on {resolution.task_id}")
         resolution_map = {item.task_id: item for item in proposal.resolutions}
+        # A non-retryable terminal-contract error is deterministic for the
+        # same task contract.  Replacing such a task with an identical task
+        # only changes its id and creates a planner loop.  The planner may
+        # still choose a genuinely different recovery plan or report the
+        # limitation, but it cannot replay the same failed contract.
+        for resolution in proposal.resolutions:
+            if resolution.action.value != "continue_with_tasks":
+                continue
+            prior = prior_tasks[resolution.task_id]
+            prior_result = prior.get("result") if isinstance(prior.get("result"), dict) else {}
+            non_retryable_contract_failure = prior_result.get("reason_code") in {
+                "agent_task_completion_invalid",
+                "agent_task_completion_missing",
+            }
+            if not non_retryable_contract_failure:
+                continue
+            for replacement_id in resolution.replacement_task_ids:
+                replacement = proposed.get(replacement_id)
+                if replacement is None:
+                    continue
+                same_contract = (
+                    replacement.executor == prior.get("executor")
+                    and replacement.intent == prior.get("intent")
+                    and replacement.instructions == prior.get("instructions")
+                    and replacement.inputs == (prior.get("inputs") or {})
+                    and [item.model_dump(mode="json", by_alias=True) for item in replacement.expected_outputs]
+                    == list(prior.get("expected_outputs") or [])
+                )
+                if same_contract:
+                    raise PlanValidationError(
+                        f"non-retryable task contract failure cannot be retried identically: {resolution.task_id}"
+                    )
         def continuation_completed(item: Dict[str, Any]) -> bool:
             replacements = item.get("replacement_task_ids") or []
             return bool(replacements) and all(

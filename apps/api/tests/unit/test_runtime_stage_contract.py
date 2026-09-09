@@ -8,7 +8,8 @@ from app.runtime.orchestrator_contracts import (
     IterationProposal, ResolutionAction, SchedulerActionKind, SynthesisBrief,
     TaskAttemptFailure, TaskResolution, TaskStatus, TerminalKind, PlannedTask,
 )
-from app.runtime.plan_store import InMemoryPlanStore
+from app.runtime.plan_store import InMemoryPlanStore, PlanValidationError
+from app.runtime.orchestrator import GraphOrchestrator
 
 
 def _task(task_id: str, *, depends_on: list[str] | None = None) -> PlannedTask:
@@ -26,6 +27,22 @@ def test_synthesis_requires_brief_and_tasks_cannot_be_checkpoints() -> None:
         PlannedTask(task_id="work", executor="research", intent="work", instructions="work", kind="synthesis")
 
 
+@pytest.mark.parametrize("field_name", ["raw_content", "raw_data", "raw_payload"])
+def test_output_contract_rejects_raw_transport_fields(field_name: str) -> None:
+    with pytest.raises(ValueError, match="raw tool payload"):
+        _task = PlannedTask(
+            task_id="work",
+            executor="research",
+            intent="work",
+            instructions="work",
+            expected_outputs=[{
+                "key": "answer",
+                "description": "Answer",
+                "schema": {"type": "object", "properties": {field_name: {"type": "string"}}},
+            }],
+        )
+
+
 def test_failed_synthesis_iteration_deterministically_returns_to_planner() -> None:
     store = InMemoryPlanStore()
     plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
@@ -35,6 +52,36 @@ def test_failed_synthesis_iteration_deterministically_returns_to_planner() -> No
     decision = store.next_decision(plan["id"])
     assert decision.kind is SchedulerActionKind.INVOKE_PLANNER
     assert decision.reason == "task_failure"
+
+
+def test_non_retryable_contract_failure_cannot_be_replayed_identically() -> None:
+    proposal = IterationProposal(
+        tasks=[PlannedTask(task_id="retry", executor="research", intent="failed", instructions="failed")],
+        terminal=TerminalKind.PLANNER,
+        resolutions=[TaskResolution(
+            task_id="failed",
+            action=ResolutionAction.CONTINUE_WITH_TASKS,
+            replacement_task_ids=["retry"],
+            reason="retry",
+        )],
+    )
+    ledger = {
+        "tasks": [{
+            "task_id": "failed",
+            "status": TaskStatus.FAILED.value,
+            "reason_code": "agent_task_completion_invalid",
+            "result": {"reason_code": "agent_task_completion_invalid", "outputs": {}},
+            "executor": "research",
+            "intent": "failed",
+            "instructions": "failed",
+            "inputs": {},
+            "expected_outputs": [],
+        }],
+        "needs": [],
+        "resolutions": [],
+    }
+    with pytest.raises(PlanValidationError, match="cannot be retried identically"):
+        GraphOrchestrator._compile(proposal, [{"slug": "research", "supports_dynamic_contracts": True}], ledger)
 
 
 def test_independent_work_finishes_before_planner_checkpoint() -> None:

@@ -165,7 +165,10 @@ class TaskOutputSpec(BaseModel):
     def _contains_forbidden_transport_field(value: Any) -> bool:
         if isinstance(value, dict):
             properties = value.get("properties")
-            if isinstance(properties, dict) and "raw_content" in properties:
+            if isinstance(properties, dict) and any(
+                field_name in properties
+                for field_name in ("raw_content", "raw_data", "raw_payload")
+            ):
                 return True
             return any(TaskOutputSpec._contains_forbidden_transport_field(item) for item in value.values())
         if isinstance(value, list):
