@@ -18,5 +18,6 @@ partial outputs, exclude scope, or report the limitation.
 removed; later work uses new IDs. The persisted iteration proposal, attempts,
 dependencies, needs, bindings and resolutions form the audit trail.
 
+
 The trace shows iterations and agent tasks, their dependencies, executor,
 status and safe result summaries. It has no parallel patch/revision graph.
