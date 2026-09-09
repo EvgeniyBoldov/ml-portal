@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID, uuid4
 
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.runtime_plan import (
     RuntimeNeedBinding, RuntimePause, RuntimePlan, RuntimePlanIteration,
-    RuntimePlanTask, RuntimeTaskAttempt, RuntimeToolResult, RuntimeTaskDependency, RuntimeTaskNeed,
+    RuntimePlanTask, RuntimeTaskAttempt, RuntimeTaskDependency, RuntimeTaskNeed,
     RuntimeTaskResolution,
 )
 from app.runtime.orchestrator_contracts import (
@@ -589,22 +589,6 @@ class SqlPlanStore:
         row.result = result.model_dump(mode="json")
         attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(RuntimeTaskAttempt.task_row_id == row.id, RuntimeTaskAttempt.attempt_number == row.attempts).with_for_update())).scalar_one()
         attempt.status, attempt.execution_result, attempt.finished_at = AttemptStatus.COMPLETED.value, execution.model_dump(mode="json"), _now()
-        expires_at = _now() + timedelta(hours=24)
-        for item in result.verified.get("result_records") or []:
-            if not isinstance(item, dict) or not item.get("result_ref"):
-                continue
-            self._session.add(RuntimeToolResult(
-                attempt_id=attempt.id,
-                result_ref=str(item["result_ref"]),
-                call_id=str(item.get("call_id") or ""),
-                operation=str(item.get("operation") or ""),
-                status=str(item.get("status") or "unknown"),
-                success=bool(item.get("success")),
-                result_fingerprint=(str(item["result_fingerprint"]) if item.get("result_fingerprint") else None),
-                payload=item.get("payload"),
-                payload_ref=item.get("payload_ref"),
-                expires_at=expires_at,
-            ))
         await self._session.flush()
         return row
 

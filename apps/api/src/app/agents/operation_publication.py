@@ -284,6 +284,14 @@ PUBLIC_RETRIEVAL_OPERATIONS: tuple[str, ...] = (
     "collection.document.search",
     "collection.table.search",
     "collection.template.search",
+    "jira_get_issue",
+    "jira_search_issues",
+    "jira_list_projects",
+    "netbox_get_device",
+    "netbox_get_objects",
+    "netbox_list_sites",
+    "netbox_search_devices",
+    "netbox_search_objects",
 )
 
 _PUBLICATION_RULES: tuple[PublicationRule, ...] = (

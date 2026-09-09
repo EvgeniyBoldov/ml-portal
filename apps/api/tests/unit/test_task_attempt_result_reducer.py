@@ -41,6 +41,29 @@ def test_freshness_is_verified_by_runtime() -> None:
     assert result.reason_code == "fresh_retrieval_missing"
 
 
+def test_named_jira_issue_requires_jira_get_issue_receipt() -> None:
+    request = _request(
+        inputs={"jira_task_id": "NIMS-3451"},
+        freshness_policy="require_retrieval",
+        expected_outputs=[TaskOutputSpec(key="task", description="Task")],
+    )
+    declaration = _declaration(outputs={"task": {"kind": "value", "value": "invented"}})
+    result = _reduce(
+        request,
+        declaration,
+        {"fresh_retrieval": True, "receipts": [{"canonical_operation": "jira_search_issues"}]},
+    )
+    assert result.outcome is TaskOutcome.NEEDS_DEPENDENCY
+    assert result.reason_code == "required_retrieval_operation_missing"
+
+    result = _reduce(
+        request,
+        declaration,
+        {"fresh_retrieval": True, "receipts": [{"canonical_operation": "jira_get_issue"}]},
+    )
+    assert result.outcome is TaskOutcome.COMPLETED
+
+
 def test_needs_is_not_a_successful_task() -> None:
     declaration = TaskCompletionDeclaration(completion="needs", report="Need target", needs=[DiscoveredNeed(ref="target", key="target", description="Target")])
     assert _reduce(_request(), declaration).outcome is TaskOutcome.NEEDS_DEPENDENCY
@@ -51,6 +74,15 @@ def test_receipt_must_be_selected_and_verified() -> None:
     declaration = _declaration(outputs={"policy": {"kind": "evidence", "refs": ["result_1"]}})
     verified = {"receipts": [{"result_ref": "result_1", "canonical_operation": "collection.document.search"}]}
     assert _reduce(request, declaration, verified).outcome is TaskOutcome.COMPLETED
+
+
+def test_receipt_can_use_the_evidence_call_id_seen_by_the_agent() -> None:
+    request = _request(expected_outputs=[TaskOutputSpec(key="policy", description="Policy", fulfillment=TaskOutputFulfillment.VERIFIED_RECEIPT, receipt_operations=["collection.document.search"])])
+    declaration = _declaration(outputs={"policy": {"kind": "evidence", "refs": ["call-1"]}})
+    verified = {"receipts": [{"result_ref": "result_1", "call_id": "call-1", "canonical_operation": "collection.document.search"}]}
+    result = _reduce(request, declaration, verified)
+    assert result.outcome is TaskOutcome.COMPLETED
+    assert result.evidence_selections[0].result_ref == "result_1"
 
 
 def test_artifact_must_be_selected_from_runtime_ledger() -> None:

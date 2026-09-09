@@ -32,7 +32,6 @@ from app.agents.operation_executor import DirectOperationExecutor
 from app.agents.runtime.agent import AgentToolRuntime
 from app.agents.operation_publication import PUBLIC_RETRIEVAL_OPERATIONS
 from app.core.http.clients import LLMClientProtocol
-from app.adapters.s3_client import s3_manager
 from app.core.logging import get_logger
 from app.runtime.orchestrator_contracts import (
     TaskCompletionDeclaration,
@@ -55,15 +54,11 @@ from app.runtime.events import OrchestrationPhase
 from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
 from app.runtime.operation_errors import RuntimeErrorCode
 from app.runtime.turn_state import RuntimeTurnState
-from app.runtime.result_store import RuntimeToolResultStore
 
 logger = get_logger(__name__)
 
 MAX_SUB_AGENT_MESSAGES = 6
 MAX_SUB_AGENT_MESSAGE_CHARS = 600
-MAX_OPERATION_RESULT_PREVIEW_CHARS = 4096  # Limit payload size in SSE
-
-
 class AgentExecutor:
     """Runs one persisted graph task through the canonical agent runtime."""
 
@@ -95,7 +90,6 @@ class AgentExecutor:
         platform_config: Optional[Dict[str, Any]] = None,
         model: Optional[str] = None,
         agent_version_id: Optional[UUID] = None,
-        runtime_plan_id: Optional[str] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         agent_slug = task.executor
         if not agent_slug:
@@ -184,8 +178,6 @@ class AgentExecutor:
         if lifecycle_agent_execution_id:
             ctx.extra["lifecycle_agent_execution_id"] = lifecycle_agent_execution_id
         ctx.extra["runtime_tool_ledger"] = state.tool_ledger
-        ctx.extra["runtime_result_store"] = RuntimeToolResultStore(self.session)
-        ctx.extra["runtime_plan_id"] = runtime_plan_id
         ctx.extra["runtime_task_id"] = task.task_id
         ctx.extra["runtime_turn_state"] = state
         ctx.extra["runtime_tool_reuse_enabled"] = bool(
@@ -201,7 +193,7 @@ class AgentExecutor:
             "json_schema": {
                 "name": "TaskCompletionDeclaration",
                 "schema": task_completion_json_schema(task),
-                "strict": False,
+                "strict": True,
             },
         }
         ledger_start = len(state.tool_ledger.entries)
@@ -365,7 +357,6 @@ class AgentExecutor:
                     sources=sub_sources,
                     verified_artifacts=artifacts,
                 )
-                await self._externalize_large_results(verified, lifecycle_agent_execution_id or task.task_id)
                 ctx.extra["agent_execution_result"] = execution
                 ctx.extra["agent_execution_verified"] = verified
 
@@ -473,33 +464,6 @@ class AgentExecutor:
         return TaskExecutionReceipt(declaration=execution, verified=verified if isinstance(verified, dict) else {})
 
     @staticmethod
-    async def _externalize_large_results(verified: Dict[str, Any], scope: str) -> None:
-        """Keep large tool payloads in backend object storage, never in task JSONB."""
-        settings = get_settings()
-        bucket = settings.S3_BUCKET_CHAT_UPLOADS
-        for record in verified.get("result_records") or []:
-            if not isinstance(record, dict) or record.get("payload") is None:
-                continue
-            try:
-                body = json.dumps(record["payload"], ensure_ascii=False, default=str).encode("utf-8")
-            except (TypeError, ValueError):
-                continue
-            if len(body) <= 4096:
-                continue
-            result_ref = str(record.get("result_ref") or "result")
-            key = f"runtime/results/{scope}/{result_ref}.json"
-            uploaded = await s3_manager.upload_content_sync(
-                bucket=bucket,
-                key=key,
-                content=body,
-                content_type="application/json",
-                metadata={"runtime_result": "true", "result_ref": result_ref},
-            )
-            if uploaded:
-                record["payload_ref"] = {"bucket": bucket, "key": key, "size_bytes": len(body), "content_type": "application/json"}
-                record["payload"] = None
-
-    @staticmethod
     def _verified_task_result(
         *, task: TaskRequest, ledger_entries: List[Any], sources: List[Dict[str, Any]],
         verified_artifacts: Optional[List[Dict[str, Any]]] = None,
@@ -545,18 +509,6 @@ class AgentExecutor:
             "artifacts": artifacts,
             "sources": [dict(item) for item in sources if isinstance(item, dict)],
             "memory_candidates": memory_candidates,
-            "result_records": [
-                {
-                    "result_ref": str(getattr(entry, "result_ref", None) or getattr(entry, "call_id", "")),
-                    "call_id": str(getattr(entry, "call_id", "")),
-                    "operation": str(getattr(entry, "operation", "")),
-                    "status": str(getattr(entry, "status", "")),
-                    "success": bool(getattr(entry, "success", False)),
-                    "payload": getattr(entry, "result_data", None),
-                    "result_fingerprint": getattr(entry, "result_fingerprint", None),
-                }
-                for entry in ledger_entries
-            ],
         }
 
     # ---------------------------------------------------------------- helpers --
@@ -719,9 +671,9 @@ class AgentExecutor:
         output_contract = [
             "[Terminal task completion declaration]",
             "Return exactly one JSON object and no prose or markdown.",
-            "The runtime owns tool execution, evidence and artifact storage. Do not copy raw tool results into outputs.",
+            "The runtime owns tool execution, evidence and artifact storage. For a task_result output, return a normalized value derived from observed tool data; do not paste an unbounded raw payload.",
             "Each outputs.<key> is a typed slot: {kind:'value',value:<value>}, {kind:'evidence',refs:[result_ref]}, or {kind:'artifact',refs:[artifact_ref]} exactly as required by that output.",
-            "Do not copy raw tool results into value slots; reference runtime evidence or artifacts by their runtime-issued refs.",
+            "Use evidence or artifact refs only for outputs whose fulfillment requires them; task_result outputs require a value slot.",
             "completion is fulfilled, needs, or unfulfillable. fulfilled requires every required output; needs requires non-empty needs; unfulfillable requires limitation.",
             "Required fields are completion, report, outputs, and needs. limitation is required only for unfulfillable.",
             "A need has ref, key, kind (data|artifact|decision), description, schema, required, and context.",
@@ -749,7 +701,8 @@ class AgentExecutor:
             "The runtime, not the agent, executes tools and owns their evidence and artifacts. "
             "outputs is a JSON object keyed by expected output key. Each value is exactly one typed slot: "
             "{kind:'value',value:<schema-validated value>}, {kind:'evidence',refs:[result_ref]}, or "
-            "{kind:'artifact',refs:[artifact_ref]}. Never copy raw tool payloads into a value slot. "
+            "{kind:'artifact',refs:[artifact_ref]}. For task_result outputs, return a normalized value derived from observed tool data; "
+            "evidence/artifact refs are valid only for the corresponding fulfillment. "
             "Use completion=fulfilled only when required outputs are present; completion=needs only with non-empty needs; completion=unfulfillable only with limitation. "
             f"Expected outputs (including required/schema): {expected}. "
             "Your declaration must conform to this JSON Schema: "

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Awaitable, Callable, Sequence
 from uuid import UUID
 
@@ -88,7 +89,12 @@ class MemoryPreparer:
             return PreparedMemoryContext(items=[], selected_fact_count=0, selected_project_count=0, selected_glossary_count=0, ambiguities=[], fallback=True)
 
         output = result.value
-        chosen_facts = _by_indexes(facts, output.fact_indexes)
+        # The selector is model-driven, so enforce a deterministic relevance
+        # guard before personal facts can enter planner and sub-agent prompts.
+        chosen_facts = [
+            item for item in _by_indexes(facts, output.fact_indexes)
+            if item.scope.value != "user" or _fact_matches_request(item, request_text)
+        ]
         chosen_projects = _by_indexes(project_glossary, output.project_indexes)
         chosen_glossary = _by_indexes(glossary, output.glossary_indexes)
         items = [
@@ -125,3 +131,35 @@ def _by_indexes(items: Sequence[Any], indexes: Sequence[int]) -> list[Any]:
         seen.add(index)
         selected.append(items[index])
     return selected
+
+
+_PERSONAL_SUBJECT_ALIASES = {
+    "имя": {"имя", "зовут", "фамил"},
+    "возраст": {"возраст", "лет", "год"},
+    "есть дети": {"дет", "ребен"},
+    "хобби": {"хобби", "увлеч", "теннис", "чтен"},
+    "user.hobby": {"хобби", "увлеч", "теннис", "чтен"},
+    "должность": {"должност", "работ", "роль", "професс"},
+    "user.role": {"должност", "работ", "роль", "професс"},
+    "user.jira.username": {"мо", "мне", "меня", "назнач", "assignee", "jira"},
+}
+
+
+def _fact_matches_request(fact: FactDTO, request_text: str) -> bool:
+    """Require direct lexical or known-intent relevance for personal memory."""
+    query = _tokens(request_text)
+    if not query:
+        return False
+    subject = str(fact.subject or "").strip().lower()
+    fact_tokens = _tokens(f"{fact.subject} {fact.value}")
+    if query & fact_tokens:
+        return True
+    aliases = _PERSONAL_SUBJECT_ALIASES.get(subject, set())
+    return any(any(token.startswith(alias) for token in query) for alias in aliases)
+
+
+def _tokens(value: str) -> set[str]:
+    return {
+        token.lower()
+        for token in re.findall(r"[\wа-яА-ЯёЁ]{2,}", str(value or ""))
+    }

@@ -43,6 +43,13 @@ def test_jira_tools_are_bounded_and_write_tools_are_not_read_only():
     names = {tool["name"]: tool for tool in jira_server.TOOLS}
     assert names["jira_search_issues"]["annotations"]["readOnlyHint"] is True
     assert names["jira_create_issue"]["annotations"]["readOnlyHint"] is False
+    assert names["jira_get_issue"]["inputSchema"]["x-runtime"]["risk_level"] == "safe"
+    assert names["jira_create_issue"]["inputSchema"]["x-runtime"] == {
+        "risk_level": "write",
+        "side_effects": True,
+        "requires_confirmation": True,
+        "credential_scope": "user",
+    }
     assert jira_server._limit(9999) == jira_server.MAX_RESULTS
 
 

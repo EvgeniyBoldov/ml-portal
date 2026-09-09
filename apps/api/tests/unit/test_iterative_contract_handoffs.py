@@ -85,9 +85,42 @@ def test_output_schema_uses_full_json_schema_validation() -> None:
     )
 
 
+def test_openapi_nullable_output_schema_is_normalized_for_runtime_validation() -> None:
+    request = _task(expected_outputs=[{
+        "key": "description", "description": "Description",
+        "schema": {"type": "string", "nullable": True},
+    }])
+    assert request.expected_outputs[0].json_schema == {"type": ["string", "null"]}
+    result = TaskAttemptResultReducer().reduce(
+        request=request,
+        declaration=TaskCompletionDeclaration(
+            completion="fulfilled", report="done",
+            outputs={"description": {"kind": "value", "value": None}},
+        ),
+        verified={},
+    )
+    assert result.outcome.value == "completed"
+
+
 def test_planner_schema_preserves_terminal_conditionality_for_the_provider() -> None:
     schema = StructuredLLMCall._compact_response_schema(IterationProposal.model_json_schema())
     assert any(item.get("then", {}).get("required") == ["synthesis_brief"] for item in schema["allOf"])
+
+
+def test_data_agent_tasks_are_forced_to_require_fresh_retrieval() -> None:
+    proposal = IterationProposal.model_validate({
+        "terminal": "planner",
+        "tasks": [{
+            "task_id": "jira", "executor": "jira_agent", "intent": "read", "instructions": "Read issue",
+            "freshness_policy": "allow_memory",
+        }],
+    })
+    compiled = GraphOrchestrator._compile(
+        proposal,
+        [{"slug": "jira_agent", "tags": ["jira"], "supports_dynamic_contracts": True}],
+        {"tasks": [], "needs": [], "bindings": [], "resolutions": []},
+    )
+    assert compiled.tasks[0].freshness_policy.value == "require_retrieval"
 
 
 def test_reducer_rejects_undeclared_output_slots() -> None:

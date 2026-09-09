@@ -25,11 +25,43 @@ class TaskAttemptResultReducer:
             return TaskResult(outcome=TaskOutcome.UNFULFILLABLE, description=declaration.report, outputs=outputs, output_states=states, limitation=declaration.limitation, verified=verified, evidence_selections=evidence, artifact_selections=artifacts)
         if request.freshness_policy == FreshnessPolicy.REQUIRE_RETRIEVAL and not verified.get("fresh_retrieval"):
             return TaskResult(outcome=TaskOutcome.NEEDS_DEPENDENCY, description=declaration.report, outputs=outputs, output_states=states, needs=[DiscoveredNeed(ref="fresh_retrieval", key="fresh_retrieval", kind="data", description="A successful compatible retrieval is required for this task attempt.")], reason_code="fresh_retrieval_missing", verified=verified, evidence_selections=evidence, artifact_selections=artifacts)
+        required_operations = self._required_retrieval_operations(request)
+        observed_operations = {
+            str(item.get("canonical_operation") or item.get("operation") or "")
+            for item in verified.get("receipts") or []
+            if isinstance(item, dict)
+        }
+        if required_operations and not required_operations.issubset(observed_operations):
+            return TaskResult(
+                outcome=TaskOutcome.NEEDS_DEPENDENCY,
+                description=declaration.report,
+                outputs=outputs,
+                output_states=states,
+                needs=[DiscoveredNeed(
+                    ref="required_retrieval_operation",
+                    key="required_retrieval_operation",
+                    kind="data",
+                    description="The task requires retrieval by the exact operation: " + ", ".join(sorted(required_operations)),
+                    context={"required_operations": sorted(required_operations)},
+                )],
+                reason_code="required_retrieval_operation_missing",
+                verified=verified,
+                evidence_selections=evidence,
+                artifact_selections=artifacts,
+            )
         if invalid:
             return self._unfulfillable(declaration, outputs, states, verified, evidence, artifacts, "output_contract_invalid", "Invalid task output slots: " + ", ".join(invalid))
         if missing:
             return self._unfulfillable(declaration, outputs, states, verified, evidence, artifacts, "required_output_missing", "The task result did not fulfill required outputs: " + ", ".join(missing))
         return TaskResult(outcome=TaskOutcome.COMPLETED, description=declaration.report, outputs=outputs, output_states=states, verified=verified, evidence_selections=evidence, artifact_selections=artifacts)
+
+    @staticmethod
+    def _required_retrieval_operations(request: TaskRequest) -> set[str]:
+        """Bind well-known entity identifiers to their authoritative read."""
+        inputs = request.inputs if isinstance(request.inputs, dict) else {}
+        if str(inputs.get("jira_task_id") or inputs.get("issue_key") or "").strip():
+            return {"jira_get_issue"}
+        return set()
 
     @staticmethod
     def _unfulfillable(declaration: TaskCompletionDeclaration, outputs: Dict[str, Any], states: Dict[str, Dict[str, Any]], verified: Dict[str, Any], evidence: list[EvidenceSelection], artifacts: list[ArtifactSelection], code: str, message: str) -> TaskResult:
@@ -42,7 +74,18 @@ class TaskAttemptResultReducer:
         missing: list[str] = []
         evidence_selections: list[EvidenceSelection] = []
         artifact_selections: list[ArtifactSelection] = []
-        receipts = {str(item.get("result_ref") or item.get("call_id") or ""): item for item in verified.get("receipts") or [] if isinstance(item, dict)}
+        receipts: Dict[str, Dict[str, Any]] = {}
+        for item in verified.get("receipts") or []:
+            if not isinstance(item, dict):
+                continue
+            result_ref = str(item.get("result_ref") or "").strip()
+            call_id = str(item.get("call_id") or "").strip()
+            if result_ref:
+                receipts[result_ref] = item
+            # Follow-up tool context exposes evidence_call_id. Accept it as
+            # an alias, but persist the canonical result_ref in selections.
+            if call_id:
+                receipts[call_id] = item
         artifacts = {str(item.get("artifact_ref") or item.get("artifact_id") or ""): item for item in verified.get("artifacts") or [] if isinstance(item, dict)}
         known_keys = {spec.key for spec in request.expected_outputs}
 
@@ -72,7 +115,14 @@ class TaskAttemptResultReducer:
                     invalid.append(spec.key)
                     states[spec.key] = {"status": "invalid", "reason": "receipt_not_verified", "refs": slot.refs}
                     continue
-                evidence_selections.extend(EvidenceSelection(result_ref=ref, output_keys=[spec.key], description=spec.description) for ref in slot.refs)
+                evidence_selections.extend(
+                    EvidenceSelection(
+                        result_ref=str(receipts[ref].get("result_ref") or ref),
+                        output_keys=[spec.key],
+                        description=spec.description,
+                    )
+                    for ref in slot.refs
+                )
                 states[spec.key] = {"status": "fulfilled", "fulfillment": "verified_receipt", "refs": slot.refs}
                 continue
             if not isinstance(slot, ArtifactOutputSlot) or any(ref not in artifacts for ref in slot.refs):

@@ -15,7 +15,7 @@ from app.runtime.entity_ids import (
 from app.runtime.orchestrator_contracts import (
     AgentTaskContract, TaskContractMode, TaskExecutionReceipt, IterationProposal, PlanRequest, PlannerContext,
     SchedulerActionKind, TaskAttemptFailure, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
-    TaskOutputFulfillment,
+    FreshnessPolicy, TaskOutputFulfillment,
 )
 from app.runtime.plan_store import PlanValidationError
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
@@ -312,10 +312,18 @@ class GraphOrchestrator:
         compiled_tasks = []
         for task in proposal.tasks:
             agent = agent_catalog[task.executor]
+            # A task delegated to a data-owning agent must not be fulfilled
+            # from model memory. The executor may still answer from explicit
+            # dependency inputs when it uses a non-data-owning agent.
+            data_agent_tags = {str(tag).strip().lower() for tag in agent.get("tags") or []}
+            requires_retrieval = bool(data_agent_tags & {"jira", "dcbox", "backup", "base_agent"})
             if task.contract.mode == TaskContractMode.DYNAMIC:
                 if not bool(agent.get("supports_dynamic_contracts", True)):
                     raise PlanValidationError(f"agent {task.executor} does not support dynamic task contracts")
-                compiled_tasks.append(task)
+                compiled_tasks.append(task.model_copy(update={
+                    "freshness_policy": FreshnessPolicy.REQUIRE_RETRIEVAL
+                    if requires_retrieval else task.freshness_policy,
+                }))
                 continue
             contracts = [
                 AgentTaskContract.model_validate(item)
@@ -331,6 +339,8 @@ class GraphOrchestrator:
                 raise PlanValidationError(f"task inputs do not satisfy contract {contract.contract_id}: {exc}") from exc
             compiled_tasks.append(task.model_copy(update={
                 "expected_outputs": contract.expected_outputs,
+                "freshness_policy": FreshnessPolicy.REQUIRE_RETRIEVAL
+                if requires_retrieval else task.freshness_policy,
                 "contract": {
                     "mode": TaskContractMode.REGISTERED,
                     "contract_id": contract.contract_id,
@@ -382,8 +392,6 @@ class GraphOrchestrator:
                     continue
                 same_contract = (
                     replacement.executor == prior.get("executor")
-                    and replacement.intent == prior.get("intent")
-                    and replacement.instructions == prior.get("instructions")
                     and replacement.inputs == (prior.get("inputs") or {})
                     and [item.model_dump(mode="json", by_alias=True) for item in replacement.expected_outputs]
                     == list(prior.get("expected_outputs") or [])
@@ -711,7 +719,6 @@ class GraphOrchestrator:
                     request = request.model_copy(update={"memory_context": list(planner_kwargs.get("planner_memory_context") or [])})
                     execution = await self.executor.execute_attempt(
                         request=request,
-                        runtime_plan_id=str(plan_id),
                         lifecycle_agent_execution_id=execution_id,
                         runtime_log_parent={"entity_type": "step", "entity_id": current_step_id},
                         **planner_kwargs,

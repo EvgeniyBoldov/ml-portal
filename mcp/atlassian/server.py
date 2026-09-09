@@ -273,6 +273,12 @@ def _tool(
             "type": "object",
             "properties": properties,
             "required": required or [],
+            "x-runtime": {
+                "risk_level": "safe" if read_only else "write",
+                "side_effects": not read_only,
+                "requires_confirmation": not read_only,
+                "credential_scope": "user",
+            },
         },
         "annotations": {
             "readOnlyHint": read_only,

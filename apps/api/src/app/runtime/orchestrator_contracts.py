@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class PlanStatus(str, Enum):
@@ -141,6 +141,18 @@ class TaskOutputSpec(BaseModel):
     fulfillment: TaskOutputFulfillment = TaskOutputFulfillment.TASK_RESULT
     receipt_operations: List[str] = Field(default_factory=list)
     model_config = {"extra": "forbid", "populate_by_name": True}
+
+    @field_validator("json_schema", mode="before")
+    @classmethod
+    def normalize_schema_dialect(cls, value: Any) -> Dict[str, Any]:
+        """Accept JSON Schema only; normalize the legacy OpenAPI nullable form."""
+        schema = _normalize_nullable_schema(value if isinstance(value, dict) else {})
+        try:
+            import jsonschema
+            jsonschema.Draft202012Validator.check_schema(schema)
+        except Exception as exc:
+            raise ValueError(f"output schema is invalid: {exc}") from exc
+        return schema
 
     @model_validator(mode="after")
     def validate_fulfillment(self) -> "TaskOutputSpec":
@@ -525,6 +537,30 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
 
     output_properties = {item.key: slot_schema(item) for item in request.expected_outputs}
     required_outputs = [item.key for item in request.expected_outputs if item.required]
+    need_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "ref": {"type": "string", "minLength": 1},
+            "key": {"type": "string", "minLength": 1},
+            "kind": {"enum": ["data", "artifact", "decision"]},
+            "description": {"type": "string", "minLength": 1},
+            "schema": {"type": "object"},
+            "required": {"type": "boolean"},
+            "context": {"type": "object"},
+        },
+        "required": ["ref", "key", "kind", "description", "schema", "required", "context"],
+    }
+    limitation_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "code": {"type": "string", "minLength": 1},
+            "message": {"type": "string", "minLength": 1},
+            "action": {"enum": [item.value for item in LimitationAction]},
+        },
+        "required": ["code", "message"],
+    }
     schema: Dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
@@ -535,15 +571,18 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
                 "type": "object", "additionalProperties": False,
                 "properties": output_properties,
             },
-            "needs": {"type": "array", "items": {"type": "object"}},
-            "limitation": {"type": "object"},
+            "needs": {"type": "array", "items": need_schema},
+            "limitation": limitation_schema,
         },
         "required": ["completion", "report", "outputs", "needs"],
     }
     schema["allOf"] = [
         {
             "if": {"properties": {"completion": {"const": AgentExecutionCompletion.FULFILLED.value}}, "required": ["completion"]},
-            "then": {"properties": {"outputs": {"required": required_outputs}}, "not": {"required": ["limitation"]}},
+            "then": {
+                "properties": {"outputs": {"required": required_outputs}, "needs": {"maxItems": 0}},
+                "not": {"required": ["limitation"]},
+            },
         },
         {
             "if": {"properties": {"completion": {"const": AgentExecutionCompletion.NEEDS.value}}, "required": ["completion"]},
@@ -551,7 +590,34 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
         },
         {
             "if": {"properties": {"completion": {"const": AgentExecutionCompletion.UNFULFILLABLE.value}}, "required": ["completion"]},
-            "then": {"required": ["limitation"]},
+            "then": {"required": ["limitation"], "properties": {"needs": {"maxItems": 0}}},
         },
     ]
     return schema
+
+
+def _normalize_nullable_schema(value: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert OpenAPI's nullable marker before Draft 2020-12 validation."""
+    normalized: Dict[str, Any] = {}
+    for key, child in value.items():
+        if isinstance(child, dict):
+            normalized[key] = _normalize_nullable_schema(child)
+        elif isinstance(child, list):
+            normalized[key] = [
+                _normalize_nullable_schema(item) if isinstance(item, dict) else item
+                for item in child
+            ]
+        else:
+            normalized[key] = child
+    if normalized.pop("nullable", False) is True:
+        schema_type = normalized.get("type")
+        if isinstance(schema_type, str):
+            normalized["type"] = [schema_type, "null"]
+        elif isinstance(schema_type, list):
+            normalized["type"] = list(dict.fromkeys([*schema_type, "null"]))
+        else:
+            normalized["anyOf"] = [
+                {key: child for key, child in normalized.items()},
+                {"type": "null"},
+            ]
+    return normalized

@@ -61,19 +61,6 @@ async def test_missing_terminal_declaration_is_not_retryable() -> None:
     assert error.value.details["validation_stage"] == "agent_terminal_response"
 
 
-@pytest.mark.asyncio
-async def test_large_runtime_result_is_externalized() -> None:
-    from unittest.mock import patch
-
-    payload = {"body": "x" * 5000}
-    with patch("app.runtime.agent_executor.s3_manager.upload_content_sync", new=AsyncMock(return_value=True)) as upload:
-        verified = {"result_records": [{"result_ref": "result_1", "payload": payload}]}
-        await AgentExecutor._externalize_large_results(verified, "attempt-1")
-    assert verified["result_records"][0]["payload"] is None
-    assert verified["result_records"][0]["payload_ref"]["key"] == "runtime/results/attempt-1/result_1.json"
-    upload.assert_awaited_once()
-
-
 def test_terminal_schema_rejects_unknown_output_fields() -> None:
     from app.runtime.orchestrator_contracts import parse_task_completion_declaration
     with pytest.raises(ValueError):
@@ -88,3 +75,20 @@ def test_terminal_prompt_can_build_task_schema() -> None:
     prompt = AgentExecutor._with_terminal_contract_prompt("agent prompt", task)
     assert "RUNTIME TASK COMPLETION DECLARATION" in prompt
     assert '"answer"' in prompt
+
+
+def test_provider_terminal_schema_matches_need_and_limitation_contract() -> None:
+    import jsonschema
+
+    from app.runtime.orchestrator_contracts import task_completion_json_schema
+
+    schema = task_completion_json_schema(_request())
+    malformed = {
+        "completion": "unfulfillable",
+        "report": "failed",
+        "outputs": {},
+        "needs": [{"ref": "x"}],
+        "limitation": {"reason": "missing runtime result"},
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.Draft202012Validator(schema).validate(malformed)

@@ -288,6 +288,28 @@ async def test_memory_preparer_degrades_to_empty_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_memory_preparer_drops_unrelated_user_pii_selected_by_model() -> None:
+    preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
+    preparer._structured.invoke = AsyncMock(return_value=_llm_result(
+        _PreparationOutput(fact_indexes=[0, 1, 2])
+    ))
+    facts = [
+        FactDTO(scope=FactScope.USER, subject="имя", value="Софья", source=FactSource.USER_UTTERANCE),
+        FactDTO(scope=FactScope.USER, subject="возраст", value="45", source=FactSource.USER_UTTERANCE),
+        FactDTO(scope=FactScope.USER, subject="хобби", value="теннис", source=FactSource.USER_UTTERANCE),
+    ]
+
+    result = await preparer.prepare(
+        request_text="Подробно опиши NIMS-3451", facts=facts,
+        project_glossary=[], glossary=[], user_id=uuid4(), tenant_id=uuid4(),
+        chat_id=None, sandbox_overrides=None,
+    )
+
+    assert result.items == []
+    assert result.selected_fact_count == 0
+
+
+@pytest.mark.asyncio
 async def test_fact_extractor_rejects_project_fact_even_with_evidence(extractor) -> None:
     extractor._structured.invoke = AsyncMock(return_value=_llm_result(
         _LLMFactOutput(facts=[_LLMFactCandidate(
