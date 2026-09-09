@@ -1,7 +1,7 @@
 """Tell the planner to model nullable source fields in task contracts.
 
-Revision ID: 0106
-Revises: 0105
+Revision ID: 0109
+Revises: 0108
 """
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0106"
-down_revision = "0105"
+revision = "0109"
+down_revision = "0108"
 branch_labels = None
 depends_on = None
 
