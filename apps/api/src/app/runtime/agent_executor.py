@@ -201,7 +201,7 @@ class AgentExecutor:
         # system prompt where it takes precedence over that stale instruction.
         sub_request.prompt = self._with_terminal_contract_prompt(sub_request.prompt, task)
 
-        # Fast-path fallback: do not spend LLM calls when planner chose CALL_AGENT,
+        # Do not spend LLM calls when planner chose CALL_AGENT,
         # but the sub-agent ended up with zero executable operations.
         if not sub_request.resolved_operations and task.freshness_policy.value == "allow_memory":
             # No operations is not an execution error for a reasoning task.
@@ -226,7 +226,6 @@ class AgentExecutor:
         )
 
         # 3. Run sub-agent tool loop and forward canonical runtime events.
-        buffered_answer: List[str] = []
         sub_sources: List[dict] = []
         artifacts: List[Dict[str, Any]] = []
         final_content = ""
@@ -286,9 +285,7 @@ class AgentExecutor:
                             if isinstance(item, dict)
                         )
 
-                if runtime_event.type == RuntimeEventType.DELTA:
-                    buffered_answer.append(str(runtime_event.data.get("content", "")))
-                elif runtime_event.type == RuntimeEventType.FINAL:
+                if runtime_event.type == RuntimeEventType.FINAL:
                     final_content = str(runtime_event.data.get("content", "") or "")
                     for src in runtime_event.data.get("sources") or []:
                         if isinstance(src, dict):
@@ -326,9 +323,10 @@ class AgentExecutor:
                 debug=build_debug_payload(exc=exc),
             )
 
-        # 4. Normalize the terminal task contract.  Agent prose is not an
-        # implicit task result: graph tasks must end with strict JSON.
-        raw_summary = final_content or "".join(buffered_answer)
+        # 4. The terminal response is the sole task contract.  A second LLM
+        # commit pass would make a valid response non-authoritative and add an
+        # untracked failure point after all tool execution has completed.
+        raw_summary = final_content
         if not success:
             ctx.extra["agent_execution_failure"] = {
                 "code": final_error_code or "agent_failed",
@@ -338,20 +336,16 @@ class AgentExecutor:
             }
         else:
             try:
-                execution = await self._commit_declaration(
-                    task=task,
-                    model=model,
-                    observed=self._commit_observation(ledger_entries=state.tool_ledger.entries[ledger_start:], artifacts=artifacts),
-                )
+                execution = parse_task_completion_declaration(raw_summary)
             except ValueError as exc:
                 ctx.extra["agent_execution_failure"] = {
                     "code": "agent_task_completion_invalid",
-                    "message": str(exc),
-                    # Tool execution is already complete. Replaying it after
-                    # an exhausted declaration-only retry is unsafe and cannot
-                    # repair a deterministic contract mismatch.
+                    "message": f"terminal task contract validation failed: {exc}",
                     "retryable": False,
-                    "details": {"retry_scope": "commit"},
+                    "details": {
+                        "retry_scope": "terminal_contract",
+                        "validation_stage": "agent_terminal_response",
+                    },
                 }
             else:
                 verified = self._verified_task_result(
@@ -459,28 +453,13 @@ class AgentExecutor:
             raise TaskExecutionError(
                 code="agent_task_completion_missing",
                 message="Agent did not return a terminal task completion",
-                retryable=True,
+                retryable=False,
+                details={
+                    "retry_scope": "terminal_contract",
+                    "validation_stage": "agent_terminal_response",
+                },
             )
         return TaskExecutionReceipt(declaration=execution, verified=verified if isinstance(verified, dict) else {})
-
-    def _commit_observation(self, *, ledger_entries: List[Any], artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Bounded, runtime-authored evidence projection for the tool-free commit pass."""
-        results = []
-        for entry in ledger_entries:
-            if getattr(entry, "status", None) != "succeeded" or not getattr(entry, "success", False):
-                continue
-            results.append({
-                "result_ref": str(getattr(entry, "result_ref", None) or getattr(entry, "call_id", "")),
-                "operation": str(getattr(entry, "operation", "")),
-                "result_preview": str(getattr(entry, "result_preview", "") or "")[:1200],
-            })
-        manifests = [{
-            "artifact_ref": str(item.get("artifact_id") or ""),
-            "file_name": str(item.get("file_name") or item.get("name") or "artifact"),
-            "content_type": str(item.get("content_type") or ""),
-            "size_bytes": item.get("size_bytes"),
-        } for item in self._dedupe_artifacts(artifacts)]
-        return {"results": results[:20], "artifacts": manifests[:20]}
 
     @staticmethod
     async def _externalize_large_results(verified: Dict[str, Any], scope: str) -> None:
@@ -508,54 +487,6 @@ class AgentExecutor:
             if uploaded:
                 record["payload_ref"] = {"bucket": bucket, "key": key, "size_bytes": len(body), "content_type": "application/json"}
                 record["payload"] = None
-
-    async def _commit_declaration(
-        self,
-        *,
-        task: TaskRequest,
-        model: Optional[str],
-        observed: Dict[str, Any],
-    ) -> TaskCompletionDeclaration:
-        """Run the terminal commit independently from the tool-decision loop.
-
-        This call has no tool payload and therefore cannot execute operations.
-        Retrying it never replays an already completed operation attempt.
-        """
-        commit_prompt = self._with_terminal_contract_prompt(
-            "You are in the commit phase. Tools are disabled. Use only the runtime observation below; "
-            "do not invent unseen data or artifact references.",
-            task,
-        )
-        messages = [
-            {"role": "system", "content": commit_prompt},
-            {"role": "user", "content": json.dumps({
-                "task": {"instructions": task.instructions, "inputs": task.inputs},
-                "runtime_observation": observed,
-            }, ensure_ascii=False, default=str)},
-        ]
-        last_error: Optional[Exception] = None
-        for _attempt in range(2):
-            try:
-                content = await self._tool_runtime.llm.call(
-                    messages=messages,
-                    model=model,
-                    temperature=0.0,
-                    max_tokens=1800,
-                    timeout_s=30,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "task_completion_declaration",
-                            "schema": task_completion_json_schema(task),
-                            "strict": False,
-                        },
-                    },
-                )
-                return parse_task_completion_declaration(content)
-            except Exception as exc:
-                last_error = exc
-                messages.append({"role": "user", "content": "Return the declaration again as one valid JSON object matching the schema. Do not add prose."})
-        raise ValueError(f"commit declaration invalid: {last_error}")
 
     @staticmethod
     def _verified_task_result(

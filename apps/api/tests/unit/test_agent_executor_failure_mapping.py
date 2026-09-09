@@ -43,22 +43,22 @@ async def test_agent_declaration_is_paired_with_runtime_evidence() -> None:
 
 
 @pytest.mark.asyncio
-async def test_commit_phase_is_tool_free_and_uses_only_runtime_projection() -> None:
+async def test_missing_terminal_declaration_is_not_retryable() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
-    executor._tool_runtime.llm.call = AsyncMock(return_value='{"completion":"fulfilled","report":"ready","outputs":{"answer":{"kind":"value","value":"ok"}},"needs":[]}')
-    task = TaskRequest(task_id="answer", executor="direct_answer", intent="answer", instructions="Answer", expected_outputs=[{"key": "answer", "description": "Answer"}])
 
-    declaration = await executor._commit_declaration(
-        task=task,
-        model="test-model",
-        observed={"results": [{"result_ref": "result_1", "result_preview": "bounded"}], "artifacts": []},
-    )
+    async def emit_nothing(*, ctx, **_kwargs):
+        yield RuntimeEvent.status("agent_finished_without_terminal_contract")
 
-    assert declaration.outputs["answer"].value == "ok"
-    kwargs = executor._tool_runtime.llm.call.await_args.kwargs
-    assert "tools" not in kwargs
-    assert kwargs["response_format"]["type"] == "json_schema"
-    assert "bounded" in kwargs["messages"][1]["content"]
+    executor.execute = emit_nothing  # type: ignore[method-assign]
+    with pytest.raises(TaskExecutionError) as error:
+        await executor.execute_attempt(
+            request=_request(), runtime_state=SimpleNamespace(), messages=[],
+            ctx=SimpleNamespace(extra={}), user_id=AsyncMock(), tenant_id=AsyncMock(),
+        )
+
+    assert error.value.code == "agent_task_completion_missing"
+    assert error.value.retryable is False
+    assert error.value.details["validation_stage"] == "agent_terminal_response"
 
 
 @pytest.mark.asyncio
@@ -78,3 +78,13 @@ def test_terminal_schema_rejects_unknown_output_fields() -> None:
     from app.runtime.orchestrator_contracts import parse_task_completion_declaration
     with pytest.raises(ValueError):
         parse_task_completion_declaration('{"completion":"fulfilled","report":"ready","outputs":{},"needs":[],"checkpoint":{}}')
+
+
+def test_terminal_prompt_can_build_task_schema() -> None:
+    task = TaskRequest(
+        task_id="answer", executor="direct_answer", intent="answer",
+        instructions="Answer", expected_outputs=[{"key": "answer", "description": "Answer"}],
+    )
+    prompt = AgentExecutor._with_terminal_contract_prompt("agent prompt", task)
+    assert "RUNTIME TASK COMPLETION DECLARATION" in prompt
+    assert '"answer"' in prompt
