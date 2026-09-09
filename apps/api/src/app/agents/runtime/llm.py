@@ -72,6 +72,7 @@ class LLMAdapter:
         tools: Optional[List[Dict[str, Any]]] = None,
         force_tool_choice: bool = False,
         timeout_s: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Non-streaming LLM call. Returns raw response dict for native tool_calls parsing.
 
@@ -85,6 +86,8 @@ class LLMAdapter:
         if tools:
             params["tools"] = tools
             params["tool_choice"] = "required" if force_tool_choice else "auto"
+        if response_format:
+            params["response_format"] = response_format
         try:
             request = self._client.chat(messages=messages, model=model, params=params,
                                         options=LLMCallOptions(timeout_s=timeout_s))

@@ -193,6 +193,17 @@ class AgentExecutor:
         )
         ctx.extra["task_freshness_policy"] = task.freshness_policy.value
         ctx.extra["task_freshness_phase_id"] = task.task_id
+        # The terminal declaration is a runtime contract, so expose its JSON
+        # schema to the agent runtime.  It is used as provider-native
+        # structured output after retrieval, never as prompt-only guidance.
+        ctx.extra["task_completion_response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "TaskCompletionDeclaration",
+                "schema": task_completion_json_schema(task),
+                "strict": False,
+            },
+        }
         ledger_start = len(state.tool_ledger.entries)
 
         # Published agent versions may still contain a legacy output-format

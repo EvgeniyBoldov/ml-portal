@@ -452,6 +452,9 @@ class AgentToolRuntime(BaseRuntime):
                         )
                         tools_payload = build_tools_payload(prompt_visible_operations)
                     if native_tool_calling and tools_payload:
+                        terminal_response_format = None
+                        if loop_state.tool_outputs:
+                            terminal_response_format = ctx.extra.get("task_completion_response_format")
                         raw_response_dict = await self.llm.call_raw(
                             messages=llm_messages,
                             model=gen.model,
@@ -460,16 +463,21 @@ class AgentToolRuntime(BaseRuntime):
                             tools=tools_payload,
                             force_tool_choice=loop_state.force_tool_choice,
                             timeout_s=gen.timeout_s,
+                            response_format=terminal_response_format,
                         )
                         loop_state.force_tool_choice = False
                         raw_response = self.llm.normalize_response(raw_response_dict)
                     else:
+                        terminal_response_format = None
+                        if loop_state.tool_outputs:
+                            terminal_response_format = ctx.extra.get("task_completion_response_format")
                         raw_response = await self.llm.call(
                             messages=llm_messages,
                             model=gen.model,
                             temperature=gen.temperature,
                             max_tokens=effective_max_tokens,
                             timeout_s=gen.timeout_s,
+                            response_format=terminal_response_format,
                         )
                 except asyncio.CancelledError:
                     logger.warning(
