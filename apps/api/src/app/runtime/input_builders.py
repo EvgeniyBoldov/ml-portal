@@ -22,6 +22,11 @@ class PlannerInputBuilder:
                 "description": self._trim_text(item.get("description", ""), MAX_AGENT_DESCRIPTION_CHARS),
                 "tags": list(item.get("tags") or []),
                 "provides_keys": list(item.get("provides_keys") or []),
+                "task_contracts": [
+                    {"contract_id": contract.get("contract_id"), "version": contract.get("version"), "description": contract.get("description")}
+                    for contract in item.get("task_contracts") or [] if isinstance(contract, dict)
+                ],
+                "supports_dynamic_contracts": bool(item.get("supports_dynamic_contracts", True)),
             })
         payload = {
             "goal": context.goal,

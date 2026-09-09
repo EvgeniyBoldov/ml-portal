@@ -584,7 +584,7 @@ class StructuredLLMCall:
             }
         allowed = {
             "$defs", "$ref", "type", "properties", "required", "items",
-            "additionalProperties", "enum", "const", "anyOf", "oneOf", "allOf",
+            "additionalProperties", "enum", "const", "anyOf", "oneOf", "allOf", "if", "then", "else", "not",
             "format", "pattern", "minLength", "maxLength", "minimum", "maximum",
             "minItems", "maxItems", "minProperties", "maxProperties",
         }
@@ -843,7 +843,10 @@ class StructuredLLMCall:
                     "Если задача должна создать скачиваемый файл (например, заполнение шаблона или file.generate), "
                     "объяви соответствующий expected_output с fulfillment=artifact. Artifact подтверждается только "
                     "успешной runtime-операцией, а не текстом агента. Для fulfillment=verified_receipt обязательно "
-                    "перечисли допустимые canonical operation names в receipt_operations; чужой успешный receipt не засчитывается."
+                    "перечисли допустимые canonical operation names в receipt_operations; чужой успешный receipt не засчитывается. "
+                    "Если available_agents публикует task_contracts, выбери contract.mode=registered и contract.contract_id; "
+                    "не передавай expected_outputs — runtime зафиксирует опубликованную схему. Dynamic contract используй "
+                    "только когда агент явно supports_dynamic_contracts."
                 )
             parts.append(
                 "# RUNTIME RESPONSE CONTRACT\n"

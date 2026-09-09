@@ -32,20 +32,20 @@ async def test_agent_declaration_is_paired_with_runtime_evidence() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
 
     async def emit_result(*, ctx, **_kwargs):
-        ctx.extra["agent_execution_result"] = TaskCompletionDeclaration(completion="fulfilled", report="done", outputs={"answer": "ok"})
+        ctx.extra["agent_execution_result"] = TaskCompletionDeclaration(completion="fulfilled", report="done", outputs={"answer": {"kind": "value", "value": "ok"}})
         ctx.extra["agent_execution_verified"] = {"artifacts": [{"artifact_ref": "artifact-1"}]}
         yield RuntimeEvent.status("done")
 
     executor.execute = emit_result  # type: ignore[method-assign]
     receipt = await executor.execute_attempt(request=_request(), runtime_state=SimpleNamespace(), messages=[], ctx=SimpleNamespace(extra={}), user_id=AsyncMock(), tenant_id=AsyncMock())
-    assert receipt.declaration.outputs == {"answer": "ok"}
+    assert receipt.declaration.outputs["answer"].value == "ok"
     assert receipt.verified["artifacts"][0]["artifact_ref"] == "artifact-1"
 
 
 @pytest.mark.asyncio
 async def test_commit_phase_is_tool_free_and_uses_only_runtime_projection() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
-    executor._tool_runtime.llm.call = AsyncMock(return_value='{"completion":"fulfilled","report":"ready","outputs":{"answer":"ok"},"evidence_selections":[],"artifact_selections":[],"needs":[]}')
+    executor._tool_runtime.llm.call = AsyncMock(return_value='{"completion":"fulfilled","report":"ready","outputs":{"answer":{"kind":"value","value":"ok"}},"needs":[]}')
     task = TaskRequest(task_id="answer", executor="direct_answer", intent="answer", instructions="Answer", expected_outputs=[{"key": "answer", "description": "Answer"}])
 
     declaration = await executor._commit_declaration(
@@ -54,7 +54,7 @@ async def test_commit_phase_is_tool_free_and_uses_only_runtime_projection() -> N
         observed={"results": [{"result_ref": "result_1", "result_preview": "bounded"}], "artifacts": []},
     )
 
-    assert declaration.outputs == {"answer": "ok"}
+    assert declaration.outputs["answer"].value == "ok"
     kwargs = executor._tool_runtime.llm.call.await_args.kwargs
     assert "tools" not in kwargs
     assert kwargs["response_format"]["type"] == "json_schema"

@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -96,6 +97,17 @@ class TaskOutputFulfillment(str, Enum):
     ARTIFACT = "artifact"
 
 
+class TaskContractMode(str, Enum):
+    """Who owns a task contract.
+
+    Registered contracts are published by an agent version.  Dynamic contracts
+    are intentionally explicit: they remain available for general-purpose
+    agents, but are compiled and validated before an attempt starts.
+    """
+    REGISTERED = "registered"
+    DYNAMIC = "dynamic"
+
+
 class AgentExecutionCompletion(str, Enum):
     FULFILLED = "fulfilled"
     NEEDS = "needs"
@@ -132,6 +144,13 @@ class TaskOutputSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_fulfillment(self) -> "TaskOutputSpec":
+        try:
+            import jsonschema
+            jsonschema.Draft202012Validator.check_schema(self.json_schema)
+        except Exception as exc:
+            raise ValueError(f"output schema is invalid: {exc}") from exc
+        if self._contains_forbidden_transport_field(self.json_schema):
+            raise ValueError("output schema must not request raw tool payload fields")
         if any(not item or item != item.strip() for item in self.receipt_operations):
             raise ValueError("receipt_operations must contain non-empty canonical names")
         if len(self.receipt_operations) != len(set(self.receipt_operations)):
@@ -142,6 +161,60 @@ class TaskOutputSpec(BaseModel):
             raise ValueError("receipt_operations are allowed only for verified_receipt outputs")
         return self
 
+    @staticmethod
+    def _contains_forbidden_transport_field(value: Any) -> bool:
+        if isinstance(value, dict):
+            properties = value.get("properties")
+            if isinstance(properties, dict) and "raw_content" in properties:
+                return True
+            return any(TaskOutputSpec._contains_forbidden_transport_field(item) for item in value.values())
+        if isinstance(value, list):
+            return any(TaskOutputSpec._contains_forbidden_transport_field(item) for item in value)
+        return False
+
+
+class TaskContractRef(BaseModel):
+    """Reference frozen into a planned task after planner compilation."""
+    mode: TaskContractMode = TaskContractMode.DYNAMIC
+    contract_id: Optional[str] = None
+    version: Optional[int] = Field(default=None, ge=1)
+    contract_hash: Optional[str] = None
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> "TaskContractRef":
+        if self.mode == TaskContractMode.REGISTERED and not self.contract_id:
+            raise ValueError("registered task contract requires contract_id")
+        if self.mode == TaskContractMode.DYNAMIC and self.contract_id is not None:
+            raise ValueError("dynamic task contract cannot contain contract_id")
+        return self
+
+
+class AgentTaskContract(BaseModel):
+    """Published, versioned task contract advertised by an agent version."""
+    contract_id: str = Field(..., min_length=1)
+    version: int = Field(..., ge=1)
+    description: str = Field(..., min_length=1)
+    input_schema: Dict[str, Any] = Field(default_factory=dict)
+    expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> "AgentTaskContract":
+        try:
+            import jsonschema
+            jsonschema.Draft202012Validator.check_schema(self.input_schema)
+        except Exception as exc:
+            raise ValueError(f"input schema is invalid: {exc}") from exc
+        keys = [item.key for item in self.expected_outputs]
+        if len(keys) != len(set(keys)):
+            raise ValueError("task contract contains duplicate output keys")
+        return self
+
+    def fingerprint(self) -> str:
+        payload = self.model_dump(mode="json", by_alias=True)
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
 
 class PlannedTask(BaseModel):
     """An immutable agent task. Planner and synthesis are not graph nodes."""
@@ -151,9 +224,16 @@ class PlannedTask(BaseModel):
     instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
+    contract: TaskContractRef = Field(default_factory=TaskContractRef)
     depends_on: List[str] = Field(default_factory=list)
     freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
     model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_contract_shape(self) -> "PlannedTask":
+        if self.contract.mode == TaskContractMode.REGISTERED and self.expected_outputs:
+            raise ValueError("registered task contract must be resolved by runtime, not planner expected_outputs")
+        return self
 
 
 class NeedBinding(BaseModel):
@@ -242,6 +322,27 @@ class IterationProposal(BaseModel):
                 raise ValueError(f"resolution references unknown replacement tasks: {sorted(unknown)}")
         return self
 
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        """Expose terminal conditionality to the model as well as Pydantic.
+
+        Pydantic's optional field schema cannot express this cross-field rule
+        by itself; without this projection a provider can emit a syntactically
+        valid synthesis proposal that the runtime must later reject.
+        """
+        schema = super().model_json_schema(*args, **kwargs)
+        schema.setdefault("allOf", []).extend([
+            {
+                "if": {"properties": {"terminal": {"const": TerminalKind.SYNTHESIS.value}}, "required": ["terminal"]},
+                "then": {"required": ["synthesis_brief"]},
+            },
+            {
+                "if": {"properties": {"terminal": {"const": TerminalKind.PLANNER.value}}, "required": ["terminal"]},
+                "then": {"properties": {"synthesis_brief": {"type": "null"}}},
+            },
+        ])
+        return schema
+
 
 class PlannerContext(BaseModel):
     goal: str
@@ -279,11 +380,37 @@ class TaskRequest(BaseModel):
     dependency_outputs: Dict[str, Any] = Field(default_factory=dict)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
+    contract: TaskContractRef = Field(default_factory=TaskContractRef)
     freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
     model_config = {"extra": "forbid"}
 
 
+class ValueOutputSlot(BaseModel):
+    kind: Literal["value"]
+    value: Any
+    model_config = {"extra": "forbid"}
+
+
+class EvidenceOutputSlot(BaseModel):
+    kind: Literal["evidence"]
+    refs: List[str] = Field(..., min_length=1)
+    model_config = {"extra": "forbid"}
+
+
+class ArtifactOutputSlot(BaseModel):
+    kind: Literal["artifact"]
+    refs: List[str] = Field(..., min_length=1)
+    model_config = {"extra": "forbid"}
+
+
+OutputSlot = Annotated[
+    Union[ValueOutputSlot, EvidenceOutputSlot, ArtifactOutputSlot],
+    Field(discriminator="kind"),
+]
+
+
 class EvidenceSelection(BaseModel):
+    """Runtime projection retained for synthesis and audit compatibility."""
     result_ref: str = Field(..., min_length=1)
     output_keys: List[str] = Field(default_factory=list)
     description: str = Field(..., min_length=1)
@@ -291,6 +418,7 @@ class EvidenceSelection(BaseModel):
 
 
 class ArtifactSelection(BaseModel):
+    """Runtime projection retained for synthesis and audit compatibility."""
     artifact_ref: str = Field(..., min_length=1)
     output_key: str = Field(..., min_length=1)
     description: str = Field(..., min_length=1)
@@ -301,9 +429,7 @@ class TaskCompletionDeclaration(BaseModel):
     """Agent-authored claim. Runtime alone verifies it and computes TaskResult."""
     completion_claim: AgentExecutionCompletion = Field(..., alias="completion")
     report: str = Field(..., min_length=1)
-    outputs: Dict[str, Any] = Field(default_factory=dict)
-    evidence_selections: List[EvidenceSelection] = Field(default_factory=list)
-    artifact_selections: List[ArtifactSelection] = Field(default_factory=list)
+    outputs: Dict[str, OutputSlot] = Field(default_factory=dict)
     needs: List[DiscoveredNeed] = Field(default_factory=list)
     limitation: Optional[UserLimitation] = None
     model_config = {"extra": "forbid", "populate_by_name": True}
@@ -334,6 +460,7 @@ class TaskResult(BaseModel):
     outcome: TaskOutcome
     description: str = Field(..., min_length=1)
     outputs: Dict[str, Any] = Field(default_factory=dict)
+    output_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     needs: List[DiscoveredNeed] = Field(default_factory=list)
     reason_code: Optional[str] = None
     limitation: Optional[UserLimitation] = None
@@ -378,13 +505,24 @@ def parse_task_completion_declaration(content: str) -> TaskCompletionDeclaration
 
 
 def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
-    """The only LLM-facing terminal schema: output values are direct payloads."""
-    output_properties = {
-        item.key: item.json_schema
-        for item in request.expected_outputs
-        if item.fulfillment == TaskOutputFulfillment.TASK_RESULT
-    }
-    return {
+    """Build the sole terminal declaration schema from the compiled contract."""
+    def slot_schema(spec: TaskOutputSpec) -> Dict[str, Any]:
+        if spec.fulfillment == TaskOutputFulfillment.TASK_RESULT:
+            return {
+                "type": "object", "additionalProperties": False,
+                "properties": {"kind": {"const": "value"}, "value": spec.json_schema},
+                "required": ["kind", "value"],
+            }
+        kind = "evidence" if spec.fulfillment == TaskOutputFulfillment.VERIFIED_RECEIPT else "artifact"
+        return {
+            "type": "object", "additionalProperties": False,
+            "properties": {"kind": {"const": kind}, "refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}},
+            "required": ["kind", "refs"],
+        }
+
+    output_properties = {item.key: slot_schema(item) for item in request.expected_outputs}
+    required_outputs = [item.key for item in request.expected_outputs if item.required]
+    schema: Dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
@@ -394,10 +532,23 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
                 "type": "object", "additionalProperties": False,
                 "properties": output_properties,
             },
-            "evidence_selections": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {"result_ref": {"type": "string", "minLength": 1}, "output_keys": {"type": "array", "items": {"type": "string"}}, "description": {"type": "string", "minLength": 1}}, "required": ["result_ref", "description"]}},
-            "artifact_selections": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {"artifact_ref": {"type": "string", "minLength": 1}, "output_key": {"type": "string", "minLength": 1}, "description": {"type": "string", "minLength": 1}}, "required": ["artifact_ref", "output_key", "description"]}},
             "needs": {"type": "array", "items": {"type": "object"}},
             "limitation": {"type": "object"},
         },
         "required": ["completion", "report", "outputs", "needs"],
     }
+    schema["allOf"] = [
+        {
+            "if": {"properties": {"completion": {"const": AgentExecutionCompletion.FULFILLED.value}}, "required": ["completion"]},
+            "then": {"properties": {"outputs": {"required": required_outputs}}, "not": {"required": ["limitation"]}},
+        },
+        {
+            "if": {"properties": {"completion": {"const": AgentExecutionCompletion.NEEDS.value}}, "required": ["completion"]},
+            "then": {"properties": {"needs": {"minItems": 1}}, "not": {"required": ["limitation"]}},
+        },
+        {
+            "if": {"properties": {"completion": {"const": AgentExecutionCompletion.UNFULFILLABLE.value}}, "required": ["completion"]},
+            "then": {"required": ["limitation"]},
+        },
+    ]
+    return schema

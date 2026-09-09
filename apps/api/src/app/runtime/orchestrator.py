@@ -13,8 +13,9 @@ from app.runtime.entity_ids import (
     runtime_attempt_id, runtime_task_id, step_id,
 )
 from app.runtime.orchestrator_contracts import (
-    TaskExecutionReceipt, IterationProposal, PlanRequest, PlannerContext,
+    AgentTaskContract, TaskContractMode, TaskExecutionReceipt, IterationProposal, PlanRequest, PlannerContext,
     SchedulerActionKind, TaskAttemptFailure, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
+    TaskOutputFulfillment,
 )
 from app.runtime.plan_store import PlanValidationError
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
@@ -303,10 +304,41 @@ class GraphOrchestrator:
 
     @staticmethod
     def _compile(proposal: IterationProposal, available_agents: list[dict[str, Any]], ledger: Dict[str, Any]) -> IterationProposal:
-        available = {str(item.get("slug") or "") for item in available_agents if isinstance(item, dict)}
+        agent_catalog = {str(item.get("slug") or ""): item for item in available_agents if isinstance(item, dict)}
+        available = set(agent_catalog)
         unknown = sorted({task.executor for task in proposal.tasks if task.executor not in available})
         if unknown:
             raise PlanValidationError(f"planner selected unavailable executors: {unknown}")
+        compiled_tasks = []
+        for task in proposal.tasks:
+            agent = agent_catalog[task.executor]
+            if task.contract.mode == TaskContractMode.DYNAMIC:
+                if not bool(agent.get("supports_dynamic_contracts", True)):
+                    raise PlanValidationError(f"agent {task.executor} does not support dynamic task contracts")
+                compiled_tasks.append(task)
+                continue
+            contracts = [
+                AgentTaskContract.model_validate(item)
+                for item in agent.get("task_contracts") or [] if isinstance(item, dict)
+            ]
+            contract = next((item for item in contracts if item.contract_id == task.contract.contract_id), None)
+            if contract is None:
+                raise PlanValidationError(f"agent {task.executor} does not publish contract {task.contract.contract_id}")
+            try:
+                import jsonschema
+                jsonschema.Draft202012Validator(contract.input_schema).validate(task.inputs)
+            except Exception as exc:
+                raise PlanValidationError(f"task inputs do not satisfy contract {contract.contract_id}: {exc}") from exc
+            compiled_tasks.append(task.model_copy(update={
+                "expected_outputs": contract.expected_outputs,
+                "contract": {
+                    "mode": TaskContractMode.REGISTERED,
+                    "contract_id": contract.contract_id,
+                    "version": contract.version,
+                    "contract_hash": contract.fingerprint(),
+                },
+            }))
+        proposal = proposal.model_copy(update={"tasks": compiled_tasks})
         prior_tasks = {str(item.get("task_id")): item for item in ledger.get("tasks", [])}
         need_items = {(str(item.get("task_id")), str(item.get("ref"))): item for item in ledger.get("needs", [])}
         proposed = {task.task_id: task for task in proposal.tasks}
@@ -359,11 +391,15 @@ class GraphOrchestrator:
             if binding.producer_task_id not in consumer.depends_on:
                 raise PlanValidationError("binding consumer must depend on producer")
             output_spec = next((item for item in producer.expected_outputs if item.key == binding.output_key), None)
-            if output_spec is None or not output_spec.required:
+            if output_spec is None or not output_spec.required or output_spec.fulfillment != TaskOutputFulfillment.TASK_RESULT:
                 raise PlanValidationError("binding output is not declared by producer")
             need_schema = need.get("schema") if isinstance(need.get("schema"), dict) else {}
-            if need_schema and output_spec.json_schema != need_schema:
-                raise PlanValidationError("binding producer output schema must equal the discovered need schema")
+            if need_schema:
+                try:
+                    import jsonschema
+                    jsonschema.Draft202012Validator.check_schema(need_schema)
+                except Exception as exc:
+                    raise PlanValidationError(f"binding need schema is invalid: {exc}") from exc
             resolution = resolution_map.get(binding.need_task_id)
             if resolution is None or resolution.action.value != "continue_with_tasks":
                 raise PlanValidationError("binding need task must be continued with replacement tasks")
@@ -663,7 +699,10 @@ class GraphOrchestrator:
                         parent_entity_type="step",
                         parent_entity_id=current_step_id,
                         agent_slug=str(task_executor or "agent"),
-                        status="completed" if result.outcome.value == "completed" else "failed",
+                        # The agent did execute and returned a declaration.
+                        # Business fulfillment belongs to task outcome, not
+                        # the health of the agent process.
+                        status="completed",
                         outcome=result.outcome.value,
                         plan_id=str(plan_id), iteration_id=iteration_id,
                         task_entity_id=task_entity_id, attempt_id=current_attempt_id,
@@ -672,7 +711,7 @@ class GraphOrchestrator:
                         attempt=attempt,
                     ))
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(
-                        step_id=current_step_id, iteration_id=iteration_id, status="completed" if result.outcome.value == "completed" else "failed",
+                        step_id=current_step_id, iteration_id=iteration_id, status="completed",
                         outcome=result.outcome.value, summary=result.description,
                         plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
                         attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,

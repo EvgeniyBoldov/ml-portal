@@ -146,6 +146,8 @@ class AgentService:
                 # Safety prompt constraints
                 "never_do": version.never_do,
                 "allowed_ops": version.allowed_ops,
+                "task_contracts": list(getattr(version, "task_contracts", None) or []),
+                "supports_dynamic_contracts": bool(getattr(version, "supports_dynamic_contracts", True)),
                 # Meta
                 "notes": version.notes,
                 "created_at": version.created_at,
@@ -307,7 +309,7 @@ class AgentService:
         "identity", "mission", "scope", "rules", "tool_use_rules",
         "output_format", "examples", "short_info",
         "never_do", "allowed_ops",
-        "tags",
+        "tags", "task_contracts", "supports_dynamic_contracts",
     ]
 
     async def _create_version_for_agent(
@@ -466,6 +468,8 @@ class AgentService:
                 "description": description,
                 "tags": list(getattr(agent, "tags", None) or []),
                 "provides_keys": list(getattr(agent, "provides_keys", None) or []),
+                "task_contracts": list(getattr(version, "task_contracts", None) or []),
+                "supports_dynamic_contracts": bool(getattr(version, "supports_dynamic_contracts", True)),
             })
         return items
 

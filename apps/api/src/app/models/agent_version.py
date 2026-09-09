@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Optional, List
 
 from sqlalchemy import String, DateTime, Text, Integer, Boolean, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -74,6 +74,11 @@ class AgentVersion(Base):
     # ── Routing (for agent router) ────────────────────────────────────────
     short_info: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tags: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)
+
+    # Published execution contracts are versioned with the prompt. The planner
+    # sees only these declarations and cannot invent a brittle source schema.
+    task_contracts: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="'[]'::jsonb")
+    supports_dynamic_contracts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
     parent_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

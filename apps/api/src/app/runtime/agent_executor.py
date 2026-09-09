@@ -347,7 +347,11 @@ class AgentExecutor:
                 ctx.extra["agent_execution_failure"] = {
                     "code": "agent_task_completion_invalid",
                     "message": str(exc),
-                    "retryable": True,
+                    # Tool execution is already complete. Replaying it after
+                    # an exhausted declaration-only retry is unsafe and cannot
+                    # repair a deterministic contract mismatch.
+                    "retryable": False,
+                    "details": {"retry_scope": "commit"},
                 }
             else:
                 verified = self._verified_task_result(
@@ -440,12 +444,14 @@ class AgentExecutor:
         failure = ctx.extra.pop("agent_execution_failure", None)
         if isinstance(failure, dict):
             retry_after_ms = failure.get("retry_after_ms")
+            details = dict(failure.get("details") or {})
+            if isinstance(retry_after_ms, int) and retry_after_ms > 0:
+                details["retry_after_ms"] = retry_after_ms
             raise TaskExecutionError(
                 code=str(failure.get("code") or "agent_failed"),
                 message=str(failure.get("message") or "Task execution failed"),
                 retryable=bool(failure.get("retryable")),
-                details={"retry_after_ms": retry_after_ms}
-                if isinstance(retry_after_ms, int) and retry_after_ms > 0 else {},
+                details=details,
             )
         execution = ctx.extra.pop("agent_execution_result", None)
         verified = ctx.extra.pop("agent_execution_verified", {})
@@ -772,10 +778,10 @@ class AgentExecutor:
             "[Terminal task completion declaration]",
             "Return exactly one JSON object and no prose or markdown.",
             "The runtime owns tool execution, evidence and artifact storage. Do not copy raw tool results into outputs.",
-            "Use direct output values: outputs.<key> is the value itself, never {data,text,artifacts}.",
-            "Select only relevant runtime results with evidence_selections=[{result_ref,output_keys,description}] and relevant files with artifact_selections=[{artifact_ref,output_key,description}].",
+            "Each outputs.<key> is a typed slot: {kind:'value',value:<value>}, {kind:'evidence',refs:[result_ref]}, or {kind:'artifact',refs:[artifact_ref]} exactly as required by that output.",
+            "Do not copy raw tool results into value slots; reference runtime evidence or artifacts by their runtime-issued refs.",
             "completion is fulfilled, needs, or unfulfillable. fulfilled requires every required output; needs requires non-empty needs; unfulfillable requires limitation.",
-            "Required fields are completion, report, outputs, evidence_selections, artifact_selections, and needs. limitation is required only for unfulfillable.",
+            "Required fields are completion, report, outputs, and needs. limitation is required only for unfulfillable.",
             "A need has ref, key, kind (data|artifact|decision), description, schema, required, and context.",
         ]
         if task.expected_outputs:
@@ -799,8 +805,9 @@ class AgentExecutor:
             "# RUNTIME TASK COMPLETION DECLARATION\n"
             "This contract overrides any conflicting output format. Return one strict JSON object only. "
             "The runtime, not the agent, executes tools and owns their evidence and artifacts. "
-            "outputs is a JSON object of direct values keyed by expected output key: never use data/text/artifacts wrappers. "
-            "Select relevant runtime evidence only via evidence_selections ({result_ref,output_keys,description}) and artifacts only via artifact_selections ({artifact_ref,output_key,description}). "
+            "outputs is a JSON object keyed by expected output key. Each value is exactly one typed slot: "
+            "{kind:'value',value:<schema-validated value>}, {kind:'evidence',refs:[result_ref]}, or "
+            "{kind:'artifact',refs:[artifact_ref]}. Never copy raw tool payloads into a value slot. "
             "Use completion=fulfilled only when required outputs are present; completion=needs only with non-empty needs; completion=unfulfillable only with limitation. "
             f"Expected outputs (including required/schema): {expected}. "
             "Your declaration must conform to this JSON Schema: "

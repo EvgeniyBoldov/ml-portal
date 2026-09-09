@@ -9,6 +9,7 @@ from app.runtime.orchestrator_contracts import (
     EvidenceSelection, TaskCompletionDeclaration, IterationProposal, NeedBinding, PlannedTask,
     TaskRequest, TaskResolution, TerminalKind,
 )
+from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.plan_store import InMemoryPlanStore, PlanValidationError
 from app.runtime.synthesis_context import SynthesisContextBuilder
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
@@ -36,7 +37,7 @@ def test_agent_receives_task_inputs_and_complete_output_contract() -> None:
     assert '"project_key": "project-1"' in message
     assert "Structured finding" in message
     assert '"required": ["name"]' in message
-    assert "direct output values" in message
+    assert "typed slot" in message
 
 
 def test_partial_artifact_is_runtime_verified_before_synthesis() -> None:
@@ -84,20 +85,25 @@ def test_output_schema_uses_full_json_schema_validation() -> None:
     )
 
 
-def test_reducer_drops_undeclared_outputs_and_validates_text_as_bound_value() -> None:
+def test_planner_schema_preserves_terminal_conditionality_for_the_provider() -> None:
+    schema = StructuredLLMCall._compact_response_schema(IterationProposal.model_json_schema())
+    assert any(item.get("then", {}).get("required") == ["synthesis_brief"] for item in schema["allOf"])
+
+
+def test_reducer_rejects_undeclared_output_slots() -> None:
     request = _task(expected_outputs=[{
         "key": "name", "description": "Name", "schema": {"type": "string"},
     }])
     execution = TaskCompletionDeclaration(
         completion="fulfilled",
         report="done",
-        outputs={"name": "Alice", "internal": "must not escape"},
+        outputs={"name": {"kind": "value", "value": "Alice"}, "internal": {"kind": "value", "value": "must not escape"}},
     )
 
     result = TaskAttemptResultReducer().reduce(request=request, declaration=execution, verified={})
 
-    assert result.outcome.value == "completed"
-    assert set(result.outputs) == {"name"}
+    assert result.outcome.value == "unfulfillable"
+    assert result.reason_code == "output_contract_invalid"
 
 
 def test_verified_receipt_must_match_the_declared_operation() -> None:
@@ -106,8 +112,7 @@ def test_verified_receipt_must_match_the_declared_operation() -> None:
         "fulfillment": "verified_receipt", "receipt_operations": ["file.generate"],
     }])
     execution = TaskCompletionDeclaration(
-        completion="fulfilled", report="done", outputs={},
-        evidence_selections=[EvidenceSelection(result_ref="result_1", description="write receipt")],
+        completion="fulfilled", report="done", outputs={"write": {"kind": "evidence", "refs": ["result_1"]}},
     )
 
     rejected = TaskAttemptResultReducer().reduce(request=request, declaration=execution, verified={"receipts": [{"result_ref": "result_1", "operation": "file.read"}]})
@@ -149,7 +154,7 @@ def test_artifact_outputs_have_one_runtime_owned_owner() -> None:
         })
 
 
-def test_binding_schema_must_match_the_discovered_need() -> None:
+def test_binding_schema_is_validated_against_the_actual_value_at_handoff() -> None:
     proposal = IterationProposal(
         terminal=TerminalKind.PLANNER,
         tasks=[
@@ -161,8 +166,20 @@ def test_binding_schema_must_match_the_discovered_need() -> None:
     )
     ledger = {"tasks": [{"task_id": "old", "status": "needs_dependency", "result": {"outputs": {}}}], "resolutions": [], "needs": [{"task_id": "old", "ref": "missing", "schema": {"type": "integer"}}]}
 
-    with pytest.raises(PlanValidationError, match="schema"):
-        GraphOrchestrator._compile(proposal, [{"slug": "research"}], ledger)
+    # Schema documents need not be byte-for-byte equal. The runtime validates
+    # the concrete producer output against the consumer's need at handoff.
+    GraphOrchestrator._compile(proposal, [{"slug": "research"}], ledger)
+
+    store = InMemoryPlanStore()
+    plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
+    plan["tasks"] = {
+        "producer": {"result": {"outputs": {"value": "not-an-integer"}}},
+        "consumer": {"task_id": "consumer", "executor": "research", "intent": "use", "instructions": "use", "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory"},
+    }
+    plan["needs"] = [{"task_id": "old", "ref": "missing", "schema": {"type": "integer"}}]
+    plan["bindings"] = [{"need_task_id": "old", "need_ref": "missing", "producer_task_id": "producer", "output_key": "value", "consumer_task_id": "consumer", "consumer_input_key": "value"}]
+    with pytest.raises(PlanValidationError, match="does not satisfy"):
+        store.task_request(plan["id"], "consumer")
 
 
 def test_completed_task_resolution_is_ignored_when_planner_moves_to_synthesis() -> None:

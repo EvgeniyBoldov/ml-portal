@@ -113,6 +113,8 @@ class AgentVersionCreate(BaseModel):
     never_do: Optional[str] = Field(default=None, description="Explicit prohibitions")
     allowed_ops: Optional[str] = Field(default=None, description="Allowed operations")
     tags: Optional[List[str]] = Field(default=None, description="Version-specific tags")
+    task_contracts: Optional[List[Dict[str, Any]]] = Field(default=None, description="Published named task contracts")
+    supports_dynamic_contracts: Optional[bool] = Field(default=None, description="Allow compiler-validated dynamic contracts")
     # Meta
     notes: Optional[str] = None
     parent_version_id: Optional[UUID] = Field(default=None, description="Parent version ID for data inheritance")
@@ -132,6 +134,8 @@ class AgentVersionUpdate(BaseModel):
     never_do: Optional[str] = None
     allowed_ops: Optional[str] = None
     tags: Optional[List[str]] = None
+    task_contracts: Optional[List[Dict[str, Any]]] = None
+    supports_dynamic_contracts: Optional[bool] = None
     # Meta
     notes: Optional[str] = None
 
@@ -154,6 +158,8 @@ class AgentVersionResponse(BaseModel):
     never_do: Optional[str] = None
     allowed_ops: Optional[str] = None
     tags: Optional[List[str]] = None
+    task_contracts: List[Dict[str, Any]] = Field(default_factory=list)
+    supports_dynamic_contracts: bool = True
     # Meta
     parent_version_id: Optional[UUID] = None
     notes: Optional[str] = None
