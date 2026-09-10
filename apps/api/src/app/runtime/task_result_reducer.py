@@ -24,7 +24,7 @@ class TaskAttemptResultReducer:
         if declaration.completion_claim == AgentExecutionCompletion.UNFULFILLABLE:
             return TaskResult(outcome=TaskOutcome.UNFULFILLABLE, description=declaration.report, outputs=outputs, output_states=states, limitation=declaration.limitation, verified=verified, evidence_selections=evidence, artifact_selections=artifacts)
         if request.freshness_policy == FreshnessPolicy.REQUIRE_RETRIEVAL and not verified.get("fresh_retrieval"):
-            return TaskResult(outcome=TaskOutcome.NEEDS_DEPENDENCY, description=declaration.report, outputs=outputs, output_states=states, needs=[DiscoveredNeed(ref="fresh_retrieval", key="fresh_retrieval", kind="data", description="A successful compatible retrieval is required for this task attempt.")], reason_code="fresh_retrieval_missing", verified=verified, evidence_selections=evidence, artifact_selections=artifacts)
+            return self._unfulfillable(declaration, outputs, states, verified, evidence, artifacts, "fresh_retrieval_missing", "A fulfilled declaration requires a successful fresh retrieval receipt.")
         required_operations = self._required_retrieval_operations(request)
         observed_operations = {
             str(item.get("canonical_operation") or item.get("operation") or "")
@@ -32,22 +32,10 @@ class TaskAttemptResultReducer:
             if isinstance(item, dict)
         }
         if required_operations and not required_operations.issubset(observed_operations):
-            return TaskResult(
-                outcome=TaskOutcome.NEEDS_DEPENDENCY,
-                description=declaration.report,
-                outputs=outputs,
-                output_states=states,
-                needs=[DiscoveredNeed(
-                    ref="required_retrieval_operation",
-                    key="required_retrieval_operation",
-                    kind="data",
-                    description="The task requires retrieval by the exact operation: " + ", ".join(sorted(required_operations)),
-                    context={"required_operations": sorted(required_operations)},
-                )],
-                reason_code="required_retrieval_operation_missing",
-                verified=verified,
-                evidence_selections=evidence,
-                artifact_selections=artifacts,
+            return self._unfulfillable(
+                declaration, outputs, states, verified, evidence, artifacts,
+                "required_retrieval_operation_missing",
+                "A fulfilled declaration requires receipts from: " + ", ".join(sorted(required_operations)),
             )
         if invalid:
             return self._unfulfillable(declaration, outputs, states, verified, evidence, artifacts, "output_contract_invalid", "Invalid task output slots: " + ", ".join(invalid))
@@ -59,7 +47,10 @@ class TaskAttemptResultReducer:
     def _required_retrieval_operations(request: TaskRequest) -> set[str]:
         """Bind well-known entity identifiers to their authoritative read."""
         inputs = request.inputs if isinstance(request.inputs, dict) else {}
-        if str(inputs.get("jira_task_id") or inputs.get("issue_key") or "").strip():
+        explicit = inputs.get("required_retrieval_operations")
+        if isinstance(explicit, list):
+            return {str(operation).strip() for operation in explicit if str(operation).strip()}
+        if str(inputs.get("jira_task_id") or inputs.get("issue_key") or inputs.get("jira_key") or "").strip():
             return {"jira_get_issue"}
         return set()
 

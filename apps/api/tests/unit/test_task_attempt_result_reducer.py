@@ -37,7 +37,7 @@ def test_schema_rejects_wrong_direct_output_value() -> None:
 
 def test_freshness_is_verified_by_runtime() -> None:
     result = _reduce(_request(freshness_policy="require_retrieval"), _declaration())
-    assert result.outcome is TaskOutcome.NEEDS_DEPENDENCY
+    assert result.outcome is TaskOutcome.UNFULFILLABLE
     assert result.reason_code == "fresh_retrieval_missing"
 
 
@@ -53,7 +53,7 @@ def test_named_jira_issue_requires_jira_get_issue_receipt() -> None:
         declaration,
         {"fresh_retrieval": True, "receipts": [{"canonical_operation": "jira_search_issues"}]},
     )
-    assert result.outcome is TaskOutcome.NEEDS_DEPENDENCY
+    assert result.outcome is TaskOutcome.UNFULFILLABLE
     assert result.reason_code == "required_retrieval_operation_missing"
 
     result = _reduce(
@@ -62,6 +62,31 @@ def test_named_jira_issue_requires_jira_get_issue_receipt() -> None:
         {"fresh_retrieval": True, "receipts": [{"canonical_operation": "jira_get_issue"}]},
     )
     assert result.outcome is TaskOutcome.COMPLETED
+
+
+def test_explicit_required_operations_override_identifier_heuristics() -> None:
+    request = _request(
+        inputs={"required_retrieval_operations": ["jira_get_issue"]},
+        freshness_policy="require_retrieval",
+    )
+    result = _reduce(
+        request,
+        _declaration(),
+        {"fresh_retrieval": True, "receipts": [{"canonical_operation": "jira_search_issues"}]},
+    )
+    assert result.outcome is TaskOutcome.UNFULFILLABLE
+    assert result.reason_code == "required_retrieval_operation_missing"
+
+
+def test_jira_key_requires_authoritative_issue_receipt() -> None:
+    request = _request(inputs={"jira_key": "NIMS-3451"}, freshness_policy="require_retrieval")
+    result = _reduce(
+        request,
+        _declaration(),
+        {"fresh_retrieval": True, "receipts": [{"canonical_operation": "jira_search_issues"}]},
+    )
+    assert result.outcome is TaskOutcome.UNFULFILLABLE
+    assert result.reason_code == "required_retrieval_operation_missing"
 
 
 def test_needs_is_not_a_successful_task() -> None:

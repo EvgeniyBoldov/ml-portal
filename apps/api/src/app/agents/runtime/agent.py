@@ -372,7 +372,7 @@ class AgentToolRuntime(BaseRuntime):
         # same call id so one user-visible request remains one journal entity.
         pending_llm_call_id: Optional[str] = None
         pending_logical_llm_call_id: Optional[str] = None
-        freshness_reminder_sent = False
+        terminal_contract_correction_sent = False
         require_retrieval = str(ctx.extra.get("task_freshness_policy") or "allow_memory") == "require_retrieval"
 
         def has_fresh_retrieval_receipt() -> bool:
@@ -452,7 +452,6 @@ class AgentToolRuntime(BaseRuntime):
                         )
                         tools_payload = build_tools_payload(prompt_visible_operations)
                     if native_tool_calling and tools_payload:
-                        terminal_response_format = ctx.extra.get("task_completion_response_format")
                         raw_response_dict = await self.llm.call_raw(
                             messages=llm_messages,
                             model=gen.model,
@@ -461,7 +460,11 @@ class AgentToolRuntime(BaseRuntime):
                             tools=tools_payload,
                             force_tool_choice=loop_state.force_tool_choice,
                             timeout_s=gen.timeout_s,
-                            response_format=terminal_response_format,
+                            # A provider cannot reliably choose between a native
+                            # tool call and a forced JSON-schema answer.  The
+                            # terminal declaration is validated by the task
+                            # runtime only after the model elects to stop.
+                            response_format=None,
                         )
                         loop_state.force_tool_choice = False
                         raw_response = self.llm.normalize_response(raw_response_dict)
@@ -728,29 +731,39 @@ class AgentToolRuntime(BaseRuntime):
                     parsed = parse_llm_response(raw_response, strict=strict_protocol)
 
                 if not parsed.has_tool_calls:
-                    # A task may answer from the bounded memory/dependency
-                    # context even when operations happen to be available.
-                    # Freshness is the only exception, and gets exactly one
-                    # targeted opportunity to retrieve before runtime decides
-                    # that the business dependency is unavailable.
-                    if require_retrieval and not freshness_reminder_sent and not has_fresh_retrieval_receipt():
-                        freshness_reminder_sent = True
+                    # Do not force a tool call merely because tools exist: the
+                    # agent owns the terminal choice.  A fulfilled declaration
+                    # that contradicts require_retrieval gets one correction
+                    # turn; the agent may then use a tool, ask for a need, or
+                    # declare the task unfulfillable.
+                    completion_claim = None
+                    try:
+                        candidate = json.loads(parsed.text)
+                        if isinstance(candidate, dict):
+                            completion_claim = candidate.get("completion")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        pass
+                    if (
+                        require_retrieval
+                        and completion_claim == "fulfilled"
+                        and not terminal_contract_correction_sent
+                        and not has_fresh_retrieval_receipt()
+                    ):
+                        terminal_contract_correction_sent = True
                         llm_messages.append({"role": "assistant", "content": raw_response})
                         llm_messages.append({
                             "role": "user",
-                            "content": "This task requires fresh retrieval. Use an available retrieval operation now; memory and prior context alone cannot complete it.",
+                            "content": "Your fulfilled declaration cannot be accepted: this task requires fresh retrieval and no successful retrieval receipt exists. Reconsider the next step. You may call an available operation, return needs if external data is missing, or return unfulfillable with a limitation.",
                         })
-                        if native_tool_calling:
-                            loop_state.force_tool_choice = True
                         pending_llm_call_id = llm_call_id
                         pending_logical_llm_call_id = logical_llm_call_id
                         await run_session.record_event("protocol_retry", {
                             "step": step + 1,
-                            "reason": "fresh_retrieval_required",
+                            "reason": "terminal_contract_correction",
                             "llm_call_id": llm_call_id,
                             "logical_llm_call_id": logical_llm_call_id,
                         })
-                        yield RuntimeEvent(RuntimeEventType.PROTOCOL_RETRY, {"reason": "fresh_retrieval_required"})
+                        yield RuntimeEvent(RuntimeEventType.PROTOCOL_RETRY, {"reason": "terminal_contract_correction"})
                         continue
                     # No operation calls — agent decided to answer directly
                     await ctx.log_intent(

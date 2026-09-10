@@ -185,9 +185,9 @@ class AgentExecutor:
         )
         ctx.extra["task_freshness_policy"] = task.freshness_policy.value
         ctx.extra["task_freshness_phase_id"] = task.task_id
-        # The terminal declaration is a runtime contract, so expose its JSON
-        # schema to the agent runtime.  It is used as provider-native
-        # structured output after retrieval, never as prompt-only guidance.
+        # The terminal declaration is a runtime contract.  It is deliberately
+        # not passed as provider-native response_format while tools are
+        # available: that conflicts with native tool selection.
         ctx.extra["task_completion_response_format"] = {
             "type": "json_schema",
             "json_schema": {
@@ -199,9 +199,8 @@ class AgentExecutor:
         ledger_start = len(state.tool_ledger.entries)
 
         # Published agent versions may still contain a legacy output-format
-        # instruction (for example, return a bare download URL).  A graph task
-        # has a stricter runtime-owned terminal protocol, so append it to the
-        # system prompt where it takes precedence over that stale instruction.
+        # instruction.  Add the runtime contract, but make it conditional on
+        # the agent deciding that this is its terminal turn.
         sub_request.prompt = self._with_terminal_contract_prompt(sub_request.prompt, task)
 
         # Do not spend LLM calls when planner chose CALL_AGENT,
@@ -670,7 +669,7 @@ class AgentExecutor:
 
         output_contract = [
             "[Terminal task completion declaration]",
-            "Return exactly one JSON object and no prose or markdown.",
+            "Only when you decide to finish the task, return exactly one JSON object and no prose or markdown. Tool calls are intermediate steps, not this declaration.",
             "The runtime owns tool execution, evidence and artifact storage. For a task_result output, return a normalized value derived from observed tool data; do not paste an unbounded raw payload.",
             "Each outputs.<key> is a typed slot: {kind:'value',value:<value>}, {kind:'evidence',refs:[result_ref]}, or {kind:'artifact',refs:[artifact_ref]} exactly as required by that output.",
             "Use evidence or artifact refs only for outputs whose fulfillment requires them; task_result outputs require a value slot.",
@@ -697,7 +696,8 @@ class AgentExecutor:
         return "\n\n".join(part for part in [
             str(prompt or "").strip(),
             "# RUNTIME TASK COMPLETION DECLARATION\n"
-            "This contract overrides any conflicting output format. Return one strict JSON object only. "
+            "When you decide the task is complete, this contract overrides any conflicting output format and you must return one strict JSON object only. "
+            "Before that, use native tool calls whenever you decide they are needed; tool calls are not terminal declarations. "
             "The runtime, not the agent, executes tools and owns their evidence and artifacts. "
             "outputs is a JSON object keyed by expected output key. Each value is exactly one typed slot: "
             "{kind:'value',value:<schema-validated value>}, {kind:'evidence',refs:[result_ref]}, or "
