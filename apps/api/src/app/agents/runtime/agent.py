@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import re
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -373,6 +374,7 @@ class AgentToolRuntime(BaseRuntime):
         pending_llm_call_id: Optional[str] = None
         pending_logical_llm_call_id: Optional[str] = None
         terminal_contract_correction_sent = False
+        terminal_json_correction_sent = False
         require_retrieval = str(ctx.extra.get("task_freshness_policy") or "allow_memory") == "require_retrieval"
 
         def has_fresh_retrieval_receipt() -> bool:
@@ -736,6 +738,33 @@ class AgentToolRuntime(BaseRuntime):
                     # that contradicts require_retrieval gets one correction
                     # turn; the agent may then use a tool, ask for a need, or
                     # declare the task unfulfillable.
+                    terminal_response_format = ctx.extra.get("task_completion_response_format")
+                    if (
+                        terminal_response_format
+                        and not terminal_json_correction_sent
+                        and not self._looks_like_task_completion_declaration(raw_response)
+                    ):
+                        terminal_json_correction_sent = True
+                        native_tool_calling = False
+                        llm_messages.append({"role": "assistant", "content": raw_response})
+                        llm_messages.append({
+                            "role": "user",
+                            "content": (
+                                "Your previous response was not a valid terminal task declaration. "
+                                "Return exactly one JSON object conforming to the runtime task completion schema. "
+                                "Do not include prose, Markdown, or a code fence."
+                            ),
+                        })
+                        pending_llm_call_id = llm_call_id
+                        pending_logical_llm_call_id = logical_llm_call_id
+                        await run_session.record_event("protocol_retry", {
+                            "step": step + 1,
+                            "reason": "terminal_json_correction",
+                            "llm_call_id": llm_call_id,
+                            "logical_llm_call_id": logical_llm_call_id,
+                        })
+                        yield RuntimeEvent(RuntimeEventType.PROTOCOL_RETRY, {"reason": "terminal_json_correction"})
+                        continue
                     completion_claim = None
                     try:
                         candidate = json.loads(parsed.text)
@@ -1408,6 +1437,25 @@ class AgentToolRuntime(BaseRuntime):
                 all_sources,
                 run_id=str(run_session.run_id or exec_request.run_id),
             )
+
+    @staticmethod
+    def _looks_like_task_completion_declaration(raw: str) -> bool:
+        """Check whether a no-tool response at least has terminal JSON shape."""
+        text = str(raw or "").strip()
+        fenced = re.fullmatch(
+            r"```[ \t]*(?:json)?[ \t]*\r?\n(?P<payload>.*?)\r?\n?```",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if fenced:
+            text = fenced.group("payload").strip()
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        return isinstance(payload, dict) and all(
+            key in payload for key in ("completion", "report", "outputs", "needs")
+        )
 
     async def _synthesize_answer(
         self,

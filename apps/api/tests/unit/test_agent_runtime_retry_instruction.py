@@ -7,6 +7,16 @@ from app.agents.context import ToolCall, ToolResult
 from types import SimpleNamespace
 
 
+def test_terminal_declaration_shape_detection_accepts_json_and_fence():
+    declaration = '{"completion":"fulfilled","report":"ok","outputs":{},"needs":[]}'
+    assert AgentToolRuntime._looks_like_task_completion_declaration(declaration)
+    assert AgentToolRuntime._looks_like_task_completion_declaration(f"```json\n{declaration}\n```")
+
+
+def test_terminal_declaration_shape_detection_rejects_prose():
+    assert not AgentToolRuntime._looks_like_task_completion_declaration("Доступны коллекции: Jira и DCBox")
+
+
 def test_required_operation_retry_instruction_uses_default():
     text = AgentToolRuntime._required_operation_retry_instruction(
         platform_config={},
