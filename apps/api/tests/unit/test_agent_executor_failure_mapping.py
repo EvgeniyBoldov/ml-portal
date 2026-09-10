@@ -7,7 +7,12 @@ import pytest
 
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.events import RuntimeEvent
-from app.runtime.orchestrator_contracts import TaskCompletionDeclaration, TaskExecutionError, TaskRequest
+from app.runtime.orchestrator_contracts import (
+    TaskCompletionDeclaration,
+    TaskExecutionError,
+    TaskRequest,
+    parse_task_completion_declaration,
+)
 
 
 def _request() -> TaskRequest:
@@ -62,9 +67,30 @@ async def test_missing_terminal_declaration_is_not_retryable() -> None:
 
 
 def test_terminal_schema_rejects_unknown_output_fields() -> None:
-    from app.runtime.orchestrator_contracts import parse_task_completion_declaration
     with pytest.raises(ValueError):
         parse_task_completion_declaration('{"completion":"fulfilled","report":"ready","outputs":{},"needs":[],"checkpoint":{}}')
+
+
+def test_terminal_declaration_accepts_a_standalone_json_fence() -> None:
+    raw = """```json
+{"completion":"fulfilled","report":"ready","outputs":{},"needs":[]}
+```"""
+
+    declaration = parse_task_completion_declaration(
+        AgentExecutor._unwrap_terminal_json_fence(raw)
+    )
+
+    assert declaration.completion_claim == "fulfilled"
+
+
+def test_terminal_declaration_does_not_accept_prose_around_json_fence() -> None:
+    raw = """Here is the result:
+```json
+{"completion":"fulfilled","report":"ready","outputs":{},"needs":[]}
+```"""
+
+    with pytest.raises(ValueError):
+        parse_task_completion_declaration(AgentExecutor._unwrap_terminal_json_fence(raw))
 
 
 def test_terminal_prompt_can_build_task_schema() -> None:

@@ -338,7 +338,9 @@ class AgentExecutor:
             }
         else:
             try:
-                execution = parse_task_completion_declaration(raw_summary)
+                execution = parse_task_completion_declaration(
+                    self._unwrap_terminal_json_fence(raw_summary)
+                )
             except ValueError as exc:
                 ctx.extra["agent_execution_failure"] = {
                     "code": "agent_task_completion_invalid",
@@ -724,6 +726,23 @@ class AgentExecutor:
             if isinstance(parsed, dict):
                 return parsed
         return {}
+
+    @staticmethod
+    def _unwrap_terminal_json_fence(raw: str) -> str:
+        """Accept a single Markdown JSON fence as terminal-response transport.
+
+        The task contract remains strict JSON semantically. Some providers still
+        wrap an otherwise valid terminal declaration in a Markdown ``json`` code
+        fence, however. Unwrap only a complete, standalone fence; prose or other
+        surrounding content must continue to fail contract validation.
+        """
+        text = str(raw or "").strip()
+        match = re.fullmatch(
+            r"```[ \t]*(?:json)?[ \t]*\r?\n(?P<payload>.*?)\r?\n?```",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        return match.group("payload").strip() if match else text
 
     @staticmethod
     def _parse_needs_from_content(raw: str) -> List[DiscoveredNeed]:
