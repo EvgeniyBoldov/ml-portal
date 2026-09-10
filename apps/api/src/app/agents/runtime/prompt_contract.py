@@ -134,7 +134,8 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
     elif canonical == "collection.template.fill":
         notes.append("row_id must come from collection.template.list")
         notes.append("call collection.template.get_schema first and use the exact field keys it returns")
-        notes.append("map every value explicitly supplied by the user to its matching schema field; never omit request_type or other populated fields")
+        notes.append("map every value explicitly supplied by the user to its matching schema field")
+        notes.append("after fill, inspect missing_placeholders and correct any user-supplied field that remains unfilled")
         notes.append("this operation already creates the final downloadable file")
         notes.append("after success, return the resulting artifact_id and do not call file.generate")
         notes.append("do not invent row_id")

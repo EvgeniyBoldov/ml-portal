@@ -97,6 +97,7 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     assert call["options"].timeout_s == 30
     assert call["messages"][0]["content"].startswith("SYNTH-PROMPT")
     assert "Сгенерированные файлы доставляются интерфейсом отдельными вложениями" in call["messages"][0]["content"]
+    assert "Никогда не придумывай имя, формат или содержимое файла" in call["messages"][0]["content"]
     assert events[0].type.value == "synthesis_start"
     assert any(ev.type.value == "status" for ev in events)
     assert events[-2].type.value == "final"

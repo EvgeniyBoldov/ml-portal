@@ -320,26 +320,7 @@ class GraphOrchestrator:
             if task.contract.mode == TaskContractMode.DYNAMIC:
                 if not bool(agent.get("supports_dynamic_contracts", True)):
                     raise PlanValidationError(f"agent {task.executor} does not support dynamic task contracts")
-                # Template filling creates a chat artifact as its primary
-                # result.  Older planner responses described that artifact as
-                # a plain string (usually the artifact_id), which made the
-                # reducer drop it before synthesis and left the final event
-                # without attachments.  Freeze the correct fulfillment at
-                # compile time so delivery does not depend on LLM wording.
-                if task.executor == "technical_writer" and task.intent == "fill_application_form":
-                    expected_outputs = [
-                        output.model_copy(update={
-                            "fulfillment": TaskOutputFulfillment.ARTIFACT,
-                            "json_schema": {},
-                        })
-                        if output.key in {"filled_form", "filled_file", "artifact"}
-                        else output
-                        for output in task.expected_outputs
-                    ]
-                else:
-                    expected_outputs = task.expected_outputs
                 compiled_tasks.append(task.model_copy(update={
-                    "expected_outputs": expected_outputs,
                     "freshness_policy": FreshnessPolicy.REQUIRE_RETRIEVAL
                     if requires_retrieval else task.freshness_policy,
                 }))

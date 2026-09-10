@@ -69,27 +69,14 @@ class SynthesisContextBuilder:
                 reports.append({"task_id": task_id, "intent": self._redact(task.get("intent")), "description": self._redact(description or "Accepted partial output."), "outputs": self._redact(selected)})
                 verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
                 if status == TaskStatus.COMPLETED.value:
-                    selected_refs = {
-                        str(selection.get("artifact_ref") or "")
-                        for selection in result.get("artifact_selections") or []
-                        if isinstance(selection, dict)
-                    }
-                    verified_artifacts = [
-                        artifact for artifact in verified.get("artifacts") or []
-                        if isinstance(artifact, dict)
-                    ]
-                    # A generated file is runtime-owned evidence.  Keep it
-                    # deliverable even for legacy task results that returned
-                    # its artifact_id as a value instead of selecting an
-                    # explicit artifact slot.  This preserves downloads while
-                    # the planner contract is being migrated.
-                    artifacts.extend(self._artifact_projection(
-                        [
-                            artifact for artifact in verified_artifacts
-                            if not selected_refs
-                            or str(artifact.get("artifact_ref") or artifact.get("artifact_id") or "") in selected_refs
-                        ]
-                    ))
+                    # Artifacts are created and verified by the runtime, not
+                    # by the model.  File delivery must therefore be derived
+                    # from every successful task's verified artifacts, rather
+                    # than from an LLM-selected output slot.  The task output
+                    # contract remains responsible only for task semantics;
+                    # it cannot make a real generated file disappear before
+                    # the UI can attach it.
+                    artifacts.extend(self._artifact_projection(verified.get("artifacts")))
                     sources.extend(self._source_projection(verified.get("sources")))
                 else:
                     artifacts.extend(self._artifact_projection([

@@ -41,7 +41,7 @@ def test_synthesis_does_not_deliver_an_artifact_deleted_later_in_the_run() -> No
     assert context["artifacts"] == []
 
 
-def test_completed_legacy_task_artifact_is_carried_to_synthesis() -> None:
+def test_completed_task_generated_artifact_is_carried_to_synthesis() -> None:
     context = SynthesisContextBuilder().build(
         plan={
             "goal": "Сформировать файл",
@@ -51,9 +51,9 @@ def test_completed_legacy_task_artifact_is_carried_to_synthesis() -> None:
             }],
             "resolutions": [],
             "tasks": {"write": {
-                "iteration_id": "final", "planned_order": 0, "status": "completed", "intent": "fill_application_form",
+                "iteration_id": "final", "planned_order": 0, "status": "completed", "intent": "generate_report",
                 "result": {
-                    "description": "done", "outputs": {"filled_form": "artifact-1"},
+                    "description": "done", "outputs": {"summary": "done"},
                     "verified": {"artifacts": [{"artifact_id": "artifact-1", "artifact_ref": "artifact-1", "file_name": "filled.xlsx"}]},
                     "artifact_selections": [],
                 },

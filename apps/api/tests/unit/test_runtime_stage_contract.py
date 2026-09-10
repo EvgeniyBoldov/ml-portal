@@ -27,28 +27,6 @@ def test_synthesis_requires_brief_and_tasks_cannot_be_checkpoints() -> None:
         PlannedTask(task_id="work", executor="research", intent="work", instructions="work", kind="synthesis")
 
 
-def test_template_writer_tasks_publish_artifact_output() -> None:
-    proposal = IterationProposal(tasks=[PlannedTask(
-        task_id="fill", executor="technical_writer", intent="fill_application_form", instructions="fill",
-        expected_outputs=[{
-            "key": "filled_form", "description": "Completed form", "schema": {
-                "type": "object", "required": ["form_content"],
-                "properties": {"form_content": {"type": "string"}},
-            },
-        }],
-    )], terminal=TerminalKind.PLANNER)
-
-    compiled = GraphOrchestrator._compile(
-        proposal,
-        [{"slug": "technical_writer", "supports_dynamic_contracts": True}],
-        {"tasks": [], "needs": [], "resolutions": []},
-    )
-
-    output = compiled.tasks[0].expected_outputs[0]
-    assert output.fulfillment.value == "artifact"
-    assert output.json_schema == {}
-
-
 @pytest.mark.parametrize("field_name", ["raw_content", "raw_data", "raw_payload"])
 def test_output_contract_rejects_raw_transport_fields(field_name: str) -> None:
     with pytest.raises(ValueError, match="raw tool payload"):
