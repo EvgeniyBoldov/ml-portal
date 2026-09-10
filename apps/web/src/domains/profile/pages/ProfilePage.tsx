@@ -125,7 +125,13 @@ export default function ProfilePage() {
   // Fetch tokens
   const { data: tokens = [], isLoading: tokensLoading } = useQuery({
     queryKey: ['profile', 'tokens'],
-    queryFn: () => apiRequest<ApiToken[]>('/profile/tokens'),
+    queryFn: async () => {
+      const result = await apiRequest<unknown>('/profile/tokens');
+      if (!Array.isArray(result)) {
+        throw new Error('Некорректный формат ответа API токенов');
+      }
+      return result as ApiToken[];
+    },
   });
 
   // Create token mutation

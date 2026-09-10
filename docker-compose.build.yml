@@ -75,7 +75,10 @@ services:
       context: .
       dockerfile: infra/docker/frontend/Dockerfile.prod
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+        # The production nginx exposes the backend under /api/v1/.
+        # Using /api here makes frontend requests hit the SPA fallback and
+        # return index.html instead of JSON (e.g. /profile/tokens).
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
         VITE_APP_NAME: ${VITE_APP_NAME:-ML Portal}
         NODE_ENV: production
     image: ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/frontend:${APP_IMAGE_TAG:?APP_IMAGE_TAG is required}

@@ -66,6 +66,7 @@ release_phase_end
 release_phase_start "build service images"
 echo "Building service images with ${base_ref} and tag ${next_app_tag}"
 BUILDKIT_PROGRESS=plain BASE_IMAGE="$base_ref" IMAGE_REPOSITORY="$IMAGE_REPOSITORY" APP_IMAGE_TAG="$next_app_tag" \
+VITE_API_BASE_URL="/api/v1" \
   docker compose -f "${REPO_ROOT}/docker-compose.build.yml" build
 release_phase_end
 

@@ -24,6 +24,7 @@ test "$origin_tag" = "$APP_IMAGE_TAG" || fail "Local release.env is stale; expec
 
 BASE_IMAGE="${IMAGE_REPOSITORY}/base-ml:${BASE_IMAGE_TAG}" \
 IMAGE_REPOSITORY="$IMAGE_REPOSITORY" APP_IMAGE_TAG="$APP_IMAGE_TAG" \
+VITE_API_BASE_URL="/api/v1" \
   docker compose -f "${REPO_ROOT}/docker-compose.build.yml" config --quiet
 
 echo "Release checks passed. Current base input: $(base_input_sha)"
