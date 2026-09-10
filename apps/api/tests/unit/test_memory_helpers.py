@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.models.memory import FactScope
 from app.models.system_llm_role import SystemLLMRoleType
@@ -343,6 +344,15 @@ async def test_fact_extractor_keeps_tenant_glossary_candidate(extractor) -> None
     assert len(facts) == 1
     assert facts[0].kind == "glossary"
     assert facts[0].metadata["aliases"] == ["EVPN"]
+
+
+def test_fact_extractor_kind_is_a_strict_storage_route() -> None:
+    """Terms must be explicitly routed to glossary, never guessed from labels."""
+    with pytest.raises(ValidationError):
+        _LLMFactCandidate(
+            scope="tenant", kind="definition", subject="аварийная ситуация",
+            value="ситуация с вероятностью возникновения аварии", confidence=1.0,
+        )
 
 
 @pytest.mark.asyncio

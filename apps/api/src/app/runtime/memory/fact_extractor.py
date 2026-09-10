@@ -11,7 +11,7 @@ owns:
 from __future__ import annotations
 
 import re
-from typing import Any, Awaitable, Callable, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, List, Literal, Optional, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -38,7 +38,9 @@ class _LLMFactCandidate(BaseModel):
     subject: str
     value: str
     confidence: float = 1.0
-    kind: str = "fact"  # fact | glossary
+    # This is a routing contract, not free-form taxonomy: ``glossary`` is
+    # persisted in glossary_entries; ``fact`` is persisted in facts.
+    kind: Literal["fact", "glossary"] = "fact"
     project_key: Optional[str] = None
     project_aliases: List[str] = Field(default_factory=list)
     aliases: List[str] = Field(default_factory=list)
