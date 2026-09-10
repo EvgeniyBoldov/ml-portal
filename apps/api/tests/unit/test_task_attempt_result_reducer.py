@@ -126,6 +126,19 @@ def test_unknown_artifact_selection_fails_task() -> None:
     assert result.reason_code == "output_contract_invalid"
 
 
+def test_legacy_artifact_id_value_is_normalized_to_artifact_selection() -> None:
+    request = _request(expected_outputs=[TaskOutputSpec(
+        key="filled_form", description="Generated form", fulfillment=TaskOutputFulfillment.ARTIFACT,
+    )])
+    result = _reduce(
+        request,
+        _declaration(outputs={"filled_form": {"kind": "value", "value": "artifact-1"}}),
+        {"artifacts": [{"artifact_ref": "artifact-1", "artifact_id": "artifact-1", "file_name": "filled.xlsx"}]},
+    )
+    assert result.outcome is TaskOutcome.COMPLETED
+    assert result.artifact_selections[0].artifact_ref == "artifact-1"
+
+
 def test_nullable_value_is_not_treated_as_a_missing_output() -> None:
     request = _request(expected_outputs=[TaskOutputSpec(key="description", description="Description", schema={"type": ["string", "null"]})])
     result = _reduce(request, _declaration(outputs={"description": {"kind": "value", "value": None}}))

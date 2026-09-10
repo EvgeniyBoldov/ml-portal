@@ -122,12 +122,22 @@ class TaskAttemptResultReducer:
                 )
                 states[spec.key] = {"status": "fulfilled", "fulfillment": "verified_receipt", "refs": slot.refs}
                 continue
-            if not isinstance(slot, ArtifactOutputSlot) or any(ref not in artifacts for ref in slot.refs):
+            # Legacy template agents returned the runtime artifact_id in a
+            # value slot even though the output is semantically an artifact.
+            # Accept that exact observed reference and normalize it to the
+            # same runtime-owned artifact selection used by new agents.
+            if isinstance(slot, ValueOutputSlot) and isinstance(slot.value, str) and slot.value in artifacts:
+                artifact_refs = [slot.value]
+            elif isinstance(slot, ArtifactOutputSlot):
+                artifact_refs = list(slot.refs)
+            else:
+                artifact_refs = []
+            if not artifact_refs or any(ref not in artifacts for ref in artifact_refs):
                 invalid.append(spec.key)
-                states[spec.key] = {"status": "invalid", "reason": "artifact_not_verified", "refs": getattr(slot, "refs", [])}
+                states[spec.key] = {"status": "invalid", "reason": "artifact_not_verified", "refs": artifact_refs}
                 continue
-            artifact_selections.extend(ArtifactSelection(artifact_ref=ref, output_key=spec.key, description=spec.description) for ref in slot.refs)
-            states[spec.key] = {"status": "fulfilled", "fulfillment": "artifact", "refs": slot.refs}
+            artifact_selections.extend(ArtifactSelection(artifact_ref=ref, output_key=spec.key, description=spec.description) for ref in artifact_refs)
+            states[spec.key] = {"status": "fulfilled", "fulfillment": "artifact", "refs": artifact_refs}
 
         invalid.extend(sorted(set(declaration.outputs) - known_keys))
         return outputs, states, invalid, missing, evidence_selections, artifact_selections

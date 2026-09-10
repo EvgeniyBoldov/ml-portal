@@ -74,11 +74,22 @@ class SynthesisContextBuilder:
                         for selection in result.get("artifact_selections") or []
                         if isinstance(selection, dict)
                     }
-                    artifacts.extend(self._artifact_projection([
+                    verified_artifacts = [
                         artifact for artifact in verified.get("artifacts") or []
                         if isinstance(artifact, dict)
-                        and str(artifact.get("artifact_ref") or artifact.get("artifact_id") or "") in selected_refs
-                    ]))
+                    ]
+                    # A generated file is runtime-owned evidence.  Keep it
+                    # deliverable even for legacy task results that returned
+                    # its artifact_id as a value instead of selecting an
+                    # explicit artifact slot.  This preserves downloads while
+                    # the planner contract is being migrated.
+                    artifacts.extend(self._artifact_projection(
+                        [
+                            artifact for artifact in verified_artifacts
+                            if not selected_refs
+                            or str(artifact.get("artifact_ref") or artifact.get("artifact_id") or "") in selected_refs
+                        ]
+                    ))
                     sources.extend(self._source_projection(verified.get("sources")))
                 else:
                     artifacts.extend(self._artifact_projection([
