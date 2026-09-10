@@ -89,12 +89,18 @@ class TaskAttemptResultReducer:
                 continue
             slot = declaration.outputs[spec.key]
             if spec.fulfillment == TaskOutputFulfillment.TASK_RESULT:
-                if not isinstance(slot, ValueOutputSlot) or (spec.json_schema and not self._matches_schema(slot.value, spec.json_schema)):
+                value = slot.value if isinstance(slot, ValueOutputSlot) else None
+                normalized_from_null = False
+                if isinstance(slot, ValueOutputSlot) and spec.json_schema:
+                    value, normalized_from_null = self._coerce_absent_value(value, spec.json_schema)
+                if not isinstance(slot, ValueOutputSlot) or (spec.json_schema and not self._matches_schema(value, spec.json_schema)):
                     invalid.append(spec.key)
                     states[spec.key] = {"status": "invalid", "reason": "value_schema_invalid"}
                     continue
-                outputs[spec.key] = slot.value
+                outputs[spec.key] = value
                 states[spec.key] = {"status": "fulfilled", "fulfillment": "task_result", "value_present": True}
+                if normalized_from_null:
+                    states[spec.key]["normalized_from"] = "null"
                 continue
             if spec.fulfillment == TaskOutputFulfillment.VERIFIED_RECEIPT:
                 if not isinstance(slot, EvidenceOutputSlot):
@@ -134,3 +140,48 @@ class TaskAttemptResultReducer:
             return True
         except Exception:
             return False
+
+    @classmethod
+    def _coerce_absent_value(cls, value: Any, schema: Dict[str, Any]) -> tuple[Any, bool]:
+        """Canonicalize a source ``null`` only when its contract permits an empty form.
+
+        External APIs commonly use ``null`` for an omitted text, list, or
+        object. A dynamic contract may instead require the corresponding empty
+        JSON value. Do not coerce any non-null value: e.g. an empty string is
+        not universally equivalent to an empty list or object. The candidate
+        must validate against the *complete* schema, including constraints
+        such as ``minLength`` and required object properties.
+        """
+        if value is not None or cls._matches_schema(value, schema):
+            return value, False
+        for candidate in cls._empty_candidates(schema):
+            if cls._matches_schema(candidate, schema):
+                return candidate, True
+        return value, False
+
+    @classmethod
+    def _empty_candidates(cls, schema: Dict[str, Any]) -> list[Any]:
+        """Return type-directed canonical empty values for a JSON Schema."""
+        if not isinstance(schema, dict):
+            return []
+        candidates: list[Any] = []
+        schema_type = schema.get("type")
+        types = [schema_type] if isinstance(schema_type, str) else schema_type if isinstance(schema_type, list) else []
+        for item_type in types:
+            if item_type == "string":
+                candidates.append("")
+            elif item_type == "object":
+                candidates.append({})
+            elif item_type == "array":
+                candidates.append([])
+        for union_key in ("anyOf", "oneOf", "allOf"):
+            branches = schema.get(union_key)
+            if isinstance(branches, list):
+                for branch in branches:
+                    candidates.extend(cls._empty_candidates(branch))
+
+        unique: list[Any] = []
+        for candidate in candidates:
+            if not any(candidate == existing and type(candidate) is type(existing) for existing in unique):
+                unique.append(candidate)
+        return unique

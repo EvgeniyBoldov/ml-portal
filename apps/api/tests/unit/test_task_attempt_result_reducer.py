@@ -1,3 +1,5 @@
+import pytest
+
 from app.runtime.orchestrator_contracts import (
     DiscoveredNeed,
     TaskCompletionDeclaration, TaskOutputFulfillment, TaskOutputSpec,
@@ -129,3 +131,27 @@ def test_nullable_value_is_not_treated_as_a_missing_output() -> None:
     result = _reduce(request, _declaration(outputs={"description": {"kind": "value", "value": None}}))
     assert result.outcome is TaskOutcome.COMPLETED
     assert "description" in result.outputs and result.outputs["description"] is None
+
+
+@pytest.mark.parametrize(("schema", "expected"), [
+    ({"type": "string"}, ""),
+    ({"type": "array"}, []),
+    ({"type": "object"}, {}),
+])
+def test_null_is_normalized_to_the_empty_value_allowed_by_contract(schema, expected) -> None:
+    request = _request(expected_outputs=[TaskOutputSpec(key="value", description="Value", schema=schema)])
+    result = _reduce(request, _declaration(outputs={"value": {"kind": "value", "value": None}}))
+
+    assert result.outcome is TaskOutcome.COMPLETED
+    assert result.outputs["value"] == expected
+    assert result.output_states["value"]["normalized_from"] == "null"
+
+
+def test_null_is_not_coerced_when_empty_string_breaks_contract_constraints() -> None:
+    request = _request(expected_outputs=[TaskOutputSpec(
+        key="value", description="Value", schema={"type": "string", "minLength": 1},
+    )])
+    result = _reduce(request, _declaration(outputs={"value": {"kind": "value", "value": None}}))
+
+    assert result.outcome is TaskOutcome.UNFULFILLABLE
+    assert result.reason_code == "output_contract_invalid"

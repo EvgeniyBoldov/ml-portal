@@ -54,7 +54,12 @@ def test_failed_synthesis_iteration_deterministically_returns_to_planner() -> No
     assert decision.reason == "task_failure"
 
 
-def test_non_retryable_contract_failure_cannot_be_replayed_identically() -> None:
+@pytest.mark.parametrize("reason_code", [
+    "agent_task_completion_invalid",
+    "agent_task_completion_missing",
+    "output_contract_invalid",
+])
+def test_non_retryable_contract_failure_cannot_be_replayed_identically(reason_code: str) -> None:
     proposal = IterationProposal(
         tasks=[PlannedTask(task_id="retry", executor="research", intent="failed", instructions="failed")],
         terminal=TerminalKind.PLANNER,
@@ -69,8 +74,8 @@ def test_non_retryable_contract_failure_cannot_be_replayed_identically() -> None
         "tasks": [{
             "task_id": "failed",
             "status": TaskStatus.FAILED.value,
-            "reason_code": "agent_task_completion_invalid",
-            "result": {"reason_code": "agent_task_completion_invalid", "outputs": {}},
+            "reason_code": reason_code,
+            "result": {"reason_code": reason_code, "outputs": {}},
             "executor": "research",
             "intent": "failed",
             "instructions": "failed",

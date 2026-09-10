@@ -383,6 +383,7 @@ class GraphOrchestrator:
             non_retryable_contract_failure = prior_result.get("reason_code") in {
                 "agent_task_completion_invalid",
                 "agent_task_completion_missing",
+                "output_contract_invalid",
             }
             if not non_retryable_contract_failure:
                 continue
