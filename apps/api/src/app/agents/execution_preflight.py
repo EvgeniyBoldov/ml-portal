@@ -206,6 +206,7 @@ class ExecutionPreflight:
                 user_id=user_id,
                 tenant_id=tenant_id,
                 agent_slug=agent_slug,
+                agent=agent_result.agent,
                 effective_permissions_override=effective_permissions_override,
                 default_collection_allow=default_collection_allow,
             )
@@ -398,15 +399,23 @@ class ExecutionPreflight:
         user_id: UUID,
         tenant_id: UUID,
         agent_slug: str,
+        agent: Any,
         effective_permissions_override: Optional[EffectivePermissions],
         default_collection_allow: bool,
     ) -> Any:
         """Step 2: resolve permissions + data instances + operations, enforce RBAC."""
+        collection_ids: Optional[set[str]] = None
+        if not bool(getattr(agent, "allow_all_collections", False)):
+            collection_ids = {
+                str(collection_id)
+                for collection_id in (getattr(agent, "allowed_collection_ids", None) or [])
+            }
         operation_result = await self.operation_router.resolve(
             user_id=user_id,
             tenant_id=tenant_id,
             effective_permissions=effective_permissions_override,
             default_collection_allow=default_collection_allow,
+            collection_ids=collection_ids,
         )
         if not self.runtime_rbac_resolver.is_agent_allowed(
             effective_permissions=operation_result.effective_permissions,

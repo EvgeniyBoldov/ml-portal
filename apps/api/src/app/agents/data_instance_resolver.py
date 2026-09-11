@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from time import monotonic
 from types import SimpleNamespace
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,10 +45,14 @@ class CollectionRuntimeResolver:
         self.session = session
         self.instance_service = instance_service
 
-    async def resolve(self) -> List[AllowedDataInstance]:
+    async def resolve(
+        self,
+        *,
+        collection_ids: Optional[Iterable[str]] = None,
+    ) -> List[AllowedDataInstance]:
         started = monotonic()
         resolved: List[AllowedDataInstance] = []
-        collections = await self._load_active_collections()
+        collections = await self._load_active_collections(collection_ids=collection_ids)
         # A local collection type shares one runtime provider.  Resolving it
         # invokes ensure_local_service_instances(), so doing that once per
         # collection turns preflight into repeated writes/lookups and can wait
@@ -171,8 +175,12 @@ class CollectionRuntimeResolver:
         )
         return resolved
 
-    async def _load_active_collections(self) -> List[Collection]:
-        result = await self.session.execute(
+    async def _load_active_collections(
+        self,
+        *,
+        collection_ids: Optional[Iterable[str]] = None,
+    ) -> List[Collection]:
+        query = (
             select(Collection)
             .options(
                 selectinload(Collection.schema),
@@ -185,6 +193,12 @@ class CollectionRuntimeResolver:
             )
             .order_by(Collection.created_at.asc())
         )
+        if collection_ids is not None:
+            ids = list(collection_ids)
+            if not ids:
+                return []
+            query = query.where(Collection.id.in_(ids))
+        result = await self.session.execute(query)
         return list(result.scalars().all())
 
     async def _resolve_collection_source(

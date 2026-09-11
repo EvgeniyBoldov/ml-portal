@@ -198,6 +198,7 @@ async def test_collection_filter_applies_agent_allowed_collection_ids():
     assert [inst.slug for inst in result.resolved_data_instances] == ["alpha"]
     assert [op.data_instance_slug for op in result.resolved_operations] == ["alpha"]
     assert set(result.execution_graph.bindings.keys()) == {"instance.alpha.search"}
+    assert preflight.operation_router.resolve.await_args.kwargs["collection_ids"] == {c1}
 
 
 @pytest.mark.asyncio
@@ -248,6 +249,7 @@ async def test_collection_filter_denies_all_when_agent_has_no_bindings_and_allow
     assert result.resolved_data_instances == []
     assert result.resolved_operations == []
     assert result.execution_graph.bindings == {}
+    assert preflight.operation_router.resolve.await_args.kwargs["collection_ids"] == set()
 
 
 @pytest.mark.asyncio

@@ -160,9 +160,12 @@ class CollectionStatusSnapshotService:
 
             status_repo = AsyncTemplateAnalysisStatusRepository(self.session)
             rows = result.mappings().all()
+            nodes_by_row_id = await status_repo.get_nodes_by_row_ids(
+                row["id"] for row in rows
+            )
             for row in rows:
                 row_id = row.get("id")
-                nodes = await status_repo.get_nodes_by_row_id(row_id)
+                nodes = nodes_by_row_id.get(row_id, [])
                 payload = build_template_row_runtime_payload(
                     {
                         **dict(row),
@@ -224,15 +227,20 @@ class CollectionStatusSnapshotService:
     async def get_document_status_snapshot(self, collection: Collection) -> dict[str, Any]:
         query_params = {"collection_id": str(collection.id)}
         try:
-            result = await self.session.execute(
-                text(
-                    "SELECT rd.agg_status, rd.status "
-                    "FROM ragdocuments rd "
-                    "JOIN document_collection_memberships dcm ON dcm.source_id = rd.id "
-                    "WHERE dcm.collection_id = CAST(:collection_id AS uuid)"
-                ),
-                query_params,
-            )
+            # A missing compatibility table aborts a PostgreSQL transaction.
+            # Isolate the probe in a savepoint so the fallback query (and the
+            # surrounding runtime plan transaction) can continue safely.
+            async with self.session.begin_nested():
+                result = await self.session.execute(
+                    text(
+                        "SELECT rd.agg_status, rd.status "
+                        "FROM ragdocuments rd "
+                        "JOIN document_collection_memberships dcm ON dcm.source_id = rd.id "
+                        "WHERE dcm.collection_id = CAST(:collection_id AS uuid)"
+                    ),
+                    query_params,
+                )
+                status_rows = result.all()
         except ProgrammingError as exc:
             # Backward compatibility for environments where membership table
             # migration is not applied yet.
@@ -248,9 +256,10 @@ class CollectionStatusSnapshotService:
                 ),
                 query_params,
             )
+            status_rows = result.all()
         statuses = [
             str(row.agg_status or row.status or "").lower()
-            for row in result.all()
+            for row in status_rows
         ]
 
         total_docs = len(statuses)

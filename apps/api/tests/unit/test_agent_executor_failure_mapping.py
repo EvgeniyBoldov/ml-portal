@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
 from app.runtime.agent_executor import AgentExecutor
+from app.agents.context import ToolContext
 from app.runtime.events import RuntimeEvent
 from app.runtime.orchestrator_contracts import (
     TaskCompletionDeclaration,
@@ -118,3 +121,57 @@ def test_provider_terminal_schema_matches_need_and_limitation_contract() -> None
     }
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.Draft202012Validator(schema).validate(malformed)
+
+
+@pytest.mark.asyncio
+async def test_preflight_timeout_uses_dedicated_session(monkeypatch) -> None:
+    """Cancelling preflight must not invalidate the plan-store session."""
+    plan_session = AsyncMock()
+    preflight_session = AsyncMock()
+    state = SimpleNamespace(entered=False, exited=False)
+
+    class SessionFactory:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            state.entered = True
+            return preflight_session
+
+        async def __aexit__(self, *_args):
+            state.exited = True
+
+    seen_sessions = []
+
+    class BlockingPreflight:
+        def __init__(self, session):
+            seen_sessions.append(session)
+
+        async def prepare(self, **_kwargs):
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr("app.runtime.agent_executor.ExecutionPreflight", BlockingPreflight)
+    executor = AgentExecutor(session=plan_session, llm_client=AsyncMock())
+    ctx = ToolContext(
+        tenant_id=uuid4(),
+        user_id=uuid4(),
+        extra={"runtime_deps": {"session_factory": SessionFactory()}},
+    )
+
+    with pytest.raises(asyncio.TimeoutError):
+        await executor._prepare_sub_agent_request(
+            ctx=ctx,
+            agent_slug="technical_writer",
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            request_text="fill form",
+            platform_config=None,
+            agent_version_id=None,
+            lifecycle_agent_execution_id=None,
+            timeout_s=0.01,
+        )
+
+    assert seen_sessions == [plan_session, preflight_session]
+    assert state.entered is True
+    assert state.exited is True
+    plan_session.rollback.assert_not_awaited()

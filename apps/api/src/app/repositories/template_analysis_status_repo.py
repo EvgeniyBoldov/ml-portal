@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -32,6 +32,23 @@ class AsyncTemplateAnalysisStatusRepository(AsyncRepository):
         stmt = stmt.order_by(TemplateAnalysisStatus.node_key)
         result = await self.session.execute(stmt)
         return result.scalars().all()
+
+    async def get_nodes_by_row_ids(
+        self,
+        row_ids: Iterable[UUID],
+    ) -> Dict[UUID, List[TemplateAnalysisStatus]]:
+        """Fetch analysis nodes for a template snapshot in one query."""
+        ids = list(row_ids)
+        if not ids:
+            return {}
+        stmt = select(TemplateAnalysisStatus).where(TemplateAnalysisStatus.row_id.in_(ids))
+        stmt = self._build_tenant_filter(stmt)
+        stmt = stmt.order_by(TemplateAnalysisStatus.row_id, TemplateAnalysisStatus.node_key)
+        result = await self.session.execute(stmt)
+        nodes_by_row_id: Dict[UUID, List[TemplateAnalysisStatus]] = {}
+        for node in result.scalars().all():
+            nodes_by_row_id.setdefault(node.row_id, []).append(node)
+        return nodes_by_row_id
 
     async def get_node(self, row_id: UUID, node_key: str) -> Optional[TemplateAnalysisStatus]:
         stmt = select(TemplateAnalysisStatus).where(

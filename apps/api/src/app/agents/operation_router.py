@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import List, Optional
+from typing import Iterable, List, Optional
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,6 +88,7 @@ class OperationRouter:
         *,
         effective_permissions: Optional[EffectivePermissions] = None,
         default_collection_allow: bool = True,
+        collection_ids: Optional[Iterable[str]] = None,
     ) -> OperationResolveResult:
         if effective_permissions is None:
             effective_permissions = await self.runtime_rbac_resolver.resolve_effective_permissions(
@@ -95,7 +96,9 @@ class OperationRouter:
                 tenant_id=tenant_id,
                 default_collection_allow=default_collection_allow,
             )
-        instances = await self.collection_runtime_resolver.resolve()
+        instances = await self.collection_runtime_resolver.resolve(
+            collection_ids=collection_ids,
+        )
 
         result = OperationResolveResult(effective_permissions=effective_permissions)
         graph_builder = RuntimeExecutionGraphBuilder()

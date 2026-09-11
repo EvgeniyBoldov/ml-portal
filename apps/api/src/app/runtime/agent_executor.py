@@ -70,12 +70,67 @@ class AgentExecutor:
     ) -> None:
         self.session = session
         self.llm_client = llm_client
+        # Kept as a fallback for callers that do not provide a session factory
+        # (primarily narrow unit-test adapters). Production runtime calls use
+        # an isolated session below: cancelling a database query otherwise
+        # invalidates the long-lived plan-store transaction.
         self.preflight = ExecutionPreflight(session)
         self._tool_runtime = AgentToolRuntime(
             llm_client=llm_client,
         )
         # Shared executor instance per pipeline adapter to avoid per-step re-init churn.
         self._operation_executor = DirectOperationExecutor()
+
+    async def _prepare_sub_agent_request(
+        self,
+        *,
+        ctx: ToolContext,
+        agent_slug: str,
+        user_id: UUID,
+        tenant_id: UUID,
+        request_text: str,
+        platform_config: Optional[Dict[str, Any]],
+        agent_version_id: Optional[UUID],
+        lifecycle_agent_execution_id: Optional[str],
+        timeout_s: int,
+    ) -> Any:
+        """Run cancellable preflight outside the plan-store transaction.
+
+        asyncpg invalidates a connection when its in-flight query is cancelled.
+        The pipeline keeps its session for plan persistence, so using that
+        session here made a preflight timeout surface later as
+        ``PendingRollbackError`` in ``PlanStore.finish_failure``.
+        """
+        prepare_kwargs = {
+            "agent_slug": agent_slug,
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "request_text": request_text,
+            "allow_partial": True,
+            "platform_config": platform_config,
+            "include_routable_agents": False,
+            "agent_version_id": agent_version_id,
+            "event_sink": ctx.extra.get("runtime_event_logger"),
+            "trace_parent_id": lifecycle_agent_execution_id,
+        }
+        session_factory = ctx.get_runtime_deps().session_factory
+        if session_factory is None:
+            return await asyncio.wait_for(
+                self.preflight.prepare(**prepare_kwargs),
+                timeout=timeout_s,
+            )
+
+        async with session_factory() as preflight_session:
+            preflight = ExecutionPreflight(preflight_session)
+            sub_request = await asyncio.wait_for(
+                preflight.prepare(**prepare_kwargs),
+                timeout=timeout_s,
+            )
+            # The factory uses expire_on_commit=False. Committing the isolated
+            # read-mostly transaction keeps the returned ORM-backed request
+            # usable after this short-lived session is closed.
+            await preflight_session.commit()
+            return sub_request
 
     async def execute(
         self,
@@ -106,20 +161,16 @@ class AgentExecutor:
         # 1. Preflight for the sub-agent.
         preflight_timeout_s = get_settings().PREFLIGHT_TIMEOUT_SECONDS
         try:
-            sub_request = await asyncio.wait_for(
-                self.preflight.prepare(
-                    agent_slug=agent_slug,
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    request_text=str(task.instructions or state.goal)[:500],
-                    allow_partial=True,
-                    platform_config=platform_config,
-                    include_routable_agents=False,
-                    agent_version_id=agent_version_id,
-                    event_sink=ctx.extra.get("runtime_event_logger"),
-                    trace_parent_id=lifecycle_agent_execution_id,
-                ),
-                timeout=preflight_timeout_s,
+            sub_request = await self._prepare_sub_agent_request(
+                ctx=ctx,
+                agent_slug=agent_slug,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                request_text=str(task.instructions or state.goal)[:500],
+                platform_config=platform_config,
+                agent_version_id=agent_version_id,
+                lifecycle_agent_execution_id=lifecycle_agent_execution_id,
+                timeout_s=preflight_timeout_s,
             )
         except Exception as exc:
             debug_traceback = traceback.format_exc()
