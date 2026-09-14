@@ -1711,7 +1711,6 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
       };
       if (isMemory || isMemoryPreparation) {
-        for (const executor of executorRuns) executor.taskPresentation = taskPresentationForExecutor(executor);
         stage.steps = executorRuns.map((executor, index) => ({
           key: `${entity.key}:memory-step:${executor.entity.id}`,
           entity: executor.entity,
