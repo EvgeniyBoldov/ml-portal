@@ -806,6 +806,8 @@ class AgentExecutor:
             "The runtime owns tool execution, evidence and artifact storage. For a task_result output, return a normalized value derived from observed tool data; do not paste an unbounded raw payload.",
             "Each outputs.<key> is a typed slot: {kind:'value',value:<value>}, {kind:'evidence',refs:[result_ref]}, or {kind:'artifact',refs:[artifact_ref]} exactly as required by that output.",
             "Use evidence or artifact refs only for outputs whose fulfillment requires them; task_result outputs require a value slot.",
+            "For a requested list, table, text, or structured data, task_result requires a compact normalized value from the observed tool result; do not substitute an evidence reference.",
+            "An evidence ref must be an exact runtime result_ref or tool call id shown in a successful tool result. Never invent a descriptive ref such as jira_search_issues_result.",
             "completion is fulfilled, needs, or unfulfillable. fulfilled requires every required output; needs requires non-empty needs; unfulfillable requires limitation.",
             "Required fields are completion, report, outputs, and needs. limitation is required only for unfulfillable.",
             "A need has ref, key, kind (data|artifact|decision), description, schema, required, and context.",

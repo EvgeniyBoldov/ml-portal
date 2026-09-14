@@ -88,7 +88,15 @@ class GraphPlanner:
             ),
         }]
         role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
-        system_prompt = str(role_config.get("prompt") or "") + (
+        # Passing a hand-built prompt to StructuredLLMCall bypasses its
+        # non-editable planner runtime contract. Compile the role here first,
+        # then add only the planner-specific tool-loop instructions.
+        role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(
+            SystemLLMRoleType.PLANNER.value,
+        )
+        system_prompt = self._llm._compile_role_prompt(
+            role_config, role_override if isinstance(role_override, dict) else None, schema=PlannerStep,
+        ) + (
             "\n\n# PLANNER TOOL LOOP\n"
             "Before proposing an iteration you may return kind=tool_call only for memory.search. "
             "Use it to resolve a glossary abbreviation or retrieve long project/company memory; "
