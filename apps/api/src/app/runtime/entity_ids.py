@@ -40,6 +40,16 @@ def memory_preparation_orchestrator_id(run_id: str) -> str:
     return _id("memory-preparation-orchestrator", run_id)
 
 
+def turn_preflight_orchestrator_id(run_id: str) -> str:
+    """Stable UUID identity for the turn-level routing preflight."""
+    return _id("turn-preflight-orchestrator", run_id)
+
+
+def memory_recall_orchestrator_id(run_id: str) -> str:
+    """Stable UUID identity for the bounded memory-recall substage."""
+    return _id("memory-recall-orchestrator", run_id)
+
+
 def memory_component_entity_id(run_id: str, component_name: str, index: int) -> str:
     return _id("memory-component", run_id, component_name, index)
 

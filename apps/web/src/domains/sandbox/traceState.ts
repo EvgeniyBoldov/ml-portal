@@ -80,6 +80,13 @@ function terminalStatus(event: RuntimeJournalEvent): string | undefined {
     return 'completed';
   }
   if (event.event_type === 'question_answer') return 'completed';
+  // The preflight orchestrator ends by handing off to the selected route
+  // (`planner`, `recall`, ...). That route is not the lifecycle status of the
+  // preflight entity itself. Treat the handoff as a completed preflight so
+  // the UI does not render the route name as an in-progress status.
+  if (event.entity_type === 'orchestrator' && event.event_type === 'orchestrator_end') {
+    return 'completed';
+  }
   if (event.event_type === 'error') return 'error';
   if (event.event_type.endsWith('_failed')) return 'failed';
   return isEnd(event.event_type) ? String(event.payload.status ?? 'completed') : undefined;

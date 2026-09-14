@@ -107,6 +107,33 @@ def test_planner_schema_preserves_terminal_conditionality_for_the_provider() -> 
     assert any(item.get("then", {}).get("required") == ["synthesis_brief"] for item in schema["allOf"])
 
 
+def test_compile_ignores_resolution_for_task_created_in_same_iteration() -> None:
+    proposal = IterationProposal.model_validate({
+        "terminal": "synthesis",
+        "tasks": [{
+            "task_id": "new-task", "executor": "worker", "intent": "store",
+            "instructions": "Store the supplied value.",
+            "expected_outputs": [{"key": "stored", "description": "Stored value"}],
+        }],
+        "resolutions": [{
+            "task_id": "new-task", "action": "accept_partial",
+            "output_keys": ["stored"], "reason": "The task is already done.",
+        }],
+        "synthesis_brief": {
+            "user_question": "goal", "planned_work": "store", "purpose": "memory",
+            "answer_requirements": "confirm",
+        },
+    })
+
+    compiled = GraphOrchestrator._compile(
+        proposal,
+        [{"slug": "worker", "supports_dynamic_contracts": True}],
+        {"tasks": [], "needs": [], "bindings": [], "resolutions": []},
+    )
+
+    assert compiled.resolutions == []
+
+
 def test_data_agent_tasks_are_forced_to_require_fresh_retrieval() -> None:
     proposal = IterationProposal.model_validate({
         "terminal": "planner",

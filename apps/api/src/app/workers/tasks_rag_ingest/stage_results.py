@@ -129,3 +129,20 @@ class IndexResult:
             indexed_count=data.get("indexed_count", 0),
             collection=data.get("collection", ""),
         )
+
+
+@dataclass(frozen=True)
+class DocumentMemoryResult:
+    """Terminal result of the non-blocking document-memory branch."""
+    source_id: str
+    memory_items: int = 0
+    glossary_terms: int = 0
+    unresolved_project_items: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "source_id": self.source_id,
+            "memory_items": self.memory_items,
+            "glossary_terms": self.glossary_terms,
+            "unresolved_project_items": self.unresolved_project_items,
+        }

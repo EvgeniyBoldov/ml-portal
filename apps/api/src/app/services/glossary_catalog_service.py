@@ -18,6 +18,8 @@ class GlossaryCatalogEntry:
     entity_type: str
     scope: str
     updated_at: datetime
+    entity_id: str | None = None
+    project_id: UUID | None = None
 
 
 class GlossaryCatalogService:
@@ -34,6 +36,8 @@ class GlossaryCatalogService:
                 aliases=row.aliases,
                 description=row.description,
                 entity_type=row.entity_type,
+                entity_id=row.entity_id,
+                project_id=row.project_id,
                 scope=row.scope,
                 updated_at=row.updated_at,
             )

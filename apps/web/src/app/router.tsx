@@ -40,6 +40,8 @@ const PlatformSettingsPage = lazy(() => import('@/domains/admin/pages/PlatformSe
 const OrchestrationPage = lazy(() => import('@/domains/admin/pages/OrchestrationPage').then(m => ({ default: m.OrchestrationPage })));
 const PeriodicTasksPage = lazy(() => import('@/domains/admin/pages/PeriodicTasksPage'));
 const CredentialPage = lazy(() => import('@/domains/admin/pages/CredentialPage').then(m => ({ default: m.default })));
+const MemoryPage = lazy(() => import('@/domains/admin/pages/MemoryPage'));
+const MemoryItemPage = lazy(() => import('@/domains/admin/pages/MemoryItemPage'));
 
 // Sandbox pages
 const SandboxLayout = lazy(() => import('@/domains/sandbox/layouts/SandboxLayout'));
@@ -106,6 +108,8 @@ const router = createBrowserRouter([
       { path: 'agents/:id/versions/new', element: withSuspense(<AgentVersionPage />) },
       { path: 'agents/:id/versions/:version', element: withSuspense(<AgentVersionPage />) },
       { path: 'collections', element: withSuspense(<CollectionListPage />) },
+      { path: 'memory', element: withSuspense(<MemoryPage />) },
+      { path: 'memory/:itemId', element: withSuspense(<MemoryItemPage />) },
       { path: 'collections/new', element: withSuspense(<CollectionPage />) },
       { path: 'collections/:slug', element: withSuspense(<CollectionPage />) },
       { path: 'collections/:id/versions/new', element: withSuspense(<CollectionVersionPage />) },

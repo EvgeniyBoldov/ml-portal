@@ -183,6 +183,7 @@ async def get_sandbox_catalog(
             SystemLLMRole.role_type.in_([
                 SystemLLMRoleType.PLANNER.value,
                 SystemLLMRoleType.MEMORY.value,
+                SystemLLMRoleType.TURN_PREFLIGHT.value,
                 SystemLLMRoleType.SYNTHESIZER.value,
                 SystemLLMRoleType.FACT_EXTRACTOR.value,
                 SystemLLMRoleType.FACT_COMPACTOR.value,
@@ -213,7 +214,7 @@ async def get_sandbox_catalog(
 
     limits_service = RuntimeLimitsService(db)
     role_limits: dict[str, dict] = {}
-    for role_key in ("planner", "synthesizer", "fact_extractor", "fact_compactor"):
+    for role_key in ("turn_preflight", "planner", "synthesizer", "fact_extractor", "fact_compactor"):
         limits = await limits_service.resolve_orchestrator(role_key)
         role_limits[role_key] = {
             "own": limits.own.__dict__,
@@ -222,6 +223,13 @@ async def get_sandbox_catalog(
         }
 
     system_routers = [
+        SandboxCatalogRouterItem(
+            id="turn_preflight",
+            name="TurnPreflight",
+            description="Корневой маршрутизатор пользовательского turn",
+            config={**_role_snapshot(SystemLLMRoleType.TURN_PREFLIGHT.value), "limits": role_limits.get("turn_preflight", {})},
+            response_contract=build_response_contract(SystemLLMRoleType.TURN_PREFLIGHT),
+        ),
         SandboxCatalogRouterItem(
             id="planner",
             name="Planner",

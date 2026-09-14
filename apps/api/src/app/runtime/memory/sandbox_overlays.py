@@ -87,7 +87,6 @@ def merge_extracted(
             value=fact.value,
             source=fact.source,
             tenant_id=fact.tenant_id,
-            project_id=fact.project_id,
             confidence=fact.confidence,
             source_ref=fact.source_ref,
             metadata=dict(fact.metadata),

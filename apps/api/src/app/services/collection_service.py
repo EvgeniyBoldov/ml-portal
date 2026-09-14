@@ -286,8 +286,9 @@ class CollectionService:
         data_instance_id: Optional[uuid.UUID] = None,
         table_name: Optional[str] = None,
         table_schema: Optional[dict] = None,
+        memory_enabled: bool = False,
     ) -> Collection:
-        return await self.lifecycle.create_collection(
+        collection = await self.lifecycle.create_collection(
             tenant_id=tenant_id,
             slug=slug,
             name=name,
@@ -299,6 +300,9 @@ class CollectionService:
             table_name=table_name,
             table_schema=table_schema,
         )
+        collection.memory_enabled = memory_enabled
+        await self.session.flush()
+        return collection
 
     async def _create_local_collection(
         self,
@@ -356,6 +360,7 @@ class CollectionService:
         tenant_id: Any = _UNSET,
         name: Any = _UNSET,
         is_active: Any = _UNSET,
+        memory_enabled: Any = _UNSET,
         data_instance_id: Any = _UNSET,
         table_name: Any = _UNSET,
         table_schema: Any = _UNSET,
@@ -381,6 +386,8 @@ class CollectionService:
             collection.name = name
         if is_active is not _UNSET:
             collection.is_active = is_active
+        if memory_enabled is not _UNSET:
+            collection.memory_enabled = memory_enabled
         if data_instance_id is not _UNSET:
             if data_instance_id != collection.data_instance_id:
                 raise ConflictError("create a new collection instead")

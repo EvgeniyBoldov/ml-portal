@@ -444,6 +444,7 @@ async def create_collection(
         collection_type=body.collection_type,
         data_instance_id=body.data_instance_id,
         table_schema=body.table_schema,
+        memory_enabled=body.memory_enabled,
     )
     await session.commit()
 
@@ -626,12 +627,16 @@ async def update_collection(
         tenant_id=body.tenant_id if "tenant_id" in body.model_fields_set else _UNSET,
         name=body.name if "name" in body.model_fields_set else _UNSET,
         is_active=body.is_active if "is_active" in body.model_fields_set else _UNSET,
+        memory_enabled=body.memory_enabled if "memory_enabled" in body.model_fields_set else _UNSET,
         table_name=body.table_name if "table_name" in body.model_fields_set else _UNSET,
         table_schema=body.table_schema if "table_schema" in body.model_fields_set else _UNSET,
         schema_ops=[op.model_dump() for op in body.schema_ops],
     )
     await session.commit()
     await session.refresh(collection)
+    if "memory_enabled" in body.model_fields_set:
+        from app.workers.tasks_memory import reconcile_collection_memory_policy
+        reconcile_collection_memory_policy.delay(str(collection.id))
     return await build_collection_response(service, collection)
 
 

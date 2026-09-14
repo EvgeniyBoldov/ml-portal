@@ -133,7 +133,7 @@ class CollectionToolResolver:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def _load_system_tools(self) -> List[DiscoveredTool]:
+    async def _load_system_tools(self) -> List[DiscoveredTool | VirtualDiscoveredTool]:
         """Load global system tools (provider_instance_id=NULL, domain='system')."""
         stmt = (
             select(DiscoveredTool)
@@ -147,12 +147,25 @@ class CollectionToolResolver:
             .order_by(DiscoveredTool.slug)
         )
         result = await self.session.execute(stmt)
-        tools = list(result.scalars().all())
-        return [
+        tools: List[DiscoveredTool | VirtualDiscoveredTool] = [
             tool
-            for tool in tools
+            for tool in result.scalars().all()
             if self._is_current_system_handler(tool)
         ]
+        known = {str(getattr(tool, "slug", "") or "") for tool in tools}
+        for handler in ToolRegistry.list_all():
+            slug = str(getattr(handler, "slug", "") or "").strip()
+            if not slug or slug in known or "system" not in list(getattr(handler, "domains", None) or []):
+                continue
+            descriptor = handler.to_mcp_descriptor()
+            tools.append(VirtualDiscoveredTool(
+                slug=slug, name=str(getattr(handler, "name", slug)),
+                description=str(descriptor.get("description") or getattr(handler, "description", "")),
+                source="local", domains=list(getattr(handler, "domains", None) or []),
+                input_schema=dict(descriptor.get("inputSchema") or {}),
+                output_schema=(dict(descriptor["outputSchema"]) if isinstance(descriptor.get("outputSchema"), dict) else None),
+            ))
+        return tools
 
     @staticmethod
     def _dedupe_tools(

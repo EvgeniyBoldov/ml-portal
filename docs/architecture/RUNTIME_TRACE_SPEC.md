@@ -19,10 +19,14 @@ Every row has an event `id`, `run_id`, monotonic `sequence`, `event_type`,
 The canonical sandbox presentation hierarchy is:
 
 ```text
-run → planner orchestrator → planner_iteration → planner LLM call
-                                             ├→ task → attempt
-                                             ├→ step → agent_execution → LLM/tool/interaction/error/snapshot
-                                             └→ checkpoint
+run → turn_preflight → LLM call
+                     ├→ synthesis_run → final_answer_marker
+                     ├→ memory_recall → turn_preflight → LLM call
+                     ├→ interaction
+                     └→ planner orchestrator → planner_iteration → planner LLM call
+                                                        ├→ task → attempt
+                                                        ├→ step → agent_execution → LLM/tool/interaction/error/snapshot
+                                                        └→ checkpoint
 ```
 
 `iteration` is the operator-facing trace entity for one planner decision
@@ -108,7 +112,12 @@ change a declared synthesis hand-off to `effective_next=planner`; the frontend
 must update that checkpoint only from this event, not directly from an agent
 error. Independent tasks may still run between the error and the decision.
 
-Preflight is represented by `preflight_started`, terminal
+`turn_preflight` is a root routing entity. Its terminal event carries only the
+safe route and bounded brief/request metadata; `recall` is a separate child and
+the second TurnPreflight invocation has the same root parent. A `clarify`
+decision owns a root interaction and never creates a plan, task or agent.
+
+Agent execution preflight is represented by `preflight_started`, terminal
 `preflight_completed`/`preflight_failed`, and a redacted capability/RBAC/limit
 snapshot. An agent-triggered extraction has `extraction_started`, terminal
 `extraction_completed`/`extraction_failed`, and is a child of its `tool_call`.
@@ -243,6 +252,15 @@ after, confirmation support before/after and delta, and its compaction action.
 Unchanged facts are omitted. This projection never contains raw evidence,
 credentials or LLM reasoning. The inspector renders it through the canonical
 trace projection; RAW remains the only generic journal-payload view.
+
+Each candidate decision is additionally a canonical `status` event with
+`stage=memory_candidate_decision`, owned by the corresponding component
+`agent_execution`. It carries the component, phase, outcome, stable safe
+reason code, run-local candidate IDs, bounded candidate/evidence projection,
+optional compaction action and optional lifecycle transition. The worker emits
+these records after the writeback checkpoint commits. Document semantic
+extraction remains a RAG/admin diagnostic and is never a Sandbox writeback
+child.
 
 ## Prohibited
 

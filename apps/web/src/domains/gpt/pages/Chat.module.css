@@ -332,6 +332,20 @@
   flex-shrink: 0;
 }
 
+.clarifyHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  color: var(--text-primary);
+}
+
+.clarifyHeader h3 {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
 .clarifyRow {
   display: flex;
   align-items: flex-end;

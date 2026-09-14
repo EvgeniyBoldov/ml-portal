@@ -5,10 +5,10 @@ import { callPresentation } from './callPresentation';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
 
 export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
-export type TraceStageKind = 'iteration' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
+export type TraceStageKind = 'iteration' | 'turn_preflight' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
 export type TraceStepKind = 'planner_decision' | 'task_execution' | 'memory_selection' | 'memory_write' | 'synthesis';
-export type TraceExecutorKind = 'planner' | 'agent' | 'memory_selector' | 'fact_extractor' | 'fact_compactor' | 'synthesizer';
-export type TraceInspectorTabId = 'info' | 'plan' | 'task' | 'memory' | 'facts' | 'result' | 'prompt' | 'rbac' | 'limits' | 'preflight' | 'request' | 'response' | 'error' | 'raw';
+export type TraceExecutorKind = 'planner' | 'preflight' | 'agent' | 'memory_selector' | 'fact_extractor' | 'fact_compactor' | 'synthesizer';
+export type TraceInspectorTabId = 'info' | 'plan' | 'task' | 'memory' | 'facts' | 'published' | 'result' | 'prompt' | 'rbac' | 'limits' | 'preflight' | 'request' | 'response' | 'error' | 'raw';
 
 export interface TraceInspectorTab {
   id: TraceInspectorTabId;
@@ -175,6 +175,8 @@ export interface TraceExecutorRun {
   metrics: TraceMetrics;
   memoryResult?: TraceMemoryComponentResult;
   preflight?: TracePreflight;
+  /** Normalized turn_preflight routing decision and its input envelope. */
+  route?: TraceRoute;
   prompt?: TracePrompt;
   access?: TraceAccessView;
   limits?: TraceLimitsView;
@@ -219,6 +221,17 @@ export interface TracePreflight {
   access?: TraceAccessView;
 }
 
+export interface TraceRoute {
+  route: string;
+  goal?: string;
+  direction?: string;
+  expectedResult?: string;
+  entityHints: string[];
+  projectHints: string[];
+  constraints: string[];
+  input?: unknown;
+}
+
 export interface TraceMemoryFact {
   scope: string;
   kind: string;
@@ -232,6 +245,7 @@ export interface TraceMemoryFact {
   supportAfter?: number;
   supportDelta?: number;
   compactionAction?: string;
+  decisionReason?: string;
 }
 
 export interface TraceMemoryComponentResult {
@@ -241,6 +255,20 @@ export interface TraceMemoryComponentResult {
   updatedCount: number;
   skippedCount: number;
   facts: TraceMemoryFact[];
+  decisions: TraceMemoryDecision[];
+  errorCode?: string;
+  errorMessage?: string;
+  decisionCounts: Record<string, number>;
+}
+
+export interface TraceMemoryDecision {
+  phase: string;
+  outcome: string;
+  reasonCode: string;
+  candidateIds: string[];
+  fact?: TraceMemoryFact;
+  action?: string;
+  evidenceCount?: number;
 }
 
 export interface TraceMemoryContext {
@@ -427,6 +455,7 @@ const iterationLabel = (type: string, number: number): string => {
 };
 const executorKindFor = (slug: string): TraceExecutorKind => {
   if (slug === 'planner') return 'planner';
+  if (slug === 'turn_preflight') return 'preflight';
   if (slug === 'memory_preparation') return 'memory_selector';
   if (slug === 'fact_extractor') return 'fact_extractor';
   if (slug === 'fact_compactor') return 'fact_compactor';
@@ -434,6 +463,7 @@ const executorKindFor = (slug: string): TraceExecutorKind => {
   return 'agent';
 };
 const stepKindFor = (stage: TraceStageKind, executor?: TraceExecutorRun): TraceStepKind => {
+  if (stage === 'turn_preflight') return 'synthesis';
   if (stage === 'synthesis') return 'synthesis';
   if (stage === 'memory_preparation') return 'memory_selection';
   if (stage === 'memory_writeback') return 'memory_write';
@@ -466,10 +496,11 @@ export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[
   if (target.kind === 'executor') {
     const primary = target.executor.kind === 'planner'
       ? target.stage.plan ? [tab('plan', 'План')] : [tab('result', 'Результат')]
+      : target.executor.kind === 'preflight' ? [tab('result', 'Маршрут')]
       : target.executor.kind === 'synthesizer' ? (hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])
         : target.executor.kind === 'memory_selector' ? [tab('task', 'Задача'), ...(target.executor.memoryContext ? [tab('memory', 'Память')] : [])]
-          : target.executor.kind === 'fact_extractor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Факты')] : [])]
-            : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Изменения')] : [])]
+          : target.executor.kind === 'fact_extractor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Кандидаты')] : [])]
+            : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Решения')] : []), ...(target.executor.memoryResult?.decisions.some((item) => item.outcome === 'published') || target.executor.memoryResult?.facts.length ? [tab('published', 'Опубликовано')] : [])]
               : [tab('task', 'Задача'), ...(hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])];
     return [tab('info', 'Инфо'), ...primary, ...executorSnapshotTabs(target.executor)];
   }
@@ -489,7 +520,10 @@ const startFor = (state: SandboxTraceState, entity: TraceEntity): RuntimeJournal
 );
 
 function memoryComponentResult(events: RuntimeJournalEvent[]): TraceMemoryComponentResult | undefined {
-  const resultEvent = [...events].reverse().find((event) => event.event_type === 'memory_component_result');
+  const resultEvent = [...events].reverse().find((event) => (
+    event.event_type === 'memory_component_result'
+    || (event.event_type === 'status' && event.payload.stage === 'memory_component_result')
+  ));
   if (!resultEvent) return undefined;
   const payload = resultEvent.payload;
   const componentName = asString(payload.component_name);
@@ -516,8 +550,39 @@ function memoryComponentResult(events: RuntimeJournalEvent[]): TraceMemoryCompon
       supportAfter: asNumber(fact.support_after) ?? asNumber(fact.support_count),
       supportDelta: asNumber(fact.support_delta),
       compactionAction: asString(fact.compaction_action) || undefined,
+      decisionReason: asString(fact.decision_reason) || undefined,
     }];
   }) : [];
+  const decisions = events.flatMap((event): TraceMemoryDecision[] => {
+    if (event.event_type !== 'status' || event.payload.stage !== 'memory_candidate_decision') return [];
+    const decision = event.payload;
+    if (asString(decision.component_name) !== componentName) return [];
+    const candidate = asRecord(decision.candidate);
+    const evidence = asRecord(decision.evidence);
+    const transition = asRecord(decision.transition);
+    const subject = asString(candidate?.subject);
+    const value = asString(candidate?.value);
+    const fact = subject && value ? {
+      scope: asString(candidate?.scope) || 'unknown',
+      kind: asString(candidate?.kind) || 'fact', subject, value,
+      confidence: asNumber(candidate?.confidence),
+      changeType: asString(decision.reason_code) || 'memory_decision',
+      statusBefore: asString(transition?.status_before) || undefined,
+      statusAfter: asString(transition?.status_after) || undefined,
+      supportBefore: asNumber(transition?.support_before),
+      supportAfter: asNumber(transition?.support_after),
+      supportDelta: asNumber(transition?.support_delta),
+      compactionAction: asString(decision.action) || undefined,
+    } satisfies TraceMemoryFact : undefined;
+    return [{
+      phase: asString(decision.decision_phase) || 'unknown',
+      outcome: asString(decision.outcome) || 'unknown',
+      reasonCode: asString(decision.reason_code) || 'unknown',
+      candidateIds: Array.isArray(decision.candidate_ids) ? decision.candidate_ids.filter((item): item is string => typeof item === 'string') : [],
+      fact, action: asString(decision.action) || undefined,
+      evidenceCount: asNumber(evidence?.count),
+    }];
+  });
   return {
     componentName,
     status: asString(payload.status) || 'completed',
@@ -525,6 +590,10 @@ function memoryComponentResult(events: RuntimeJournalEvent[]): TraceMemoryCompon
     updatedCount: asNumber(payload.updated_count) ?? 0,
     skippedCount: asNumber(payload.skipped_count) ?? 0,
     facts,
+    decisions,
+    errorCode: asString(payload.error_code) || undefined,
+    errorMessage: asString(payload.error_message) || undefined,
+    decisionCounts: asRecord(payload.decision_counts) ? Object.fromEntries(Object.entries(asRecord(payload.decision_counts)!).flatMap(([key, value]) => typeof value === 'number' ? [[key, value]] : [])) : {},
   };
 }
 
@@ -611,6 +680,33 @@ function preflightFor(state: SandboxTraceState, executor: TraceEntity): TracePre
     operationsCount: asNumber(payload.operations_count),
     dataInstancesCount: asNumber(payload.data_instances_count),
     access: accessFor(payload.rbac_audit),
+  };
+}
+
+function routeFor(calls: TraceCall[]): TraceRoute | undefined {
+  const call = [...calls].reverse().find((item) => item.kind === 'llm' && item.response);
+  if (!call?.response) return undefined;
+  const response = asRecord(parseCallContent(llmResponseContent(call.response.payload)).data) ?? {};
+  const brief = asRecord(response.task_brief) ?? {};
+  const requestMessage = call.request.payload.messages;
+  const userMessage = Array.isArray(requestMessage)
+    ? requestMessage.map((item) => asRecord(item) ?? {}).find((item) => item.role === 'user')?.content
+    : undefined;
+  let input: unknown;
+  if (userMessage !== undefined) {
+    const parsed = parseCallContent(userMessage);
+    input = sanitizeDisplay(parsed.data ?? parsed.text);
+  }
+  if (!asString(response.route) && Object.keys(brief).length === 0 && input === undefined) return undefined;
+  return {
+    route: asString(response.route) || 'unknown',
+    goal: asString(brief.goal),
+    direction: asString(brief.direction),
+    expectedResult: asString(brief.expected_result),
+    entityHints: stringArray(brief.entity_hints),
+    projectHints: stringArray(brief.project_hints),
+    constraints: stringArray(brief.constraints),
+    input,
   };
 }
 
@@ -1571,12 +1667,36 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
     .map((entity): TraceStage | null => {
       const start = startFor(state, entity);
       if (!start) return null;
+      const isPreflight = entity.type === 'orchestrator' && asString(start.payload.role) === 'turn_preflight';
       const isMemory = entity.type === 'orchestrator' && asString(start.payload.role) === 'memory';
       const isMemoryPreparation = entity.type === 'orchestrator' && asString(start.payload.role) === 'memory_preparation';
       const isSynthesis = entity.type === 'synthesis_run';
-      if (!isMemory && !isMemoryPreparation && !isSynthesis) return null;
+      if (!isPreflight && !isMemory && !isMemoryPreparation && !isSynthesis) return null;
       const executorRuns = isSynthesis
         ? [synthesizerExecutorFor(state, entity)].filter((executor): executor is TraceExecutorRun => Boolean(executor))
+        : isPreflight
+          ? (() => {
+              const preflightChildren = [
+                ...entity.childKeys.map((key) => state.entitiesByKey[key]),
+                ...Object.values(state.entitiesByKey).filter((child) => (
+                  child.type === 'llm_call'
+                  && child.parentKey === `turn_preflight:${entity.id}`
+                )),
+              ];
+              const calls = groupLogicalLlmCalls(preflightChildren
+                .filter((child): child is TraceEntity => Boolean(child))
+                .map((child) => callFor(state, child))
+                .filter((call): call is TraceCall => Boolean(call)));
+              const result = executorResultFor(state, entity, 'Turn Preflight', 'turn_preflight', calls);
+              const metrics = metricsFor(state, entity);
+              return [{
+                entity, inspectorKey: `executor:preflight:${entity.key}`, start,
+                task: 'Маршрутизация запроса', executorType: 'TURN_PREFLIGHT', executorName: 'Turn Preflight',
+                executorSlug: 'turn_preflight', kind: 'preflight', calls, result, route: routeFor(calls),
+                info: executorInfoFor(result, calls, metrics.elapsedMs), metrics,
+                prompt: promptFor(eventsFor(state, entity), calls),
+              } satisfies TraceExecutorRun];
+            })()
         : entity.childKeys
           .map((key) => state.entitiesByKey[key])
           .filter((child): child is TraceEntity => Boolean(child))
@@ -1584,10 +1704,10 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           .filter((executor): executor is TraceExecutorRun => Boolean(executor));
       const stage: TraceStage = {
         entity, start, number: plannerStages.length + 1, iterationNumber: plannerStages.length + 1,
-        stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : 'memory',
-        kind: isSynthesis ? 'synthesis' : isMemoryPreparation ? 'memory_preparation' : 'memory_writeback',
-        label: isSynthesis ? 'Подготовка ответа' : isMemoryPreparation ? 'Подготовка памяти' : 'Сохранение памяти',
-        task: isSynthesis ? 'Подготовка финального ответа' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
+        stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : isPreflight ? 'turn_preflight' : 'memory',
+        kind: isSynthesis ? 'synthesis' : isPreflight ? 'turn_preflight' : isMemoryPreparation ? 'memory_preparation' : 'memory_writeback',
+        label: isSynthesis ? 'Подготовка ответа' : isPreflight ? 'Turn Preflight' : isMemoryPreparation ? 'Подготовка контекста' : 'Сохранение контекста диалога',
+        task: isSynthesis ? 'Подготовка финального ответа' : isPreflight ? 'Маршрутизация запроса' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
       };
       if (isMemory || isMemoryPreparation) {

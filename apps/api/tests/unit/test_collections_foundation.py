@@ -224,6 +224,33 @@ def test_document_source_meta_build_and_upsert_artifacts():
     assert get_document_artifact_key(meta, "canonical") == "tenant/doc/canonical/policy.json"
 
 
+def test_document_source_meta_marks_explicit_memory_override():
+    meta = build_document_source_meta(
+        filename="policy.pdf",
+        title="Policy",
+        content_type="application/pdf",
+        size_bytes=128,
+        original_key="tenant/doc/original/policy.pdf",
+        memory_enabled=False,
+    )
+
+    assert meta["memory"] == {"enabled": False, "policy": "explicit"}
+
+
+def test_document_source_meta_marks_collection_memory_policy():
+    meta = build_document_source_meta(
+        filename="policy.pdf",
+        title="Policy",
+        content_type="application/pdf",
+        size_bytes=128,
+        original_key="tenant/doc/original/policy.pdf",
+        memory_enabled=True,
+        memory_policy="collection",
+    )
+
+    assert meta["memory"] == {"enabled": True, "policy": "collection"}
+
+
 def test_table_vector_point_id_is_deterministic():
     point_a = _build_point_id("collection-1", "row-1", "title", 0)
     point_b = _build_point_id("collection-1", "row-1", "title", 0)

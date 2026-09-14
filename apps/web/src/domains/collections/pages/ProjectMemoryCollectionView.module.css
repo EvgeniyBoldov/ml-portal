@@ -84,6 +84,17 @@
   line-height: 1.45;
 }
 
+.procedure {
+  display: grid;
+  gap: var(--sp-1);
+  line-height: 1.45;
+}
+
+.procedure ol {
+  margin: 0;
+  padding-left: var(--sp-4);
+}
+
 .selectedRow td {
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }

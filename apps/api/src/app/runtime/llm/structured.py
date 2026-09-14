@@ -26,7 +26,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
-from app.adapters.interfaces.llm import LLMCallOptions, LLMProviderError
+from app.adapters.interfaces.llm import LLMCallOptions, LLMErrorCode, LLMProviderError
 from app.core.logging import get_logger
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.limits import estimate_tokens
@@ -417,7 +417,10 @@ class StructuredLLMCall:
                 provider_retryable = exc.retryable if isinstance(exc, LLMProviderError) else True
                 adaptive_retry = (
                     isinstance(exc, LLMProviderError)
-                    and exc.code.value == "llm_request_too_large"
+                    and exc.code in {
+                        LLMErrorCode.REQUEST_TOO_LARGE,
+                        LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED,
+                    }
                     and attempt < max_retries
                     and self._shrink_request_for_provider_limit(params)
                 )
@@ -646,6 +649,13 @@ class StructuredLLMCall:
         data = cls._extract_json(raw)
         if data is None:
             raise StructuredCallError("no JSON block detected in LLM response")
+        # Some OpenAI-compatible models insert ``\"\"`` between objects while
+        # serialising long arrays (``[{...}, \"\", {...}]``). This is valid JSON
+        # but never valid runtime data: every list item in our structured
+        # contracts is either an object or a non-empty scalar. Drop only empty
+        # string placeholders before Pydantic validation; all meaningful
+        # fields and the schema remain authoritative.
+        data = cls._drop_empty_list_placeholders(data)
         try:
             return schema.model_validate(data)
         except ValidationError:
@@ -656,6 +666,18 @@ class StructuredLLMCall:
                 return schema.model_validate(coerced)
             except ValidationError as exc:
                 raise StructuredCallError(f"schema validation failed: {exc.errors()}") from exc
+
+    @classmethod
+    def _drop_empty_list_placeholders(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: cls._drop_empty_list_placeholders(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [
+                cls._drop_empty_list_placeholders(item)
+                for item in value
+                if not (isinstance(item, str) and not item.strip())
+            ]
+        return value
 
     @staticmethod
     def _coerce_schema_types(data: Any, schema: Type[T]) -> Any:
@@ -839,7 +861,11 @@ class StructuredLLMCall:
                     "Для terminal=synthesis не используй continue_with_tasks: в такой proposal нет replacement-задач. "
                     "Не повторяй уже сохранённые resolutions. Для каждой текущей незавершённой задачи выбери ровно одно "
                     "действие; continue_with_tasks допустим только если все replacement_task_ids присутствуют в tasks этой proposal.\n"
-                    "Для project knowledge используй только ключ проекта из memory_context.type=project. "
+                    "Memory приходит единым memory_context.type=memory_recall. Используй relevant_knowledge, правила и процедуры "
+                    "только как долговременный контекст; не вызывай низкоуровневые memory tools. Если rag_required=true, "
+                    "до terminal=synthesis обязательно запланируй и получи успешный collection.document.search. "
+                    "Если tool_required=true, не представляй memory как текущее состояние системы: запланируй доступный read-only tool "
+                    "или явно укажи невозможность получить runtime observation. "
                     "Если проект для знания нужен, но ключ отсутствует или контекст неоднозначен, заверши iteration "
                     "terminal=planner и создай задачу получения недостающих данных. Когда вызываешь executor=knowledge, передай точный project_key "
                     "в task.inputs.\n"

@@ -235,7 +235,10 @@ Bad group boundaries:
 Paused-run rule:
 - A task-local `waiting_confirmation` is a persisted sandbox-run state, not a
   completed run. Its confirmation action/context remain available until the
-  run is resumed or cancelled. Free-form clarification starts a new run.
+  run is resumed or cancelled.
+- A TurnPreflight `waiting_input` clarification is a root interaction without
+  a plan or task. Its answer resumes the same sandbox run at mechanical lookup
+  and TurnPreflight.
 - Resume continues the same sandbox run and clears the persisted pause only
   after its immutable resume snapshot has been constructed.
 - A paused run is cancelled by the common resume payload

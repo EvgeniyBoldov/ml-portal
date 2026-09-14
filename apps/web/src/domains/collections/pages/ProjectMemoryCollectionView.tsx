@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import {
   collectionsApi,
-  type ProjectMemoryFact,
+  type ProjectMemoryItem,
   type ProjectMemoryProject,
 } from '@/shared/api/collections';
 import { qk } from '@/shared/api/keys';
@@ -14,6 +14,8 @@ import {
   DataTable,
   EmptyState,
   Icon,
+  Input,
+  Modal,
   Skeleton,
   type DataTableColumn,
 } from '@/shared/ui';
@@ -32,8 +34,8 @@ const PROJECT_COLUMNS: DataTableColumn<ProjectMemoryProject>[] = [
     ),
   },
   {
-    key: 'facts',
-    label: 'ФАКТОВ',
+    key: 'items',
+    label: 'ЗНАНИЙ',
     width: 110,
     align: 'right',
     sortValue: (project) => totalFacts(project),
@@ -47,7 +49,7 @@ const PROJECT_COLUMNS: DataTableColumn<ProjectMemoryProject>[] = [
   },
 ];
 
-const FACT_COLUMNS: DataTableColumn<ProjectMemoryFact>[] = [
+const ITEM_COLUMNS: DataTableColumn<ProjectMemoryItem>[] = [
   {
     key: 'subject',
     label: 'КЛЮЧ',
@@ -57,8 +59,14 @@ const FACT_COLUMNS: DataTableColumn<ProjectMemoryFact>[] = [
   },
   {
     key: 'value',
-    label: 'ЗНАЧЕНИЕ',
-    render: (fact) => <span className={styles.factValue}>{fact.value}</span>,
+    label: 'ЗНАНИЕ',
+    render: (fact) => <MemoryContent fact={fact} />,
+  },
+  {
+    key: 'kind',
+    label: 'ТИП',
+    width: 130,
+    render: (fact) => <Badge tone="neutral">{fact.kind}</Badge>,
   },
   {
     key: 'status',
@@ -71,13 +79,21 @@ const FACT_COLUMNS: DataTableColumn<ProjectMemoryFact>[] = [
 export default function ProjectMemoryCollectionView() {
   const navigate = useNavigate();
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
+  const [projectQueryText, setProjectQueryText] = useState('');
+  const [itemQueryText, setItemQueryText] = useState('');
+  const [itemType, setItemType] = useState('');
+  const [itemState, setItemState] = useState('');
   const overviewQuery = useQuery({
-    queryKey: qk.collections.projectMemoryOverview(),
-    queryFn: () => collectionsApi.getProjectMemoryOverview(),
+    queryKey: qk.collections.projectMemoryOverview({ query: projectQueryText }),
+    queryFn: () => collectionsApi.getProjectMemoryOverview({ query: projectQueryText || undefined }),
   });
   const projectQuery = useQuery({
-    queryKey: qk.collections.projectMemoryProject(selectedProjectKey ?? ''),
-    queryFn: () => collectionsApi.getProjectMemoryProject(selectedProjectKey!),
+    queryKey: qk.collections.projectMemoryProject(selectedProjectKey ?? '', { query: itemQueryText, item_type: itemType, state: itemState }),
+    queryFn: () => collectionsApi.getProjectMemoryProject(selectedProjectKey!, {
+      query: itemQueryText || undefined,
+      item_type: itemType || undefined,
+      state: itemState || undefined,
+    }),
     enabled: selectedProjectKey !== null,
   });
 
@@ -124,6 +140,7 @@ export default function ProjectMemoryCollectionView() {
         <div className={styles.content}>
           <section className={styles.projectsSection} aria-label="Проекты">
             <h2>Проекты</h2>
+            <Input aria-label="Поиск проектов" placeholder="Поиск проекта" value={projectQueryText} onChange={(event) => setProjectQueryText(event.target.value)} />
             <DataTable
               columns={PROJECT_COLUMNS}
               data={projects}
@@ -156,11 +173,29 @@ export default function ProjectMemoryCollectionView() {
                   </div>
                   <ProjectStatusSummary project={projectQuery.data.project} />
                 </div>
+                <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                  <Input aria-label="Поиск знаний" placeholder="Поиск по subject и содержимому" value={itemQueryText} onChange={(event) => setItemQueryText(event.target.value)} />
+                  <select aria-label="Тип знания" value={itemType} onChange={(event) => setItemType(event.target.value)}>
+                    <option value="">Все типы</option>
+                    <option value="description">Описание</option>
+                    <option value="relationship">Связь</option>
+                    <option value="rule">Правило</option>
+                    <option value="constraint">Ограничение</option>
+                    <option value="procedure">Процедура</option>
+                    <option value="decision">Решение</option>
+                  </select>
+                  <select aria-label="Состояние знания" value={itemState} onChange={(event) => setItemState(event.target.value)}>
+                    <option value="">Все состояния</option>
+                    <option value="active">Актуально</option>
+                    <option value="uncertain">Требует проверки</option>
+                    <option value="stale">Устарело</option>
+                  </select>
+                </div>
                 <DataTable
-                  columns={FACT_COLUMNS}
-                  data={projectQuery.data.facts}
-                  keyField="subject"
-                  emptyText="Текущих фактов нет"
+                  columns={ITEM_COLUMNS}
+                  data={projectQuery.data.items}
+                  keyField="id"
+                  emptyText="Текущих знаний нет"
                 />
               </>
             )}
@@ -178,19 +213,66 @@ function totalFacts(project: ProjectMemoryProject): number {
 function ProjectStatusSummary({ project }: { project: ProjectMemoryProject }) {
   return (
     <div className={styles.statusSummary}>
-      {project.status_counts.confirmed ? <FactStatusBadge status="confirmed" count={project.status_counts.confirmed} /> : null}
-      {project.status_counts.pending ? <FactStatusBadge status="pending" count={project.status_counts.pending} /> : null}
-      {project.status_counts.unconfirmed ? <FactStatusBadge status="unconfirmed" count={project.status_counts.unconfirmed} /> : null}
+      {project.status_counts.active ? <FactStatusBadge status="active" count={project.status_counts.active} /> : null}
+      {project.status_counts.uncertain ? <FactStatusBadge status="uncertain" count={project.status_counts.uncertain} /> : null}
+      {project.status_counts.stale ? <FactStatusBadge status="stale" count={project.status_counts.stale} /> : null}
     </div>
   );
 }
 
 function FactStatusBadge({ status, count }: { status: string; count?: number }) {
   const statusMap: Record<string, { label: string; tone: 'success' | 'warn' | 'danger' }> = {
-    confirmed: { label: 'Подтверждён', tone: 'success' },
-    pending: { label: 'Ожидает', tone: 'warn' },
-    unconfirmed: { label: 'Требует проверки', tone: 'danger' },
+    active: { label: 'Актуально', tone: 'success' },
+    uncertain: { label: 'Требует проверки', tone: 'warn' },
+    stale: { label: 'Устарело', tone: 'danger' },
   };
   const view = statusMap[status] ?? { label: status, tone: 'warn' as const };
   return <Badge tone={view.tone}>{count === undefined ? view.label : `${view.label}: ${count}`}</Badge>;
+}
+
+function MemoryContent({ fact }: { fact: ProjectMemoryItem }) {
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+  const evidenceQuery = useQuery({
+    queryKey: ['collections', 'project-memory', 'evidence', fact.id, selectedEvidenceId],
+    queryFn: () => collectionsApi.getProjectMemoryEvidence(fact.id, selectedEvidenceId!),
+    enabled: selectedEvidenceId !== null,
+  });
+  const evidenceControls = fact.evidence_section_ids.length > 0 ? (
+    <details>
+      <summary>Evidence ({fact.evidence_section_ids.length})</summary>
+      {fact.evidence_section_ids.map((sectionId) => <Button key={sectionId} size="sm" variant="ghost" onClick={() => setSelectedEvidenceId(sectionId)}>{sectionId}</Button>)}
+      <Modal open={selectedEvidenceId !== null} onClose={() => setSelectedEvidenceId(null)} title={evidenceQuery.data?.label ?? 'Evidence'}>
+        {evidenceQuery.isLoading ? 'Загрузка evidence…' : evidenceQuery.isError ? 'Evidence недоступен.' : <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{evidenceQuery.data?.excerpt}</pre>}
+      </Modal>
+    </details>
+  ) : null;
+  if (fact.kind !== 'procedure') {
+    const summary = typeof fact.content.summary === 'string' ? fact.content.summary : fact.value;
+    return <><span className={styles.factValue}>{summary}</span>{evidenceControls}</>;
+  }
+  const content = fact.content;
+  const goal = typeof content.goal === 'string' ? content.goal : fact.subject;
+  const conditions = Array.isArray(content.applicability_conditions) ? content.applicability_conditions : [];
+  const approvals = Array.isArray(content.required_approvals) ? content.required_approvals : [];
+  const prechecks = Array.isArray(content.prechecks) ? content.prechecks : [];
+  const steps = Array.isArray(content.steps) ? content.steps : [];
+  const verification = Array.isArray(content.verification) ? content.verification : [];
+  const rollback = content.rollback && typeof content.rollback === 'object' ? content.rollback as Record<string, unknown> : null;
+  const exceptions = Array.isArray(content.exceptions) ? content.exceptions : [];
+  return (
+    <div className={styles.procedure}>
+      <strong>{goal}</strong>
+      {conditions.length > 0 ? <div>Условия: {conditions.map(String).join('; ')}</div> : null}
+      {approvals.length > 0 ? <div>Согласования: {approvals.map(String).join('; ')}</div> : null}
+      {prechecks.length > 0 ? <div>Предварительные проверки: {prechecks.map(String).join('; ')}</div> : null}
+      {steps.length > 0 ? <ol>{steps.map((step, index) => {
+        const value = step as Record<string, unknown>;
+        return <li key={index}>{String(value.instruction ?? '')}{value.expected_result ? ` — результат: ${String(value.expected_result)}` : ''}{value.confirmation_required ? ' (требуется подтверждение)' : ''}</li>;
+      })}</ol> : null}
+      {verification.length > 0 ? <span>Проверка: {verification.map(String).join('; ')}</span> : null}
+      {rollback ? <div>Откат: {String(rollback.mode === 'steps' ? (rollback.steps as unknown[] | undefined)?.map(String).join('; ') : rollback.reason ?? 'не применим')}</div> : null}
+      {exceptions.length > 0 ? <div>Исключения: {exceptions.map(String).join('; ')}</div> : null}
+      {evidenceControls}
+    </div>
+  );
 }

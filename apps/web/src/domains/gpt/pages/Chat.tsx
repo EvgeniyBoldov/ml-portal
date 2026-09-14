@@ -11,7 +11,7 @@ import { Icon } from '@/shared/ui/Icon';
 export default function Chat() {
   const { chatId } = useParams();
   const state = useChatMessagesState();
-  const { loadMessages, setCurrentChat, clearPendingState, sendMessageStream, abortStream, resumeStream } = useChatActions();
+  const { loadMessages, loadPausedRun, setCurrentChat, clearPendingState, sendMessageStream, abortStream, resumeStream } = useChatActions();
   const historyRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = React.useState(false);
   const [streamError, setStreamError] = React.useState<string | null>(null);
@@ -68,12 +68,13 @@ export default function Chat() {
     clearPendingState();
     setClarifyInput('');
     setCurrentChat(chatId);
+    void loadPausedRun(chatId);
     if (!current?.loaded) {
       loadMessages(chatId).catch(console.error);
     }
     setBusy(false);
     setStreamError(null);
-  }, [chatId, current?.loaded, clearPendingState, setCurrentChat, loadMessages]);
+  }, [chatId, current?.loaded, clearPendingState, setCurrentChat, loadMessages, loadPausedRun]);
 
   // Handle send with agent support
   const handleSend = async (
@@ -127,23 +128,22 @@ export default function Chat() {
 
   const handleClarifySubmit = async () => {
     if (!clarifyInput.trim() || clarifyBusy) return;
+    const runId = String(state.pausedRunId || '').trim();
+    if (!runId) {
+      setStreamError('Сессия ожидания уже завершена или устарела. Отправьте сообщение заново.');
+      return;
+    }
     setClarifyBusy(true);
     setStreamError(null);
     try {
       const userInput = clarifyInput.trim();
-      let resumed = false;
-      if (state.pausedRunId) {
-        resumed = await resumeStream(
-          state.pausedRunId,
-          'input',
-          userInput,
-          () => {},
-          (err: string) => setStreamError(_friendlyError(err)),
-        );
-      } else {
-        await handleSend(userInput, {});
-        resumed = true;
-      }
+      const resumed = await resumeStream(
+        runId,
+        'input',
+        userInput,
+        () => {},
+        (err: string) => setStreamError(_friendlyError(err)),
+      );
       if (resumed) {
         setClarifyInput('');
       }
@@ -173,6 +173,7 @@ export default function Chat() {
       );
       if (cancelled) {
         setClarifyInput('');
+        if (chatId) await loadMessages(chatId);
       }
     } finally {
       setClarifyBusy(false);
@@ -289,6 +290,7 @@ export default function Chat() {
         {pendingConfirmation ? (
           <ConfirmationPrompt
             item={pendingConfirmation}
+            disabled={clarifyBusy}
             onCancel={() => { void handleInteractionCancel(); }}
             onConfirm={async () => {
               if (clarifyBusy) return;
@@ -309,9 +311,9 @@ export default function Chat() {
           />
         ) : isWaitingInput ? (
           <div className={styles.clarifyBox}>
-            <div className={styles.waitingInputText}>
+            <div className={styles.clarifyHeader}>
               <Icon name="help-circle" size={16} />
-              <span>{state.pendingInput?.question || state.pendingInput?.reason || 'Агент ожидает вашего ответа'}</span>
+              <h3>{state.pendingInput?.question || state.pendingInput?.reason || 'Уточните, пожалуйста, запрос'}</h3>
             </div>
             <div className={styles.clarifyRow}>
               <textarea

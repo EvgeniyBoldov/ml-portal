@@ -28,7 +28,10 @@ from app.runtime.memory.fact_extractor import (
     _LLMFactCandidate,
     _LLMFactOutput,
 )
-from app.runtime.memory.preparer import MemoryPreparer, _PreparationOutput
+from app.runtime.memory.preparer import (
+    MemoryPreparer, _PreparationOutput, _conservative_intent,
+    _requires_current_observation,
+)
 from app.runtime.memory.dto import FactDTO
 from app.models.memory import FactSource
 
@@ -43,6 +46,11 @@ def _llm_result(value):
         request_messages=[],
         request_params={},
     )
+
+
+def test_current_state_request_requires_runtime_observation() -> None:
+    assert _requires_current_observation("Какой сейчас статус коммутатора?") is True
+    assert _requires_current_observation("Опиши процедуру изменения VLAN") is False
 
 
 # ============================================================= FactExtractor
@@ -88,6 +96,30 @@ async def test_fact_extractor_maps_valid_candidates_to_dtos(extractor):
 
 
 @pytest.mark.asyncio
+async def test_fact_extractor_sends_primary_text_only_once(extractor):
+    extractor._structured.invoke = AsyncMock(return_value=_llm_result(_LLMFactOutput()))
+    source_text = "Термин\nОпределение"
+
+    await extractor.extract(
+        user_message=source_text,
+        evidence=[FactEvidence(
+            source_id="user_message", source_type="user_message",
+            source_ref="turn-1", text=source_text,
+        )],
+        preflight_candidates=[{
+            "scope": "tenant", "kind": "glossary",
+            "subject": "Термин", "value": "Определение",
+        }],
+        known_facts=[], tenant_id=uuid4(),
+    )
+
+    payload = extractor._structured.invoke.await_args.kwargs["payload"]
+    assert "user_message" not in payload
+    assert payload["evidence"][0]["text"] == source_text
+    assert payload["preflight_candidates"][0]["subject"] == "Термин"
+
+
+@pytest.mark.asyncio
 async def test_fact_extractor_drops_unknown_scope(extractor):
     uid = uuid4()
     extractor._structured.invoke = AsyncMock(
@@ -110,6 +142,21 @@ async def test_fact_extractor_drops_unknown_scope(extractor):
     )
     assert len(facts) == 1
     assert facts[0].subject == "user.name"
+
+
+def test_fact_extractor_records_safe_validation_decisions() -> None:
+    result = FactExtractor._to_dtos_with_decisions(
+        _LLMFactOutput(facts=[
+            _LLMFactCandidate(scope="global", subject="x", value="y", confidence=1.0),
+            _LLMFactCandidate(scope="user", subject="user.name", value="Anna", confidence=1.0),
+        ]),
+        user_message="My name is Anna", evidence=[FactEvidence(
+            source_id="user_message", source_type="user_message", source_ref="turn-1", text="My name is Anna",
+        )], user_id=uuid4(), tenant_id=None, chat_id=None,
+    )
+
+    assert [item.reason_code for item in result.decisions] == ["unknown_scope", "evidence_validated"]
+    assert result.decisions[1].compact_view()["candidate_ids"] == ["extractor:2"]
 
 
 @pytest.mark.asyncio
@@ -175,7 +222,7 @@ async def test_fact_extractor_caps_at_max_per_turn(extractor):
     facts = await extractor.extract(
         user_message=" ".join(f"v{i}" for i in range(20)), agent_results=[], known_facts=[], user_id=uid,
     )
-    assert len(facts) == 8
+    assert len(facts) == 12
 
 
 @pytest.mark.asyncio
@@ -275,6 +322,99 @@ async def test_memory_preparer_selects_only_llm_indexed_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_memory_preparer_fallback_preserves_current_state_tool_requirement() -> None:
+    preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
+    preparer._structured.invoke = AsyncMock(side_effect=RuntimeError("offline"))
+    result = await preparer.prepare(
+        request_text="Какой сейчас статус коммутатора?", facts=[], project_glossary=[], glossary=[],
+        user_id=None, tenant_id=None, chat_id=None, sandbox_overrides=None,
+    )
+    assert result.fallback is True
+    assert result.tool_required is True
+
+
+def test_action_request_cannot_be_downgraded_by_memory_selector() -> None:
+    assert _conservative_intent("Измени VLAN в production", "informational") == "action"
+
+
+@pytest.mark.asyncio
+async def test_memory_preparer_adds_selected_project_knowledge() -> None:
+    preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
+    preparer._structured.invoke = AsyncMock(return_value=_llm_result(
+        _PreparationOutput(memory_indexes=[0])
+    ))
+
+    result = await preparer.prepare(
+        request_text="Как поменять VLAN в Сфере?",
+        facts=[],
+        project_glossary=[{"id": "p1", "key": "sphere", "name": "Сфера", "aliases": []}],
+        project_facts=[
+            {
+                "project_id": "p1",
+                "project_key": "sphere",
+                "kind": "procedure",
+                "subject": "network.change_vlan",
+                "value": "Перед изменением VLAN сохранить конфигурацию.",
+                "confidence": 0.95,
+                "source_ref": "document-1#section-3",
+            },
+        ],
+        glossary=[], user_id=None, tenant_id=None, chat_id=None, sandbox_overrides=None,
+    )
+
+    assert result.selected_project_fact_count == 1
+    assert result.items[-1]["type"] == "project_knowledge"
+    assert result.items[-1]["kind"] == "procedure"
+    assert result.items[-1]["project_key"] == "sphere"
+    # A how-to request is informational; executing the change is a separate
+    # intent and must not force a live runtime observation.
+    assert result.needs_source_check is False
+    assert result.intent == "informational"
+
+
+@pytest.mark.asyncio
+async def test_memory_preparer_keeps_model_selected_semantic_hit_without_lexical_overlap() -> None:
+    preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
+    preparer._structured.invoke = AsyncMock(return_value=_llm_result(
+        _PreparationOutput(memory_indexes=[0], intent="informational")
+    ))
+    result = await preparer.prepare(
+        request_text="Какой порядок для сегментации сети?", facts=[], project_glossary=[], glossary=[],
+        project_facts=[{
+            "project_id": None, "kind": "procedure", "subject": "switch.vlan_change",
+            "value": "Перед изменением VLAN сохранить конфигурацию.", "confidence": 0.95,
+            "state": "active",
+        }],
+        user_id=None, tenant_id=None, chat_id=None, sandbox_overrides=None,
+    )
+    assert result.selected_project_fact_count == 1
+    assert result.items[0]["subject"] == "switch.vlan_change"
+
+
+@pytest.mark.asyncio
+async def test_memory_preparer_keeps_active_procedure_when_its_source_is_old_but_not_stale() -> None:
+    preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
+    preparer._structured.invoke = AsyncMock(return_value=_llm_result(
+        _PreparationOutput(memory_indexes=[0], intent="informational")
+    ))
+
+    result = await preparer.prepare(
+        request_text="Что известно о VLAN в Сфере?",
+        facts=[],
+        project_glossary=[{"id": "p1", "key": "sphere", "name": "Сфера", "aliases": []}],
+        project_facts=[{
+            "project_id": "p1", "project_key": "sphere", "kind": "procedure",
+            "subject": "network.change_vlan", "value": "Сохранить конфигурацию.",
+            "confidence": 0.95, "observed_at": "2020-01-01T00:00:00+00:00",
+        }],
+        glossary=[], user_id=None, tenant_id=None, chat_id=None, sandbox_overrides=None,
+    )
+
+    assert any(item.get("type") == "project_knowledge" for item in result.items)
+    assert "semantic_memory_stale" not in result.source_check_reasons
+
+
+@pytest.mark.asyncio
 async def test_memory_preparer_degrades_to_empty_context() -> None:
     preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
     preparer._structured.invoke = AsyncMock(side_effect=RuntimeError("offline"))
@@ -356,7 +496,7 @@ def test_fact_extractor_kind_is_a_strict_storage_route() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fact_extractor_promotes_grounded_glossary_to_global_candidate(extractor) -> None:
+async def test_fact_extractor_keeps_grounded_glossary_in_tenant_candidate(extractor) -> None:
     extractor._structured.invoke = AsyncMock(return_value=_llm_result(
         _LLMFactOutput(facts=[_LLMFactCandidate(
             scope="tenant", kind="glossary", subject="срк",
@@ -376,7 +516,7 @@ async def test_fact_extractor_promotes_grounded_glossary_to_global_candidate(ext
     )
 
     assert len(facts) == 1
-    assert facts[0].metadata["glossary_scope"] == "global"
+    assert facts[0].metadata["glossary_scope"] is None
 
 
 @pytest.mark.asyncio

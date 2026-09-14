@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -16,6 +17,10 @@ from app.services.model_call_config_service import ModelCallConfig
 
 class _Result(BaseModel):
     value: str
+
+
+class _ItemsResult(BaseModel):
+    items: list[dict[str, str]]
 
 
 def test_structured_prompt_generates_contract_for_non_synthesizer_roles():
@@ -48,6 +53,34 @@ def test_structured_prompt_keeps_database_requirements_for_synthesizer():
     )
 
     assert "Редакторские требования из БД" in prompt
+
+
+def test_turn_preflight_prompt_is_built_from_database_sections_and_locked_schema():
+    prompt = StructuredLLMCall._compile_role_prompt(
+        {
+            "role_type": SystemLLMRoleType.TURN_PREFLIGHT.value,
+            "identity": "DB preflight identity",
+            "rules": "DB preflight routing rules",
+            "output_requirements": "DB preflight JSON requirements",
+        },
+        None,
+        schema=_Result,
+    )
+
+    assert "DB preflight identity" in prompt
+    assert "DB preflight routing rules" in prompt
+    assert "DB preflight JSON requirements" in prompt
+    assert "# RUNTIME RESPONSE CONTRACT" in prompt
+    assert '"value"' in prompt
+
+
+def test_structured_parser_drops_empty_list_placeholders_only():
+    result = StructuredLLMCall._parse_and_validate(
+        '{"items":[{"value":"one"},"",{"value":"two"}]}',
+        _ItemsResult,
+    )
+
+    assert result.items == [{"value": "one"}, {"value": "two"}]
 
 
 def test_structured_retry_delay_uses_backoff_and_provider_hint():
@@ -162,6 +195,43 @@ async def test_structured_call_preserves_normalized_error_code_in_trace():
     assert responses[-1].data["error_code"] == "llm_request_too_large"
     assert responses[-1].data["retryable"] is False
     assert client.chat.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_structured_call_retries_json_validation_rejection_with_json_object():
+    client = AsyncMock()
+    observed_params = []
+
+    async def chat(*_args, **kwargs):
+        observed_params.append(copy.deepcopy(kwargs["params"]))
+        if len(observed_params) == 1:
+            raise LLMProviderError(
+                code=LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED,
+                safe_message="LLM does not support structured output",
+                retryable=False,
+                status_code=400,
+            )
+        return {"choices": [{"message": {"content": '{"value": "ok"}'}}]}
+
+    client.chat = chat
+    call = StructuredLLMCall(session=AsyncMock(), llm_client=client)
+    call.role_service.get_role_config = AsyncMock(
+        return_value={"model": "gpt-oss", "max_retries": 1, "timeout_s": 1}
+    )
+    call.model_call_config_service.resolve = AsyncMock(
+        return_value=ModelCallConfig(max_output_tokens=900, request_timeout_s=1, max_retries=1)
+    )
+
+    result = await call.invoke(
+        role=SystemLLMRoleType.TURN_PREFLIGHT,
+        payload={"input": "hello"},
+        schema=_Result,
+    )
+
+    assert result.value.value == "ok"
+    first_params, second_params = observed_params
+    assert first_params["response_format"]["type"] == "json_schema"
+    assert second_params["response_format"] == {"type": "json_object"}
 
 
 @pytest.mark.asyncio

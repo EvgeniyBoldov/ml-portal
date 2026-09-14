@@ -52,6 +52,8 @@ async def upload_collection_document(
     scope: str | None = Form(None),
     tags: str | None = Form(None),
     meta_fields: str | None = Form(None),
+    memory_enabled: bool | None = Form(None),
+    project_keys: str | None = Form(None),
     auto_ingest: bool = Form(True),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
@@ -75,6 +77,13 @@ async def upload_collection_document(
             extra_meta = json.loads(meta_fields)
         except json.JSONDecodeError:
             extra_meta = {}
+    doc_project_keys: list[str] = []
+    if project_keys:
+        try:
+            raw_project_keys = json.loads(project_keys)
+            doc_project_keys = [str(value).strip().lower() for value in raw_project_keys if str(value).strip()] if isinstance(raw_project_keys, list) else []
+        except json.JSONDecodeError:
+            doc_project_keys = [value.strip().lower() for value in project_keys.split(",") if value.strip()]
 
     redis = get_redis_client()
     event_publisher = RAGEventPublisher(redis) if redis else None
@@ -97,6 +106,8 @@ async def upload_collection_document(
         scope=scope,
         tags=doc_tags,
         meta_fields=extra_meta,
+        memory_enabled=memory_enabled,
+        project_keys=doc_project_keys,
     )
 
     if auto_ingest:
@@ -119,7 +130,7 @@ async def list_collection_documents(
 ):
     from sqlalchemy import func as sa_func
     from app.models.rag import RAGDocument
-    from app.models.rag_ingest import Source, DocumentCollectionMembership
+    from app.models.rag_ingest import Source, DocumentCollectionMembership, RAGStatus
 
     try:
         collection = await _resolve_collection(collection_id, session, user)
@@ -155,6 +166,18 @@ async def list_collection_documents(
             document_meta = meta.get("document", {})
             collection_meta = meta.get("collection", {})
             artifacts = meta.get("artifacts", {})
+            memory_meta = dict(meta.get("memory") or {})
+            memory_policy = str(memory_meta.get("policy") or "collection")
+            effective_memory_enabled = (
+                bool(memory_meta.get("enabled"))
+                if memory_policy == "explicit" or "enabled" in memory_meta
+                else bool(collection.memory_enabled)
+            )
+            memory_status = (await session.execute(select(RAGStatus).where(
+                RAGStatus.doc_id == doc.id,
+                RAGStatus.node_type == "memory",
+                RAGStatus.node_key == "extract",
+            ))).scalar_one_or_none()
 
             agg_status = doc.agg_status
             if not agg_status:
@@ -195,6 +218,14 @@ async def list_collection_documents(
                 "s3_key": artifacts.get("original", {}).get("key"),
                 "document": document_meta,
                 "collection": collection_meta,
+                "memory": {
+                    "policy": memory_policy,
+                    "enabled": bool(memory_meta.get("enabled")) if "enabled" in memory_meta else None,
+                    "effective_enabled": effective_memory_enabled,
+                    "project_keys": list(memory_meta.get("project_keys") or []),
+                    "extraction_status": memory_status.status if memory_status is not None else "not_queued",
+                    "extraction_metrics": dict(memory_status.metrics_json or {}) if memory_status is not None else {},
+                },
                 "artifacts": {
                     kind: artifact for kind, artifact in artifacts.items() if artifact.get("key")
                 },

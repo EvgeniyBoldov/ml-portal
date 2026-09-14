@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import {
@@ -12,6 +13,7 @@ import {
   DataTable,
   EmptyState,
   Icon,
+  Input,
   Skeleton,
   type DataTableColumn,
 } from '@/shared/ui';
@@ -51,8 +53,8 @@ const GLOSSARY_COLUMNS: DataTableColumn<GlossaryCatalogEntry>[] = [
     label: 'ОБЛАСТЬ',
     width: 150,
     render: (entry) => (
-      <Badge tone={entry.scope === 'global' ? 'info' : 'success'}>
-        {entry.scope === 'global' ? 'Общий' : 'Текущий tenant'}
+      <Badge tone={entry.scope === 'global' ? 'info' : entry.scope === 'user' ? 'neutral' : 'success'}>
+        {entry.scope === 'global' ? 'Компания' : entry.scope === 'user' ? 'Личный' : 'Текущий tenant'}
       </Badge>
     ),
   },
@@ -60,9 +62,11 @@ const GLOSSARY_COLUMNS: DataTableColumn<GlossaryCatalogEntry>[] = [
 
 export default function GlossaryCollectionView() {
   const navigate = useNavigate();
+  const [query, setQuery] = useState('');
+  const [scope, setScope] = useState('');
   const glossaryQuery = useQuery({
-    queryKey: qk.collections.glossaryOverview(),
-    queryFn: () => collectionsApi.getGlossaryOverview(),
+    queryKey: qk.collections.glossaryOverview({ query, scope }),
+    queryFn: () => collectionsApi.getGlossaryOverview({ query: query || undefined, scope: scope || undefined }),
   });
 
   if (glossaryQuery.isLoading) {
@@ -98,6 +102,15 @@ export default function GlossaryCollectionView() {
       </header>
 
       <main className={styles.content}>
+        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+          <Input aria-label="Поиск по глоссарию" placeholder="Поиск термина, алиаса или определения" value={query} onChange={(event) => setQuery(event.target.value)} />
+          <select aria-label="Область глоссария" value={scope} onChange={(event) => setScope(event.target.value)}>
+            <option value="">Все области</option>
+            <option value="global">Компания</option>
+            <option value="tenant">Tenant</option>
+            <option value="user">Личные</option>
+          </select>
+        </div>
         {entries.length === 0 ? (
           <EmptyState
             title="В глоссарии пока нет терминов"

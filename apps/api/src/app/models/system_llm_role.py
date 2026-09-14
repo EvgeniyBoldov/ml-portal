@@ -22,9 +22,12 @@ class SystemLLMRoleType(str, Enum):
     """System LLM role types."""
     PLANNER = "planner"
     MEMORY = "memory"
+    TURN_PREFLIGHT = "turn_preflight"
     SYNTHESIZER = "synthesizer"
     FACT_EXTRACTOR = "fact_extractor"
     FACT_COMPACTOR = "fact_compactor"
+    DOCUMENT_MEMORY_EXTRACTOR = "document_memory_extractor"
+    MEMORY_EVALUATOR = "memory_evaluator"
 
 
 class RetryBackoffType(str, Enum):
@@ -48,10 +51,10 @@ class SystemLLMRole(Base):
     
     # === Role Identification ===
     role_type: Mapped[str] = mapped_column(
-        String(20),
-        CheckConstraint("role_type IN ('planner', 'memory', 'synthesizer', 'fact_extractor', 'fact_compactor')", name="check_system_llm_role_type"),
+        String(32),
+        CheckConstraint("role_type IN ('planner', 'memory', 'turn_preflight', 'synthesizer', 'fact_extractor', 'fact_compactor', 'document_memory_extractor', 'memory_evaluator')", name="check_system_llm_role_type"),
         nullable=False,
-        comment="Role type: planner | memory | synthesizer | fact_extractor | fact_compactor"
+        comment="Role type: planner | memory | turn_preflight | synthesizer | fact_extractor | fact_compactor | document_memory_extractor"
     )
     
     # === Prompt Parts ===

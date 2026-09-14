@@ -15,11 +15,64 @@ from app.runtime.entity_ids import (
 from app.runtime.orchestrator_contracts import (
     AgentTaskContract, TaskContractMode, TaskExecutionReceipt, IterationProposal, PlanRequest, PlannerContext,
     SchedulerActionKind, TaskAttemptFailure, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
-    FreshnessPolicy, TaskOutputFulfillment,
+    FreshnessPolicy, TaskOutputFulfillment, TerminalKind,
 )
 from app.runtime.plan_store import PlanValidationError
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
+from app.runtime.memory.tool_ledger import canonical_operation_name, document_search_evidence_document_ids
+
+
+def _recall_requires_rag(memory_context: Any) -> bool:
+    return any(
+        isinstance(item, dict) and item.get("type") == "memory_recall" and item.get("rag_required")
+        for item in memory_context or []
+    )
+
+
+def _recall_requires_tool(memory_context: Any) -> bool:
+    return any(
+        isinstance(item, dict) and item.get("type") == "memory_recall" and item.get("tool_required")
+        for item in memory_context or []
+    )
+
+
+def _has_successful_runtime_observation(runtime_state: Any) -> bool:
+    """Accept only successful read observations, never arbitrary tool calls."""
+    read_markers = (".get", ".get_", ".read", ".list", ".search", ".query", ".status", ".info", ".describe", ".aggregate")
+    write_markers = (".create", ".update", ".delete", ".write", ".fill", ".apply", ".change", ".set", ".run", ".execute")
+    entries = getattr(getattr(runtime_state, "tool_ledger", None), "entries", [])
+    for entry in entries:
+        if getattr(entry, "status", None) != "succeeded":
+            continue
+        operation = canonical_operation_name(str(getattr(entry, "operation", "")))
+        if operation in {"collection.document.search", "collection.table.search"}:
+            continue
+        if any(marker in operation for marker in read_markers) and not any(marker in operation for marker in write_markers):
+            return True
+    return False
+
+
+def _has_successful_rag_evidence(runtime_state: Any, memory_context: Any = None) -> bool:
+    """Require a document-search receipt relevant to recalled source evidence."""
+    expected_document_ids = {
+        str(ref.get("document_id") or "").strip()
+        for item in memory_context or []
+        if isinstance(item, dict) and item.get("type") == "memory_recall"
+        for ref in item.get("source_references") or []
+        if isinstance(ref, dict) and str(ref.get("document_id") or "").strip()
+    }
+    entries = getattr(getattr(runtime_state, "tool_ledger", None), "entries", [])
+    for entry in entries:
+        if (
+            getattr(entry, "status", None) != "succeeded"
+            or canonical_operation_name(str(getattr(entry, "operation", ""))) != "collection.document.search"
+        ):
+            continue
+        matched_document_ids = document_search_evidence_document_ids(getattr(entry, "result_data", None))
+        if not expected_document_ids or expected_document_ids & matched_document_ids:
+            return True
+    return False
 
 
 class Planner(Protocol):
@@ -268,7 +321,8 @@ class GraphOrchestrator:
         return PlanRequest(
             context=PlannerContext(goal=goal, trigger=trigger, execution_ledger=ledger,
                                    available_agents=available_agents, available_artifacts=available_artifacts,
-                                   memory_context=list(planner_kwargs.get("planner_memory_context") or [])),
+                                   memory_context=list(planner_kwargs.get("planner_memory_context") or []),
+                                   task_brief=dict(planner_kwargs.get("task_brief") or {})),
             plan_id=plan_id,
             run_id=UUID(str(snapshot["root_run_id"])),
         )
@@ -352,6 +406,22 @@ class GraphOrchestrator:
         prior_tasks = {str(item.get("task_id")): item for item in ledger.get("tasks", [])}
         need_items = {(str(item.get("task_id")), str(item.get("ref"))): item for item in ledger.get("needs", [])}
         proposed = {task.task_id: task for task in proposal.tasks}
+        # Resolutions describe dispositions for tasks from the previous
+        # ledger, never tasks introduced by this proposal. Providers can
+        # still emit a semantically misplaced resolution after producing a
+        # structurally valid proposal. It cannot affect execution and must
+        # not make an otherwise executable initial iteration fail.
+        current_task_resolutions = [
+            resolution for resolution in proposal.resolutions
+            if resolution.task_id in proposed and resolution.task_id not in prior_tasks
+        ]
+        if current_task_resolutions:
+            proposal = proposal.model_copy(update={
+                "resolutions": [
+                    resolution for resolution in proposal.resolutions
+                    if resolution not in current_task_resolutions
+                ],
+            })
         # A completed task has no open disposition left to resolve. Models
         # sometimes repeat an ``accept_partial`` resolution when moving from
         # terminal=planner to terminal=synthesis; treating that harmless
@@ -467,6 +537,20 @@ class GraphOrchestrator:
             **planner_kwargs,
         )
         proposal = self._compile(proposal, available_agents, request.context.execution_ledger)
+        if (
+            proposal.terminal == TerminalKind.SYNTHESIS
+            and _recall_requires_rag(planner_kwargs.get("planner_memory_context"))
+            and not _has_successful_rag_evidence(
+                planner_kwargs.get("runtime_state"), planner_kwargs.get("planner_memory_context"),
+            )
+        ):
+            raise PlanValidationError("memory recall requires successful collection.document.search before synthesis")
+        if (
+            proposal.terminal == TerminalKind.SYNTHESIS
+            and _recall_requires_tool(planner_kwargs.get("planner_memory_context"))
+            and not _has_successful_runtime_observation(planner_kwargs.get("runtime_state"))
+        ):
+            raise PlanValidationError("memory recall requires a successful runtime observation before synthesis")
         if proposal.synthesis_brief is not None and proposal.synthesis_brief.user_question != goal:
             raise PlanValidationError("synthesis brief user_question must equal the immutable plan goal")
         await self.store.apply_iteration(plan_id, proposal, iteration_id=iteration_entity_id)

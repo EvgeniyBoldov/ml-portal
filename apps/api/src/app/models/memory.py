@@ -19,7 +19,7 @@ Design notes
   free audit trail and a clean "forget" primitive (soft-delete by
   setting `superseded_by`).
 * `subject` is a canonical slot key: e.g. `user.name`,
-  `user.stack.current`, `project.repo`, `department.standard_db`. It
+  `user.stack.current`, `department.standard_db`. It
   is what callers query on, so it is **indexed** — both alone and in
   composite with `scope`.
 * `DialogueSummary` is **per-chat**, `chat_id` is the primary key. We
@@ -64,7 +64,6 @@ class FactScope(str, Enum):
     """
     USER = "user"
     TENANT = "tenant"
-    PROJECT = "project"
 
 
 class FactStatus(str, Enum):
@@ -101,10 +100,7 @@ class Fact(Base):
         Index("ix_facts_tenant_scope", "tenant_id", "scope"),
         Index("ix_facts_owner_subject_active", "owner_type", "owner_id", "subject",
               postgresql_where="superseded_by IS NULL"),
-        CheckConstraint(
-            "scope IN ('user', 'tenant', 'project')",
-            name="ck_facts_scope",
-        ),
+        CheckConstraint("scope IN ('user', 'tenant')", name="ck_facts_scope"),
         CheckConstraint(
             "source IN ('user_utterance', 'tool_result', 'manual', 'system', 'agent_result')",
             name="ck_facts_source",
@@ -129,12 +125,6 @@ class Fact(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=True,
     )
-    project_id: Mapped[Optional[UUID]] = mapped_column(
-        PGUUID(as_uuid=True),
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
     # Generic ownership is the canonical contract for new rows. Legacy
     # user_id/tenant_id/chat_id remain during the compatibility transition.
@@ -147,7 +137,7 @@ class Fact(Base):
     subject: Mapped[str] = mapped_column(
         String(200),
         nullable=False,
-        comment="Canonical slot key, e.g. 'user.name', 'project.repo'.",
+        comment="Canonical slot key, e.g. 'user.name', 'department.standard_db'.",
     )
     value: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_value: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
@@ -215,6 +205,170 @@ class FactObservation(Base):
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     source_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     source_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class MemoryItem(Base):
+    """Typed, document-derived semantic memory.
+
+    Unlike legacy ``Fact``, a MemoryItem may carry a complete procedure or
+    rule in ``content``.  It is intentionally source-backed and never becomes
+    active without at least one MemoryItemSource row.
+    """
+
+    __tablename__ = "memory_items"
+    __table_args__ = (
+        Index(
+            "uq_memory_items_identity", "scope", "item_type",
+            text("COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
+            "normalized_subject", unique=True,
+        ),
+        Index("ix_memory_items_project_active", "project_id", "state"),
+        Index("ix_memory_items_scope_subject", "scope", "subject"),
+        CheckConstraint("scope IN ('company', 'project')", name="ck_memory_items_scope"),
+        CheckConstraint("state IN ('active', 'stale', 'uncertain')", name="ck_memory_items_state"),
+        CheckConstraint(
+            "item_type IN ('description', 'relationship', 'rule', 'constraint', 'procedure', 'decision')",
+            name="ck_memory_items_type",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    item_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True,
+    )
+    owner_type: Mapped[str] = mapped_column(String(32), nullable=False, default="company", server_default="company")
+    owner_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    applicability: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    visibility: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{\"mode\": \"source\"}'::jsonb"))
+    subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    normalized_subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    extraction_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, server_default="1")
+    project_resolution_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    source_trust: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, server_default="1")
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    last_verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class MemoryItemSource(Base):
+    """A bounded provenance binding from semantic memory to a canonical document section."""
+
+    __tablename__ = "memory_item_sources"
+    __table_args__ = (
+        Index(
+            "uq_memory_item_sources_binding",
+            "memory_item_id", "document_id", "canonical_checksum", "section_id", unique=True,
+        ),
+        Index("ix_memory_item_sources_document", "document_id", "canonical_checksum"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    memory_item_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("memory_items.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    document_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    canonical_checksum: Mapped[str] = mapped_column(String(128), nullable=False)
+    section_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    start_offset: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    end_offset: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    excerpt_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class MemoryClaim(Base):
+    """One source-backed extraction claim, prior to semantic consolidation."""
+
+    __tablename__ = "memory_claims"
+    __table_args__ = (
+        Index(
+            "uq_memory_claim_source_identity", "document_id", "canonical_checksum", "scope", "item_type",
+            text("COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
+            "normalized_subject", unique=True,
+        ),
+        Index("ix_memory_claims_item_state", "memory_item_id", "state"),
+        CheckConstraint("scope IN ('company', 'project')", name="ck_memory_claims_scope"),
+        CheckConstraint("state IN ('active', 'stale', 'conflict')", name="ck_memory_claims_state"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    memory_item_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("memory_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=False, index=True)
+    canonical_checksum: Mapped[str] = mapped_column(String(128), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    item_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    # NULL means company-visible source; a value means evidence available
+    # only through that tenant's local document scope.
+    visibility_tenant_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True,
+    )
+    applicability: Mapped[Dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"),
+    )
+    normalized_subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_section_ids: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    extraction_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, server_default="1")
+    project_resolution_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    source_trust: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, server_default="1")
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class MemoryRelation(Base):
+    """Typed edge from a semantic item to a company entity."""
+
+    __tablename__ = "memory_relations"
+    __table_args__ = (
+        Index("uq_memory_relations_edge", "memory_item_id", "document_id", "relation_type", "target_type", "target_id", unique=True),
+        Index("ix_memory_relations_target", "target_type", "target_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    memory_item_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("memory_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=True, index=True,
+    )
+    relation_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class MemoryItemEvaluation(Base):
+    """Evidence-only trust decision for one semantic memory item."""
+
+    __tablename__ = "memory_item_evaluations"
+    __table_args__ = (
+        Index("uq_memory_item_evaluations_item_call", "memory_item_id", "tool_call_id", unique=True),
+        Index("ix_memory_item_evaluations_item_created", "memory_item_id", "created_at"),
+        CheckConstraint(
+            "outcome IN ('confirmed', 'contradicted', 'insufficient', 'irrelevant')",
+            name="ck_memory_item_evaluations_outcome",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    memory_item_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("memory_items.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    tool_call_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    evidence_refs: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 

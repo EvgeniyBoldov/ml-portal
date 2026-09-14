@@ -2,9 +2,14 @@
 
 ## Обзор
 
-Текущий runtime построен как многослойный execution pipeline:
+Целевой runtime построен как многослойный execution pipeline:
 
-`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> PipelineAssembler -> GraphPlanner -> SqlPlanStore -> GraphOrchestrator -> AgentExecutor -> DirectOperationExecutor`
+`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> mechanical lookup -> TurnPreflight -> GraphPlanner | Synthesizer`
+
+При `GraphPlanner` ветка продолжается через
+`SqlPlanStore -> GraphOrchestrator -> AgentExecutor -> DirectOperationExecutor`
+и завершается Synthesizer. Полное решение зафиксировано в
+[`ADR: TurnPreflight Routing`](./ADR_TURN_PREFLIGHT_ROUTING.md).
 
 Канонический планировщик возвращает не следующий шаг, а предложение
 сохраняемой итерации: `IterationProposal -> IterationCompiler -> SqlPlanStore`.
@@ -15,7 +20,8 @@ runtime добавляет идентификаторы и транзакцио�
 `unfulfillable`. Выполнение v1 последовательное; зависимости уже являются
 частью контракта и готовы к будущему параллельному scheduler.
 
-Это важно: агентный runtime больше не является одним простым tool-call loop. Он уже включает:
+Это важно: агентный runtime больше не является одним простым tool-call loop. Он включает:
+- root-level TurnPreflight, который маршрутизирует пользовательский turn,
 - preflight разрешение доступных агентов/коллекций/операций,
 - persisted iterative task graph with dependency and explicit-pause handling,
 - sub-agent operation loop,
@@ -104,13 +110,24 @@ class ExecutionPreflight:
         # 5. Determine execution mode
 ```
 
+`ExecutionPreflight` выполняется только для уже выбранного агентного task. Он
+не является `TurnPreflight` и не выбирает маршрут пользовательского turn.
+
+### TurnPreflight
+
+Root-level системная роль перед planner. После дешёвого code-only lookup
+глоссария, проектов и сущностей она возвращает строгий route: `synthesis`,
+`planner`, `recall` или `clarify`. Для `planner` она формирует `TaskBrief`, для
+`synthesis` — `SynthesisBrief`; сама не выполняет tools, не создаёт задачи и
+не пишет память.
+
 ### RuntimePipeline
 Единая точка входа runtime.
 
 ```python
 class RuntimePipeline:
     async def execute(...) -> AsyncGenerator[RuntimeEvent, None]:
-        # platform snapshot -> memory -> planning -> agent execution -> terminal synthesis
+        # lookup -> TurnPreflight -> planning or synthesis -> writeback
 ```
 
 ## Tool Contract
@@ -142,14 +159,14 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 ## Runtime flow
 
 ```
-1. `ChatStreamService` или sandbox создаёт `ToolContext`.
-2. `RuntimePipeline` загружает platform snapshot и строит turn memory.
-3. Planner генерирует полную неизменяемую iteration proposal: только агентские задачи, bindings, решения по незавершённой работе и terminal — `planner` либо `synthesis`.
-4. Terminal является свойством iteration, а не task. `planner` создаёт следующую iteration. `synthesis` запрашивает финальную сборку ответа и требует synthesis brief: вопрос, планировавшаяся работа, её цель и требования к ответу. Run становится `completed` только после успешного synthesis.
-5. Store возвращает typed scheduler decision. Orchestrator только исполняет его: создаёт attempt, вызывает агента, применяет один атомарный result либо вызывает planner/synthesizer. Каждое declared output содержит только `text`, `data` и/или `artifacts`; artifact fulfillment строится исключительно из verified tool ledger. `verified_receipt` засчитывается только для операции из обязательного `receipt_operations` этого output.
-6. `waiting_retry` ожидает свой срок, а `waiting_confirmation` приостанавливает только адресную задачу. Для terminal `needs_dependency`, `unfulfillable`, `failed`, `blocked` или `cancelled` runtime завершает независимые задачи, блокирует зависимые и вызывает planner. Он не интерпретирует partial results и не решает, достаточно ли их для ответа.
-7. Planner получает полный структурный ledger всех задач и попыток. Для каждой незавершённой работы он явно выбирает продолжение, принятие partial outputs, исключение части объёма или сообщение ограничения пользователю.
-8. Synthesis получает successful reports всех iteration, явно принятые partial outputs, verified artifacts/sources и актуальные user-visible limitations. Сырые agent/tool journal и технические ошибки не передаются.
+1. `ChatStreamService` или sandbox создаёт `ToolContext`; runtime выполняет bounded mechanical lookup glossary/project/entity candidates.
+2. `TurnPreflight` возвращает `synthesis`, `planner`, `recall` или `clarify` и соответствующий строгий brief/request.
+3. `synthesis` передаёт `SynthesisBrief` напрямую Synthesizer без persisted plan и агентских задач. `recall` читает только запрошенный scoped context и вызывает TurnPreflight повторно.
+4. `planner` передаёт `TaskBrief` в GraphPlanner. Planner сам использует canonical memory tools и генерирует полную неизменяемую iteration proposal только для агентской работы.
+5. Terminal является свойством iteration, а не task. `planner` создаёт следующую iteration; `synthesis` запрашивает финальную сборку ответа. Run становится `completed` только после успешного synthesis.
+6. Store возвращает typed scheduler decision. Orchestrator только исполняет его: создаёт attempt, вызывает агента, применяет один атомарный result либо вызывает planner/synthesizer.
+7. Planner получает полный структурный ledger всех задач и попыток и выбирает продолжение, принятие partial outputs, исключение части объёма или сообщение ограничения пользователю.
+8. Synthesis получает `SynthesisBrief`, successful reports всех iteration, явно принятые partial outputs, verified artifacts/sources и актуальные user-visible limitations. Сырые agent/tool journal и технические ошибки не передаются.
 
 Оркестратор поддерживает явные task-статусы `pending`, `running`,
 `waiting_retry`, `waiting_confirmation`, `needs_dependency`, `blocked`,
@@ -163,18 +180,16 @@ Retry переводит задачу обратно в исполнение т�
 
 ### Memory lifecycle
 
-Turn memory is assembled before planning by `MemoryBuilder`. It reads only
-bounded confirmed active facts for the effective user and tenant through
-`MemoryService`; the builder also assembles bounded in-turn tool, agent and
-attachment sections. For sandbox runs, branch fact overlays are applied before
-the immutable snapshot is handed to runtime.
+Memory is not an unconditional pre-planner prompt stage. Mechanical lookup
+provides only bounded candidate aliases/projects/entities to TurnPreflight.
+For `recall`, runtime reads the requested scoped context before a second
+TurnPreflight decision. For `planner`, planner obtains project rules, processes
+and facts on demand through canonical memory operations; it does not receive a
+preassembled project-memory dump. Sandbox overlays remain scoped to the
+immutable run snapshot.
 
-The `memory` system role is not a fact writer: it selects indexes from the
-already loaded facts, project catalogue and confirmed glossary, and may report
-ambiguities. Glossary aliases are used by `memory.lookup` to expand terms before
-project and project-memory-key matching; project rules are never injected into
-the automatic turn snapshot. A failed selection falls back to an empty
-optional context and does not fail the main turn.
+TurnPreflight can attach evidence-backed memory candidates, but the role is not
+a writer and cannot turn them into durable facts.
 
 After terminal synthesis, the chat path emits the answer and dispatches
 `finalize_memory` asynchronously. That worker runs `FactExtractor`,
@@ -193,11 +208,14 @@ executor, agent runtime, tools, budgets и workers получают только
 и эмитят `RuntimeEvent`; они не создают logger, sequence, envelope stamper или
 отдельный trace store.
 
-Preflight, operation execution and agent-triggered document extraction are
-also journalled semantic boundaries. Extraction is a child of `tool_call`;
-independent RAG ingestion keeps its own job-status/event contract.
+TurnPreflight, agent execution preflight, operation execution and
+agent-triggered document extraction are also journalled semantic boundaries.
+Extraction is a child of `tool_call`; independent RAG ingestion keeps its own
+job-status/event contract.
 The canonical trace presentation hierarchy is
-`run -> planner orchestrator -> planner_iteration -> planner llm_call` и
+`run -> turn_preflight -> llm_call`, затем либо `synthesis_run`, либо
+`memory_recall -> turn_preflight`, либо `planner orchestrator -> planner_iteration`.
+Агентская ветка сохраняет
 `planner_iteration -> step -> agent_execution -> llm_call|tool_call|interaction|error|snapshot`.
 `task` and `attempt` are persisted execution-control entities, not a competing
 trace containment chain: lifecycle rows retain their plan parent and carry
@@ -298,28 +316,32 @@ target-specific execution binding.
 ## Pause / resume
 
 ### Каноническое поведение
-- Runtime приостанавливает только задачу со статусом `waiting_confirmation`.
+- Runtime приостанавливает адресную задачу со статусом `waiting_confirmation`
+  либо root TurnPreflight с `waiting_input`.
 - Confirmation pause сохраняется с fingerprint операции и возобновляет тот же
   runtime run и ту же задачу.
-- Пользовательское уточнение не является paused plan: synthesis возвращает
-  текущий безопасный результат или limitation, а следующий ввод создаёт новый
-  root run.
+- Уточнение TurnPreflight не является paused plan: оно сохраняет root
+  continuation context без plan/task, а ответ пользователя повторно проходит
+  mechanical lookup и TurnPreflight в том же root run.
 
 Перед подтверждённым повторным запуском исполнитель получает исходный task
 request и проверенный fingerprint операции.
 
 ### Контракт paused_action / paused_context
-- Backend должен сохранять полный paused-state через `RuntimeHitlProtocolService.build_paused_from_stop`.
-- Resume endpoint должен читать `run.paused_action` / `run.paused_context` для восстановления контекста.
+- Backend сохраняет confirmation state через
+  `RuntimeHitlProtocolService.build_paused_from_stop`; TurnPreflight сохраняет
+  отдельный root clarification context.
+- Resume endpoint читает соответствующий continuation context, не создавая
+  plan для clarification.
 - Pipeline не должен затирать эти данные при паузе.
 
 ### Resume endpoints
 - **Chat**: `POST /chats/runs/{id}/resume` → SSE-стрим (не JSON).
 - **Sandbox**: `POST /sandbox/sessions/{sid}/runs/{rid}/resume` → SSE-стрим, тот же `RuntimePipeline`, тот же run_id (не создавать новый).
 - Sandbox resume продолжает тот же sandbox run id; chat continuation не создаёт root journal run.
-- Оба endpoint принимают payload `{ "action": "confirm" | "cancel" }` для
-  адресной confirmation pause. Свободный пользовательский текст не является
-  resume payload и запускает новый run.
+- Оба endpoint принимают `{ "action": "confirm" | "cancel" }` для адресной
+  confirmation pause или `{ "answer": "..." }` для TurnPreflight
+  clarification. Ответ clarification не создаёт новый root run.
 - Подтверждение выполняется только signed confirmation token, выпущенным из
   сохранённого pause state; raw fingerprints и отдельный confirm endpoint не
   являются transport contract.
@@ -503,6 +525,7 @@ context_snapshot: {
 
 ### События с snapshot
 - `run_start` — `inputs.user_request`, `limits`, `meta.agent_slug`, `meta.model`
+- `turn_preflight_start` — `inputs.user_request`, bounded mechanical lookup, `system_prompt`, `limits`, `meta.role=turn_preflight`
 - planner `orchestrator_start` — `inputs.goal`, `system_prompt`, `limits`, `rbac`, `meta.role=planner`
 - `planner_iteration_start` — `inputs.goal`, `inputs.iteration_intent`, `limits`, `meta.attempt`, `meta.available_agents`
 - `agent_start` — `inputs.goal`, `inputs.agent_input`, `system_prompt`, `limits`, `rbac`, `meta.role`, `meta.agent_slug`

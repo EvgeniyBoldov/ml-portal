@@ -1,18 +1,13 @@
 """
-RuntimePipeline — thin coordinator (no triage).
+RuntimePipeline — thin coordinator with root TurnPreflight routing.
 
 Responsibilities (and NOTHING else):
     1. Resolve tenant/user/chat ids from the incoming request.
     2. Load the platform snapshot (config + routable agents + policy).
-    3. Ask `MemoryBuilder` to assemble the turn's memory from the
-       persisted FactStore.
-    4. Initialize `RuntimeTurnState` as the single source of truth.
-    5. Run the persisted graph planning stage until the plan pauses or reaches
-       a terminal state.
-    6. Let the terminal synthesis checkpoint produce the final answer.
-    7. Hand off to `MemoryWriter.finalize` to persist extracted facts.
-
-Triage is gone. The planner absorbs clarify.
+    3. Run mechanical glossary/entity lookup and TurnPreflight.
+    4. Route to direct synthesis, bounded recall, clarification, or planning.
+    5. Run the persisted graph only for an execution task.
+    6. Hand off to `MemoryWriter.finalize` after an answer.
 """
 from __future__ import annotations
 
@@ -36,9 +31,10 @@ from app.runtime.envelope import PhasedEvent
 from app.runtime.entity_ids import (
     interaction_id as _interaction_id,
     memory_component_entity_id as _memory_component_entity_id,
-    memory_preparation_orchestrator_id as _memory_preparation_orchestrator_id,
     memory_orchestrator_id as _memory_orchestrator_id,
+    memory_recall_orchestrator_id as _memory_recall_orchestrator_id,
     planner_orchestrator_id,
+    turn_preflight_orchestrator_id as _turn_preflight_orchestrator_id,
 )
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.memory.fact_extractor import AgentResultSnippet, FactEvidence
@@ -48,16 +44,17 @@ from app.runtime.stages.graph_planning_stage import GraphPlanningOutcomeKind
 from app.runtime.turn_state import RuntimeTurnState
 from app.core.prometheus_metrics import memory_writer_finalize_failures_total
 from app.models.system_llm_role import SystemLLMRoleType
+from app.runtime.memory.recall import MemoryRecallContext
+from app.runtime.memory.mechanical_lookup import MechanicalLookupService
+from app.runtime.memory.search import MemorySearchService
+from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.system_llm_role_service import SystemLLMRoleService
 from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
-from app.services.glossary_service import GlossaryService
 
 # Memory writeback runs via Celery (single canonical execution mode).
 RUNTIME_MEMORY_INLINE = False
-MEMORY_PREPARATION_PROJECT_LIMIT = 200
-
 logger = get_logger(__name__)
 
 
@@ -286,6 +283,7 @@ class RuntimePipeline:
             attachments=list(request.attachments or []),
             platform_config=platform.config,
             sandbox_overrides=request.sandbox_overrides,
+            load_durable_memory=False,
         )
 
         # Initialize RuntimeTurnState as the single source of truth
@@ -409,98 +407,219 @@ class RuntimePipeline:
             ),
             phase=OrchestrationPhase.PIPELINE,
         )
-        # --- Memory preparation (single LLM call, no tools) -----------
-        memory_preparation_orchestrator = _memory_preparation_orchestrator_id(run_id_str)
-        memory_preparation_executor = _memory_component_entity_id(
-            run_id_str, "memory_preparation", 1,
-        )
-        project_glossary = await GlossaryService(self._session).list_project_terms(
-            limit=MEMORY_PREPARATION_PROJECT_LIMIT,
-        )
-        global_glossary = await GlossaryService(self._session).list_confirmed_global_terms(
-            limit=MEMORY_PREPARATION_PROJECT_LIMIT,
-        )
+        # Root routing intentionally happens before any planner-only memory
+        # preparation.  Mechanical lookup contains ids/aliases only.
+        preflight_id = _turn_preflight_orchestrator_id(run_id_str)
         yield await emitter.emit(
             RuntimeEvent.orchestrator_start(
-                orchestrator_id=memory_preparation_orchestrator,
+                orchestrator_id=preflight_id,
                 run_id=run_id_str,
-                role="memory_preparation",
-                context_snapshot=compact_snapshot(
-                    inputs={"user_request": request.request_text},
-                    meta={
-                        "role": "memory_preparation",
-                        "facts_available": len(turn_mem.durable_snapshot.entries),
-                        "project_terms_available": len(project_glossary),
-                        "global_glossary_available": len(global_glossary),
-                    },
+                role="turn_preflight",
+            ),
+            phase=OrchestrationPhase.PREFLIGHT,
+        )
+        try:
+            lookup = await MechanicalLookupService(self._session).lookup(
+                request_text=effective_user_query, tenant_id=tenant_id,
+            )
+            decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
+                user_request=effective_user_query,
+                mechanical_lookup=lookup,
+                continuation=continuation_state,
+                chat_id=chat_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                sandbox_overrides=request.sandbox_overrides,
+                trace_parent_entity_id=preflight_id,
+                event_sink=lambda event: emitter.emit(event, phase=OrchestrationPhase.PREFLIGHT),
+            )
+        except Exception as exc:  # conservative compatibility fallback
+            logger.error("TurnPreflight unavailable; planner route is blocked: %s", exc)
+            yield await emitter.emit(
+                RuntimeEvent.orchestrator_end(
+                    orchestrator_id=preflight_id, run_id=run_id_str, status="failed",
                 ),
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
-        yield await emitter.emit(
-            RuntimeEvent.agent_start(
-                agent_execution_id=memory_preparation_executor,
-                parent_entity_type="orchestrator",
-                parent_entity_id=memory_preparation_orchestrator,
-                agent_slug="memory_preparation",
-                executor_type="orchestrator",
-                executor_name="Подготовка памяти",
-                task_title="Отбор контекста для планера",
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
-
-        async def _memory_preparation_event(event: RuntimeEvent) -> None:
-            await emitter.emit(event, phase=OrchestrationPhase.PIPELINE)
-
-        prepared_memory = await self._assembler.memory_preparer.prepare(
-            request_text=request.request_text,
-            facts=turn_mem.durable_snapshot.entries,
-            project_glossary=project_glossary,
-            glossary=global_glossary,
-            user_id=user_id,
-            tenant_id=tenant_id,
-            chat_id=chat_id,
-            sandbox_overrides=request.sandbox_overrides,
-            event_sink=_memory_preparation_event,
-            agent_execution_id=memory_preparation_executor,
-        )
-        turn_mem.planner_memory_context = list(prepared_memory.items)
-        yield await emitter.emit(
-            RuntimeEvent.status(
-                "memory_context_prepared",
-                entity_type="agent_execution",
-                entity_id=memory_preparation_executor,
-                parent_entity_type="orchestrator",
-                parent_entity_id=memory_preparation_orchestrator,
-                selected_facts=prepared_memory.selected_fact_count,
-                selected_projects=prepared_memory.selected_project_count,
-                ambiguities=prepared_memory.ambiguities,
-                fallback=prepared_memory.fallback,
-                memory_context=prepared_memory.items,
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
-        yield await emitter.emit(
-            RuntimeEvent.agent_end(
-                agent_execution_id=memory_preparation_executor,
-                parent_entity_type="orchestrator",
-                parent_entity_id=memory_preparation_orchestrator,
-                agent_slug="memory_preparation",
-                status="completed",
-                outcome="degraded" if prepared_memory.fallback else "completed",
-                summary=f"Контекст: {len(prepared_memory.items)} элементов",
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
+                phase=OrchestrationPhase.PREFLIGHT,
+            )
+            yield await emitter.emit(
+                RuntimeEvent.error(
+                    "Turn preflight is unavailable",
+                    recoverable=True,
+                    error_code="turn_preflight_unavailable",
+                    retryable=True,
+                    user_message=(
+                        "Не удалось определить маршрут запроса. Планировщик не запускался; "
+                        "повторите запрос позже."
+                    ),
+                    source="turn_preflight",
+                    parent_entity_type="orchestrator",
+                    parent_entity_id=preflight_id,
+                ),
+                phase=OrchestrationPhase.PREFLIGHT,
+            )
+            yield await emitter.emit(
+                RuntimeEvent.stop(
+                    reason=PipelineStopReason.FAILED.value,
+                    run_id=run_id_str,
+                    message="TurnPreflight unavailable; planner was not invoked",
+                ),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+            yield await emitter.emit(
+                RuntimeEvent.run_end(run_id=run_id_str, status=PipelineStopReason.FAILED.value),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+            return
+        recall_context: dict[str, Any] | None = None
+        if decision.route == "recall":
+            memory_request = decision.memory_request
+            assert memory_request is not None
+            recall_id = _memory_recall_orchestrator_id(run_id_str)
+            yield await emitter.emit(RuntimeEvent.orchestrator_start(
+                orchestrator_id=recall_id, run_id=run_id_str, role="memory_recall",
+            ), phase=OrchestrationPhase.PREFLIGHT)
+            try:
+                recall_context = await MemorySearchService(self._session).search(
+                    query=memory_request.query, tenant_id=tenant_id, user_id=user_id,
+                    project_keys=memory_request.project_keys, kinds=memory_request.kinds,
+                    entity_ids=memory_request.entity_ids, direction=memory_request.direction,
+                    limit=memory_request.limit,
+                )
+                decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
+                    user_request=effective_user_query, mechanical_lookup=lookup,
+                    continuation=continuation_state, recall_context=recall_context,
+                    chat_id=chat_id, tenant_id=tenant_id, user_id=user_id,
+                    sandbox_overrides=request.sandbox_overrides,
+                    trace_parent_entity_id=preflight_id,
+                    event_sink=lambda event: emitter.emit(event, phase=OrchestrationPhase.PREFLIGHT),
+                )
+            except Exception as exc:
+                logger.error("TurnPreflight recall completion unavailable; planner route is blocked: %s", exc)
+                yield await emitter.emit(RuntimeEvent.orchestrator_end(
+                    orchestrator_id=recall_id, run_id=run_id_str, status="failed",
+                ), phase=OrchestrationPhase.PREFLIGHT)
+                yield await emitter.emit(RuntimeEvent.orchestrator_end(
+                    orchestrator_id=preflight_id, run_id=run_id_str, status="failed",
+                ), phase=OrchestrationPhase.PREFLIGHT)
+                yield await emitter.emit(RuntimeEvent.error(
+                    "Turn preflight recall is unavailable",
+                    recoverable=True, error_code="turn_preflight_recall_unavailable", retryable=True,
+                    user_message=(
+                        "Не удалось получить контекст памяти для маршрутизации запроса. "
+                        "Планировщик не запускался; повторите запрос позже."
+                    ), source="turn_preflight", parent_entity_type="orchestrator", parent_entity_id=preflight_id,
+                ), phase=OrchestrationPhase.PREFLIGHT)
+                yield await emitter.emit(RuntimeEvent.stop(
+                    reason=PipelineStopReason.FAILED.value, run_id=run_id_str,
+                    message="TurnPreflight recall unavailable; planner was not invoked",
+                ), phase=OrchestrationPhase.PIPELINE)
+                yield await emitter.emit(RuntimeEvent.run_end(
+                    run_id=run_id_str, status=PipelineStopReason.FAILED.value,
+                ), phase=OrchestrationPhase.PIPELINE)
+                return
+            yield await emitter.emit(RuntimeEvent.orchestrator_end(
+                orchestrator_id=recall_id, run_id=run_id_str,
+                status="completed" if recall_context is not None else "failed",
+            ), phase=OrchestrationPhase.PREFLIGHT)
         yield await emitter.emit(
             RuntimeEvent.orchestrator_end(
-                orchestrator_id=memory_preparation_orchestrator,
+                orchestrator_id=preflight_id,
                 run_id=run_id_str,
-                status="completed",
+                status=decision.route,
             ),
-            phase=OrchestrationPhase.PIPELINE,
+            phase=OrchestrationPhase.PREFLIGHT,
         )
+        if decision.route == "clarify":
+            clarification = decision.clarification
+            assert clarification is not None
+            clarification_context = dict(clarification.context)
+            # A TurnPreflight clarification intentionally has no persisted
+            # plan. Preserve its original goal in the generic continuation
+            # payload so the standard resume endpoint can recreate a root
+            # checkpoint without querying PlanStore.
+            clarification_context["original_goal"] = effective_goal
+            clarification_context["preflight_route"] = "clarify"
+            yield await emitter.emit(
+                RuntimeEvent.waiting_input(
+                    clarification.question, run_id=run_id_str,
+                    parent_entity_type="run", parent_entity_id=run_id_str,
+                ),
+                phase=OrchestrationPhase.PREFLIGHT,
+            )
+            yield await emitter.emit(
+                RuntimeEvent.stop(reason=PipelineStopReason.WAITING_INPUT.value, run_id=run_id_str,
+                                  question=clarification.question, context=clarification_context),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+            yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="waiting_input"), phase=OrchestrationPhase.PIPELINE)
+            return
+        turn_mem.preflight_candidates = [
+            candidate.model_dump(mode="json") for candidate in decision.memory_candidates
+        ]
+        if decision.route == "synthesis":
+            brief = decision.synthesis_brief
+            assert brief is not None
+            direct_context = {
+                "user_question": effective_user_query,
+                "synthesis_brief": brief.synthesis_brief.model_dump(mode="json"),
+                "direct_answer_draft": brief.answer_draft,
+                "plan_outline": [], "resolution_decisions": [], "completed_task_reports": [],
+                "limitations": [], "artifacts": [], "sources": [],
+                "memory_context": recall_context or {},
+                "memory_candidates": turn_mem.preflight_candidates,
+            }
+            async for event in self._assembler.synthesizer.stream(
+                runtime_state=runtime_state, run_id=run_id, synthesis_context=direct_context,
+                model=request.model, platform_config=platform.config,
+                sandbox_overrides=request.sandbox_overrides, logging_level=run_logging_level,
+            ):
+                yield await emitter.emit(event, phase=OrchestrationPhase.SYNTHESIS)
+            if runtime_state.final_answer:
+                await_background_tail = bool(getattr(request, "await_background_tail", True))
+                if await_background_tail:
+                    async for memory_ev in self._finalize_memory(
+                        turn_mem=turn_mem, runtime_state=runtime_state, request=request,
+                        stop_reason=PipelineStopReason.COMPLETED, emitter=emitter,
+                        logging_level=run_logging_level,
+                    ):
+                        yield memory_ev
+                else:
+                    await self._consume_memory_finalize_background(
+                        turn_mem=turn_mem, runtime_state=runtime_state, request=request,
+                        stop_reason=PipelineStopReason.COMPLETED, emitter=emitter,
+                        logging_level=run_logging_level,
+                    )
+                yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="completed"), phase=OrchestrationPhase.PIPELINE)
+            else:
+                yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="failed"), phase=OrchestrationPhase.PIPELINE)
+            return
+        preflight_task_brief: dict[str, Any] = {}
+        if decision.route in {"planner", "recall"} and decision.task_brief is not None:
+            effective_goal = decision.task_brief.goal
+            runtime_state.goal = effective_goal
+            preflight_task_brief = decision.task_brief.model_dump(mode="json")
+            # The run retains the raw user request, while the planner trace
+            # records the preflight-normalized task it actually received.
+            planner_context_snapshot = compact_snapshot(
+                inputs={"goal": effective_goal, "task_brief": preflight_task_brief},
+                prompt=prompt_snapshot(planner_prompt, run_logging_level),
+                limits=serialize_limits(planner_limits),
+                rbac=planner_rbac_audit if isinstance(planner_rbac_audit, dict) else None,
+                meta={
+                    "role": "planner", "model": planner_model or request.model,
+                    "execution_mode": execution_mode.value,
+                    "explicit_agent_slug": explicit_slug,
+                    "continuation": continuation_state or None,
+                    "preflight_direction": decision.task_brief.direction,
+                },
+            )
+        memory_recall = MemoryRecallContext(
+            resolved_terms=[], resolved_entities=[], relevant_projects=[],
+            relevant_knowledge=[], applicable_rules=[], applicable_procedures=[],
+            known_constraints=[], durable_facts=[], uncertainties=[],
+            source_references=[], rag_required=False, rag_reasons=[],
+        )
+        turn_mem.planner_memory_context = []
         yield await emitter.emit(
             RuntimeEvent.orchestrator_start(
                 orchestrator_id=orchestrator_id,
@@ -562,6 +681,7 @@ class RuntimePipeline:
             platform_config=platform.config,
             planner_rbac_audit=planner_rbac_audit,
             planner_memory_context=turn_mem.planner_memory_context,
+            task_brief=preflight_task_brief,
             durable_memory_snapshot=turn_mem.durable_snapshot,
             orchestrator_id=orchestrator_id,
             runtime_limits=serialize_limits(run_limits_v2.as_entity_limits()),
@@ -639,6 +759,9 @@ class RuntimePipeline:
             ),
             phase=OrchestrationPhase.PLANNER,
         )
+        self._dispatch_memory_evidence_feedback(
+            recall_item=memory_recall.as_item(), runtime_state=runtime_state, tenant_id=tenant_id,
+        )
 
         if await_background_tail:
             # Sandbox/trace mode consumes the full runtime tail after final answer.
@@ -678,6 +801,61 @@ class RuntimePipeline:
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )
+
+    @staticmethod
+    def _dispatch_memory_evidence_feedback(
+        *, recall_item: dict[str, Any], runtime_state: RuntimeTurnState, tenant_id: UUID,
+    ) -> None:
+        """Queue trust feedback after the response path; never delay the user."""
+        if not recall_item.get("rag_required"):
+            return
+        memory_item_ids = list(dict.fromkeys(
+            str(item.get("memory_item_id") or "").strip()
+            for group in ("relevant_knowledge", "applicable_rules", "applicable_procedures", "known_constraints")
+            for item in recall_item.get(group) or []
+            if isinstance(item, dict) and str(item.get("memory_item_id") or "").strip()
+        ))
+        claim_ids = list(dict.fromkeys(
+            str(claim_id).strip()
+            for group in ("relevant_knowledge", "applicable_rules", "applicable_procedures", "known_constraints")
+            for item in recall_item.get(group) or []
+            if isinstance(item, dict)
+            for claim_id in item.get("claim_ids") or []
+            if str(claim_id).strip()
+        ))
+        selected_claim_ids_by_item = {
+            str(item.get("memory_item_id")): str(item.get("selected_claim_id"))
+            for group in ("relevant_knowledge", "applicable_rules", "applicable_procedures", "known_constraints")
+            for item in recall_item.get(group) or []
+            if isinstance(item, dict)
+            and str(item.get("memory_item_id") or "").strip()
+            and str(item.get("selected_claim_id") or "").strip()
+        }
+        if not memory_item_ids or not claim_ids:
+            return
+        from app.runtime.memory.evidence_feedback import bounded_document_evidence
+        from app.runtime.memory.tool_ledger import canonical_operation_name
+        from app.workers.tasks_memory import evaluate_memory_rag_evidence
+        for entry in runtime_state.tool_ledger.entries:
+            if (
+                entry.status != "succeeded"
+                or canonical_operation_name(entry.operation) != "collection.document.search"
+                or entry.result_data is None
+            ):
+                continue
+            evidence = bounded_document_evidence(entry.result_data)
+            if not evidence:
+                continue
+            try:
+                evaluate_memory_rag_evidence.delay({
+                    "tenant_id": str(tenant_id), "tool_call_id": entry.call_id,
+                    "memory_item_ids": memory_item_ids,
+                    "claim_ids": claim_ids,
+                    "selected_claim_ids_by_item": selected_claim_ids_by_item,
+                    "evidence": evidence,
+                })
+            except Exception:  # feedback is best effort and must not affect a completed turn
+                logger.warning("Failed to queue memory evidence feedback", exc_info=True)
 
     @staticmethod
     def _apply_sandbox_overrides(request: PipelineRequest, ctx: ToolContext) -> None:
@@ -790,7 +968,6 @@ class RuntimePipeline:
             for entry in runtime_state.tool_ledger.entries
             if entry.status == "succeeded" and entry.result_data is not None
         ]
-        turn_mem.project_memory_candidates = list(runtime_state.project_memory_candidates)
         # Sync memory_bundle reference
         runtime_state.memory_bundle = turn_mem.memory_bundle
         assistant_final = runtime_state.final_answer or ""
@@ -863,6 +1040,22 @@ class RuntimePipeline:
                         _memory_component_entity_id(str(runtime_state.run_id), component_name, index),
                     )
                     component_status = str(item.get("status") or "completed")
+                    for decision in item.get("decisions") or []:
+                        if not isinstance(decision, dict):
+                            continue
+                        decision_payload = dict(decision)
+                        decision_payload.pop("stage", None)
+                        yield await emitter.emit(
+                            RuntimeEvent.status(
+                                "memory_candidate_decision",
+                                **decision_payload,
+                                entity_type="agent_execution",
+                                entity_id=component_entity_id,
+                                parent_entity_type="orchestrator",
+                                parent_entity_id=memory_orchestrator,
+                            ),
+                            phase=OrchestrationPhase.PIPELINE,
+                        )
                     # Memory degradation/skipping is a completed best-effort
                     # post-response component, not a user-interaction pause.
                     lifecycle_status = "failed" if component_status == "failed" else "completed"
@@ -878,6 +1071,7 @@ class RuntimePipeline:
                             error_message=item.get("error_message"),
                             duration_ms=item.get("duration_ms", 0),
                             facts=item.get("facts", []),
+                            decision_counts=item.get("decision_counts", {}),
                             entity_type="agent_execution",
                             entity_id=component_entity_id,
                             parent_entity_type="orchestrator",
@@ -948,7 +1142,6 @@ class RuntimePipeline:
                 SummaryPayload,
                 AgentResultPayload,
                 FactEvidencePayload,
-                ProjectMemoryCandidatePayload,
             )
             memory_limits: Optional[dict[str, int]] = None
             facts_limits: Optional[dict[str, int]] = None
@@ -1018,10 +1211,6 @@ class RuntimePipeline:
                     for r in turn_mem.agent_results
                 ],
                 fact_evidence=[FactEvidencePayload(**item.model_dump()) for item in turn_mem.fact_evidence],
-                project_memory_candidates=[
-                    ProjectMemoryCandidatePayload(**item.model_dump())
-                    for item in turn_mem.project_memory_candidates
-                ],
                 skip_llm_helpers=False,
                 terminal_reason=stop_reason.value if stop_reason else None,
                 sandbox_overrides=request.sandbox_overrides,

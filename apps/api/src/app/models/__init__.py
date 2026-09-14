@@ -36,14 +36,14 @@ from .platform_settings import PlatformSettings
 from .orchestration_settings import OrchestrationSettings
 from .system_llm_role import SystemLLMRole, SystemLLMRoleType, RetryBackoffType
 from .chat_summary import ChatSummary
-from .execution_memory import ExecutionMemory
 from .chat_turn import ChatTurn
 from .sandbox import SandboxSession, SandboxOverride, SandboxRun
 from .discovered_tool import DiscoveredTool
 from .memory import Fact, FactScope, FactSource, DialogueSummary
-from .memory import FactObservation, FactStatus
+from .memory import FactObservation, FactStatus, MemoryClaim, MemoryItem, MemoryItemSource, MemoryItemEvaluation, MemoryRelation
 from .project import Project
 from .glossary import GlossaryEntry, GlossaryObservation, GlossaryScope, GlossaryStatus
+from .knowledge_entity import KnowledgeEntity, KnowledgeEntitySource
 from .execution_limit import (
     ActorExecutionLimit,
     ActorExecutionLimitScope,
@@ -113,7 +113,6 @@ __all__ = [
     "SystemLLMRoleType", 
     "RetryBackoffType",
     "ChatSummary",
-    "ExecutionMemory",
     "ChatTurn",
     "SandboxSession",
     "SandboxOverride",
@@ -125,9 +124,16 @@ __all__ = [
     "DialogueSummary",
     "FactObservation",
     "FactStatus",
+    "MemoryItem",
+    "MemoryClaim",
+    "MemoryItemSource",
+    "MemoryItemEvaluation",
+    "MemoryRelation",
     "Project",
     "GlossaryEntry",
     "GlossaryObservation",
+    "KnowledgeEntity",
+    "KnowledgeEntitySource",
     "GlossaryScope",
     "GlossaryStatus",
     "ExecutionLimit",

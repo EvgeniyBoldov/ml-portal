@@ -200,3 +200,93 @@ async def test_resume_run_reuses_paused_chat_turn(monkeypatch):
     assert checkpoint["original_goal"] == "Что мне почитать?"
     session.commit.assert_awaited_once()
     assert any("event: done" in chunk for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_resume_preflight_clarify_uses_goal_from_pause_context(monkeypatch):
+    chat_id, user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4(), uuid4()
+    turn = SimpleNamespace(
+        id=uuid4(), chat_id=chat_id, user_id=user_id, status="paused",
+        pause_status="waiting_input", paused_action=None,
+        paused_context={"question": "Какой проект?", "original_goal": "Обнови glossary"},
+        paused_at=datetime.now(timezone.utc),
+    )
+    captured: dict[str, object] = {}
+
+    class _Service:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def send_message_stream(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "final", "message_id": "assistant-1"}
+
+    monkeypatch.setattr(chat_messages, "ChatStreamService", _Service)
+    monkeypatch.setattr(chat_messages, "map_service_event_to_sse", lambda _: "event: final\ndata: {}\n\n")
+    session = AsyncMock()
+    session.execute.side_effect = [_Result(turn), _Result(None), _Result(turn)]
+
+    response = await chat_messages.resume_run(
+        run_id=str(run_id),
+        body=RuntimeResumeRequest(action=RuntimeResumeAction.INPUT, input="Проект Нема"),
+        session=session,
+        current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]),
+        _rl=None,
+    )
+    async for _ in response.body_iterator:
+        pass
+
+    checkpoint = captured["continuation_meta"]["resume_checkpoint"]
+    assert checkpoint["original_goal"] == "Обнови glossary"
+
+
+@pytest.mark.asyncio
+async def test_get_paused_run_returns_public_contract_for_preflight_clarification():
+    chat_id, user_id, run_id = uuid4(), uuid4(), uuid4()
+    turn = SimpleNamespace(
+        runtime_run_id=run_id,
+        pause_status="waiting_input",
+        paused_action={"kind": "input"},
+        paused_context={"question": "Для какого проекта?", "original_goal": "Обнови регламент"},
+    )
+    session = AsyncMock()
+    session.execute.return_value = _Result(turn)
+
+    response = await chat_messages.get_paused_run(
+        chat_id=str(chat_id),
+        chat_ctx=ChatContext(chat_id=str(chat_id), tenant_id=str(uuid4()), user_id=str(user_id)),
+        session=session,
+        current_user=UserCtx(id=str(user_id), tenant_ids=[str(uuid4())]),
+    )
+
+    assert response["pause"]["run_id"] == str(run_id)
+    assert response["pause"]["reason"] == "waiting_input"
+    assert response["pause"]["action"]["kind"] == "input"
+    assert response["pause"]["context"]["question"] == "Для какого проекта?"
+
+
+@pytest.mark.asyncio
+async def test_get_paused_run_returns_confirmation_question_from_action():
+    chat_id, user_id, run_id = uuid4(), uuid4(), uuid4()
+    turn = SimpleNamespace(
+        runtime_run_id=run_id,
+        pause_status="waiting_confirmation",
+        paused_action={
+            "kind": "confirm",
+            "question": "Подтвердить публикацию изменений?",
+            "operation_fingerprint": "fingerprint-1",
+        },
+        paused_context={},
+    )
+    session = AsyncMock()
+    session.execute.return_value = _Result(turn)
+
+    response = await chat_messages.get_paused_run(
+        chat_id=str(chat_id),
+        chat_ctx=ChatContext(chat_id=str(chat_id), tenant_id=str(uuid4()), user_id=str(user_id)),
+        session=session,
+        current_user=UserCtx(id=str(user_id), tenant_ids=[str(uuid4())]),
+    )
+
+    assert response["pause"]["reason"] == "waiting_confirmation"
+    assert response["pause"]["action"]["question"] == "Подтвердить публикацию изменений?"

@@ -12,6 +12,7 @@ import {
   type OrchestrationSettings,
   type ExecutorSettingsUpdate,
   type PlannerRoleUpdate,
+  type TurnPreflightRoleUpdate,
   type MemoryRoleUpdate,
   type SynthesizerRoleUpdate,
   type FactExtractorRoleUpdate,
@@ -197,6 +198,28 @@ export function useActivePlannerRole() {
     queryKey: qk.admin.systemLlmRoles.active('planner'),
     queryFn: () => systemLLMRolesApi.getActive('planner'),
     staleTime: 30_000,
+  });
+}
+
+export function useActiveTurnPreflightRole() {
+  return useQuery({
+    queryKey: qk.admin.systemLlmRoles.active('turn_preflight'),
+    queryFn: () => systemLLMRolesApi.getActive('turn_preflight'),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateTurnPreflightRole() {
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+  return useMutation({
+    mutationFn: (data: TurnPreflightRoleUpdate) => systemLLMRolesApi.updateActive('turn_preflight', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('turn_preflight') });
+      showSuccess('Настройки Preflight обновлены');
+    },
+    onError: (err: Error) => showError(err.message),
   });
 }
 

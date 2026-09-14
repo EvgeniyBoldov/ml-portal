@@ -43,12 +43,11 @@ def register_builtins() -> None:
     import app.agents.builtins.collection_get  # noqa: F401
     import app.agents.builtins.collection_aggregate  # noqa: F401
     import app.agents.builtins.collection_catalog  # noqa: F401
+    import app.agents.builtins.memory_search  # noqa: F401
     import app.agents.builtins.file_generate  # noqa: F401
     import app.agents.builtins.file_read  # noqa: F401
     import app.agents.builtins.file_list  # noqa: F401
     import app.agents.builtins.file_delete  # noqa: F401
-    import app.agents.builtins.project_memory  # noqa: F401
-    import app.agents.builtins.memory  # noqa: F401
     import app.agents.builtins.template_list  # noqa: F401
     import app.agents.builtins.template_get_schema  # noqa: F401
     import app.agents.builtins.template_fill  # noqa: F401

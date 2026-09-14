@@ -22,7 +22,7 @@ from app.models.chat import Chats
 from app.models.memory import FactScope, FactSource
 from app.models.sandbox import SandboxBranch
 from app.runtime.memory.fact_extractor import (
-    FactExtractor,
+    FactExtractor, FactExtractionResult,
     FactEvidence,
     KnownFactSnippet,
 )
@@ -31,6 +31,7 @@ from app.runtime.memory.fact_reconciler import FactReconciler
 from app.runtime.memory.glossary_reconciler import GlossaryReconciler
 from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.dto import FactDTO
+from app.runtime.memory.decisions import MemoryDecision, decision_counts
 from app.runtime.memory.sandbox_overlays import merge_extracted
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.memory.service import MemoryService
@@ -70,6 +71,7 @@ class MemoryWriteResult:
     error_message: Optional[str] = None
     duration_ms: int = 0
     facts: tuple[dict[str, Any], ...] = ()
+    decisions: tuple[MemoryDecision, ...] = ()
 
     def compact_view(self) -> dict:
         return {
@@ -82,6 +84,8 @@ class MemoryWriteResult:
             "error_message": self.error_message,
             "duration_ms": self.duration_ms,
             "facts": list(self.facts),
+            "decisions": [item.compact_view() for item in self.decisions],
+            "decision_counts": decision_counts(self.decisions),
         }
 
 
@@ -182,7 +186,9 @@ class MemoryWriter:
                 component_name=component.name,
                 status="failed",
                 error_code="memory_component_error",
-                error_message=str(exc)[:500],
+                # The exception can contain provider/request details. Journal
+                # payloads are operator-safe, application logs retain detail.
+                error_message="Компонент памяти завершился с ошибкой",
             )
         elapsed_ms = int((monotonic() - started) * 1000)
         return MemoryWriteResult(
@@ -194,6 +200,8 @@ class MemoryWriter:
             error_code=result.error_code,
             error_message=result.error_message,
             duration_ms=elapsed_ms,
+            facts=result.facts,
+            decisions=result.decisions,
         )
 
     # ---------------------------------------------------------------- facts
@@ -204,7 +212,18 @@ class MemoryWriter:
         user_message: str,
         sandbox_overrides: Optional[dict] = None,
         persist_chat_scoped: bool = True,
-    ) -> List[Any]:
+    ) -> FactExtractionResult:
+        # The ordinary turn path deliberately avoids a durable read before
+        # routing.  Hydrate only here, after the answer, so extraction can
+        # still deduplicate against the current user/tenant state.
+        if not memory.retrieved_facts:
+            snapshot = await self._memory_service.read_snapshot(
+                user_id=memory.user_id,
+                tenant_id=memory.tenant_id,
+                limit=20,
+            )
+            memory.durable_snapshot = snapshot
+            memory.retrieved_facts = list(snapshot.entries)
         known = [
             KnownFactSnippet(subject=s, value=v)
             for s, v in memory.iter_known_subjects()
@@ -219,10 +238,11 @@ class MemoryWriter:
             ),
             *memory.fact_evidence,
         ]
-        return await self._extractor.extract(
+        return await self._extractor.extract_with_decisions(
             user_message=user_message,
             evidence=evidence,
             known_facts=known,
+            preflight_candidates=memory.preflight_candidates,
             user_id=memory.user_id,
             tenant_id=memory.tenant_id,
             chat_id=memory.chat_id,
@@ -235,56 +255,24 @@ class MemoryWriter:
             agent_execution_id=self._component_execution_ids.get("fact_extractor"),
         )
 
-    @staticmethod
-    def _project_candidate_facts(memory: TurnMemory) -> list[FactDTO]:
-        evidence_by_id = {item.source_id: item for item in memory.fact_evidence}
-        facts: list[FactDTO] = []
-        for candidate in memory.project_memory_candidates:
-            evidence = [
-                evidence_by_id[call_id].model_dump()
-                for call_id in candidate.evidence_call_ids
-                if call_id in evidence_by_id
-            ]
-            if not evidence:
-                continue
-            facts.append(FactDTO(
-                scope=FactScope.PROJECT,
-                subject=candidate.subject,
-                value=candidate.value,
-                source=FactSource.TOOL_RESULT,
-                tenant_id=memory.tenant_id,
-                confidence=1.0,
-                metadata={
-                    "project_key": candidate.project_key,
-                    "project_aliases": list(candidate.aliases),
-                    "project_memory_marked": True,
-                    "evidence": evidence,
-                },
-            ))
-        return facts
-
     async def _compact_and_write_facts(
         self,
         memory: TurnMemory,
         candidates: List[Any],
         sandbox_overrides: Optional[dict] = None,
         persist_chat_scoped: bool = True,
-    ) -> tuple[int, list[dict[str, Any]]]:
+    ) -> tuple[int, list[dict[str, Any]], list[MemoryDecision], str | None]:
         branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
-        project_candidates = self._project_candidate_facts(memory)
-        all_candidates = [*candidates, *project_candidates]
+        # Project knowledge is document-derived; this path persists only
+        # conversational user/tenant facts and glossary updates.
+        all_candidates = list(candidates)
         if not all_candidates:
-            return 0, []
-        project_keys = [
-            str(item.metadata.get("project_key") or "")
-            for item in all_candidates
-            if getattr(item, "scope", None) == FactScope.PROJECT
-        ]
+            return 0, [], [], None
         if memory.chat_id is None or not persist_chat_scoped:
             if branch_id is None:
-                return 0
+                return 0, [], [], None
             current = list(getattr(memory.durable_snapshot, "entries", ()) or ())
-            compacted = await self._fact_compactor.compact(
+            compaction = await self._fact_compactor.compact_with_decisions(
                 candidates=all_candidates,
                 current_facts=current,
                 user_id=memory.user_id,
@@ -294,12 +282,19 @@ class MemoryWriter:
                 event_sink=(lambda event: self._llm_event_sink("fact_compactor", event)) if self._llm_event_sink else None,
                 agent_execution_id=self._component_execution_ids.get("fact_compactor"),
             )
-            branch_facts = [item for item in compacted if item.kind != "glossary"]
+            branch_facts = [item for item in compaction.facts if item.kind != "glossary"]
             saved = await self._write_branch_facts(
                 branch_id=branch_id,
                 facts=branch_facts,
                 base=current,
             )
+            branch_decisions = list(compaction.decisions)
+            branch_decisions.extend(MemoryDecision(
+                "fact_compactor", "publication",
+                "published" if saved else "skipped",
+                "sandbox_overlay_updated" if saved else "sandbox_branch_missing",
+                (item,), action=str(item.metadata.get("compaction_action") or "add"),
+            ) for item in branch_facts)
             return saved, [
                 _fact_change_view(
                     item,
@@ -311,19 +306,17 @@ class MemoryWriter:
                     support_delta=0,
                 )
                 for item in branch_facts
-            ]
+            ], branch_decisions, compaction.error_code
         async with self._db_write_lock:
-            await self._fact_reconciler.ensure_projects(all_candidates)
             current = await self._fact_reconciler.current_for(
                 user_id=memory.user_id,
                 tenant_id=memory.tenant_id,
-                project_keys=project_keys,
             )
             current.extend(await self._glossary_reconciler.current_for(
                 user_id=memory.user_id,
                 tenant_id=memory.tenant_id,
             ))
-            compacted = await self._fact_compactor.compact(
+            compaction = await self._fact_compactor.compact_with_decisions(
                 candidates=all_candidates,
                 current_facts=current,
                 user_id=memory.user_id,
@@ -333,17 +326,18 @@ class MemoryWriter:
                 event_sink=(lambda event: self._llm_event_sink("fact_compactor", event)) if self._llm_event_sink else None,
                 agent_execution_id=self._component_execution_ids.get("fact_compactor"),
             )
-            changes = await self._fact_reconciler.apply_with_changes(
-                candidates=[item for item in compacted if item.kind != "glossary"],
+            fact_result = await self._fact_reconciler.apply_with_decisions(
+                candidates=[item for item in compaction.facts if item.kind != "glossary"],
                 user_id=memory.user_id,
                 tenant_id=memory.tenant_id,
             )
-            glossary_saved = await self._glossary_reconciler.apply(
-                candidates=[item for item in compacted if item.kind == "glossary"],
+            glossary_result = await self._glossary_reconciler.apply_with_decisions(
+                candidates=[item for item in compaction.facts if item.kind == "glossary"],
                 user_id=memory.user_id,
                 tenant_id=memory.tenant_id,
             )
-        return len(changes) + glossary_saved, [
+        changes = fact_result.changes
+        return len(changes) + glossary_result.changed, [
             {
                 "scope": item.scope,
                 "kind": item.kind,
@@ -358,7 +352,7 @@ class MemoryWriter:
                 "compaction_action": item.compaction_action,
             }
             for item in changes
-        ]
+        ], [*compaction.decisions, *fact_result.decisions, *glossary_result.decisions], compaction.error_code
 
     async def _chat_exists(self, chat_id) -> bool:
         if chat_id is None:
@@ -429,13 +423,17 @@ class _FactExtractionMemoryWriteComponent:
 
     async def write(self, ctx: MemoryWriteContext) -> MemoryWriteResult:
         if ctx.skip_llm_helpers:
-            return MemoryWriteResult(component_name=self.name, status="skipped", skipped_count=1)
-        candidates = await self._owner._extract_facts(
+            return MemoryWriteResult(
+                component_name=self.name, status="skipped", skipped_count=1,
+                error_code="memory_helpers_skipped",
+            )
+        extraction = await self._owner._extract_facts(
             ctx.memory,
             ctx.user_message,
             ctx.sandbox_overrides,
             ctx.persist_chat_scoped,
         )
+        candidates = extraction.facts
         ctx.fact_candidates = candidates
         if not ctx.persist_chat_scoped and not ctx.sandbox_branch_id:
             return MemoryWriteResult(
@@ -445,12 +443,15 @@ class _FactExtractionMemoryWriteComponent:
                 error_code="sandbox_persist_skipped",
                 error_message="Chat-scoped persistence skipped: sandbox chat is not stored in chats table",
                 facts=tuple(_fact_candidate_view(item) for item in candidates),
+                decisions=tuple(extraction.decisions),
             )
         return MemoryWriteResult(
             component_name=self.name,
-            status="ok",
+            status="degraded" if extraction.error_code else "ok",
             inserted_count=len(candidates),
+            error_code=extraction.error_code,
             facts=tuple(_fact_candidate_view(item) for item in candidates),
+            decisions=tuple(extraction.decisions),
         )
 
 
@@ -462,8 +463,11 @@ class _FactCompactionMemoryWriteComponent:
 
     async def write(self, ctx: MemoryWriteContext) -> MemoryWriteResult:
         if ctx.skip_llm_helpers:
-            return MemoryWriteResult(component_name=self.name, status="skipped", skipped_count=1)
-        saved, changes = await self._owner._compact_and_write_facts(
+            return MemoryWriteResult(
+                component_name=self.name, status="skipped", skipped_count=1,
+                error_code="memory_helpers_skipped",
+            )
+        saved, changes, decisions, error_code = await self._owner._compact_and_write_facts(
             ctx.memory,
             list(ctx.fact_candidates or []),
             ctx.sandbox_overrides,
@@ -476,13 +480,16 @@ class _FactCompactionMemoryWriteComponent:
                 inserted_count=saved,
                 error_code="sandbox_persist_skipped",
                 error_message="Chat-scoped persistence skipped: sandbox chat is not stored in chats table",
+                decisions=tuple(decisions),
             )
         ctx.fact_changes = changes
         return MemoryWriteResult(
             component_name=self.name,
-            status="ok",
+            status="degraded" if error_code else "ok",
             inserted_count=saved,
+            error_code=error_code,
             facts=tuple(changes),
+            decisions=tuple(decisions),
         )
 
 
@@ -495,6 +502,7 @@ def _fact_candidate_view(fact: FactDTO) -> dict[str, Any]:
         "confidence": fact.confidence,
         "change_type": "candidate_extracted",
         "status_after": "pending",
+        "decision_reason": "Подтверждён первичным evidence текущего диалога",
     }
 
 
@@ -520,6 +528,7 @@ def _fact_change_view(
         "support_after": support_after,
         "support_delta": support_delta,
         "compaction_action": str(fact.metadata.get("compaction_action") or "add"),
+        "decision_reason": "Изменение опубликовано в изолированной Sandbox-ветке",
     }
 
 

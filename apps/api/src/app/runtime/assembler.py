@@ -22,7 +22,6 @@ from app.core.http.clients import LLMClientProtocol
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.memory.builder import MemoryBuilder
 from app.runtime.memory.writer import MemoryWriter
-from app.runtime.memory.preparer import MemoryPreparer
 from app.runtime.planner.graph_planner import GraphPlanner
 from app.runtime.ports import SynthesizerPort, TaskExecutionPort
 from app.runtime.synthesizer import Synthesizer
@@ -62,10 +61,6 @@ class PipelineAssembler:
     def build_memory_writer(self, **kwargs: object) -> MemoryWriter:
         """Build an observed writer for an inline post-turn memory tail."""
         return MemoryWriter(session=self._session, llm_client=self._llm_client, **kwargs)
-
-    @cached_property
-    def memory_preparer(self) -> MemoryPreparer:
-        return MemoryPreparer(session=self._session, llm_client=self._llm_client)
 
     @cached_property
     def graph_planner(self) -> GraphPlanner:

@@ -39,6 +39,17 @@ export const PLANNER_INPUT_CONTRACT = {
   ],
 };
 
+export const TURN_PREFLIGHT_INPUT_CONTRACT = {
+  type: 'object',
+  properties: {
+    user_request: { type: 'string' },
+    mechanical_lookup: { type: 'object' },
+    continuation: { type: 'object' },
+    recall_context: { type: ['object', 'null'] },
+  },
+  required: ['user_request', 'mechanical_lookup', 'continuation', 'recall_context'],
+};
+
 export const SYNTHESIZER_INPUT_CONTRACT = {
   type: 'object',
   properties: {

@@ -45,6 +45,19 @@ export async function listMessages(
   }>(`/chats/${chatId}/messages?${qs.toString()}`);
 }
 
+export interface ChatPausedRun {
+  run_id: string;
+  reason: string;
+  action: Record<string, unknown>;
+  context: Record<string, unknown>;
+  contract_version: number;
+}
+
+/** Restore the current interaction after navigation or a page refresh. */
+export async function getPausedRun(chatId: string) {
+  return apiRequest<{ pause: ChatPausedRun | null }>(`/chats/${chatId}/paused-run`);
+}
+
 export async function sendMessage(
   chat_id: string,
   body: ChatMessageCreateRequest

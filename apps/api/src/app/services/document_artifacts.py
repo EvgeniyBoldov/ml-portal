@@ -133,6 +133,9 @@ def build_document_source_meta(
     source: Optional[str] = None,
     scope: Optional[str] = None,
     tags: Optional[list[str]] = None,
+    memory_enabled: Optional[bool] = None,
+    memory_policy: Optional[str] = None,
+    project_keys: Optional[list[str]] = None,
     language: str = "en",
 ) -> Dict[str, Any]:
     meta = normalize_document_source_meta(None)
@@ -152,6 +155,16 @@ def build_document_source_meta(
         "qdrant_collection_name": qdrant_collection_name,
         "prefilter": dict(prefilter or {}),
     }
+    if memory_enabled is not None:
+        meta["memory"] = {"enabled": bool(memory_enabled)}
+        # `collection` means this value is derived and can be reconciled when
+        # the collection policy changes. `explicit` is an intentional
+        # per-document override and must survive that reconciliation.
+        meta["memory"]["policy"] = memory_policy if memory_policy in {"collection", "explicit"} else "explicit"
+    if project_keys:
+        meta.setdefault("memory", {})["project_keys"] = [
+            str(key).strip().lower() for key in project_keys if str(key).strip()
+        ][:20]
     meta["artifacts"]["original"] = {
         "key": original_key,
         "filename": filename,

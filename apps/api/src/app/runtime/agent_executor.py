@@ -59,6 +59,87 @@ logger = get_logger(__name__)
 
 MAX_SUB_AGENT_MESSAGES = 6
 MAX_SUB_AGENT_MESSAGE_CHARS = 600
+
+
+def _render_memory_recall(recall: Dict[str, Any]) -> list[str]:
+    """Keep remembered statements distinct from their documentary evidence."""
+    lines: list[str] = []
+    terms = ", ".join(str(item) for item in recall.get("resolved_terms") or [] if str(item).strip())
+    projects = ", ".join(str(item) for item in recall.get("relevant_projects") or [] if str(item).strip())
+    if terms:
+        lines.append(f"[Resolved terms] {terms}")
+    if projects:
+        lines.append(f"[Relevant projects] {projects}")
+    for entity in (recall.get("resolved_entities") or [])[:6]:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("canonical_name") or entity.get("matched_form") or "").strip()
+        kind = str(entity.get("type") or "entity").strip()
+        if name:
+            lines.append(f"[Resolved entity] {kind}: {name}")
+    for label, key in (
+        ("Remembered knowledge", "relevant_knowledge"),
+        ("Applicable rules", "applicable_rules"),
+        ("Applicable procedures", "applicable_procedures"),
+        ("Known constraints", "known_constraints"),
+    ):
+        entries = recall.get(key) or []
+        for entry in entries[:2 if key == "applicable_procedures" else 6]:
+            if not isinstance(entry, dict):
+                continue
+            subject = str(entry.get("subject") or "").strip()
+            if not subject:
+                continue
+            if key == "applicable_procedures":
+                lines.extend(_render_procedure(subject, entry.get("content")))
+                continue
+            value = str(entry.get("value") or "").strip()
+            if subject and value:
+                lines.append(f"- [{label}] {subject}: {value}")
+    if recall.get("rag_required"):
+        reasons = ", ".join(str(item) for item in recall.get("rag_reasons") or [])
+        lines.append(f"[RAG verification required] {reasons or 'memory requires source verification'}")
+    if recall.get("tool_required"):
+        lines.append("[Current system observation required] use an available read-only tool before treating state as current")
+    if recall.get("clarification_required"):
+        reasons = ", ".join(str(item) for item in recall.get("clarification_reasons") or [])
+        lines.append(f"[Clarification required] {reasons or 'do not choose an ambiguous entity or project'}")
+    for ref in (recall.get("source_references") or [])[:6]:
+        if isinstance(ref, dict):
+            lines.append(f"- [Memory evidence] {ref.get('label') or ref.get('section_id') or 'document section'}")
+    return lines
+
+
+def _render_procedure(subject: str, raw_content: Any) -> list[str]:
+    """Render a canonical procedure atomically, never a truncated JSON blob."""
+    content = raw_content if isinstance(raw_content, dict) else {}
+    goal = str(content.get("goal") or "").strip()
+    if not goal:
+        return []
+    lines = [f"- [Applicable procedure] {subject}: {goal}"]
+    for label, key in (("Conditions", "applicability_conditions"), ("Approvals", "required_approvals"),
+                       ("Prechecks", "prechecks"), ("Verification", "verification"), ("Exceptions", "exceptions")):
+        values = [str(value).strip() for value in content.get(key) or [] if str(value).strip()]
+        if values:
+            lines.append(f"  {label}: " + "; ".join(values))
+    for step in content.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        instruction = str(step.get("instruction") or "").strip()
+        expected = str(step.get("expected_result") or "").strip()
+        if instruction and expected:
+            confirmation = "; confirmation required" if step.get("confirmation_required") else ""
+            lines.append(f"  Step {step.get('order')}: {instruction}. Expected: {expected}{confirmation}")
+    rollback = content.get("rollback") if isinstance(content.get("rollback"), dict) else {}
+    if rollback.get("mode") == "steps":
+        values = [str(value).strip() for value in rollback.get("steps") or [] if str(value).strip()]
+        if values:
+            lines.append("  Rollback: " + "; ".join(values))
+    elif rollback.get("mode") == "not_applicable" and str(rollback.get("reason") or "").strip():
+        lines.append(f"  Rollback not applicable: {str(rollback['reason']).strip()}")
+    return lines
+
+
 class AgentExecutor:
     """Runs one persisted graph task through the canonical agent runtime."""
 
@@ -524,7 +605,6 @@ class AgentExecutor:
         receipts: List[Dict[str, Any]] = []
         evidence: Dict[str, Any] = {}
         artifacts: List[Dict[str, Any]] = []
-        memory_candidates: List[Dict[str, Any]] = []
         fresh_retrieval = False
         for entry in ledger_entries:
             if getattr(entry, "status", None) != "succeeded" or not getattr(entry, "success", False):
@@ -544,12 +624,6 @@ class AgentExecutor:
             }
             receipts.append(receipt)
             evidence[receipt["call_id"]] = {"operation": operation, "result_fingerprint": receipt["result_fingerprint"]}
-            if normalized in {"project_memory.mark", "memory.mark"}:
-                memory_candidates.append({
-                    "call_id": receipt["call_id"],
-                    "result_fingerprint": receipt["result_fingerprint"],
-                    "status": "accepted_candidate",
-                })
         artifacts = AgentExecutor._dedupe_artifacts(list(verified_artifacts or []))
         for artifact in artifacts:
             artifact["artifact_ref"] = str(artifact.get("artifact_id") or "")
@@ -560,7 +634,6 @@ class AgentExecutor:
             "evidence": evidence,
             "artifacts": artifacts,
             "sources": [dict(item) for item in sources if isinstance(item, dict)],
-            "memory_candidates": memory_candidates,
         }
 
     # ---------------------------------------------------------------- helpers --
@@ -680,14 +753,21 @@ class AgentExecutor:
                 final_query = "\n\n".join(["\n".join(dependency_lines), final_query])
 
         if task.memory_context:
-            memory_lines = ["[Relevant durable memory]"]
+            memory_lines = ["[Relevant memory]"]
             for item in task.memory_context[:12]:
                 if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "memory_recall":
+                    memory_lines.extend(_render_memory_recall(item))
                     continue
                 subject = str(item.get("subject") or "").strip()
                 value = str(item.get("value") or "").strip()
                 if subject and value:
-                    memory_lines.append(f"- [{item.get('scope', 'memory')}] {subject}: {value}")
+                    memory_type = str(item.get("kind") or item.get("type") or "memory").strip()
+                    project_key = str(item.get("project_key") or "").strip()
+                    scope = str(item.get("scope") or "memory").strip()
+                    location = f"{scope}:{project_key}" if project_key else scope
+                    memory_lines.append(f"- [{location}/{memory_type}] {subject}: {value}")
             if len(memory_lines) > 1:
                 final_query = "\n\n".join(["\n".join(memory_lines), final_query])
 

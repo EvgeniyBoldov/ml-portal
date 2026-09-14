@@ -10,6 +10,17 @@ const event = (sequence: number, type: string, entityType: string, entityId: str
 });
 
 describe('sandbox trace state', () => {
+  it('marks turn preflight complete when orchestrator_end contains the selected route', () => {
+    let state = emptySandboxTrace();
+    state = applyRuntimeJournalEvent(state, event(1, 'orchestrator_start', 'orchestrator', 'preflight-1'));
+    state = applyRuntimeJournalEvent(state, {
+      ...event(2, 'orchestrator_end', 'orchestrator', 'preflight-1'),
+      payload: { role: 'turn_preflight', status: 'planner' },
+    });
+
+    expect(state.entitiesByKey['orchestrator:preflight-1'].status).toBe('completed');
+  });
+
   it('creates and updates explicit entities without heuristics', () => {
     let state = emptySandboxTrace();
     state = applyRuntimeJournalEvent(state, event(1, 'run_start', 'run', 'run-1'));

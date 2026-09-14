@@ -78,6 +78,16 @@ def test_normalize_error_classifies_timeout_and_context_limit():
     assert oversized.retryable is False
 
 
+def test_normalize_error_classifies_json_validation_rejection_as_structured_output_issue():
+    error = RuntimeError("Bad request")
+    error.response = SimpleNamespace(status_code=400, headers={}, text='{"error":{"code":"json_validate_failed"}}')
+
+    normalized = OpenAICompatibleLLM._normalize_error(error)
+
+    assert normalized.code is LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED
+    assert normalized.retryable is False
+
+
 def test_normalize_error_classifies_provider_tpm_limit_without_http_status():
     error = RuntimeError(
         "Rate limit reached: tokens per minute. Please try again in 16.14s."

@@ -16,7 +16,7 @@ class SystemLLMRoleBase(BaseModel):
     """Base schema for SystemLLMRole."""
     
     # === Role Identification ===
-    role_type: SystemLLMRoleType = Field(..., description="Role type: triage | planner | summary | memory")
+    role_type: SystemLLMRoleType = Field(..., description="Runtime role: planner | turn_preflight | synthesizer | memory | fact_extractor | fact_compactor")
     
     # === Prompt Parts ===
     identity: Optional[str] = Field(None, description="Role identity description")

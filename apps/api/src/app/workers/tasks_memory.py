@@ -8,15 +8,21 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from celery import shared_task
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.memory import FactScope, FactSource
+from app.models.memory import FactScope, FactSource, MemoryClaim, MemoryItem
+from app.models.rag import RAGDocument
+from app.models.rag_ingest import DocumentCollectionMembership, RAGStatus, Source
+from app.models.collection import Collection
+from app.models.glossary import GlossaryObservation
 from app.workers.session_factory import get_worker_session
 from app.workers.transaction_utils import checkpoint_commit
 from app.models.system_llm_role import SystemLLMRoleType
@@ -24,14 +30,309 @@ from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.memory.dto import SummaryDTO, FactDTO
 from app.runtime.memory.fact_extractor import AgentResultSnippet, FactEvidence
 from app.runtime.memory.transport import TurnMemory
-from app.runtime.project_memory_candidates import ProjectMemoryCandidate
 from app.runtime.memory.writer import MemoryWriter
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.entity_ids import memory_component_entity_id, memory_orchestrator_id as make_memory_orchestrator_id
 from app.services.system_llm_role_service import SystemLLMRoleService
 from app.services.runtime_event_logger import RuntimeEventJournalFactory
+from app.runtime.memory.evidence_feedback import (
+    MemoryEvidenceEvaluator, MemoryEvidenceFeedbackService, bounded_document_evidence,
+)
+
+
+@shared_task(name="app.workers.tasks_memory.reextract_stale_document_memory", queue="maintenance.default")
+def reextract_stale_document_memory(batch_size: int = 20) -> Dict[str, Any]:
+    """Gradually refresh document memory withdrawn by a content contract change."""
+    async def _reextract() -> Dict[str, Any]:
+        from app.services.rag_status_manager import RAGStatusManager, StageStatus
+        from app.repositories.factory import AsyncRepositoryFactory
+        from app.workers.tasks_rag_ingest.document_memory import extract_document_memory, is_memory_trusted_source
+
+        jobs: list[tuple[str, dict[str, str]]] = []
+        async with get_worker_session() as session:
+            rows = (await session.execute(
+                select(RAGDocument, Source, RAGStatus)
+                .join(Source, Source.source_id == RAGDocument.id)
+                .outerjoin(MemoryClaim, MemoryClaim.document_id == RAGDocument.id)
+                .outerjoin(GlossaryObservation, GlossaryObservation.document_id == RAGDocument.id)
+                .outerjoin(RAGStatus, (RAGStatus.doc_id == RAGDocument.id)
+                           & (RAGStatus.node_type == "memory") & (RAGStatus.node_key == "extract"))
+                .where(
+                    or_(MemoryClaim.state == "stale", GlossaryObservation.state == "stale"),
+                    RAGDocument.status != "archived",
+                    RAGDocument.s3_key_processed.is_not(None),
+                )
+                .order_by(RAGDocument.id)
+            )).all()
+            seen: set[UUID] = set()
+            for document, source, status in rows:
+                if document.id in seen or len(jobs) >= max(1, min(int(batch_size), 50)):
+                    continue
+                seen.add(document.id)
+                if not is_memory_trusted_source(source.meta, document_scope=str(document.scope or "local")):
+                    continue
+                metrics = dict(status.metrics_json or {}) if status is not None else {}
+                if status is not None and status.status in {"queued", "processing"}:
+                    continue
+                if status is not None and status.status == "completed" and metrics.get("entity_graph_contract") is True:
+                    continue
+                tenant_id = source.tenant_id or document.tenant_id
+                if tenant_id is None:
+                    continue
+                manager = RAGStatusManager(session, AsyncRepositoryFactory(session, tenant_id))
+                await manager.transition_stage(document.id, "memory.extract", StageStatus.QUEUED)
+                jobs.append((str(tenant_id), {
+                    "source_id": str(document.id), "canonical_key": str(document.s3_key_processed),
+                }))
+            await session.commit()
+        for tenant_id, job in jobs:
+            extract_document_memory.delay(job, tenant_id, True)
+        return {"queued": len(jobs)}
+
+    return asyncio.run(_reextract())
+
+
+@shared_task(name="app.workers.tasks_memory.index_memory_items", queue="memory")
+def index_memory_items(memory_item_ids: List[str]) -> Dict[str, Any]:
+    """Build/update the rebuildable company semantic index."""
+    async def _index() -> Dict[str, Any]:
+        async with get_worker_session() as session:
+            ids = [UUID(str(value)) for value in memory_item_ids[:200]]
+            rows = list((await session.execute(select(MemoryItem).where(MemoryItem.id.in_(ids)))).scalars().all())
+            from app.runtime.memory.semantic_index import MemorySemanticIndex
+            indexed = await MemorySemanticIndex(session).index_items(rows)
+            return {"indexed": indexed}
+    return asyncio.run(_index())
+
+
+@shared_task(name="app.workers.tasks_memory.remove_memory_items", queue="memory")
+def remove_memory_items(memory_item_ids: List[str]) -> Dict[str, Any]:
+    async def _remove() -> Dict[str, Any]:
+        async with get_worker_session() as session:
+            ids = [UUID(str(value)) for value in memory_item_ids[:500]]
+            from app.runtime.memory.semantic_index import MemorySemanticIndex
+            removed = await MemorySemanticIndex(session).remove_items(ids)
+            return {"removed": removed}
+    return asyncio.run(_remove())
+
+
+@shared_task(name="app.workers.tasks_memory.rebuild_memory_index", queue="memory")
+def rebuild_memory_index() -> Dict[str, Any]:
+    async def _rebuild() -> Dict[str, Any]:
+        async with get_worker_session() as session:
+            from app.runtime.memory.semantic_index import MemorySemanticIndex
+            return {"indexed": await MemorySemanticIndex(session).rebuild()}
+    return asyncio.run(_rebuild())
+
+
+@shared_task(name="app.workers.tasks_memory.reconcile_memory_index", queue="maintenance.default")
+def reconcile_memory_index() -> Dict[str, Any]:
+    """Converge the derived Qdrant index to PostgreSQL after lost queue work."""
+    async def _reconcile() -> Dict[str, Any]:
+        from app.runtime.memory.semantic_index import MemorySemanticIndex
+
+        indexed = removed = 0
+        async with get_worker_session() as session:
+            index = MemorySemanticIndex(session)
+            for state in ("active", "uncertain"):
+                cursor: UUID | None = None
+                while True:
+                    stmt = select(MemoryItem).where(MemoryItem.state == state)
+                    if cursor is not None:
+                        stmt = stmt.where(MemoryItem.id > cursor)
+                    rows = list((await session.execute(stmt.order_by(MemoryItem.id).limit(200))).scalars().all())
+                    if not rows:
+                        break
+                    indexed += await index.index_items(rows)
+                    cursor = rows[-1].id
+            stale_ids = list((await session.execute(select(MemoryItem.id).where(
+                MemoryItem.state == "stale",
+            ))).scalars().all())
+            for start in range(0, len(stale_ids), 500):
+                removed += await index.remove_items(stale_ids[start:start + 500])
+        return {"indexed": indexed, "removed": removed}
+
+    return asyncio.run(_reconcile())
+
+
+@shared_task(name="app.workers.tasks_memory.refresh_memory_freshness", queue="maintenance.default")
+def refresh_memory_freshness() -> Dict[str, Any]:
+    """Mark source-backed knowledge stale when it has not been verified in time."""
+    async def _refresh() -> Dict[str, Any]:
+        # Procedures and policy constraints are intentionally short-lived:
+        # using an old operational instruction is riskier than an old service
+        # description.  RAG evidence can confirm and refresh an item later.
+        max_age_days = {
+            "procedure": 90, "rule": 120, "constraint": 120,
+            "decision": 180, "description": 365, "relationship": 365,
+        }
+        stale_ids: list[UUID] = []
+        now = datetime.now(timezone.utc)
+        async with get_worker_session() as session:
+            rows = list((await session.execute(select(MemoryItem).where(
+                MemoryItem.state.in_(("active", "uncertain")),
+            ))).scalars().all())
+            for item in rows:
+                age = max_age_days.get(item.item_type, 180)
+                observed = item.last_verified_at or item.updated_at
+                if observed < now - timedelta(days=age):
+                    item.state = "stale"
+                    stale_ids.append(item.id)
+            await session.commit()
+        if stale_ids:
+            remove_memory_items.delay([str(item_id) for item_id in stale_ids])
+        return {"stale": len(stale_ids)}
+
+    return asyncio.run(_refresh())
+
+
+@shared_task(name="app.workers.tasks_memory.reconcile_collection_memory_policy", queue="maintenance.default")
+def reconcile_collection_memory_policy(collection_id: str) -> Dict[str, Any]:
+    """Converge existing collection documents after its memory policy changes."""
+    async def _reconcile() -> Dict[str, Any]:
+        from app.runtime.memory.document_memory import retire_document_memory
+
+        enabled_jobs: list[tuple[str, dict[str, str]]] = []
+        stale_ids: set[UUID] = set()
+        active_ids: set[UUID] = set()
+        async with get_worker_session() as session:
+            collection = await session.get(Collection, UUID(str(collection_id)))
+            if collection is None:
+                return {"processed": 0, "reason": "collection_not_found"}
+            rows = (await session.execute(
+                select(Source, RAGDocument)
+                .join(DocumentCollectionMembership, DocumentCollectionMembership.source_id == Source.source_id)
+                .join(RAGDocument, RAGDocument.id == Source.source_id)
+                .where(DocumentCollectionMembership.collection_id == collection.id)
+            )).all()
+            for source, document in rows:
+                meta = dict(source.meta or {})
+                memory = dict(meta.get("memory") or {})
+                explicit = memory.get("policy") == "explicit"
+                enabled_membership = (await session.execute(
+                    select(func.count(DocumentCollectionMembership.id))
+                    .join(Collection, Collection.id == DocumentCollectionMembership.collection_id)
+                    .where(
+                        DocumentCollectionMembership.source_id == source.source_id,
+                        Collection.memory_enabled.is_(True),
+                    )
+                )).scalar_one() > 0
+                enabled = bool(memory.get("enabled")) if explicit else enabled_membership
+                if not explicit:
+                    memory["enabled"] = enabled
+                    memory["policy"] = "collection"
+                    meta["memory"] = memory
+                    source.meta = meta
+                if enabled and document.s3_key_processed and document.status != "archived":
+                    enabled_jobs.append((str(document.tenant_id), {
+                        "source_id": str(document.id), "canonical_key": str(document.s3_key_processed),
+                    }))
+                elif not enabled:
+                    states = await retire_document_memory(session, document_id=document.id)
+                    stale_ids.update(item_id for item_id, state in states.items() if state == "stale")
+                    active_ids.update(item_id for item_id, state in states.items() if state in {"active", "uncertain"})
+            await session.commit()
+        if stale_ids:
+            remove_memory_items.delay([str(item_id) for item_id in stale_ids])
+        if active_ids:
+            index_memory_items.delay([str(item_id) for item_id in active_ids])
+        if enabled_jobs:
+            from app.workers.tasks_rag_ingest.document_memory import extract_document_memory
+            for tenant_id, job in enabled_jobs:
+                extract_document_memory.delay(job, tenant_id, True)
+        return {"processed": len(enabled_jobs) + len(stale_ids) + len(active_ids), "enabled": len(enabled_jobs)}
+
+    return asyncio.run(_reconcile())
 
 logger = get_logger(__name__)
+
+
+@shared_task(name="app.workers.tasks_memory.evaluate_memory_rag_evidence", queue="memory")
+def evaluate_memory_rag_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Evaluate recalled memory against one successful RAG result after a turn."""
+    import asyncio
+
+    async def _evaluate() -> Dict[str, Any]:
+        tenant_id = UUID(str(payload["tenant_id"]))
+        tool_call_id = str(payload["tool_call_id"])
+        # Pipeline sends an already bounded, documentary-only payload. Keep a
+        # legacy fallback for tasks queued before this contract existed.
+        raw_evidence = payload.get("evidence")
+        evidence = list(raw_evidence)[:8] if isinstance(raw_evidence, list) else bounded_document_evidence(payload.get("result"))
+        item_ids = [UUID(str(value)) for value in payload.get("memory_item_ids") or []]
+        claim_ids = [UUID(str(value)) for value in payload.get("claim_ids") or []]
+        if not evidence or not item_ids or not claim_ids:
+            return {"evaluated": 0, "reason": "no_evidence_or_items"}
+        reextract_document_ids: set[UUID] = set()
+        reindex_item_ids: set[UUID] = set()
+        evaluated = 0
+        async with get_worker_session() as session:
+            from app.core.di import get_llm_client
+            evaluator = MemoryEvidenceEvaluator(session=session, llm_client=get_llm_client())
+            feedback = MemoryEvidenceFeedbackService(session)
+            visible_claims = (await session.execute(
+                select(MemoryClaim).join(RAGDocument, RAGDocument.id == MemoryClaim.document_id).where(
+                    MemoryClaim.id.in_(claim_ids[:24]), MemoryClaim.memory_item_id.in_(item_ids[:12]),
+                    MemoryClaim.state == "active",
+                    or_(MemoryClaim.visibility_tenant_id.is_(None), MemoryClaim.visibility_tenant_id == tenant_id),
+                    or_(RAGDocument.scope == "global", RAGDocument.tenant_id == tenant_id),
+                    RAGDocument.status != "archived",
+                )
+            )).scalars().all()
+            requested_claims_by_item: dict[UUID, UUID] = {}
+            for raw_item_id, raw_claim_id in dict(payload.get("selected_claim_ids_by_item") or {}).items():
+                try:
+                    requested_claims_by_item[UUID(str(raw_item_id))] = UUID(str(raw_claim_id))
+                except (TypeError, ValueError):
+                    continue
+            claims_by_id = {claim.id: claim for claim in visible_claims}
+            claims_by_item: dict[UUID, MemoryClaim] = {}
+            for claim in visible_claims:
+                requested = requested_claims_by_item.get(claim.memory_item_id)
+                if requested is not None:
+                    selected = claims_by_id.get(requested)
+                    if selected is not None:
+                        claims_by_item[claim.memory_item_id] = selected
+                    continue
+                # Compatibility for jobs queued before selected claim ids.
+                # Deterministic ordering avoids a database-dependent choice.
+                current = claims_by_item.get(claim.memory_item_id)
+                if current is None or (claim.confidence, claim.updated_at, str(claim.id)) > (
+                    current.confidence, current.updated_at, str(current.id)
+                ):
+                    claims_by_item[claim.memory_item_id] = claim
+            for item_id, claim in list(claims_by_item.items())[:12]:
+                item = (await session.execute(select(MemoryItem).where(MemoryItem.id == item_id))).scalar_one_or_none()
+                if item is None:
+                    continue
+                if await feedback.already_evaluated(memory_item_id=item.id, tool_call_id=tool_call_id):
+                    continue
+                decision = await evaluator.evaluate(item=item, content=dict(claim.content or {}), evidence=evidence, tenant_id=tenant_id)
+                applied, documents = await feedback.apply(item=item, claim=claim, tool_call_id=tool_call_id, decision=decision)
+                if applied:
+                    evaluated += 1
+                    reindex_item_ids.add(item.id)
+                    reextract_document_ids.update(documents)
+            await session.commit()
+        if reindex_item_ids:
+            from app.workers.tasks_memory import index_memory_items
+            index_memory_items.delay([str(item_id) for item_id in reindex_item_ids])
+        if reextract_document_ids:
+            from app.models.rag import RAGDocument
+            async with get_worker_session() as session:
+                rows = (await session.execute(select(RAGDocument).where(
+                    RAGDocument.id.in_(reextract_document_ids),
+                ))).scalars().all()
+                jobs = [
+                    (str(row.tenant_id), {"source_id": str(row.id), "canonical_key": row.s3_key_processed})
+                    for row in rows if row.s3_key_processed and row.tenant_id
+                ]
+            from app.workers.tasks_rag_ingest.document_memory import extract_document_memory
+            for document_tenant_id, job in jobs:
+                extract_document_memory.delay(job, document_tenant_id, True)
+        return {"evaluated": evaluated, "reextract_documents": len(reextract_document_ids)}
+
+    return asyncio.run(_evaluate())
 
 
 class FactPayload(BaseModel):
@@ -72,14 +373,6 @@ class FactEvidencePayload(BaseModel):
     label: Optional[str] = None
 
 
-class ProjectMemoryCandidatePayload(BaseModel):
-    project_key: str
-    subject: str
-    value: str
-    evidence_call_ids: List[str] = Field(default_factory=list)
-    aliases: List[str] = Field(default_factory=list)
-
-
 class MemoryFinalizePayload(BaseModel):
     """
     Serializable payload for memory finalization task.
@@ -98,7 +391,6 @@ class MemoryFinalizePayload(BaseModel):
     retrieved_facts: List[FactPayload] = Field(default_factory=list)
     agent_results: List[AgentResultPayload] = Field(default_factory=list)
     fact_evidence: List[FactEvidencePayload] = Field(default_factory=list)
-    project_memory_candidates: List[ProjectMemoryCandidatePayload] = Field(default_factory=list)
     
     # Control flags
     skip_llm_helpers: bool = False
@@ -166,11 +458,6 @@ def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
         FactEvidence(**item.model_dump()) for item in payload.fact_evidence
     ]
     memory.fact_run_ref = payload.runtime_run_id
-    memory.project_memory_candidates = [
-        ProjectMemoryCandidate(**item.model_dump())
-        for item in payload.project_memory_candidates
-    ]
-    
     return memory
 
 
@@ -444,6 +731,21 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                         memory_component_entity_id(payload.runtime_run_id or payload.chat_id or "unknown", component_name, index),
                     )
                     component_status = str(item.get("status") or "completed")
+                    for decision in item.get("decisions") or []:
+                        if not isinstance(decision, dict):
+                            continue
+                        decision_payload = dict(decision)
+                        decision_payload.pop("stage", None)
+                        await _publish(
+                            RuntimeEvent.status(
+                                "memory_candidate_decision",
+                                **decision_payload,
+                                entity_type="agent_execution",
+                                entity_id=component_entity_id,
+                                parent_entity_type="orchestrator",
+                                parent_entity_id=memory_orchestrator_id,
+                            )
+                        )
                     # A skipped/degraded memory component is a completed
                     # post-response attempt with a non-fatal result.  It is
                     # not a HITL pause and must not put the trace stage on
@@ -461,6 +763,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                             error_message=item.get("error_message"),
                             duration_ms=item.get("duration_ms", 0),
                             facts=item.get("facts", []),
+                            decision_counts=item.get("decision_counts", {}),
                             entity_type="agent_execution",
                             entity_id=component_entity_id,
                             parent_entity_type="orchestrator",

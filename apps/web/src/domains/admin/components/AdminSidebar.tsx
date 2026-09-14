@@ -42,6 +42,7 @@ const navigation: NavGroup[] = [
       { path: '/admin/tools', label: 'Инструменты', icon: 'settings' },
       { path: '/admin/agents', label: 'Агенты', icon: 'sparkles' },
       { path: '/admin/collections', label: 'Данные', icon: 'database' },
+      { path: '/admin/memory', label: 'Мемори', icon: 'sparkles' },
       { path: '/admin/orchestration', label: 'Оркестрация', icon: 'settings' },
     ],
   },

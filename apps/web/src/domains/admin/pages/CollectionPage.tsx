@@ -58,6 +58,7 @@ type CollectionEditorForm = {
   table_name: string;
   data_instance_id: string;
   is_active: boolean;
+  memory_enabled: boolean;
   has_vector_search: boolean;
   chunk_strategy: string;
   chunk_size: number;
@@ -195,6 +196,16 @@ const ACTIVE_VERSION_META_FIELDS: FieldConfig[] = [
   { key: 'updated_at', type: 'date', label: 'Обновлена', editable: false },
 ];
 
+const MEMORY_POLICY_FIELDS: FieldConfig[] = [
+  {
+    key: 'memory_enabled',
+    type: 'boolean',
+    label: 'Извлекать знания в память',
+    description: 'Для загружаемых документов будут извлекаться термины, правила и процедуры в долгоживущую память.',
+    editable: true,
+  },
+];
+
 const TOOL_COLUMNS: DataTableColumn<RuntimeOperationRow>[] = [
   { key: 'operation', label: 'Operation', render: (row) => <code>{row.operation}</code> },
   { key: 'title', label: 'Название', render: (row) => row.title || '—' },
@@ -260,6 +271,7 @@ export function CollectionPage() {
       table_name: col?.table_name ?? '',
       data_instance_id: col?.data_instance_id ?? '',
       is_active: col?.is_active ?? true,
+      memory_enabled: col?.memory_enabled ?? false,
       has_vector_search: col?.has_vector_search ?? false,
       chunk_strategy: col?.vector_config?.chunk_strategy ?? 'by_tokens',
       chunk_size: col?.vector_config?.chunk_size ?? 500,
@@ -308,6 +320,7 @@ export function CollectionPage() {
         name: data.name,
         fields,
         data_instance_id: data.data_instance_id || undefined,
+        memory_enabled: data.memory_enabled ?? false,
         vector_config: needsVectorConfig ? {
           chunk_strategy: data.chunk_strategy ?? 'by_paragraphs',
           chunk_size: data.chunk_size ?? 512,
@@ -321,6 +334,7 @@ export function CollectionPage() {
         tenant_id: data.tenant_id || undefined,
         name: data.name,
         is_active: data.is_active,
+        memory_enabled: data.memory_enabled,
         table_name: data.table_name || undefined,
         schema_ops: schemaOps,
       };
@@ -362,6 +376,7 @@ export function CollectionPage() {
     table_name: collection?.table_name ?? '',
     data_instance_id: collection?.data_instance_id ?? '',
     is_active: collection?.is_active ?? true,
+    memory_enabled: collection?.memory_enabled ?? false,
     has_vector_search: collection?.has_vector_search ?? false,
     chunk_strategy: collection?.vector_config?.chunk_strategy ?? 'by_tokens',
     chunk_size: collection?.vector_config?.chunk_size ?? 500,
@@ -655,6 +670,16 @@ export function CollectionPage() {
             editable
             onChange={handleFieldChangeWrapped}
           />
+          <Block
+            title="Память"
+            icon="file-text"
+            iconVariant="warning"
+            width="1/2"
+            fields={MEMORY_POLICY_FIELDS}
+            data={formData}
+            editable
+            onChange={handleFieldChangeWrapped}
+          />
           {formData.collection_type !== 'api' && (
             <Block
               title="Поля коллекции"
@@ -761,6 +786,16 @@ export function CollectionPage() {
             width="1/2"
             height="stretch"
             fields={configFieldsViewEdit}
+            data={blockData}
+            editable={isEditable}
+            onChange={handleFieldChangeWrapped}
+          />
+          <Block
+            title="Память"
+            icon="file-text"
+            iconVariant="warning"
+            width="1/2"
+            fields={MEMORY_POLICY_FIELDS}
             data={blockData}
             editable={isEditable}
             onChange={handleFieldChangeWrapped}

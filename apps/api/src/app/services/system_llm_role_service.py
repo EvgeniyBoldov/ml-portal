@@ -106,6 +106,9 @@ class SystemLLMRoleService:
         """Update the active Memory role."""
         return await self.update_active_role(SystemLLMRoleType.MEMORY, data)
 
+    async def update_turn_preflight_role(self, data: SystemLLMRoleUpdate) -> Optional[SystemLLMRole]:
+        return await self.update_active_role(SystemLLMRoleType.TURN_PREFLIGHT, data)
+
     async def update_synthesizer_role(self, data: SynthesizerRoleUpdate) -> Optional[SystemLLMRole]:
         """Update the active Synthesizer role."""
         return await self.update_active_role(SystemLLMRoleType.SYNTHESIZER, data)

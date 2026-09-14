@@ -46,6 +46,10 @@ class CollectionCapabilityBinding:
 
 
 _OPERATION_SPECS: Dict[str, OperationSpec] = {
+    "memory.search": OperationSpec(
+        canonical_op_slug="memory.search", domain="memory", title="Search Memory",
+        description="Search bounded project and company memory.", result_kind="memory", scope_kind="system",
+    ),
     "collection.info": OperationSpec(
         canonical_op_slug="collection.info",
         domain="collection",
@@ -70,38 +74,6 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         title="SQL Search Objects",
         description="Search available schemas, tables, columns, and views in external database",
         result_kind="schema_search",
-        scope_kind="system",
-    ),
-    "project_memory.read": OperationSpec(
-        canonical_op_slug="project_memory.read",
-        domain="project_memory",
-        title="Read Project Memory",
-        description="Read confirmed compact knowledge for an exact project key",
-        result_kind="rows",
-        scope_kind="system",
-    ),
-    "memory.mark": OperationSpec(
-        canonical_op_slug="memory.mark",
-        domain="memory",
-        title="Mark Project Memory Candidates",
-        description="Mark evidenced project knowledge for asynchronous compaction without writing durable memory",
-        result_kind="generic",
-        scope_kind="system",
-    ),
-    "memory.lookup": OperationSpec(
-        canonical_op_slug="memory.lookup",
-        domain="memory",
-        title="Lookup Memory Terms",
-        description="Resolve glossary aliases, projects, and relevant project-memory keys without reading values",
-        result_kind="catalog",
-        scope_kind="system",
-    ),
-    "memory.read": OperationSpec(
-        canonical_op_slug="memory.read",
-        domain="memory",
-        title="Read Project Memory",
-        description="Read confirmed values for project-memory keys returned by memory.lookup",
-        result_kind="rows",
         scope_kind="system",
     ),
     "collection.table.search": OperationSpec(
@@ -519,7 +491,6 @@ def resolve_publication(
     normalized_raw = str(raw_slug or "").strip()
     if not normalized_raw:
         return None
-
     candidate_domains = _build_domain_candidates(
         context_domains=context_domains,
         discovered_domains=discovered_domains,
@@ -544,6 +515,11 @@ def resolve_publication(
                 return PublicationDecision(canonical_op_slug=canonical, spec=spec)
 
     if _is_collection_like_raw(normalized_raw):
+        return None
+
+    # Memory has one explicit, read-only public operation. Do not manufacture
+    # other memory operations from arbitrary adapter slugs.
+    if "memory" in candidate_domains and normalized_raw != "memory.search":
         return None
 
     canonical_non_collection = _resolve_non_collection_canonical(

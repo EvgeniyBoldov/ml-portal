@@ -366,6 +366,7 @@ class PlannerContext(BaseModel):
     available_agents: List[Dict[str, Any]] = Field(default_factory=list)
     available_artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
+    task_brief: Dict[str, Any] = Field(default_factory=dict)
     model_config = {"extra": "forbid"}
 
 

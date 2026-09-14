@@ -68,6 +68,8 @@ class CollectionDocumentUploadService:
         scope: Optional[str] = None,
         tags: Optional[List[str]] = None,
         meta_fields: Optional[dict] = None,
+        memory_enabled: Optional[bool] = None,
+        project_keys: Optional[List[str]] = None,
     ) -> dict:
         """Upload a file into a document collection and persist RAG bookkeeping."""
         collection = await self._get_document_collection(collection_id)
@@ -139,6 +141,9 @@ class CollectionDocumentUploadService:
                 source=source,
                 scope=scope,
                 tags=tags or [],
+                memory_enabled=bool(getattr(collection, "memory_enabled", False)) if memory_enabled is None else memory_enabled,
+                memory_policy="collection" if memory_enabled is None else "explicit",
+                project_keys=project_keys,
             )
 
             src = Source(

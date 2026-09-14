@@ -35,13 +35,35 @@ describe('projectTraceStages memory components', () => {
     const target = resolveTraceInspectionTarget(state, compactor.inspectorKey);
     expect(compactor.kind).toBe('fact_compactor');
     expect(target?.kind).toBe('executor');
-    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Изменения', 'RAW']);
+    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Решения', 'Опубликовано', 'RAW']);
     expect(compactor.memoryResult?.facts).toEqual([expect.objectContaining({
       subject: 'network.zone',
       changeType: 'candidate_confirmed',
       statusBefore: 'pending',
       statusAfter: 'confirmed',
       supportDelta: 1,
+    })]);
+  });
+
+  it('projects typed candidate decisions from canonical status events', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'memory-1', role: 'memory' }),
+      event(2, 'agent_start', { entity_type: 'agent_execution', entity_id: 'extractor-1', parent_entity_type: 'orchestrator', parent_entity_id: 'memory-1', agent_slug: 'fact_extractor' }),
+      event(3, 'status', {
+        stage: 'memory_candidate_decision', entity_type: 'agent_execution', entity_id: 'extractor-1', parent_entity_type: 'orchestrator', parent_entity_id: 'memory-1',
+        component_name: 'fact_extractor', decision_phase: 'extraction_validation', outcome: 'rejected', reason_code: 'below_confidence', candidate_ids: ['extractor:1'],
+        candidate: { scope: 'user', kind: 'fact', subject: 'language', value: 'Russian', confidence: 0.2 }, evidence: { count: 1, refs: [{ source_type: 'user_message', source_ref: 'turn-1' }] },
+      }),
+      event(4, 'status', {
+        stage: 'memory_component_result', entity_type: 'agent_execution', entity_id: 'extractor-1', parent_entity_type: 'orchestrator', parent_entity_id: 'memory-1',
+        component_name: 'fact_extractor', status: 'ok', inserted_count: 0, updated_count: 0, skipped_count: 1, facts: [],
+      }),
+    ]);
+
+    const extractor = projectTraceStages(state)[0].executorRuns[0];
+    expect(extractor.memoryResult?.decisions).toEqual([expect.objectContaining({
+      outcome: 'rejected', reasonCode: 'below_confidence', evidenceCount: 1,
+      fact: expect.objectContaining({ subject: 'language' }),
     })]);
   });
 
@@ -67,6 +89,41 @@ describe('projectTraceStages memory components', () => {
       mode: 'partial', durationMs: 12, operationsCount: 4, dataInstancesCount: 2,
       missing: { tools: [], collections: ['private_docs (rbac_denied)'], credentials: ['dcbox'] },
     });
+  });
+
+  it('projects the turn preflight route contract into the route inspector tab', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'preflight-1', role: 'turn_preflight' }),
+      event(2, 'llm_request', {
+        entity_type: 'llm_call', entity_id: 'call-1', parent_entity_type: 'orchestrator', parent_entity_id: 'preflight-1',
+        messages: [{ role: 'user', content: JSON.stringify({ user_request: 'Запомни факт', mechanical_lookup: { entities: ['НОП'] } }) }],
+      }),
+      event(3, 'llm_response', {
+        entity_type: 'llm_call', entity_id: 'call-1', parent_entity_type: 'orchestrator', parent_entity_id: 'preflight-1',
+        content: JSON.stringify({ route: 'planner', task_brief: {
+          goal: 'Сохранить факт', direction: 'В память пользователя', expected_result: 'Факт сохранён',
+          entity_hints: ['НОП'], project_hints: [], constraints: ['не выдумывать'],
+        } }),
+      }),
+      event(4, 'orchestrator_end', { entity_type: 'orchestrator', entity_id: 'preflight-1', role: 'turn_preflight', status: 'planner' }),
+    ]);
+
+    const executor = projectTraceStages(state).find((stage) => stage.kind === 'turn_preflight')?.executorRuns[0];
+    expect(executor?.route).toEqual(expect.objectContaining({
+      route: 'planner', goal: 'Сохранить факт', direction: 'В память пользователя', expectedResult: 'Факт сохранён',
+      entityHints: ['НОП'], constraints: ['не выдумывать'],
+      input: { user_request: 'Запомни факт', mechanical_lookup: { entities: ['НОП'] } },
+    }));
+  });
+
+  it('does not throw when turn preflight has an empty LLM response', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'preflight-empty', role: 'turn_preflight' }),
+      event(2, 'llm_request', { entity_type: 'llm_call', entity_id: 'call-empty', parent_entity_type: 'orchestrator', parent_entity_id: 'preflight-empty' }),
+      event(3, 'llm_response', { entity_type: 'llm_call', entity_id: 'call-empty', parent_entity_type: 'orchestrator', parent_entity_id: 'preflight-empty' }),
+    ]);
+
+    expect(() => projectTraceStages(state)).not.toThrow();
   });
 
   it('keeps a planner proposal scoped to its iteration and maps planned tasks to steps', () => {

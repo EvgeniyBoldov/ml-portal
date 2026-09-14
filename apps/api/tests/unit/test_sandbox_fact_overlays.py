@@ -44,13 +44,13 @@ def test_set_override_adds_branch_only_fact() -> None:
     ]
 
 
-def test_project_fact_is_kept_in_branch_overlay() -> None:
-    overrides = merge_extracted({}, [_fact(FactScope.PROJECT, "project.network.standard", "EVPN")])
+def test_tenant_fact_is_kept_in_branch_overlay() -> None:
+    overrides = merge_extracted({}, [_fact(FactScope.TENANT, "department.network.standard", "EVPN")])
 
     effective = apply_overrides([], overrides)
 
     assert [(item.scope, item.subject, item.status) for item in effective] == [
-        (FactScope.PROJECT, "project.network.standard", FactStatus.CONFIRMED),
+        (FactScope.TENANT, "department.network.standard", FactStatus.CONFIRMED),
     ]
 
 

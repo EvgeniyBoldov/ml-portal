@@ -31,7 +31,6 @@ class FactDTO:
     # Optional scoping context — required-ness depends on scope and is
     # enforced by FactStore.upsert_with_supersede, not here.
     tenant_id: Optional[UUID] = None
-    project_id: Optional[UUID] = None
     owner_type: Optional[str] = None
     owner_id: Optional[UUID] = None
     kind: str = "fact"
@@ -65,8 +64,6 @@ class FactDTO:
             return self.owner_id == other.owner_id
         if self.scope == FactScope.TENANT:
             return self.owner_id == other.owner_id
-        if self.scope == FactScope.PROJECT:
-            return self.project_id == other.project_id
         return False
 
 

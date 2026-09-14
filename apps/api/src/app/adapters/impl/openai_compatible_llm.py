@@ -329,8 +329,13 @@ class OpenAICompatibleLLM:
         error_body = body.get("error") if isinstance(body, dict) and isinstance(body.get("error"), dict) else {}
         provider_code = str(error_body.get("code") or error_body.get("type") or "").strip() or None
         provider_message = str(error_body.get("message") or "")
-        text = f"{exc} {provider_code or ''} {provider_message}".lower()
         headers = getattr(response, "headers", None) if response is not None else None
+        # Some OpenAI-compatible SDK errors expose the provider body only on
+        # ``response.text``. Include this bounded diagnostic surface in
+        # classification so JSON-mode failures can use the structured-call
+        # compatibility fallback.
+        response_text = getattr(response, "text", "") if response is not None else ""
+        text = f"{exc} {provider_code or ''} {provider_message} {response_text or ''}".lower()
         retry_after_ms: Optional[int] = None
         retry_after = headers.get("retry-after") if headers is not None else None
         if retry_after:
@@ -359,7 +364,7 @@ class OpenAICompatibleLLM:
             code, safe, retryable = LLMErrorCode.REQUEST_TOO_LARGE, "LLM request exceeds provider limits", False
         elif "tool" in text and ("not support" in text or "unsupported" in text or "tool_use_failed" in text):
             code, safe, retryable = LLMErrorCode.TOOL_CALLING_UNSUPPORTED, "LLM does not support native tool calling", False
-        elif "response_format" in text or "json_schema" in text:
+        elif "json_validate_failed" in text or "response_format" in text or "json_schema" in text:
             code, safe, retryable = LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED, "LLM does not support structured output", False
         elif status_code is not None and 400 <= status_code < 500:
             code, safe, retryable = LLMErrorCode.INVALID_REQUEST, "LLM rejected the request", False

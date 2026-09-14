@@ -138,6 +138,7 @@ export interface Collection {
   is_fully_vectorized: boolean;
   
   is_active: boolean;
+  memory_enabled?: boolean;
   lifecycle_status?: string;
   current_version_id?: string | null;
   current_version?: CollectionVersion | null;
@@ -162,22 +163,48 @@ export interface ProjectMemoryProject {
   updated_at: string | null;
 }
 
+export interface ProjectCatalogItem {
+  key: string;
+  name: string;
+  aliases: string[];
+}
+
 export interface ProjectMemoryOverviewResponse {
   projects: ProjectMemoryProject[];
   total: number;
+  limit?: number;
+  offset?: number;
 }
 
-export interface ProjectMemoryFact {
+export interface ProjectMemoryItem {
+  id: string;
   subject: string;
   value: string;
+  content: Record<string, unknown>;
   kind: string;
   status: string;
   observed_at: string;
+  last_verified_at: string;
+  applicability: Record<string, unknown>;
+  source_count: number;
+  evidence_section_ids: string[];
 }
 
 export interface ProjectMemoryProjectDetailResponse {
   project: ProjectMemoryProject;
-  facts: ProjectMemoryFact[];
+  items: ProjectMemoryItem[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ProjectMemoryEvidencePreview {
+  document_id: string;
+  section_id: string;
+  label: string;
+  start_offset: number;
+  end_offset: number;
+  excerpt: string;
 }
 
 export interface GlossaryCatalogEntry {
@@ -185,13 +212,17 @@ export interface GlossaryCatalogEntry {
   aliases: string[];
   description: string | null;
   entity_type: string;
-  scope: 'global' | 'tenant';
+  entity_id: string | null;
+  project_id: string | null;
+  scope: 'global' | 'tenant' | 'user';
   updated_at: string;
 }
 
 export interface GlossaryOverviewResponse {
   entries: GlossaryCatalogEntry[];
   total: number;
+  limit?: number;
+  offset?: number;
 }
 
 export interface CollectionCapabilityTool {
@@ -219,6 +250,7 @@ export interface CreateCollectionRequest {
   vector_config?: VectorConfig;
   table_schema?: Record<string, unknown> | null;
   data_instance_id?: string;
+  memory_enabled?: boolean;
 }
 
 export interface SchemaOperation {
@@ -232,6 +264,7 @@ export interface UpdateCollectionRequest {
   tenant_id?: string | null;
   name?: string;
   is_active?: boolean;
+  memory_enabled?: boolean;
   data_instance_id?: string | null;
   table_name?: string | null;
   table_schema?: Record<string, unknown> | null;
@@ -262,6 +295,8 @@ export interface UploadDocumentRequest {
   tags?: string[];
   meta_fields?: Record<string, string>;
   auto_ingest?: boolean;
+  memory_enabled?: boolean;
+  project_keys?: string[];
 }
 
 export interface UploadDocumentResponse {
@@ -358,6 +393,14 @@ export interface CollectionDocument {
   s3_key: string | null;
   document?: Record<string, unknown>;
   collection?: Record<string, unknown>;
+  memory?: {
+    policy: 'collection' | 'explicit';
+    enabled: boolean | null;
+    effective_enabled: boolean;
+    project_keys: string[];
+    extraction_status: string;
+    extraction_metrics: Record<string, unknown>;
+  };
   artifacts?: Record<string, { key?: string; content_type?: string; format?: string; available?: boolean }>;
   meta_fields: Record<string, unknown>;
 }
@@ -651,6 +694,8 @@ export const collectionsApi = {
     if (data.tags?.length) formData.append('tags', JSON.stringify(data.tags));
     if (data.meta_fields && Object.keys(data.meta_fields).length > 0) formData.append('meta_fields', JSON.stringify(data.meta_fields));
     if (data.auto_ingest !== undefined) formData.append('auto_ingest', String(data.auto_ingest));
+    if (data.memory_enabled !== undefined) formData.append('memory_enabled', String(data.memory_enabled));
+    if (data.project_keys?.length) formData.append('project_keys', JSON.stringify(data.project_keys));
 
     return apiRequest<UploadDocumentResponse>(
       `/collections/${collectionId}/upload-document`,
@@ -754,18 +799,43 @@ export const collectionsApi = {
     return toFrontendCollection(collection);
   },
 
-  getProjectMemoryOverview: async (): Promise<ProjectMemoryOverviewResponse> =>
-    apiRequest<ProjectMemoryOverviewResponse>('/collections/project-memory'),
+  getProjectMemoryOverview: async (params?: { query?: string; state?: string }): Promise<ProjectMemoryOverviewResponse> => {
+    const search = new URLSearchParams();
+    if (params?.query) search.set('query', params.query);
+    if (params?.state) search.set('state', params.state);
+    return apiRequest<ProjectMemoryOverviewResponse>(`/collections/project-memory${search.toString() ? `?${search}` : ''}`);
+  },
+
+  getProjectCatalog: async (): Promise<ProjectCatalogItem[]> =>
+    apiRequest<ProjectCatalogItem[]>('/collections/project-memory/catalog'),
 
   getProjectMemoryProject: async (
     projectKey: string,
+    params?: { query?: string; item_type?: string; state?: string; limit?: number; offset?: number },
   ): Promise<ProjectMemoryProjectDetailResponse> =>
-    apiRequest<ProjectMemoryProjectDetailResponse>(
-      `/collections/project-memory/projects/${encodeURIComponent(projectKey)}`,
-    ),
+    apiRequest<ProjectMemoryProjectDetailResponse>(`/collections/project-memory/projects/${encodeURIComponent(projectKey)}${(() => {
+      const search = new URLSearchParams();
+      if (params?.query) search.set('query', params.query);
+      if (params?.item_type) search.set('item_type', params.item_type);
+      if (params?.state) search.set('state', params.state);
+      if (params?.limit !== undefined) search.set('limit', String(params.limit));
+      if (params?.offset !== undefined) search.set('offset', String(params.offset));
+      return search.toString() ? `?${search}` : '';
+    })()}`),
 
-  getGlossaryOverview: async (): Promise<GlossaryOverviewResponse> =>
-    apiRequest<GlossaryOverviewResponse>('/collections/glossary'),
+  getProjectMemoryEvidence: async (itemId: string, sectionId: string): Promise<ProjectMemoryEvidencePreview> =>
+    apiRequest<ProjectMemoryEvidencePreview>(`/collections/project-memory/items/${encodeURIComponent(itemId)}/evidence/${encodeURIComponent(sectionId)}`),
+
+  getGlossaryOverview: async (params?: { query?: string; scope?: string; entity_type?: string; project_id?: string; limit?: number; offset?: number }): Promise<GlossaryOverviewResponse> => {
+    const search = new URLSearchParams();
+    if (params?.query) search.set('query', params.query);
+    if (params?.scope) search.set('scope', params.scope);
+    if (params?.entity_type) search.set('entity_type', params.entity_type);
+    if (params?.project_id) search.set('project_id', params.project_id);
+    if (params?.limit !== undefined) search.set('limit', String(params.limit));
+    if (params?.offset !== undefined) search.set('offset', String(params.offset));
+    return apiRequest<GlossaryOverviewResponse>(`/collections/glossary${search.toString() ? `?${search}` : ''}`);
+  },
 
   // CSV operations
   previewCSV: async (

@@ -1,6 +1,7 @@
 """Candidate persistence for evidence-backed user, tenant and global terminology."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Sequence
 from uuid import UUID
@@ -16,9 +17,16 @@ from app.models.glossary import (
 )
 from app.models.memory import FactScope, FactSource
 from app.runtime.memory.dto import FactDTO
+from app.runtime.memory.decisions import MemoryDecision
 
 
 GLOSSARY_CONFIRMATION_SUPPORT = 3
+
+
+@dataclass(frozen=True)
+class GlossaryReconciliationResult:
+    changed: int
+    decisions: list[MemoryDecision]
 
 
 class GlossaryReconciler:
@@ -91,7 +99,19 @@ class GlossaryReconciler:
         user_id: UUID | None,
         tenant_id: UUID | None,
     ) -> int:
+        return (await self.apply_with_decisions(
+            candidates=candidates, user_id=user_id, tenant_id=tenant_id,
+        )).changed
+
+    async def apply_with_decisions(
+        self,
+        *,
+        candidates: Sequence[FactDTO],
+        user_id: UUID | None,
+        tenant_id: UUID | None,
+    ) -> GlossaryReconciliationResult:
         changed = 0
+        decisions: list[MemoryDecision] = []
         for candidate in candidates:
             if candidate.kind != "glossary":
                 continue
@@ -101,9 +121,16 @@ class GlossaryReconciler:
                 tenant_id=tenant_id,
             )
             if owner is None:
+                decisions.append(MemoryDecision("fact_compactor", "reconciliation", "rejected", "missing_owner", (candidate,)))
                 continue
             action = str(candidate.metadata.get("compaction_action") or "add")
             if action in {"discard", "mark_conflict"}:
+                decisions.append(MemoryDecision(
+                    "fact_compactor", "reconciliation",
+                    "conflict" if action == "mark_conflict" else "rejected",
+                    "marked_conflict" if action == "mark_conflict" else "discarded_by_compactor",
+                    (candidate,), action=action,
+                ))
                 continue
             scope, owner_id = owner
             row = await self._find(scope=scope, owner_id=owner_id, canonical_term=candidate.subject)
@@ -122,12 +149,14 @@ class GlossaryReconciler:
                 self._session.add(row)
                 await self._session.flush()
             else:
+                row.is_active = True
                 row.aliases = _aliases([*(row.aliases or []), *aliases], row.canonical_term)
                 if row.status != GlossaryStatus.CONFIRMED.value:
                     row.description = candidate.value
 
             added = await self._add_observations(row, candidate.metadata.get("evidence") or [])
             if not added:
+                decisions.append(MemoryDecision("fact_compactor", "reconciliation", "skipped", "no_new_evidence", (candidate,), action=action))
                 continue
             now = datetime.now(timezone.utc)
             row.support_count += added
@@ -138,8 +167,14 @@ class GlossaryReconciler:
                 row.last_confirmed_at = now
             self._session.add(row)
             changed += 1
+            decisions.append(MemoryDecision(
+                "fact_compactor", "publication", "published",
+                "glossary_confirmed" if row.status == GlossaryStatus.CONFIRMED.value else "glossary_pending",
+                (candidate,), action=action, status_after=str(row.status),
+                support_after=int(row.support_count or 0), support_delta=added,
+            ))
         await self._session.flush()
-        return changed
+        return GlossaryReconciliationResult(changed, decisions)
 
     async def _find(
         self,
@@ -151,7 +186,6 @@ class GlossaryReconciler:
         stmt = select(GlossaryEntry).where(
             GlossaryEntry.scope == scope.value,
             GlossaryEntry.canonical_term == canonical_term,
-            GlossaryEntry.is_active.is_(True),
         )
         if scope == GlossaryScope.USER:
             stmt = stmt.where(GlossaryEntry.user_id == owner_id)

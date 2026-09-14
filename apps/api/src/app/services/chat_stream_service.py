@@ -384,6 +384,11 @@ class ChatStreamService:
                 elif event.type == RuntimeEventType.STOP:
                     stop_payload = dict(event.data or {})
                     paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(stop_payload)
+                    if paused_payload["reason"] not in {"waiting_input", "waiting_confirmation"}:
+                        # FAILED/COMPLETED STOP events are terminal markers,
+                        # not resumable user interactions. The preceding
+                        # ERROR/FINAL event owns their chat representation.
+                        return None
                     return {
                         "type": "run_paused",
                         "reason": paused_payload["reason"],

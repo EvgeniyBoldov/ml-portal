@@ -100,6 +100,7 @@ class MemoryBuilder:
         tool_ledger_entries: Optional[List[Dict[str, Any]]] = None,
         recent_agent_runs: Optional[List[Dict[str, Any]]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
+        load_durable_memory: bool = True,
     ) -> TurnMemory:
         sandbox_branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
         # Conversation summary is retained in storage for compatibility but is
@@ -109,6 +110,20 @@ class MemoryBuilder:
             base=self._memory_budget,
             platform_config=platform_config,
         )
+        if not load_durable_memory:
+            return TurnMemory(
+                chat_id=chat_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                turn_number=summary.last_updated_turn + 1,
+                goal=goal,
+                summary=summary,
+                artifacts=[
+                    item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+                    for item in (attachments or [])
+                ],
+                memory_diagnostics={"mode": "lazy"},
+            )
         durable_snapshot = await self._memory_service.read_snapshot(
             user_id=user_id,
             tenant_id=tenant_id,

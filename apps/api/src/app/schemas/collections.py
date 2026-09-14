@@ -57,6 +57,7 @@ class CreateCollectionRequest(BaseModel):
     # Optional for local types (table/document) — backend auto-resolves local service instance.
     # Required for remote types (sql/api).
     data_instance_id: Optional[uuid.UUID] = None
+    memory_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_name_chars(self) -> "CreateCollectionRequest":
@@ -108,6 +109,7 @@ class UpdateCollectionRequest(BaseModel):
     tenant_id: Optional[uuid.UUID] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     is_active: Optional[bool] = None
+    memory_enabled: Optional[bool] = None
     table_name: Optional[str] = None
     table_schema: Optional[dict] = None
     schema_ops: List[SchemaOperation] = Field(default_factory=list)

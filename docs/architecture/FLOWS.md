@@ -149,18 +149,21 @@ Binding rule:
 ## 7. Pause / Resume Flow
 
 Flow:
-1. Runtime stops on a task-local `waiting_confirmation` only; it does not use
-   a paused-plan path for free-form clarification.
-2. Pause context and operation fingerprint are persisted in the runtime plan and `chat_turn`.
-3. User confirms or rejects that exact operation.
-4. Confirmation resumes the same runtime run; rejection is recorded as a
+1. Runtime stops on a task-local `waiting_confirmation` or a root-level
+   TurnPreflight `waiting_input` clarification.
+2. Confirmation fingerprint stays in the runtime plan; root clarification
+   context is persisted in `chat_turn` without a plan.
+3. User answers a clarification or confirms/rejects that exact operation.
+4. A clarification resumes the root turn at mechanical lookup and
+   TurnPreflight without creating a plan. Confirmation resumes the same
+   selected task; rejection is recorded as a
    `cancelled` task with the runtime-owned `confirmation_rejected` limitation
    and triggers the planner checkpoint.
 
 Binding rule:
 - pause/resume is part of the chat execution contract,
-- free-form clarification is not a paused plan: synthesis answers with the
-  current limitation and the next user message begins a new run.
+- a TurnPreflight clarification is a root interaction, never a paused plan or
+  a synthetic agent task.
 
 ## 8. Why This Document Exists
 
@@ -171,22 +174,28 @@ They are intentionally lightweight:
 - not a migration plan,
 - not a task list.
 
-## 9. Planner Memory Contract
+## 9. Turn Routing and Memory Contract
 
 Flow:
-1. `MemoryBuilder` reads bounded confirmed user/tenant facts through
-   `MemoryService` and assembles the current-turn memory bundle.
-2. `MemoryPreparer` optionally selects relevant fact/project indexes for the
-   planner; it never writes facts and returns an empty fallback on failure.
-3. Planner receives only the bounded `planner_memory_context`; it does not
-   query memory tables or receive a full storage dump.
-4. After terminal synthesis, `finalize_memory` runs asynchronously through
-   `FactExtractor -> FactCompactor -> FactReconciler` and persists evidence-
-   backed facts using supersede semantics.
+1. Code resolves ACL-safe glossary aliases, projects and entities without an
+   LLM call; values from durable memory are not injected at this stage.
+2. `TurnPreflight` returns a strict `synthesis`, `planner`, `recall` or
+   `clarify` decision. It provides a `SynthesisBrief`, `TaskBrief`,
+   `MemoryRequest` or one clarification question respectively.
+3. `synthesis` invokes Synthesizer directly. `recall` performs bounded scoped
+   read and re-enters TurnPreflight once. `planner` invokes GraphPlanner.
+4. Planner and agents use canonical scoped memory operations themselves;
+   planner decides which recalled rules, processes and facts are relevant to
+   the plan.
+5. After every final synthesis, `finalize_memory` asynchronously runs
+   `FactExtractor -> FactCompactor -> FactReconciler` and persists only
+   evidence-backed candidates. TurnPreflight proposals are hints, not writes.
 
 Binding rule:
 - `RuntimeTurnState`/`TurnMemory` are short-lived bounded turn state,
 - `MemorySnapshot` is the immutable read projection for one run,
+- `TurnPreflight` never reads storage directly, creates plans/tasks or writes
+  durable memory,
 - `facts` is durable business memory; `runtime_execution_events` remains the
   execution journal and is not a memory store,
 - sandbox overlays are branch-scoped and never directly persist durable facts.

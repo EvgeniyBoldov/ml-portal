@@ -22,6 +22,34 @@ MAX_TOOL_PREVIEW_CHARS = 220
 MAX_RESULT_CACHE_CHARS = 24_000
 
 
+def canonical_operation_name(operation: str) -> str:
+    """Return a stable operation identity for runtime and policy checks.
+
+    Published operations are instance-bound (``instance.<slug>.<operation>``),
+    while policy is defined against their canonical operation names.
+    """
+    value = str(operation or "").strip()
+    if value.startswith("instance."):
+        parts = value.split(".", 2)
+        if len(parts) == 3:
+            return parts[2]
+    return value
+
+
+def document_search_evidence_document_ids(result: Any) -> set[str]:
+    """Extract document identities from a bounded document-search result."""
+    if not isinstance(result, dict):
+        return set()
+    hits = result.get("hits")
+    if not isinstance(hits, list):
+        return set()
+    return {
+        str(hit.get("document_id") or hit.get("artifact_id") or "").strip()
+        for hit in hits
+        if isinstance(hit, dict) and str(hit.get("document_id") or hit.get("artifact_id") or "").strip()
+    }
+
+
 class ToolLedgerEntry(BaseModel):
     call_id: str
     result_ref: str

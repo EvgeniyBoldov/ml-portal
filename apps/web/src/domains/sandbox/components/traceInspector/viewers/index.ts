@@ -6,6 +6,7 @@ export { ExtractionResultViewer } from './ExtractionResultViewer';
 export { FactsViewer } from './FactsViewer';
 export { MemoryContextViewer } from './MemoryContextViewer';
 export { PreflightViewer } from './PreflightViewer';
+export { RouteViewer } from './RouteViewer';
 export { TaskViewer } from './TaskViewer';
 export { LlmTokenUsage as TokenUsageViewer, LlmRequestSnapshotView as LlmRequestViewer, LlmResponseSnapshotView as LlmResponseViewer, ToolRequestView as ToolRequestViewer, ToolResponseView as ToolResponseViewer } from '../CallViews';
 export { AgentResultViewer, SynthesizerResultViewer } from '../ResultViews';

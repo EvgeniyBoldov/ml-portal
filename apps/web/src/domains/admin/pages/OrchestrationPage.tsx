@@ -6,6 +6,7 @@ import {
   useActiveFactExtractorRole,
   useActiveMemoryRole,
   useActivePlannerRole,
+  useActiveTurnPreflightRole,
   useActiveFactCompactorRole,
   useActiveSynthesizerRole,
   useOrchestratorExecutionLimits,
@@ -13,6 +14,7 @@ import {
   useUpdateMemoryRole,
   useUpdateOrchestratorExecutionLimits,
   useUpdatePlannerRole,
+  useUpdateTurnPreflightRole,
   useUpdateFactCompactorRole,
   useUpdateSynthesizerRole,
 } from '@/shared/api/hooks/usePlatformSettings';
@@ -24,6 +26,7 @@ import {
   FACT_EXTRACTOR_INPUT_CONTRACT,
   MEMORY_INPUT_CONTRACT,
   PLANNER_INPUT_CONTRACT,
+  TURN_PREFLIGHT_INPUT_CONTRACT,
   FACT_COMPACTOR_INPUT_CONTRACT,
   SYNTHESIZER_INPUT_CONTRACT,
 } from '@/shared/constants/orchestratorContracts';
@@ -152,6 +155,8 @@ export function OrchestrationPage() {
   const [plannerMode, setPlannerMode] = useState<'view' | 'edit'>('view');
   const [plannerForm, setPlannerForm] = useState<RoleFormData>(DEFAULT_ROLE_FORM);
   const [plannerLimitsForm, setPlannerLimitsForm] = useState<Record<string, unknown>>({});
+  const [preflightMode, setPreflightMode] = useState<'view' | 'edit'>('view');
+  const [preflightForm, setPreflightForm] = useState<RoleFormData>(DEFAULT_ROLE_FORM);
 
   const [synthMode, setSynthMode] = useState<'view' | 'edit'>('view');
   const [synthForm, setSynthForm] = useState<RoleFormData>(DEFAULT_ROLE_FORM);
@@ -169,6 +174,7 @@ export function OrchestrationPage() {
   const [compactLimitsForm, setCompactLimitsForm] = useState<Record<string, unknown>>({});
 
   const { data: plannerRole, isLoading: plannerLoading } = useActivePlannerRole();
+  const { data: preflightRole, isLoading: preflightLoading } = useActiveTurnPreflightRole();
   const { data: synthesizerRole, isLoading: synthesizerLoading } = useActiveSynthesizerRole();
   const { data: factExtractorRole, isLoading: factExtractorLoading } = useActiveFactExtractorRole();
   const { data: memoryRole, isLoading: memoryLoading } = useActiveMemoryRole();
@@ -180,6 +186,7 @@ export function OrchestrationPage() {
   const { data: compactLimits, isLoading: compactLimitsLoading } = useOrchestratorExecutionLimits('fact_compactor');
 
   const updatePlannerRole = useUpdatePlannerRole();
+  const updatePreflightRole = useUpdateTurnPreflightRole();
   const updateSynthesizerRole = useUpdateSynthesizerRole();
   const updateFactExtractorRole = useUpdateFactExtractorRole();
   const updateMemoryRole = useUpdateMemoryRole();
@@ -205,6 +212,14 @@ export function OrchestrationPage() {
     outputRequirements: 'Что именно должен вернуть planner по итогам шага и в каком виде.',
     model: 'LLM-модель planner.',
   }, plannerRole?.response_contract ?? null, PLANNER_INPUT_CONTRACT), [modelOptions, plannerRole?.response_contract]);
+  const resolvedPreflightFields = useMemo(() => roleFields(modelOptions, {
+    identity: 'Корневой маршрутизатор turn до planner/synthesizer.',
+    mission: 'Определяет единственный следующий маршрут и нормализует задачу.',
+    rules: 'Не выполняет инструменты и не создаёт план; может запросить recall или clarification.',
+    safety: 'Не считать кандидатов записанными в память и не утверждать недоказанные факты.',
+    outputRequirements: 'Строгий TurnPreflightDecision с ровно одним route payload.',
+    model: 'LLM-модель preflight.',
+  }, preflightRole?.response_contract ?? null, TURN_PREFLIGHT_INPUT_CONTRACT), [modelOptions, preflightRole?.response_contract]);
   const resolvedSynthesizerFields = useMemo(() => roleFields(modelOptions, {
     identity: 'Роль синтезатора итогового ответа.',
     mission: 'Сборка финального ответа пользователя из фактов рантайма.',
@@ -283,6 +298,25 @@ export function OrchestrationPage() {
           ) : null}
           <Block title="Примеры и дополнительные параметры" icon="code" iconVariant="info" width="full" fields={resolvedPlannerFields.filter((f) => ROLE_AUXILIARY_KEYS.includes(f.key))} data={plannerMode === 'edit' ? plannerForm : mapRoleToFields(plannerRole)} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => setPlannerForm((p) => ({ ...p, [k]: v })) : undefined} />
           <Block title="Лимиты исполнения" icon="zap" iconVariant="warning" width="1/2" fields={ORCHESTRATOR_LIMIT_FIELDS} data={plannerMode === 'edit' ? plannerLimitsForm : (plannerLimits?.effective || {})} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => setPlannerLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
+        </Tab>
+
+        <Tab
+          title="Turn Preflight"
+          layout="grid"
+          actions={buildEntityCrudActions({
+            mode: preflightMode,
+            saving: updatePreflightRole.isPending,
+            tone: 'default',
+            labels: { edit: 'Изменить' },
+            onEdit: () => { setPreflightForm(mapRoleToFields(preflightRole)); setPreflightMode('edit'); },
+            onSave: async () => { await updatePreflightRole.mutateAsync(preflightForm); setPreflightMode('view'); },
+            onCancel: () => { setPreflightMode('view'); setPreflightForm(DEFAULT_ROLE_FORM); },
+          })}
+        >
+          <Block title="Правила маршрутизации" icon="shield" iconVariant="primary" width="2/3" fields={resolvedPreflightFields.filter((f) => ['identity', 'mission', 'rules', 'safety'].includes(f.key))} data={preflightMode === 'edit' ? preflightForm : mapRoleToFields(preflightRole)} editable={preflightMode === 'edit'} onChange={preflightMode === 'edit' ? (k, v) => setPreflightForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={resolvedPreflightFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key))} data={preflightMode === 'edit' ? preflightForm : mapRoleToFields(preflightRole)} editable={preflightMode === 'edit'} onChange={preflightMode === 'edit' ? (k, v) => setPreflightForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Контракт ответа" icon="code" iconVariant="warning" width="full" fields={resolvedPreflightFields.filter((f) => f.key === 'output_requirements')} data={preflightMode === 'edit' ? preflightForm : mapRoleToFields(preflightRole)} editable={preflightMode === 'edit'} onChange={preflightMode === 'edit' ? (k, v) => setPreflightForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Примеры и дополнительные параметры" icon="code" iconVariant="info" width="full" fields={resolvedPreflightFields.filter((f) => ROLE_AUXILIARY_KEYS.includes(f.key))} data={preflightMode === 'edit' ? preflightForm : mapRoleToFields(preflightRole)} editable={preflightMode === 'edit'} onChange={preflightMode === 'edit' ? (k, v) => setPreflightForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
 
         <Tab
@@ -392,7 +426,7 @@ export function OrchestrationPage() {
         </Tab>
       </EntityPageV2>
 
-      {(modelsLoading || plannerLoading || synthesizerLoading || factExtractorLoading || memoryLoading || factCompactorLoading || plannerLimitsLoading || synthLimitsLoading || factLimitsLoading || compactLimitsLoading) && (
+      {(modelsLoading || plannerLoading || preflightLoading || synthesizerLoading || factExtractorLoading || memoryLoading || factCompactorLoading || plannerLimitsLoading || synthLimitsLoading || factLimitsLoading || compactLimitsLoading) && (
         <div>Загрузка настроек оркестрации…</div>
       )}
     </>

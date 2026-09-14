@@ -803,6 +803,22 @@
   gap: 16px;
 }
 
+.uploadField {
+  display: grid;
+  gap: 6px;
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.uploadField select {
+  min-height: 36px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 10px;
+}
+
 .dropZone {
   display: flex;
   flex-direction: column;

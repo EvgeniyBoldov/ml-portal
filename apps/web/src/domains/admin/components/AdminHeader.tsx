@@ -22,6 +22,7 @@ const routeLabels: Record<string, string> = {
   '/admin/audit': 'Аудит',
   '/admin/settings': 'Настройки',
   '/admin/settings/email': 'Email настройки',
+  '/admin/memory': 'Мемори',
 };
 
 function getBreadcrumbs(pathname: string): Breadcrumb[] {

@@ -38,6 +38,7 @@ export type ExecutorSettingsUpdate = Partial<Pick<
 
 export type SystemLLMRoleType =
   | 'planner'
+  | 'turn_preflight'
   | 'memory'
   | 'synthesizer'
   | 'fact_extractor'
@@ -154,6 +155,7 @@ export interface SystemLLMRoleUpdate {
 // Role-specific update types — all use same schema as SystemLLMRoleUpdate
 // Fields: identity, mission, rules, safety, output_requirements, model, temperature, etc.
 export type PlannerRoleUpdate = SystemLLMRoleUpdate;
+export type TurnPreflightRoleUpdate = SystemLLMRoleUpdate;
 export type MemoryRoleUpdate = SystemLLMRoleUpdate;
 export type SynthesizerRoleUpdate = SystemLLMRoleUpdate;
 export type FactExtractorRoleUpdate = SystemLLMRoleUpdate;
@@ -457,8 +459,68 @@ export interface TenantListResponse {
   has_more: boolean;
 }
 
+export interface SemanticMemoryAdminItem {
+  id: string;
+  scope: string;
+  item_type: string;
+  project_id: string | null;
+  subject: string;
+  content_text: string;
+  confidence: number;
+  state: string;
+  last_verified_at: string;
+  updated_at: string;
+  source_count: number;
+  claim_count: number;
+}
+
+export interface SemanticMemoryAdminPage {
+  items: SemanticMemoryAdminItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface SemanticMemoryAdminDetail extends SemanticMemoryAdminItem {
+  content: Record<string, unknown>;
+  applicability: Record<string, unknown>;
+  visibility: Record<string, unknown>;
+  sources: Array<{ document_id: string; canonical_checksum: string; section_id: string; label: string | null; start_offset: number | null; end_offset: number | null }>;
+  claims: Array<{ id: string; document_id: string; canonical_checksum: string; scope: string; item_type: string; project_id: string | null; normalized_subject: string; confidence: number; state: string; evidence_section_ids: string[]; content: Record<string, unknown>; applicability: Record<string, unknown>; visibility_tenant_id: string | null; updated_at: string }>;
+  relations: Array<{ relation_type: string; target_type: string; target_id: string }>;
+  evaluations: Array<{ tool_call_id: string; outcome: string; reason: string; evidence_refs: string[]; created_at: string }>;
+}
+
+export interface AdminGlossaryEntry {
+  id: string;
+  scope: string;
+  canonical_term: string;
+  aliases: string[];
+  entity_type: string;
+  entity_id: string | null;
+  description: string | null;
+  tenant_id: string | null;
+  project_id: string | null;
+  is_active: boolean;
+  status: string;
+  support_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 // API functions
 export const adminApi = {
+  async getGlossary(): Promise<AdminGlossaryEntry[]> {
+    return apiRequest('/admin/glossary');
+  },
+  async getSemanticMemory(params: { query?: string; scope?: string; state?: string; item_type?: string; project_id?: string; limit?: number; offset?: number } = {}): Promise<SemanticMemoryAdminPage> {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') search.set(key, String(value)); });
+    return apiRequest(`/admin/memory?${search.toString()}`);
+  },
+  async getSemanticMemoryItem(itemId: string): Promise<SemanticMemoryAdminDetail> {
+    return apiRequest(`/admin/memory/${itemId}`);
+  },
   // Users
   async getUsers(
     params: {

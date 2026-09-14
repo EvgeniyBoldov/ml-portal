@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import Fact, FactObservation, FactScope, FactStatus
 from app.models.memory import FactSource
-from app.models.project import Project
 from app.runtime.memory.dto import FactDTO
+from app.runtime.memory.decisions import MemoryDecision
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,12 @@ class FactReconciliationChange:
     compaction_action: str
 
 
+@dataclass(frozen=True)
+class FactReconciliationResult:
+    changes: list[FactReconciliationChange]
+    decisions: list[MemoryDecision]
+
+
 class FactReconciler:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -41,43 +47,17 @@ class FactReconciler:
         *,
         user_id: UUID | None,
         tenant_id: UUID | None,
-        project_keys: Sequence[str] = (),
     ) -> list[FactDTO]:
         owners = []
         if user_id:
             owners.append((Fact.owner_type == "user") & (Fact.owner_id == user_id))
         if tenant_id:
             owners.append((Fact.owner_type == "tenant") & (Fact.owner_id == tenant_id))
-        normalized_keys = {key.strip().lower() for key in project_keys if key and key.strip()}
-        if normalized_keys:
-            projects = await self._session.execute(select(Project.id).where(Project.key.in_(normalized_keys)))
-            project_ids = [row for row in projects.scalars().all()]
-            if project_ids:
-                owners.append(Fact.project_id.in_(project_ids))
         if not owners:
             return []
         rows = await self._session.execute(select(Fact).where(Fact.superseded_by.is_(None), or_(*owners)))
-        # The compactor only needs a bounded contextual view.  Tenant/project
-        # candidates carry their own grouping and are resolved during apply.
+        # The compactor only needs a bounded owner-scoped contextual view.
         return [_dto(row) for row in rows.scalars().all()]
-
-    async def ensure_projects(self, candidates: Sequence[FactDTO]) -> None:
-        """Create catalogue rows for evidenced project facts when absent.
-
-        Project names are LLM-normalised only after extractor evidence
-        validation, therefore this operation never creates a project from an
-        agent conclusion alone.
-        """
-        for candidate in candidates:
-            if candidate.scope != FactScope.PROJECT:
-                continue
-            key = str(candidate.metadata.get("project_key") or "").strip().lower()
-            if not key:
-                continue
-            exists = await self._session.execute(select(Project.id).where(Project.key == key))
-            if exists.scalar_one_or_none() is None:
-                self._session.add(Project(key=key, name=key, aliases=[key]))
-        await self._session.flush()
 
     async def apply(
         self,
@@ -102,15 +82,28 @@ class FactReconciler:
         tenant_id: UUID | None,
         sandbox: bool = False,
     ) -> list[FactReconciliationChange]:
-        await self.ensure_projects(candidates)
+        return (await self.apply_with_decisions(
+            candidates=candidates, user_id=user_id, tenant_id=tenant_id, sandbox=sandbox,
+        )).changes
+
+    async def apply_with_decisions(
+        self,
+        *,
+        candidates: Sequence[FactDTO],
+        user_id: UUID | None,
+        tenant_id: UUID | None,
+        sandbox: bool = False,
+    ) -> FactReconciliationResult:
         changes: list[FactReconciliationChange] = []
+        decisions: list[MemoryDecision] = []
         for candidate in candidates:
             compaction_action = str(candidate.metadata.get("compaction_action") or "add")
-            owner_type, owner_id, project_id = await self._owner_for(candidate, user_id=user_id, tenant_id=tenant_id)
-            if owner_id is None and project_id is None:
+            owner_type, owner_id = self._owner_for(candidate, user_id=user_id, tenant_id=tenant_id)
+            if owner_id is None:
+                decisions.append(MemoryDecision("fact_compactor", "reconciliation", "rejected", "missing_owner", (candidate,), action=compaction_action))
                 continue
             existing = await self._find_same(
-                candidate, owner_type=owner_type, owner_id=owner_id, project_id=project_id,
+                candidate, owner_type=owner_type, owner_id=owner_id,
             )
             is_new = existing is None
             status_before = existing.status if existing is not None else None
@@ -118,7 +111,6 @@ class FactReconciler:
             if existing is None:
                 existing = Fact(
                     tenant_id=tenant_id,
-                    project_id=project_id,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     kind=candidate.kind,
@@ -141,13 +133,17 @@ class FactReconciler:
                     await self._supersede_targets(existing, candidate.metadata.get("compaction_target_ids") or [])
             added = await self._add_observations(existing, candidate.metadata.get("evidence") or [])
             if not added:
+                decisions.append(MemoryDecision(
+                    "fact_compactor", "reconciliation", "skipped", "no_new_evidence", (candidate,),
+                    action=compaction_action, status_before=status_before, status_after=str(existing.status),
+                    support_before=support_before, support_after=int(existing.support_count or 0), support_delta=0,
+                ))
                 continue
             existing.support_count += added
             existing.observed_at = datetime.now(timezone.utc)
-            marked_project_fact = bool(candidate.metadata.get("project_memory_marked"))
             if compaction_action == "mark_conflict":
                 existing.status = FactStatus.UNCONFIRMED.value
-            elif sandbox or existing.scope == FactScope.USER or marked_project_fact:
+            elif sandbox or existing.scope == FactScope.USER:
                 existing.status = FactStatus.CONFIRMED.value
                 existing.first_confirmed_at = existing.first_confirmed_at or datetime.now(timezone.utc)
                 existing.last_confirmed_at = datetime.now(timezone.utc)
@@ -155,8 +151,6 @@ class FactReconciler:
                 existing.status = FactStatus.CONFIRMED.value
                 existing.first_confirmed_at = existing.first_confirmed_at or datetime.now(timezone.utc)
                 existing.last_confirmed_at = datetime.now(timezone.utc)
-            if existing.scope == FactScope.PROJECT.value and existing.status == FactStatus.CONFIRMED.value:
-                await self._apply_confirmed_project_aliases(existing, candidate.metadata.get("project_aliases") or [])
             self._session.add(existing)
             status_after = str(existing.status)
             if is_new:
@@ -178,46 +172,33 @@ class FactReconciler:
                 support_delta=added,
                 compaction_action=compaction_action,
             ))
+            decisions.append(MemoryDecision(
+                "fact_compactor", "publication",
+                "conflict" if compaction_action == "mark_conflict" else "published",
+                "marked_unconfirmed" if compaction_action == "mark_conflict" else change_type,
+                (candidate,), action=compaction_action, status_before=status_before,
+                status_after=status_after, support_before=support_before,
+                support_after=int(existing.support_count or 0), support_delta=added,
+            ))
         await self._session.flush()
-        return changes
+        return FactReconciliationResult(changes, decisions)
 
-    async def _apply_confirmed_project_aliases(self, fact: Fact, raw_aliases: Sequence[object]) -> None:
-        if fact.project_id is None:
-            return
-        row = await self._session.execute(select(Project).where(Project.id == fact.project_id))
-        project = row.scalar_one_or_none()
-        if project is None:
-            return
-        aliases = list(project.aliases or [])
-        known = {item.casefold() for item in aliases}
-        for raw in raw_aliases:
-            alias = " ".join(str(raw or "").strip().split())[:120]
-            if alias and alias.casefold() not in known and alias.casefold() != project.name.casefold():
-                aliases.append(alias)
-                known.add(alias.casefold())
-        project.aliases = aliases
-        self._session.add(project)
-
-    async def _owner_for(self, candidate: FactDTO, *, user_id: UUID | None, tenant_id: UUID | None) -> tuple[str | None, UUID | None, UUID | None]:
+    @staticmethod
+    def _owner_for(candidate: FactDTO, *, user_id: UUID | None, tenant_id: UUID | None) -> tuple[str | None, UUID | None]:
         if candidate.scope == FactScope.USER:
-            return "user", user_id, None
+            return "user", user_id
         if candidate.scope == FactScope.TENANT:
-            return "tenant", tenant_id, None
-        project_key = str(candidate.metadata.get("project_key") or "").strip().lower()
-        if not project_key:
-            return None, None, None
-        row = await self._session.execute(select(Project).where(Project.key == project_key, Project.is_active.is_(True)))
-        project = row.scalar_one_or_none()
-        return ("project", project.id, project.id) if project else (None, None, None)
+            return "tenant", tenant_id
+        return None, None
 
-    async def _find_same(self, candidate: FactDTO, *, owner_type: str | None, owner_id: UUID | None, project_id: UUID | None) -> Fact | None:
+    async def _find_same(self, candidate: FactDTO, *, owner_type: str | None, owner_id: UUID | None) -> Fact | None:
         stmt = select(Fact).where(
             Fact.scope == candidate.scope.value,
             Fact.subject == candidate.subject,
             Fact.normalized_value == _normalized(candidate.value),
             Fact.superseded_by.is_(None),
         )
-        stmt = stmt.where(Fact.project_id == project_id) if project_id else stmt.where(Fact.owner_type == owner_type, Fact.owner_id == owner_id)
+        stmt = stmt.where(Fact.owner_type == owner_type, Fact.owner_id == owner_id)
         return (await self._session.execute(stmt.limit(1))).scalar_one_or_none()
 
     async def _demote_conflicts(self, inserted: Fact) -> None:
@@ -228,7 +209,7 @@ class FactReconciler:
             Fact.superseded_by.is_(None),
             Fact.status == FactStatus.CONFIRMED.value,
         ).values(status=FactStatus.UNCONFIRMED.value)
-        stmt = stmt.where(Fact.project_id == inserted.project_id) if inserted.project_id else stmt.where(Fact.owner_type == inserted.owner_type, Fact.owner_id == inserted.owner_id)
+        stmt = stmt.where(Fact.owner_type == inserted.owner_type, Fact.owner_id == inserted.owner_id)
         await self._session.execute(stmt)
 
     async def _supersede_targets(self, replacement: Fact, raw_ids: Sequence[object]) -> None:
@@ -248,9 +229,7 @@ class FactReconciler:
             Fact.superseded_by.is_(None),
             Fact.scope == replacement.scope,
         )
-        stmt = stmt.where(Fact.project_id == replacement.project_id) if replacement.project_id else stmt.where(
-            Fact.owner_type == replacement.owner_type, Fact.owner_id == replacement.owner_id,
-        )
+        stmt = stmt.where(Fact.owner_type == replacement.owner_type, Fact.owner_id == replacement.owner_id)
         await self._session.execute(stmt.values(superseded_by=replacement.id))
 
     async def _add_observations(self, fact: Fact, raw: Sequence[dict[str, Any]]) -> int:
@@ -334,7 +313,6 @@ def _dto(row: Fact) -> FactDTO:
         value=row.value,
         source=FactSource(row.source),
         tenant_id=row.tenant_id,
-        project_id=row.project_id,
         owner_type=row.owner_type,
         owner_id=row.owner_id,
         kind=row.kind or "fact",
@@ -347,7 +325,7 @@ def _persisted_metadata(metadata: dict[str, Any]) -> dict[str, Any] | None:
     """Keep routing/conflict metadata, while observations retain provenance."""
     result = {
         key: metadata[key]
-        for key in ("project_key", "project_aliases", "aliases", "compaction_action")
+        for key in ("aliases", "compaction_action")
         if metadata.get(key) not in (None, "", [])
     }
     return result or None

@@ -84,6 +84,8 @@ export interface EntityPageV2Props {
 
   /** Default active tab id */
   defaultTab?: string;
+  /** Notifies consumers which declarative tab is active. */
+  onTabChange?: (tabId: string) => void;
 
   /** Tab children */
   children: React.ReactNode;
@@ -104,6 +106,7 @@ export function EntityPageV2({
   onDelete,
   showDelete = false,
   defaultTab,
+  onTabChange,
   children,
 }: EntityPageV2Props) {
   const navigate = useNavigate();
@@ -192,7 +195,7 @@ export function EntityPageV2({
           <button
             key={tab.id}
             className={`${pageStyles.tab} ${tab.id === activeTabId ? pageStyles.active : ''}`}
-            onClick={() => setActiveTabId(tab.id!)}
+            onClick={() => { setActiveTabId(tab.id!); onTabChange?.(tab.id!); }}
             type="button"
           >
             {tab.title}

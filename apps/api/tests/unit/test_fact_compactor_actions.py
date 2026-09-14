@@ -18,17 +18,17 @@ def _result(value):
 @pytest.mark.asyncio
 async def test_compactor_preserves_llm_selected_supersede_targets() -> None:
     target = FactDTO(
-        scope=FactScope.PROJECT, subject="network.access", value="Legacy rule",
-        source=FactSource.TOOL_RESULT, metadata={"project_key": "nemesis"},
+        scope=FactScope.TENANT, subject="network.access", value="Legacy rule",
+        source=FactSource.TOOL_RESULT,
     )
     candidate = FactDTO(
-        scope=FactScope.PROJECT, subject="network.access", value="New compact rule",
-        source=FactSource.TOOL_RESULT, metadata={"project_key": "nemesis", "evidence": [{"source_type": "tool_result", "source_ref": "call-1"}]},
+        scope=FactScope.TENANT, subject="network.access", value="New compact rule",
+        source=FactSource.TOOL_RESULT, metadata={"evidence": [{"source_type": "tool_result", "source_ref": "call-1"}]},
     )
     compactor = FactCompactor(session=AsyncMock(), llm_client=AsyncMock())
     compactor._structured.invoke = AsyncMock(return_value=_result(_CompactionOutput(facts=[
         _CompactedFact(
-            scope="project", subject="network.access", value="New compact rule",
+            scope="tenant", subject="network.access", value="New compact rule",
             action="supersede", source_candidate_indexes=[0], target_current_indexes=[0],
         )
     ])))

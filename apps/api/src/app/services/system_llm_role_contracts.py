@@ -55,8 +55,11 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
     model: Type[BaseModel] | None = None
 
     if role == SystemLLMRoleType.PLANNER:
-        from app.runtime.orchestrator_contracts import IterationProposal
-        model = IterationProposal
+        from app.runtime.planner.graph_planner import PlannerStep
+        model = PlannerStep
+    elif role == SystemLLMRoleType.TURN_PREFLIGHT:
+        from app.runtime.turn_preflight import TurnPreflightDecision
+        model = TurnPreflightDecision
     elif role == SystemLLMRoleType.FACT_EXTRACTOR:
         from app.runtime.memory.fact_extractor import _LLMFactOutput
         model = _LLMFactOutput
@@ -66,6 +69,12 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
     elif role == SystemLLMRoleType.MEMORY:
         from app.runtime.memory.preparer import _PreparationOutput
         model = _PreparationOutput
+    elif role == SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR:
+        from app.runtime.memory.document_memory import _DocumentMemoryOutput
+        model = _DocumentMemoryOutput
+    elif role == SystemLLMRoleType.MEMORY_EVALUATOR:
+        from app.runtime.memory.evidence_feedback import _MemoryEvaluationOutput
+        model = _MemoryEvaluationOutput
     if model:
         _ROLE_OUTPUT_MODELS[role] = model
 
@@ -160,9 +169,12 @@ def validate_role_contracts() -> Dict[SystemLLMRoleType, str]:
     errors: Dict[SystemLLMRoleType, str] = {}
     json_roles = [
         SystemLLMRoleType.PLANNER,
+        SystemLLMRoleType.TURN_PREFLIGHT,
         SystemLLMRoleType.FACT_EXTRACTOR,
         SystemLLMRoleType.FACT_COMPACTOR,
         SystemLLMRoleType.MEMORY,
+        SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR,
+        SystemLLMRoleType.MEMORY_EVALUATOR,
     ]
 
     for role in json_roles:

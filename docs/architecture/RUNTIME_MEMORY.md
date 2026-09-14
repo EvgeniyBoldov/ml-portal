@@ -7,7 +7,8 @@ runtime state, RAG knowledge, an artifact registry, or an execution trace.
 
 ```text
 facts table -> MemoryService/FactStore -> immutable MemorySnapshot
-  -> prompt-profile adapter -> planner or agent context
+  -> bounded mechanical lookup or scoped runtime recall
+  -> TurnPreflight, planner or agent context
 ```
 
 `RuntimeTurnState`, persisted plans/tasks/attempts, and tool outputs remain
@@ -91,20 +92,34 @@ It exposes these immutable projections:
 
 No caller receives raw ORM rows or an unrestricted memory dump.
 
+## Turn routing and recall
+
+Memory preparation is not an unconditional LLM step before planning.
+`TurnPreflight` first receives only a cheap, ACL-safe mechanical lookup of
+confirmed glossary aliases, project names and entity mappings. It can request
+bounded context with a `MemoryRequest`, but does not read memory storage or run
+a memory tool loop itself.
+
+For a simple memory-grounded answer, runtime resolves the requested scoped
+context and invokes TurnPreflight once more to produce a `SynthesisBrief`.
+For execution work, TurnPreflight sends a `TaskBrief` to planner without a
+preselected project-memory dump. Planner then calls canonical memory operations
+and decides which returned rules, processes and facts belong in the plan.
+
 ## Prompt profiles
 
 Planner and agents have different memory needs.
 
 | Consumer | Injected automatically | Retrieved on demand |
 | --- | --- | --- |
-| Planner | Selected user/tenant context | Glossary/project resolution and exact project memory through canonical system operations |
+| TurnPreflight | Mechanical glossary/project/entity candidates only | Requests a bounded recall; it does not read memory itself |
+| Planner | No automatic project-memory dump | Glossary/project resolution and exact project memory through canonical system operations |
 | Agent | Task-filtered user/tenant context | Project memory, files and RAG through canonical tools |
 | Synthesizer | No durable memory by default; bounded completed reports, verified artifacts, allowed evidence and task limitations | None |
 
-The planner receives structured `memory_context` in its planning payload, not
-a prose dump. It contains only bounded user role/responsibility/preferences
-and tenant terminology/conventions/default process rules selected for this
-request. It never receives all project rules.
+Planner never receives an unrestricted memory dump or raw ORM rows. Its
+`TaskBrief` carries task/project direction, while canonical memory operations
+return only bounded scoped projections that planner selected for the plan.
 
 The runtime passes the bounded context already selected for the current run to
 the agent prompt. Task intent, instructions and dependency outputs delimit how
@@ -114,38 +129,19 @@ selector.
 
 ## Project-memory tools
 
-Project context follows progressive disclosure. The runtime exposes the
-canonical system operations `memory.lookup`, `memory.read` and `memory.mark`:
+Project context follows progressive disclosure. The sole canonical system
+operation is `memory.search(query, project_keys?, entity_ids?, kinds?,
+direction?, limit?)`. It is available without collection binding to Planner
+and agents, validates project keys fail-closed, and returns a bounded typed
+`memory_context`: resolved projects/terms, relevant knowledge, rules,
+procedures, constraints, durable user/tenant facts, uncertainty, provenance
+and whether source verification is required. It never returns raw ORM rows or
+storage keys.
 
-- `memory.lookup` accepts a batch of suspicious terms. It first returns
-  confirmed glossary matches and expands each query with its canonical term
-  and aliases. It then searches project `key`, `name` and aliases and returns
-  only bounded dynamic memory keys for each resolved project; fact values are
-  never returned by this operation;
-- `memory.read` accepts one or more exact `{project_key, keys}` groups and
-  returns bounded confirmed values only for those keys. Agents should use keys
-  returned by `memory.lookup`, not invent subject keys;
-- `memory.mark` records bounded evidence-backed candidates in the
-  current turn only and never writes durable memory directly. Its evidence IDs
-  must be the `evidence_call_id` exposed on a successful tool result; artifact
-  IDs and native provider call IDs are not valid evidence.
-
-All three operations are published as `scope_kind=system` operations and are
-available without collection binding. Planner and agent access is deliberately
-limited to these contextual tools. They do not receive arbitrary database
-access or unrestricted file content. Files and RAG are read by a normal
-context/document agent through existing canonical tools.
-
-The older `project_memory.read` operation remains a compatibility surface for
-existing callers during migration; new prompts and plans must use
-`memory.lookup` followed by `memory.read`.
-
-If one term resolves to multiple projects, `memory.lookup` returns
-`ambiguous_projects` and does not read any of them. If several distinct
-projects are identified in one request, it returns all of them as separate
-groups. An ambiguous or missing project result is recorded in the execution
-ledger; planner creates the required data-gathering work or reports the
-remaining limitation through terminal synthesis.
+TurnPreflight uses a separate mechanical lookup and `MemoryRequest`; it never
+calls the operation itself. Unknown or ambiguous project identity is a
+clarification condition before planning. No role receives arbitrary database
+access or unrestricted file content.
 
 ## Planner and task lifecycle
 
@@ -199,6 +195,12 @@ compaction action. `FactReconciler` owns persistence, support counts,
 confirmation thresholds, project resolution, conflict markers and
 supersede/tombstone semantics. None of these components may write raw LLM
 output directly to active memory.
+
+For Sandbox observability, every accepted, rejected, skipped, conflicting or
+published conversational candidate is collected as a bounded decision and
+emitted through the canonical runtime journal after writeback succeeds. Its
+evidence is represented by references/counts only; raw prompts, source text
+and LLM reasoning are never journalled as memory decisions.
 
 `GlossaryReconciler` owns the analogous candidate lifecycle for `kind=glossary`.
 It deduplicates source references, merges aliases case-insensitively and does

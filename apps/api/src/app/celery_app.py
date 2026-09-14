@@ -81,6 +81,18 @@ def build_default_beat_schedule() -> dict:
             "task": "app.workers.tasks_rag_reindex.reconcile_stale_rag_reindex",
             "schedule": 900.0,  # 15 minutes
         },
+        "memory-index-reconcile": {
+            "task": "app.workers.tasks_memory.reconcile_memory_index",
+            "schedule": 900.0,  # 15 minutes
+        },
+        "memory-freshness-refresh": {
+            "task": "app.workers.tasks_memory.refresh_memory_freshness",
+            "schedule": 86400.0,
+        },
+        "memory-document-contract-reextract": {
+            "task": "app.workers.tasks_memory.reextract_stale_document_memory",
+            "schedule": 300.0,
+        },
         "collection-vector-index-audit": {
             "task": "app.workers.tasks_vector_index_audit.audit_collection_vector_indexes",
             "schedule": 3600.0,  # 1 hour
@@ -195,6 +207,10 @@ app.conf.task_routes = {
     
     # Memory writeback tasks
     "app.workers.tasks_memory.finalize_memory": {"queue": "memory", "priority": 1},
+    "app.workers.tasks_memory.reconcile_memory_index": {"queue": "maintenance.default", "priority": 1},
+    "app.workers.tasks_memory.refresh_memory_freshness": {"queue": "maintenance.default", "priority": 1},
+    "app.workers.tasks_memory.reextract_stale_document_memory": {"queue": "maintenance.default", "priority": 1},
+    "app.workers.tasks_memory.reconcile_collection_memory_policy": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_deprecated_entities": {"queue": "cleanup_low", "priority": 1},
 
     # Reindex tasks

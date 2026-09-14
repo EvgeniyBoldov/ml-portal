@@ -131,7 +131,6 @@ class FactStore:
         row = Fact(
             id=dto.id,
             tenant_id=dto.tenant_id,
-            project_id=dto.project_id,
             owner_type=dto.owner_type,
             owner_id=dto.owner_id,
             kind=dto.kind,
@@ -269,7 +268,6 @@ def _orm_to_dto(row: Fact) -> FactDTO:
         value=row.value,
         source=FactSource(row.source),
         tenant_id=row.tenant_id,
-        project_id=row.project_id,
         owner_type=row.owner_type,
         owner_id=row.owner_id,
         kind=row.kind or "fact",

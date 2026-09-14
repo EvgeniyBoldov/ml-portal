@@ -36,6 +36,11 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
         return format_chat_sse(ChatSSEEventType.DELTA, DeltaPayload(content=str(event.get("content") or "")))
     if event_type in {"stop", "run_paused"}:
         paused = RuntimeHitlProtocolService.build_paused_from_stop(event)
+        # STOP is also emitted for terminal failures. Only the two explicit
+        # HITL reasons are resumable; exposing a failed run as `pause` makes
+        # clients render a bogus clarification input.
+        if paused["reason"] not in {"waiting_input", "waiting_confirmation"}:
+            return None
         return format_chat_sse(ChatSSEEventType.PAUSE, PausePayload(
             run_id=str(paused["run_id"]), reason=str(paused["reason"]),
             action=dict(paused["action"]), context=dict(paused["context"]),

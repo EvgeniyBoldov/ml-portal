@@ -18,6 +18,7 @@
 ## Architecture
 - [Data Model](architecture/DATA_MODEL.md)
 - [Agent Runtime](architecture/AGENT_RUNTIME.md)
+- [ADR: TurnPreflight Routing](architecture/ADR_TURN_PREFLIGHT_ROUTING.md)
 - [Flows](architecture/FLOWS.md)
 - [Collection Asset Refactor](architecture/COLLECTION_ASSET_REFACTOR.md)
 - [MCP Credential Flow](architecture/MCP_CREDENTIAL_FLOW.md)

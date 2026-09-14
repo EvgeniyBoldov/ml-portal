@@ -8,6 +8,7 @@ export interface ChatConfirmationItem {
   operation: string;
   riskLevel: string;
   argsPreview: string;
+  question: string;
   summary: string;
 }
 
@@ -15,9 +16,15 @@ interface ConfirmationPromptProps {
   item: ChatConfirmationItem;
   onConfirm: () => void;
   onCancel: () => void;
+  disabled?: boolean;
 }
 
-export function ConfirmationPrompt({ item, onConfirm, onCancel }: ConfirmationPromptProps) {
+export function ConfirmationPrompt({
+  item,
+  onConfirm,
+  onCancel,
+  disabled = false,
+}: ConfirmationPromptProps) {
   const confirmRef = React.useRef<HTMLButtonElement | null>(null);
 
   React.useEffect(() => {
@@ -28,15 +35,15 @@ export function ConfirmationPrompt({ item, onConfirm, onCancel }: ConfirmationPr
     const handler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onCancel();
+        if (!disabled) onCancel();
       } else if (event.key === 'Enter') {
         event.preventDefault();
-        onConfirm();
+        if (!disabled) onConfirm();
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onCancel, onConfirm]);
+  }, [disabled, onCancel, onConfirm]);
 
   const riskClass =
     item.riskLevel === 'destructive'
@@ -48,19 +55,42 @@ export function ConfirmationPrompt({ item, onConfirm, onCancel }: ConfirmationPr
   return (
     <div className={styles.card}>
       <div className={styles.header}>
-        <div className={styles.title}>Требуется подтверждение операции</div>
-        <span className={`${styles.risk} ${riskClass}`}>{item.riskLevel || 'safe'}</span>
+        <div className={styles.title}>
+          {item.question || 'Подтвердите действие'}
+        </div>
+        <span className={`${styles.risk} ${riskClass}`}>
+          {item.riskLevel || 'safe'}
+        </span>
       </div>
-      <div className={styles.line}>Tool: {item.toolSlug || 'unknown'}</div>
-      <div className={styles.line}>Operation: {item.operation || 'unknown'}</div>
-      <div className={styles.line}>{item.summary || 'Операция требует подтверждения.'}</div>
-      {item.argsPreview ? <div className={styles.args}>{item.argsPreview}</div> : null}
+      {item.toolSlug ? (
+        <div className={styles.line}>Tool: {item.toolSlug}</div>
+      ) : null}
+      {item.operation ? (
+        <div className={styles.line}>Operation: {item.operation}</div>
+      ) : null}
+      {item.summary && item.summary !== item.question ? (
+        <div className={styles.line}>{item.summary}</div>
+      ) : null}
+      {item.argsPreview ? (
+        <div className={styles.args}>{item.argsPreview}</div>
+      ) : null}
       <div className={styles.actions}>
-        <button type="button" className={styles.btn} onClick={onCancel}>
+        <button
+          type="button"
+          className={styles.btn}
+          onClick={onCancel}
+          disabled={disabled}
+        >
           Отменить
         </button>
-        <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={onConfirm} ref={confirmRef}>
-          Подтвердить
+        <button
+          type="button"
+          className={`${styles.btn} ${styles.btnPrimary}`}
+          onClick={onConfirm}
+          ref={confirmRef}
+          disabled={disabled}
+        >
+          {disabled ? 'Отправка...' : 'Подтвердить'}
         </button>
       </div>
     </div>

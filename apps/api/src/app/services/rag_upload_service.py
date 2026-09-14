@@ -45,6 +45,7 @@ class RAGUploadService:
         content_type: Optional[str] = None,
         name: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        memory_enabled: Optional[bool] = None,
     ) -> dict:
         """
         Загружает документ в S3 и создаёт записи в БД
@@ -91,7 +92,7 @@ class RAGUploadService:
                 size=len(file_content),
                 tags=doc_tags,
                 s3_key=s3_key,
-                user_id=user_id
+                user_id=user_id,
             )
 
             # Создаём source для ingest pipeline
@@ -101,7 +102,8 @@ class RAGUploadService:
                 title=doc_name,
                 content_type=content_type,
                 size=len(file_content),
-                s3_key=s3_key
+                s3_key=s3_key,
+                memory_enabled=memory_enabled,
             )
 
             # Инициализируем статусы
@@ -196,7 +198,8 @@ class RAGUploadService:
         title: str,
         content_type: Optional[str],
         size: int,
-        s3_key: str
+        s3_key: str,
+        memory_enabled: Optional[bool] = None,
     ):
         """Создаёт запись source для ingest pipeline"""
         source = Source(
@@ -210,6 +213,7 @@ class RAGUploadService:
                 content_type=content_type,
                 size_bytes=size,
                 original_key=s3_key,
+                memory_enabled=memory_enabled,
             ),
         )
         

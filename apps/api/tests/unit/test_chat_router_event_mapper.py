@@ -24,3 +24,29 @@ def test_stop_is_normalized_to_single_pause_event():
     frame = map_service_event_to_sse({"type": "stop", "run_id": "run-1", "reason": "waiting_input", "question": "Какая сеть?"})
     assert frame is not None and frame.startswith("event: pause\n")
     assert _payload(frame)["action"]["kind"] == "input"
+
+
+def test_confirmation_pause_keeps_question_for_chat_header():
+    frame = map_service_event_to_sse({
+        "type": "stop",
+        "run_id": "run-1",
+        "reason": "waiting_confirmation",
+        "message": "Подтвердить публикацию изменений?",
+        "action": {"operation_fingerprint": "fingerprint-1", "risk_level": "write"},
+    })
+    assert frame is not None
+    payload = _payload(frame)
+    assert payload["action"]["kind"] == "confirm"
+    assert payload["action"]["message"] == "Подтвердить публикацию изменений?"
+    assert payload["context"]["message"] == "Подтвердить публикацию изменений?"
+
+
+def test_failed_stop_is_not_exposed_as_a_resumable_pause():
+    frame = map_service_event_to_sse({
+        "type": "stop",
+        "run_id": "run-1",
+        "reason": "failed",
+        "message": "TurnPreflight unavailable; planner was not invoked",
+    })
+
+    assert frame is None

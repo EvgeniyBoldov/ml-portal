@@ -64,6 +64,8 @@ def format_stage_name(node_type: str, node_key: str) -> str:
         return f"embed.{node_key}"
     if node_type == "index":
         return f"index.{node_key}"
+    if node_type == "memory":
+        return f"memory.{node_key}"
     return node_key
 
 
@@ -72,6 +74,8 @@ def split_stage_name(stage: str) -> tuple[str, str]:
         return "embedding", stage.replace("embed.", "", 1)
     if stage.startswith("index."):
         return "index", stage.replace("index.", "", 1)
+    if stage.startswith("memory."):
+        return "memory", stage.replace("memory.", "", 1)
     return "pipeline", stage
 
 

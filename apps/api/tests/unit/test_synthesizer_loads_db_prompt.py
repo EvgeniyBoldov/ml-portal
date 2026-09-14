@@ -96,6 +96,7 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     assert call["params"] == {"temperature": 0.15, "max_tokens": 321}
     assert call["options"].timeout_s == 30
     assert call["messages"][0]["content"].startswith("SYNTH-PROMPT")
+    assert "mode=planned" in call["messages"][0]["content"]
     assert "Сгенерированные файлы доставляются интерфейсом отдельными вложениями" in call["messages"][0]["content"]
     assert "Никогда не придумывай имя, формат или содержимое файла" in call["messages"][0]["content"]
     assert events[0].type.value == "synthesis_start"
@@ -103,6 +104,38 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     assert events[-2].type.value == "final"
     assert events[-1].type.value == "synthesis_end"
     assert state.final_answer == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_uses_direct_source_mode_without_task_reports():
+    llm = _LLMClientProbe(["Формулировка принята."])
+    synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)
+    state = _runtime_state()
+    context = {
+        "user_question": "Запомни как факт",
+        "synthesis_brief": {"purpose": "Подтвердить принятие"},
+        "direct_answer_draft": "Формулировка принята как кандидат памяти.",
+        "completed_task_reports": [],
+        "memory_context": {},
+        "artifacts": [],
+        "sources": [],
+    }
+
+    with patch(
+        "app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
+        new=AsyncMock(return_value={"prompt": "SYNTH-PROMPT", "model": "gpt-test", "temperature": 0.1}),
+    ), patch(
+        "app.services.model_call_config_service.ModelCallConfigService.resolve",
+        new=AsyncMock(return_value=SimpleNamespace(max_output_tokens=None, request_timeout_s=30, max_retries=0)),
+    ):
+        _ = [event async for event in synth.stream(
+            runtime_state=state, run_id=state.run_id, synthesis_context=context,
+        )]
+
+    prompt = llm.calls[0]["messages"][0]["content"]
+    assert "mode=direct" in prompt
+    assert "Отсутствие completed_task_reports нормально" in prompt
+    assert "mode=planned" not in prompt
 
 
 @pytest.mark.asyncio

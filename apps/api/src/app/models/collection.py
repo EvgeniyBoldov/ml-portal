@@ -160,6 +160,10 @@ class Collection(Base, LifecycleMixin):
     
     # Guardrails (local collections only)
     allow_unfiltered_search: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=False)
+    memory_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment="Documents in this collection may feed durable semantic memory.",
+    )
     max_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=100)
     query_timeout_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=10)
     

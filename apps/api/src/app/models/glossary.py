@@ -74,7 +74,7 @@ class GlossaryEntry(Base):
 
 
 class GlossaryObservation(Base):
-    """A distinct evidence source supporting an automatically extracted term."""
+    """A source-backed glossary definition claim."""
 
     __tablename__ = "glossary_observations"
     __table_args__ = (
@@ -92,6 +92,15 @@ class GlossaryObservation(Base):
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     source_ref: Mapped[str] = mapped_column(String(128), nullable=False)
     source_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=True, index=True,
+    )
+    visibility_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True,
+    )
+    definition: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    aliases: Mapped[List[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
         default=lambda: datetime.now(timezone.utc),

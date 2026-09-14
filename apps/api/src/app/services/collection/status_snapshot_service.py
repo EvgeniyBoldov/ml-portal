@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from typing import Any
 
 from sqlalchemy import text
@@ -230,7 +232,10 @@ class CollectionStatusSnapshotService:
             # A missing compatibility table aborts a PostgreSQL transaction.
             # Isolate the probe in a savepoint so the fallback query (and the
             # surrounding runtime plan transaction) can continue safely.
-            async with self.session.begin_nested():
+            nested_transaction = self.session.begin_nested()
+            if inspect.isawaitable(nested_transaction):
+                nested_transaction = await nested_transaction
+            async with nested_transaction:
                 result = await self.session.execute(
                     text(
                         "SELECT rd.agg_status, rd.status "

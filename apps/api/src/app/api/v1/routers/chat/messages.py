@@ -39,6 +39,51 @@ from app.runtime.contracts import ExecutionMode
 router = APIRouter()
 logger = get_logger(__name__)
 
+
+@router.get("/{chat_id}/paused-run")
+async def get_paused_run(
+    chat_id: str,
+    chat_ctx: ChatContext = Depends(resolve_chat_context),
+    session: AsyncSession = Depends(db_session),
+    current_user: UserCtx = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return the one resumable interaction for a chat as the public pause contract.
+
+    A pause can outlive the SSE connection (for example after a page refresh).
+    Do not expose the raw ChatTurn row: action/context are normalized through
+    the same contract used by the streaming transport.
+    """
+    try:
+        chat_uuid = uuid.UUID(chat_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid chat ID")
+
+    if str(chat_ctx.chat_id) != str(chat_uuid):
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    result = await session.execute(
+        select(ChatTurn)
+        .where(
+            ChatTurn.chat_id == chat_uuid,
+            ChatTurn.user_id == uuid.UUID(str(current_user.id)),
+            ChatTurn.status == "paused",
+        )
+        .order_by(ChatTurn.paused_at.desc(), ChatTurn.started_at.desc())
+        .limit(1)
+    )
+    turn = result.scalar_one_or_none()
+    if turn is None or turn.runtime_run_id is None:
+        return {"pause": None}
+
+    paused = RuntimeHitlProtocolService.build_paused_from_stop({
+        "run_id": str(turn.runtime_run_id),
+        "reason": str(turn.pause_status or "paused"),
+        "action": turn.paused_action if isinstance(turn.paused_action, dict) else {},
+        "context": turn.paused_context if isinstance(turn.paused_context, dict) else {},
+    })
+    return {"pause": paused}
+
+
 @router.get("/{chat_id}/messages")
 async def list_messages(
     chat_id: str,
@@ -244,8 +289,13 @@ async def resume_run(
 
     checkpoint_service = RuntimeResumeCheckpointService.from_session(session)
     original_goal = await checkpoint_service.resolve_original_goal(run_uuid)
+    if original_goal is None and isinstance(paused_context, dict):
+        # Root TurnPreflight can pause before a plan exists. Its runtime-owned
+        # pause context carries the original goal precisely for this fallback.
+        candidate = str(paused_context.get("original_goal") or "").strip()
+        original_goal = candidate or None
     if original_goal is None:
-        raise HTTPException(status_code=409, detail="Runtime continuation plan not found")
+        raise HTTPException(status_code=409, detail="Runtime continuation context not found")
 
     checkpoint = checkpoint_service.build(
         run_id=run_uuid,

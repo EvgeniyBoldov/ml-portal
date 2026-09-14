@@ -28,6 +28,7 @@ async def upload_rag_file(
     file: UploadFile = File(...),
     name: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
+    memory_enabled: Optional[bool] = Form(None),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     repo_factory: AsyncRepositoryFactory = Depends(get_async_repository_factory)
@@ -81,6 +82,7 @@ async def upload_rag_file(
             content_type=file.content_type,
             name=name,
             tags=doc_tags,
+            memory_enabled=memory_enabled,
             user_id=user.id
         )
         

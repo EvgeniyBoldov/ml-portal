@@ -46,6 +46,19 @@ _FILE_DELIVERY_RULE = (
     "или содержимое файла: используй только имена из поля artifacts synthesis context. "
     "Если artifacts пуст, не утверждай, что файл создан или будет прикреплён."
 )
+_PLANNED_SYNTHESIS_MODE = (
+    "# SYNTHESIS INPUT MODE\n"
+    "mode=planned. Источником содержания являются только completed_task_reports, "
+    "явно принятые partial outputs, verified sources/artifacts и limitations. "
+    "Не используй plan_outline, намерения задач или непроверенные утверждения как выполненный результат."
+)
+_DIRECT_SYNTHESIS_MODE = (
+    "# SYNTHESIS INPUT MODE\n"
+    "mode=direct. Отсутствие completed_task_reports нормально. Источником содержания являются "
+    "только direct_answer_draft, synthesis_brief и memory_context. Не требуй план, отчёты задач "
+    "или новые данные. Не утверждай, что факт, запись памяти или иное действие уже завершены, "
+    "если это не подтверждено в direct_answer_draft."
+)
 
 _ROLE_PROMPT_SECTIONS = [
     ("identity", "IDENTITY"),
@@ -128,6 +141,14 @@ class Synthesizer:
             if role_override.get("temperature") is not None:
                 synth_role_cfg["temperature"] = float(role_override["temperature"])
         synth_prompt = _compile_role_prompt(synth_role_cfg, role_override if isinstance(role_override, dict) else None)
+        if synthesis_context.get("direct_answer_draft"):
+            synth_prompt += (
+                f"\n\n{_DIRECT_SYNTHESIS_MODE}\n\n# DIRECT ANSWER MATERIAL\n"
+                "direct_answer_draft is runtime-owned material prepared by TurnPreflight. "
+                "Use it as the factual basis for this answer; edit only for clarity and do not add claims beyond it or memory_context."
+            )
+        else:
+            synth_prompt += f"\n\n{_PLANNED_SYNTHESIS_MODE}"
         synth_prompt = f"{synth_prompt}\n\n# FILE DELIVERY\n{_FILE_DELIVERY_RULE}"
 
         if budget_registry is not None:

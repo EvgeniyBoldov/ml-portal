@@ -87,9 +87,21 @@ async def archive_rag_document(
         status_manager = RAGStatusManager(session, repo_factory, event_publisher)
         
         await status_manager.archive_document(doc_uuid)
+        from app.runtime.memory.document_memory import retire_document_memory
+        item_states = await retire_document_memory(session, document_id=doc_uuid)
         
         document.status = "archived"
         document.updated_at = datetime.now(timezone.utc)
+        # Commit the truth before scheduling a derived-index effect.
+        await session.commit()
+        stale_ids = [str(item_id) for item_id, state in item_states.items() if state == "stale"]
+        active_ids = [str(item_id) for item_id, state in item_states.items() if state in {"active", "uncertain"}]
+        if stale_ids:
+            from app.workers.tasks_memory import remove_memory_items
+            remove_memory_items.delay(stale_ids)
+        if active_ids:
+            from app.workers.tasks_memory import index_memory_items
+            index_memory_items.delay(active_ids)
         
         await event_publisher.publish_document_archived(
             doc_id=doc_uuid,
@@ -124,6 +136,15 @@ async def unarchive_rag_document(
         
         await status_manager.unarchive_document(doc_uuid)
         await status_manager._update_aggregate_status(doc_uuid)
+        # Archiving deliberately removes provenance bindings. Re-extract from
+        # canonical text on restoration instead of reviving stale claims.
+        await session.commit()
+        if document.s3_key_processed and document.tenant_id:
+            from app.workers.tasks_rag_ingest.document_memory import extract_document_memory
+            extract_document_memory.delay(
+                {"source_id": str(document.id), "canonical_key": document.s3_key_processed},
+                str(document.tenant_id), True,
+            )
         
         await event_publisher.publish_document_archived(
             doc_id=doc_uuid,
@@ -151,14 +172,20 @@ async def delete_rag_document(
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        from app.workers.tasks_rag_ingest import cleanup_document_artifacts
-        
-        cleanup_document_artifacts.delay(
-            str(document.tenant_id), 
-            str(document.id)
-        )
-        
+        from app.runtime.memory.document_memory import retire_document_memory
+        item_states = await retire_document_memory(session, document_id=document.id)
         await repo_factory.delete_rag_document(uuid.UUID(doc_id))
+        await session.commit()
+        stale_ids = [str(item_id) for item_id, state in item_states.items() if state == "stale"]
+        active_ids = [str(item_id) for item_id, state in item_states.items() if state in {"active", "uncertain"}]
+        if stale_ids:
+            from app.workers.tasks_memory import remove_memory_items
+            remove_memory_items.delay(stale_ids)
+        if active_ids:
+            from app.workers.tasks_memory import index_memory_items
+            index_memory_items.delay(active_ids)
+        from app.workers.tasks_rag_ingest import cleanup_document_artifacts
+        cleanup_document_artifacts.delay(str(document.tenant_id), str(document.id))
         
         return {"id": doc_id, "deleted": True}
     except ValueError:

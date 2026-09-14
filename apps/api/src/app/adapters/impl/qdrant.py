@@ -142,9 +142,25 @@ class QdrantVectorStore:
         await self._client.delete_collection(collection_name=name)
 
     async def collection_exists(self, name: str) -> bool:
-        """Check if collection exists in Qdrant"""
+        """Check a collection or its read alias exists in Qdrant."""
         try:
-            collections = await self._client.get_collections()
-            return name in [c.name for c in collections.collections]
+            await self._client.get_collection(collection_name=name)
+            return True
         except Exception:
             return False
+
+    async def alias_target(self, alias: str) -> str | None:
+        aliases = await self._client.get_aliases()
+        for item in getattr(aliases, "aliases", []) or []:
+            if getattr(item, "alias_name", None) == alias:
+                return str(getattr(item, "collection_name", "")) or None
+        return None
+
+    async def replace_alias(self, *, alias: str, collection: str) -> None:
+        operations: list[Any] = []
+        if await self.alias_target(alias):
+            operations.append(qm.DeleteAliasOperation(delete_alias=qm.DeleteAlias(alias_name=alias)))
+        operations.append(qm.CreateAliasOperation(create_alias=qm.CreateAlias(
+            collection_name=collection, alias_name=alias,
+        )))
+        await self._client.update_collection_aliases(change_aliases_operations=operations)

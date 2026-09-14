@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Chat, ChatMessage } from '@shared/api/types';
 import { qk } from '@/shared/api/keys';
 import { consumeSse } from '@/shared/api/sse';
+import type { ChatPausedRun } from '@/shared/api/chats';
 import type { ActiveChatRun, ChatAttachmentRef, ChatMessageMeta, ChatRagSource, ChatRuntimeProgress, ChatTimelineMessage } from '../types';
 
 type Message = ChatTimelineMessage;
@@ -14,6 +15,7 @@ interface PendingConfirmation {
   operation: string;
   riskLevel: string;
   argsPreview: string;
+  question: string;
   summary: string;
   runId?: string | null;
 }
@@ -51,6 +53,7 @@ interface ChatActions {
   setCurrentChat: (chatId: string) => void;
   clearPendingState: () => void;
   applyPausedState: (state: ResumePausedState) => void;
+  loadPausedRun: (chatId: string) => Promise<void>;
   abortStream: () => void;
   sendMessageStream: (
     chatId: string,
@@ -228,6 +231,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const message = (resumeState.message || '').trim();
     const runId = (resumeState.runId || '').trim();
     const action = resumeState.action || {};
+    const actionQuestion = typeof action.question === 'string' ? action.question.trim() : '';
+    const actionMessage = typeof action.message === 'string' ? action.message.trim() : '';
+    const actionSummary = typeof action.summary === 'string' ? action.summary.trim() : '';
+    const interactionQuestion = question || message || actionQuestion || actionMessage || actionSummary;
+
+    // The public pause contract admits only explicit HITL states. Be
+    // defensive for historical/buggy streams: a terminal failure must never
+    // turn into a clarification form in the chat UI.
+    if (reason !== 'waiting_input' && reason !== 'waiting_confirmation') {
+      console.warn('Ignoring non-resumable chat pause state', reason);
+      return;
+    }
 
     setStopReason(reason);
     setPausedRunId(runId || null);
@@ -239,7 +254,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         operation: String(action.operation || ''),
         riskLevel: String(action.risk_level || 'write'),
         argsPreview: String(action.args_preview || ''),
-        summary: message || question || 'Требуется подтверждение',
+        question: interactionQuestion || 'Подтвердите действие',
+        summary: actionSummary || message || actionMessage || '',
         runId: runId || null,
       }]);
       setPendingInput(null);
@@ -249,11 +265,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     setPendingConfirmations([]);
     setPendingInput({
-      question: question || message || undefined,
+      question: interactionQuestion || undefined,
       reason,
     });
     setActiveRun((current) => current ? { ...current, runId: runId || current.runId, status: 'waiting_input' } : current);
   }, []);
+
+  const loadPausedRun = useCallback(async (chatId: string) => {
+    try {
+      const { getPausedRun } = await import('@shared/api/chats');
+      const response = await getPausedRun(chatId);
+      const pause: ChatPausedRun | null | undefined = response?.pause;
+      if (!pause) return;
+      applyPausedState({
+        runId: pause.run_id,
+        reason: pause.reason,
+        question: typeof pause.context?.question === 'string' ? pause.context.question : undefined,
+        message: typeof pause.context?.message === 'string' ? pause.context.message : undefined,
+        action: pause.action,
+      });
+    } catch (err) {
+      // A paused run is supplementary UI state. Message history remains usable
+      // if it expires between the page load and this lookup.
+      console.warn('Failed to restore paused chat run', err);
+    }
+  }, [applyPausedState]);
 
   const sendMessageStream = useCallback(async (
     chatId: string,
@@ -730,11 +766,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setCurrentChat,
       clearPendingState,
       applyPausedState,
+      loadPausedRun,
       abortStream,
       sendMessageStream,
       resumeStream,
     }),
-    [loadMessages, setCurrentChat, clearPendingState, applyPausedState, abortStream, sendMessageStream, resumeStream]
+    [loadMessages, setCurrentChat, clearPendingState, applyPausedState, loadPausedRun, abortStream, sendMessageStream, resumeStream]
   );
   const messagesStateValue = useMemo(
     () => ({

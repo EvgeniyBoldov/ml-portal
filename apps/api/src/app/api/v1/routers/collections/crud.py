@@ -44,6 +44,7 @@ async def _build_collection_response(
         status_details=snapshot["details"],
         total_rows=effective_total_rows,
         is_active=collection.is_active,
+        memory_enabled=bool(getattr(collection, "memory_enabled", False)),
         has_vector_search=collection.has_vector_search,
         created_at=collection.created_at.isoformat(),
         updated_at=collection.updated_at.isoformat(),
@@ -147,6 +148,7 @@ class CollectionResponse(BaseModel):
     status_details: Optional[dict] = None
     total_rows: int
     is_active: bool
+    memory_enabled: bool = False
     has_vector_search: bool = False
     created_at: str
     updated_at: str

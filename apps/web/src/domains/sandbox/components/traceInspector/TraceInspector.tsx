@@ -9,7 +9,7 @@ import { formatCallDuration } from '../../callPresentation';
 import type { ToolNameMap } from '../../callInspection';
 import { PlanTaskCard } from './PlanTaskCard';
 import { traceStatusLabel, traceStatusTone } from '../../traceStatus';
-import { ExecutorInfoViewer, FactsViewer, LimitsViewer, MemoryContextViewer, PreflightViewer, PromptViewer, RawEventsViewer, RbacViewer, TaskViewer } from './viewers';
+import { ExecutorInfoViewer, FactsViewer, LimitsViewer, MemoryContextViewer, PreflightViewer, PromptViewer, RawEventsViewer, RbacViewer, RouteViewer, TaskViewer } from './viewers';
 
 interface Props { target: TraceInspectionTarget | null; trace: SandboxTraceState | null; toolNames?: ToolNameMap; }
 function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
@@ -54,11 +54,12 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'plan') return <PlanView plan={stage.plan} />;
     if (tab === 'task' && target.kind === 'executor') return <TaskViewer task={selectedTask} />;
     if (tab === 'task' && target.kind === 'step' && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
-    if (tab === 'facts' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} />;
+    if (tab === 'facts' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} mode={target.executor.kind === 'fact_extractor' ? 'candidates' : 'decisions'} />;
+    if (tab === 'published' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} mode="published" />;
     if (tab === 'memory' && target.kind === 'executor') return <MemoryContextViewer context={target.executor.memoryContext} />;
     if (tab === 'result' && target.kind === 'stage') return <StageResultView stage={target.stage} />;
     if (tab === 'result' && target.kind === 'step') return <StepResultView step={target.step} />;
-    if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : <ExecutorResultView executor={target.executor} />;
+    if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : target.executor.kind === 'preflight' ? <RouteViewer route={target.executor.route} /> : <ExecutorResultView executor={target.executor} />;
     if (tab === 'prompt' && target.kind === 'executor') return <PromptViewer prompt={target.executor.prompt} />;
     if (tab === 'rbac' && target.kind === 'executor') return <RbacViewer access={target.executor.access} />;
     if (tab === 'limits' && target.kind === 'executor') return <LimitsViewer limits={target.executor.limits} />;

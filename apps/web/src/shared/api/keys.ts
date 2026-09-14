@@ -170,10 +170,10 @@ export const qk = {
       ['collections', 'data', slug, params] as const,
     documents: (id: string, params?: { page?: number; size?: number; status?: string }) =>
       ['collections', 'documents', id, params] as const,
-    projectMemoryOverview: () => ['collections', 'project-memory', 'overview'] as const,
-    projectMemoryProject: (projectKey: string) =>
-      ['collections', 'project-memory', 'project', projectKey] as const,
-    glossaryOverview: () => ['collections', 'glossary', 'overview'] as const,
+    projectMemoryOverview: (params?: Record<string, unknown>) => ['collections', 'project-memory', 'overview', params] as const,
+    projectMemoryProject: (projectKey: string, params?: Record<string, unknown>) =>
+      ['collections', 'project-memory', 'project', projectKey, params] as const,
+    glossaryOverview: (params?: Record<string, unknown>) => ['collections', 'glossary', 'overview', params] as const,
   },
   auth: {
     me: () => ['auth', 'me'] as const,

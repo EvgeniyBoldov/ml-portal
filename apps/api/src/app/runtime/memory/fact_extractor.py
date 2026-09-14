@@ -11,6 +11,7 @@ owns:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, List, Literal, Optional, Sequence
 from uuid import UUID
 
@@ -24,6 +25,7 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.dto import FactDTO
+from app.runtime.memory.decisions import JOURNAL_CANDIDATE_IDS, MemoryDecision
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 logger = get_logger(__name__)
@@ -41,8 +43,6 @@ class _LLMFactCandidate(BaseModel):
     # This is a routing contract, not free-form taxonomy: ``glossary`` is
     # persisted in glossary_entries; ``fact`` is persisted in facts.
     kind: Literal["fact", "glossary"] = "fact"
-    project_key: Optional[str] = None
-    project_aliases: List[str] = Field(default_factory=list)
     aliases: List[str] = Field(default_factory=list)
     evidence_source_ids: List[str] = Field(default_factory=list)
 
@@ -80,10 +80,21 @@ class KnownFactSnippet(BaseModel):
     value: str
 
 
+@dataclass(frozen=True)
+class FactExtractionResult:
+    """Internal writeback result; ``extract`` keeps its legacy list API."""
+    facts: list[FactDTO]
+    decisions: list[MemoryDecision]
+    error_code: str | None = None
+
+
 # --- Extractor --------------------------------------------------------------
 
 
-MAX_FACTS_PER_TURN = 8
+# A pasted glossary routinely contains more than eight terms. Keep this in
+# sync with the preflight/retrieval contract (12) so valid candidates are not
+# silently lost between routing and writeback.
+MAX_FACTS_PER_TURN = 12
 MAX_SUBJECT_LEN = 200
 MAX_VALUE_LEN = 500  # persisted as TEXT; cap so rogue outputs don't blow prompts later
 CONFIDENCE_MIN = 0.6
@@ -118,6 +129,7 @@ class FactExtractor:
         user_message: str,
         evidence: Sequence[FactEvidence] = (),
         known_facts: Sequence[KnownFactSnippet] = (),
+        preflight_candidates: Sequence[dict[str, Any]] = (),
         agent_results: Sequence[AgentResultSnippet] = (),
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
@@ -129,15 +141,44 @@ class FactExtractor:
         """Run the extractor. On any failure returns [] and logs a warning —
         memory extraction must never break a chat turn.
         """
+        return (await self.extract_with_decisions(
+            user_message=user_message, evidence=evidence, known_facts=known_facts,
+            preflight_candidates=preflight_candidates,
+            agent_results=agent_results, user_id=user_id, tenant_id=tenant_id,
+            chat_id=chat_id, sandbox_overrides=sandbox_overrides,
+            llm_event_sink=llm_event_sink, agent_execution_id=agent_execution_id,
+        )).facts
+
+    async def extract_with_decisions(
+        self,
+        *,
+        user_message: str,
+        evidence: Sequence[FactEvidence] = (),
+        known_facts: Sequence[KnownFactSnippet] = (),
+        preflight_candidates: Sequence[dict[str, Any]] = (),
+        agent_results: Sequence[AgentResultSnippet] = (),
+        user_id: Optional[UUID] = None,
+        tenant_id: Optional[UUID] = None,
+        chat_id: Optional[UUID] = None,
+        sandbox_overrides: Optional[dict] = None,
+        llm_event_sink: Optional[Callable[[RuntimeEvent], Awaitable[None]]] = None,
+        agent_execution_id: Optional[str] = None,
+    ) -> FactExtractionResult:
         # Compatibility argument ``agent_results`` is deliberately ignored:
         # summaries can never become fact evidence.
         effective_evidence = list(evidence) or ([FactEvidence(
             source_id="user_message", source_type="user_message", source_ref=str(chat_id or "request"), text=user_message,
         )] if user_message.strip() else [])
         payload = {
-            "user_message": (user_message or "").strip(),
+            # ``evidence`` contains the canonical source text. Do not also
+            # send it as ``user_message``: for ordinary turns they are the
+            # same document, and duplicating a long paste both wastes context
+            # and makes the structured call more likely to be rate-limited.
             "evidence": [item.model_dump() for item in effective_evidence],
             "known_facts": [k.model_dump() for k in known_facts],
+            # Hints only: the extractor must still cite and re-validate the
+            # primary evidence for every resulting candidate below.
+            "preflight_candidates": list(preflight_candidates),
         }
 
         try:
@@ -155,10 +196,10 @@ class FactExtractor:
             )
         except StructuredCallError as exc:
             logger.warning("FactExtractor structured call failed: %s", exc)
-            return []
+            return FactExtractionResult([], [], "extractor_call_failed")
         except Exception as exc:  # noqa: BLE001 — extractor must never raise
             logger.warning("FactExtractor unexpected error: %s", exc)
-            return []
+            return FactExtractionResult([], [], "extractor_unexpected_error")
         role_extras: dict[str, Any] = {}
         try:
             role_config = await self._role_service.get_role_config(SystemLLMRoleType.FACT_EXTRACTOR)
@@ -168,7 +209,7 @@ class FactExtractor:
         except Exception:
             role_extras = {}
         policy = _resolve_fact_policy(role_extras, sandbox_overrides)
-        return self._to_dtos(
+        return self._to_dtos_with_decisions(
             result.value,
             user_message=user_message,
             evidence=effective_evidence,
@@ -208,36 +249,72 @@ class FactExtractor:
         * Clip too-long subjects/values.
         * Cap count at MAX_FACTS_PER_TURN.
         """
+        return FactExtractor._to_dtos_with_decisions(
+            out, user_message=user_message, evidence=evidence, user_id=user_id,
+            tenant_id=tenant_id, chat_id=chat_id, max_facts_per_turn=max_facts_per_turn,
+            max_subject_len=max_subject_len, max_value_len=max_value_len,
+            confidence_min=confidence_min, max_value_words=max_value_words,
+        ).facts
+
+    @staticmethod
+    def _to_dtos_with_decisions(
+        out: _LLMFactOutput,
+        *,
+        user_message: str,
+        evidence: Sequence[FactEvidence],
+        user_id: Optional[UUID],
+        tenant_id: Optional[UUID],
+        chat_id: Optional[UUID],
+        max_facts_per_turn: int = MAX_FACTS_PER_TURN,
+        max_subject_len: int = MAX_SUBJECT_LEN,
+        max_value_len: int = MAX_VALUE_LEN,
+        confidence_min: float = CONFIDENCE_MIN,
+        max_value_words: int = MAX_VALUE_WORDS,
+    ) -> FactExtractionResult:
         out_list: List[FactDTO] = []
-        for cand in out.facts[:max_facts_per_turn]:
+        decisions: list[MemoryDecision] = []
+        for index, cand in enumerate(out.facts):
+            candidate_id = f"extractor:{index + 1}"
+            if index >= max_facts_per_turn:
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "limit_exceeded"))
+                continue
             scope_raw = (cand.scope or "").strip().lower()
             try:
                 scope = FactScope(scope_raw)
             except ValueError:
                 logger.debug("FactExtractor: skip unknown scope %r", scope_raw)
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "unknown_scope"))
                 continue
 
             subject = (cand.subject or "").strip()[:max_subject_len]
             value = (cand.value or "").strip()[:max_value_len]
             if not subject or not value:
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "empty_content"))
                 continue
 
             if scope == FactScope.USER and user_id is None:
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "missing_owner"))
                 continue
             if scope == FactScope.TENANT and tenant_id is None:
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "missing_owner"))
                 continue
             kind = (cand.kind or "fact").strip().lower()
             if kind not in {"fact", "glossary"}:
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "unsupported_kind"))
                 continue
             if kind == "glossary" and scope not in {FactScope.USER, FactScope.TENANT}:
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "invalid_glossary_scope"))
                 continue
             confidence = max(0.0, min(1.0, float(cand.confidence)))
             if confidence < confidence_min:
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "below_confidence"))
                 continue
             subject = FactExtractor._normalize_subject(subject)
             if not subject:
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "invalid_subject"))
                 continue
             if FactExtractor._looks_ephemeral(subject, value, max_value_words=max_value_words):
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "ephemeral_value"))
                 continue
 
             matched_evidence = FactExtractor._matching_evidence(
@@ -249,20 +326,17 @@ class FactExtractor:
             )
             if not matched_evidence:
                 logger.debug("FactExtractor: skip fact without evidence: %r=%r", subject, value)
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "evidence_not_matched"))
                 continue
             if scope == FactScope.USER and not any(item.source_type == "user_message" for item in matched_evidence):
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "user_evidence_required"))
                 continue
-            # Project knowledge is accepted only from explicit in-run markers;
-            # this extractor owns user/tenant facts and terminology.
-            if scope == FactScope.PROJECT:
-                continue
-
+            # Turn-level tool evidence does not carry the RAG document scope
+            # through this transport.  Never promote it to company glossary:
+            # document ingestion is the only source-aware publication path.
             glossary_scope = None
-            if kind == "glossary" and _has_grounded_glossary_evidence(matched_evidence):
-                glossary_scope = "global"
 
-            out_list.append(
-                FactDTO(
+            fact = FactDTO(
                     scope=scope,
                     subject=subject,
                     value=value,
@@ -271,15 +345,15 @@ class FactExtractor:
                     kind=kind,
                     confidence=confidence,
                     metadata={
-                        "project_key": (cand.project_key or "").strip().lower() or None,
-                        "project_aliases": _normalize_project_aliases(cand.project_aliases),
-                        "aliases": _normalize_project_aliases(cand.aliases),
+                        "aliases": _normalize_aliases(cand.aliases),
                         "evidence": [item.model_dump() for item in matched_evidence],
                         "glossary_scope": glossary_scope,
+                        JOURNAL_CANDIDATE_IDS: [candidate_id],
                     },
                 )
-            )
-        return out_list
+            out_list.append(fact)
+            decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "accepted", "evidence_validated", (fact,)))
+        return FactExtractionResult(out_list, decisions)
 
     @staticmethod
     def _normalize_subject(subject: str) -> str:
@@ -358,7 +432,7 @@ def _resolve_fact_policy(role_extras: Optional[dict], sandbox_overrides: Optiona
     return cfg
 
 
-def _normalize_project_aliases(raw: Sequence[str]) -> list[str]:
+def _normalize_aliases(raw: Sequence[str]) -> list[str]:
     aliases: list[str] = []
     seen: set[str] = set()
     for value in raw[:8]:
