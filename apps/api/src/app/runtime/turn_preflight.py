@@ -101,6 +101,7 @@ class TurnPreflight:
         *,
         user_request: str,
         mechanical_lookup: dict[str, Any],
+        facts_context: list[dict[str, Any]] | None = None,
         continuation: dict[str, Any] | None = None,
         recall_context: dict[str, Any] | None = None,
         chat_id: UUID | None = None,
@@ -117,6 +118,12 @@ class TurnPreflight:
             payload={
                 "user_request": self._routing_request(user_request),
                 "mechanical_lookup": mechanical_lookup,
+                # Confirmed user/tenant facts plus small runtime facts (such
+                # as the current date) are deliberately passed as a raw
+                # projection. Unlike document memory, these are operational
+                # context and must be available while resolving pronouns and
+                # tool scope.
+                "facts_context": list(facts_context or []),
                 "continuation": continuation or {},
                 "recall_context": recall_context,
             },

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import MemoryRelation
 from app.runtime.memory.fact_store import FactStore
-from app.runtime.memory.recall import MemoryRecallService
+from app.runtime.memory.recall import MemoryRecallService, _matching_glossary_terms
 from app.runtime.memory.service import MemoryService
 from app.runtime.memory.semantic_index import MemorySemanticIndex
 from app.services.glossary_service import GlossaryService
@@ -31,6 +31,8 @@ class MemorySearchService:
         limit: int = 8,
     ) -> dict[str, Any]:
         projects = await GlossaryService(self._session).list_project_terms()
+        confirmed_glossary = await GlossaryService(self._session).list_confirmed_terms(tenant_id=tenant_id)
+        glossary_terms = _matching_glossary_terms(query, confirmed_glossary, limit=12)
         project_key_set = {str(key).strip().lower() for key in project_keys if str(key).strip()}
         known_project_keys = {str(item.get("key") or "").strip().lower() for item in projects}
         unknown_project_keys = sorted(project_key_set - known_project_keys)
@@ -89,13 +91,17 @@ class MemorySearchService:
         return {
             "items": values,
             "projects": [{"key": item["key"], "name": item["name"]} for item in selected],
+            "glossary": [{
+                "term": item.get("term"), "description": item.get("description"),
+                "aliases": list(item.get("aliases") or []), "scope": item.get("scope"),
+            } for item in glossary_terms],
             "count": len(values),
             "search_scope": {
                 "direction": str(direction or "").strip() or None,
                 "entity_ids": normalized_entity_ids,
                 "kinds": sorted(allowed_kinds),
             },
-            "memory_context": _memory_context(values, selected, durable_facts),
+            "memory_context": _memory_context(values, selected, durable_facts, glossary_terms),
         }
 
 
@@ -117,9 +123,12 @@ def _empty_result(*, direction: str | None, entity_ids: list[str], kinds: list[s
             "memory_context": {"type": "memory_recall", "resolved_terms": [], "resolved_entities": [], "relevant_projects": [], "relevant_knowledge": [], "applicable_rules": [], "applicable_procedures": [], "known_constraints": [], "durable_facts": [], "uncertainties": uncertainties, "source_references": [], "rag_required": False, "tool_required": False}}
 
 
-def _memory_context(items: list[dict[str, Any]], projects: list[dict[str, Any]], durable_facts: list[dict[str, object]]) -> dict[str, Any]:
+def _memory_context(
+    items: list[dict[str, Any]], projects: list[dict[str, Any]],
+    durable_facts: list[dict[str, object]], glossary: list[dict[str, Any]],
+) -> dict[str, Any]:
     def typed(kind: str) -> list[dict[str, Any]]:
         return [item for item in items if item.get("kind") == kind]
     refs = [ref for item in items for ref in item.get("source_references") or [] if isinstance(ref, dict)]
     uncertain = [item for item in items if item.get("state") != "active"]
-    return {"type": "memory_recall", "resolved_terms": typed("term"), "resolved_entities": [], "relevant_projects": [{"key": item.get("key"), "name": item.get("name")} for item in projects], "relevant_knowledge": [item for item in items if item.get("kind") not in {"rule", "constraint", "procedure"}], "applicable_rules": typed("rule"), "applicable_procedures": typed("procedure"), "known_constraints": typed("constraint"), "durable_facts": durable_facts, "uncertainties": [f"uncertain_memory:{item.get('id')}" for item in uncertain], "source_references": refs[:24], "rag_required": bool(uncertain), "tool_required": False}
+    return {"type": "memory_recall", "resolved_terms": glossary, "resolved_entities": [], "relevant_projects": [{"key": item.get("key"), "name": item.get("name")} for item in projects], "relevant_knowledge": [item for item in items if item.get("kind") not in {"rule", "constraint", "procedure"}], "applicable_rules": typed("rule"), "applicable_procedures": typed("procedure"), "known_constraints": typed("constraint"), "durable_facts": durable_facts, "uncertainties": [f"uncertain_memory:{item.get('id')}" for item in uncertain], "source_references": refs[:24], "rag_required": bool(uncertain), "tool_required": False}

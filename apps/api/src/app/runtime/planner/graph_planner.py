@@ -81,12 +81,17 @@ class GraphPlanner:
         payload = self._input_builder.build_graph_request(request)
         payload["planner_tools"] = [{
             "operation": "memory.search",
-            "description": "Read bounded ACL-scoped project/company memory before proposing tasks.",
+            "description": (
+                "Read bounded ACL-scoped project/company memory and confirmed glossary terms "
+                "before proposing tasks. Use it for long memory or abbreviations; "
+                "do not use it to replace the durable facts already in memory_context."
+            ),
         }]
         role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
         system_prompt = str(role_config.get("prompt") or "") + (
             "\n\n# PLANNER TOOL LOOP\n"
             "Before proposing an iteration you may return kind=tool_call only for memory.search. "
+            "Use it to resolve a glossary abbreviation or retrieve long project/company memory; "
             "After zero to three tool results return kind=proposal with the complete IterationProposal. "
             "Never create a task merely to read memory."
         )

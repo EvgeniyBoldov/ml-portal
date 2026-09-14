@@ -272,7 +272,10 @@ class RuntimePipeline:
         }
         effective_agent_slug = explicit_slug if explicit_slug in available_agent_slugs else None
 
-        # --- Memory: read path ----------------------------------------
+        # --- Facts: read before root routing --------------------------
+        # Confirmed user/tenant facts are small, explicit operational context
+        # (such as a user's default Jira project).  They must be visible to
+        # preflight and planner; document/project memory remains search-only.
         turn_mem = await self._assembler.memory_builder.build(
             goal=effective_goal,
             chat_id=chat_id,
@@ -283,8 +286,23 @@ class RuntimePipeline:
             attachments=list(request.attachments or []),
             platform_config=platform.config,
             sandbox_overrides=request.sandbox_overrides,
-            load_durable_memory=False,
+            load_durable_memory=True,
         )
+        # Runtime facts are contextual rather than durable: they are fresh on
+        # every turn and therefore must never enter MemoryWriter. Keep the
+        # ISO date and its timezone explicit so relative dates are not
+        # silently interpreted in an arbitrary server locale.
+        turn_mem.planner_memory_context = [
+            *turn_mem.planner_memory_context,
+            {
+                "scope": "runtime",
+                "kind": "fact",
+                "subject": "current_date",
+                "value": datetime.now(timezone.utc).date().isoformat(),
+                "timezone": "UTC",
+                "confidence": 1.0,
+            },
+        ]
 
         # Initialize RuntimeTurnState as the single source of truth
         # For resume, use the original run_id; otherwise generate new
@@ -425,6 +443,7 @@ class RuntimePipeline:
             decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
                 user_request=effective_user_query,
                 mechanical_lookup=lookup,
+                facts_context=turn_mem.planner_memory_context,
                 continuation=continuation_state,
                 chat_id=chat_id,
                 tenant_id=tenant_id,
@@ -487,6 +506,7 @@ class RuntimePipeline:
                 )
                 decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
                     user_request=effective_user_query, mechanical_lookup=lookup,
+                    facts_context=turn_mem.planner_memory_context,
                     continuation=continuation_state, recall_context=recall_context,
                     chat_id=chat_id, tenant_id=tenant_id, user_id=user_id,
                     sandbox_overrides=request.sandbox_overrides,
@@ -616,10 +636,9 @@ class RuntimePipeline:
         memory_recall = MemoryRecallContext(
             resolved_terms=[], resolved_entities=[], relevant_projects=[],
             relevant_knowledge=[], applicable_rules=[], applicable_procedures=[],
-            known_constraints=[], durable_facts=[], uncertainties=[],
+            known_constraints=[], durable_facts=turn_mem.planner_memory_context, uncertainties=[],
             source_references=[], rag_required=False, rag_reasons=[],
         )
-        turn_mem.planner_memory_context = []
         yield await emitter.emit(
             RuntimeEvent.orchestrator_start(
                 orchestrator_id=orchestrator_id,

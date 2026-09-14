@@ -14,7 +14,11 @@ class MemorySearchTool(VersionedTool):
     tool_slug: ClassVar[str] = "memory.search"
     domains: ClassVar[list] = ["system", "memory"]
     name: ClassVar[str] = "Search Memory"
-    description: ClassVar[str] = "Search allowed project and company memory with bounded, source-aware results."
+    description: ClassVar[str] = (
+        "Search allowed project/company long memory and confirmed glossary terms with "
+        "bounded, source-aware results. Use it to resolve an abbreviation or retrieve "
+        "project knowledge; it is not a source of current external-system state."
+    )
 
     @tool_version(
         version="1.0.0",
@@ -25,8 +29,8 @@ class MemorySearchTool(VersionedTool):
             "direction": {"type": "string"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 12},
         }, "required": ["query"]},
-        output_schema={"type": "object", "properties": {"items": {"type": "array"}, "projects": {"type": "array"}, "count": {"type": "integer"}}},
-        description="Bounded ACL-aware semantic-memory search",
+        output_schema={"type": "object", "properties": {"items": {"type": "array"}, "projects": {"type": "array"}, "glossary": {"type": "array"}, "count": {"type": "integer"}}},
+        description="Bounded ACL-aware long-memory and glossary search",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         query = str(args.get("query") or "").strip()

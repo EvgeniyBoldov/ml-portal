@@ -44,6 +44,27 @@ async def test_preflight_uses_shared_db_prompt_builder() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preflight_receives_confirmed_facts_as_raw_context() -> None:
+    preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
+    preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(
+        value=TurnPreflightDecision.model_validate({
+            "route": "planner",
+            "task_brief": {
+                "goal": "Показать тикеты", "project_hints": ["ABC"],
+                "direction": "read current Jira tickets", "expected_result": "Список тикетов",
+            },
+        }),
+    ))
+
+    facts = [{"scope": "user", "kind": "fact", "subject": "jira project", "value": "ABC", "confidence": 1.0}]
+    await preflight.decide(
+        user_request="Какие тикеты на моём проекте?", mechanical_lookup={}, facts_context=facts,
+    )
+
+    assert preflight._llm.invoke.await_args.kwargs["payload"]["facts_context"] == facts
+
+
+@pytest.mark.asyncio
 async def test_preflight_bounds_only_its_routing_copy_of_a_large_user_request() -> None:
     preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
     preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(
