@@ -46,6 +46,7 @@ from app.core.prometheus_metrics import memory_writer_finalize_failures_total
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.memory.recall import MemoryRecallContext
 from app.runtime.memory.mechanical_lookup import MechanicalLookupService
+from app.runtime.memory.project_context import ProjectContextResolver
 from app.runtime.memory.search import MemorySearchService
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
 from app.services.agent_service import AgentService
@@ -303,6 +304,14 @@ class RuntimePipeline:
                 "confidence": 1.0,
             },
         ]
+        project_context = await ProjectContextResolver(self._session).resolve(
+            request_text=effective_user_query, facts=turn_mem.durable_snapshot.entries, tenant_id=tenant_id,
+        )
+        turn_mem.project_context = project_context.as_dict()
+        # The typed context is visible to planner/task construction and is
+        # also the authoritative default for agent memory.search calls.
+        turn_mem.planner_memory_context.append({"type": "project_context", **turn_mem.project_context})
+        ctx.extra["project_context"] = turn_mem.project_context
 
         # Initialize RuntimeTurnState as the single source of truth
         # For resume, use the original run_id; otherwise generate new
@@ -444,6 +453,7 @@ class RuntimePipeline:
                 user_request=effective_user_query,
                 mechanical_lookup=lookup,
                 facts_context=turn_mem.planner_memory_context,
+                project_context=turn_mem.project_context,
                 continuation=continuation_state,
                 chat_id=chat_id,
                 tenant_id=tenant_id,
@@ -508,7 +518,8 @@ class RuntimePipeline:
             try:
                 recall_context = await MemorySearchService(self._session).search(
                     query=memory_request.query, tenant_id=tenant_id, user_id=user_id,
-                    project_keys=memory_request.project_keys, kinds=memory_request.kinds,
+                    project_keys=memory_request.project_keys, fallback_project_keys=project_context.effective_project_keys, kinds=memory_request.kinds,
+                    scopes=memory_request.scopes,
                     entity_ids=memory_request.entity_ids, direction=memory_request.direction,
                     limit=memory_request.limit,
                 )
@@ -527,6 +538,7 @@ class RuntimePipeline:
                 decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
                     user_request=effective_user_query, mechanical_lookup=lookup,
                     facts_context=turn_mem.planner_memory_context,
+                    project_context=turn_mem.project_context,
                     continuation=continuation_state, recall_context=recall_context,
                     chat_id=chat_id, tenant_id=tenant_id, user_id=user_id,
                     sandbox_overrides=request.sandbox_overrides,

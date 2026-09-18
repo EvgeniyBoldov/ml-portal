@@ -34,6 +34,8 @@ export type TabLayout =
 export interface TabProps {
   /** Tab title shown in tab bar */
   title: string;
+  /** Optional muted identifier directly beneath the entity title. */
+  subtitle?: React.ReactNode;
   /** Tab ID (auto-generated from index if not provided) */
   id?: string;
   /** Layout type for children */
@@ -93,6 +95,7 @@ export interface EntityPageV2Props {
 
 export function EntityPageV2({
   title,
+  subtitle,
   mode,
   loading = false,
   saving = false,
@@ -258,7 +261,7 @@ export function EntityPageV2({
       {/* Header */}
       <header className={pageStyles.header}>
         <div className={pageStyles.headerLeft}>
-          <h1 className={pageStyles.title}>{title}</h1>
+          <div className={pageStyles.titleGroup}><h1 className={pageStyles.title}>{title}</h1>{subtitle ? <div className={pageStyles.subtitle}>{subtitle}</div> : null}</div>
           {isEdit && (
             <span className={pageStyles.editBadge}>Редактирование</span>
           )}

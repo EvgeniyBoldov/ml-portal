@@ -171,7 +171,13 @@ class RuntimeEventLogger:
         if level is RuntimeLoggingLevel.NONE:
             return False
         if level is RuntimeLoggingLevel.ERROR:
-            return event_type == "error" or event_type.endswith("_rejected")
+            # Error-only agent runs still need a minimal, inspectable root.
+            # Without these boundaries the UI cannot distinguish the failure
+            # from an orphaned LLM/tool row.
+            return (
+                event_type == "error" or event_type.endswith("_rejected")
+                or (self.context.entity_type == "agent_execution" and event_type in {"agent_start", "agent_end"})
+            )
         return level is RuntimeLoggingLevel.FULL or event_type in _BRIEF_EVENTS
 
     def should_publish_progress(self, event_type: str) -> bool:
@@ -233,8 +239,11 @@ class RuntimeEventLogger:
             payload.update({
                 "entity_type": "error",
                 "entity_id": str(error_key),
-                "parent_entity_type": payload.get("parent_entity_type") or "run",
-                "parent_entity_id": payload.get("parent_entity_id") or str(self.context.run_id),
+                # A scoped logger owns its errors. Falling back to the run
+                # orphaned agent failures and made their detail traces lose
+                # the decisive error event.
+                "parent_entity_type": payload.get("parent_entity_type") or self.context.entity_type or "run",
+                "parent_entity_id": payload.get("parent_entity_id") or self.context.entity_id or str(self.context.run_id),
             })
         _validate_runtime_identity(
             payload.get("entity_type"), payload.get("entity_id"),

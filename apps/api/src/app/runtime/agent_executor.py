@@ -50,6 +50,7 @@ from app.agents.runtime.published_capabilities import (
     serialize_published_operations,
 )
 from app.runtime.events import RuntimeEvent, RuntimeEventType
+from app.services.runtime_event_logger import RuntimeEventLogger, RuntimeLoggingLevel
 from app.runtime.events import OrchestrationPhase
 from app.runtime.memory.components import MemoryBundle, MemoryItem, MemorySection
 from app.runtime.operation_errors import RuntimeErrorCode
@@ -556,28 +557,96 @@ class AgentExecutor:
         the terminal result into a state transition.
         """
         confirmation_payload: Optional[Dict[str, Any]] = None
-        logger = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
+        root_logger = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
+        logger = root_logger
+        # A chat run deliberately does not persist its root trace.  Agent runs
+        # are the exception: their container's observation policy owns just
+        # this execution and its descendants.  Sandbox already journals the
+        # entire run at FULL, so do not create a duplicate subtrace there.
+        is_sandbox = bool(getattr(getattr(root_logger, "context", None), "origin", None) == "sandbox")
+        if isinstance(root_logger, RuntimeEventLogger) and lifecycle_agent_execution_id and not is_sandbox:
+            from sqlalchemy import select
+            from app.models.agent import Agent
+
+            configured_level = await self.session.scalar(
+                select(Agent.logging_level).where(Agent.slug == request.executor)
+            )
+            level = RuntimeLoggingLevel.parse(configured_level)
+            if level is not RuntimeLoggingLevel.NONE:
+                parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
+                parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None
+                logger = root_logger.for_entity(
+                    entity_type="agent_execution",
+                    entity_id=lifecycle_agent_execution_id,
+                    parent_entity_type=parent_type,
+                    parent_entity_id=parent_id,
+                    level=level,
+                )
+                # The graph emits this lifecycle event before it invokes the
+                # executor.  The root is NONE in chat mode, hence the scoped
+                # journal owns an equivalent canonical start row.
+                await logger.emit(RuntimeEvent.agent_start(
+                    agent_execution_id=lifecycle_agent_execution_id,
+                    parent_entity_type=parent_type,
+                    parent_entity_id=parent_id,
+                    agent_slug=str(request.executor or "agent"),
+                    task_title=str(request.intent or request.task_id),
+                    task_id=request.task_id,
+                ), phase=OrchestrationPhase.AGENT)
+        previous_logger = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
+        if isinstance(ctx.extra, dict):
+            ctx.extra["runtime_event_logger"] = logger
+        terminal_status = "completed"
+        terminal_outcome = "completed"
         if runtime_log_parent:
             ctx.extra["runtime_log_parent"] = dict(runtime_log_parent)
-        async for event in self.execute(
-            task=request,
-            lifecycle_agent_execution_id=lifecycle_agent_execution_id,
-            runtime_state=runtime_state,
-            messages=messages,
-            ctx=ctx,
-            user_id=user_id,
-            tenant_id=tenant_id,
-            platform_config=platform_config,
-            model=model,
-            agent_version_id=agent_version_id,
-        ):
-            if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
-                confirmation_payload = dict(event.data or {})
-            if logger is not None:
-                # The graph owns the task pause and emits the canonical
-                # interaction event with its persisted checkpoint.
-                if event.type != RuntimeEventType.CONFIRMATION_REQUIRED:
-                    await logger.emit(event, phase=OrchestrationPhase.AGENT)
+        try:
+            async for event in self.execute(
+                task=request,
+                lifecycle_agent_execution_id=lifecycle_agent_execution_id,
+                runtime_state=runtime_state,
+                messages=messages,
+                ctx=ctx,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                platform_config=platform_config,
+                model=model,
+                agent_version_id=agent_version_id,
+            ):
+                if event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
+                    confirmation_payload = dict(event.data or {})
+                    terminal_status, terminal_outcome = "paused", "confirmation_required"
+                if event.type == RuntimeEventType.ERROR:
+                    terminal_status, terminal_outcome = "failed", "failed"
+                if logger is not None:
+                    # The graph owns the task pause and emits the canonical
+                    # interaction event with its persisted checkpoint.
+                    if event.type != RuntimeEventType.CONFIRMATION_REQUIRED:
+                        await logger.emit(event, phase=OrchestrationPhase.AGENT)
+            pending_failure = ctx.extra.get("agent_execution_failure") if isinstance(ctx.extra, dict) else None
+            if isinstance(pending_failure, dict):
+                terminal_status, terminal_outcome = "failed", "failed"
+            declaration = ctx.extra.get("agent_execution_result") if isinstance(ctx.extra, dict) else None
+            if isinstance(declaration, TaskCompletionDeclaration):
+                terminal_outcome = declaration.completion_claim.value
+        except Exception:
+            terminal_status, terminal_outcome = "failed", "failed"
+            raise
+        finally:
+            if logger is not root_logger and logger is not None and lifecycle_agent_execution_id:
+                parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
+                parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None
+                await logger.emit(RuntimeEvent.agent_end(
+                    agent_execution_id=lifecycle_agent_execution_id,
+                    parent_entity_type=parent_type,
+                    parent_entity_id=parent_id,
+                    agent_slug=str(request.executor or "agent"),
+                    status=terminal_status,
+                    outcome=terminal_outcome,
+                    task_id=request.task_id,
+                ), phase=OrchestrationPhase.AGENT)
+            if isinstance(ctx.extra, dict):
+                ctx.extra["runtime_event_logger"] = previous_logger
         if confirmation_payload is not None:
             raise TaskConfirmationRequired(confirmation_payload)
         failure = ctx.extra.pop("agent_execution_failure", None)

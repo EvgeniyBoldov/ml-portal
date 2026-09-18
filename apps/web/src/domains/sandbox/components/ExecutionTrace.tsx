@@ -12,6 +12,12 @@ interface ExecutionTraceProps {
   progress?: RuntimeProgress[];
   onSelectTarget?: (target: TraceInspectionTarget) => void;
   selectedTargetKey?: string | null;
+  /** Keep sandbox's compact defaults unless an embedding explicitly opts in. */
+  defaultExpanded?: boolean;
+  defaultCallsExpanded?: boolean;
+  /** Presentation traces may add display-only ancestors; never export them. */
+  rawEvents?: SandboxTraceState;
+  showHeader?: boolean;
 }
 
 const formatDuration = (ms: number | undefined): string => {
@@ -19,7 +25,7 @@ const formatDuration = (ms: number | undefined): string => {
   return `${Math.max(1, Math.round(ms / 1000))} с`;
 };
 
-function downloadTraceLog(trace: SandboxTraceState, progress: RuntimeProgress[], elapsedMs: number | undefined): void {
+export function downloadTraceLog(trace: SandboxTraceState, progress: RuntimeProgress[], elapsedMs: number | undefined): void {
   const events = trace.eventIdsBySequence
     .map((eventId) => trace.eventsById[eventId])
     .filter(Boolean);
@@ -119,8 +125,8 @@ function CallSummary({ calls }: { calls: TraceCall[] }) {
   return <span className={styles.callSummary}>{labels.filter(([kind]) => counts[kind]).map(([kind, label]) => <span key={kind} className={styles[`summary-${kind}`]}>{counts[kind]} {label}</span>)}</span>;
 }
 
-function ExecutorRunCard({ executor, stage, onSelect, selectedTargetKey }: { executor: TraceExecutorRun; stage: TraceStage; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null }) {
-  const [expanded, setExpanded] = useState(false);
+function ExecutorRunCard({ executor, stage, onSelect, selectedTargetKey, defaultCallsExpanded = false }: { executor: TraceExecutorRun; stage: TraceStage; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null; defaultCallsExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultCallsExpanded);
   const isTerminal = ['completed', 'complete', 'failed', 'fail', 'error', 'stalled'].includes(executor.entity.status);
   return (
     <article className={`${styles.executor} ${statusClass(executor.entity.status)} ${selectedTargetKey === executor.inspectorKey ? styles.isSelected : ''}`}>
@@ -146,25 +152,25 @@ function ExecutorRunCard({ executor, stage, onSelect, selectedTargetKey }: { exe
   );
 }
 
-function StepCard({ step, onSelect, selectedTargetKey }: { step: ReturnType<typeof stepFor>; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null }) {
+function StepCard({ step, onSelect, selectedTargetKey, defaultCallsExpanded }: { step: ReturnType<typeof stepFor>; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null; defaultCallsExpanded?: boolean }) {
   const { stage } = step;
   return (
     <div className={styles.stageRow}>
       <button type="button" className={`${styles.stageNumber} ${selectedTargetKey === step.key ? styles.isSelected : ''}`} onClick={() => onSelect?.(withTraceInspectorTabs({ kind: 'step', key: step.key, step, tabs: [] }))}>{step.number || stage.iterationNumber || 1}</button>
       <div className={styles.stage}>
-        <div className={styles.executorList}>{step.executorRuns.map((executor) => <ExecutorRunCard key={executor.entity.key} executor={executor} stage={stage} onSelect={onSelect} selectedTargetKey={selectedTargetKey} />)}</div>
+        <div className={styles.executorList}>{step.executorRuns.map((executor) => <ExecutorRunCard key={executor.entity.key} executor={executor} stage={stage} onSelect={onSelect} selectedTargetKey={selectedTargetKey} defaultCallsExpanded={defaultCallsExpanded} />)}</div>
       </div>
     </div>
   );
 }
 
-function StageCard({ stage, onSelect, selectedTargetKey }: { stage: TraceStage; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null }) {
+function StageCard({ stage, onSelect, selectedTargetKey, defaultCallsExpanded }: { stage: TraceStage; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null; defaultCallsExpanded?: boolean }) {
   const steps = stage.steps.length > 0 ? stage.steps : [stepFor(stage)];
-  return <div className={styles.stepList}>{steps.map((step) => <StepCard key={step.key} step={step} onSelect={onSelect} selectedTargetKey={selectedTargetKey} />)}</div>;
+  return <div className={styles.stepList}>{steps.map((step) => <StepCard key={step.key} step={step} onSelect={onSelect} selectedTargetKey={selectedTargetKey} defaultCallsExpanded={defaultCallsExpanded} />)}</div>;
 }
 
-export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget, selectedTargetKey }: ExecutionTraceProps) {
-  const [expanded, setExpanded] = useState(false);
+export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget, selectedTargetKey, defaultExpanded = false, defaultCallsExpanded = false, rawEvents, showHeader = true }: ExecutionTraceProps) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [now, setNow] = useState(() => Date.now());
   const stages = useMemo(() => projectTraceStages(trace), [trace]);
   const latestProgress = progress[progress.length - 1]?.description;
@@ -176,8 +182,8 @@ export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget
   if (stages.length === 0 && !latestProgress) return null;
   const elapsedMs = traceElapsedMs(trace, now);
   return (
-    <section className={styles.trace}>
-      <header className={styles.summary}>
+    <section className={showHeader ? styles.trace : styles.traceBare}>
+      {showHeader && <header className={styles.summary}>
         <button type="button" className={styles.summaryToggle} onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
           <span className={styles.summaryTitle}>Трейс выполнения ({formatDuration(elapsedMs)})</span>
           {isRunning && <span className={styles.running}>выполняется</span>}
@@ -187,13 +193,13 @@ export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget
         <button
           type="button"
           className={styles.download}
-          onClick={() => downloadTraceLog(trace, progress, elapsedMs)}
-          disabled={trace.eventIdsBySequence.length === 0 && progress.length === 0}
+          onClick={() => downloadTraceLog(rawEvents ?? trace, progress, elapsedMs)}
+          disabled={(rawEvents ?? trace).eventIdsBySequence.length === 0 && progress.length === 0}
           title="Скачать все raw-события и progress текущего трейса"
         >
           ↓ Скачать лог
         </button>
-      </header>
+      </header>}
       {expanded && <div className={styles.iterations}>{stages.map((stage) => (
         <article key={stage.entity.key} className={`${styles.iteration} ${styles[`iteration-${stage.iterationType}`] ?? ''} ${selectedTargetKey === stage.entity.key ? styles.isSelected : ''}`}>
           <header className={styles.iterationHeader}>
@@ -204,7 +210,7 @@ export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget
             <StatusBadge status={stage.entity.status} />
           </header>
           <Metrics metrics={stage.metrics} />
-          <div className={styles.iterationBody}><StageCard stage={stage} onSelect={onSelectTarget} selectedTargetKey={selectedTargetKey} /></div>
+          <div className={styles.iterationBody}><StageCard stage={stage} onSelect={onSelectTarget} selectedTargetKey={selectedTargetKey} defaultCallsExpanded={defaultCallsExpanded} /></div>
         </article>
       ))}</div>}
     </section>

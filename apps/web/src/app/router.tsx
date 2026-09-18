@@ -42,6 +42,8 @@ const PeriodicTasksPage = lazy(() => import('@/domains/admin/pages/PeriodicTasks
 const CredentialPage = lazy(() => import('@/domains/admin/pages/CredentialPage').then(m => ({ default: m.default })));
 const MemoryPage = lazy(() => import('@/domains/admin/pages/MemoryPage'));
 const MemoryItemPage = lazy(() => import('@/domains/admin/pages/MemoryItemPage'));
+const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage'));
+const AgentRunPage = lazy(() => import('@/domains/admin/pages/AgentRunPage'));
 
 // Sandbox pages
 const SandboxLayout = lazy(() => import('@/domains/sandbox/layouts/SandboxLayout'));
@@ -107,6 +109,8 @@ const router = createBrowserRouter([
       { path: 'agents/:id', element: withSuspense(<AgentPage />) },
       { path: 'agents/:id/versions/new', element: withSuspense(<AgentVersionPage />) },
       { path: 'agents/:id/versions/:version', element: withSuspense(<AgentVersionPage />) },
+      { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },
+      { path: 'agent-runs/:id', element: withSuspense(<AgentRunPage />) },
       { path: 'collections', element: withSuspense(<CollectionListPage />) },
       { path: 'memory', element: withSuspense(<MemoryPage />) },
       { path: 'memory/:itemId', element: withSuspense(<MemoryItemPage />) },

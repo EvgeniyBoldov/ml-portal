@@ -23,6 +23,7 @@ from app.models.mixins.lifecycle import LifecycleMixin
 class LoggingLevel(str, enum.Enum):
     """Agent logging verbosity level"""
     NONE = "none"
+    ERROR = "error"
     BRIEF = "brief"
     FULL = "full"
 

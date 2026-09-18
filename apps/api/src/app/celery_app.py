@@ -36,6 +36,8 @@ app = Celery(
         "app.workers.tasks_ldap_sync",
         # Memory writeback tasks
         "app.workers.tasks_memory",
+        # Shadow document study tasks
+        "app.workers.tasks_shadow_document_memory",
     ],
     autodiscover_tasks=False,  # Отключаем автообнаружение задач
 )
@@ -92,6 +94,10 @@ def build_default_beat_schedule() -> dict:
         "memory-document-contract-reextract": {
             "task": "app.workers.tasks_memory.reextract_stale_document_memory",
             "schedule": 300.0,
+        },
+        "shadow-memory-conflict-reconcile": {
+            "task": "app.workers.tasks_shadow_document_memory.reconcile_shadow_memory_conflicts",
+            "schedule": 900.0,
         },
         "collection-vector-index-audit": {
             "task": "app.workers.tasks_vector_index_audit.audit_collection_vector_indexes",
@@ -211,6 +217,10 @@ app.conf.task_routes = {
     "app.workers.tasks_memory.refresh_memory_freshness": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_memory.reextract_stale_document_memory": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_memory.reconcile_collection_memory_policy": {"queue": "maintenance.default", "priority": 1},
+    "app.workers.tasks_shadow_document_memory.shadow_study_rag_document": {"queue": "memory", "priority": 1},
+    "app.workers.tasks_shadow_document_memory.study_shadow_document_sections": {"queue": "memory", "priority": 1},
+    "app.workers.tasks_shadow_document_memory.finalize_shadow_document_study": {"queue": "memory", "priority": 1},
+    "app.workers.tasks_shadow_document_memory.reconcile_shadow_memory_conflicts": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_deprecated_entities": {"queue": "cleanup_low", "priority": 1},
 
     # Reindex tasks

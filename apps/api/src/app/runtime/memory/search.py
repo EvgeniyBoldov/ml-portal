@@ -7,9 +7,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import MemoryRelation
-from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.recall import MemoryRecallService, _matching_glossary_terms
-from app.runtime.memory.service import MemoryService
 from app.runtime.memory.semantic_index import MemorySemanticIndex
 from app.services.glossary_service import GlossaryService
 
@@ -25,6 +23,8 @@ class MemorySearchService:
         tenant_id: UUID | None,
         user_id: UUID | None = None,
         project_keys: list[str] = (),
+        fallback_project_keys: list[str] | tuple[str, ...] = (),
+        scopes: list[str] = (),
         kinds: list[str] = (),
         entity_ids: list[str] = (),
         direction: str | None = None,
@@ -32,8 +32,10 @@ class MemorySearchService:
     ) -> dict[str, Any]:
         projects = await GlossaryService(self._session).list_project_terms()
         confirmed_glossary = await GlossaryService(self._session).list_confirmed_terms(tenant_id=tenant_id)
-        glossary_terms = _matching_glossary_terms(query, confirmed_glossary, limit=12)
-        project_key_set = {str(key).strip().lower() for key in project_keys if str(key).strip()}
+        enabled_scopes = {str(scope).strip().lower() for scope in scopes if str(scope).strip()} or {"glossary", "project", "global"}
+        glossary_terms = _matching_glossary_terms(query, confirmed_glossary, limit=12) if "glossary" in enabled_scopes else []
+        requested_keys = {str(key).strip().lower() for key in project_keys if str(key).strip()}
+        project_key_set = requested_keys or {str(key).strip().lower() for key in fallback_project_keys if str(key).strip()}
         known_project_keys = {str(item.get("key") or "").strip().lower() for item in projects}
         unknown_project_keys = sorted(project_key_set - known_project_keys)
         if unknown_project_keys:
@@ -41,10 +43,7 @@ class MemorySearchService:
                 direction=direction, entity_ids=entity_ids, kinds=kinds,
                 uncertainties=[f"unknown_project_key:{key}" for key in unknown_project_keys],
             )
-        selected = [
-            item for item in projects
-            if not project_key_set or str(item.get("key") or "").strip().lower() in project_key_set
-        ]
+        selected = [item for item in projects if str(item.get("key") or "").strip().lower() in project_key_set]
         project_ids = [item["id"] for item in selected]
         # Reuse the read-side ACL/applicability implementation; no selector LLM
         # participates in this operation.
@@ -75,6 +74,11 @@ class MemorySearchService:
             allowed_kinds = _kinds_for_direction(direction)
         if allowed_kinds:
             items = [item for item in items if str(item.get("kind")) in allowed_kinds]
+        if "project" not in enabled_scopes:
+            items = [item for item in items if item.get("project_id") is None]
+        if "global" not in enabled_scopes:
+            items = [item for item in items if item.get("project_id") is not None]
+        items, precedence_uncertainties = _apply_project_precedence(items, project_ids)
         values = [
             {
                 "id": str(item["id"]), "project_id": str(item["project_id"]) if item.get("project_id") else None,
@@ -84,10 +88,6 @@ class MemorySearchService:
             }
             for item in items[:max(1, min(int(limit), 12))]
         ]
-        snapshot = await MemoryService(fact_store=FactStore(self._session)).read_snapshot(
-            user_id=user_id, tenant_id=tenant_id, limit=12,
-        )
-        durable_facts = snapshot.agent_context(query=query, limit=8)
         return {
             "items": values,
             "projects": [{"key": item["key"], "name": item["name"]} for item in selected],
@@ -101,7 +101,8 @@ class MemorySearchService:
                 "entity_ids": normalized_entity_ids,
                 "kinds": sorted(allowed_kinds),
             },
-            "memory_context": _memory_context(values, selected, durable_facts, glossary_terms),
+            "uncertainties": precedence_uncertainties,
+            "memory_context": _memory_context(values, selected, [], glossary_terms, precedence_uncertainties),
         }
 
 
@@ -125,10 +126,33 @@ def _empty_result(*, direction: str | None, entity_ids: list[str], kinds: list[s
 
 def _memory_context(
     items: list[dict[str, Any]], projects: list[dict[str, Any]],
-    durable_facts: list[dict[str, object]], glossary: list[dict[str, Any]],
+    durable_facts: list[dict[str, object]], glossary: list[dict[str, Any]], uncertainties: list[str] = (),
 ) -> dict[str, Any]:
     def typed(kind: str) -> list[dict[str, Any]]:
         return [item for item in items if item.get("kind") == kind]
     refs = [ref for item in items for ref in item.get("source_references") or [] if isinstance(ref, dict)]
     uncertain = [item for item in items if item.get("state") != "active"]
-    return {"type": "memory_recall", "resolved_terms": glossary, "resolved_entities": [], "relevant_projects": [{"key": item.get("key"), "name": item.get("name")} for item in projects], "relevant_knowledge": [item for item in items if item.get("kind") not in {"rule", "constraint", "procedure"}], "applicable_rules": typed("rule"), "applicable_procedures": typed("procedure"), "known_constraints": typed("constraint"), "durable_facts": durable_facts, "uncertainties": [f"uncertain_memory:{item.get('id')}" for item in uncertain], "source_references": refs[:24], "rag_required": bool(uncertain), "tool_required": False}
+    return {"type": "memory_recall", "resolved_terms": glossary, "resolved_entities": [], "relevant_projects": [{"key": item.get("key"), "name": item.get("name")} for item in projects], "relevant_knowledge": [item for item in items if item.get("kind") not in {"rule", "constraint", "procedure"}], "applicable_rules": typed("rule"), "applicable_procedures": typed("procedure"), "known_constraints": typed("constraint"), "durable_facts": durable_facts, "uncertainties": [*uncertainties, *[f"uncertain_memory:{item.get('id')}" for item in uncertain]], "source_references": refs[:24], "rag_required": bool(uncertain or uncertainties), "tool_required": False}
+
+
+def _apply_project_precedence(items: list[dict[str, Any]], project_ids: list[UUID]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Never hand an arbitrary winner for divergent project rules to an LLM."""
+    if not project_ids:
+        return items, []
+    by_identity: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in items:
+        by_identity.setdefault((str(item.get("kind")), str(item.get("subject")).casefold()), []).append(item)
+    result: list[dict[str, Any]] = []
+    uncertainties: list[str] = []
+    project_set = {str(value) for value in project_ids}
+    for identity, rows in by_identity.items():
+        globals_ = [row for row in rows if row.get("project_id") is None]
+        scoped = {str(row.get("project_id")): row for row in rows if row.get("project_id") is not None}
+        effective = [scoped.get(project_id) or (globals_[0] if globals_ else None) for project_id in project_set]
+        effective = [row for row in effective if row is not None]
+        if len({str(row.get("content_text")) for row in effective}) > 1:
+            uncertainties.append(f"project_memory_divergence:{identity[0]}:{identity[1]}")
+            continue
+        if effective:
+            result.append(effective[0])
+    return result, uncertainties

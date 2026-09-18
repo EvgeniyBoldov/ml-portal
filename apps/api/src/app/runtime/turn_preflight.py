@@ -36,6 +36,7 @@ class MemoryRequest(BaseModel):
     direction: str = Field(..., min_length=1)
     kinds: list[str] = Field(default_factory=list)
     entity_ids: list[str] = Field(default_factory=list)
+    scopes: list[Literal["glossary", "project", "global"]] = Field(default_factory=lambda: ["glossary", "project", "global"])
     query: str = Field(..., min_length=1)
     limit: int = Field(default=8, ge=1, le=12)
     model_config = {"extra": "forbid"}
@@ -102,6 +103,7 @@ class TurnPreflight:
         user_request: str,
         mechanical_lookup: dict[str, Any],
         facts_context: list[dict[str, Any]] | None = None,
+        project_context: dict[str, Any] | None = None,
         continuation: dict[str, Any] | None = None,
         recall_context: dict[str, Any] | None = None,
         chat_id: UUID | None = None,
@@ -124,6 +126,7 @@ class TurnPreflight:
                 # context and must be available while resolving pronouns and
                 # tool scope.
                 "facts_context": list(facts_context or []),
+                "project_context": dict(project_context or {}),
                 "continuation": continuation or {},
                 "recall_context": recall_context,
             },

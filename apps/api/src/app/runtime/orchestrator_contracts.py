@@ -330,6 +330,12 @@ class IterationProposal(BaseModel):
             raise ValueError("synthesis terminal requires synthesis_brief")
         if self.terminal == TerminalKind.PLANNER and self.synthesis_brief is not None:
             raise ValueError("planner terminal cannot include synthesis_brief")
+        # A planner terminal schedules more work.  With no new tasks it only
+        # creates an empty checkpoint/iteration loop; after all prior work is
+        # resolved the only valid terminal is synthesis with a user-facing
+        # limitation in its brief.
+        if self.terminal == TerminalKind.PLANNER and not self.tasks:
+            raise ValueError("planner terminal requires at least one task")
         known = set(ids)
         for task in self.tasks:
             output_keys = [output.key for output in task.expected_outputs]

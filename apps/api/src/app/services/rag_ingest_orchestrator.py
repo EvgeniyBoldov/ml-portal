@@ -26,6 +26,7 @@ from app.workers.tasks_rag_ingest import (
     embed_chunks_model,
     index_model,
 )
+from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
 
 logger = get_logger(__name__)
 
@@ -133,7 +134,10 @@ class RAGIngestOrchestrator:
             self._build_embed_index_sig(tid, model) for model in embedding_models
         )
 
-        return chain(extract_sig, normalize_sig, chunk_sig, embed_index_group)
+        # Shadow study runs only after every target embedding was indexed. It
+        # creates reviewable candidates and is isolated from RAG readiness and
+        # runtime recall, so a later study failure cannot invalidate the file.
+        return chain(extract_sig, normalize_sig, chunk_sig, embed_index_group, shadow_study_rag_document.s(tid))
 
     def _build_embed_index_chain(self, document_id: UUID, model_alias: str, chunks_key: str) -> chain:
         """Build: embed → index for one model, starting from existing chunks."""

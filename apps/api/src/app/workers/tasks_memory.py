@@ -44,9 +44,7 @@ from app.runtime.memory.evidence_feedback import (
 def reextract_stale_document_memory(batch_size: int = 20) -> Dict[str, Any]:
     """Gradually refresh document memory withdrawn by a content contract change."""
     async def _reextract() -> Dict[str, Any]:
-        from app.services.rag_status_manager import RAGStatusManager, StageStatus
-        from app.repositories.factory import AsyncRepositoryFactory
-        from app.workers.tasks_rag_ingest.document_memory import extract_document_memory, is_memory_trusted_source
+        from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
 
         jobs: list[tuple[str, dict[str, str]]] = []
         async with get_worker_session() as session:
@@ -69,8 +67,6 @@ def reextract_stale_document_memory(batch_size: int = 20) -> Dict[str, Any]:
                 if document.id in seen or len(jobs) >= max(1, min(int(batch_size), 50)):
                     continue
                 seen.add(document.id)
-                if not is_memory_trusted_source(source.meta, document_scope=str(document.scope or "local")):
-                    continue
                 metrics = dict(status.metrics_json or {}) if status is not None else {}
                 if status is not None and status.status in {"queued", "processing"}:
                     continue
@@ -79,14 +75,12 @@ def reextract_stale_document_memory(batch_size: int = 20) -> Dict[str, Any]:
                 tenant_id = source.tenant_id or document.tenant_id
                 if tenant_id is None:
                     continue
-                manager = RAGStatusManager(session, AsyncRepositoryFactory(session, tenant_id))
-                await manager.transition_stage(document.id, "memory.extract", StageStatus.QUEUED)
                 jobs.append((str(tenant_id), {
-                    "source_id": str(document.id), "canonical_key": str(document.s3_key_processed),
+                    "source_id": str(document.id),
                 }))
             await session.commit()
         for tenant_id, job in jobs:
-            extract_document_memory.delay(job, tenant_id, True)
+            shadow_study_rag_document.delay(job, tenant_id)
         return {"queued": len(jobs)}
 
     return asyncio.run(_reextract())
@@ -237,9 +231,9 @@ def reconcile_collection_memory_policy(collection_id: str) -> Dict[str, Any]:
         if active_ids:
             index_memory_items.delay([str(item_id) for item_id in active_ids])
         if enabled_jobs:
-            from app.workers.tasks_rag_ingest.document_memory import extract_document_memory
+            from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
             for tenant_id, job in enabled_jobs:
-                extract_document_memory.delay(job, tenant_id, True)
+                shadow_study_rag_document.delay(job, tenant_id)
         return {"processed": len(enabled_jobs) + len(stale_ids) + len(active_ids), "enabled": len(enabled_jobs)}
 
     return asyncio.run(_reconcile())
@@ -327,9 +321,9 @@ def evaluate_memory_rag_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
                     (str(row.tenant_id), {"source_id": str(row.id), "canonical_key": row.s3_key_processed})
                     for row in rows if row.s3_key_processed and row.tenant_id
                 ]
-            from app.workers.tasks_rag_ingest.document_memory import extract_document_memory
+            from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
             for document_tenant_id, job in jobs:
-                extract_document_memory.delay(job, document_tenant_id, True)
+                shadow_study_rag_document.delay(job, document_tenant_id)
         return {"evaluated": evaluated, "reextract_documents": len(reextract_document_ids)}
 
     return asyncio.run(_evaluate())

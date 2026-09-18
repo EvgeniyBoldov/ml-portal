@@ -258,6 +258,27 @@ async def test_structured_planner_uses_resolved_retry_limit():
     assert client.chat.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_structured_call_can_select_registry_default_model():
+    client = AsyncMock()
+    client.chat = AsyncMock(return_value={"choices": [{"message": {"content": '{"value": "ok"}'}}]})
+    call = StructuredLLMCall(session=AsyncMock(), llm_client=client)
+    call.role_service.get_role_config = AsyncMock(
+        return_value={"model": "role-specific-model", "max_retries": 0, "timeout_s": 1}
+    )
+    call.model_call_config_service.resolve = AsyncMock(
+        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=0)
+    )
+
+    result = await call.invoke(
+        role=SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR,
+        payload={"input": "hello"}, schema=_Result, use_default_model=True,
+    )
+
+    assert result.value.value == "ok"
+    assert client.chat.await_args.kwargs["model"] is None
+
+
 async def _failed_stream():
     raise ConnectionError("LiteLLM stream reset")
     yield "unreachable"

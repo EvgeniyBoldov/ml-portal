@@ -20,6 +20,7 @@ class PlannerMemoryToolCall(BaseModel):
     project_keys: list[str] = Field(default_factory=list)
     kinds: list[str] = Field(default_factory=list)
     entity_ids: list[str] = Field(default_factory=list)
+    scopes: list[Literal["glossary", "project", "global"]] = Field(default_factory=lambda: ["glossary", "project", "global"])
     direction: str | None = None
     limit: int = Field(default=8, ge=1, le=12)
     model_config = {"extra": "forbid"}
@@ -140,8 +141,12 @@ class GraphPlanner:
                     actor_type="planner", actor_entity_id=planner_iteration_trace_id,
                 ))
             try:
+                project_context = next((item for item in request.context.memory_context
+                                        if isinstance(item, dict) and item.get("type") == "project_context"), {})
                 data = await MemorySearchService(self._session).search(
                     query=call.query, tenant_id=tenant_id, user_id=user_id, project_keys=call.project_keys,
+                    fallback_project_keys=list(project_context.get("effective_project_keys") or []),
+                    scopes=call.scopes,
                     kinds=call.kinds, entity_ids=call.entity_ids,
                     direction=call.direction, limit=call.limit,
                 )

@@ -86,10 +86,7 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
             logger.info(f"Normalize cached for {source_id}")
             await ctx.set_completed(metrics={"status": "already_processed", "cached": True})
             await ctx.session.commit()
-            result = NormalizeResult(source_id=source_id, canonical_key=cached["canonical_key"])
-            from app.workers.tasks_rag_ingest.document_memory import extract_document_memory
-            extract_document_memory.delay(result.to_dict(), ctx.tenant_id_str)
-            return result
+            return NormalizeResult(source_id=source_id, canonical_key=cached["canonical_key"])
 
         # 3. Read Extracted Text
         if not extracted_key:
@@ -171,14 +168,6 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
             "checksum": content_checksum,
         })
         await ctx.session.commit()
-
-        # Memory extraction is deliberately independent from the RAG chain:
-        # a failed LLM extraction must not prevent document search/indexing.
-        from app.workers.tasks_rag_ingest.document_memory import extract_document_memory
-        extract_document_memory.delay(
-            NormalizeResult(source_id=source_id, canonical_key=canonical_key).to_dict(),
-            ctx.tenant_id_str,
-        )
 
         return NormalizeResult(source_id=source_id, canonical_key=canonical_key)
 

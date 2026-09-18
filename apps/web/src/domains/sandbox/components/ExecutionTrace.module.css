@@ -5,6 +5,7 @@
   background: var(--trace-surface);
   color: var(--text-primary);
 }
+.traceBare { color: var(--text-primary); }
 
 .summary {
   display: flex;

@@ -20,7 +20,7 @@ class AgentCreate(BaseModel):
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
     tags: Optional[List[str]] = Field(default=None, description="Agent tags for catalog filtering")
-    logging_level: str = Field(default="brief", description="none | errors | brief | full")
+    logging_level: str = Field(default="brief", description="none | error | brief | full")
     model: Optional[str] = Field(default=None, description="LLM model alias")
     temperature: Optional[float] = Field(default=None, description="LLM temperature (orchestration default if None)")
     requires_confirmation_for_write: Optional[bool] = Field(default=None, description="Require confirmation for write ops")
@@ -34,7 +34,7 @@ class AgentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     tags: Optional[List[str]] = None
-    logging_level: Optional[str] = Field(default=None, description="none, brief, full")
+    logging_level: Optional[str] = Field(default=None, description="none, error, brief, full")
     model: Optional[str] = Field(default=None, description="LLM model alias")
     temperature: Optional[float] = None
     requires_confirmation_for_write: Optional[bool] = None
@@ -51,7 +51,7 @@ class AgentResponse(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     current_version_id: Optional[UUID] = None
-    logging_level: str = Field(default="brief", description="none | errors | brief | full")
+    logging_level: str = Field(default="brief", description="none | error | brief | full")
     model: Optional[str] = None
     temperature: Optional[float] = None
     requires_confirmation_for_write: Optional[bool] = None

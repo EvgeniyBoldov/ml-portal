@@ -130,6 +130,7 @@ class StructuredLLMCall:
         sandbox_overrides: Optional[Dict[str, Any]] = None,
         budget_registry: Optional[Any] = None,
         budget_entity_id: Optional[str] = None,
+        use_default_model: bool = False,
     ) -> StructuredCallResult[T]:
         """Execute the role with structured JSON payload, validate output against `schema`.
 
@@ -149,9 +150,13 @@ class StructuredLLMCall:
         role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(role_key)
 
         # Apply model / temperature override from sandbox
-        model = role_config.get("model") or "unknown"
+        # Some background workflows deliberately use the registry default
+        # deployment instead of binding behaviour to a configurable runtime
+        # role.  ``None`` is meaningful to the connector resolver: it selects
+        # the enabled LLM_CHAT model marked default_for_type.
+        model = None if use_default_model else (role_config.get("model") or "unknown")
         temperature = role_config.get("temperature")
-        if isinstance(role_override, dict):
+        if isinstance(role_override, dict) and not use_default_model:
             if role_override.get("model"):
                 model = str(role_override["model"])
             if role_override.get("temperature") is not None:

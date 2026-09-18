@@ -21,7 +21,10 @@ from app.models.credential_set import Credential
 from app.models.tool_instance import ToolInstance
 from app.models.tool import Tool
 from app.runtime.memory.fact_store import FactStore
-from app.models.memory import Fact, FactScope
+from app.models.memory import Fact, FactScope, FactSource, FactStatus
+from app.runtime.memory.dto import FactDTO
+from app.runtime.memory.project_context import PROJECT_SCOPE_SUBJECT
+from app.models.project import Project
 from app.runtime.memory.service import MemoryService
 from app.runtime.memory.fact_reconciler import FactReconciler
 from sqlalchemy import select
@@ -110,6 +113,14 @@ class FactsDeleteResponse(BaseModel):
 class UserFactUpdate(BaseModel):
     subject: str
     value: str
+
+
+class ProjectScopeUpdate(BaseModel):
+    project_keys: List[str]
+
+
+class ProjectScopeResponse(BaseModel):
+    project_keys: List[str]
 
 
 class ProfilePasswordChangeRequest(BaseModel):
@@ -291,6 +302,37 @@ async def list_user_facts(
         for row in tenant_rows
     ]
     return [*personal, *tenant]
+
+
+@router.get("/project-scope", response_model=ProjectScopeResponse)
+async def get_project_scope(current_user: UserCtx = Depends(get_current_user)):
+    async with get_session_factory()() as session:
+        fact = await FactStore(session).get_active_by_key(
+            scope=FactScope.USER, subject=PROJECT_SCOPE_SUBJECT, owner_type="user", owner_id=UUID(current_user.id),
+        )
+    return ProjectScopeResponse(project_keys=list((fact.metadata or {}).get("project_keys") or []) if fact else [])
+
+
+@router.put("/project-scope", response_model=ProjectScopeResponse)
+async def set_project_scope(payload: ProjectScopeUpdate, current_user: UserCtx = Depends(get_current_user)):
+    keys = list(dict.fromkeys(str(key).strip().casefold() for key in payload.project_keys if str(key).strip()))
+    if len(keys) > 12:
+        raise HTTPException(status_code=422, detail="At most 12 projects may be selected")
+    user_id = UUID(current_user.id)
+    async with get_session_factory()() as session:
+        known = {str(key).casefold() for key in (await session.execute(select(Project.key))).scalars().all()}
+        unknown = sorted(set(keys) - known)
+        if unknown:
+            raise HTTPException(status_code=422, detail={"unknown_project_keys": unknown})
+        value = ", ".join(keys)
+        await FactStore(session).upsert_with_supersede(FactDTO(
+            scope=FactScope.USER, subject=PROJECT_SCOPE_SUBJECT, value=value,
+            source=FactSource.MANUAL, owner_type="user", owner_id=user_id, kind="project_scope",
+            metadata={"project_keys": keys}, status=FactStatus.CONFIRMED, confidence=1.0,
+            support_count=1, user_visible=True,
+        ))
+        await session.commit()
+    return ProjectScopeResponse(project_keys=keys)
 
 
 @router.delete("/facts", response_model=FactsDeleteResponse)

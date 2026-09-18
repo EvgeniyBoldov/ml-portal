@@ -30,6 +30,15 @@ def test_error_level_is_errors_only() -> None:
     assert logger.should_log("executor_started") is False
 
 
+def test_error_level_keeps_agent_run_boundaries() -> None:
+    logger = _logger(RuntimeLoggingLevel.ERROR).for_entity(
+        entity_type="agent_execution", entity_id=str(uuid4()),
+    )
+    assert logger.should_log("agent_start") is True
+    assert logger.should_log("agent_end") is True
+    assert logger.should_log("llm_request") is False
+
+
 def test_brief_level_contains_lifecycle_and_snapshots_not_io() -> None:
     logger = _logger(RuntimeLoggingLevel.BRIEF)
     assert logger.should_log("agent_start") is True

@@ -43,6 +43,8 @@
   text-overflow: ellipsis;
   color: var(--text);
 }
+.titleGroup { min-width: 0; }
+.subtitle { overflow: hidden; margin-top: 2px; color: var(--text-secondary); font-family: var(--font-mono); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 
 .editBadge {
   display: inline-flex;

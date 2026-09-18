@@ -14,6 +14,12 @@ from app.models.memory import (
     MemoryItemSource,
     MemoryRelation,
 )
+from app.models.document_memory_staging import (
+    DocumentMemorySnapshot,
+    GlossaryMeaning,
+    MemoryCandidateProjectBinding,
+    MemoryExtractionCandidate,
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,15 @@ class SemanticMemoryDetail:
 class SemanticMemoryPage:
     rows: tuple[SemanticMemoryListRow, ...]
     total: int
+
+
+@dataclass(frozen=True)
+class SemanticMemoryStagingOverview:
+    snapshots: dict[str, int]
+    candidates: dict[str, int]
+    project_bindings: dict[str, int]
+    glossary_meanings: dict[str, int]
+    conflicting_glossary_terms: int
 
 
 class SemanticMemoryAdminService:
@@ -113,6 +128,40 @@ class SemanticMemoryAdminService:
             item=item, sources=tuple(sources), claims=tuple(claims),
             relations=tuple(relations), evaluations=tuple(evaluations),
         )
+
+    async def staging_overview(self) -> SemanticMemoryStagingOverview:
+        """Expose P0 migration health without switching any user read path."""
+        snapshots = await self._count_by(DocumentMemorySnapshot.status)
+        candidates = await self._count_by(MemoryExtractionCandidate.resolution_status)
+        project_bindings = await self._count_by(
+            MemoryCandidateProjectBinding.role, MemoryCandidateProjectBinding.status,
+        )
+        meanings = await self._count_by(GlossaryMeaning.resolution_status)
+        conflicts = (await self._session.execute(
+            select(func.count()).select_from(
+                select(GlossaryMeaning.term_id)
+                .where(GlossaryMeaning.resolution_status == "resolved")
+                .group_by(GlossaryMeaning.term_id)
+                .having(func.count(func.distinct(GlossaryMeaning.definition)) > 1)
+                .subquery()
+            )
+        )).scalar_one()
+        return SemanticMemoryStagingOverview(
+            snapshots=snapshots,
+            candidates=candidates,
+            project_bindings=project_bindings,
+            glossary_meanings=meanings,
+            conflicting_glossary_terms=int(conflicts),
+        )
+
+    async def _count_by(self, *columns) -> dict[str, int]:
+        rows = (await self._session.execute(
+            select(*columns, func.count()).group_by(*columns)
+        )).all()
+        return {
+            ":".join(str(value) for value in row[:-1]): int(row[-1])
+            for row in rows
+        }
 
 
 def _item_filters(scope, state, item_type, project_id, query):

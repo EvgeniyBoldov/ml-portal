@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, DataTable, EntityPageV2, Input, Tab, type DataTableColumn } from '@/shared/ui';
-import { adminApi, type AdminGlossaryEntry, type SemanticMemoryAdminItem } from '@/shared/api/admin';
+import { adminApi, type AdminGlossaryEntry, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
 
 const glossaryColumns: DataTableColumn<AdminGlossaryEntry>[] = [
   { key: 'canonical_term', label: 'ТЕРМИН', sortable: true, render: (row) => <div><strong>{row.canonical_term}</strong><div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>{row.description || 'Без определения'}</div></div> },
@@ -27,10 +27,20 @@ const projectMemoryColumns: DataTableColumn<SemanticMemoryAdminItem>[] = [
   { key: 'source_count', label: 'ИСТОЧНИКИ', width: 110, align: 'right', render: (row) => row.source_count },
 ];
 
+const reviewColumns = (onDecision: (id: string, action: 'approve' | 'reject') => void, pending: boolean): DataTableColumn<ShadowMemoryCandidate>[] => [
+  { key: 'subject', label: 'КАНДИДАТ', render: (row) => <div><strong>{row.subject}</strong><div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>{JSON.stringify(row.content)}</div></div> },
+  { key: 'candidate_type', label: 'ТИП', width: 130, render: (row) => <Badge tone="neutral">{row.candidate_type}</Badge> },
+  { key: 'scope_candidate', label: 'SCOPE', width: 120, render: (row) => <Badge tone="info">{row.scope_candidate || 'unknown'}</Badge> },
+  { key: 'evidence_section_ids', label: 'EVIDENCE', width: 110, render: (row) => row.evidence_section_ids.length },
+  { key: 'conflict_ids', label: 'КОНФЛИКТЫ', width: 110, render: (row) => <Badge tone={row.conflict_ids.length ? 'danger' : 'success'}>{row.conflict_ids.length}</Badge> },
+  { key: 'actions', label: '', width: 190, render: (row) => <div style={{ display: 'flex', gap: 8 }}><button type="button" disabled={pending || row.conflict_ids.length > 0} onClick={() => onDecision(row.id, 'approve')}>Утвердить</button><button type="button" disabled={pending} onClick={() => onDecision(row.id, 'reject')}>Отклонить</button></div> },
+];
+
 export default function MemoryPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('glossary');
   const [query, setQuery] = useState('');
+  const queryClient = useQueryClient();
   const { data: glossary, isLoading: glossaryLoading, isError: glossaryError } = useQuery({
     queryKey: ['admin', 'glossary'],
     queryFn: () => adminApi.getGlossary(),
@@ -40,6 +50,17 @@ export default function MemoryPage() {
     queryKey: ['admin', 'memory', 'project', query],
     queryFn: () => adminApi.getSemanticMemory({ scope: 'project', query: query || undefined }),
     enabled: activeTab === 'project-memory',
+  });
+  const { data: review, isLoading: reviewLoading, isError: reviewError } = useQuery({
+    queryKey: ['admin', 'memory', 'staging-review'],
+    queryFn: () => adminApi.getShadowMemoryCandidates('needs_review'),
+    enabled: activeTab === 'review',
+  });
+  const decision = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: 'approve' | 'reject' }) => action === 'approve'
+      ? adminApi.approveShadowMemoryCandidate(id, { scope: 'global' })
+      : adminApi.rejectShadowMemoryCandidate(id, 'Rejected by administrator'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'memory', 'staging-review'] }),
   });
   const filteredGlossary = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -59,6 +80,9 @@ export default function MemoryPage() {
       </Tab>
       <Tab title="Project Memory" id="project-memory" layout="full">
         {memoryError ? <p role="alert">Не удалось загрузить Project Memory.</p> : <DataTable columns={projectMemoryColumns} data={projectMemory?.items ?? []} keyField="id" loading={memoryLoading} emptyText="Знания проекта не найдены" paginated pageSize={20} onRowClick={(row) => navigate(`/admin/memory/${row.id}`)} />}
+      </Tab>
+      <Tab title="На проверке" id="review" layout="full">
+        {reviewError ? <p role="alert">Не удалось загрузить очередь проверки.</p> : <DataTable columns={reviewColumns((id, action) => decision.mutate({ id, action }), decision.isPending)} data={review ?? []} keyField="id" loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20} />}
       </Tab>
     </EntityPageV2>
   );

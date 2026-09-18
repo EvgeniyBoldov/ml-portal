@@ -27,6 +27,7 @@ class MemorySearchTool(VersionedTool):
             "kinds": {"type": "array", "items": {"type": "string"}},
             "entity_ids": {"type": "array", "items": {"type": "string"}},
             "direction": {"type": "string"},
+            "scopes": {"type": "array", "items": {"type": "string"}},
             "limit": {"type": "integer", "minimum": 1, "maximum": 12},
         }, "required": ["query"]},
         output_schema={"type": "object", "properties": {"items": {"type": "array"}, "projects": {"type": "array"}, "glossary": {"type": "array"}, "count": {"type": "integer"}}},
@@ -40,6 +41,8 @@ class MemorySearchTool(VersionedTool):
             data = await MemorySearchService(session).search(
                 query=query, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
                 project_keys=[str(value) for value in args.get("project_keys") or []],
+                fallback_project_keys=list((ctx.extra.get("project_context") or {}).get("effective_project_keys") or []),
+                scopes=[str(value) for value in args.get("scopes") or []],
                 kinds=[str(value) for value in args.get("kinds") or []],
                 entity_ids=[str(value) for value in args.get("entity_ids") or []],
                 direction=str(args.get("direction") or "").strip() or None,

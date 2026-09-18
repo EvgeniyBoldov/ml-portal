@@ -28,6 +28,7 @@ from .projects import router as projects_router
 from .glossary import router as glossary_router
 from .facts import router as facts_router
 from .semantic_memory import router as semantic_memory_router
+from .agent_runs import router as agent_runs_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -56,5 +57,6 @@ router.include_router(projects_router, tags=["projects"])
 router.include_router(glossary_router, tags=["glossary"])
 router.include_router(facts_router, tags=["facts"])
 router.include_router(semantic_memory_router, tags=["semantic-memory"])
+router.include_router(agent_runs_router, prefix="/agent-runs", tags=["agent-runs"])
 
 __all__ = ["router"]

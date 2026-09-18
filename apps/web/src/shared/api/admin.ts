@@ -508,6 +508,21 @@ export interface AdminGlossaryEntry {
   updated_at: string;
 }
 
+export interface ShadowMemoryCandidate {
+  id: string;
+  snapshot_id: string;
+  visibility_tenant_id: string | null;
+  candidate_type: string;
+  subject: string;
+  content: Record<string, unknown>;
+  evidence_section_ids: string[];
+  scope_candidate: string | null;
+  resolution_status: string;
+  extraction_confidence: number;
+  project_ids: string[];
+  conflict_ids: string[];
+}
+
 // API functions
 export const adminApi = {
   async getGlossary(): Promise<AdminGlossaryEntry[]> {
@@ -520,6 +535,15 @@ export const adminApi = {
   },
   async getSemanticMemoryItem(itemId: string): Promise<SemanticMemoryAdminDetail> {
     return apiRequest(`/admin/memory/${itemId}`);
+  },
+  async getShadowMemoryCandidates(status: 'needs_review' | 'conflict' | 'resolved' | 'rejected' = 'needs_review'): Promise<ShadowMemoryCandidate[]> {
+    return apiRequest(`/admin/memory/staging/candidates?status=${status}`);
+  },
+  async approveShadowMemoryCandidate(id: string, body: { reason?: string; scope?: 'global' | 'project'; project_id?: string; promote_to_company?: boolean; content?: Record<string, unknown> } = {}): Promise<ShadowMemoryCandidate> {
+    return apiRequest(`/admin/memory/staging/candidates/${id}/approve`, { method: 'POST', body: JSON.stringify(body) });
+  },
+  async rejectShadowMemoryCandidate(id: string, reason?: string): Promise<ShadowMemoryCandidate> {
+    return apiRequest(`/admin/memory/staging/candidates/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
   },
   // Users
   async getUsers(
@@ -944,6 +968,46 @@ export const orchestrationApi = {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
+};
+
+export interface AgentRunListItem {
+  agent_execution_id: string;
+  run_id: string;
+  tenant_id?: string | null;
+  user_id?: string | null;
+  agent_slug?: string | null;
+  agent_id?: string | null;
+  agent_name?: string | null;
+  task_title?: string | null;
+  logging_level: 'error' | 'brief' | 'full' | string;
+  started_at: string;
+}
+
+export interface AgentRunDetail {
+  agent_execution_id: string;
+  run_id: string;
+  agent_id?: string | null;
+  agent_name?: string | null;
+  agent_slug?: string | null;
+  events: Array<{
+    id: string;
+    run_id: string;
+    sequence: number;
+    event_type: string;
+    occurred_at: string;
+    entity_type?: string | null;
+    entity_id?: string | null;
+    parent_entity_type?: string | null;
+    parent_entity_id?: string | null;
+    caused_by_event_id?: string | null;
+    duration_ms?: number | null;
+    payload: Record<string, unknown>;
+  }>;
+}
+
+export const agentRunsApi = {
+  list: (): Promise<AgentRunListItem[]> => apiRequest('/admin/agent-runs', { method: 'GET' }),
+  get: (id: string): Promise<AgentRunDetail> => apiRequest(`/admin/agent-runs/${encodeURIComponent(id)}`, { method: 'GET' }),
 };
 
 export const systemLLMRolesApi = {

@@ -136,15 +136,12 @@ async def unarchive_rag_document(
         
         await status_manager.unarchive_document(doc_uuid)
         await status_manager._update_aggregate_status(doc_uuid)
-        # Archiving deliberately removes provenance bindings. Re-extract from
-        # canonical text on restoration instead of reviving stale claims.
+        # Shadow study is rerun from canonical text on restoration. It creates
+        # reviewable candidates and never revives legacy published claims.
         await session.commit()
         if document.s3_key_processed and document.tenant_id:
-            from app.workers.tasks_rag_ingest.document_memory import extract_document_memory
-            extract_document_memory.delay(
-                {"source_id": str(document.id), "canonical_key": document.s3_key_processed},
-                str(document.tenant_id), True,
-            )
+            from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
+            shadow_study_rag_document.delay({"source_id": str(document.id)}, str(document.tenant_id))
         
         await event_publisher.publish_document_archived(
             doc_id=doc_uuid,

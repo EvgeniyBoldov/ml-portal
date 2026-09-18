@@ -13,9 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.models.rag import RAGDocument
+from app.models.document_memory_staging import DocumentMemorySnapshot, MemoryCandidateProjectBinding, MemoryConflictCase, MemoryConflictMember, MemoryExtractionCandidate
+from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService
 from app.models.rag_ingest import RAGStatus, Source
-from app.repositories.factory import AsyncRepositoryFactory
-from app.services.rag_status_manager import RAGStatusManager, StageStatus
 from app.services.semantic_memory_admin_service import (
     SemanticMemoryAdminService,
     SemanticMemoryListRow,
@@ -89,6 +89,37 @@ class SemanticMemoryExtractionStatusResponse(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
 
 
+class SemanticMemoryStagingOverviewResponse(BaseModel):
+    snapshots: dict[str, int] = Field(default_factory=dict)
+    candidates: dict[str, int] = Field(default_factory=dict)
+    project_bindings: dict[str, int] = Field(default_factory=dict)
+    glossary_meanings: dict[str, int] = Field(default_factory=dict)
+    conflicting_glossary_terms: int = 0
+
+
+class ShadowCandidateResponse(BaseModel):
+    id: UUID
+    snapshot_id: UUID
+    visibility_tenant_id: UUID | None
+    candidate_type: str
+    subject: str
+    content: dict[str, Any]
+    evidence_section_ids: list[str]
+    scope_candidate: str | None
+    resolution_status: str
+    extraction_confidence: float
+    project_ids: list[UUID] = Field(default_factory=list)
+    conflict_ids: list[UUID] = Field(default_factory=list)
+
+
+class ShadowCandidateDecisionRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=2000)
+    content: dict[str, Any] | None = None
+    scope: str | None = Field(default=None, pattern="^(global|project)$")
+    project_id: UUID | None = None
+    promote_to_company: bool = False
+
+
 def _item_response(row: SemanticMemoryListRow) -> SemanticMemoryItemResponse:
     item = row.item
     return SemanticMemoryItemResponse(
@@ -128,14 +159,85 @@ async def get_document_memory_extraction_status(
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
+    snapshot = (await db.execute(select(DocumentMemorySnapshot).where(
+        DocumentMemorySnapshot.document_id == document_id,
+    ).order_by(DocumentMemorySnapshot.updated_at.desc()).limit(1))).scalar_one_or_none()
     status = (await db.execute(select(RAGStatus).where(
         RAGStatus.doc_id == document_id, RAGStatus.node_type == "memory", RAGStatus.node_key == "extract",
     ))).scalar_one_or_none()
     return SemanticMemoryExtractionStatusResponse(
         document_id=document_id,
-        status=status.status if status is not None else "not_queued",
-        metrics=dict(status.metrics_json or {}) if status is not None else {},
+        status=snapshot.status if snapshot is not None else (status.status if status is not None else "not_queued"),
+        metrics=dict(snapshot.metrics or {}) if snapshot is not None else (dict(status.metrics_json or {}) if status is not None else {}),
     )
+
+
+@router.get("/staging/overview", response_model=SemanticMemoryStagingOverviewResponse)
+async def get_semantic_memory_staging_overview(
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """P0 diagnostics for the new claim/applicability model."""
+    overview = await SemanticMemoryAdminService(db).staging_overview()
+    return SemanticMemoryStagingOverviewResponse(
+        snapshots=overview.snapshots,
+        candidates=overview.candidates,
+        project_bindings=overview.project_bindings,
+        glossary_meanings=overview.glossary_meanings,
+        conflicting_glossary_terms=overview.conflicting_glossary_terms,
+    )
+
+
+@router.get("/staging/candidates", response_model=list[ShadowCandidateResponse])
+async def list_shadow_candidates(
+    status: str | None = Query(default=None, pattern="^(needs_review|conflict|resolved|rejected)$"),
+    tenant_id: UUID | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    stmt = select(MemoryExtractionCandidate).order_by(MemoryExtractionCandidate.updated_at.desc()).limit(limit)
+    if status:
+        stmt = stmt.where(MemoryExtractionCandidate.resolution_status == status)
+    if tenant_id:
+        stmt = stmt.where(MemoryExtractionCandidate.visibility_tenant_id == tenant_id)
+    rows = list((await db.execute(stmt)).scalars().all())
+    result: list[ShadowCandidateResponse] = []
+    for row in rows:
+        project_ids = list((await db.execute(select(MemoryCandidateProjectBinding.project_id).where(
+            MemoryCandidateProjectBinding.candidate_id == row.id,
+        ))).scalars().all())
+        conflict_ids = list((await db.execute(select(MemoryConflictMember.conflict_id).join(MemoryConflictCase, MemoryConflictCase.id == MemoryConflictMember.conflict_id).where(MemoryConflictMember.candidate_id == row.id, MemoryConflictCase.status == "open"))).scalars().all())
+        result.append(ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
+            candidate_type=row.candidate_type, subject=row.subject, content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),
+            scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence,
+            project_ids=project_ids, conflict_ids=conflict_ids))
+    return result
+
+
+@router.post("/staging/candidates/{candidate_id}/approve", response_model=ShadowCandidateResponse)
+async def approve_shadow_candidate(candidate_id: UUID, request: ShadowCandidateDecisionRequest, db: AsyncSession = Depends(db_session), user: UserCtx = Depends(require_admin)):
+    try:
+        row = await ShadowMemoryPublicationService(db).approve(candidate_id=candidate_id, actor_id=UUID(user.id), reason=request.reason,
+            content=request.content, scope=request.scope, project_id=request.project_id, promote_to_company=request.promote_to_company)
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback(); raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
+        candidate_type=row.candidate_type, subject=row.subject, content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),
+        scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence)
+
+
+@router.post("/staging/candidates/{candidate_id}/reject", response_model=ShadowCandidateResponse)
+async def reject_shadow_candidate(candidate_id: UUID, request: ShadowCandidateDecisionRequest, db: AsyncSession = Depends(db_session), user: UserCtx = Depends(require_admin)):
+    try:
+        row = await ShadowMemoryPublicationService(db).reject(candidate_id=candidate_id, actor_id=UUID(user.id), reason=request.reason)
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback(); raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
+        candidate_type=row.candidate_type, subject=row.subject, content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),
+        scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence)
 
 
 @router.get("/{item_id}", response_model=SemanticMemoryDetailResponse)
@@ -181,26 +283,17 @@ async def reextract_document_memory(
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Queue a source-backed re-extraction; semantic content is never edited inline."""
+    """Queue a shadow study; candidates remain outside runtime memory."""
     document = await db.get(RAGDocument, document_id)
     source = (await db.execute(select(Source).where(Source.source_id == document_id))).scalar_one_or_none()
     if document is None or source is None:
         raise HTTPException(status_code=404, detail="Document source not found")
-    enabled = bool((source.meta or {}).get("memory", {}).get("enabled"))
-    if document.status == "archived" or not document.s3_key_processed or not enabled:
-        raise HTTPException(status_code=409, detail="Document is not eligible for memory extraction")
-    status = (await db.execute(select(RAGStatus).where(
-        RAGStatus.doc_id == document_id, RAGStatus.node_type == "memory", RAGStatus.node_key == "extract",
-    ))).scalar_one_or_none()
-    if status is not None and status.status in {"queued", "processing"}:
-        return {"document_id": str(document_id), "status": "queued"}
+    if document.status == "archived" or not document.s3_key_processed:
+        raise HTTPException(status_code=409, detail="Document is not eligible for shadow study")
     tenant_id = source.tenant_id or document.tenant_id
     if tenant_id is None:
         raise HTTPException(status_code=409, detail="Document has no tenant execution context")
-    await RAGStatusManager(db, AsyncRepositoryFactory(db, tenant_id)).transition_stage(
-        document_id, "memory.extract", StageStatus.QUEUED,
-    )
     await db.commit()
-    from app.workers.tasks_rag_ingest.document_memory import extract_document_memory
-    extract_document_memory.delay({"source_id": str(document.id), "canonical_key": str(document.s3_key_processed)}, str(tenant_id), True)
+    from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
+    shadow_study_rag_document.delay({"source_id": str(document.id)}, str(tenant_id))
     return {"document_id": str(document_id), "status": "queued"}

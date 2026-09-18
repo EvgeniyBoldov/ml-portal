@@ -44,6 +44,18 @@ from .memory import FactObservation, FactStatus, MemoryClaim, MemoryItem, Memory
 from .project import Project
 from .glossary import GlossaryEntry, GlossaryObservation, GlossaryScope, GlossaryStatus
 from .knowledge_entity import KnowledgeEntity, KnowledgeEntitySource
+from .document_memory_staging import (
+    DocumentMemorySnapshot,
+    MemoryExtractionCandidate,
+    MemoryCandidateProjectBinding,
+    GlossaryTerm,
+    GlossaryMeaning,
+    GlossaryMeaningProjectBinding,
+    GlossaryMeaningSource,
+    MemoryConflictCase,
+    MemoryConflictMember,
+    MemoryCandidateDecision,
+)
 from .execution_limit import (
     ActorExecutionLimit,
     ActorExecutionLimitScope,
@@ -134,6 +146,16 @@ __all__ = [
     "GlossaryObservation",
     "KnowledgeEntity",
     "KnowledgeEntitySource",
+    "DocumentMemorySnapshot",
+    "MemoryExtractionCandidate",
+    "MemoryCandidateProjectBinding",
+    "GlossaryTerm",
+    "GlossaryMeaning",
+    "GlossaryMeaningProjectBinding",
+    "GlossaryMeaningSource",
+    "MemoryConflictCase",
+    "MemoryConflictMember",
+    "MemoryCandidateDecision",
     "GlossaryScope",
     "GlossaryStatus",
     "ExecutionLimit",

@@ -41,6 +41,8 @@ class TurnMemory:
     retrieved_facts: List[FactDTO] = field(default_factory=list)
     memory_bundle: MemoryBundle = field(default_factory=MemoryBundle)
     planner_memory_context: List[Dict[str, Any]] = field(default_factory=list)
+    # Deterministically resolved before preflight; never inferred by an LLM.
+    project_context: Dict[str, Any] = field(default_factory=dict)
     durable_snapshot: MemorySnapshot = field(default_factory=MemorySnapshot)
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
     fact_evidence: List[FactEvidence] = field(default_factory=list)

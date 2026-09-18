@@ -147,7 +147,7 @@ const AGENT_EXEC_FIELDS: FieldConfig[] = [
     description: 'Уровень детализации трейса запуска',
     options: [
       { value: 'none', label: 'None — не логировать' },
-      { value: 'errors', label: 'Errors — только ошибки' },
+      { value: 'error', label: 'Errors — только ошибки' },
       { value: 'brief', label: 'Brief — метаданные (по умолчанию)' },
       { value: 'full', label: 'Full — всё включая промты и ответы' },
     ],
