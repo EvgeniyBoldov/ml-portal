@@ -18,6 +18,7 @@ class RuntimeErrorCode(str, Enum):
     AGENT_WALL_TIME_EXCEEDED = "agent_wall_time_exceeded"
     AGENT_REQUIRED_OPERATION_CALL_MISSING = "agent_required_operation_call_missing"
     AGENT_MAX_TOOL_CALLS_EXCEEDED = "agent_max_tool_calls_exceeded"
+    AGENT_MAX_RETRIES_EXCEEDED = "agent_max_retries_exceeded"
     AGENT_NON_RETRYABLE_OPERATION_FAILURE = "agent_non_retryable_operation_failure"
     AGENT_NO_SUCCESSFUL_OPERATION_RESULT = "agent_no_successful_operation_result"
     AGENT_RUNTIME_EXCEPTION = "agent_runtime_exception"

@@ -199,6 +199,7 @@ export interface TraceExecutorResult {
   missingInputs?: unknown;
   needs?: unknown;
   artifacts?: unknown;
+  sources?: unknown;
   operations: { total: number; succeeded: number; failed: number };
 }
 
@@ -259,6 +260,7 @@ export interface TraceMemoryComponentResult {
   errorCode?: string;
   errorMessage?: string;
   decisionCounts: Record<string, number>;
+  durationMs?: number;
 }
 
 export interface TraceMemoryDecision {
@@ -277,12 +279,17 @@ export interface TraceMemoryContext {
   selectedProjects: number;
   context: TraceMemoryContextItem[];
   ambiguities: string[];
+  selectedGlossary: number;
+  selectedMemoryItems: number;
+  sourceCheckReasons: string[];
+  searchScope?: Record<string, unknown>;
 }
 
 export type TraceMemoryContextItem =
   | { type: 'fact'; scope: string; subject: string; value: string }
   | { type: 'project'; projectId?: string; key: string; name: string; matchedAliases: string[] }
-  | { type: 'glossary'; scope: string; term: string; description: string; aliases: string[] };
+  | { type: 'glossary'; scope: string; term: string; description: string; aliases: string[] }
+  | { type: 'knowledge'; scope: string; kind: string; subject: string; value: string; confidence?: number; sourceReferences: unknown[] };
 
 export interface TraceStage {
   entity: TraceEntity;
@@ -456,7 +463,7 @@ const iterationLabel = (type: string, number: number): string => {
 const executorKindFor = (slug: string): TraceExecutorKind => {
   if (slug === 'planner') return 'planner';
   if (slug === 'turn_preflight') return 'preflight';
-  if (slug === 'memory_preparation') return 'memory_selector';
+  if (slug === 'memory_preparation' || slug === 'memory_selector') return 'memory_selector';
   if (slug === 'fact_extractor') return 'fact_extractor';
   if (slug === 'fact_compactor') return 'fact_compactor';
   if (slug === 'synthesizer') return 'synthesizer';
@@ -500,7 +507,7 @@ export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[
       : target.executor.kind === 'synthesizer' ? (hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])
         : target.executor.kind === 'memory_selector' ? [tab('task', 'Задача'), ...(target.executor.memoryContext ? [tab('memory', 'Память')] : [])]
           : target.executor.kind === 'fact_extractor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Кандидаты')] : [])]
-            : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Решения')] : []), ...(target.executor.memoryResult?.decisions.some((item) => item.outcome === 'published') || target.executor.memoryResult?.facts.length ? [tab('published', 'Опубликовано')] : [])]
+              : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Решения')] : []), ...(target.executor.memoryResult?.decisions.some((item) => item.outcome === 'published') ? [tab('published', 'Опубликовано')] : [])]
               : [tab('task', 'Задача'), ...(hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])];
     return [tab('info', 'Инфо'), ...primary, ...executorSnapshotTabs(target.executor)];
   }
@@ -594,6 +601,7 @@ function memoryComponentResult(events: RuntimeJournalEvent[]): TraceMemoryCompon
     errorCode: asString(payload.error_code) || undefined,
     errorMessage: asString(payload.error_message) || undefined,
     decisionCounts: asRecord(payload.decision_counts) ? Object.fromEntries(Object.entries(asRecord(payload.decision_counts)!).flatMap(([key, value]) => typeof value === 'number' ? [[key, value]] : [])) : {},
+    durationMs: asNumber(payload.duration_ms),
   };
 }
 
@@ -602,7 +610,20 @@ function memoryContextFor(events: RuntimeJournalEvent[]): TraceMemoryContext | u
     event.event_type === 'status' && event.payload.stage === 'memory_context_prepared'
   ))?.payload;
   if (!payload) return undefined;
-  const context = Array.isArray(payload.memory_context) ? payload.memory_context.flatMap((item): TraceMemoryContextItem[] => {
+  const rawContext = payload.memory_context;
+  const rawRecord = asRecord(rawContext);
+  const arrayField = (key: string): unknown[] => Array.isArray(rawRecord?.[key]) ? rawRecord[key] as unknown[] : [];
+  const contextItems = Array.isArray(rawContext)
+    ? rawContext
+    : [
+        ...arrayField('durable_facts').map((item) => ({ ...(asRecord(item) ?? {}), type: 'fact' })),
+        ...arrayField('relevant_projects').map((item) => ({ ...(asRecord(item) ?? {}), type: 'project' })),
+        ...arrayField('resolved_terms').map((item) => ({ ...(asRecord(item) ?? {}), type: 'glossary' })),
+        ...['relevant_knowledge', 'applicable_rules', 'applicable_procedures', 'known_constraints'].flatMap((key) => (
+          arrayField(key).map((item) => ({ ...(asRecord(item) ?? {}), type: 'knowledge' }))
+        )),
+      ];
+  const context = contextItems.flatMap((item): TraceMemoryContextItem[] => {
     const record = asRecord(item);
     const type = asString(record?.type);
     if (type === 'fact') {
@@ -621,14 +642,24 @@ function memoryContextFor(events: RuntimeJournalEvent[]): TraceMemoryContext | u
       const description = asString(record?.description);
       return term && description ? [{ type: 'glossary', scope: asString(record?.scope) || 'global', term, description, aliases: stringArray(record?.aliases) }] : [];
     }
+    if (type === 'knowledge') {
+      const subject = asString(record?.subject);
+      const content = record?.content;
+      const value = asString(record?.value) || (content ? JSON.stringify(content) : '');
+      return subject && value ? [{ type: 'knowledge', scope: asString(record?.scope) || 'unknown', kind: asString(record?.kind) || 'knowledge', subject, value, confidence: asNumber(record?.confidence), sourceReferences: Array.isArray(record?.source_references) ? record.source_references : [] }] : [];
+    }
     return [];
-  }) : [];
+  });
   return {
     fallback: payload.fallback === true,
     selectedFacts: asNumber(payload.selected_facts) ?? 0,
     selectedProjects: asNumber(payload.selected_projects) ?? 0,
+    selectedGlossary: asNumber(payload.selected_glossary) ?? 0,
+    selectedMemoryItems: asNumber(payload.selected_memory_items) ?? 0,
     context,
-    ambiguities: stringArray(payload.ambiguities),
+    ambiguities: stringArray(payload.ambiguities ?? asRecord(rawContext)?.uncertainties),
+    sourceCheckReasons: stringArray(payload.source_check_reasons ?? asRecord(rawContext)?.rag_reasons),
+    searchScope: asRecord(payload.search_scope) ?? undefined,
   };
 }
 
@@ -1130,13 +1161,14 @@ function executorResultFor(
   const ended = [...executorEvents].reverse().find((event) => event.event_type === 'agent_end');
   const isSynthesizer = executorSlug === 'synthesizer';
   const final = isSynthesizer
-    ? state.eventIdsBySequence
-      .map((id) => state.eventsById[id])
-      .filter((event): event is RuntimeJournalEvent => Boolean(event))
-      .filter((event) => event.event_type === 'final_answer_marker'
-        && event.parent_entity_type === 'synthesis_run'
-        && event.parent_entity_id === entity.id)
-      .sort((left, right) => right.sequence - left.sequence)[0]
+    ? [...executorEvents].reverse().find((event) => event.event_type === 'final_answer_marker' || (event.event_type === 'status' && event.payload.stage === 'final_answer_marker'))
+      ?? state.eventIdsBySequence
+        .map((id) => state.eventsById[id])
+        .filter((event): event is RuntimeJournalEvent => Boolean(event))
+        .filter((event) => (event.event_type === 'final_answer_marker' || (event.event_type === 'status' && event.payload.stage === 'final_answer_marker'))
+          && event.parent_entity_type === 'synthesis_run'
+          && event.parent_entity_id === entity.id)
+        .sort((left, right) => right.sequence - left.sequence)[0]
     : undefined;
   const error = state.eventIdsBySequence
     .map((id) => state.eventsById[id])
@@ -1165,6 +1197,7 @@ function executorResultFor(
     missingInputs: endPayload.missing_inputs,
     needs: endPayload.needs,
     artifacts: endPayload.artifacts ?? endPayload.attachments ?? resultPayload.attachments ?? resultPayload.artifacts,
+    sources: resultPayload.sources,
     operations: { total: toolCalls.length, succeeded, failed },
   };
 }
@@ -1303,7 +1336,15 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     .filter((call): call is TraceCall => Boolean(call)));
   const limits = executorLimitsFor(latestPayload(eventsFor(state, entity), 'budget_snapshot'));
   const result = executorResultFor(state, entity, 'Синтезатор', 'synthesizer', calls);
-  const metrics = metricsFor(state, entity);
+  const baseMetrics = metricsFor(state, entity);
+  const metrics = {
+    ...baseMetrics,
+    calls: calls.length || baseMetrics.calls,
+    successfulCalls: calls.filter((call) => call.response && llmResponseStatus(call.response.payload) !== 'error').length || baseMetrics.successfulCalls,
+    failedCalls: calls.filter((call) => call.response && llmResponseStatus(call.response.payload) === 'error').length || baseMetrics.failedCalls,
+    tokens: calls.reduce((total, call) => total + (call.info.tokensTotal ?? 0), 0) || baseMetrics.tokens,
+    retries: calls.reduce((total, call) => total + (call.retryEvents?.length ?? 0), 0) || baseMetrics.retries,
+  };
   const executor: TraceExecutorRun = {
     entity,
     inspectorKey: `executor:${entity.key}`,
@@ -1669,7 +1710,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
       if (!start) return null;
       const isPreflight = entity.type === 'orchestrator' && asString(start.payload.role) === 'turn_preflight';
       const isMemory = entity.type === 'orchestrator' && asString(start.payload.role) === 'memory';
-      const isMemoryPreparation = entity.type === 'orchestrator' && asString(start.payload.role) === 'memory_preparation';
+      const isMemoryPreparation = entity.type === 'orchestrator' && ['memory_preparation', 'memory_recall'].includes(asString(start.payload.role));
       const isSynthesis = entity.type === 'synthesis_run';
       if (!isPreflight && !isMemory && !isMemoryPreparation && !isSynthesis) return null;
       const executorRuns = isSynthesis

@@ -47,16 +47,23 @@ export function FactsViewer({ result, mode }: { result: TraceMemoryComponentResu
   const decisions = result?.decisions.filter((item) => (
     mode === 'published' ? item.outcome === 'published' : mode === 'decisions' ? item.outcome !== 'published' : true
   )) ?? [];
-  const legacyFacts = mode === 'decisions' ? [] : result?.facts ?? [];
+  // Component result and decision journal answer different questions. Never
+  // hide the persisted result merely because a decision was recorded.
+  const legacyFacts = mode === 'published' ? [] : result?.facts ?? [];
   const emptyMessage = mode === 'published'
     ? 'Опубликованных изменений в этом запуске нет.'
     : isCompactor ? 'Решения этого запуска не записаны в журнал.' : 'Кандидаты не извлечены или не прошли проверку evidence.';
-  if (!legacyFacts.length && !decisions.length) return <InspectorEmptyState message={emptyMessage} />;
-  if (decisions.length) return <InspectorStack>
+  if (!result) return <InspectorEmptyState message={emptyMessage} />;
+  return <InspectorStack>
     <InspectorFieldGroup>
       <InspectorFieldRow label="Статус компонента"><InspectorStatus label={result?.status === 'ok' ? 'Завершён' : result?.status === 'degraded' ? 'Завершён с ограничениями' : result?.status ?? '—'} tone={result?.status === 'ok' ? 'success' : result?.status === 'failed' ? 'danger' : 'warn'} /></InspectorFieldRow>
+      {result ? <InspectorFieldRow label="Итоги"><InspectorScalar value={`Создано: ${result.insertedCount}; обновлено: ${result.updatedCount}; пропущено: ${result.skippedCount}`} /></InspectorFieldRow> : null}
+      {result?.durationMs !== undefined ? <InspectorFieldRow label="Длительность"><InspectorScalar value={`${result.durationMs} мс`} /></InspectorFieldRow> : null}
+      {result && Object.keys(result.decisionCounts).length ? <InspectorFieldRow label="Счётчики решений"><InspectorScalar value={Object.entries(result.decisionCounts).map(([key, value]) => `${key}: ${value}`).join(', ')} /></InspectorFieldRow> : null}
+      {result?.errorCode ? <InspectorFieldRow label="Код ошибки"><InspectorScalar value={result.errorCode} /></InspectorFieldRow> : null}
       {result?.errorMessage ? <InspectorFieldRow label="Сообщение"><InspectorScalar value={result.errorMessage} /></InspectorFieldRow> : null}
     </InspectorFieldGroup>
+    {!legacyFacts.length && !decisions.length ? <InspectorEmptyState message={emptyMessage} /> : null}
     {decisions.map((decision, index) => <InspectorSection key={`${decision.candidateIds.join(':')}:${index}`} title={`${mode === 'published' ? 'Изменение' : mode === 'candidates' ? 'Кандидат' : 'Решение'} ${index + 1}`}>
     <InspectorFieldGroup>
       <InspectorFieldRow label="Результат"><InspectorStatus label={outcomeLabel(decision.outcome)} tone={decision.outcome === 'published' || decision.outcome === 'accepted' ? 'success' : decision.outcome === 'rejected' || decision.outcome === 'conflict' ? 'warn' : 'neutral'} /></InspectorFieldRow>
@@ -64,21 +71,26 @@ export function FactsViewer({ result, mode }: { result: TraceMemoryComponentResu
       <InspectorFieldRow label="Причина"><InspectorScalar value={reasonLabel(decision.reasonCode)} /></InspectorFieldRow>
       {decision.fact ? <>
         <InspectorFieldRow label="Область"><InspectorScalar value={decision.fact.scope} /></InspectorFieldRow>
+        <InspectorFieldRow label="Тип"><InspectorScalar value={decision.fact.kind} /></InspectorFieldRow>
         <InspectorFieldRow label="Свойство"><InspectorScalar value={decision.fact.subject} /></InspectorFieldRow>
         <InspectorFieldRow label="Значение"><InspectorScalar value={decision.fact.value} /></InspectorFieldRow>
       </> : null}
       {decision.action ? <InspectorFieldRow label="Действие"><InspectorScalar value={actionLabel(decision.action)} /></InspectorFieldRow> : null}
+      {decision.candidateIds.length ? <InspectorFieldRow label="ID кандидатов"><InspectorScalar value={decision.candidateIds.join(', ')} /></InspectorFieldRow> : null}
       {decision.evidenceCount !== undefined ? <InspectorFieldRow label="Evidence"><InspectorScalar value={decision.evidenceCount} /></InspectorFieldRow> : null}
+      {decision.fact?.statusAfter ? <InspectorFieldRow label="Статус"><InspectorScalar value={`${statusLabel(decision.fact.statusBefore)} → ${statusLabel(decision.fact.statusAfter)}`} /></InspectorFieldRow> : null}
+      {decision.fact?.supportDelta !== undefined ? <InspectorFieldRow label="Подтверждения"><InspectorScalar value={`${decision.fact.supportDelta >= 0 ? '+' : ''}${decision.fact.supportDelta}${decision.fact.supportBefore !== undefined && decision.fact.supportAfter !== undefined ? `: ${decision.fact.supportBefore} → ${decision.fact.supportAfter}` : ''}`} /></InspectorFieldRow> : null}
     </InspectorFieldGroup>
-    </InspectorSection>)}</InspectorStack>;
-  return <InspectorStack>{legacyFacts.map((fact, index) => <InspectorSection key={`${fact.subject}:${fact.value}:${index}`} title={`${mode === 'published' ? 'Изменение' : isCompactor ? 'Решение' : 'Кандидат'} ${index + 1}`}>
+    </InspectorSection>)}
+  {legacyFacts.map((fact, index) => <InspectorSection key={`${fact.subject}:${fact.value}:${index}`} title={`${isCompactor ? 'Результат' : 'Кандидат'} ${index + 1}`}>
       <InspectorFieldGroup>
         <InspectorFieldRow label="Область"><InspectorScalar value={fact.scope} /></InspectorFieldRow>
+        <InspectorFieldRow label="Тип"><InspectorScalar value={fact.kind} /></InspectorFieldRow>
         <InspectorFieldRow label="Свойство"><InspectorScalar value={fact.subject} /></InspectorFieldRow>
         <InspectorFieldRow label="Значение"><InspectorScalar value={fact.value} /></InspectorFieldRow>
         <InspectorFieldRow label="Изменение"><InspectorScalar value={changeLabel(fact.changeType)} /></InspectorFieldRow>
         {fact.statusAfter ? <InspectorFieldRow label="Статус"><InspectorStatus label={fact.statusBefore ? `${statusLabel(fact.statusBefore)} → ${statusLabel(fact.statusAfter)}` : statusLabel(fact.statusAfter)} tone={fact.statusAfter === 'confirmed' ? 'success' : 'warn'} /></InspectorFieldRow> : null}
-        {fact.supportDelta !== undefined ? <InspectorFieldRow label="Подтверждения"><InspectorScalar value={fact.supportBefore !== undefined && fact.supportAfter !== undefined ? `+${fact.supportDelta}: ${fact.supportBefore} → ${fact.supportAfter}` : `+${fact.supportDelta}`} /></InspectorFieldRow> : null}
+        {fact.supportDelta !== undefined ? <InspectorFieldRow label="Подтверждения"><InspectorScalar value={fact.supportBefore !== undefined && fact.supportAfter !== undefined ? `${fact.supportDelta >= 0 ? '+' : ''}${fact.supportDelta}: ${fact.supportBefore} → ${fact.supportAfter}` : `${fact.supportDelta >= 0 ? '+' : ''}${fact.supportDelta}`} /></InspectorFieldRow> : null}
         {fact.compactionAction ? <InspectorFieldRow label="Решение"><InspectorScalar value={actionLabel(fact.compactionAction)} /></InspectorFieldRow> : null}
         {fact.decisionReason ? <InspectorFieldRow label="Причина"><InspectorScalar value={fact.decisionReason} /></InspectorFieldRow> : null}
         {fact.confidence !== undefined ? <InspectorFieldRow label="Уверенность"><InspectorScalar value={fact.confidence} /></InspectorFieldRow> : null}

@@ -214,7 +214,7 @@ export interface GlossaryCatalogEntry {
   entity_type: string;
   entity_id: string | null;
   project_id: string | null;
-  scope: 'global' | 'tenant' | 'user';
+  scope: 'global' | 'tenant' | 'user' | 'project';
   updated_at: string;
 }
 

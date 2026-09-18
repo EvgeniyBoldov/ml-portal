@@ -24,7 +24,6 @@ def test_constraints_prompt_hides_sandbox_notes_by_default():
             max_retries=1,
             streaming_enabled=True,
             citations_required=False,
-            allow_parallel_tool_calls=True,
         ),
         platform_config={},
         sandbox_overrides={"prompt": "x", "orchestration": {"a": 1}},
@@ -45,7 +44,6 @@ def test_constraints_prompt_includes_sandbox_notes_when_flag_enabled():
             max_retries=1,
             streaming_enabled=True,
             citations_required=False,
-            allow_parallel_tool_calls=True,
         ),
         platform_config={},
         sandbox_overrides={

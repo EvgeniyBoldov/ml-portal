@@ -115,6 +115,7 @@ class AgentVersionCreate(BaseModel):
     tags: Optional[List[str]] = Field(default=None, description="Version-specific tags")
     task_contracts: Optional[List[Dict[str, Any]]] = Field(default=None, description="Published named task contracts")
     supports_dynamic_contracts: Optional[bool] = Field(default=None, description="Allow compiler-validated dynamic contracts")
+    requires_fresh_retrieval: Optional[bool] = Field(default=None, description="Require a fresh tool retrieval for every task")
     # Meta
     notes: Optional[str] = None
     parent_version_id: Optional[UUID] = Field(default=None, description="Parent version ID for data inheritance")
@@ -136,6 +137,7 @@ class AgentVersionUpdate(BaseModel):
     tags: Optional[List[str]] = None
     task_contracts: Optional[List[Dict[str, Any]]] = None
     supports_dynamic_contracts: Optional[bool] = None
+    requires_fresh_retrieval: Optional[bool] = None
     # Meta
     notes: Optional[str] = None
 
@@ -160,6 +162,7 @@ class AgentVersionResponse(BaseModel):
     tags: Optional[List[str]] = None
     task_contracts: List[Dict[str, Any]] = Field(default_factory=list)
     supports_dynamic_contracts: bool = True
+    requires_fresh_retrieval: bool = False
     # Meta
     parent_version_id: Optional[UUID] = None
     notes: Optional[str] = None

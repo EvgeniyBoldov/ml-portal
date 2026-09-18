@@ -32,3 +32,25 @@ def test_runtime_turn_state_compact_view_is_serializable():
     assert payload["status"] == "completed"
     assert payload["final_answer"] == "ready"
     assert "memory_bundle" in payload
+
+
+def test_pending_confirmation_call_is_not_counted_as_consumed_tool_work():
+    state = _state()
+    state.record_tool_call(
+        tool="collection.file.delete", call_id="pending", arguments={"id": "1"},
+        agent_slug="agent", phase_id="task",
+    )
+
+    state.discard_pending_tool_call("pending")
+
+    assert state.used_tool_calls == 0
+    assert state.tool_ledger.entries == []
+
+
+def test_task_tool_budget_is_scoped_and_persists_across_attempts():
+    state = _state()
+    state.consume_task_tool_call("task-a")
+    state.consume_task_tool_call("task-a")
+
+    assert state.task_tool_calls_used("task-a") == 2
+    assert state.task_tool_calls_used("task-b") == 0

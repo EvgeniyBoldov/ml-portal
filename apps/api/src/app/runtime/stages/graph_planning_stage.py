@@ -1,6 +1,8 @@
 """Persisted graph planning stage used by the RuntimePipeline."""
 from __future__ import annotations
 
+import asyncio
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -157,37 +159,41 @@ class GraphPlanningStage:
                 ),
                 OrchestrationPhase.PLANNER,
             )
-        async for event in self._orchestrator.run(
-            plan_id=plan.id,
-            goal=plan.goal,
-            available_agents=available_agents,
-            available_artifacts=[
-                item.model_dump(mode="json")
-                for item in runtime_state.attachment_contexts
-                if item.ref.artifact_id not in runtime_state.deleted_artifact_ids
-            ],
-            max_steps=self._max_steps,
-            max_task_executions=(
-                task_attempts_limit
-                if isinstance(task_attempts_limit, int) and task_attempts_limit > 0
-                else None
-            ),
-            planner_kwargs=planner_kwargs,
-        ):
-            runtime_event = event.to_runtime_event()
-            if runtime_event.type == RuntimeEventType.WAITING_INPUT:
-                pause_question = str(runtime_event.data.get("question") or "").strip() or None
-            elif runtime_event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
-                pause_message = str(
-                    runtime_event.data.get("message") or runtime_event.data.get("summary") or ""
-                ).strip() or None
-                confirmation_context = dict(runtime_event.data or {})
-            phase = event.get("phase")
-            try:
-                event_phase = OrchestrationPhase(str(phase)) if phase else OrchestrationPhase.PLANNER
-            except ValueError:
-                event_phase = OrchestrationPhase.PLANNER
-            yield PhasedEvent(runtime_event, event_phase)
+        try:
+            async for event in self._orchestrator.run(
+                plan_id=plan.id,
+                goal=plan.goal,
+                available_agents=available_agents,
+                available_artifacts=[
+                    item.model_dump(mode="json")
+                    for item in runtime_state.attachment_contexts
+                    if item.ref.artifact_id not in runtime_state.deleted_artifact_ids
+                ],
+                max_steps=self._max_steps,
+                max_task_executions=(
+                    task_attempts_limit
+                    if isinstance(task_attempts_limit, int) and task_attempts_limit > 0
+                    else None
+                ),
+                planner_kwargs=planner_kwargs,
+            ):
+                runtime_event = event.to_runtime_event()
+                if runtime_event.type == RuntimeEventType.WAITING_INPUT:
+                    pause_question = str(runtime_event.data.get("question") or "").strip() or None
+                elif runtime_event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
+                    pause_message = str(
+                        runtime_event.data.get("message") or runtime_event.data.get("summary") or ""
+                    ).strip() or None
+                    confirmation_context = dict(runtime_event.data or {})
+                phase = event.get("phase")
+                try:
+                    event_phase = OrchestrationPhase(str(phase)) if phase else OrchestrationPhase.PLANNER
+                except ValueError:
+                    event_phase = OrchestrationPhase.PLANNER
+                yield PhasedEvent(runtime_event, event_phase)
+        except asyncio.CancelledError:
+            await self._store.cancel_plan(plan.id, reason="orchestrator_cancelled")
+            raise
         snapshot = await self._store.snapshot(plan.id)
         status = str(snapshot["status"])
         if status == "completed":

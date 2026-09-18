@@ -210,7 +210,10 @@ class Synthesizer:
         if role_cfg.get("temperature") is not None:
             params["temperature"] = role_cfg["temperature"]
 
-        yield RuntimeEvent.status("synthesizing")
+        yield RuntimeEvent.status(
+            "synthesizing", entity_type="synthesis_run", entity_id=synthesis_run_id,
+            parent_entity_type="run", parent_entity_id=str(run_id),
+        )
         messages = self._input_builder.build(
             synthesis_context=synthesis_context,
             system_prompt=system_prompt,
@@ -441,11 +444,19 @@ class Synthesizer:
         yield RuntimeEvent.status(
             "final_answer_marker",
             producer="synthesizer_llm",
-            parent_entity_type="synthesis_run",
-            parent_entity_id=synthesis_run_id,
+            entity_type="synthesis_run",
+            entity_id=synthesis_run_id,
+            parent_entity_type="run",
+            parent_entity_id=str(run_id),
             content=full,
+            sources=sources,
+            attachments=attachments,
         )
-        yield RuntimeEvent.final(full, sources=sources, run_id=str(run_id), attachments=attachments)
+        yield RuntimeEvent.final(
+            full, sources=sources, run_id=str(run_id), attachments=attachments,
+            entity_type="synthesis_run", entity_id=synthesis_run_id,
+            parent_entity_type="run", parent_entity_id=str(run_id),
+        )
         if budget_registry is not None:
             final_payload = budget_registry.emit_snapshot(synthesis_run_id, reason="finalize") or {}
             yield RuntimeEvent.budget_snapshot(

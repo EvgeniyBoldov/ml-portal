@@ -55,7 +55,7 @@ async def get_glossary_overview(
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     query: str | None = Query(default=None, max_length=200),
-    scope: str | None = Query(default=None, pattern="^(global|tenant|user)$"),
+    scope: str | None = Query(default=None, pattern="^(global|tenant|user|project)$"),
     entity_type: str | None = Query(default=None, max_length=100),
     project_id: UUID | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=200),

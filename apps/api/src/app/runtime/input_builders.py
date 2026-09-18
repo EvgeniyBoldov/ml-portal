@@ -23,10 +23,18 @@ class PlannerInputBuilder:
                 "tags": list(item.get("tags") or []),
                 "provides_keys": list(item.get("provides_keys") or []),
                 "task_contracts": [
-                    {"contract_id": contract.get("contract_id"), "version": contract.get("version"), "description": contract.get("description")}
+                    {
+                        "contract_id": contract.get("contract_id"),
+                        "version": contract.get("version"),
+                        "description": contract.get("description"),
+                        # A registered contract is usable by the planner only
+                        # when it can construct its typed input object.
+                        "input_schema": contract.get("input_schema"),
+                    }
                     for contract in item.get("task_contracts") or [] if isinstance(contract, dict)
                 ],
                 "supports_dynamic_contracts": bool(item.get("supports_dynamic_contracts", True)),
+                "requires_fresh_retrieval": bool(item.get("requires_fresh_retrieval", False)),
             })
         payload = {
             "goal": context.goal,

@@ -15,12 +15,13 @@ from app.core.security import verify_password, hash_password
 from app.core.security import UserCtx
 from app.core.crypto import get_crypto_service
 from app.models.user import Users
+from app.models.tenant import UserTenants
 from app.models.api_token import ApiToken
 from app.models.credential_set import Credential
 from app.models.tool_instance import ToolInstance
 from app.models.tool import Tool
 from app.runtime.memory.fact_store import FactStore
-from app.models.memory import Fact
+from app.models.memory import Fact, FactScope
 from app.runtime.memory.service import MemoryService
 from app.runtime.memory.fact_reconciler import FactReconciler
 from sqlalchemy import select
@@ -92,6 +93,10 @@ class UserFactResponse(BaseModel):
     source: str
     observed_at: datetime
     created_at: datetime
+    owner_type: str = "user"
+    owner_id: str | None = None
+    tenant_id: str | None = None
+    can_edit: bool = True
 
 
 class FactsDeleteRequest(BaseModel):
@@ -248,18 +253,44 @@ async def list_user_facts(
 
     session_factory = get_session_factory()
     async with session_factory() as session:
-        rows = await MemoryService(fact_store=FactStore(session)).list_user_visible(
+        memory = MemoryService(fact_store=FactStore(session))
+        rows = await memory.list_user_visible(
             user_id=user_id, limit=safe_limit, offset=safe_offset
         )
+        # Tenant facts are visible context to every tenant member. They are
+        # returned alongside personal facts with an explicit capability flag;
+        # the browser must never infer write access from the fact scope.
+        tenant_ids = list((await session.execute(
+            select(UserTenants.tenant_id).where(UserTenants.user_id == user_id)
+        )).scalars().all())
+        tenant_rows = []
+        for tenant_id in tenant_ids:
+            tenant_rows.extend(await FactStore(session).retrieve(
+                scopes=[FactScope.TENANT], owner_type="tenant", owner_id=tenant_id, limit=safe_limit,
+            ))
 
-    return [
+    personal = [
         UserFactResponse(
             id=str(row.id), scope=row.scope.value, subject=row.subject, value=row.value,
             confidence=row.confidence, source=row.source.value,
-            observed_at=row.observed_at, created_at=row.observed_at,
+            observed_at=row.observed_at, created_at=row.created_at or row.observed_at,
+            owner_type="user", owner_id=str(user_id), tenant_id=str(row.tenant_id) if row.tenant_id else None,
+            can_edit=True,
         )
         for row in rows
     ]
+    tenant = [
+        UserFactResponse(
+            id=str(row.id), scope=row.scope.value, subject=row.subject, value=row.value,
+            confidence=row.confidence, source=row.source.value,
+            observed_at=row.observed_at, created_at=row.created_at or row.observed_at,
+            owner_type="tenant", owner_id=str(row.owner_id) if row.owner_id else None,
+            tenant_id=str(row.tenant_id) if row.tenant_id else None,
+            can_edit=current_user.role == "admin",
+        )
+        for row in tenant_rows
+    ]
+    return [*personal, *tenant]
 
 
 @router.delete("/facts", response_model=FactsDeleteResponse)

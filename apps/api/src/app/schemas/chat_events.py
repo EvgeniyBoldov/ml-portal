@@ -56,6 +56,10 @@ class PausePayload(BaseModel):
 
 class FinalPayload(BaseModel):
     message_id: str
+    # FINAL is authoritative. Delta is an optional rendering optimization,
+    # therefore a client reconnecting or a non-streaming provider must still
+    # receive the complete answer here.
+    content: str = ""
     created_at: Optional[str] = None
     sources: list[dict[str, Any]] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)

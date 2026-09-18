@@ -41,6 +41,7 @@ class FactDTO:
     observed_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+    created_at: Optional[datetime] = None
 
     # Lifecycle — populated by the store when reading back, or left
     # defaulted on construction for writes.

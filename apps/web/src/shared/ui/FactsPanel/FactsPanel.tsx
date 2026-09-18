@@ -50,14 +50,18 @@ export function FactsPanel({ mode, ownerId }: FactsPanelProps) {
   const invalidate = () => queryClient.invalidateQueries({ queryKey });
   const mutation = useMutation({
     mutationFn: (input: FactInput) => editing
-      ? (isProfile ? factsApi.updateProfile(editing.id, input) : factsApi.updateAdmin(owner, ownerId!, editing.id, input))
+      ? (isProfile && editing.owner_type === 'tenant' && editing.owner_id
+        ? factsApi.updateAdmin('tenant', editing.owner_id, editing.id, input)
+        : isProfile ? factsApi.updateProfile(editing.id, input) : factsApi.updateAdmin(owner, ownerId!, editing.id, input))
       : (isProfile ? factsApi.createProfile(input) : factsApi.createAdmin(owner, ownerId!, input)),
     onSuccess: () => { invalidate(); setEditing(null); setCreating(false); showSuccess(editing ? 'Факт обновлён' : 'Факт добавлен'); },
     onError: (error: Error) => showError(error.message || 'Не удалось сохранить факт'),
   });
   const deleteMutation = useMutation({
     mutationFn: async (fact: Fact): Promise<void> => {
-      if (isProfile) {
+      if (isProfile && fact.owner_type === 'tenant' && fact.owner_id) {
+        await factsApi.deleteAdmin('tenant', fact.owner_id, fact.id);
+      } else if (isProfile) {
         await factsApi.deleteProfile([fact.id]);
       } else {
         await factsApi.deleteAdmin(owner, ownerId!, fact.id);
@@ -72,11 +76,11 @@ export function FactsPanel({ mode, ownerId }: FactsPanelProps) {
     { key: 'scope', label: 'SCOPE' },
     { key: 'source', label: 'ИСТОЧНИК' },
     { key: 'observed_at', label: 'ОБНОВЛЕНО', render: (fact) => new Date(fact.observed_at).toLocaleDateString('ru-RU') },
-    { key: 'actions', label: '', render: (fact) => <div className={styles.actions}><Button size="sm" variant="outline" onClick={() => setEditing(fact)}>Изменить</Button><Button size="sm" variant="danger" onClick={() => setDeleting(fact)}>Удалить</Button></div> },
+    { key: 'actions', label: '', render: (fact) => fact.can_edit === false ? <span className={styles.value}>Только просмотр</span> : <div className={styles.actions}><Button size="sm" variant="outline" onClick={() => setEditing(fact)}>Изменить</Button><Button size="sm" variant="danger" onClick={() => setDeleting(fact)}>Удалить</Button></div> },
   ];
   return (
     <div className={styles.container}>
-      <div className={styles.header}><p>Подтверждённые факты памяти</p><Button onClick={() => setCreating(true)}>Добавить факт</Button></div>
+      <div className={styles.header}><p>{isProfile ? 'Личные и доступные tenant-факты памяти' : 'Подтверждённые факты памяти'}</p><Button onClick={() => setCreating(true)}>Добавить факт</Button></div>
       <DataTable columns={columns} data={data} keyField="id" loading={isLoading} emptyText="Факты пока отсутствуют" />
       <Modal open={creating || Boolean(editing)} title={editing ? 'Изменить факт' : 'Добавить факт'} onClose={() => { setCreating(false); setEditing(null); }}>
         <FactForm initial={editing ?? undefined} onSubmit={(input) => mutation.mutate(input)} saving={mutation.isPending} />

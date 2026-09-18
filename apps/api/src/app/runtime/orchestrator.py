@@ -252,6 +252,25 @@ class GraphOrchestrator:
         self.logging_level = logging_level
         self.reducer = TaskAttemptResultReducer()
 
+    async def _execute_with_heartbeat(
+        self, *, plan_id: UUID, task_id: str, heartbeat_seconds: float, **kwargs: Any,
+    ) -> TaskExecutionReceipt:
+        """Keep a claimed task live while an agent waits on an external call."""
+        execution_task = asyncio.create_task(self.executor.execute_attempt(**kwargs))
+        heartbeat = getattr(self.store, "heartbeat_task", None)
+        try:
+            while True:
+                done, _ = await asyncio.wait({execution_task}, timeout=heartbeat_seconds)
+                if done:
+                    return execution_task.result()
+                if heartbeat is not None:
+                    await heartbeat(plan_id, task_id)
+        except BaseException:
+            if not execution_task.done():
+                execution_task.cancel()
+                await asyncio.gather(execution_task, return_exceptions=True)
+            raise
+
     @staticmethod
     def _iteration_graph_events(
         *, plan_id: UUID, run_id: str, iteration_id: str,
@@ -315,9 +334,7 @@ class GraphOrchestrator:
         ledger_size = len(json.dumps(ledger, ensure_ascii=False, default=str))
         max_ledger_chars = int(planner_kwargs.get("planner_ledger_max_chars") or 160_000)
         if ledger_size > max_ledger_chars:
-            raise PlanValidationError(
-                f"planner execution ledger exceeds hard limit ({ledger_size}>{max_ledger_chars})"
-            )
+            ledger = self._compact_ledger(ledger, max_ledger_chars)
         return PlanRequest(
             context=PlannerContext(goal=goal, trigger=trigger, execution_ledger=ledger,
                                    available_agents=available_agents, available_artifacts=available_artifacts,
@@ -326,6 +343,43 @@ class GraphOrchestrator:
             plan_id=plan_id,
             run_id=UUID(str(snapshot["root_run_id"])),
         )
+
+    @staticmethod
+    def _compact_ledger(ledger: Dict[str, Any], max_chars: int) -> Dict[str, Any]:
+        """Preserve graph state while bounding model context deterministically."""
+        def compact(value: Any, *, depth: int = 0) -> Any:
+            if isinstance(value, str):
+                return value if len(value) <= 1_024 else value[:1_024] + "…[truncated]"
+            if isinstance(value, list):
+                items = [compact(item, depth=depth + 1) for item in value[:40]]
+                if len(value) > 40:
+                    items.append({"_truncated_items": len(value) - 40})
+                return items
+            if isinstance(value, dict):
+                if depth > 8:
+                    return {"_truncated": "nested value omitted"}
+                return {str(key): compact(item, depth=depth + 1) for key, item in list(value.items())[:80]}
+            return value
+
+        bounded = compact(ledger)
+        # A few huge result values can still exceed the global limit.  Keep
+        # their state/description but externalize their payload from planner
+        # context instead of failing the whole plan.
+        for task in bounded.get("tasks", []):
+            if len(json.dumps(bounded, ensure_ascii=False, default=str)) <= max_chars:
+                break
+            result = task.get("result") if isinstance(task, dict) else None
+            if isinstance(result, dict) and result.get("outputs"):
+                result["outputs"] = {"_truncated": "output retained in task journal"}
+        if len(json.dumps(bounded, ensure_ascii=False, default=str)) > max_chars:
+            bounded["tasks"] = [
+                {key: task.get(key) for key in ("task_id", "iteration_id", "status", "attempts", "result")}
+                for task in bounded.get("tasks", [])
+            ]
+            for task in bounded["tasks"]:
+                if isinstance(task.get("result"), dict):
+                    task["result"]["outputs"] = {"_truncated": "see task journal"}
+        return bounded
 
     @staticmethod
     def _planner_ledger(snapshot: Dict[str, Any]) -> Dict[str, Any]:
@@ -366,11 +420,9 @@ class GraphOrchestrator:
         compiled_tasks = []
         for task in proposal.tasks:
             agent = agent_catalog[task.executor]
-            # A task delegated to a data-owning agent must not be fulfilled
-            # from model memory. The executor may still answer from explicit
-            # dependency inputs when it uses a non-data-owning agent.
-            data_agent_tags = {str(tag).strip().lower() for tag in agent.get("tags") or []}
-            requires_retrieval = bool(data_agent_tags & {"jira", "dcbox", "backup", "base_agent"})
+            # This is a published, versioned execution capability rather
+            # than a runtime-maintained list of agent names or tags.
+            requires_retrieval = bool(agent.get("requires_fresh_retrieval", False))
             if task.contract.mode == TaskContractMode.DYNAMIC:
                 if not bool(agent.get("supports_dynamic_contracts", True)):
                     raise PlanValidationError(f"agent {task.executor} does not support dynamic task contracts")
@@ -400,6 +452,7 @@ class GraphOrchestrator:
                     "contract_id": contract.contract_id,
                     "version": contract.version,
                     "contract_hash": contract.fingerprint(),
+                    "input_schema": contract.input_schema,
                 },
             }))
         proposal = proposal.model_copy(update={"tasks": compiled_tasks})
@@ -519,6 +572,15 @@ class GraphOrchestrator:
             target = (binding.consumer_task_id, binding.consumer_input_key)
             if target in bound_inputs or binding.consumer_input_key in consumer.inputs:
                 raise PlanValidationError("binding writes a duplicate consumer input")
+            # ``task.inputs`` was validated before runtime injects bindings.
+            # Reject an impossible target early; the concrete merged value is
+            # validated again by PlanStore at the handoff boundary.
+            if consumer.contract.mode == TaskContractMode.REGISTERED:
+                input_schema = consumer.contract.input_schema or {}
+                properties = input_schema.get("properties") if isinstance(input_schema, dict) else None
+                additional = input_schema.get("additionalProperties", True) if isinstance(input_schema, dict) else True
+                if isinstance(properties, dict) and binding.consumer_input_key not in properties and additional is False:
+                    raise PlanValidationError("binding writes an input forbidden by the consumer contract")
             bound_inputs.add(target)
         return proposal
 
@@ -564,11 +626,23 @@ class GraphOrchestrator:
         artifacts = list(available_artifacts or [])
         async def fail(code: str, exc: BaseException | str) -> None:
             await self.store.mark_failed(plan_id, code, str(exc))
+        runtime_limits = planner_kwargs.get("runtime_limits") if isinstance(planner_kwargs.get("runtime_limits"), dict) else {}
+        wall_time_ms = runtime_limits.get("wall_time_ms")
+        try:
+            lease_seconds = max(300, int(wall_time_ms or 0) // 1000 + 60)
+        except (TypeError, ValueError):
+            lease_seconds = 360
         await self.store.recover_stale_claims(
             plan_id,
-            stale_before=datetime.now(timezone.utc) - timedelta(minutes=5),
+            stale_before=datetime.now(timezone.utc) - timedelta(seconds=lease_seconds),
         )
         snapshot = await self.store.snapshot(plan_id)
+        if snapshot.get("status") not in {"draft", "active"}:
+            # A terminal plan is immutable.  In particular, a failed initial
+            # planner call leaves no iteration, which previously made a later
+            # delivery invoke the planner again and resurrect the plan.
+            yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status=str(snapshot.get("status") or "failed"))
+            return
         if not snapshot.get("iterations"):
             planner_parent = str(planner_kwargs.get("planner_budget_entity_id") or snapshot["root_run_id"])
             trace_iteration_id = planner_iteration_id(str(snapshot["root_run_id"]), 1)
@@ -588,6 +662,12 @@ class GraphOrchestrator:
                 ):
                     yield graph_event
             except Exception as exc:
+                # Another delivery may have won the initial apply race.  It
+                # is not a planner failure and must never fail its live plan.
+                current = await self.store.snapshot(plan_id)
+                if isinstance(exc, PlanValidationError) and current.get("iterations"):
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_retry", reason="claimed_by_other_worker")
+                    return
                 yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
                     iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1, status="failed",
                 ))
@@ -596,7 +676,8 @@ class GraphOrchestrator:
                 return
         # ``max_steps`` is the iteration budget. Task count is deliberately
         # independent: a large valid iteration must not be mistaken for a loop.
-        for _ in range(max(80, max_steps * 100)):
+        scheduler_action_limit = max(1, int(planner_kwargs.get("scheduler_action_limit") or max_steps * 100))
+        for _ in range(scheduler_action_limit):
             before_decision = await self.store.snapshot(plan_id)
             decision = await self.store.next_decision(plan_id)
             after_decision = await self.store.snapshot(plan_id)
@@ -665,7 +746,11 @@ class GraphOrchestrator:
                         str(current_snapshot["root_run_id"]), str(decision.iteration_id),
                     ),
                 ))
-                await self.store.claim_checkpoint(plan_id, decision.kind)
+                try:
+                    await self.store.claim_checkpoint(plan_id, decision.kind)
+                except PlanValidationError:
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_retry", reason="claimed_by_other_worker")
+                    return
                 next_iteration_number = len(current_snapshot.get("iterations", [])) + 1
                 planner_parent = str(planner_kwargs.get("planner_budget_entity_id") or current_snapshot["root_run_id"])
                 trace_iteration_id = planner_iteration_id(str(current_snapshot["root_run_id"]), next_iteration_number)
@@ -717,7 +802,11 @@ class GraphOrchestrator:
                     await fail("synthesizer_missing", "terminal synthesis executor is not configured")
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesizer_missing")
                     return
-                iteration = await self.store.claim_checkpoint(plan_id, decision.kind)
+                try:
+                    iteration = await self.store.claim_checkpoint(plan_id, decision.kind)
+                except PlanValidationError:
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_retry", reason="claimed_by_other_worker")
+                    return
                 try:
                     context_limit = int(planner_kwargs.get("synthesis_context_max_chars") or 120_000)
                     runtime_state = planner_kwargs.get("runtime_state")
@@ -759,7 +848,11 @@ class GraphOrchestrator:
                         await fail("task_execution_limit_exceeded", "Task execution limit exceeded")
                         yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="task_execution_limit_exceeded")
                         return
-                task = await self.store.claim_task(plan_id, decision.task_id)
+                try:
+                    task = await self.store.claim_task(plan_id, decision.task_id)
+                except PlanValidationError:
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_retry", reason="claimed_by_other_worker")
+                    return
                 task_id = task.task_id if hasattr(task, "task_id") else task["task_id"]
                 attempt = task.attempts if hasattr(task, "attempts") else task["attempts"]
                 iteration_id = str(task.iteration_id if hasattr(task, "iteration_id") else task["iteration_id"])
@@ -802,7 +895,10 @@ class GraphOrchestrator:
                 try:
                     request = TaskRequest.model_validate(await self.store.task_request(plan_id, task_id))
                     request = request.model_copy(update={"memory_context": list(planner_kwargs.get("planner_memory_context") or [])})
-                    execution = await self.executor.execute_attempt(
+                    execution = await self._execute_with_heartbeat(
+                        plan_id=plan_id,
+                        task_id=task_id,
+                        heartbeat_seconds=max(5.0, min(30.0, lease_seconds / 3)),
                         request=request,
                         lifecycle_agent_execution_id=execution_id,
                         runtime_log_parent={"entity_type": "step", "entity_id": current_step_id},

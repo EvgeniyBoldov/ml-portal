@@ -24,12 +24,21 @@ def test_graph_planner_input_builder_uses_only_iteration_contract():
     payload = PlannerInputBuilder().build_graph_request(_request())
 
     assert set(payload) == {
-        "goal", "trigger", "execution_ledger", "available_artifacts", "memory_context",
+        "goal", "trigger", "execution_ledger", "available_artifacts", "memory_context", "task_brief",
         "available_agents", "iteration_contract",
     }
     assert payload["trigger"] == "task_outcome"
     assert payload["execution_ledger"]["tasks"][0]["task_id"] == "inspect"
     assert payload["iteration_contract"]["terminal"] == ["planner", "synthesis"]
+
+
+def test_graph_planner_input_builder_exposes_fresh_retrieval_capability():
+    payload = PlannerInputBuilder().build_graph_request(_request(available_agents=[{
+        "slug": "live-system", "description": "Reads the live system",
+        "requires_fresh_retrieval": True,
+    }]))
+
+    assert payload["available_agents"][0]["requires_fresh_retrieval"] is True
 
 
 def test_graph_planner_input_builder_normalizes_artifact_contexts():

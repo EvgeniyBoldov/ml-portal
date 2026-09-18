@@ -6,7 +6,7 @@ Flow:
 2. Non-streaming LLM call
 3. Parse tool_calls from response (protocol.py)
 4. If tool_calls → execute each → add results to context → goto 2
-5. If no tool_calls → streaming synthesis with tool data → final
+5. If no tool_calls → emit the agent's terminal task declaration
 """
 from __future__ import annotations
 
@@ -57,7 +57,8 @@ class AgentLoopState:
     sources: List[dict] = field(default_factory=list)
     tool_calls_total: int = 0
     steps_without_successful_tool_result: int = 0
-    retry_count: int = 0
+    llm_retry_count: int = 0
+    invalid_tool_retry_count: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
     tokens_total: int = 0
@@ -71,6 +72,7 @@ from app.agents.protocol import (
     build_tool_result_messages,
     build_tool_results_message,
     build_tools_payload,
+    NativeToolCallProtocolError,
     parse_llm_response,
     parse_native_tool_calls,
 )
@@ -93,6 +95,7 @@ from app.runtime.error_payloads import build_debug_payload
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.adapters.interfaces.llm import LLMProviderError
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
+from app.runtime.orchestrator_contracts import parse_task_completion_declaration
 from app.services.platform_settings_defaults import (
     PLATFORM_INTENT_MESSAGES,
     PLATFORM_REQUIRED_OPERATION_RETRY_INSTRUCTION,
@@ -148,9 +151,11 @@ def _build_budget_snapshot_payload(
                 "remaining": max(0, policy.max_tool_calls_total - loop_state.tool_calls_total),
             },
             "retries": {
-                "used": loop_state.retry_count,
-                "limit": policy.max_retries,
-                "remaining": max(0, policy.max_retries - loop_state.retry_count),
+                "llm_transport_used": loop_state.llm_retry_count,
+                "invalid_tool_used": loop_state.invalid_tool_retry_count,
+                "limit_per_category": policy.max_retries,
+                "remaining_llm_transport": max(0, policy.max_retries - loop_state.llm_retry_count),
+                "remaining_invalid_tool": max(0, policy.max_retries - loop_state.invalid_tool_retry_count),
             },
             "tokens_in": {
                 "used": loop_state.tokens_in,
@@ -250,7 +255,6 @@ class AgentToolRuntime(BaseRuntime):
                 "max_tokens": gen.max_tokens,
                 "streaming_enabled": policy.streaming_enabled,
                 "citations_required": policy.citations_required,
-                "allow_parallel_tool_calls": policy.allow_parallel_tool_calls,
                 "available_operations": serialize_published_operations(available_operations),
                 "available_collections": serialize_published_collections(
                     exec_request.resolved_data_instances,
@@ -348,7 +352,9 @@ class AgentToolRuntime(BaseRuntime):
         llm_messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ] + list(messages)
-        loop_state = AgentLoopState()
+        loop_state = AgentLoopState(
+            tool_calls_total=max(0, int(ctx.extra.get("runtime_task_tool_calls_used") or 0)),
+        )
         loop_state.start_time = time.time()  # Start clock after all setup is complete
         max_steps_without_success = int(
             platform_config.get("max_steps_without_successful_tool_result")
@@ -367,7 +373,6 @@ class AgentToolRuntime(BaseRuntime):
         }
         tool_ledger = ctx.extra.get("runtime_tool_ledger")
         reuse_enabled = bool(ctx.extra.get("runtime_tool_reuse_enabled", True))
-        seen_native_tool_calls: set[tuple[str, str]] = set()
         # A later agent step after tool execution is a new decision and
         # receives a new call id.  All retries before that action reuse the
         # same call id so one user-visible request remains one journal entity.
@@ -412,6 +417,12 @@ class AgentToolRuntime(BaseRuntime):
                     )
                     await run_session.finish("failed", "Wall time limit exceeded")
                     return
+                effective_llm_timeout_s = self._effective_tool_timeout_s(
+                    configured_timeout_ms=(
+                        int(gen.timeout_s * 1000) if gen.timeout_s is not None else None
+                    ),
+                    remaining_wall_time_ms=global_remaining,
+                )
 
                 step_budget_snapshot = _build_budget_snapshot_payload(
                     owner_id=budget_owner_id,
@@ -435,7 +446,7 @@ class AgentToolRuntime(BaseRuntime):
                     model=gen.model,
                     temperature=gen.temperature,
                     max_tokens=effective_max_tokens,
-                    timeout_s=gen.timeout_s,
+                    timeout_s=effective_llm_timeout_s,
                     messages=llm_messages,
                     parent_entity_type="agent_execution",
                     parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
@@ -461,7 +472,7 @@ class AgentToolRuntime(BaseRuntime):
                             max_tokens=effective_max_tokens,
                             tools=tools_payload,
                             force_tool_choice=loop_state.force_tool_choice,
-                            timeout_s=gen.timeout_s,
+                            timeout_s=effective_llm_timeout_s,
                             # A provider cannot reliably choose between a native
                             # tool call and a forced JSON-schema answer.  The
                             # terminal declaration is validated by the task
@@ -477,7 +488,7 @@ class AgentToolRuntime(BaseRuntime):
                             model=gen.model,
                             temperature=gen.temperature,
                             max_tokens=effective_max_tokens,
-                            timeout_s=gen.timeout_s,
+                            timeout_s=effective_llm_timeout_s,
                             response_format=terminal_response_format,
                         )
                 except asyncio.CancelledError:
@@ -561,7 +572,7 @@ class AgentToolRuntime(BaseRuntime):
                     )
                     retryable = provider_error.retryable if provider_error is not None else True
                     retry_after_ms = provider_error.retry_after_ms if provider_error is not None else None
-                    will_retry = retryable and loop_state.retry_count < policy.max_retries
+                    will_retry = retryable and loop_state.llm_retry_count < policy.max_retries
                     if will_retry:
                         logger.warning(
                             "Agent LLM call will retry run_id=%s agent=%s step=%s model=%s "
@@ -572,7 +583,7 @@ class AgentToolRuntime(BaseRuntime):
                             gen.model,
                             provider_error.code.value if provider_error is not None else "agent_llm_call_error",
                             retry_after_ms,
-                            loop_state.retry_count + 1,
+                            loop_state.llm_retry_count + 1,
                             policy.max_retries + 1,
                         )
                     else:
@@ -606,14 +617,14 @@ class AgentToolRuntime(BaseRuntime):
                     )
                     if will_retry:
                         retry_delay_ms = self._retry_delay_ms(
-                            retry_count=loop_state.retry_count,
+                            retry_count=loop_state.llm_retry_count,
                             retry_after_ms=retry_after_ms,
                         )
-                        loop_state.retry_count += 1
+                        loop_state.llm_retry_count += 1
                         retry_payload = {
                             "step": step + 1,
                             "reason": "transport_error",
-                            "attempt": loop_state.retry_count,
+                            "attempt": loop_state.llm_retry_count,
                             "max_attempts": policy.max_retries + 1,
                             "retry_delay_ms": retry_delay_ms,
                             "logical_llm_call_id": logical_llm_call_id,
@@ -632,6 +643,22 @@ class AgentToolRuntime(BaseRuntime):
                         )
                         pending_llm_call_id = llm_call_id
                         pending_logical_llm_call_id = logical_llm_call_id
+                        remaining_retry_ms = policy.max_wall_time_ms - (
+                            (time.time() - loop_state.start_time) * 1000
+                        )
+                        if remaining_retry_ms <= retry_delay_ms:
+                            limit_message = "Wall time limit would be exceeded before the next LLM retry"
+                            yield RuntimeEvent.error(
+                                limit_message,
+                                recoverable=False,
+                                error_code=RuntimeErrorCode.AGENT_WALL_TIME_EXCEEDED,
+                                retryable=False,
+                                user_message=limit_message,
+                                operator_message=limit_message,
+                                source="runtime",
+                            )
+                            await run_session.finish("failed", limit_message)
+                            return
                         await asyncio.sleep(retry_delay_ms / 1000)
                         continue
                     debug = build_debug_payload(exc=exc, traceback_text=traceback.format_exc())
@@ -725,10 +752,21 @@ class AgentToolRuntime(BaseRuntime):
                 strict_protocol = bool(platform_config.get("strict_operation_protocol", False))
                 parsed = None
                 if native_tool_calling and raw_response_dict is not None:
-                    parsed = parse_native_tool_calls(
-                        raw_response_dict,
-                        seen_tools=seen_native_tool_calls,
-                    )
+                    try:
+                        parsed = parse_native_tool_calls(raw_response_dict)
+                    except NativeToolCallProtocolError as exc:
+                        message = f"Malformed native tool call: {exc}"
+                        yield RuntimeEvent.error(
+                            message,
+                            recoverable=False,
+                            error_code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
+                            retryable=False,
+                            user_message="The model returned an invalid operation request.",
+                            operator_message=message,
+                            source="llm",
+                        )
+                        await run_session.finish("failed", message)
+                        return
                 if parsed is None:
                     parsed = parse_llm_response(raw_response, strict=strict_protocol)
 
@@ -742,7 +780,7 @@ class AgentToolRuntime(BaseRuntime):
                     if (
                         terminal_response_format
                         and not terminal_json_correction_sent
-                        and not self._looks_like_task_completion_declaration(raw_response)
+                        and not self._has_valid_task_completion_declaration(raw_response)
                     ):
                         terminal_json_correction_sent = True
                         native_tool_calling = False
@@ -805,8 +843,8 @@ class AgentToolRuntime(BaseRuntime):
                     )
                     final_answer_content: List[str] = []
                     async for ev in self._handle_no_tool_calls(
-                        exec_request, messages, llm_messages,
-                        parsed, loop_state.tool_outputs, loop_state.sources, gen, run_session, sandbox_ov,
+                        exec_request, parsed, loop_state.tool_outputs,
+                        loop_state.sources, run_session,
                     ):
                         if ev.type == RuntimeEventType.FINAL and isinstance(ev.data, dict):
                             final_answer_content.append(str(ev.data.get("content", "") or ""))
@@ -833,6 +871,22 @@ class AgentToolRuntime(BaseRuntime):
                     )
                 ]
                 if fail_fast_invalid_calls and invalid_operation_slugs:
+                    if loop_state.invalid_tool_retry_count >= policy.max_retries:
+                        fail_message = (
+                            "Maximum retries for invalid operation calls "
+                            f"({policy.max_retries}) reached"
+                        )
+                        yield RuntimeEvent.error(
+                            fail_message,
+                            recoverable=False,
+                            error_code=RuntimeErrorCode.AGENT_MAX_RETRIES_EXCEEDED,
+                            retryable=False,
+                            user_message=fail_message,
+                            operator_message=fail_message,
+                            source="runtime",
+                        )
+                        await run_session.finish("failed", fail_message)
+                        return
                     retry_message = self._invalid_operation_retry_instruction(
                         invalid_operation_slugs=invalid_operation_slugs,
                         available_operations=available_operations,
@@ -855,7 +909,7 @@ class AgentToolRuntime(BaseRuntime):
                         "protocol_retry",
                         retry_payload,
                     )
-                    loop_state.retry_count += 1
+                    loop_state.invalid_tool_retry_count += 1
                     if native_tool_calling:
                         loop_state.force_tool_choice = True
                     yield RuntimeEvent(
@@ -894,6 +948,10 @@ class AgentToolRuntime(BaseRuntime):
                         operation_results_for_context=operation_results_for_context,
                         operation_calls_total_ref=operation_calls_total_ref,
                         include_operation_contracts=not native_tool_calling,
+                        remaining_wall_time_ms=(
+                            policy.max_wall_time_ms
+                            - ((time.time() - loop_state.start_time) * 1000)
+                        ),
                     ):
                         yield ev
                         if ev.type in (
@@ -1013,19 +1071,21 @@ class AgentToolRuntime(BaseRuntime):
                     f"{len(parsed.tool_calls)} tool calls executed, "
                     f"total_outputs={len(loop_state.tool_outputs)}",
                 )
-            # Max steps reached — synthesize with whatever we have
+            # The executor consumes a TaskCompletionDeclaration, not prose.
+            # A second free-text synthesis call here used to make a successful
+            # tool run fail terminal validation.  Preserve the observed tool
+            # outputs and declare the budget limitation deterministically.
             if loop_state.tool_outputs:
-                synth_final_content: List[str] = []
-                async for ev in self._synthesize_answer(
-                    exec_request, messages, loop_state.tool_outputs, loop_state.sources, gen, run_session,
-                ):
-                    if ev.type == RuntimeEventType.FINAL and isinstance(ev.data, dict):
-                        synth_final_content.append(str(ev.data.get("content", "") or ""))
-                    yield ev
+                terminal_content = self._runtime_unfulfillable_declaration(policy.max_llm_calls)
+                yield RuntimeEvent.final(
+                    terminal_content,
+                    loop_state.sources,
+                    run_id=str(run_session.run_id or exec_request.run_id),
+                )
                 await run_session.record_event("final_response", {
                     "step": step + 1,
                     "tool_calls_total": len(loop_state.tool_outputs),
-                    "content": synth_final_content[0] if synth_final_content else "",
+                    "content": terminal_content,
                 })
             else:
                 yield RuntimeEvent.error(
@@ -1039,6 +1099,11 @@ class AgentToolRuntime(BaseRuntime):
                 )
             await run_session.finish("completed" if loop_state.tool_outputs else "failed")
 
+        except asyncio.CancelledError:
+            cancel_message = "Agent execution cancelled"
+            logger.info("%s run_id=%s agent=%s", cancel_message, run_session.run_id, agent.slug)
+            await run_session.finish("cancelled", cancel_message)
+            raise
         except Exception as e:
             logger.error(f"Agent operation loop failed: {e}", exc_info=True)
             yield RuntimeEvent.error(
@@ -1070,8 +1135,23 @@ class AgentToolRuntime(BaseRuntime):
         operation_results_for_context: List[tuple],
         operation_calls_total_ref: List[int],
         include_operation_contracts: bool,
+        remaining_wall_time_ms: float,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """Execute one operation call: budget check → tool → SSE events → logging → collect."""
+        if remaining_wall_time_ms <= 0:
+            limit_message = "Wall time limit exceeded before operation execution"
+            yield RuntimeEvent.error(
+                limit_message,
+                recoverable=False,
+                error_code=RuntimeErrorCode.AGENT_WALL_TIME_EXCEEDED,
+                retryable=False,
+                user_message=limit_message,
+                operator_message=limit_message,
+                source="runtime",
+            )
+            await run_session.finish("failed", limit_message)
+            return
+
         # Keep the operation cap local to the current agent run.
         if operation_calls_total_ref[0] >= policy.max_tool_calls_total:
             limit_message = f"Maximum operation calls ({policy.max_tool_calls_total}) reached"
@@ -1130,14 +1210,23 @@ class AgentToolRuntime(BaseRuntime):
         })
 
         try:
+            effective_timeout_s = self._effective_tool_timeout_s(
+                configured_timeout_ms=policy.tool_timeout_ms,
+                remaining_wall_time_ms=remaining_wall_time_ms,
+            )
             result, sources = await self.tools.execute(
                 operation_call, ctx, available_operations,
-                timeout_s=(
-                    int(policy.tool_timeout_ms / 1000) if policy.tool_timeout_ms else None
-                ),
+                timeout_s=effective_timeout_s,
             )
         except ConfirmationRequiredError as exc:
-            yield RuntimeEvent(RuntimeEventType.CONFIRMATION_REQUIRED, dict(exc.payload))
+            confirmation_payload = dict(exc.payload)
+            confirmation_payload.update({
+                "call_id": operation_call.id,
+                "tool": operation_call.tool_name,
+                "parent_entity_type": "agent_execution",
+                "parent_entity_id": agent_execution_id,
+            })
+            yield RuntimeEvent(RuntimeEventType.CONFIRMATION_REQUIRED, confirmation_payload)
             await run_session.finish("waiting_confirmation", str(exc))
             return
 
@@ -1392,14 +1481,10 @@ class AgentToolRuntime(BaseRuntime):
     async def _handle_no_tool_calls(
         self,
         exec_request: ExecutionRequest,
-        original_messages: List[Dict[str, Any]],
-        llm_messages: List[Dict[str, Any]],
         parsed: Any,
         all_operation_outputs: List[Dict[str, Any]],
         all_sources: List[dict],
-        gen: GenerationParams,
         run_session: Any,
-        sandbox_overrides: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """Handle case when agent decides not to call tools."""
         if parsed.text.strip():
@@ -1414,33 +1499,51 @@ class AgentToolRuntime(BaseRuntime):
                 run_id=str(run_session.run_id or exec_request.run_id),
             )
         elif all_operation_outputs:
-            async for ev in self._synthesize_answer(
-                exec_request, original_messages,
-                all_operation_outputs, all_sources, gen, run_session, sandbox_overrides,
-            ):
-                yield ev
-        else:
-            # Empty response fallback — re-stream
-            yield RuntimeEvent.status("generating_answer")
-            full_content = ""
-            async for chunk in self.llm.stream(
-                messages=llm_messages,
-                model=gen.model,
-                temperature=gen.temperature,
-                max_tokens=gen.max_tokens,
-                timeout_s=gen.timeout_s,
-            ):
-                full_content += chunk
-                yield RuntimeEvent.delta(chunk)
             yield RuntimeEvent.final(
-                full_content,
+                self._runtime_unfulfillable_declaration(None),
                 all_sources,
+                run_id=str(run_session.run_id or exec_request.run_id),
+            )
+        else:
+            yield RuntimeEvent.final(
+                self._runtime_unfulfillable_declaration(None),
+                [],
                 run_id=str(run_session.run_id or exec_request.run_id),
             )
 
     @staticmethod
-    def _looks_like_task_completion_declaration(raw: str) -> bool:
-        """Check whether a no-tool response at least has terminal JSON shape."""
+    def _effective_tool_timeout_s(
+        *,
+        configured_timeout_ms: Optional[int],
+        remaining_wall_time_ms: float,
+    ) -> float:
+        """Cap every operation by the wall-clock budget left to this run."""
+        if remaining_wall_time_ms <= 0:
+            raise ValueError("operation cannot start after the wall-time budget is exhausted")
+        requested_timeout_ms = int(configured_timeout_ms or remaining_wall_time_ms)
+        return max(0.000001, min(requested_timeout_ms, remaining_wall_time_ms) / 1000)
+
+    @staticmethod
+    def _runtime_unfulfillable_declaration(max_llm_calls: Optional[int]) -> str:
+        """Return a valid terminal contract when runtime cannot continue."""
+        suffix = (
+            f" after {max_llm_calls} decision calls" if max_llm_calls is not None else ""
+        )
+        return json.dumps({
+            "completion": "unfulfillable",
+            "report": f"The agent could not produce a terminal task declaration{suffix}.",
+            "outputs": {},
+            "needs": [],
+            "limitation": {
+                "code": "agent_terminal_declaration_missing",
+                "message": "The agent did not return a valid terminal task declaration.",
+                "action": "retry_later",
+            },
+        })
+
+    @staticmethod
+    def _has_valid_task_completion_declaration(raw: str) -> bool:
+        """Validate the exact terminal contract before ending the agent run."""
         text = str(raw or "").strip()
         fenced = re.fullmatch(
             r"```[ \t]*(?:json)?[ \t]*\r?\n(?P<payload>.*?)\r?\n?```",
@@ -1450,88 +1553,10 @@ class AgentToolRuntime(BaseRuntime):
         if fenced:
             text = fenced.group("payload").strip()
         try:
-            payload = json.loads(text)
-        except (TypeError, ValueError, json.JSONDecodeError):
+            parse_task_completion_declaration(text)
+        except ValueError:
             return False
-        return isinstance(payload, dict) and all(
-            key in payload for key in ("completion", "report", "outputs", "needs")
-        )
-
-    async def _synthesize_answer(
-        self,
-        exec_request: ExecutionRequest,
-        messages: List[Dict[str, Any]],
-        tool_outputs: List[Dict[str, Any]],
-        sources: List[dict],
-        gen: GenerationParams,
-        run_session: Any,
-        sandbox_overrides: Optional[Dict[str, Any]] = None,
-    ) -> AsyncGenerator[RuntimeEvent, None]:
-        """Stream a synthesis answer using operation outputs as grounding data."""
-        agent_prompt = self.prompts.render_base_prompt(
-            exec_request, sandbox_overrides=sandbox_overrides or {},
-        )
-
-        observation_text = self.tools.format_observation_text(tool_outputs)
-        synthesis_messages = self.prompts.build_synthesis_messages(
-            agent_prompt, list(messages), observation_text,
-        )
-
-        yield RuntimeEvent.status("generating_answer")
-        llm_call_id = str(uuid4())
-        llm_start = time.time()
-        yield RuntimeEvent.llm_request(
-            llm_call_id=llm_call_id,
-            model=gen.model,
-            temperature=gen.temperature,
-            max_tokens=gen.max_tokens,
-            messages=synthesis_messages,
-            parent_entity_type="agent_execution",
-            parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
-            agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
-            agent_slug=exec_request.agent.slug,
-            purpose="final_answer",
-            actor_type="agent",
-            actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
-        )
-        answer_parts: List[str] = []
-        async for chunk in self.llm.stream(
-            messages=synthesis_messages, model=gen.model,
-            temperature=gen.temperature, max_tokens=gen.max_tokens,
-            timeout_s=gen.timeout_s,
-        ):
-            answer_parts.append(chunk)
-            yield RuntimeEvent.delta(chunk)
-
-        full_answer = "".join(answer_parts)
-        llm_duration = int((time.time() - llm_start) * 1000)
-        prompt_tokens = _estimate_tokens(json.dumps(synthesis_messages, ensure_ascii=False, default=str))
-        completion_tokens = _estimate_tokens(full_answer)
-        yield RuntimeEvent.llm_response(
-            llm_call_id=llm_call_id,
-            model=gen.model,
-            temperature=gen.temperature,
-            max_tokens=gen.max_tokens,
-            messages=synthesis_messages,
-            content=full_answer,
-            response_length=len(full_answer),
-            tokens_in=prompt_tokens,
-            tokens_out=completion_tokens,
-            tokens_total=prompt_tokens + completion_tokens,
-            duration_ms=llm_duration,
-            parent_entity_type="agent_execution",
-            parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
-            agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
-            agent_slug=exec_request.agent.slug,
-            purpose="final_answer",
-            actor_type="agent",
-            actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
-        )
-        yield RuntimeEvent.final(
-            full_answer,
-            sources,
-            run_id=str(run_session.run_id or exec_request.run_id),
-        )
+        return True
 
     @staticmethod
     def _retry_delay_ms(*, retry_count: int, retry_after_ms: Optional[int]) -> int:

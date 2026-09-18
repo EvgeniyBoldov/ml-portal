@@ -169,10 +169,12 @@ class FactCompactor:
             metadata["aliases"] = term_aliases
             merged_ids = [candidate_id for item in matches for candidate_id in item.metadata.get(JOURNAL_CANDIDATE_IDS, []) if isinstance(candidate_id, str)]
             metadata[JOURNAL_CANDIDATE_IDS] = merged_ids
+            subject = self._grounded_subject(output.subject, matches, base.subject)
+            value = self._grounded_value(output.value, matches, base.value)
             compacted_fact = FactDTO(
                 scope=base.scope,
-                subject=output.subject.strip().lower()[:200] or base.subject,
-                value=output.value.strip()[:500] or base.value,
+                subject=subject,
+                value=value,
                 source=base.source,
                 tenant_id=base.tenant_id,
                 owner_type=base.owner_type,
@@ -194,6 +196,36 @@ class FactCompactor:
         ]
         decisions.extend(MemoryDecision("fact_compactor", "compaction", "accepted", "unrepresented_passthrough", (item,)) for item in untouched)
         return FactCompactionResult([*exact, *compacted, *untouched], decisions)
+
+    @staticmethod
+    def _grounded_subject(value: str, matches: Sequence[FactDTO], fallback: str) -> str:
+        """Keep the fact in a source-backed slot after LLM compaction.
+
+        The compactor may normalize wording, but it cannot introduce a new
+        subject.  Extractor candidates have already passed evidence validation,
+        so accepting one of their canonical subjects preserves that boundary.
+        """
+        normalized = " ".join(str(value or "").strip().lower().split())[:200]
+        known_subjects = {item.subject for item in matches}
+        return normalized if normalized in known_subjects else fallback
+
+    @staticmethod
+    def _grounded_value(value: str, matches: Sequence[FactDTO], fallback: str) -> str:
+        """Accept a rewritten value only when primary evidence supports it."""
+        normalized = str(value or "").strip()[:500]
+        if not normalized:
+            return fallback
+        words = [word for word in normalized.casefold().split() if len(word) > 2]
+        for candidate in matches:
+            for raw in candidate.metadata.get("evidence", []) if isinstance(candidate.metadata, dict) else []:
+                if not isinstance(raw, dict):
+                    continue
+                evidence_text = str(raw.get("text") or "").casefold()
+                if normalized.casefold() in evidence_text:
+                    return normalized
+                if words and sum(word in evidence_text for word in words) >= max(1, len(words) // 2):
+                    return normalized
+        return fallback
 
 
 def item_to_payload(item: FactDTO, index: int | None = None) -> dict[str, Any]:

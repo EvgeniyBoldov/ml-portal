@@ -275,6 +275,7 @@ def _orm_to_dto(row: Fact) -> FactDTO:
         confidence=row.confidence,
         source_ref=row.source_ref,
         observed_at=row.observed_at,
+        created_at=row.created_at,
         id=row.id,
         superseded_by=row.superseded_by,
         user_visible=row.user_visible,

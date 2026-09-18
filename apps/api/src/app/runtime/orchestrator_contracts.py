@@ -132,6 +132,24 @@ class DiscoveredNeed(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
     model_config = {"extra": "forbid", "populate_by_name": True}
 
+    @field_validator("json_schema", mode="before")
+    @classmethod
+    def validate_json_schema(cls, value: Any) -> Dict[str, Any]:
+        """Reject a malformed need before it becomes persisted plan state.
+
+        A need is supplied by the agent but is later used as the contract for
+        a cross-task binding.  Deferring schema validation until that binding
+        is planned makes an invalid agent declaration look like a successful
+        ``needs_dependency`` task and fails only in a later iteration.
+        """
+        schema = _normalize_nullable_schema(value if isinstance(value, dict) else {})
+        try:
+            import jsonschema
+            jsonschema.Draft202012Validator.check_schema(schema)
+        except Exception as exc:
+            raise ValueError(f"need schema is invalid: {exc}") from exc
+        return schema
+
 
 class TaskOutputSpec(BaseModel):
     key: str = Field(..., min_length=1)
@@ -194,6 +212,10 @@ class TaskContractRef(BaseModel):
     contract_id: Optional[str] = None
     version: Optional[int] = Field(default=None, ge=1)
     contract_hash: Optional[str] = None
+    # Persist the compiled input boundary.  An agent version is deliberately
+    # not pinned, but a task must remain validated against the contract that
+    # the planner was allowed to select.
+    input_schema: Optional[Dict[str, Any]] = None
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
@@ -452,6 +474,9 @@ class TaskCompletionDeclaration(BaseModel):
 
     @model_validator(mode="after")
     def validate_completion(self) -> "TaskCompletionDeclaration":
+        need_refs = [need.ref for need in self.needs]
+        if len(need_refs) != len(set(need_refs)):
+            raise ValueError("needs must contain unique refs")
         if self.completion_claim == AgentExecutionCompletion.NEEDS and not self.needs:
             raise ValueError("needs completion requires at least one need")
         if self.completion_claim == AgentExecutionCompletion.FULFILLED and self.needs:

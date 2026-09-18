@@ -9,6 +9,7 @@ import pytest
 
 from app.runtime.agent_executor import AgentExecutor
 from app.agents.context import ToolContext
+from app.agents.runtime.agent import AgentToolRuntime
 from app.runtime.events import RuntimeEvent
 from app.runtime.orchestrator_contracts import (
     TaskCompletionDeclaration,
@@ -94,6 +95,40 @@ def test_terminal_declaration_does_not_accept_prose_around_json_fence() -> None:
 
     with pytest.raises(ValueError):
         parse_task_completion_declaration(AgentExecutor._unwrap_terminal_json_fence(raw))
+
+
+def test_terminal_declaration_rejects_duplicate_need_refs() -> None:
+    with pytest.raises(ValueError, match="unique refs"):
+        parse_task_completion_declaration(
+            '{"completion":"needs","report":"Need inputs","outputs":{},"needs":['
+            '{"ref":"target","key":"target","kind":"data","description":"First","schema":{},"required":true,"context":{}},'
+            '{"ref":"target","key":"another_target","kind":"data","description":"Second","schema":{},"required":true,"context":{}}]}'
+        )
+
+
+def test_terminal_declaration_rejects_invalid_need_schema() -> None:
+    with pytest.raises(ValueError, match="need schema is invalid"):
+        parse_task_completion_declaration(
+            '{"completion":"needs","report":"Need input","outputs":{},"needs":['
+            '{"ref":"target","key":"target","kind":"data","description":"Target","schema":{"type":"not-a-json-schema-type"},"required":true,"context":{}}]}'
+        )
+
+
+def test_runtime_fallback_is_a_valid_unfulfillable_terminal_declaration() -> None:
+    declaration = parse_task_completion_declaration(
+        AgentToolRuntime._runtime_unfulfillable_declaration(3)
+    )
+
+    assert declaration.completion_claim == "unfulfillable"
+    assert declaration.limitation is not None
+    assert declaration.limitation.code == "agent_terminal_declaration_missing"
+
+
+def test_operation_timeout_is_capped_by_remaining_wall_budget() -> None:
+    assert AgentToolRuntime._effective_tool_timeout_s(
+        configured_timeout_ms=60_000,
+        remaining_wall_time_ms=250,
+    ) == 0.25
 
 
 def test_terminal_prompt_can_build_task_schema() -> None:

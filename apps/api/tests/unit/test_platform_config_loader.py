@@ -26,8 +26,8 @@ async def test_platform_config_loader_happy_path_builds_snapshot():
 
     assert snapshot.policy == PolicyLimits(max_steps=7, max_wall_time_ms=3333)
     assert snapshot.routable_agents == [
-        {"slug": "ops", "description": "Operations", "tags": [], "provides_keys": []},
-        {"slug": "analyst", "description": "Analytics", "tags": [], "provides_keys": []},
+        {"slug": "ops", "description": "Operations", "tags": [], "provides_keys": [], "task_contracts": [], "supports_dynamic_contracts": True, "requires_fresh_retrieval": False},
+        {"slug": "analyst", "description": "Analytics", "tags": [], "provides_keys": [], "task_contracts": [], "supports_dynamic_contracts": True, "requires_fresh_retrieval": False},
     ]
     assert snapshot.available_agents_for_planner("pinned-agent") == [
         {"slug": "pinned-agent", "description": "", "provides_keys": []}
@@ -48,7 +48,7 @@ async def test_platform_config_loader_degrades_when_config_unavailable():
     assert snapshot.config == {}
     assert snapshot.policy == PolicyLimits()  # defaults
     assert snapshot.routable_agents == [
-        {"slug": "ops", "description": "Ops", "tags": [], "provides_keys": []}
+        {"slug": "ops", "description": "Ops", "tags": [], "provides_keys": [], "task_contracts": [], "supports_dynamic_contracts": True, "requires_fresh_retrieval": False}
     ]
 
 

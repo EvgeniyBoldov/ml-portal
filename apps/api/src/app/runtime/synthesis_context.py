@@ -60,7 +60,11 @@ class SynthesisContextBuilder:
             status = str(task.get("status") or "")
             outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
             selected = outputs if status == TaskStatus.COMPLETED.value else {key: outputs[key] for key in accepted.get(task_id, set()) if key in outputs}
-            if status == TaskStatus.COMPLETED.value or selected:
+            partial_artifacts = (
+                self._accepted_partial_artifacts(result, accepted.get(task_id, set()))
+                if status != TaskStatus.COMPLETED.value else []
+            )
+            if status == TaskStatus.COMPLETED.value or selected or partial_artifacts:
                 # A nonterminal task may expose only values explicitly
                 # accepted by the planner.  Its free-form agent narrative can
                 # describe unaccepted work, so use the runtime resolution as
@@ -79,11 +83,12 @@ class SynthesisContextBuilder:
                     artifacts.extend(self._artifact_projection(verified.get("artifacts")))
                     sources.extend(self._source_projection(verified.get("sources")))
                 else:
-                    artifacts.extend(self._artifact_projection([
-                        artifact
-                        for value in selected.values() if isinstance(value, dict)
-                        for artifact in (value.get("artifacts") or [])
-                    ]))
+                    # A real artifact output is represented by an
+                    # ArtifactSelection, not by ``result.outputs`` (which is
+                    # intentionally reserved for bindable value outputs).
+                    # Therefore an explicitly accepted partial artifact must
+                    # be selected from the runtime-owned verified set.
+                    artifacts.extend(partial_artifacts)
             if status != TaskStatus.COMPLETED.value and task_id not in resolved:
                 limitation = result.get("limitation") if isinstance(result.get("limitation"), dict) else {}
                 limitations.append({"task_id": task_id, "status": status, "reason_code": self._redact(limitation.get("code") or result.get("reason_code")), "message": self._redact(limitation.get("message") or result.get("description") or "Task did not complete")})
@@ -93,9 +98,45 @@ class SynthesisContextBuilder:
             if str(item.get("artifact_id") or "") not in deleted
         ]
         context = {"user_question": plan.get("goal"), "synthesis_brief": self._redact(iteration["synthesis_brief"]), "plan_outline": [{"sequence": item.get("sequence"), "terminal": item.get("terminal")} for item in plan.get("iterations", [])], "resolution_decisions": self._redact([{key: item.get(key) for key in ("task_id", "action", "output_keys", "reason")} for item in resolutions if item.get("action") != ResolutionAction.CONTINUE_WITH_TASKS.value]), "completed_task_reports": reports, "limitations": limitations, "artifacts": deliverable_artifacts, "sources": self._dedupe(sources, "source_id")}
-        if len(json.dumps(context, ensure_ascii=False, default=str)) > self._max_chars:
-            raise SynthesisContextError("synthesis context exceeds configured size")
-        return context
+        return self._compact_to_limit(context)
+
+    def _compact_to_limit(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Never lose a completed plan merely because evidence is verbose."""
+        if len(json.dumps(context, ensure_ascii=False, default=str)) <= self._max_chars:
+            return context
+
+        def compact(value: Any, depth: int = 0) -> Any:
+            if isinstance(value, str):
+                return value if len(value) <= 1_024 else value[:1_024] + "…[truncated]"
+            if isinstance(value, list):
+                result = [compact(item, depth + 1) for item in value[:40]]
+                if len(value) > 40:
+                    result.append({"_truncated_items": len(value) - 40})
+                return result
+            if isinstance(value, dict):
+                if depth > 8:
+                    return {"_truncated": "nested value omitted"}
+                return {str(key): compact(item, depth + 1) for key, item in list(value.items())[:80]}
+            return value
+
+        bounded = compact(context)
+        for report in bounded.get("completed_task_reports", []):
+            if len(json.dumps(bounded, ensure_ascii=False, default=str)) <= self._max_chars:
+                break
+            if isinstance(report, dict) and report.get("outputs"):
+                report["outputs"] = {"_truncated": "full value retained in task journal"}
+        if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
+            bounded["completed_task_reports"] = [
+                {key: report.get(key) for key in ("task_id", "intent", "description")}
+                for report in bounded.get("completed_task_reports", []) if isinstance(report, dict)
+            ]
+        if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
+            # The brief and limitations are the minimum safe answer contract.
+            bounded["artifacts"] = []
+            bounded["sources"] = []
+        if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
+            raise SynthesisContextError("synthesis context exceeds configured size after compaction")
+        return bounded
 
     def _redact(self, value: Any) -> Any:
         return self._redactor.redact(value)
@@ -113,6 +154,29 @@ class SynthesisContextBuilder:
             for item in value
             if isinstance(item, dict) and str(item.get("artifact_id") or "").strip()
         ]
+
+    def _accepted_partial_artifacts(
+        self, result: Dict[str, Any], accepted_output_keys: set[str],
+    ) -> list[Dict[str, Any]]:
+        """Return only runtime-verified artifacts accepted by the planner."""
+        if not accepted_output_keys:
+            return []
+        selected_refs = {
+            str(selection.get("artifact_ref") or "").strip()
+            for selection in result.get("artifact_selections") or []
+            if isinstance(selection, dict)
+            and str(selection.get("output_key") or "") in accepted_output_keys
+            and str(selection.get("artifact_ref") or "").strip()
+        }
+        verified = result.get("verified")
+        verified_artifacts = verified.get("artifacts") if isinstance(verified, dict) else []
+        return self._artifact_projection([
+            artifact
+            for artifact in verified_artifacts or []
+            if isinstance(artifact, dict)
+            and str(artifact.get("artifact_ref") or artifact.get("artifact_id") or "").strip()
+            in selected_refs
+        ])
 
     def _source_projection(self, value: Any) -> list[Dict[str, Any]]:
         if not isinstance(value, list):

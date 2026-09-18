@@ -63,3 +63,34 @@ def test_completed_task_generated_artifact_is_carried_to_synthesis() -> None:
     )
 
     assert context["artifacts"] == [{"artifact_id": "artifact-1", "file_name": "filled.xlsx", "content_type": "", "size_bytes": None}]
+
+
+def test_accepted_partial_artifact_is_carried_to_synthesis() -> None:
+    context = SynthesisContextBuilder().build(
+        plan={
+            "goal": "Сформировать файл",
+            "iterations": [{
+                "id": "final", "sequence": 2, "terminal": "synthesis",
+                "synthesis_brief": {"user_question": "Сформировать файл", "planned_work": "Создать", "purpose": "Отдать", "answer_requirements": "Файл"},
+            }],
+            "resolutions": [{
+                "task_id": "write", "action": "accept_partial",
+                "output_keys": ["file"], "reason": "Файл был создан до сбоя.",
+            }],
+            "tasks": {"write": {
+                "iteration_id": "previous", "planned_order": 0,
+                "status": "unfulfillable", "intent": "generate_report",
+                "result": {
+                    "description": "Metadata update failed",
+                    "outputs": {},
+                    "artifact_selections": [{"artifact_ref": "artifact-1", "output_key": "file", "description": "Generated report"}],
+                    "verified": {"artifacts": [{"artifact_id": "artifact-1", "artifact_ref": "artifact-1", "file_name": "report.xlsx"}]},
+                    "limitation": {"code": "metadata_failed", "message": "Metadata update failed"},
+                },
+            }},
+        },
+        iteration_id="final",
+    )
+
+    assert context["artifacts"] == [{"artifact_id": "artifact-1", "file_name": "report.xlsx", "content_type": "", "size_bytes": None}]
+    assert context["limitations"] == []

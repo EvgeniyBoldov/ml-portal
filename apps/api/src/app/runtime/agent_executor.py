@@ -311,6 +311,7 @@ class AgentExecutor:
             ctx.extra["lifecycle_agent_execution_id"] = lifecycle_agent_execution_id
         ctx.extra["runtime_tool_ledger"] = state.tool_ledger
         ctx.extra["runtime_task_id"] = task.task_id
+        ctx.extra["runtime_task_tool_calls_used"] = runtime_state.task_tool_calls_used(task.task_id)
         ctx.extra["runtime_turn_state"] = state
         ctx.extra["runtime_tool_reuse_enabled"] = bool(
             (platform_config or {}).get("runtime_tool_reuse_enabled", True),
@@ -393,9 +394,16 @@ class AgentExecutor:
                         call_id=str(runtime_event.data.get("call_id") or ""),
                         success=bool(runtime_event.data.get("success")),
                         data=result_payload,
+                        sources=[
+                            dict(source)
+                            for source in (runtime_event.data.get("sources") or [])
+                            if isinstance(source, dict)
+                        ],
                     )
                     if bool(runtime_event.data.get("reused")):
                         state.used_tool_calls = max(0, state.used_tool_calls - 1)
+                    else:
+                        state.consume_task_tool_call(task.task_id)
 
                     for src in runtime_event.data.get("sources") or []:
                         if isinstance(src, dict):
@@ -419,6 +427,8 @@ class AgentExecutor:
                             if isinstance(item, dict)
                         )
 
+                if runtime_event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
+                    state.discard_pending_tool_call(str(runtime_event.data.get("call_id") or ""))
                 if runtime_event.type == RuntimeEventType.FINAL:
                     final_content = str(runtime_event.data.get("content", "") or "")
                     for src in runtime_event.data.get("sources") or []:

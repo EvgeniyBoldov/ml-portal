@@ -14,7 +14,10 @@ def test_tool_ledger_marks_duplicate_call_after_completed_match():
         agent_slug="mon.net",
         phase_id="p1",
     )
-    ledger.register_result(call_id="c1", success=True, data={"rows": [1]})
+    ledger.register_result(
+        call_id="c1", success=True, data={"rows": [1]},
+        sources=[{"url": "https://example.test/result"}],
+    )
 
     second = ledger.register_call(
         operation="collection.sql.execute",
@@ -58,7 +61,10 @@ def test_tool_ledger_find_successful_result_by_signature():
         agent_slug="a",
         phase_id=None,
     )
-    ledger.register_result(call_id="c1", success=True, data={"rows": [1]})
+    ledger.register_result(
+        call_id="c1", success=True, data={"rows": [1]},
+        sources=[{"url": "https://example.test/result"}],
+    )
 
     found = ledger.find_successful_result(
         operation="collection.sql.execute",
@@ -67,3 +73,17 @@ def test_tool_ledger_find_successful_result_by_signature():
     assert found is not None
     assert found.call_id == "c1"
     assert found.result_data == {"rows": [1]}
+    assert found.sources == [{"url": "https://example.test/result"}]
+
+
+def test_tool_ledger_reuse_is_scoped_to_phase():
+    ledger = ToolLedger()
+    ledger.register_call(
+        operation="collection.sql.execute", call_id="c1", arguments={"query": "select 1"},
+        iteration=1, agent_slug="a", phase_id="task-a",
+    )
+    ledger.register_result(call_id="c1", success=True, data={"rows": [1]})
+
+    assert ledger.find_successful_result(
+        operation="collection.sql.execute", arguments={"query": "select 1"}, phase_id="task-b",
+    ) is None

@@ -116,7 +116,7 @@ def test_rejected_confirmation_is_a_task_failure_for_planner() -> None:
     assert store.next_decision(plan["id"]).kind is SchedulerActionKind.INVOKE_PLANNER
 
 
-def test_stale_task_claim_is_recovered_without_reusing_the_attempt() -> None:
+def test_stale_task_claim_becomes_terminal_failure_without_replay() -> None:
     store = InMemoryPlanStore()
     plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
     store.apply_iteration(plan["id"], IterationProposal(tasks=[_task("work")], terminal=TerminalKind.PLANNER))
@@ -129,6 +129,7 @@ def test_stale_task_claim_is_recovered_without_reusing_the_attempt() -> None:
         plan["id"], stale_before=datetime.now(timezone.utc) - timedelta(minutes=5),
     )
 
-    assert plan["tasks"]["work"]["status"] == TaskStatus.PENDING.value
+    assert plan["tasks"]["work"]["status"] == TaskStatus.FAILED.value
+    assert plan["tasks"]["work"]["result"]["reason_code"] == "claim_lease_expired"
     assert plan["attempts"]["work"][-1]["status"] == "failed"
     assert plan["attempts"]["work"][-1]["error"]["code"] == "claim_lease_expired"

@@ -494,8 +494,16 @@ class RuntimePipeline:
             memory_request = decision.memory_request
             assert memory_request is not None
             recall_id = _memory_recall_orchestrator_id(run_id_str)
+            selector_id = _memory_component_entity_id(run_id_str, "memory_selector", 0)
             yield await emitter.emit(RuntimeEvent.orchestrator_start(
                 orchestrator_id=recall_id, run_id=run_id_str, role="memory_recall",
+            ), phase=OrchestrationPhase.PREFLIGHT)
+            # Recall is a first-class traceable operation.  Do not leave the
+            # inspector to infer selected memory from a later preflight call.
+            yield await emitter.emit(RuntimeEvent.agent_start(
+                agent_execution_id=selector_id,
+                parent_entity_type="orchestrator", parent_entity_id=recall_id,
+                agent_slug="memory_selector", task_title="Отбор контекста памяти",
             ), phase=OrchestrationPhase.PREFLIGHT)
             try:
                 recall_context = await MemorySearchService(self._session).search(
@@ -504,6 +512,18 @@ class RuntimePipeline:
                     entity_ids=memory_request.entity_ids, direction=memory_request.direction,
                     limit=memory_request.limit,
                 )
+                yield await emitter.emit(RuntimeEvent.status(
+                    "memory_context_prepared",
+                    fallback=False,
+                    selected_facts=len((recall_context.get("memory_context") or {}).get("durable_facts") or []),
+                    selected_projects=len(recall_context.get("projects") or []),
+                    selected_glossary=len(recall_context.get("glossary") or []),
+                    selected_memory_items=len(recall_context.get("items") or []),
+                    memory_context=recall_context.get("memory_context") or {},
+                    search_scope=recall_context.get("search_scope") or {},
+                    entity_type="agent_execution", entity_id=selector_id,
+                    parent_entity_type="orchestrator", parent_entity_id=recall_id,
+                ), phase=OrchestrationPhase.PREFLIGHT)
                 decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
                     user_request=effective_user_query, mechanical_lookup=lookup,
                     facts_context=turn_mem.planner_memory_context,
@@ -517,6 +537,10 @@ class RuntimePipeline:
                 logger.error("TurnPreflight recall completion unavailable; planner route is blocked: %s", exc)
                 yield await emitter.emit(RuntimeEvent.orchestrator_end(
                     orchestrator_id=recall_id, run_id=run_id_str, status="failed",
+                ), phase=OrchestrationPhase.PREFLIGHT)
+                yield await emitter.emit(RuntimeEvent.agent_end(
+                    agent_execution_id=selector_id, parent_entity_type="orchestrator",
+                    parent_entity_id=recall_id, agent_slug="memory_selector", status="failed",
                 ), phase=OrchestrationPhase.PREFLIGHT)
                 yield await emitter.emit(RuntimeEvent.orchestrator_end(
                     orchestrator_id=preflight_id, run_id=run_id_str, status="failed",
@@ -537,6 +561,10 @@ class RuntimePipeline:
                     run_id=run_id_str, status=PipelineStopReason.FAILED.value,
                 ), phase=OrchestrationPhase.PIPELINE)
                 return
+            yield await emitter.emit(RuntimeEvent.agent_end(
+                agent_execution_id=selector_id, parent_entity_type="orchestrator",
+                parent_entity_id=recall_id, agent_slug="memory_selector", status="completed",
+            ), phase=OrchestrationPhase.PREFLIGHT)
             yield await emitter.emit(RuntimeEvent.orchestrator_end(
                 orchestrator_id=recall_id, run_id=run_id_str,
                 status="completed" if recall_context is not None else "failed",
@@ -999,8 +1027,10 @@ class RuntimePipeline:
                 turn_number=turn_mem.turn_number,
                 agent_results=len(turn_mem.agent_results or []),
                 mode="inline" if inline_memory else "celery",
-                parent_entity_type="orchestrator",
-                parent_entity_id=_memory_orchestrator_id(str(runtime_state.run_id)),
+                entity_type="orchestrator",
+                entity_id=_memory_orchestrator_id(str(runtime_state.run_id)),
+                parent_entity_type="run",
+                parent_entity_id=str(runtime_state.run_id),
             ),
             phase=OrchestrationPhase.PIPELINE,
         )
@@ -1230,6 +1260,7 @@ class RuntimePipeline:
                     for r in turn_mem.agent_results
                 ],
                 fact_evidence=[FactEvidencePayload(**item.model_dump()) for item in turn_mem.fact_evidence],
+                preflight_candidates=list(turn_mem.preflight_candidates or []),
                 skip_llm_helpers=False,
                 terminal_reason=stop_reason.value if stop_reason else None,
                 sandbox_overrides=request.sandbox_overrides,
@@ -1255,6 +1286,10 @@ class RuntimePipeline:
                     tail_id=tail_id,
                     stream_key=stream_key,
                     runtime_run_id=str(runtime_state.run_id),
+                    entity_type="orchestrator",
+                    entity_id=_memory_orchestrator_id(str(runtime_state.run_id)),
+                    parent_entity_type="run",
+                    parent_entity_id=str(runtime_state.run_id),
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )

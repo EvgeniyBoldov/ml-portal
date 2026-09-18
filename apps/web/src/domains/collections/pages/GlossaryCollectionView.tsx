@@ -53,8 +53,8 @@ const GLOSSARY_COLUMNS: DataTableColumn<GlossaryCatalogEntry>[] = [
     label: 'ОБЛАСТЬ',
     width: 150,
     render: (entry) => (
-      <Badge tone={entry.scope === 'global' ? 'info' : entry.scope === 'user' ? 'neutral' : 'success'}>
-        {entry.scope === 'global' ? 'Компания' : entry.scope === 'user' ? 'Личный' : 'Текущий tenant'}
+      <Badge tone={entry.scope === 'global' ? 'info' : entry.scope === 'user' ? 'neutral' : entry.scope === 'project' ? 'warn' : 'success'}>
+        {entry.scope === 'global' ? 'Компания' : entry.scope === 'user' ? 'Личный' : entry.scope === 'project' ? 'Проект' : 'Текущий tenant'}
       </Badge>
     ),
   },
@@ -109,6 +109,7 @@ export default function GlossaryCollectionView() {
             <option value="global">Компания</option>
             <option value="tenant">Tenant</option>
             <option value="user">Личные</option>
+            <option value="project">Проект</option>
           </select>
         </div>
         {entries.length === 0 ? (

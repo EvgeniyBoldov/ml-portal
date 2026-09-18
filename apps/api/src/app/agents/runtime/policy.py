@@ -29,7 +29,6 @@ class PolicyLimits:
     max_retries: int = 3
     streaming_enabled: bool = True
     citations_required: bool = False
-    allow_parallel_tool_calls: bool = False
 
     @classmethod
     def from_policy(
@@ -46,8 +45,6 @@ class PolicyLimits:
         execution = policy.get("execution", {})
         retry = policy.get("retry", {})
         output = policy.get("output", {})
-        tool_exec = policy.get("tool_execution", {})
-
         lim = limit or {}
 
         return cls(
@@ -67,5 +64,4 @@ class PolicyLimits:
             max_retries=lim.get("max_retries", retry.get("max_retries", 3)),
             streaming_enabled=execution.get("streaming_enabled", True),
             citations_required=output.get("citations_required", False),
-            allow_parallel_tool_calls=tool_exec.get("allow_parallel_tool_calls", False),
         )

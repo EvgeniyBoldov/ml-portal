@@ -548,7 +548,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           else if (eventType === 'final') {
             try {
               const parsed = JSON.parse(data);
-              realAssistantId = parsed.message_id;
+              realAssistantId = typeof parsed.message_id === 'string' ? parsed.message_id : realAssistantId;
               const assistantCreatedAt = parsed.created_at;
               // Update sources if present in final event
               const finalSources = parsed.sources;
@@ -558,10 +558,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 clearTimeout(flushTimer);
                 flushTimer = null;
               }
+              // A non-streaming provider legitimately emits only FINAL. Do
+              // not discard its content merely because no delta was seen.
+              const finalContent = typeof parsed.content === 'string' ? parsed.content : assistantContent;
+              assistantContent = finalContent || assistantContent;
               pendingRenderedContent = assistantContent;
               flushAssistantContent();
               setActiveRun((current) => current?.assistantMessageId === tempAssistantId
-                ? { ...current, assistantMessageId: realAssistantId! }
+                ? { ...current, assistantMessageId: realAssistantId || current.assistantMessageId }
                 : current);
               setMessagesByChat(prev => {
                 const current = prev[chatId];
@@ -573,7 +577,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                     items: current.items.map(m =>
                       m.id === tempAssistantId ? { 
                         ...m, 
-                        id: realAssistantId!, 
+                        id: realAssistantId || m.id,
                         createdAt: assistantCreatedAt || m.createdAt,
                         isOptimistic: false,
                         meta: {
@@ -588,6 +592,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             } catch (e) {
               console.error('Failed to parse final event', e);
             }
+          }
+          else if (eventType === 'cached') {
+            // Idempotent retries do not replay a delta stream. Reload the
+            // persisted pair so the optimistic blank assistant card cannot
+            // replace an already completed answer.
+            void loadMessages(chatId);
+            setActiveRun(null);
           }
           // `pause` is the only public pause event in the current contract.
           else if (eventType === 'pause') {
@@ -663,7 +674,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [applyPausedState, queryClient]);
+  }, [applyPausedState, loadMessages, queryClient]);
 
   const resumeStream = useCallback(async (
     runId: string,

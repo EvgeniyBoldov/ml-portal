@@ -79,6 +79,9 @@ class AgentVersion(Base):
     # sees only these declarations and cannot invent a brittle source schema.
     task_contracts: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="'[]'::jsonb")
     supports_dynamic_contracts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    # A versioned capability: tasks delegated to this agent need a fresh
+    # observation and must not be satisfied from model memory alone.
+    requires_fresh_retrieval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     parent_version_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

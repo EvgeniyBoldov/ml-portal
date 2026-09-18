@@ -148,6 +148,7 @@ class AgentService:
                 "allowed_ops": version.allowed_ops,
                 "task_contracts": list(getattr(version, "task_contracts", None) or []),
                 "supports_dynamic_contracts": bool(getattr(version, "supports_dynamic_contracts", True)),
+                "requires_fresh_retrieval": bool(getattr(version, "requires_fresh_retrieval", False)),
                 # Meta
                 "notes": version.notes,
                 "created_at": version.created_at,
@@ -309,7 +310,7 @@ class AgentService:
         "identity", "mission", "scope", "rules", "tool_use_rules",
         "output_format", "examples", "short_info",
         "never_do", "allowed_ops",
-        "tags", "task_contracts", "supports_dynamic_contracts",
+        "tags", "task_contracts", "supports_dynamic_contracts", "requires_fresh_retrieval",
     ]
 
     async def _create_version_for_agent(
@@ -453,10 +454,25 @@ class AgentService:
         rows = result.all()
         items: List[Dict[str, Any]] = []
         seen: set[str] = set()
+        # The planner catalogue must describe the same published version that
+        # normal runtime resolution prefers.  SQL row order is not a version
+        # selection policy, so select current_version first and only then a
+        # deterministic published fallback.
+        grouped: Dict[str, list[tuple[Agent, AgentVersion]]] = {}
         for agent, version in rows:
             slug = str(getattr(agent, "slug", "") or "").strip()
-            if not slug or slug in seen:
+            if not slug:
                 continue
+            grouped.setdefault(slug, []).append((agent, version))
+        for slug in sorted(grouped):
+            if slug in seen:
+                continue
+            versions = grouped[slug]
+            agent, version = next(
+                ((candidate_agent, candidate_version) for candidate_agent, candidate_version in versions
+                 if getattr(candidate_agent, "current_version_id", None) == getattr(candidate_version, "id", None)),
+                min(versions, key=lambda item: str(getattr(item[1], "id", ""))),
+            )
             seen.add(slug)
             description = (
                 str(getattr(version, "short_info", "") or "").strip()
@@ -470,6 +486,7 @@ class AgentService:
                 "provides_keys": list(getattr(agent, "provides_keys", None) or []),
                 "task_contracts": list(getattr(version, "task_contracts", None) or []),
                 "supports_dynamic_contracts": bool(getattr(version, "supports_dynamic_contracts", True)),
+                "requires_fresh_retrieval": bool(getattr(version, "requires_fresh_retrieval", False)),
             })
         return items
 

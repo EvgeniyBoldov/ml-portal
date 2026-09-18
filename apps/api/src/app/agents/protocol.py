@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -40,6 +41,10 @@ TOOL_CALL_JSON_BLOCK = re.compile(
 TOOL_RESULT_TEMPLATE = """```tool_result
 {result}
 ```"""
+
+
+class NativeToolCallProtocolError(ValueError):
+    """A provider returned a malformed native tool-call payload."""
 
 
 def _extract_tool_name(data: Dict[str, Any]) -> Optional[str]:
@@ -312,8 +317,6 @@ def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str,
 
 def parse_native_tool_calls(
     response: Any,
-    *,
-    seen_tools: Optional[set[tuple[str, str]]] = None,
 ) -> Optional[ParsedResponse]:
     """Parse OpenAI-style tool_calls from a raw model response."""
 
@@ -321,37 +324,47 @@ def parse_native_tool_calls(
         return None
 
     choices = response.get("choices") or []
-    if not choices:
+    if not isinstance(choices, list) or not choices:
         return None
-
-    message = (choices[0].get("message") or {}) if choices else {}
+    if not isinstance(choices[0], dict):
+        raise NativeToolCallProtocolError("native response choice must be an object")
+    message = choices[0].get("message") or {}
+    if not isinstance(message, dict):
+        raise NativeToolCallProtocolError("native response message must be an object")
     raw_tool_calls = message.get("tool_calls") or []
     if not raw_tool_calls:
         return None
-
-    if seen_tools is None:
-        seen_tools = set()
+    if not isinstance(raw_tool_calls, list):
+        raise NativeToolCallProtocolError("native tool_calls must be an array")
 
     tool_calls: List[ToolCall] = []
     for item in raw_tool_calls:
-        fn = (item.get("function") or {}) if isinstance(item, dict) else {}
+        if not isinstance(item, dict):
+            raise NativeToolCallProtocolError("native tool call must be an object")
+        fn = item.get("function") or {}
+        if not isinstance(fn, dict):
+            raise NativeToolCallProtocolError("native tool call function must be an object")
         name = str(fn.get("name") or "").strip()
         if not name:
-            continue
+            raise NativeToolCallProtocolError("native tool call is missing function name")
+        tool_call_id = str(item.get("id") or "").strip()
+        if not tool_call_id:
+            raise NativeToolCallProtocolError("native tool call is missing id")
         raw_args = fn.get("arguments") or {}
         if isinstance(raw_args, str):
             try:
                 raw_args = json.loads(raw_args)
             except json.JSONDecodeError:
-                raw_args = {}
+                raise NativeToolCallProtocolError("native tool call arguments must be valid JSON")
         if not isinstance(raw_args, dict):
-            raw_args = {}
-        args_json = json.dumps(raw_args, sort_keys=True)
-        tool_key = (name, args_json)
-        if tool_key in seen_tools:
-            continue
-        tool_calls.append(ToolCall.from_dict({"tool": name, "arguments": raw_args}))
-        seen_tools.add(tool_key)
+            raise NativeToolCallProtocolError("native tool call arguments must be an object")
+        # The provider-issued id is the only valid correlation key for a
+        # native `role=tool` message. Every provider call must receive a
+        # corresponding result, including repeated calls with equal arguments.
+        # Execution-level reuse safely prevents duplicate side effects.
+        call_data: Dict[str, Any] = {"tool": name, "arguments": raw_args}
+        call_data["id"] = tool_call_id
+        tool_calls.append(ToolCall.from_dict(call_data))
 
     if not tool_calls:
         return None
@@ -366,17 +379,26 @@ def build_tool_result_messages(
 ) -> List[Dict[str, Any]]:
     """Build OpenAI-style `role=tool` messages for native tool calling."""
 
-    id_map: Dict[str, str] = {}
+    ids_by_name: Dict[str, deque[str]] = defaultdict(deque)
+    raw_ids: set[str] = set()
     for item in tool_calls_raw:
         if isinstance(item, dict):
             fn_name = (item.get("function") or {}).get("name") or ""
             tool_call_id = str(item.get("id") or "")
             if fn_name and tool_call_id:
-                id_map[fn_name] = tool_call_id
+                ids_by_name[str(fn_name)].append(tool_call_id)
+                raw_ids.add(tool_call_id)
 
     messages: List[Dict[str, Any]] = []
     for tool_call, result_content in results:
-        tool_call_id = id_map.get(tool_call.tool_name) or tool_call.id
+        # Native calls keep their own provider id.  The queue is only a
+        # backwards-compatible fallback for callers that constructed
+        # ToolCall objects without that id.
+        tool_call_id = tool_call.id
+        if tool_call_id not in raw_ids:
+            matching_ids = ids_by_name.get(tool_call.tool_name)
+            if matching_ids:
+                tool_call_id = matching_ids.popleft()
         messages.append(
             {
                 "role": "tool",

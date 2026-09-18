@@ -99,6 +99,12 @@ class PlatformConfigLoader:
                 "description": str(item.get("description") or "").strip(),
                 "tags": list(item.get("tags") or []),
                 "provides_keys": list(item.get("provides_keys") or []),
+                # These are execution capabilities, not presentation details.
+                # Dropping them here silently turned every agent into a dynamic,
+                # memory-eligible agent in the graph compiler.
+                "task_contracts": list(item.get("task_contracts") or []),
+                "supports_dynamic_contracts": bool(item.get("supports_dynamic_contracts", True)),
+                "requires_fresh_retrieval": bool(item.get("requires_fresh_retrieval", False)),
             }
             for item in agents
             if str(item.get("slug") or "").strip()

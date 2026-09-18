@@ -48,6 +48,7 @@ class RuntimeTurnState(BaseModel):
     runtime_facts: List[RuntimeFact] = Field(default_factory=list)
     tool_ledger: ToolLedger = Field(default_factory=ToolLedger)
     used_tool_calls: int = 0
+    task_tool_calls: Dict[str, int] = Field(default_factory=dict)
 
     status: str = "running"
     final_answer: Optional[str] = None
@@ -159,12 +160,31 @@ class RuntimeTurnState(BaseModel):
         call_id: str,
         success: bool,
         data: Any,
+        sources: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self.tool_ledger.register_result(
             call_id=call_id,
             success=success,
             data=data,
+            sources=sources,
         )
+
+    def consume_task_tool_call(self, task_id: str) -> None:
+        key = str(task_id or "").strip()
+        if key:
+            self.task_tool_calls[key] = self.task_tool_calls.get(key, 0) + 1
+
+    def task_tool_calls_used(self, task_id: str) -> int:
+        return self.task_tool_calls.get(str(task_id or "").strip(), 0)
+
+    def discard_pending_tool_call(self, call_id: str) -> None:
+        """Remove an announced call that paused before execution."""
+        for index in range(len(self.tool_ledger.entries) - 1, -1, -1):
+            entry = self.tool_ledger.entries[index]
+            if entry.call_id == call_id and entry.status == "called":
+                self.tool_ledger.entries.pop(index)
+                self.used_tool_calls = max(0, self.used_tool_calls - 1)
+                return
 
     def mark_artifact_deleted(self, artifact_id: str) -> None:
         artifact_id = str(artifact_id or "").strip()

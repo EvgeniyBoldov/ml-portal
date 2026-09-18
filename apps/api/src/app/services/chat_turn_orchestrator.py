@@ -245,6 +245,7 @@ class ChatTurnOrchestrator:
             yield {
                 "type": "final",
                 "message_id": assistant_message.message_id,
+                "content": assistant_content,
                 "created_at": assistant_message.created_at,
                 "sources": rag_sources,
                 "attachments": final_attachments,

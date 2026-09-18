@@ -143,6 +143,10 @@ class FactReconciler:
             existing.observed_at = datetime.now(timezone.utc)
             if compaction_action == "mark_conflict":
                 existing.status = FactStatus.UNCONFIRMED.value
+                # A conflict is not resolved by merely hiding the incoming
+                # value. Existing confirmed values in the same semantic slot
+                # are contradictory too and must stop participating in recall.
+                await self._demote_conflicts(existing)
             elif sandbox or existing.scope == FactScope.USER:
                 existing.status = FactStatus.CONFIRMED.value
                 existing.first_confirmed_at = existing.first_confirmed_at or datetime.now(timezone.utc)

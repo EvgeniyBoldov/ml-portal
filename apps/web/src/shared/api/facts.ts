@@ -11,6 +11,7 @@ export interface Fact {
   source: string;
   status?: string;
   support_count?: number;
+  can_edit?: boolean;
   observed_at: string;
   created_at: string;
 }

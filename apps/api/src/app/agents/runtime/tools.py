@@ -73,7 +73,7 @@ class OperationExecutionFacade:
         operation_call: ToolCall,
         ctx: ToolContext,
         operations: List[ResolvedOperation],
-        timeout_s: Optional[int] = None,
+        timeout_s: Optional[float] = None,
     ) -> Tuple[ToolResult, List[dict]]:
         """Execute a single operation call.
 
@@ -160,12 +160,6 @@ class OperationExecutionFacade:
                 },
             ), []
 
-        self._ensure_confirmation_if_required(
-            operation=operation,
-            operation_call=operation_call,
-            ctx=ctx,
-        )
-
         reused = self._reuse_policy.maybe_reuse(
             operation_slug=operation_call.tool_name,
             arguments=operation_call.arguments,
@@ -178,6 +172,12 @@ class OperationExecutionFacade:
                 operation_call.tool_name,
             )
             return result, sources
+
+        self._ensure_confirmation_if_required(
+            operation=operation,
+            operation_call=operation_call,
+            ctx=ctx,
+        )
 
         try:
             logger.info(f"Executing tool: {operation_call.tool_name}")

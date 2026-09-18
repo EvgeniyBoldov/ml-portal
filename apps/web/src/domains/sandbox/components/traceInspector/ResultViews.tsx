@@ -29,6 +29,7 @@ function ExecutorResultFields({ result }: { result: TraceExecutorResult }) {
     {result.missingInputs !== undefined ? <InspectorFieldRow label="Недостающие входные данные"><Output value={result.missingInputs} /></InspectorFieldRow> : null}
     {result.needs !== undefined ? <InspectorFieldRow label="Потребности"><Output value={result.needs} /></InspectorFieldRow> : null}
     {result.artifacts !== undefined ? <InspectorFieldRow label="Артефакты"><Output value={result.artifacts} /></InspectorFieldRow> : null}
+    {result.sources !== undefined ? <InspectorFieldRow label="Источники"><Output value={result.sources} /></InspectorFieldRow> : null}
   </InspectorFieldGroup>;
 }
 
@@ -45,6 +46,7 @@ function ExecutorResultCard({ result }: { result: TraceExecutorResult }) {
     {result.missingInputs !== undefined ? <InspectorFieldGroup><InspectorFieldRow label="Недостающие входные данные"><Output value={result.missingInputs} /></InspectorFieldRow></InspectorFieldGroup> : null}
     {result.needs !== undefined ? <InspectorFieldGroup><InspectorFieldRow label="Потребности"><Output value={result.needs} /></InspectorFieldRow></InspectorFieldGroup> : null}
     {result.artifacts !== undefined ? <InspectorFieldGroup><InspectorFieldRow label="Артефакты"><Output value={result.artifacts} /></InspectorFieldRow></InspectorFieldGroup> : null}
+    {result.sources !== undefined ? <InspectorFieldGroup><InspectorFieldRow label="Источники"><Output value={result.sources} /></InspectorFieldRow></InspectorFieldGroup> : null}
     {!result.message && result.output === undefined && !operations.total ? <div className={styles.empty}>Исполнитель не записал содержательный результат.</div> : null}
   </article>;
 }

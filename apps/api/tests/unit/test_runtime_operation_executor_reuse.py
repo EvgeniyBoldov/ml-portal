@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.context import RuntimeDependencies, ToolCall, ToolContext
+from app.agents.context import RuntimeDependencies, ToolCall, ToolContext, ToolResult
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
 from app.agents.runtime.tools import ToolExecutor
 from app.runtime.memory.tool_ledger import ToolLedger
@@ -55,7 +55,10 @@ async def test_operation_executor_reuses_from_tool_ledger():
         agent_slug="mon.net",
         phase_id=None,
     )
-    ledger.register_result(call_id="call-1", success=True, data={"rows": [{"v": 1}]})
+    ledger.register_result(
+        call_id="call-1", success=True, data={"rows": [{"v": 1}]},
+        sources=[{"url": "https://example.test/result"}],
+    )
 
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
     deps = RuntimeDependencies(operation_executor=AsyncMock())
@@ -74,5 +77,55 @@ async def test_operation_executor_reuses_from_tool_ledger():
     assert result.metadata.get("reused") is True
     assert result.metadata.get("reused_from_call_id") == "call-1"
     assert result.data == {"rows": [{"v": 1}]}
-    assert sources == []
+    assert sources == [{"url": "https://example.test/result"}]
     deps.operation_executor.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_operation_executor_does_not_reuse_when_fresh_retrieval_is_required():
+    operation = _operation()
+    arguments = {"query": "select 1", "collection_slug": "sql-demo"}
+    call = ToolCall(id="call-2", tool_name=operation.operation_slug, arguments=arguments)
+    ledger = ToolLedger()
+    ledger.register_call(
+        operation=operation.operation_slug, call_id="call-1", arguments=arguments,
+        iteration=1, agent_slug="agent", phase_id="task-a",
+    )
+    ledger.register_result(call_id="call-1", success=True, data={"rows": [{"v": 1}]})
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
+    deps = RuntimeDependencies(operation_executor=AsyncMock())
+    deps.operation_executor.execute.return_value = ToolResult.ok({"rows": [{"v": 2}]})
+    ctx.set_runtime_deps(deps)
+    ctx.extra.update({
+        "runtime_tool_ledger": ledger,
+        "runtime_task_id": "task-b",
+        "task_freshness_policy": "require_retrieval",
+    })
+
+    result, _ = await ToolExecutor().execute(operation_call=call, ctx=ctx, operations=[operation])
+
+    assert result.metadata.get("reused") is None
+    deps.operation_executor.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reused_confirmable_operation_does_not_consume_a_new_confirmation():
+    operation = _operation().model_copy(update={"requires_confirmation": True})
+    arguments = {"query": "select 1", "collection_slug": "sql-demo"}
+    ledger = ToolLedger()
+    ledger.register_call(
+        operation=operation.operation_slug, call_id="call-1", arguments=arguments,
+        iteration=1, agent_slug="agent", phase_id=None,
+    )
+    ledger.register_result(call_id="call-1", success=True, data={"rows": [{"v": 1}]})
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
+    ctx.set_runtime_deps(RuntimeDependencies(operation_executor=AsyncMock()))
+    ctx.extra["runtime_tool_ledger"] = ledger
+
+    result, _ = await ToolExecutor().execute(
+        operation_call=ToolCall(id="call-2", tool_name=operation.operation_slug, arguments=arguments),
+        ctx=ctx,
+        operations=[operation],
+    )
+
+    assert result.metadata.get("reused") is True

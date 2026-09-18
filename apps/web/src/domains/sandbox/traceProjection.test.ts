@@ -35,7 +35,7 @@ describe('projectTraceStages memory components', () => {
     const target = resolveTraceInspectionTarget(state, compactor.inspectorKey);
     expect(compactor.kind).toBe('fact_compactor');
     expect(target?.kind).toBe('executor');
-    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Решения', 'Опубликовано', 'RAW']);
+    expect(target?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Решения', 'RAW']);
     expect(compactor.memoryResult?.facts).toEqual([expect.objectContaining({
       subject: 'network.zone',
       changeType: 'candidate_confirmed',
@@ -231,9 +231,39 @@ describe('projectTraceStages memory components', () => {
       fallback: true,
       selectedFacts: 2,
       selectedProjects: 1,
+      selectedGlossary: 0,
+      selectedMemoryItems: 0,
       context: [{ type: 'fact', scope: 'unknown', subject: 'role', value: 'engineer' }],
       ambiguities: ['СРК может означать несколько терминов'],
+      sourceCheckReasons: [],
     });
+  });
+
+  it('projects the production memory-recall selector contract', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'recall-1', role: 'memory_recall' }),
+      event(2, 'agent_start', { entity_type: 'agent_execution', entity_id: 'selector-1', parent_entity_type: 'orchestrator', parent_entity_id: 'recall-1', agent_slug: 'memory_selector' }),
+      event(3, 'status', {
+        entity_type: 'agent_execution', entity_id: 'selector-1', parent_entity_type: 'orchestrator', parent_entity_id: 'recall-1',
+        stage: 'memory_context_prepared', selected_facts: 1, selected_projects: 1, selected_glossary: 1, selected_memory_items: 1,
+        search_scope: { direction: 'policy' }, memory_context: {
+          durable_facts: [{ scope: 'user', subject: 'language', value: 'ru' }],
+          relevant_projects: [{ key: 'CORE', name: 'Core' }],
+          resolved_terms: [{ term: 'SLO', description: 'Целевой уровень', aliases: ['sla'] }],
+          applicable_rules: [{ scope: 'project', kind: 'rule', subject: 'deploy', content: { value: 'approval' }, confidence: 0.9, source_references: [{ id: 'doc-1' }] }],
+          rag_reasons: ['uncertain_memory:1'],
+        },
+      }),
+      event(4, 'agent_end', { entity_type: 'agent_execution', entity_id: 'selector-1', parent_entity_type: 'orchestrator', parent_entity_id: 'recall-1', status: 'completed' }),
+    ]);
+    const selector = projectTraceStages(state)[0].executorRuns[0];
+    expect(projectTraceStages(state)[0].kind).toBe('memory_preparation');
+    expect(selector.kind).toBe('memory_selector');
+    expect(selector.memoryContext).toMatchObject({ selectedGlossary: 1, selectedMemoryItems: 1, sourceCheckReasons: ['uncertain_memory:1'] });
+    expect(selector.memoryContext?.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'fact', subject: 'language' }),
+      expect.objectContaining({ type: 'knowledge', subject: 'deploy' }),
+    ]));
   });
 
   it('uses synthesis presentation kinds and the shared executor tab policy', () => {
@@ -257,6 +287,15 @@ describe('projectTraceStages memory components', () => {
       expect(callTarget.call.requestView).toMatchObject({ purpose: 'Финальный ответ', messages: [] });
       expect(callTarget.call.responseView).toMatchObject({ resultKind: 'answer', terminal: true, content: { kind: 'text', text: 'Готово' } });
     }
+  });
+
+  it('keeps synthesizer sources and attachments on its result entity', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'synthesis_start', { entity_type: 'synthesis_run', entity_id: 'synthesis-1' }),
+      event(2, 'status', { entity_type: 'synthesis_run', entity_id: 'synthesis-1', stage: 'final_answer_marker', content: 'Готово', sources: [{ id: 'doc-1' }], attachments: [{ artifact_id: 'a-1' }] }),
+    ]);
+    const synthesizer = projectTraceStages(state)[0].executorRuns[0];
+    expect(synthesizer.result).toMatchObject({ output: 'Готово', sources: [{ id: 'doc-1' }], artifacts: [{ artifact_id: 'a-1' }] });
   });
 
   it('builds one labelled LLM transcript and a safe expandable tool result projection', () => {

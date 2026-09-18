@@ -144,7 +144,7 @@ def test_data_agent_tasks_are_forced_to_require_fresh_retrieval() -> None:
     })
     compiled = GraphOrchestrator._compile(
         proposal,
-        [{"slug": "jira_agent", "tags": ["jira"], "supports_dynamic_contracts": True}],
+        [{"slug": "jira_agent", "requires_fresh_retrieval": True, "supports_dynamic_contracts": True}],
         {"tasks": [], "needs": [], "bindings": [], "resolutions": []},
     )
     assert compiled.tasks[0].freshness_policy.value == "require_retrieval"
@@ -189,7 +189,7 @@ def test_binding_injects_the_schema_validated_value_not_its_storage_wrapper() ->
         "producer": {"result": {"outputs": {"value": {"id": 7}}}},
         "consumer": {
             "task_id": "consumer", "executor": "research", "intent": "use", "instructions": "use",
-            "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory",
+            "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory", "status": "running",
         },
     }
     plan["bindings"] = [{
@@ -234,7 +234,7 @@ def test_binding_schema_is_validated_against_the_actual_value_at_handoff() -> No
     plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
     plan["tasks"] = {
         "producer": {"result": {"outputs": {"value": "not-an-integer"}}},
-        "consumer": {"task_id": "consumer", "executor": "research", "intent": "use", "instructions": "use", "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory"},
+        "consumer": {"task_id": "consumer", "executor": "research", "intent": "use", "instructions": "use", "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory", "status": "running"},
     }
     plan["needs"] = [{"task_id": "old", "ref": "missing", "schema": {"type": "integer"}}]
     plan["bindings"] = [{"need_task_id": "old", "need_ref": "missing", "producer_task_id": "producer", "output_key": "value", "consumer_task_id": "consumer", "consumer_input_key": "value"}]

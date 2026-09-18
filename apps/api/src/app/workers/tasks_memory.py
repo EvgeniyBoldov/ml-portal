@@ -391,6 +391,10 @@ class MemoryFinalizePayload(BaseModel):
     retrieved_facts: List[FactPayload] = Field(default_factory=list)
     agent_results: List[AgentResultPayload] = Field(default_factory=list)
     fact_evidence: List[FactEvidencePayload] = Field(default_factory=list)
+    # TurnPreflight candidates are hints for FactExtractor, not durable facts.
+    # They must survive the default Celery handoff so inline and async
+    # finalization apply the same evidence-validation path.
+    preflight_candidates: List[Dict[str, Any]] = Field(default_factory=list)
     
     # Control flags
     skip_llm_helpers: bool = False
@@ -447,6 +451,7 @@ def _deserialize_turn_memory(payload: MemoryFinalizePayload) -> TurnMemory:
         goal="",  # Not needed for writeback
         summary=summary,
         retrieved_facts=facts,
+        preflight_candidates=list(payload.preflight_candidates),
     )
     
     # Attach agent results

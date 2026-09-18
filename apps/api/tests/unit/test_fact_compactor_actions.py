@@ -83,6 +83,31 @@ async def test_compactor_keeps_evidenced_candidates_omitted_by_partial_llm_outpu
 
 
 @pytest.mark.asyncio
+async def test_compactor_cannot_replace_an_evidenced_value_with_an_ungrounded_one() -> None:
+    candidate = FactDTO(
+        scope=FactScope.USER,
+        subject="role",
+        value="network engineer",
+        source=FactSource.USER_UTTERANCE,
+        metadata={"evidence": [{"source_type": "user_message", "source_ref": "turn-1", "text": "I am a network engineer."}]},
+    )
+    compactor = FactCompactor(session=AsyncMock(), llm_client=AsyncMock())
+    compactor._structured.invoke = AsyncMock(return_value=_result(_CompactionOutput(facts=[
+        _CompactedFact(
+            scope="user", subject="security.clearance", value="top secret",
+            action="rewrite", source_candidate_indexes=[0],
+        )
+    ])))
+
+    result = await compactor.compact(
+        candidates=[candidate], current_facts=[], user_id=uuid4(), tenant_id=uuid4(), chat_id=uuid4(),
+    )
+
+    assert result[0].subject == "role"
+    assert result[0].value == "network engineer"
+
+
+@pytest.mark.asyncio
 async def test_compactor_forwards_its_execution_id_to_structured_llm() -> None:
     candidate = FactDTO(
         scope=FactScope.USER,

@@ -89,6 +89,60 @@ def validate_iteration(proposal: IterationProposal) -> None:
         visit(task_id)
 
 
+def validate_iteration_semantics(proposal: IterationProposal, snapshot: Dict[str, Any]) -> None:
+    """Defend the persistence boundary, not only the planner adapter.
+
+    ``apply_iteration`` is a public store operation.  A malformed proposal
+    must not be able to persist dangling string references merely because it
+    did not originate in ``GraphOrchestrator._compile``.
+    """
+    current = {task.task_id: task for task in proposal.tasks}
+    prior = dict(snapshot.get("tasks") or {})
+    needs = {
+        (str(item.get("task_id") or ""), str(item.get("ref") or ""))
+        for item in snapshot.get("needs") or [] if isinstance(item, dict)
+    }
+    for resolution in proposal.resolutions:
+        old = prior.get(resolution.task_id)
+        if old is None or _is_terminal(str(old.get("status") or "")) and old.get("status") == TaskStatus.COMPLETED.value:
+            raise PlanValidationError("resolution must target a prior incomplete task")
+        outputs = set((old.get("result") or {}).get("outputs") or {})
+        if any(key not in outputs for key in resolution.output_keys):
+            raise PlanValidationError("resolution accepts an absent prior output")
+    resolutions = {item.task_id: item for item in proposal.resolutions}
+    bound: set[tuple[str, str]] = set()
+    for binding in proposal.bindings:
+        if (binding.need_task_id, binding.need_ref) not in needs:
+            raise PlanValidationError("binding targets an unknown discovered need")
+        producer, consumer = current.get(binding.producer_task_id), current.get(binding.consumer_task_id)
+        if producer is None or consumer is None:
+            raise PlanValidationError("binding producer and consumer must belong to the iteration")
+        if binding.producer_task_id not in consumer.depends_on:
+            raise PlanValidationError("binding consumer must depend on producer")
+        if not any(item.key == binding.output_key for item in producer.expected_outputs):
+            raise PlanValidationError("binding output is not declared by producer")
+        if resolutions.get(binding.need_task_id) is None or binding.consumer_task_id not in resolutions[binding.need_task_id].replacement_task_ids:
+            raise PlanValidationError("binding consumer is not an approved replacement")
+        target = (binding.consumer_task_id, binding.consumer_input_key)
+        if target in bound or binding.consumer_input_key in consumer.inputs:
+            raise PlanValidationError("binding writes a duplicate consumer input")
+        bound.add(target)
+
+
+def _validate_compiled_inputs(task: Dict[str, Any], inputs: Dict[str, Any]) -> None:
+    contract = task.get("contract") if isinstance(task.get("contract"), dict) else {}
+    if str(contract.get("mode") or "") != "registered":
+        return
+    schema = contract.get("input_schema")
+    if not isinstance(schema, dict):
+        raise PlanValidationError("registered task is missing compiled input schema")
+    try:
+        import jsonschema
+        jsonschema.Draft202012Validator(schema).validate(inputs)
+    except Exception as exc:
+        raise PlanValidationError(f"bound inputs do not satisfy consumer contract: {exc}") from exc
+
+
 def _is_terminal(status: str) -> bool:
     return status in {item.value for item in TERMINAL_TASK_STATUSES}
 
@@ -194,12 +248,45 @@ class InMemoryPlanStore:
         plan = self.get(plan_id)
         plan["status"] = PlanStatus.FAILED.value
         plan["last_failure"] = {"code": code, "message": message}
+        for iteration in plan["iterations"]:
+            if iteration["status"] == IterationStatus.ACTIVE.value and iteration["checkpoint_status"] in {"planner_running", "synthesis_running"}:
+                iteration["checkpoint_status"] = "idle"
+                iteration["checkpoint_claimed_at"] = None
+
+    def cancel_plan(self, plan_id: str, *, reason: str = "cancelled") -> None:
+        plan = self.get(plan_id)
+        if plan["status"] in {PlanStatus.COMPLETED.value, PlanStatus.FAILED.value, PlanStatus.CANCELLED.value}:
+            return
+        for task_id, task in plan["tasks"].items():
+            if task["status"] != TaskStatus.RUNNING.value:
+                continue
+            task["status"] = TaskStatus.CANCELLED.value
+            task["result"] = {"outcome": TaskOutcome.UNFULFILLABLE.value, "description": "Task execution was cancelled", "reason_code": reason, "outputs": {}, "limitation": {"code": reason, "message": "Execution was cancelled.", "action": "none"}}
+            attempts = plan["attempts"].get(task_id, [])
+            if attempts and attempts[-1].get("status") == AttemptStatus.RUNNING.value:
+                attempts[-1].update({"status": AttemptStatus.CANCELLED.value, "error": {"code": reason, "message": "Execution cancelled"}, "finished_at": _now().isoformat()})
+        for iteration in plan["iterations"]:
+            if iteration["status"] == IterationStatus.ACTIVE.value:
+                iteration["checkpoint_status"] = "idle"
+                iteration["checkpoint_claimed_at"] = None
+        plan["status"] = PlanStatus.CANCELLED.value
+
+    def heartbeat_task(self, plan_id: str, task_id: str) -> None:
+        task = self.get(plan_id)["tasks"].get(task_id)
+        if task is None or task["status"] != TaskStatus.RUNNING.value:
+            raise PlanValidationError("task heartbeat requires a running task")
+        # In-memory state has no updated_at column; retain a lease timestamp
+        # for parity with SQL and for deterministic tests.
+        task["lease_heartbeat_at"] = _now().isoformat()
 
     def apply_iteration(
         self, plan_id: str, proposal: IterationProposal, *, iteration_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         validate_iteration(proposal)
         plan = self.get(plan_id)
+        if plan["status"] not in {PlanStatus.DRAFT.value, PlanStatus.ACTIVE.value}:
+            raise PlanValidationError("cannot apply an iteration to a terminal or paused plan")
+        validate_iteration_semantics(proposal, plan)
         existing_ids = set(plan["tasks"])
         proposed_ids = {task.task_id for task in proposal.tasks}
         if existing_ids & proposed_ids:
@@ -293,6 +380,8 @@ class InMemoryPlanStore:
         task = plan["tasks"].get(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
+        if task["status"] != TaskStatus.RUNNING.value:
+            raise PlanValidationError("task request requires a running claim")
         inputs = deepcopy(task["inputs"])
         for binding in plan["bindings"]:
             if binding["consumer_task_id"] == task_id:
@@ -303,6 +392,7 @@ class InMemoryPlanStore:
                 value = source_outputs[binding["output_key"]]
                 need = next((item for item in plan["needs"] if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
+        _validate_compiled_inputs(task, inputs)
         dependencies = {dep: plan["tasks"][dep]["result"] for dep in task["depends_on"]}
         return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"],
                 "inputs": inputs, "dependency_outputs": dependencies,
@@ -354,10 +444,20 @@ class InMemoryPlanStore:
             if task["status"] != TaskStatus.RUNNING.value:
                 continue
             attempts = plan["attempts"].get(task_id, [])
-            started_at = datetime.fromisoformat(attempts[-1]["started_at"]) if attempts else _now()
-            if started_at >= stale_before:
+            lease_at = datetime.fromisoformat(task.get("lease_heartbeat_at") or attempts[-1]["started_at"]) if attempts else _now()
+            if lease_at >= stale_before:
                 continue
-            task["status"] = TaskStatus.PENDING.value
+            # An external operation may already have happened.  A stale claim
+            # is therefore not safe to replay automatically: let the planner
+            # explicitly choose a recovery path from a terminal limitation.
+            task["status"] = TaskStatus.FAILED.value
+            task["result"] = {
+                "outcome": TaskOutcome.UNFULFILLABLE.value,
+                "description": "Task execution lease expired before a result was recorded",
+                "reason_code": "claim_lease_expired",
+                "outputs": {},
+                "limitation": _safe_failure_limitation("claim_lease_expired"),
+            }
             if attempts and attempts[-1]["status"] == AttemptStatus.RUNNING.value:
                 attempts[-1].update({"status": AttemptStatus.FAILED.value, "error": {"code": "claim_lease_expired", "message": "Execution claim expired"}, "finished_at": _now().isoformat()})
         for iteration in plan["iterations"]:
@@ -377,6 +477,10 @@ class SqlPlanStore:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def _commit(self) -> None:
+        """Persist a lifecycle boundary before any caller can do external work."""
+        await self._session.commit()
+
     async def get_by_run(self, root_run_id: UUID) -> Optional[RuntimePlan]:
         return (await self._session.execute(select(RuntimePlan).where(RuntimePlan.root_run_id == root_run_id))).scalar_one_or_none()
 
@@ -384,12 +488,46 @@ class SqlPlanStore:
         plan = RuntimePlan(goal=goal, root_run_id=root_run_id, tenant_id=tenant_id, chat_id=chat_id)
         self._session.add(plan)
         await self._session.flush()
+        await self._commit()
         return plan
 
     async def mark_failed(self, plan_id: UUID, code: str, message: str) -> None:
         plan = await self._plan(plan_id, lock=True)
         plan.status, plan.last_failure = PlanStatus.FAILED.value, {"code": code, "message": message}
+        iteration = await self._active_iteration(plan_id, lock=True)
+        if iteration is not None and iteration.checkpoint_status in {"planner_running", "synthesis_running"}:
+            iteration.checkpoint_status, iteration.checkpoint_claimed_at = "idle", None
         await self._session.flush()
+        await self._commit()
+
+    async def cancel_plan(self, plan_id: UUID, *, reason: str = "cancelled") -> None:
+        plan = await self._plan(plan_id, lock=True)
+        if plan.status in {PlanStatus.COMPLETED.value, PlanStatus.FAILED.value, PlanStatus.CANCELLED.value}:
+            return
+        rows = (await self._session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.status == TaskStatus.RUNNING.value).with_for_update())).scalars().all()
+        for row in rows:
+            row.status = TaskStatus.CANCELLED.value
+            row.result = {"outcome": TaskOutcome.UNFULFILLABLE.value, "description": "Task execution was cancelled", "reason_code": reason, "outputs": {}, "limitation": {"code": reason, "message": "Execution was cancelled.", "action": "none"}}
+            attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(RuntimeTaskAttempt.task_row_id == row.id, RuntimeTaskAttempt.attempt_number == row.attempts).with_for_update())).scalar_one_or_none()
+            if attempt is not None and attempt.status == AttemptStatus.RUNNING.value:
+                attempt.status, attempt.error, attempt.finished_at = AttemptStatus.CANCELLED.value, {"code": reason, "message": "Execution cancelled"}, _now()
+        iteration = await self._active_iteration(plan_id, lock=True)
+        if iteration is not None:
+            iteration.checkpoint_status, iteration.checkpoint_claimed_at = "idle", None
+        plan.status = PlanStatus.CANCELLED.value
+        await self._session.flush()
+        await self._commit()
+
+    async def heartbeat_task(self, plan_id: UUID, task_id: str) -> None:
+        await self._plan(plan_id, lock=True)
+        row = (await self._session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id).with_for_update())).scalar_one_or_none()
+        if row is None or row.status != TaskStatus.RUNNING.value:
+            raise PlanValidationError("task heartbeat requires a running task")
+        # Assigning the same status does not reliably mark an ORM row dirty;
+        # updated_at is the durable lease heartbeat.
+        row.updated_at = _now()
+        await self._session.flush()
+        await self._commit()
 
     async def _plan(self, plan_id: UUID, *, lock: bool = False) -> RuntimePlan:
         query = select(RuntimePlan).where(RuntimePlan.id == plan_id)
@@ -414,6 +552,9 @@ class SqlPlanStore:
     ) -> RuntimePlan:
         validate_iteration(proposal)
         plan = await self._plan(plan_id, lock=True)
+        if plan.status not in {PlanStatus.DRAFT.value, PlanStatus.ACTIVE.value}:
+            raise PlanValidationError("cannot apply an iteration to a terminal or paused plan")
+        validate_iteration_semantics(proposal, await self.snapshot(plan_id))
         active = await self._active_iteration(plan_id, lock=True)
         if active is not None:
             if active.checkpoint_status != "planner_running":
@@ -443,6 +584,7 @@ class SqlPlanStore:
         self._session.add_all([RuntimeTaskResolution(iteration_id=iteration.id, **item.model_dump(mode="json")) for item in proposal.resolutions])
         plan.status = PlanStatus.ACTIVE.value
         await self._session.flush()
+        await self._commit()
         return plan
 
     async def snapshot(self, plan_id: UUID) -> Dict[str, Any]:
@@ -489,6 +631,13 @@ class SqlPlanStore:
             if current["result"] != original["result"]:
                 row.result = current["result"]
         await self._session.flush()
+        if any(
+            current["status"] != before["tasks"][task_id]["status"]
+            or current["next_retry_at"] != before["tasks"][task_id]["next_retry_at"]
+            or current["result"] != before["tasks"][task_id]["result"]
+            for task_id, current in working["tasks"].items()
+        ):
+            await self._commit()
         return decision
 
     async def claim_task(self, plan_id: UUID, task_id: str) -> RuntimePlanTask:
@@ -502,6 +651,7 @@ class SqlPlanStore:
         row.status, row.attempts, row.next_retry_at = TaskStatus.RUNNING.value, row.attempts + 1, None
         self._session.add(RuntimeTaskAttempt(task_row_id=row.id, attempt_number=row.attempts))
         await self._session.flush()
+        await self._commit()
         return row
 
     async def claim_checkpoint(self, plan_id: UUID, kind: SchedulerActionKind) -> RuntimePlanIteration:
@@ -516,6 +666,7 @@ class SqlPlanStore:
         row.checkpoint_status = "planner_running" if kind == SchedulerActionKind.INVOKE_PLANNER else "synthesis_running"
         row.checkpoint_claimed_at = _now()
         await self._session.flush()
+        await self._commit()
         return row
 
     async def task_request(self, plan_id: UUID, task_id: str) -> Dict[str, Any]:
@@ -523,6 +674,8 @@ class SqlPlanStore:
         task = snapshot["tasks"].get(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
+        if task["status"] != TaskStatus.RUNNING.value:
+            raise PlanValidationError("task request requires a running claim")
         inputs = dict(task["inputs"])
         for binding in snapshot.get("bindings", []):
             if binding["consumer_task_id"] == task_id:
@@ -533,6 +686,7 @@ class SqlPlanStore:
                 value = source_outputs[binding["output_key"]]
                 need = next((item for item in snapshot.get("needs", []) if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
+        _validate_compiled_inputs(task, inputs)
         return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": {dep: snapshot["tasks"][dep]["result"] for dep in task["depends_on"]}, "expected_outputs": task["expected_outputs"], "contract": task.get("contract", {}), "freshness_policy": task["freshness_policy"]}
 
     async def pause_confirmation(self, plan_id: UUID, task_id: str, payload: Dict[str, Any]) -> None:
@@ -546,6 +700,7 @@ class SqlPlanStore:
         attempt.status, attempt.error, attempt.finished_at = AttemptStatus.CANCELLED.value, {"code": "confirmation_required", "message": "Operation requires confirmation"}, _now()
         self._session.add(RuntimePause(plan_id=plan_id, task_id=task_id, kind="confirmation", operation_fingerprint=fingerprint, payload=payload))
         await self._session.flush()
+        await self._commit()
 
     async def resume_confirmation(self, plan_id: UUID, task_id: str, operation_fingerprint: str) -> None:
         plan = await self._plan(plan_id, lock=True)
@@ -557,6 +712,7 @@ class SqlPlanStore:
             raise PlanValidationError("confirmation task is not waiting")
         row.status, pause.status, pause.resolved_at, plan.status = TaskStatus.PENDING.value, "approved", _now(), PlanStatus.ACTIVE.value
         await self._session.flush()
+        await self._commit()
 
     async def reject_confirmation(self, plan_id: UUID, task_id: str, operation_fingerprint: str) -> None:
         plan = await self._plan(plan_id, lock=True)
@@ -570,6 +726,7 @@ class SqlPlanStore:
         row.result = {"outcome": TaskOutcome.UNFULFILLABLE.value, "description": "Required operation was rejected", "reason_code": "confirmation_rejected", "outputs": {}, "limitation": {"code": "confirmation_rejected", "message": "The required operation was not approved.", "action": "none"}}
         pause.status, pause.resolved_at, plan.status = "rejected", _now(), PlanStatus.ACTIVE.value
         await self._session.flush()
+        await self._commit()
 
     async def finish_attempt(self, plan_id: UUID, task_id: str, *, execution: TaskExecutionReceipt, result: TaskResult) -> RuntimePlanTask:
         await self._plan(plan_id, lock=True)
@@ -590,6 +747,7 @@ class SqlPlanStore:
         attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(RuntimeTaskAttempt.task_row_id == row.id, RuntimeTaskAttempt.attempt_number == row.attempts).with_for_update())).scalar_one()
         attempt.status, attempt.execution_result, attempt.finished_at = AttemptStatus.COMPLETED.value, execution.model_dump(mode="json"), _now()
         await self._session.flush()
+        await self._commit()
         return row
 
     async def finish_failure(self, plan_id: UUID, task_id: str, failure: TaskAttemptFailure, *, max_attempts: int, retry_at: Optional[datetime] = None) -> RuntimePlanTask:
@@ -611,6 +769,7 @@ class SqlPlanStore:
                 "limitation": limitation,
             }
         await self._session.flush()
+        await self._commit()
         return row
 
     async def link_attempt_execution(self, plan_id: UUID, task_id: str, agent_execution_id: UUID) -> None:
@@ -631,6 +790,7 @@ class SqlPlanStore:
         )).scalar_one()
         attempt.agent_execution_id = agent_execution_id
         await self._session.flush()
+        await self._commit()
 
     async def complete_synthesis(self, plan_id: UUID) -> None:
         plan = await self._plan(plan_id, lock=True)
@@ -641,6 +801,7 @@ class SqlPlanStore:
         iteration.checkpoint_claimed_at = None
         plan.status = PlanStatus.COMPLETED.value
         await self._session.flush()
+        await self._commit()
 
     async def recover_stale_claims(self, plan_id: UUID, *, stale_before: datetime) -> None:
         await self._plan(plan_id, lock=True)
@@ -652,7 +813,17 @@ class SqlPlanStore:
             ).with_for_update()
         )).scalars().all()
         for row in rows:
-            row.status = TaskStatus.PENDING.value
+            # The operation may have escaped the process before it died. Do
+            # not create an implicit second execution from a stale timestamp.
+            row.status = TaskStatus.FAILED.value
+            limitation = _safe_failure_limitation("claim_lease_expired")
+            row.result = {
+                "outcome": TaskOutcome.UNFULFILLABLE.value,
+                "description": "Task execution lease expired before a result was recorded",
+                "reason_code": "claim_lease_expired",
+                "outputs": {},
+                "limitation": limitation,
+            }
             attempt = (await self._session.execute(
                 select(RuntimeTaskAttempt).where(
                     RuntimeTaskAttempt.task_row_id == row.id,
@@ -669,3 +840,4 @@ class SqlPlanStore:
             iteration.checkpoint_status = "idle"
             iteration.checkpoint_claimed_at = None
         await self._session.flush()
+        await self._commit()
