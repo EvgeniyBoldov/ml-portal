@@ -59,6 +59,21 @@ class ChatMessageStreamRequest(BaseModel):
     confirmation_tokens: Optional[List[str]] = Field(default=None, description="Confirmation tokens for gated operations")
 
 
+class ChatContextInspectionResponse(BaseModel):
+    revision: int
+    focus: Dict[str, Any] = Field(default_factory=dict)
+    active_goal: Optional[Dict[str, Any]] = None
+    artifacts: List[Dict[str, Any]] = Field(default_factory=list)
+    open_loops: List[Dict[str, Any]] = Field(default_factory=list)
+    decisions: List[Dict[str, Any]] = Field(default_factory=list)
+    task_results: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ChatContextResetResponse(BaseModel):
+    revision: int
+    closed_items: int
+
+
 class ChatAttachmentUploadResponse(BaseModel):
     artifact_id: str
     file_name: str

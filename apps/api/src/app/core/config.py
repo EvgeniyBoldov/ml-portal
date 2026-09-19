@@ -73,6 +73,16 @@ class Settings(BaseSettings):
     )
     CHAT_TITLE_MAX_TOKENS: int = Field(default=128, ge=16, le=512)
     CHAT_TITLE_REASONING_EFFORT: str | None = Field(default="low")
+    CHAT_CONTEXT_TERM_BINDING_TTL_DAYS: int = Field(default=90, ge=1)
+    CHAT_CONTEXT_TASK_RESULT_TTL_DAYS: int = Field(default=30, ge=1)
+    CHAT_CONTEXT_BLOCKED_LOOP_TTL_DAYS: int = Field(default=30, ge=1)
+    CHAT_CONTEXT_TERM_BINDING_LIMIT: int = Field(default=20, ge=1, le=100)
+    CHAT_CONTEXT_ARTIFACT_LIMIT: int = Field(default=50, ge=1, le=100)
+    CHAT_CONTEXT_OPEN_LOOP_LIMIT: int = Field(default=5, ge=1, le=20)
+    CHAT_CONTEXT_DECISION_LIMIT: int = Field(default=10, ge=1, le=50)
+    CHAT_CONTEXT_TASK_RESULT_LIMIT: int = Field(default=20, ge=1, le=100)
+    CHAT_CONTEXT_HISTORY_LIMIT: int = Field(default=12, ge=1, le=50)
+    CHAT_CONTEXT_TOTAL_ITEM_LIMIT: int = Field(default=120, ge=10, le=300)
     
     # Embedding runtime behavior flags.
     EMB_OFFLINE: bool = Field(default=True, description="Disallow network downloads for embedding models")

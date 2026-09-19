@@ -1,0 +1,51 @@
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.description,
+.empty,
+.error,
+.revision,
+.value {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.revision {
+  color: var(--text-secondary);
+}
+
+.section {
+  border-top: 1px solid var(--border-color);
+  padding-top: var(--sp-3);
+}
+
+.section h3 {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.value {
+  color: var(--text-primary);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-left: var(--sp-5);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}

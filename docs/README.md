@@ -25,6 +25,7 @@
 - [DCBox MCP](architecture/DCBOX_MCP.md)
 - [Sandbox Runtime](architecture/SANDBOX_RUNTIME.md)
 - [Runtime Memory](architecture/RUNTIME_MEMORY.md)
+- [Chat Context Memory](architecture/CHAT_CONTEXT_MEMORY.md)
 - [Memory Risks and Accepted Decisions](architecture/MEMORY_RISKS.md)
 - [Chat File Attachments](architecture/CHAT_FILE_ATTACHMENTS.md)
 - [Entity Builder Pattern](architecture/ENTITY_BUILDER_PATTERN.md)

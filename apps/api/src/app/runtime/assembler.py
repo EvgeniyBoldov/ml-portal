@@ -23,11 +23,13 @@ from app.runtime.agent_executor import AgentExecutor
 from app.runtime.memory.builder import MemoryBuilder
 from app.runtime.memory.writer import MemoryWriter
 from app.runtime.planner.graph_planner import GraphPlanner
-from app.runtime.ports import SynthesizerPort, TaskExecutionPort
+from app.runtime.ports import ChatContextOutcomePort, SynthesizerPort, TaskExecutionPort
 from app.runtime.synthesizer import Synthesizer
 from app.runtime.orchestrator import GraphOrchestrator
 from app.runtime.plan_store import SqlPlanStore
 from app.runtime.stages.graph_planning_stage import GraphPlanningStage
+from app.services.chat_context_outcome_adapter import ChatContextOutcomeAdapter
+from app.services.chat_context_service import ChatContextService
 
 
 class PipelineAssembler:
@@ -76,6 +78,11 @@ class PipelineAssembler:
     @cached_property
     def synthesizer(self) -> SynthesizerPort:
         return Synthesizer(session=self._session, llm_client=self._llm_client)
+
+    @cached_property
+    def chat_context_outcome_port(self) -> ChatContextOutcomePort:
+        """Concrete chat adapter; request data itself remains serializable."""
+        return ChatContextOutcomeAdapter(ChatContextService(self._session, self._llm_client, None))
 
     # ------------------------------------------------------------------ #
     # Stage factories (fresh per turn)                                   #

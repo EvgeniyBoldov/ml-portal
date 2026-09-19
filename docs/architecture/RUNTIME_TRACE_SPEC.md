@@ -6,6 +6,11 @@
 runtime. It records operator-meaningful facts from start to terminal state;
 SSE transport and old trace/run tables are not alternate histories.
 
+The journal is not an input to chat-context materialization. The separate
+contract in [`CHAT_CONTEXT_MEMORY.md`](CHAT_CONTEXT_MEMORY.md) consumes a typed
+runtime outcome projection and never scans, replays, copies, or summarizes raw
+journal rows.
+
 ## Event identity and hierarchy
 
 Every row has an event `id`, `run_id`, monotonic `sequence`, `event_type`,

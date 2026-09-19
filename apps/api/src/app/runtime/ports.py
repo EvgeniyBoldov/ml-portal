@@ -41,6 +41,8 @@ from app.runtime.orchestrator_contracts import (
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.events import RuntimeEvent
 from app.runtime.turn_state import RuntimeTurnState
+from app.runtime.context_outcome import RuntimeOutcomeProjection
+from app.services.chat_context_contracts import ChatContextApplyReceipt
 
 
 # --------------------------------------------------------------------------- #
@@ -95,3 +97,13 @@ class SynthesizerPort(Protocol):
         budget_resolver: Optional[BudgetResolver] = None,
         logging_level: Optional[str] = None,
     ) -> AsyncIterator[RuntimeEvent]: ...
+
+
+@runtime_checkable
+class ChatContextOutcomePort(Protocol):
+    """Internal runtime-to-chat handoff; never an SSE or journal boundary."""
+
+    async def apply(
+        self, *, projection: RuntimeOutcomeProjection, expected_context_revision: int,
+        branch_id: str | None, owner_id: str, tenant_id: str,
+    ) -> ChatContextApplyReceipt: ...

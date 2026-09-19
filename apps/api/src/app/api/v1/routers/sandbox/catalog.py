@@ -187,6 +187,7 @@ async def get_sandbox_catalog(
                 SystemLLMRoleType.SYNTHESIZER.value,
                 SystemLLMRoleType.FACT_EXTRACTOR.value,
                 SystemLLMRoleType.FACT_COMPACTOR.value,
+                SystemLLMRoleType.CHAT_CONTEXT_COMPACTOR.value,
             ]),
         )
     )
@@ -264,6 +265,13 @@ async def get_sandbox_catalog(
             description="Нормализация и объединение подтверждённых фактов",
             config={**_role_snapshot(SystemLLMRoleType.FACT_COMPACTOR.value), "limits": role_limits.get("fact_compactor", {})},
             response_contract=build_response_contract(SystemLLMRoleType.FACT_COMPACTOR),
+        ),
+        SandboxCatalogRouterItem(
+            id="chat_context_compactor",
+            name="Chat Context Compactor",
+            description="Асинхронная компактация безопасного рабочего контекста чата",
+            config=_role_snapshot(SystemLLMRoleType.CHAT_CONTEXT_COMPACTOR.value),
+            response_contract=build_response_contract(SystemLLMRoleType.CHAT_CONTEXT_COMPACTOR),
         ),
     ]
 

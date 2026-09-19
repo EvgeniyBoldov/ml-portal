@@ -22,8 +22,10 @@ from app.runtime import PipelineRequest, RuntimeEvent, RuntimeEventType, Runtime
 from app.runtime.contracts import ExecutionMode
 from app.agents.execution_preflight import AgentUnavailableError
 from app.core.logging import get_logger
+from app.core.config import get_settings
 from app.core.idempotency import IdempotencyManager
 from app.services.chat_context_service import ChatContextService
+from app.services.chat_context_contracts import ChatContextSnapshot
 from app.services.chat_event_mapper import ChatEventMapper
 from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_turn_orchestrator import ChatTurnOrchestrator
@@ -234,7 +236,19 @@ class ChatStreamService:
             attachment_contexts = []
             artifact_ids = artifact_ids or []
             attachment_meta: list[dict[str, Any]] = []
-            context = await self.context_service.load_chat_context(chat_id, limit=12)
+            context = await self.context_service.load_chat_context(chat_id, limit=get_settings().CHAT_CONTEXT_HISTORY_LIMIT)
+            try:
+                loaded_snapshot = await self.context_service.load_snapshot(
+                    chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id,
+                )
+            except Exception:
+                # Context is an optimization, not a prerequisite for a user
+                # turn. The pipeline receives an explicit empty snapshot.
+                logger.warning("chat_context_snapshot_load_failed", exc_info=True, extra={"chat_id": chat_id})
+                from app.core.prometheus_metrics import chat_context_snapshot_load_total
+                chat_context_snapshot_load_total.labels(status="failed").inc()
+                loaded_snapshot = ChatContextSnapshot(chat_id=chat_id)
+            context_snapshot = loaded_snapshot if isinstance(loaded_snapshot, ChatContextSnapshot) else ChatContextSnapshot(chat_id=chat_id)
             if artifact_ids:
                 try:
                     attachment_meta = await self.attachment_service.artifact_metadata(
@@ -252,7 +266,12 @@ class ChatStreamService:
                 for item in history_attachment_meta
                 if isinstance(item, dict) and item.get("artifact_id")
             ]
-            effective_artifact_ids = [*history_artifact_ids, *artifact_ids]
+            snapshot_artifact_ids = [
+                str(item.artifact_id or "")
+                for item in context_snapshot.artifacts
+                if item.artifact_id
+            ]
+            effective_artifact_ids = list(dict.fromkeys([*history_artifact_ids, *snapshot_artifact_ids, *artifact_ids]))
             if effective_artifact_ids:
                 attachment_contexts = await self.attachment_service.build_runtime_artifact_contexts(
                     artifact_ids=effective_artifact_ids,
@@ -281,6 +300,7 @@ class ChatStreamService:
                 store_idempotency=self.store_idempotency,
                 bind_attachments=self.attachment_service.bind_artifacts_to_message,
                 preloaded_context=context,
+                preloaded_context_snapshot=context_snapshot,
             ):
                 yield event
 
@@ -314,6 +334,10 @@ class ChatStreamService:
         execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         attachment_contexts: Optional[list[dict[str, Any]]] = None,
         runtime_run_id: Optional[str] = None,
+        chat_turn_id: Optional[str] = None,
+        expected_context_revision: int = 0,
+        chat_context_snapshot: Optional[ChatContextSnapshot] = None,
+        chat_user_message_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run the turn via runtime v3 Pipeline, translating events to SSE payloads."""
         try:
@@ -332,6 +356,10 @@ class ChatStreamService:
                 request_text=text_content,
                 runtime_run_id=runtime_run_id,
                 chat_id=str(tool_ctx.chat_id),
+                chat_turn_id=chat_turn_id,
+                expected_context_revision=expected_context_revision,
+                chat_context_snapshot=chat_context_snapshot,
+                chat_user_message_id=chat_user_message_id,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 messages=llm_messages,

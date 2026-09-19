@@ -131,6 +131,10 @@ def build_default_beat_schedule() -> dict:
             "task": "app.workers.tasks_cleanup.cleanup_orphaned_chat_attachments",
             "schedule": 3600.0,  # 1 hour
         },
+        "chat-context-expiry-cleanup": {
+            "task": "app.workers.tasks_cleanup.expire_chat_context_items",
+            "schedule": 3600.0,
+        },
         "deprecated-entities-cleanup": {
             "task": "app.workers.tasks_cleanup.cleanup_deprecated_entities",
             "schedule": 3600.0,  # 1 hour

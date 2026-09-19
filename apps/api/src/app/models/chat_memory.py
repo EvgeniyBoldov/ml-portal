@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -19,13 +19,17 @@ class ChatMemoryItem(Base):
     __tablename__ = "chat_memory_items"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('scope', 'term_binding', 'artifact_ref', 'decision', 'open_question', 'chat_fact', 'summary', 'task_result_ref')",
+            "kind IN ('scope', 'goal', 'term_binding', 'artifact_ref', 'open_loop', 'decision', 'recent_anchor', 'task_result_ref', 'open_question', 'chat_fact', 'summary')",
             name="ck_chat_memory_items_kind",
         ),
         CheckConstraint("status IN ('active', 'superseded', 'closed', 'expired')", name="ck_chat_memory_items_status"),
         Index("ix_chat_memory_items_chat_active", "chat_id", "status", "updated_at"),
         Index("ix_chat_memory_items_branch_active", "sandbox_branch_id", "status", "updated_at"),
         Index("ix_chat_memory_items_source_turn", "source_turn_id"),
+        Index("uq_chat_memory_active_root", "chat_id", "kind", "item_key", unique=True,
+              postgresql_where=text("status = 'active' AND sandbox_branch_id IS NULL")),
+        Index("uq_chat_memory_active_branch", "chat_id", "sandbox_branch_id", "kind", "item_key", unique=True,
+              postgresql_where=text("status = 'active' AND sandbox_branch_id IS NOT NULL")),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -42,6 +46,7 @@ class ChatMemoryItem(Base):
     source_message_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("chatmessages.id", ondelete="SET NULL"), nullable=True)
     source_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     source_ref: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_turn_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

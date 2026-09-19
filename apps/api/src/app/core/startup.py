@@ -316,6 +316,15 @@ async def validate_role_contracts_task(session_factory: async_sessionmaker[Async
     logger.info("Role contracts validated successfully")
 
 
+async def ensure_runtime_role_defaults(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Create mandatory non-planner role defaults idempotently at startup."""
+    from app.services.system_llm_role_service import SystemLLMRoleService
+
+    async with session_factory() as session:
+        await SystemLLMRoleService(session).ensure_default_roles()
+        await session.commit()
+
+
 async def sync_periodic_tasks(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Sync celery beat schedule into periodic_tasks registry."""
     from app.services.periodic_task_sync_service import PeriodicTaskSyncService
@@ -330,6 +339,7 @@ async def run_all(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Run all startup tasks in order. Each failure is isolated."""
     tasks: list[tuple[str, Callable]] = [
         ("validate_role_contracts", validate_role_contracts_task),
+        ("ensure_runtime_role_defaults", ensure_runtime_role_defaults),
         ("ensure_default_admin", ensure_default_admin),
         ("register_embedding_models", register_embedding_models),
         ("sync_tool_catalog", sync_tool_catalog),

@@ -34,6 +34,11 @@ duplicate storage coordinates. Collection access is revalidated through RBAC on
 every read. Removing an attachment reference removes the owned chat attachment
 and storage object; removing an external reference never removes its source.
 
+[`CHAT_CONTEXT_MEMORY.md`](CHAT_CONTEXT_MEMORY.md) defines how a completed run
+may add a verified artifact to this registry and separately remember its
+conversational role. The context layer never replaces this registry, and its
+cached metadata never grants file access.
+
 ## Contracts
 
 ### Upload policy

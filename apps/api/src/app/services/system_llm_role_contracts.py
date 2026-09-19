@@ -75,6 +75,9 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
     elif role == SystemLLMRoleType.MEMORY_EVALUATOR:
         from app.runtime.memory.evidence_feedback import _MemoryEvaluationOutput
         model = _MemoryEvaluationOutput
+    elif role == SystemLLMRoleType.CHAT_CONTEXT_COMPACTOR:
+        from app.services.chat_context_compactor import _CompactionOutput
+        model = _CompactionOutput
     if model:
         _ROLE_OUTPUT_MODELS[role] = model
 
@@ -175,6 +178,7 @@ def validate_role_contracts() -> Dict[SystemLLMRoleType, str]:
         SystemLLMRoleType.MEMORY,
         SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR,
         SystemLLMRoleType.MEMORY_EVALUATOR,
+        SystemLLMRoleType.CHAT_CONTEXT_COMPACTOR,
     ]
 
     for role in json_roles:

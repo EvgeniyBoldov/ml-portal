@@ -24,7 +24,7 @@ from app.models.rag_ingest import DocumentCollectionMembership, RAGStatus, Sourc
 from app.models.collection import Collection
 from app.models.glossary import GlossaryObservation
 from app.workers.session_factory import get_worker_session
-from app.workers.transaction_utils import checkpoint_commit
+from app.workers.transaction_utils import checkpoint_commit, worker_transaction
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.memory.dto import SummaryDTO, FactDTO
@@ -34,6 +34,8 @@ from app.runtime.memory.writer import MemoryWriter
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.entity_ids import memory_component_entity_id, memory_orchestrator_id as make_memory_orchestrator_id
 from app.services.system_llm_role_service import SystemLLMRoleService
+from app.services.chat_context_compactor import ChatContextCompactor
+from app.services.chat_context_service import ChatContextService
 from app.services.runtime_event_logger import RuntimeEventJournalFactory
 from app.runtime.memory.evidence_feedback import (
     MemoryEvidenceEvaluator, MemoryEvidenceFeedbackService, bounded_document_evidence,
@@ -239,6 +241,51 @@ def reconcile_collection_memory_policy(collection_id: str) -> Dict[str, Any]:
     return asyncio.run(_reconcile())
 
 logger = get_logger(__name__)
+
+
+class ChatContextCompactionPayload(BaseModel):
+    chat_id: str
+    chat_turn_id: str
+    user_id: str
+    tenant_id: str
+    expected_revision: int = Field(ge=0)
+    snapshot: dict[str, Any]
+    recent_dialogue: list[dict[str, str]] = Field(default_factory=list, max_length=8)
+    outcome: dict[str, Any] = Field(default_factory=dict)
+    valid_source_ids: list[str] = Field(default_factory=list, max_length=20)
+    sandbox_branch_id: Optional[str] = None
+
+
+@shared_task(name="app.workers.tasks_memory.compact_chat_context", queue="memory")
+def compact_chat_context(payload_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Best-effort semantic compaction guarded by the snapshot revision."""
+    async def _compact() -> Dict[str, Any]:
+        payload = ChatContextCompactionPayload.model_validate(payload_dict)
+        async with get_worker_session() as session:
+            from app.core.di import get_llm_client, reset_llm_client
+
+            reset_llm_client()
+            llm_client = get_llm_client()
+            compactor = ChatContextCompactor(session=session, llm_client=llm_client)
+            operations = await compactor.propose(
+                snapshot=payload.snapshot, recent_dialogue=payload.recent_dialogue,
+                outcome=payload.outcome, valid_source_ids=payload.valid_source_ids,
+                expected_revision=payload.expected_revision, chat_id=payload.chat_id,
+                user_id=payload.user_id, tenant_id=payload.tenant_id,
+            )
+            if not operations:
+                from app.core.prometheus_metrics import record_chat_context_reconciliation
+                record_chat_context_reconciliation(origin="compactor", outcome="no_op")
+                return {"status": "skipped", "reason": "no_valid_operations"}
+            async with worker_transaction(session, "compact_chat_context"):
+                receipt = await ChatContextService(session, llm_client, None).apply_compaction(
+                    chat_id=payload.chat_id, branch_id=payload.sandbox_branch_id,
+                    chat_turn_id=payload.chat_turn_id, expected_revision=payload.expected_revision,
+                    operations=operations,
+                )
+            return {"status": "completed", "revision": receipt.revision, "applied": receipt.applied_count, "skipped": receipt.skipped_count, "degraded": receipt.degradation_codes}
+
+    return asyncio.run(_compact())
 
 
 @shared_task(name="app.workers.tasks_memory.evaluate_memory_rag_evidence", queue="memory")

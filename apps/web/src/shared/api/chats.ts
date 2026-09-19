@@ -12,6 +12,22 @@ import type {
   ChatUploadPolicy,
 } from './types';
 
+/** Bounded user-safe projection of chat-local working context. */
+export interface ChatContextInspection {
+  revision: number;
+  focus: Record<string, unknown>;
+  active_goal: Record<string, unknown> | null;
+  artifacts: Array<Record<string, unknown>>;
+  open_loops: Array<Record<string, unknown>>;
+  decisions: Array<Record<string, unknown>>;
+  task_results: Array<Record<string, unknown>>;
+}
+
+export interface ChatContextResetResult {
+  revision: number;
+  closed_items: number;
+}
+
 export async function listChats(
   params: { cursor?: string; limit?: number; q?: string } = {}
 ) {
@@ -101,6 +117,17 @@ export async function updateChatTags(chat_id: string, tags: string[]) {
 export async function deleteChat(chat_id: string) {
   return apiRequest<{ id: string; deleted: boolean }>(`/chats/${chat_id}`, {
     method: 'DELETE',
+  });
+}
+
+export async function getChatContext(chatId: string) {
+  return apiRequest<ChatContextInspection>(`/chats/${chatId}/context`);
+}
+
+export async function resetChatContext(chatId: string) {
+  return apiRequest<ChatContextResetResult>(`/chats/${chatId}/context`, {
+    method: 'DELETE',
+    idempotent: true,
   });
 }
 

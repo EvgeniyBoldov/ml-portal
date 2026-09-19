@@ -69,7 +69,7 @@ export const qk = {
     },
     systemLlmRoles: {
       all: () => ['admin', 'system-llm-roles'] as const,
-      active: (role: 'planner' | 'turn_preflight' | 'memory' | 'synthesizer' | 'fact_extractor' | 'fact_compactor') =>
+      active: (role: 'planner' | 'turn_preflight' | 'memory' | 'synthesizer' | 'fact_extractor' | 'fact_compactor' | 'chat_context_compactor') =>
         ['admin', 'system-llm-roles', 'active', role] as const,
     },
     audit: (params?: {
@@ -147,6 +147,7 @@ export const qk = {
     list: (q?: string) => ['chats', 'list', q] as const,
     detail: (id: string) => ['chats', 'detail', id] as const,
     messages: (chatId: string) => ['chats', 'messages', chatId] as const,
+    context: (chatId: string) => ['chats', 'context', chatId] as const,
   },
   plans: {
     all: () => ['plans'] as const,

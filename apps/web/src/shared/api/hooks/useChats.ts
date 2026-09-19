@@ -28,6 +28,27 @@ export function useChatMessages(chatId: string | undefined, limit = 50) {
   });
 }
 
+/** Bounded, user-safe working context for the selected chat. */
+export function useChatContext(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: chatId ? qk.chats.context(chatId) : qk.chats.context('undefined'),
+    queryFn: () => chatsApi.getChatContext(chatId!),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useResetChatContext() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (chatId: string) => chatsApi.resetChatContext(chatId),
+    onSuccess: (_result, chatId) => {
+      queryClient.invalidateQueries({ queryKey: qk.chats.context(chatId) });
+    },
+  });
+}
+
 /**
  * Hook for creating new chat
  */

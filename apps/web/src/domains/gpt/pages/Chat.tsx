@@ -3,6 +3,7 @@ import styles from './Chat.module.css';
 import { useParams } from 'react-router-dom';
 import { useChatActions, useChatMessagesState } from '@/domains/chat/contexts/ChatContext';
 import { ChatComposer } from '@/domains/chat/components/ChatComposer';
+import { ChatContextPanel } from '@/domains/chat/components/ChatContextPanel';
 import { UserMessage } from '@/domains/chat/components/UserMessage';
 import { AssistantMessage } from '@/domains/chat/components/AssistantMessage';
 import { ConfirmationPrompt } from '@/domains/chat/components/ConfirmationPrompt/ConfirmationPrompt';
@@ -239,6 +240,7 @@ export default function Chat() {
         <div className={styles.headerInfo}>
           <h2 className={styles.headerTitle}>Чат</h2>
         </div>
+        <ChatContextPanel chatId={chatId} />
       </div>
 
       {/* Messages */}

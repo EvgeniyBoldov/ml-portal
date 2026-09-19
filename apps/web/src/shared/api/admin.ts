@@ -42,7 +42,8 @@ export type SystemLLMRoleType =
   | 'memory'
   | 'synthesizer'
   | 'fact_extractor'
-  | 'fact_compactor';
+  | 'fact_compactor'
+  | 'chat_context_compactor';
 export type RetryBackoffType = 'none' | 'linear' | 'exp';
 
 export type ResponseContractFormat = 'json' | 'plain_text' | 'markdown';

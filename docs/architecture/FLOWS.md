@@ -199,3 +199,34 @@ Binding rule:
 - `facts` is durable business memory; `runtime_execution_events` remains the
   execution journal and is not a memory store,
 - sandbox overlays are branch-scoped and never directly persist durable facts.
+
+## 10. Chat Context Materialization Flow
+
+Related docs:
+- [Chat Context Memory](CHAT_CONTEXT_MEMORY.md)
+- [Chat File Attachments](CHAT_FILE_ATTACHMENTS.md)
+- [Runtime Event Journal](RUNTIME_TRACE_SPEC.md)
+
+Flow:
+1. Load a bounded recent dialogue tail and the active typed chat-context
+   snapshot.
+2. Re-authorize selected artifact references through the canonical chat
+   artifact service.
+3. Freeze the bounded snapshot into the current runtime turn.
+4. Execute the canonical runtime pipeline.
+5. Build a typed `RuntimeOutcomeProjection` from runtime state, final plan
+   state, verified artifacts, and safe limitations.
+6. Register verified artifact targets in the chat artifact registry.
+7. Apply deterministic chat-context operations in turn order.
+8. Optionally compact goal/topic/decision context asynchronously with a
+   revision guard.
+
+Binding rule:
+- `runtime_execution_events` is never an extraction input and is never
+  replayed into chat memory;
+- `chat_artifact_references` owns file identity, target resolution, and access;
+- `chat_memory_items` owns only bounded conversational meaning and provenance;
+- runtime plans remain control-plane state and contribute only typed bounded
+  outcome references;
+- technical errors remain diagnostics, while only safe continuation-relevant
+  limitations may enter chat context.

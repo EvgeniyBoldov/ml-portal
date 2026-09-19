@@ -129,6 +129,44 @@ chat_runtime_progress_forwarded_total = Counter(
     registry=_registry,
 )
 
+# Chat-local working context uses fixed outcome/origin labels only.  In
+# particular, chat, turn, artifact and tenant identifiers must never be labels.
+chat_context_snapshot_load_total = Counter(
+    "chat_context_snapshot_load_total",
+    "Bounded chat context snapshots loaded",
+    ["status"],
+    registry=_registry,
+)
+
+chat_context_reconcile_total = Counter(
+    "chat_context_reconcile_total",
+    "Chat context reconciliation outcomes",
+    ["action", "kind", "status"],
+    registry=_registry,
+)
+
+chat_context_compaction_total = Counter(
+    "chat_context_compaction_total",
+    "Optional chat context compaction outcomes",
+    ["status"],
+    registry=_registry,
+)
+
+chat_context_stale_write_total = Counter(
+    "chat_context_stale_write_total",
+    "Chat context writes skipped by revision guard",
+    ["kind"],
+    registry=_registry,
+)
+
+
+def record_chat_context_reconciliation(*, origin: str, outcome: str) -> None:
+    chat_context_reconcile_total.labels(action=origin, kind="all", status=outcome).inc()
+    if origin == "compactor":
+        chat_context_compaction_total.labels(status=outcome).inc()
+    if outcome == "stale":
+        chat_context_stale_write_total.labels(kind="all").inc()
+
 runtime_event_duration_ms = Histogram(
     "runtime_event_duration_ms",
     "Duration reported by canonical runtime events",

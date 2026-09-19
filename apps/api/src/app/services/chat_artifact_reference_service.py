@@ -155,6 +155,43 @@ class ChatArtifactReferenceService:
             chat_id=chat_id,
             owner_id=owner_id,
         )
+        return await self._resolve_reference(reference, owner_id=owner_id, tenant_id=tenant_id)
+
+    async def resolve_many(
+        self,
+        *, artifact_ids: list[str], chat_id: str | uuid.UUID,
+        owner_id: str | uuid.UUID, tenant_id: str | uuid.UUID,
+    ) -> dict[str, ResolvedDownload]:
+        """Resolve a bounded registry batch without one lookup per reference."""
+        ids: list[uuid.UUID] = []
+        for raw in artifact_ids[:100]:
+            try:
+                ids.append(uuid.UUID(str(raw)))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return {}
+        rows = list((await self.session.execute(
+            select(ChatArtifactReference).where(
+                ChatArtifactReference.id.in_(ids),
+                ChatArtifactReference.chat_id == uuid.UUID(str(chat_id)),
+                ChatArtifactReference.owner_id == uuid.UUID(str(owner_id)),
+            )
+        )).scalars().all())
+        resolved: dict[str, ResolvedDownload] = {}
+        for reference in rows:
+            try:
+                resolved[str(reference.id)] = await self._resolve_reference(
+                    reference, owner_id=owner_id, tenant_id=tenant_id,
+                )
+            except ChatArtifactReferenceError:
+                continue
+        return resolved
+
+    async def _resolve_reference(
+        self, reference: ChatArtifactReference, *, owner_id: str | uuid.UUID,
+        tenant_id: str | uuid.UUID,
+    ) -> ResolvedDownload:
         kind = reference.target_kind
         if kind == "chat_attachment":
             try:

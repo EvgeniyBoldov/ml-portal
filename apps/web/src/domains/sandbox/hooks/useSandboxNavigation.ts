@@ -15,6 +15,7 @@ const ORCHESTRATOR_META: Array<{
   { id: 'synthesizer', name: 'Synthesizer', description: 'Сборка итогового ответа' },
   { id: 'fact_extractor', name: 'Fact Extractor', description: 'Извлечение фактов для памяти' },
   { id: 'fact_compactor', name: 'Fact Compactor', description: 'Сопоставление и нормализация фактов' },
+  { id: 'chat_context_compactor', name: 'Chat Context Compactor', description: 'Компактация рабочего контекста чата' },
 ];
 
 export function useSandboxCatalog(sessionId: string | undefined) {
@@ -63,6 +64,11 @@ export function useCatalogData(sessionId: string | undefined) {
         queryFn: () => systemLLMRolesApi.getActive('fact_compactor'),
         staleTime: 30_000,
       },
+      {
+        queryKey: qk.admin.systemLlmRoles.active('chat_context_compactor'),
+        queryFn: () => systemLLMRolesApi.getActive('chat_context_compactor'),
+        staleTime: 30_000,
+      },
     ],
   });
 
@@ -72,6 +78,7 @@ export function useCatalogData(sessionId: string | undefined) {
     const synthesizerConfig = orchestratorQueries[2]?.data as Record<string, unknown> | undefined;
     const factExtractorConfig = orchestratorQueries[3]?.data as Record<string, unknown> | undefined;
     const factCompactorConfig = orchestratorQueries[4]?.data as Record<string, unknown> | undefined;
+    const chatContextCompactorConfig = orchestratorQueries[5]?.data as Record<string, unknown> | undefined;
 
     const configById: Record<string, Record<string, unknown>> = {
       planner: plannerConfig ?? {},
@@ -79,6 +86,7 @@ export function useCatalogData(sessionId: string | undefined) {
       synthesizer: synthesizerConfig ?? {},
       fact_extractor: factExtractorConfig ?? {},
       fact_compactor: factCompactorConfig ?? {},
+      chat_context_compactor: chatContextCompactorConfig ?? {},
     };
 
     const catalogRouters = data?.system_routers ?? [];

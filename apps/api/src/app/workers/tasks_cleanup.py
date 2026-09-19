@@ -25,6 +25,8 @@ from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
 from app.services.sandbox_service import SandboxService
 from app.workers.session_factory import get_worker_session
+from app.workers.transaction_utils import worker_transaction
+from app.repositories.chat_context_repository import ChatContextRepository
 
 logger = get_logger(__name__)
 
@@ -34,6 +36,7 @@ RUNTIME_EVENT_RETENTION_DAYS = 7
 DEFAULT_LIFECYCLE_RETENTION_DAYS = 14
 DETACHED_CHAT_ATTACHMENT_RETENTION_HOURS = 24
 ORPHAN_CHAT_ATTACHMENT_GRACE_MINUTES = 15
+CHAT_CONTEXT_EXPIRY_BATCH_SIZE = 500
 
 
 LIFECYCLE_MODELS = (
@@ -45,6 +48,19 @@ LIFECYCLE_MODELS = (
     ("chat", Chats),
     ("sandbox_session", SandboxSession),
 )
+
+
+@shared_task(name="app.workers.tasks_cleanup.expire_chat_context_items", queue="maintenance.default")
+def expire_chat_context_items() -> dict[str, int]:
+    """Mark expired working-context items without deleting chat history."""
+    async def _expire() -> dict[str, int]:
+        async with get_worker_session() as session:
+            async with worker_transaction(session, "expire_chat_context_items"):
+                expired = await ChatContextRepository(session).expire_due_items(limit=CHAT_CONTEXT_EXPIRY_BATCH_SIZE)
+        return {"expired": expired}
+
+    import asyncio
+    return asyncio.run(_expire())
 
 
 @shared_task(

@@ -5,6 +5,11 @@
 Runtime memory is a bounded, provenance-aware context projection. It is not
 runtime state, RAG knowledge, an artifact registry, or an execution trace.
 
+Per-chat working context is a separate surface defined in
+[`CHAT_CONTEXT_MEMORY.md`](CHAT_CONTEXT_MEMORY.md). It may refer to durable
+facts, plans, and artifacts, but it never copies their authoritative data and
+never reads the runtime event journal.
+
 ```text
 facts table -> MemoryService/FactStore -> immutable MemorySnapshot
   -> bounded mechanical lookup or scoped runtime recall

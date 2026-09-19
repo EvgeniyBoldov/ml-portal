@@ -25,12 +25,13 @@ from app.models.chat_turn import ChatTurn
 from app.repositories.chats_repo import AsyncChatMessagesRepository
 from app.repositories.factory import AsyncRepositoryFactory
 from app.schemas.chat_events import ChatSSEEventType, ErrorPayload, format_chat_sse, format_chat_sse_done
-from app.schemas.chats import ChatMessageStreamRequest
+from app.schemas.chats import ChatContextInspectionResponse, ChatContextResetResponse, ChatMessageStreamRequest
 from app.schemas.confirmations import ConfirmationIssueRequest, ConfirmationIssueResponse
 from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeRequest
 from app.services.chat_router_event_mapper import build_resume_content, map_service_event_to_sse
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.chat_stream_service import ChatStreamService
+from app.services.chat_context_service import ChatContextService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeValidationError
 from app.agents.runtime.confirmation import get_confirmation_service
@@ -38,6 +39,35 @@ from app.runtime.contracts import ExecutionMode
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+@router.get("/{chat_id}/context", response_model=ChatContextInspectionResponse)
+async def inspect_chat_context(
+    chat_id: str,
+    chat_ctx: ChatContext = Depends(resolve_chat_context),
+    session: AsyncSession = Depends(db_session),
+) -> ChatContextInspectionResponse:
+    """Inspect the safe chat-local working context, never the runtime trace."""
+    if str(chat_ctx.chat_id) != str(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    result = await ChatContextService(session, None, None).inspect_snapshot(
+        chat_id=str(chat_ctx.chat_id), owner_id=str(chat_ctx.user_id), tenant_id=str(chat_ctx.tenant_id),
+    )
+    return ChatContextInspectionResponse.model_validate(result)
+
+
+@router.delete("/{chat_id}/context", response_model=ChatContextResetResponse)
+async def reset_chat_context(
+    chat_id: str,
+    chat_ctx: ChatContext = Depends(resolve_chat_context),
+    session: AsyncSession = Depends(db_session),
+) -> ChatContextResetResponse:
+    """Forget only chat-local working context; transcript and facts remain."""
+    if str(chat_ctx.chat_id) != str(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    receipt = await ChatContextService(session, None, None).reset_context(chat_id=str(chat_ctx.chat_id))
+    await session.commit()
+    return ChatContextResetResponse(revision=receipt.revision, closed_items=receipt.applied_count)
 
 
 @router.get("/{chat_id}/paused-run")

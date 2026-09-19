@@ -23,6 +23,35 @@ from app.runtime.task_result_reducer import TaskAttemptResultReducer
 from app.runtime.memory.tool_ledger import canonical_operation_name, document_search_evidence_document_ids
 
 
+def _task_memory_context(task: TaskRequest, planner_memory_context: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project planner context to the concrete task without semantic guessing.
+
+    Artifact references are forwarded only when the plan explicitly names their
+    opaque id; task agents must not receive the entire conversational registry.
+    """
+    selected: list[dict[str, Any]] = []
+    task_text = json.dumps({"intent": task.intent, "instructions": task.instructions, "inputs": task.inputs}, ensure_ascii=False, default=str)
+    for entry in planner_memory_context:
+        if not isinstance(entry, dict) or entry.get("type") != "chat_context":
+            selected.append(entry)
+            continue
+        raw = dict(entry)
+        artifacts = [
+            item for item in raw.get("artifacts") or []
+            if isinstance(item, dict) and str(item.get("artifact_id") or "") in task_text
+        ]
+        selected.append({
+            "type": "chat_context",
+            "revision": raw.get("revision"),
+            "focus": raw.get("focus"),
+            "active_goal": raw.get("active_goal"),
+            "term_bindings": list(raw.get("term_bindings") or [])[:10],
+            "artifacts": artifacts[:10],
+            "open_loops": list(raw.get("open_loops") or [])[:3],
+        })
+    return selected
+
+
 def _recall_requires_rag(memory_context: Any) -> bool:
     return any(
         isinstance(item, dict) and item.get("type") == "memory_recall" and item.get("rag_required")
@@ -894,7 +923,11 @@ class GraphOrchestrator:
                 ))
                 try:
                     request = TaskRequest.model_validate(await self.store.task_request(plan_id, task_id))
-                    request = request.model_copy(update={"memory_context": list(planner_kwargs.get("planner_memory_context") or [])})
+                    request = request.model_copy(update={
+                        "memory_context": _task_memory_context(
+                            request, list(planner_kwargs.get("planner_memory_context") or []),
+                        ),
+                    })
                     execution = await self._execute_with_heartbeat(
                         plan_id=plan_id,
                         task_id=task_id,
@@ -910,7 +943,11 @@ class GraphOrchestrator:
                     await self.store.finish_attempt(plan_id, task_id, execution=execution, result=result)
                     runtime_state = planner_kwargs.get("runtime_state")
                     if runtime_state is not None and hasattr(runtime_state, "add_task_result"):
-                        runtime_state.add_task_result({"task_id": task_id, **result.model_dump(mode="json")})
+                        runtime_state.add_task_result({
+                            "plan_id": str(plan_id), "task_id": task_id,
+                            "task_entity_id": task_entity_id, "intent": str(task_intent or "")[:600],
+                            "executor": str(task_executor or ""), **result.model_dump(mode="json"),
+                        })
                     if result.outcome.value == "completed":
                         yield OrchestratorEvent(type="task_attempt_succeeded", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
                     yield OrchestratorEvent(type={"completed": "task_completed", "needs_dependency": "task_needs_dependency", "unfulfillable": "task_unfulfillable"}[result.outcome.value], plan_id=str(plan_id), task_id=task_id, attempt=attempt, outcome=result.outcome.value, **trace_links)

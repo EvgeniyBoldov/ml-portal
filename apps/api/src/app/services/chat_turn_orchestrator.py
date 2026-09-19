@@ -5,11 +5,12 @@ import uuid
 
 from app.agents import ToolContext
 from app.core.logging import get_logger
+from app.core.config import get_settings
 from app.services.chat_context_service import ChatContextService
+from app.services.chat_context_contracts import ChatContextSnapshot
 from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_turn_state import ChatTurnState, TurnPhase
-from app.services.chat_memory_service import ChatMemoryService
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.runtime.contracts import ExecutionMode
 
@@ -51,6 +52,7 @@ class ChatTurnOrchestrator:
         store_idempotency,
         bind_attachments,
         preloaded_context: Optional[list[dict[str, Any]]] = None,
+        preloaded_context_snapshot: Optional[ChatContextSnapshot] = None,
         resumed_turn_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         turn = ChatTurnState(chat_id=chat_id, request_id=idempotency_key)
@@ -95,6 +97,10 @@ class ChatTurnOrchestrator:
                     message_id=user_message_id,
                 )
             await self.turn_service.attach_user_message(turn_id, user_message_id)
+            # Persist the request/turn before a potentially long stream. The
+            # terminal assistant, turn status and deterministic context share
+            # a later transaction boundary.
+            await self.turn_service.session.commit()
             turn.transition(TurnPhase.USER_PERSISTED)
             yield {
                 "type": "user_message",
@@ -116,11 +122,15 @@ class ChatTurnOrchestrator:
         context = (
             list(preloaded_context)
             if preloaded_context is not None
-            else await self.context_service.load_chat_context(chat_id, limit=12)
+            else await self.context_service.load_chat_context(chat_id, limit=get_settings().CHAT_CONTEXT_HISTORY_LIMIT)
         )
         # Do not mutate ``context``: it represents history before this turn
         # and is used as the runtime's pre-turn history.
         llm_messages = [*context, {"role": "user", "content": str(content)}]
+        loaded_snapshot = preloaded_context_snapshot or await self.context_service.load_snapshot(
+            chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id,
+        )
+        context_snapshot = loaded_snapshot if isinstance(loaded_snapshot, ChatContextSnapshot) else ChatContextSnapshot(chat_id=chat_id)
 
         tool_ctx = ToolContext(
             tenant_id=tenant_id or "",
@@ -161,6 +171,10 @@ class ChatTurnOrchestrator:
                 content=content,
                 execution_mode=execution_mode,
                 runtime_run_id=runtime_run_id,
+                chat_turn_id=str(turn_id),
+                expected_context_revision=context_snapshot.revision,
+                chat_context_snapshot=context_snapshot,
+                chat_user_message_id=user_message_id,
             ):
                 if isinstance(event_data.get("run_id"), str):
                     last_run_id = str(event_data.get("run_id"))
@@ -231,20 +245,15 @@ class ChatTurnOrchestrator:
                 turn_id,
                 assistant_message_id=assistant_message.message_id,
             )
-            # Artifact bytes and ownership stay in ChatArtifactReference. The
-            # memory layer stores only a compact, source-linked working ref.
-            try:
-                context_artifacts = [
-                    item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
-                    for item in attachment_contexts
-                ]
-                await ChatMemoryService(self.persistence_service.session).record_artifacts(
-                    chat_id=chat_id,
-                    artifacts=[*context_artifacts, *final_attachments],
-                    source_turn_id=turn_id,
-                )
-            except Exception:
-                logger.warning("chat_context_artifact_write_failed", exc_info=True)
+            # The optional worker must observe the same committed deterministic
+            # context and assistant message as the immediately following turn.
+            await self.turn_service.session.commit()
+            await self._dispatch_context_compaction(
+                chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
+                recent_dialogue=llm_messages, user_message_id=user_message_id, assistant_content=assistant_content,
+                assistant_message_id=str(assistant_message.message_id), run_id=last_run_id,
+                terminal_state="completed",
+            )
             turn.transition(TurnPhase.FINAL_PERSISTED)
             yield {
                 "type": "final",
@@ -284,6 +293,12 @@ class ChatTurnOrchestrator:
                 question = str(paused_action.get("question") or "").strip()
             if not message and isinstance(paused_action, dict):
                 message = str(paused_action.get("message") or "").strip()
+            await self._dispatch_context_compaction(
+                chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
+                recent_dialogue=llm_messages, user_message_id=user_message_id, assistant_content=message or question,
+                assistant_message_id=None, run_id=paused_run_id,
+                terminal_state=str(paused_reason or "waiting_input"),
+            )
             # Emit stop with run_id so UI can resume paused run.
             yield {
                 "type": "stop",
@@ -324,6 +339,7 @@ class ChatTurnOrchestrator:
                     },
                 )
                 await self.turn_service.attach_assistant_message(turn_id, failed_message.message_id)
+            await self.turn_service.session.commit()
             if not terminal_event_emitted:
                 yield {"type": "error", "error": llm_error["user_message"], "code": llm_error["code"]}
             terminal_event_emitted = True
@@ -361,3 +377,57 @@ class ChatTurnOrchestrator:
             "user_message": user_message,
             "operator_message": raw_message or normalized_code,
         }
+
+    async def _dispatch_context_compaction(
+        self,
+        *,
+        chat_id: str,
+        turn_id: str,
+        user_id: str,
+        tenant_id: Optional[str],
+        recent_dialogue: list[dict[str, Any]],
+        user_message_id: Optional[str],
+        assistant_content: str,
+        assistant_message_id: Optional[str],
+        run_id: Optional[str],
+        terminal_state: str,
+    ) -> None:
+        """Queue optional semantic compaction after deterministic state exists."""
+        if not tenant_id:
+            return
+        try:
+            snapshot = await self.context_service.load_snapshot(
+                chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id,
+            )
+            if not isinstance(snapshot, ChatContextSnapshot):
+                return
+            from app.runtime.redactor import RuntimeRedactor
+            redactor = RuntimeRedactor()
+            dialogue = [
+                {"role": str(item.get("role")), "content": str(redactor.redact(item.get("content") or ""))[:1200]}
+                for item in recent_dialogue[-7:]
+                if isinstance(item, dict) and item.get("role") in {"user", "assistant"} and item.get("content")
+            ]
+            if assistant_content:
+                dialogue.append({"role": "assistant", "content": str(redactor.redact(assistant_content))[:1200]})
+            sources = [f"turn:{turn_id}"]
+            if user_message_id:
+                sources.append(f"message:{user_message_id}")
+            if assistant_message_id:
+                sources.append(f"message:{assistant_message_id}")
+            if run_id:
+                sources.append(f"run:{run_id}")
+            for item in recent_dialogue[-7:]:
+                if isinstance(item, dict) and item.get("message_id"):
+                    sources.append(f"message:{item['message_id']}")
+            from app.workers.tasks_memory import compact_chat_context
+
+            compact_chat_context.delay({
+                "chat_id": chat_id, "chat_turn_id": turn_id, "user_id": user_id, "tenant_id": tenant_id,
+                "expected_revision": snapshot.revision, "snapshot": snapshot.model_dump(mode="json"),
+                "recent_dialogue": dialogue[-8:],
+                "outcome": {"terminal_state": terminal_state, "assistant_summary": assistant_content[:600]},
+                "valid_source_ids": list(dict.fromkeys(sources))[:20],
+            })
+        except Exception:
+            logger.warning("chat_context_compaction_dispatch_failed", exc_info=True, extra={"chat_id": chat_id, "turn_id": turn_id})

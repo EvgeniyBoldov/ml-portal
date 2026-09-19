@@ -39,7 +39,6 @@ class ChatPersistenceService:
             meta=meta,
         )
         await self.session.flush()
-        await self.session.commit()
 
         message_id = str(message.id)
         logger.info(f"User message created: {message_id}")
@@ -81,7 +80,6 @@ class ChatPersistenceService:
             meta=meta or None,
         )
         await self.session.flush()
-        await self.session.commit()
 
         message_id = str(message.id)
         logger.info(f"Assistant message saved: {message_id}")

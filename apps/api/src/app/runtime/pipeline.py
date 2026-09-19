@@ -53,7 +53,7 @@ from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.system_llm_role_service import SystemLLMRoleService
 from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
-from app.services.chat_memory_service import ChatMemoryService
+from app.runtime.context_outcome import RuntimeOutcomeProjector
 
 # Memory writeback runs via Celery (single canonical execution mode).
 RUNTIME_MEMORY_INLINE = False
@@ -323,13 +323,12 @@ class RuntimePipeline:
             },
         ]
         branch_id = _sandbox_branch_id(request.sandbox_overrides)
-        chat_memory = ChatMemoryService(self._session)
-        try:
-            chat_context = await chat_memory.projection(chat_id=chat_id, branch_id=branch_id)
-        except Exception:
-            logger.warning("chat_context_read_failed", exc_info=True)
-            chat_context = ChatMemoryService.empty_projection()
-        scope_payload = chat_context.get("scope") if isinstance(chat_context.get("scope"), dict) else {}
+        chat_context = (
+            request.chat_context_snapshot.model_dump(mode="json")
+            if request.chat_context_snapshot is not None
+            else {"chat_id": chat_id, "sandbox_branch_id": branch_id, "revision": 0}
+        )
+        scope_payload = chat_context.get("focus") if isinstance(chat_context.get("focus"), dict) else chat_context.get("scope") if isinstance(chat_context.get("scope"), dict) else {}
         project_context = await ProjectContextResolver(self._session).resolve(
             request_text=effective_user_query,
             facts=turn_mem.durable_snapshot.entries,
@@ -479,16 +478,6 @@ class RuntimePipeline:
             lookup = await MechanicalLookupService(self._session).lookup(
                 request_text=effective_user_query, tenant_id=tenant_id,
             )
-            if chat_id is not None:
-                if project_context.explicit_project_keys:
-                    await chat_memory.record_scope(
-                        chat_id=chat_id, branch_id=branch_id,
-                        project_keys=project_context.explicit_project_keys, selection="explicit",
-                    )
-                    chat_context = await chat_memory.projection(chat_id=chat_id, branch_id=branch_id)
-                await chat_memory.record_term_bindings(
-                    chat_id=chat_id, branch_id=branch_id, matches=lookup.get("glossary") or [],
-                )
             decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
                 user_request=effective_user_query,
                 mechanical_lookup=lookup,
@@ -655,6 +644,12 @@ class RuntimePipeline:
                                   question=clarification.question, context=clarification_context),
                 phase=OrchestrationPhase.PIPELINE,
             )
+            await self._apply_chat_context_outcome(
+                request=request, runtime_state=runtime_state, branch_id=branch_id,
+                terminal_state="waiting_input", project_context=project_context.as_dict(),
+                clarification={"question": clarification.question, "message": clarification_context.get("message")},
+                term_bindings=lookup.get("glossary") or [],
+            )
             yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="waiting_input"), phase=OrchestrationPhase.PIPELINE)
             return
         turn_mem.preflight_candidates = [
@@ -671,6 +666,7 @@ class RuntimePipeline:
                 "limitations": [], "artifacts": [], "sources": [],
                 "memory_context": recall_context or {},
                 "memory_candidates": turn_mem.preflight_candidates,
+                "chat_context": chat_context,
             }
             async for event in self._assembler.synthesizer.stream(
                 runtime_state=runtime_state, run_id=run_id, synthesis_context=direct_context,
@@ -693,6 +689,11 @@ class RuntimePipeline:
                         stop_reason=PipelineStopReason.COMPLETED, emitter=emitter,
                         logging_level=run_logging_level,
                     )
+                await self._apply_chat_context_outcome(
+                    request=request, runtime_state=runtime_state, branch_id=branch_id,
+                    terminal_state="completed", project_context=project_context.as_dict(),
+                    term_bindings=lookup.get("glossary") or [],
+                )
                 yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="completed"), phase=OrchestrationPhase.PIPELINE)
             else:
                 yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="failed"), phase=OrchestrationPhase.PIPELINE)
@@ -851,6 +852,13 @@ class RuntimePipeline:
                     RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
                     phase=OrchestrationPhase.PIPELINE,
                 )
+            await self._apply_chat_context_outcome(
+                request=request, runtime_state=runtime_state, branch_id=branch_id,
+                terminal_state=("waiting_confirmation" if terminal_status == PipelineStopReason.WAITING_CONFIRMATION.value else "waiting_input" if terminal_status == PipelineStopReason.WAITING_INPUT.value else "failed"),
+                project_context=project_context.as_dict(),
+                clarification={"question": planning_outcome.pause_question, "message": planning_outcome.pause_message} if planning_outcome.kind == GraphPlanningOutcomeKind.PAUSED else None,
+                term_bindings=lookup.get("glossary") or [],
+            )
             return
 
         # The terminal synthesis checkpoint already emitted the final answer.
@@ -864,6 +872,12 @@ class RuntimePipeline:
         )
         self._dispatch_memory_evidence_feedback(
             recall_item=memory_recall.as_item(), runtime_state=runtime_state, tenant_id=tenant_id,
+        )
+
+        await self._apply_chat_context_outcome(
+            request=request, runtime_state=runtime_state, branch_id=branch_id,
+            terminal_state="completed", project_context=project_context.as_dict(),
+            term_bindings=lookup.get("glossary") or [],
         )
 
         if await_background_tail:
@@ -904,6 +918,42 @@ class RuntimePipeline:
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )
+
+    async def _apply_chat_context_outcome(
+        self,
+        *,
+        request: PipelineRequest,
+        runtime_state: RuntimeTurnState,
+        branch_id: str | None,
+        terminal_state: str,
+        project_context: dict[str, Any],
+        clarification: dict[str, Any] | None = None,
+        term_bindings: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Apply deterministic chat context without reading journal data.
+
+        Context is optional for detached sandbox runs. Deterministic writes
+        remain part of the owning chat transaction; unlike optional semantic
+        compaction, reconciliation failure must abort final persistence.
+        """
+        if not request.chat_id or not request.chat_turn_id:
+            return
+        projection = RuntimeOutcomeProjector.project(
+            runtime_state=runtime_state, chat_id=request.chat_id,
+            chat_turn_id=request.chat_turn_id, terminal_state=terminal_state,
+            project_context=project_context, clarification=clarification, term_bindings=term_bindings,
+            user_message_id=request.chat_user_message_id,
+            current_user_intent=runtime_state.current_user_query,
+        )
+        receipt = await self._assembler.chat_context_outcome_port.apply(
+            projection=projection, expected_context_revision=request.expected_context_revision,
+            branch_id=branch_id, owner_id=request.user_id, tenant_id=request.tenant_id,
+        )
+        logger.info("chat_context_reconciled", extra={
+            "chat_id": request.chat_id, "chat_turn_id": request.chat_turn_id,
+            "run_id": str(runtime_state.run_id), "revision": receipt.revision,
+            "applied_count": receipt.applied_count, "skipped_count": receipt.skipped_count,
+        })
 
     @staticmethod
     def _dispatch_memory_evidence_feedback(

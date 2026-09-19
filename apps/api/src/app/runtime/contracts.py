@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from app.services.chat_context_contracts import ChatContextSnapshot
 
 
 class ExecutionMode(str, Enum):
@@ -57,6 +58,12 @@ class PipelineRequest(BaseModel):
     runtime_run_id: Optional[str] = None
     # chat_id is None for sandbox runs that have no persistent chat binding.
     chat_id: Optional[str] = None
+    # Chat context identity/revision are serializable. The concrete outcome
+    # adapter is wired by PipelineAssembler, never carried in this request.
+    chat_turn_id: Optional[str] = None
+    expected_context_revision: int = Field(default=0, ge=0)
+    chat_context_snapshot: ChatContextSnapshot | None = None
+    chat_user_message_id: Optional[str] = None
     user_id: str = Field(..., min_length=1)
     tenant_id: str = Field(..., min_length=1)
 

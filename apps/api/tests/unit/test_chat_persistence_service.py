@@ -32,7 +32,7 @@ class TestChatPersistenceService:
         assert result.message_id == "msg-1"
         assert result.created_at == "2026-01-01T12:00:00Z"
         mock_session.flush.assert_awaited_once()
-        mock_session.commit.assert_awaited_once()
+        mock_session.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_create_assistant_message_includes_rag_sources_in_meta(self, service: ChatPersistenceService, messages_repo: AsyncMock):
