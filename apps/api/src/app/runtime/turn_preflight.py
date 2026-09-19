@@ -104,6 +104,8 @@ class TurnPreflight:
         mechanical_lookup: dict[str, Any],
         facts_context: list[dict[str, Any]] | None = None,
         project_context: dict[str, Any] | None = None,
+        chat_context: dict[str, Any] | None = None,
+        recent_dialogue: list[dict[str, str]] | None = None,
         continuation: dict[str, Any] | None = None,
         recall_context: dict[str, Any] | None = None,
         chat_id: UUID | None = None,
@@ -127,6 +129,8 @@ class TurnPreflight:
                 # tool scope.
                 "facts_context": list(facts_context or []),
                 "project_context": dict(project_context or {}),
+                "chat_context": dict(chat_context or {}),
+                "recent_dialogue": list(recent_dialogue or []),
                 "continuation": continuation or {},
                 "recall_context": recall_context,
             },

@@ -48,7 +48,10 @@ class MechanicalLookupService:
             matched = _matches(request_text, _forms(item, "term", "aliases"))
             if not matched:
                 continue
-            matched_terms.append({"term": item["term"], "aliases": list(item.get("aliases") or []), "matched_aliases": matched})
+            matched_terms.append({
+                "id": str(item["id"]), "term": item["term"], "description": item.get("description") or "",
+                "aliases": list(item.get("aliases") or []), "matched_aliases": matched,
+            })
             if item.get("entity_id"):
                 entities.append({"id": str(item["entity_id"]), "type": item.get("entity_type"), "term": item["term"]})
         return {"projects": matched_projects[:6], "glossary": matched_terms[:12], "entities": entities[:12]}

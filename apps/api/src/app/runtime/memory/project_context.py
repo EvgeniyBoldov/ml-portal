@@ -16,20 +16,26 @@ PROJECT_SCOPE_SUBJECT = "user.project_scope"
 @dataclass(frozen=True)
 class ProjectContext:
     explicit_project_keys: tuple[str, ...] = ()
+    chat_project_keys: tuple[str, ...] = ()
     default_project_keys: tuple[str, ...] = ()
     ambiguities: tuple[str, ...] = ()
 
     @property
     def effective_project_keys(self) -> tuple[str, ...]:
-        return self.explicit_project_keys or self.default_project_keys
+        return self.explicit_project_keys or self.chat_project_keys or self.default_project_keys
 
     @property
     def source(self) -> str:
-        return "explicit" if self.explicit_project_keys else ("user_default" if self.default_project_keys else "none")
+        if self.explicit_project_keys:
+            return "explicit"
+        if self.chat_project_keys:
+            return "chat_context"
+        return "user_default" if self.default_project_keys else "none"
 
     def as_dict(self) -> dict[str, object]:
         return {
             "explicit_project_keys": list(self.explicit_project_keys),
+            "chat_project_keys": list(self.chat_project_keys),
             "default_project_keys": list(self.default_project_keys),
             "effective_project_keys": list(self.effective_project_keys),
             "source": self.source,
@@ -44,7 +50,10 @@ class ProjectContextResolver:
     def __init__(self, session) -> None:
         self._glossary = GlossaryService(session)
 
-    async def resolve(self, *, request_text: str, facts: Iterable[FactDTO], tenant_id: UUID | None = None) -> ProjectContext:
+    async def resolve(
+        self, *, request_text: str, facts: Iterable[FactDTO], tenant_id: UUID | None = None,
+        chat_project_keys: Iterable[str] = (),
+    ) -> ProjectContext:
         projects = await self._glossary.list_project_terms()
         glossary = await self._glossary.list_confirmed_terms(tenant_id=tenant_id)
         by_id = {str(item.get("id")): str(item.get("key") or "").strip().casefold() for item in projects}
@@ -57,6 +66,10 @@ class ProjectContextResolver:
             projects.append({"key": key, "name": term.get("term"), "aliases": term.get("aliases") or []})
         known = {str(item.get("key") or "").strip().casefold() for item in projects}
         defaults = _scope_keys(facts, known)
+        chat_keys = list(dict.fromkeys(
+            str(key).strip().casefold() for key in chat_project_keys
+            if str(key).strip().casefold() in known
+        ))
         matches: dict[str, set[str]] = {}
         for project in projects:
             key = str(project.get("key") or "").strip().casefold()
@@ -72,6 +85,7 @@ class ProjectContextResolver:
                 ambiguities.append(f"ambiguous_project_alias:{form}")
         return ProjectContext(
             explicit_project_keys=tuple(sorted(explicit)),
+            chat_project_keys=tuple(chat_keys),
             default_project_keys=tuple(defaults),
             ambiguities=tuple(sorted(set(ambiguities))),
         )

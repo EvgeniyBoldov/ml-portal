@@ -9,6 +9,7 @@ from app.services.chat_context_service import ChatContextService
 from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_turn_state import ChatTurnState, TurnPhase
+from app.services.chat_memory_service import ChatMemoryService
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.runtime.contracts import ExecutionMode
 
@@ -230,6 +231,20 @@ class ChatTurnOrchestrator:
                 turn_id,
                 assistant_message_id=assistant_message.message_id,
             )
+            # Artifact bytes and ownership stay in ChatArtifactReference. The
+            # memory layer stores only a compact, source-linked working ref.
+            try:
+                context_artifacts = [
+                    item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+                    for item in attachment_contexts
+                ]
+                await ChatMemoryService(self.persistence_service.session).record_artifacts(
+                    chat_id=chat_id,
+                    artifacts=[*context_artifacts, *final_attachments],
+                    source_turn_id=turn_id,
+                )
+            except Exception:
+                logger.warning("chat_context_artifact_write_failed", exc_info=True)
             turn.transition(TurnPhase.FINAL_PERSISTED)
             yield {
                 "type": "final",

@@ -53,10 +53,28 @@ from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.system_llm_role_service import SystemLLMRoleService
 from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
+from app.services.chat_memory_service import ChatMemoryService
 
 # Memory writeback runs via Celery (single canonical execution mode).
 RUNTIME_MEMORY_INLINE = False
 logger = get_logger(__name__)
+
+
+def _recent_dialogue(messages: list[dict[str, Any]], *, limit: int = 8, max_chars: int = 1_200) -> list[dict[str, str]]:
+    """Bound transcript projection for the routing role, never a raw journal."""
+    result: list[dict[str, str]] = []
+    for message in messages[-limit:]:
+        if not isinstance(message, dict) or message.get("role") not in {"user", "assistant"}:
+            continue
+        content = str(message.get("content") or "").strip()
+        if content:
+            result.append({"role": str(message["role"]), "content": content[:max_chars]})
+    return result
+
+
+def _sandbox_branch_id(overrides: dict[str, Any] | None) -> str | None:
+    value = (overrides or {}).get("sandbox_branch_id")
+    return str(value) if value else None
 
 
 def _tool_fact_evidence_text(value: Any, *, limit: int = 8_000) -> str:
@@ -304,13 +322,25 @@ class RuntimePipeline:
                 "confidence": 1.0,
             },
         ]
+        branch_id = _sandbox_branch_id(request.sandbox_overrides)
+        chat_memory = ChatMemoryService(self._session)
+        try:
+            chat_context = await chat_memory.projection(chat_id=chat_id, branch_id=branch_id)
+        except Exception:
+            logger.warning("chat_context_read_failed", exc_info=True)
+            chat_context = ChatMemoryService.empty_projection()
+        scope_payload = chat_context.get("scope") if isinstance(chat_context.get("scope"), dict) else {}
         project_context = await ProjectContextResolver(self._session).resolve(
-            request_text=effective_user_query, facts=turn_mem.durable_snapshot.entries, tenant_id=tenant_id,
+            request_text=effective_user_query,
+            facts=turn_mem.durable_snapshot.entries,
+            tenant_id=tenant_id,
+            chat_project_keys=scope_payload.get("project_keys") or [],
         )
         turn_mem.project_context = project_context.as_dict()
         # The typed context is visible to planner/task construction and is
         # also the authoritative default for agent memory.search calls.
         turn_mem.planner_memory_context.append({"type": "project_context", **turn_mem.project_context})
+        turn_mem.planner_memory_context.append({"type": "chat_context", **chat_context})
         ctx.extra["project_context"] = turn_mem.project_context
 
         # Initialize RuntimeTurnState as the single source of truth
@@ -449,11 +479,23 @@ class RuntimePipeline:
             lookup = await MechanicalLookupService(self._session).lookup(
                 request_text=effective_user_query, tenant_id=tenant_id,
             )
+            if chat_id is not None:
+                if project_context.explicit_project_keys:
+                    await chat_memory.record_scope(
+                        chat_id=chat_id, branch_id=branch_id,
+                        project_keys=project_context.explicit_project_keys, selection="explicit",
+                    )
+                    chat_context = await chat_memory.projection(chat_id=chat_id, branch_id=branch_id)
+                await chat_memory.record_term_bindings(
+                    chat_id=chat_id, branch_id=branch_id, matches=lookup.get("glossary") or [],
+                )
             decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
                 user_request=effective_user_query,
                 mechanical_lookup=lookup,
                 facts_context=turn_mem.planner_memory_context,
                 project_context=turn_mem.project_context,
+                chat_context=chat_context,
+                recent_dialogue=_recent_dialogue(list(request.messages or [])),
                 continuation=continuation_state,
                 chat_id=chat_id,
                 tenant_id=tenant_id,
@@ -539,6 +581,8 @@ class RuntimePipeline:
                     user_request=effective_user_query, mechanical_lookup=lookup,
                     facts_context=turn_mem.planner_memory_context,
                     project_context=turn_mem.project_context,
+                    chat_context=chat_context,
+                    recent_dialogue=_recent_dialogue(list(request.messages or [])),
                     continuation=continuation_state, recall_context=recall_context,
                     chat_id=chat_id, tenant_id=tenant_id, user_id=user_id,
                     sandbox_overrides=request.sandbox_overrides,

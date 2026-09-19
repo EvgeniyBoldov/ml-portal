@@ -37,6 +37,7 @@ from .orchestration_settings import OrchestrationSettings
 from .system_llm_role import SystemLLMRole, SystemLLMRoleType, RetryBackoffType
 from .chat_summary import ChatSummary
 from .chat_turn import ChatTurn
+from .chat_memory import ChatMemoryItem
 from .sandbox import SandboxSession, SandboxOverride, SandboxRun
 from .discovered_tool import DiscoveredTool
 from .memory import Fact, FactScope, FactSource, DialogueSummary
@@ -126,6 +127,7 @@ __all__ = [
     "RetryBackoffType",
     "ChatSummary",
     "ChatTurn",
+    "ChatMemoryItem",
     "SandboxSession",
     "SandboxOverride",
     "SandboxRun",
