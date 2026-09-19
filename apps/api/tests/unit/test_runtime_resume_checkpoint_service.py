@@ -95,6 +95,12 @@ def test_waiting_confirmation_accepts_only_confirm_or_cancel():
         action=RuntimeResumeAction.CANCEL,
         user_input=None,
     ) == ""
+    with pytest.raises(RuntimeResumeValidationError, match="does not accept input"):
+        service.validate_action(
+            pause_status="waiting_confirmation",
+            action=RuntimeResumeAction.CONFIRM,
+            user_input="лишний текст",
+        )
     with pytest.raises(RuntimeResumeValidationError, match="waiting_confirmation"):
         service.validate_action(
             pause_status="waiting_confirmation",

@@ -8,7 +8,7 @@ from app.schemas.chat_events import (
 
 def test_chat_contract_contains_only_public_transport_events():
     assert {event.value for event in ChatSSEEventType} == {
-        "user_message", "chat_title", "status", "delta", "pause", "final", "cached", "error",
+        "user_message", "status", "delta", "pause", "final", "cached", "error",
     }
 
 

@@ -84,6 +84,12 @@ export async function renameChat(chat_id: string, name: string) {
   });
 }
 
+export async function generateChatTitle(chatId: string) {
+  return apiRequest<{ title: string | null; generated: boolean }>(`/chats/${chatId}/title-generation`, {
+    method: 'POST',
+  });
+}
+
 export async function updateChatTags(chat_id: string, tags: string[]) {
   const body: ChatTagsUpdateRequest = { tags };
   return apiRequest<{ id: string; tags: string[] }>(`/chats/${chat_id}/tags`, {

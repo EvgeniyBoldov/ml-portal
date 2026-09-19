@@ -170,6 +170,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [pausedRunId, setPausedRunId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const pauseLookupVersionRef = useRef(0);
 
   const { data: chats } = useChats();
   const queryClient = useQueryClient();
@@ -208,14 +209,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const setCurrentChat = useCallback((_chatId: string) => {}, []);
 
-  const clearPendingState = useCallback(() => {
+  const clearPausedInteraction = useCallback(() => {
     setPendingConfirmations([]);
     setPendingConfirmationTokens([]);
     setPendingInput(null);
     setStopReason(null);
     setPausedRunId(null);
-    setActiveRun(null);
   }, []);
+
+  const clearPendingState = useCallback(() => {
+    clearPausedInteraction();
+    setActiveRun(null);
+  }, [clearPausedInteraction]);
 
   const abortStream = useCallback(() => {
     if (abortControllerRef.current) {
@@ -244,6 +249,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // A just-arrived stream pause is newer than any in-flight restoration
+    // lookup that may still be about to return an older empty response.
+    pauseLookupVersionRef.current += 1;
     setStopReason(reason);
     setPausedRunId(runId || null);
 
@@ -272,11 +280,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadPausedRun = useCallback(async (chatId: string) => {
+    const lookupVersion = ++pauseLookupVersionRef.current;
     try {
       const { getPausedRun } = await import('@shared/api/chats');
       const response = await getPausedRun(chatId);
+      if (lookupVersion !== pauseLookupVersionRef.current) return;
       const pause: ChatPausedRun | null | undefined = response?.pause;
-      if (!pause) return;
+      if (!pause) {
+        clearPausedInteraction();
+        return;
+      }
       applyPausedState({
         runId: pause.run_id,
         reason: pause.reason,
@@ -289,7 +302,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // if it expires between the page load and this lookup.
       console.warn('Failed to restore paused chat run', err);
     }
-  }, [applyPausedState]);
+  }, [applyPausedState, clearPausedInteraction]);
 
   const sendMessageStream = useCallback(async (
     chatId: string,
@@ -492,34 +505,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               console.error('Failed to parse user_message event', e);
             }
           }
-          // Handle chat_title event (auto-generated title)
-          else if (eventType === 'chat_title') {
-            try {
-              const parsed = JSON.parse(data);
-              const newTitle = parsed.title;
-              if (newTitle && chatId) {
-                // Update chat title in cache immediately
-                queryClient.setQueriesData(
-                  { queryKey: qk.chats.all() },
-                  (oldData: unknown) => {
-                    if (!oldData || typeof oldData !== 'object') return oldData;
-                    const typed = oldData as { items?: Array<Record<string, unknown>> };
-                    if (!Array.isArray(typed.items)) return oldData;
-                    return {
-                      ...typed,
-                      items: typed.items.map((chat) =>
-                        chat.id === chatId ? { ...chat, name: newTitle } : chat
-                      ),
-                    };
-                  }
-                );
-                // Also invalidate to ensure consistency
-                queryClient.invalidateQueries({ queryKey: qk.chats.all() });
-              }
-            } catch (e) {
-              console.error('Failed to parse chat_title event', e);
-            }
-          }
           // Runtime progress is the only safe execution detail exposed to chat.
           else if (eventType === 'status') {
             try {
@@ -589,6 +574,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   }
                 };
               });
+              // Title generation is intentionally a separate, non-blocking
+              // metadata request. It starts only after the first completed
+              // response and never extends this chat run's SSE lifecycle.
+              void import('@shared/api/chats').then(({ generateChatTitle }) =>
+                generateChatTitle(chatId).then((result) => {
+                  if (!result.generated || !result.title) return;
+                  queryClient.setQueriesData(
+                    { queryKey: qk.chats.all() },
+                    (oldData: unknown) => {
+                      if (!oldData || typeof oldData !== 'object') return oldData;
+                      const typed = oldData as { items?: Array<Record<string, unknown>> };
+                      if (!Array.isArray(typed.items)) return oldData;
+                      return {
+                        ...typed,
+                        items: typed.items.map((chat) =>
+                          chat.id === chatId ? { ...chat, name: result.title } : chat
+                        ),
+                      };
+                    },
+                  );
+                }).catch(() => undefined),
+              );
             } catch (e) {
               console.error('Failed to parse final event', e);
             }
@@ -714,6 +721,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         throw new Error(reason);
       }
 
+      // The server has atomically moved the turn out of paused state before
+      // opening this stream. Remove the old interaction immediately instead
+      // of waiting for its terminal SSE frame; a new pause will re-apply it.
+      pauseLookupVersionRef.current += 1;
+      clearPausedInteraction();
+
       await consumeSse(response, ({ event, data }) => {
         if (data === '[DONE]' || event === 'done') {
           if (!pausedAgain) clearPendingState();
@@ -769,7 +782,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [applyPausedState, clearPendingState]);
+  }, [applyPausedState, clearPausedInteraction, clearPendingState]);
 
   const actionsValue = useMemo<ChatActions>(
     () => ({

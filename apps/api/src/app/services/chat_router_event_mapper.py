@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from app.schemas.chat_events import (
-    CachedPayload, ChatSSEEventType, ChatTitlePayload, DeltaPayload, ErrorPayload,
+    CachedPayload, ChatSSEEventType, DeltaPayload, ErrorPayload,
     FinalPayload, PausePayload, RuntimeProgressPayload, StatusPayload,
     UserMessagePayload, format_chat_sse,
 )
@@ -21,8 +21,6 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
         return format_chat_sse(ChatSSEEventType.USER_MESSAGE, UserMessagePayload(
             message_id=str(event["message_id"]), created_at=event.get("created_at"),
         ))
-    if event_type == "chat_title":
-        return format_chat_sse(ChatSSEEventType.CHAT_TITLE, ChatTitlePayload(title=str(event.get("title") or "")))
     if event_type == "status" and event.get("stage") == "runtime_progress":
         progress = event.get("progress")
         if not isinstance(progress, dict):

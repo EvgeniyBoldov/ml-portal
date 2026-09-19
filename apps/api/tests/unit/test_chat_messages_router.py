@@ -241,6 +241,34 @@ async def test_resume_preflight_clarify_uses_goal_from_pause_context(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_resume_cancel_terminates_confirmation_without_reentering_runtime(monkeypatch):
+    user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4()
+    turn = SimpleNamespace(
+        id=uuid4(), chat_id=uuid4(), user_id=user_id, status="paused",
+        pause_status="waiting_confirmation", paused_action={}, paused_context={}, paused_at=datetime.now(timezone.utc),
+    )
+    session = AsyncMock()
+    session.execute.side_effect = [_Result(turn), _Result(turn)]
+
+    class _UnexpectedService:
+        def __init__(self, **_kwargs):
+            raise AssertionError("Cancelled confirmation must not start ChatStreamService")
+
+    monkeypatch.setattr(chat_messages, "ChatStreamService", _UnexpectedService)
+    response = await chat_messages.resume_run(
+        run_id=str(run_id),
+        body=RuntimeResumeRequest(action=RuntimeResumeAction.CANCEL),
+        session=session,
+        current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]),
+        _rl=None,
+    )
+
+    chunks = [chunk async for chunk in response.body_iterator]
+    assert turn.status == "cancelled"
+    assert any("event: done" in chunk for chunk in chunks)
+
+
+@pytest.mark.asyncio
 async def test_get_paused_run_returns_public_contract_for_preflight_clarification():
     chat_id, user_id, run_id = uuid4(), uuid4(), uuid4()
     turn = SimpleNamespace(

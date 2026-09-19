@@ -3,14 +3,23 @@ import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import db_uow, get_current_user
+from app.api.deps import db_uow, get_current_user, get_llm_client
+from app.core.http.clients import LLMClientProtocol
 from app.core.security import UserCtx
+from app.models.chat import ChatMessages, Chats
 from app.repositories.chats_repo import AsyncChatsRepository
+from app.services.chat_title_generator import ChatTitleGenerator
 from app.services.chats_service import ChatsService
 
 router = APIRouter()
+
+
+def _message_text(message: ChatMessages) -> str:
+    content = message.content
+    return str(content.get("text") or "") if isinstance(content, dict) else str(content or "")
 
 
 @router.get("/")
@@ -77,7 +86,7 @@ async def update_chat(
         raise HTTPException(status_code=400, detail="Invalid chat ID")
 
     chats_repo = AsyncChatsRepository(session, tenant_id=None, user_id=uuid.UUID(str(current_user.id)))
-    chat = await chats_repo.update_chat(chat_uuid, name=name)
+    chat = await chats_repo.update_chat(chat_uuid, name=name, title_source="manual")
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
@@ -88,6 +97,68 @@ async def update_chat(
         "updated_at": chat.updated_at.isoformat() + "Z" if chat.updated_at else None,
         "tags": chat.tags or [],
     }
+
+
+@router.post("/{chat_id}/title-generation")
+async def generate_chat_title(
+    chat_id: str,
+    current_user: UserCtx = Depends(get_current_user),
+    session: AsyncSession = Depends(db_uow),
+    llm: LLMClientProtocol = Depends(get_llm_client),
+):
+    """Generate title metadata separately from the chat response stream."""
+    try:
+        chat_uuid = uuid.UUID(chat_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid chat ID")
+
+    chat = (await session.execute(select(Chats).where(
+        Chats.id == chat_uuid,
+        Chats.owner_id == uuid.UUID(str(current_user.id)),
+    ))).scalar_one_or_none()
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    if chat.title_source != "default":
+        return {"title": chat.name, "generated": False}
+
+    first_user = (await session.execute(
+        select(ChatMessages)
+        .where(ChatMessages.chat_id == chat_uuid, ChatMessages.role == "user")
+        .order_by(ChatMessages.created_at.asc())
+        .limit(1)
+    )).scalar_one_or_none()
+    first_assistant = (await session.execute(
+        select(ChatMessages)
+        .where(ChatMessages.chat_id == chat_uuid, ChatMessages.role == "assistant")
+        .order_by(ChatMessages.created_at.asc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if first_user is None or first_assistant is None:
+        return {"title": chat.name, "generated": False}
+
+    try:
+        title = await ChatTitleGenerator(llm).generate(
+            user_message=_message_text(first_user),
+            assistant_message=_message_text(first_assistant),
+        )
+    except Exception:
+        # This endpoint is optional UI metadata. A title outage must not turn
+        # a completed chat turn into a user-visible error.
+        return {"title": chat.name, "generated": False}
+    if title is None:
+        return {"title": chat.name, "generated": False}
+
+    # A simultaneous manual rename wins: update only while the chat is still
+    # in its initial default-title state.
+    result = await session.execute(
+        update(Chats)
+        .where(Chats.id == chat_uuid, Chats.title_source == "default")
+        .values(name=title, title_source="auto")
+    )
+    if not result.rowcount:
+        await session.refresh(chat)
+        return {"title": chat.name, "generated": False}
+    return {"title": title, "generated": True}
 
 
 @router.put("/{chat_id}/tags")

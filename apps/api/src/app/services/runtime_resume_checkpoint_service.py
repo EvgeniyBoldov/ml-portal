@@ -54,6 +54,8 @@ class RuntimeResumeCheckpointService:
                 raise RuntimeResumeValidationError(
                     "waiting_confirmation requires action='confirm' or action='cancel'"
                 )
+            if normalized_input:
+                raise RuntimeResumeValidationError("waiting_confirmation does not accept input")
             return ""
         raise RuntimeResumeValidationError("Run is not waiting for resume")
 

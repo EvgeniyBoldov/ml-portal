@@ -67,6 +67,12 @@ class Settings(BaseSettings):
         default=1000,
         description="Default completion-token cap when an agent has no scoped LLM output limit",
     )
+    CHAT_TITLE_MODEL: str | None = Field(
+        default=None,
+        description="Optional dedicated model alias for background chat-title generation.",
+    )
+    CHAT_TITLE_MAX_TOKENS: int = Field(default=128, ge=16, le=512)
+    CHAT_TITLE_REASONING_EFFORT: str | None = Field(default="low")
     
     # Embedding runtime behavior flags.
     EMB_OFFLINE: bool = Field(default=True, description="Disallow network downloads for embedding models")

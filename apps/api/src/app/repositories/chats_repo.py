@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import uuid
 
 from app.models.chat import Chats, ChatMessages
+from app.services.chat_title_generator import is_default_chat_title
 from app.repositories.base import AsyncTenantRepository
 from app.core.logging import get_logger
 from app.services.chat_visibility import is_sandbox_upload_chat, visible_chat_clause
@@ -23,7 +24,12 @@ class AsyncChatsRepository(AsyncTenantRepository[Chats]):
     async def create_chat(self, owner_id: str, name: Optional[str] = None,
                          tags: Optional[List[str]] = None) -> Chats:
         """Create a new chat"""
-        chat = Chats(owner_id=owner_id, name=name, tags=tags or [])
+        chat = Chats(
+            owner_id=owner_id,
+            name=name,
+            tags=tags or [],
+            title_source="default" if is_default_chat_title(name) else "manual",
+        )
         self.session.add(chat)
         await self.session.flush()
         return chat

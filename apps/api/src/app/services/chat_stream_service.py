@@ -26,7 +26,6 @@ from app.core.idempotency import IdempotencyManager
 from app.services.chat_context_service import ChatContextService
 from app.services.chat_event_mapper import ChatEventMapper
 from app.services.chat_persistence_service import ChatPersistenceService
-from app.services.chat_title_service import ChatTitleService
 from app.services.chat_turn_orchestrator import ChatTurnOrchestrator
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
@@ -58,7 +57,6 @@ class ChatStreamService:
         self.messages_repo = messages_repo
         self.idempotency = IdempotencyManager(redis)
         self.context_service = ChatContextService(session, llm_client, messages_repo)
-        self.title_service = ChatTitleService(session, llm_client, chats_repo)
         self.persistence_service = ChatPersistenceService(session, messages_repo)
         self.chat_turn_service = ChatTurnService(session)
         self.event_mapper = ChatEventMapper()
@@ -66,7 +64,6 @@ class ChatStreamService:
         self.turn_orchestrator = ChatTurnOrchestrator(
             context_service=self.context_service,
             persistence_service=self.persistence_service,
-            title_service=self.title_service,
             turn_service=self.chat_turn_service,
         )
     async def verify_chat_access(self, chat_id: str, user_id: str) -> bool:
@@ -90,8 +87,6 @@ class ChatStreamService:
     ) -> List[Dict[str, str]]:
         return await self.context_service.load_chat_context_with_summary(chat_id, recent_limit=recent_limit)
     
-    async def generate_chat_title(self, chat_id: str, first_message: str) -> Optional[str]:
-        return await self.title_service.generate_chat_title(chat_id, first_message)
 
     async def check_idempotency(
         self,

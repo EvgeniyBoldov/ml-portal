@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 class ChatSSEEventType(str, Enum):
     USER_MESSAGE = "user_message"
-    CHAT_TITLE = "chat_title"
     STATUS = "status"
     DELTA = "delta"
     PAUSE = "pause"
@@ -21,10 +20,6 @@ class ChatSSEEventType(str, Enum):
 class UserMessagePayload(BaseModel):
     message_id: str
     created_at: Optional[str] = None
-
-
-class ChatTitlePayload(BaseModel):
-    title: str
 
 
 class RuntimeProgressPayload(BaseModel):

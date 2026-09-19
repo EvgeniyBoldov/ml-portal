@@ -7,7 +7,6 @@ from app.agents import ToolContext
 from app.core.logging import get_logger
 from app.services.chat_context_service import ChatContextService
 from app.services.chat_persistence_service import ChatPersistenceService
-from app.services.chat_title_service import ChatTitleService
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_turn_state import ChatTurnState, TurnPhase
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
@@ -23,12 +22,10 @@ class ChatTurnOrchestrator:
         *,
         context_service: ChatContextService,
         persistence_service: ChatPersistenceService,
-        title_service: ChatTitleService,
         turn_service: ChatTurnService,
     ) -> None:
         self.context_service = context_service
         self.persistence_service = persistence_service
-        self.title_service = title_service
         self.turn_service = turn_service
 
     async def execute_turn(
@@ -111,26 +108,18 @@ class ChatTurnOrchestrator:
         # RuntimePipeline already builds its own cross-turn memory from the
         # new Fact/Summary stores. Injecting legacy chat summary here duplicates
         # context and inflates token usage.
-        context = list(preloaded_context or [])
-        if not context:
-            context = await self.context_service.load_chat_context(chat_id, limit=12)
-        llm_messages = context
-        llm_messages.append({"role": "user", "content": str(content)})
-
-        user_messages_count = sum(1 for msg in context if msg.get("role") == "user")
-        is_first_message = user_messages_count == 0
-        logger.info(
-            f"Chat title check: user_messages_count={user_messages_count}, "
-            f"is_first={is_first_message}, chat.name='{chat.name}'"
+        # ``[]`` is a meaningful preloaded value for a new chat.  Treating it
+        # as absent reloads context after the user message has been persisted,
+        # which makes the first turn look like a subsequent one and prevents
+        # automatic title generation.
+        context = (
+            list(preloaded_context)
+            if preloaded_context is not None
+            else await self.context_service.load_chat_context(chat_id, limit=12)
         )
-        if is_first_message and chat.name in (None, "", "New Chat", "Новый чат"):
-            logger.info(f"Generating chat title for first message: {content[:100]}")
-            generated_title = await self.title_service.generate_chat_title(chat_id, content)
-            if generated_title:
-                logger.info(f"Generated title: {generated_title}")
-                yield {"type": "chat_title", "title": generated_title}
-            else:
-                logger.warning("Failed to generate chat title")
+        # Do not mutate ``context``: it represents history before this turn
+        # and is used as the runtime's pre-turn history.
+        llm_messages = [*context, {"role": "user", "content": str(content)}]
 
         tool_ctx = ToolContext(
             tenant_id=tenant_id or "",
