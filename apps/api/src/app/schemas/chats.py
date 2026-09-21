@@ -63,9 +63,11 @@ class ChatContextInspectionResponse(BaseModel):
     revision: int
     focus: Dict[str, Any] = Field(default_factory=dict)
     active_goal: Optional[Dict[str, Any]] = None
+    term_bindings: List[Dict[str, Any]] = Field(default_factory=list)
     artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     open_loops: List[Dict[str, Any]] = Field(default_factory=list)
     decisions: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_anchor: Optional[Dict[str, Any]] = None
     task_results: List[Dict[str, Any]] = Field(default_factory=list)
 
 

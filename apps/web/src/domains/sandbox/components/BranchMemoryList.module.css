@@ -1,0 +1,8 @@
+.rows { display: flex; flex-direction: column; gap: 8px; }
+.row { width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-primary); text-align: left; cursor: pointer; }
+.row:hover { background: var(--bg-hover); border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color)); }
+.main { display: flex; flex-direction: column; gap: 3px; }
+.subject { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.value { color: var(--text-secondary); font-size: 12px; white-space: pre-wrap; }
+.inspector { display: flex; flex-direction: column; gap: 14px; }
+.inspectorTitle { margin: 0; color: var(--text-primary); font-size: 15px; }

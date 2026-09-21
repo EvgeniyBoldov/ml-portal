@@ -32,7 +32,7 @@ import { TraceInspector } from './traceInspector/TraceInspector';
 import type { SandboxTraceState } from '../traceState';
 import type { TraceInspectionTarget } from '../traceProjection';
 import { SandboxResolver } from '../lib/sandboxResolver';
-import { BranchFactsInspector } from './BranchFactsInspector';
+import { BranchMemoryList } from './BranchMemoryList';
 import styles from './ConfigPanel.module.css';
 
 interface SessionConfigPanelProps {
@@ -349,15 +349,9 @@ export function ConfigPanel({
     enabled: activeBranchId.length > 0,
     staleTime: 15_000,
   });
-  const { data: branchFactsArtifact, isLoading: isBranchFactsLoading, isError: isBranchFactsError } = useQuery({
-    queryKey: qk.sandbox.branchArtifacts.facts(sessionId, activeBranchId),
-    queryFn: () => sandboxApi.getBranchFactsArtifact(sessionId, activeBranchId),
-    enabled: activeBranchId.length > 0,
-    staleTime: 15_000,
-  });
-  const { data: branchSummaryArtifact } = useQuery({
-    queryKey: qk.sandbox.branchArtifacts.summary(sessionId, activeBranchId),
-    queryFn: () => sandboxApi.getBranchSummaryArtifact(sessionId, activeBranchId),
+  const branchMemoryQuery = useQuery({
+    queryKey: qk.sandbox.branchMemory(sessionId, activeBranchId),
+    queryFn: () => sandboxApi.getBranchMemory(sessionId, activeBranchId),
     enabled: activeBranchId.length > 0,
     staleTime: 15_000,
   });
@@ -486,11 +480,6 @@ export function ConfigPanel({
       discovered_tool: selectedToolBase as Record<string, unknown>,
       router: ({ ...(selectedRouter?.config ?? {}), limits: orchestratorLimits ?? {} }) as Record<string, unknown>,
       platform: ({ ...(platformSettings ?? {}), limits: platformLimits ?? {} }) as Record<string, unknown>,
-      branch_facts: ({
-        base: branchFactsArtifact?.base ?? { user: [], tenant: [], project: [] },
-        overrides: branchFactsArtifact?.overrides ?? { user: {}, tenant: {}, project: {} },
-        effective: branchFactsArtifact?.effective ?? { user: [], tenant: [], project: [] },
-      }) as Record<string, unknown>,
     };
 
     const source = sourceByKey[selectedBlueprint.key] ?? {};
@@ -507,8 +496,6 @@ export function ConfigPanel({
     selectedRouter,
     selectedToolVersionId,
     selectedTool,
-    branchFactsArtifact?.facts,
-    branchSummaryArtifact?.summary,
   ]);
 
   const sectionTabs = useMemo(
@@ -813,7 +800,17 @@ export function ConfigPanel({
   };
 
   const isEntityInspectorMode = Boolean(traceTarget);
-  const isBranchFactsInspector = selectedItem?.type === 'artifact' && selectedItem.artifactKind === 'facts';
+  const isMemoryList = selectedItem?.type === 'memory' && Boolean(selectedItem.memoryKind);
+
+  if (isMemoryList) {
+    return <div className={styles.panel}>
+      <div className={styles.header}><div className={styles['header-main']}><span className={styles.title}>{selectedItem?.name}</span></div></div>
+      <div className={styles.body}>
+        <BranchMemoryList memory={branchMemoryQuery.data} kind={selectedItem!.memoryKind!}
+          isLoading={branchMemoryQuery.isLoading} isError={branchMemoryQuery.isError} />
+      </div>
+    </div>;
+  }
 
   return (
     <div className={styles.panel}>
@@ -882,7 +879,7 @@ export function ConfigPanel({
         </div>
       </div>
 
-      {isBranchFactsInspector ? null : selectedItem?.type === 'parameter' ? (
+      {selectedItem?.type === 'parameter' ? (
         <ConfigTabs
           items={[
             { id: 'platform', label: 'Платформа' },
@@ -895,13 +892,7 @@ export function ConfigPanel({
       )}
 
       <div className={styles.body}>
-        {isBranchFactsInspector ? (
-          <BranchFactsInspector
-            artifact={branchFactsArtifact}
-            isLoading={isBranchFactsLoading}
-            isError={isBranchFactsError}
-          />
-        ) : selectedItem && visibleSections.length > 0 ? (
+        {selectedItem && visibleSections.length > 0 ? (
           <div className={styles['sections-list']}>
             {visibleSections.map((section) => (
               <div key={section.title} className={styles.section}>

@@ -19,7 +19,7 @@ class ChatMemoryItem(Base):
     __tablename__ = "chat_memory_items"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('scope', 'goal', 'term_binding', 'artifact_ref', 'open_loop', 'decision', 'recent_anchor', 'task_result_ref', 'open_question', 'chat_fact', 'summary')",
+            "kind IN ('scope', 'goal', 'term_binding', 'artifact_ref', 'open_loop', 'decision', 'recent_anchor', 'task_result_ref')",
             name="ck_chat_memory_items_kind",
         ),
         CheckConstraint("status IN ('active', 'superseded', 'closed', 'expired')", name="ck_chat_memory_items_status"),
@@ -30,6 +30,12 @@ class ChatMemoryItem(Base):
               postgresql_where=text("status = 'active' AND sandbox_branch_id IS NULL")),
         Index("uq_chat_memory_active_branch", "chat_id", "sandbox_branch_id", "kind", "item_key", unique=True,
               postgresql_where=text("status = 'active' AND sandbox_branch_id IS NOT NULL")),
+        # These three kinds are semantic singletons, not merely conventional
+        # item keys.  Keep a database fence as well as the reconciler check.
+        Index("uq_chat_memory_active_root_singleton", "chat_id", "kind", unique=True,
+              postgresql_where=text("status = 'active' AND sandbox_branch_id IS NULL AND kind IN ('scope', 'goal', 'recent_anchor')")),
+        Index("uq_chat_memory_active_branch_singleton", "chat_id", "sandbox_branch_id", "kind", unique=True,
+              postgresql_where=text("status = 'active' AND sandbox_branch_id IS NOT NULL AND kind IN ('scope', 'goal', 'recent_anchor')")),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

@@ -257,50 +257,6 @@ class SandboxService:
     async def reset_branch_overrides(self, branch_id: UUID) -> int:
         return await self.branch_state.reset_branch_overrides(branch_id)
 
-    async def get_branch_artifacts(self, branch_id: UUID) -> Optional[SandboxBranch]:
-        return await self.branch_state.get_branch_artifacts(branch_id)
-
-    async def update_branch_artifacts(
-        self,
-        *,
-        branch_id: UUID,
-        facts: Optional[List[Dict[str, Any]]] = None,
-        summary: Optional[Dict[str, Any]] = None,
-    ) -> Optional[SandboxBranch]:
-        return await self.branch_state.update_branch_artifacts(
-            branch_id=branch_id,
-            facts=facts,
-            summary=summary,
-        )
-
-    async def upsert_fact_override(
-        self,
-        *,
-        branch_id: UUID,
-        scope: str,
-        subject: str,
-        entry: Dict[str, Any],
-    ) -> Optional[SandboxBranch]:
-        return await self.branch_state.upsert_fact_override(
-            branch_id=branch_id,
-            scope=scope,
-            subject=subject,
-            entry=entry,
-        )
-
-    async def delete_fact_override(
-        self,
-        *,
-        branch_id: UUID,
-        scope: str,
-        subject: str,
-    ) -> bool:
-        return await self.branch_state.delete_fact_override(
-            branch_id=branch_id,
-            scope=scope,
-            subject=subject,
-        )
-
     async def create_snapshot(
         self,
         session_id: UUID,

@@ -312,6 +312,10 @@ async def resume_run(
 
     if body.action is RuntimeResumeAction.CANCEL:
         await turn_service.cancel_turn(turn.id, error_message="Cancelled by user")
+        if turn.chat_id:
+            await ChatContextService(session, None, None).cancel_turn_context(
+                chat_id=str(turn.chat_id), chat_turn_id=str(turn.id),
+            )
         await session.commit()
         async def _cancel_gen() -> AsyncGenerator[str, None]:
             yield format_chat_sse_done()

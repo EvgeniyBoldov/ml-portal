@@ -250,7 +250,9 @@ class TestChatTurnOrchestrator:
             paused_action=None,
             paused_context=None,
         )
-        orchestrator.turn_service.session.commit.assert_awaited_once()
+        # The request/turn is committed before the long-running stream, then
+        # the pause checkpoint is committed before its resumable SSE frame.
+        assert orchestrator.turn_service.session.commit.await_count == 2
 
     @pytest.mark.asyncio
     @pytest.mark.asyncio

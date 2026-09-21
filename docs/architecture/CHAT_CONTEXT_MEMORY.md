@@ -2,9 +2,9 @@
 
 ## Status
 
-Proposed target architecture. The existing `chat_memory_items` implementation
-is an initial compatibility foundation and does not yet satisfy this complete
-contract.
+Implemented architecture contract. `chat_memory_items` is the typed,
+revisioned persistence surface defined here; future changes must preserve the
+boundaries and invariants in this document.
 
 ## 1. Purpose
 
@@ -500,8 +500,11 @@ verified by the runtime. Technical journal data is not assigned a chat-context
 trust class at all.
 
 Payload schemas carry `trust_class` where a consumer needs to distinguish
-exact and inferred values. Explicit current input always overrides an inferred
-item regardless of confidence score.
+exact and inferred values. A composite scope additionally carries independent
+trust classes for `project_keys`, `entity_refs`, and `topic`: an inferred topic
+must never downgrade or relabel verified project/entity identity. Explicit
+current input always overrides an inferred item regardless of confidence
+score.
 
 ## 9. Read lifecycle
 
@@ -512,8 +515,10 @@ At the start of a normal chat turn:
 3. `ChatContextService` loads the active snapshot for `(chat_id, branch_id)`.
 4. Artifact IDs in the selected snapshot are batch-resolved through
    `ChatArtifactReferenceService` using current user, tenant, and chat access.
-5. Missing or denied artifacts are omitted from runtime context and scheduled
-   for close/expire; their cached metadata never grants access.
+5. Missing or denied artifacts are omitted from runtime context. Reads are
+   side-effect free; a registry deletion or an explicit lifecycle writer may
+   retire the stale conversational reference later. Cached metadata never
+   grants access.
 6. Durable user/tenant facts are independently loaded through
    `MemoryService`.
 7. Project/company knowledge remains on-demand through canonical memory/RAG
@@ -971,7 +976,7 @@ the operation.
 | Failure | Required behavior |
 | --- | --- |
 | Context read fails | Continue with recent dialogue and empty chat snapshot; emit safe diagnostic |
-| Artifact re-authorization fails | Omit artifact, mark unavailable/close best-effort, do not fail unrelated answer |
+| Artifact re-authorization fails | Omit artifact without writing during the read; an explicit lifecycle writer may close it later; do not fail unrelated answer |
 | Deterministic reconciliation fails before commit | Fail/rollback the owning persistence transaction according to chat finalization contract |
 | Optional compactor fails | Keep deterministic context; answer remains successful |
 | Compactor output invalid | Reject all invalid operations; no partial raw write |
@@ -1100,27 +1105,33 @@ deterministic:
 16. Runtime logging level `none`, `brief`, or `full` has no effect on the
     resulting chat context.
 
-## 25. Current implementation gaps
+## 25. Implementation closure
 
-The existing implementation already creates `chat_memory_items`, reads a
-projection, resolves chat project scope, records glossary bindings, and tries
-to record artifacts. Before it satisfies this contract, implementation must
-address:
+The following contract requirements are implemented and covered by focused
+service/runtime tests:
 
-- absent goal/open-loop/decision/recent-anchor writers;
-- preflight prompt rules that do not yet authorize the new context inputs;
-- direct synthesis not receiving the chat snapshot;
-- generic agent rendering not understanding the `chat_context` structure;
-- nested runtime attachment shapes not normalized by artifact recording;
-- artifact memory not rehydrating through the authorized registry;
-- missing per-kind limits and expiry filtering;
-- incomplete source turn/run/message provenance;
-- no active-item uniqueness or revision guard;
-- no service-specific tests for chat context;
-- two legacy summary persistence mechanisms that must not become competing
-  active sources of truth.
+- deterministic writers for scope, goal, open loops, safe limitations,
+  recent anchor, verified artifacts, term bindings, and bounded task-result
+  references;
+- prompt-authorized chat context and recent dialogue for TurnPreflight, direct
+  synthesis, planner, and mechanically selected task-agent inputs;
+- normalized runtime-verified artifact DTOs and fresh registry
+  re-authorization; unavailable references are omitted by a read-only
+  snapshot and may be retired only by an explicit lifecycle writer;
+- per-kind bounded snapshot reads (singleton scope/goal/anchor cannot be
+  evicted by recent artifacts), TTL handling on both read and write paths, and
+  scheduled expiry cleanup;
+- source turn/message/run/artifact/glossary/task provenance resolved against
+  the owning chat/turn, canonical vocabulary, partial active-row uniqueness,
+  revision/CAS guards, and stale compactor rejection;
+- branch-scoped sandbox snapshots and outcome handoff through a hidden
+  sandbox chat turn whose paused, completed, failed, and cancelled lifecycle
+  is synchronized with the sandbox run;
+- user-safe inspection/reset controls and context metrics; and
+- removal of the legacy summary path from chat-context consumers, leaving one
+  active source of conversational working state.
 
-These are migration gaps, not reasons to introduce a second memory model.
+The document's non-goals remain intentional exclusions, not deferred gaps.
 
 ## 26. Binding decisions
 

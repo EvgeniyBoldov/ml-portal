@@ -23,14 +23,8 @@ export const qk = {
       list: (sessionId: string, branchId: string) =>
         ['sandbox', 'branch-overrides', sessionId, branchId] as const,
     },
-    branchArtifacts: {
-      meta: (sessionId: string, branchId: string) =>
-        ['sandbox', 'branch-artifacts', 'meta', sessionId, branchId] as const,
-      facts: (sessionId: string, branchId: string) =>
-        ['sandbox', 'branch-artifacts', 'facts', sessionId, branchId] as const,
-      summary: (sessionId: string, branchId: string) =>
-        ['sandbox', 'branch-artifacts', 'summary', sessionId, branchId] as const,
-    },
+    branchMemory: (sessionId: string, branchId: string) =>
+      ['sandbox', 'branch-memory', sessionId, branchId] as const,
     runs: {
       list: (sessionId: string, branchId?: string) =>
         ['sandbox', 'runs', sessionId, branchId ?? 'all'] as const,

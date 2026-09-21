@@ -255,6 +255,17 @@ async def test_resume_cancel_terminates_confirmation_without_reentering_runtime(
             raise AssertionError("Cancelled confirmation must not start ChatStreamService")
 
     monkeypatch.setattr(chat_messages, "ChatStreamService", _UnexpectedService)
+    class _ContextService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def cancel_turn_context(self, **_kwargs):
+            return None
+
+    # The router owns cancellation orchestration; context reconciliation is
+    # covered independently and must not consume this router fixture's SQL
+    # result queue.
+    monkeypatch.setattr(chat_messages, "ChatContextService", _ContextService)
     response = await chat_messages.resume_run(
         run_id=str(run_id),
         body=RuntimeResumeRequest(action=RuntimeResumeAction.CANCEL),

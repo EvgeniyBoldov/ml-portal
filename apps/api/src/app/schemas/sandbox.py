@@ -80,34 +80,14 @@ class SandboxBranchListItem(BaseModel):
     updated_at: datetime
 
 
-class SandboxBranchArtifactsMetaResponse(BaseModel):
+class SandboxBranchMemoryResponse(BaseModel):
+    """Read-only, branch-scoped projection of the canonical memory layers."""
     branch_id: UUID
-    facts_count: int = 0
-    summary_present: bool = False
-    updated_at: Optional[datetime] = None
-
-
-class SandboxBranchFactsArtifactResponse(BaseModel):
-    branch_id: UUID
-    base: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
-    overrides: dict[str, dict[str, dict[str, Any]]] = Field(default_factory=dict)
-    effective: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
-    facts: list[dict[str, Any]] = []
-    updated_at: Optional[datetime] = None
-
-
-class SandboxFactOverrideUpsert(BaseModel):
-    state: Literal["set", "deleted"]
-    value: Optional[str] = Field(default=None, max_length=500)
-    source: Literal["user_utterance", "tool_result", "manual", "system"] = "manual"
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    source_ref: Optional[str] = Field(default=None, max_length=128)
-
-
-class SandboxBranchSummaryArtifactResponse(BaseModel):
-    branch_id: UUID
-    summary: dict[str, Any] = {}
-    updated_at: Optional[datetime] = None
+    chat_context: dict[str, Any] = Field(default_factory=dict)
+    user_facts: list[dict[str, Any]] = Field(default_factory=list)
+    tenant_facts: list[dict[str, Any]] = Field(default_factory=list)
+    glossary: list[dict[str, Any]] = Field(default_factory=list)
+    project_memory: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SandboxBranchOverrideUpsert(BaseModel):

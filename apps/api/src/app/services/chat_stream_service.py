@@ -82,14 +82,6 @@ class ChatStreamService:
     ) -> List[Dict[str, str]]:
         return await self.context_service.load_chat_context(chat_id, limit=limit)
 
-    async def load_chat_context_with_summary(
-        self,
-        chat_id: str,
-        recent_limit: int = 3,
-    ) -> List[Dict[str, str]]:
-        return await self.context_service.load_chat_context_with_summary(chat_id, recent_limit=recent_limit)
-    
-
     async def check_idempotency(
         self,
         idempotency_key: str,

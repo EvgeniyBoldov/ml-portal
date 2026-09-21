@@ -24,7 +24,12 @@ class ChatContextReducer:
             if entry_id and term:
                 operations.append(ChatContextOperation(action="touch", kind="term_binding", item_key=entry_id,
                     payload={"glossary_entry_id": entry_id, "term": term, "aliases": list(binding.get("matched_aliases") or binding.get("aliases") or [])[:10], "trust_class": "application_verified"}, source_ids=[*source, f"glossary:{entry_id}"], expected_revision=expected_revision))
-        if projection.effective_goal:
+        # A technical failure is not conversational memory.  In particular,
+        # it must not create a new goal or recent anchor from a provider/tool
+        # failure.  Safe blocked limitations below are the only error-derived
+        # state that may survive a turn.
+        persist_terminal_anchor = projection.terminal_state != "failed"
+        if projection.effective_goal and persist_terminal_anchor:
             # A completed run is not necessarily a completed conversational
             # objective: follow-up requests must keep an explicit active goal.
             operations.append(ChatContextOperation(action="update", kind="goal", item_key="active_goal",
@@ -57,13 +62,14 @@ class ChatContextReducer:
                 operations.append(ChatContextOperation(action="touch", kind="task_result_ref", item_key=f"{plan_id}:{task_entity_id}",
                     payload={**item, "trust_class": "runtime_normalized"},
                     source_ids=[*source, f"task:{task_entity_id}"][:4], expected_revision=expected_revision))
-        operations.append(ChatContextOperation(
-            action="update", kind="recent_anchor", item_key="recent_anchor",
-            payload={
-                "user_intent": projection.current_user_intent or projection.effective_goal,
-                "assistant_outcome": str(projection.assistant_outcome.get("summary") or ""),
-                "terminal_state": projection.terminal_state,
-                "trust_class": "runtime_normalized",
-            }, source_ids=source, expected_revision=expected_revision,
-        ))
+        if persist_terminal_anchor:
+            operations.append(ChatContextOperation(
+                action="update", kind="recent_anchor", item_key="recent_anchor",
+                payload={
+                    "user_intent": projection.current_user_intent or projection.effective_goal,
+                    "assistant_outcome": str(projection.assistant_outcome.get("summary") or ""),
+                    "terminal_state": projection.terminal_state,
+                    "trust_class": "runtime_normalized",
+                }, source_ids=source, expected_revision=expected_revision,
+            ))
         return operations

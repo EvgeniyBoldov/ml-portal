@@ -37,6 +37,8 @@ from app.schemas.sandbox import (
 from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeRequest
 from app.schemas.runtime_events import RuntimeJournalEventResponse
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
+from app.services.chat_context_service import ChatContextService
+from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_visibility import make_sandbox_upload_chat_name
 from app.services.sandbox_service import SandboxService
 from app.services.runtime_event_journal_service import RuntimeEventJournalService
@@ -62,6 +64,43 @@ _JOURNAL_WIRE_FIELDS = {
     "entity_id", "parent_entity_type", "parent_entity_id", "caused_by_event_id",
     "duration_ms",
 }
+
+
+async def _sandbox_chat_context_input(
+    session: AsyncSession,
+    *,
+    chat_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    resume: bool = False,
+) -> tuple[str, int, object]:
+    """Create/reuse a hidden chat turn and freeze its branch snapshot."""
+    turns = ChatTurnService(session)
+    turn = await turns.get_by_runtime_run_id(run_id)
+    if turn is None:
+        turn = await turns.start_turn(
+            chat_id=chat_id, user_id=user_id, tenant_id=tenant_id,
+            runtime_run_id=run_id,
+        )
+    elif resume:
+        await turns.resume_turn(turn.id)
+    snapshot = await ChatContextService(session, None, None).load_snapshot(
+        chat_id=str(chat_id), branch_id=str(branch_id),
+        owner_id=str(user_id), tenant_id=str(tenant_id),
+    )
+    # The source turn must exist before reconciliation can use its FK.
+    await session.commit()
+    return str(turn.id), snapshot.revision, snapshot
+
+
+async def _fail_sandbox_chat_turn(session: AsyncSession, *, run_id: uuid.UUID, error: str) -> None:
+    """Terminalize the hidden turn when setup fails before the runner owns it."""
+    turns = ChatTurnService(session)
+    turn = await turns.get_by_runtime_run_id(run_id)
+    if turn is not None:
+        await turns.fail_turn(turn.id, error_message=error[:2000] or "Sandbox runtime setup failed")
 
 
 def _format_sse(event: str, payload: dict) -> str:
@@ -424,6 +463,7 @@ async def run_sandbox(
                     try:
                         svc_err = SandboxService(stream_db)
                         await svc_err.finish_run(run_id, "failed", str(agent_err))
+                        await _fail_sandbox_chat_turn(stream_db, run_id=run_id, error=str(agent_err))
                         await stream_db.commit()
                     except Exception:
                         pass
@@ -463,11 +503,22 @@ async def run_sandbox(
             tool_ctx.set_runtime_deps(runtime_deps)
 
             messages = [{"role": "user", "content": data.request_text}]
+            chat_turn_id, expected_context_revision, context_snapshot = await _sandbox_chat_context_input(
+                stream_db,
+                chat_id=sandbox_chat_id,
+                branch_id=branch_id,
+                run_id=run_id,
+                user_id=u_uuid,
+                tenant_id=t_uuid,
+            )
 
             pipeline_request = PipelineRequest(
                 request_text=data.request_text,
                 runtime_run_id=str(run_id),
                 chat_id=str(sandbox_chat_id),
+                chat_turn_id=chat_turn_id,
+                expected_context_revision=expected_context_revision,
+                chat_context_snapshot=context_snapshot,
                 user_id=str(u_uuid),
                 tenant_id=str(t_uuid),
                 messages=messages,
@@ -572,6 +623,13 @@ async def resume_sandbox_run(
 
     if data.action is RuntimeResumeAction.CANCEL and str(run.status or "") != "waiting_confirmation":
         await svc.finish_run(run_id, "cancelled", "Cancelled by user")
+        turn = await ChatTurnService(db).get_by_runtime_run_id(run_id)
+        if turn is not None:
+            await ChatTurnService(db).cancel_turn(turn.id, error_message="Cancelled by user")
+            if run.branch_id:
+                await ChatContextService(db, None, None).cancel_turn_context(
+                    chat_id=str(turn.chat_id), chat_turn_id=str(turn.id), branch_id=str(run.branch_id),
+                )
         await db.commit()
 
         async def _cancel_gen() -> AsyncGenerator[str, None]:
@@ -677,6 +735,7 @@ async def resume_sandbox_run(
                         payload={"stage": "sandbox_agent_resolve", "agent_slug": resumed_agent_slug},
                     )
                     await SandboxService(stream_db).finish_run(run_id, "failed", str(agent_err))
+                    await _fail_sandbox_chat_turn(stream_db, run_id=run_id, error=str(agent_err))
                     await stream_db.commit()
                     yield _format_sse(
                         "error",
@@ -725,11 +784,23 @@ async def resume_sandbox_run(
                 paused_action=paused_action if isinstance(paused_action, dict) else None,
                 paused_context=paused_context if isinstance(paused_context, dict) else None,
             )
+            chat_turn_id, expected_context_revision, context_snapshot = await _sandbox_chat_context_input(
+                stream_db,
+                chat_id=sandbox_chat_id,
+                branch_id=branch.id,
+                run_id=run_id,
+                user_id=u_uuid,
+                tenant_id=t_uuid,
+                resume=True,
+            )
 
             pipeline_request = PipelineRequest(
                 request_text=request_text,
                 runtime_run_id=str(run_id),
                 chat_id=str(sandbox_chat_id),
+                chat_turn_id=chat_turn_id,
+                expected_context_revision=expected_context_revision,
+                chat_context_snapshot=context_snapshot,
                 user_id=str(u_uuid),
                 tenant_id=str(t_uuid),
                 messages=[{"role": "user", "content": resume_content}],

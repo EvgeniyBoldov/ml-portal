@@ -10,19 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.repositories.chats_repo import AsyncChatMessagesRepository
-from app.services.chat_summary_service import ChatSummaryService
 from app.repositories.chat_context_repository import ChatContextRepository
 from app.services.chat_context_contracts import ChatContextApplyReceipt, ChatContextOperation, ChatContextSnapshot
 from app.services.chat_context_reconciler import ChatContextReconciler
 from app.runtime.context_outcome import RuntimeOutcomeProjection
-from app.services.chat_artifact_reference_service import ChatArtifactReferenceService, ChatArtifactReferenceError
+from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
 from app.core.config import get_settings
 
 logger = get_logger(__name__)
 
 
 class ChatContextService:
-    """Service for chat context loading and summary maintenance."""
+    """Read and reconcile the canonical bounded chat context."""
 
     def __init__(
         self,
@@ -51,8 +50,9 @@ class ChatContextService:
             elif isinstance(content_text, dict):
                 content_text = json.dumps(content_text)
 
+            message_id = getattr(msg, "id", None)
             context.append({
-                "message_id": str(msg.id),
+                **({"message_id": str(message_id)} if message_id is not None else {}),
                 "role": msg.role,
                 "content": str(content_text),
                 **(
@@ -64,63 +64,17 @@ class ChatContextService:
             })
         return context
 
-    async def load_chat_context_with_summary(
-        self,
-        chat_id: str | uuid.UUID,
-        recent_limit: int = 3,
-    ) -> List[Dict[str, Any]]:
-        """Load context using summary + last N raw messages."""
-        summary = await self.get_latest_summary_text(chat_id)
-        recent = await self.load_chat_context(chat_id, limit=recent_limit)
-
-        context: List[Dict[str, Any]] = []
-        if summary:
-            context.append({
-                "role": "system",
-                "content": f"Conversation summary so far:\n{summary}",
-            })
-            logger.info(f"Using summary context ({len(summary)} chars) + {len(recent)} recent messages")
-        else:
-            recent = await self.load_chat_context(chat_id, limit=20)
-            logger.info(f"No summary, using {len(recent)} raw messages as context")
-
-        context.extend(recent)
-        return context
-
-    async def get_latest_summary_text(self, chat_id: str | uuid.UUID) -> Optional[str]:
-        summary_service = ChatSummaryService(self.session)
-        return await summary_service.get_summary_text(uuid.UUID(str(chat_id)))
-
-    async def store_summary(
-        self,
-        chat_id: uuid.UUID,
-        summary: str,
-        tenant_id: uuid.UUID | None = None,
-        summary_metadata: dict | None = None,
-    ) -> None:
-        """Store summary for chat."""
-        messages = await self.load_chat_context(chat_id, limit=100)
-        message_count = len(messages)
-
-        summary_service = ChatSummaryService(self.session)
-        await summary_service.create_or_update_summary(
-            chat_id=chat_id,
-            summary_text=summary,
-            message_count=message_count,
-            tenant_id=tenant_id,
-            summary_metadata=summary_metadata,
-        )
-        logger.info(f"Stored summary for chat {chat_id}: {summary[:100]}...")
-
     async def load_snapshot(
         self, *, chat_id: str, branch_id: str | None = None, owner_id: str | None = None,
         tenant_id: str | None = None, _attempt: int = 0,
     ) -> ChatContextSnapshot:
         """Load a bounded immutable context projection; artifact access is fresh.
 
-        A missing principal deliberately yields no artifact candidates. Context
-        loading is read-only: stale registry entries are retired by the normal
-        reconciler/expiry path, never as a side effect of a prompt read.
+        A missing principal deliberately yields no artifact candidates.  A
+        reference the canonical registry cannot resolve is omitted from this
+        projection.  Reads never retire it: inspection and prompt assembly
+        must remain side-effect free and lifecycle transitions require an
+        explicit writer transaction.
         """
         repository = ChatContextRepository(self.session)
         settings = get_settings()
@@ -128,6 +82,12 @@ class ChatContextService:
         snapshot = ChatContextSnapshot(chat_id=chat_id, sandbox_branch_id=branch_id, revision=head.revision if head else 0,
             updated_through_turn_id=str(head.updated_through_turn_id) if head and head.updated_through_turn_id else None)
         per_kind_limits = {
+            # Singleton values are independently selected.  Do not replace
+            # this with a global projection limit: recency of artifacts is
+            # not allowed to suppress the active conversational focus.
+            "scope": 1,
+            "goal": 1,
+            "recent_anchor": 1,
             "term_binding": settings.CHAT_CONTEXT_TERM_BINDING_LIMIT,
             "artifact_ref": settings.CHAT_CONTEXT_ARTIFACT_LIMIT,
             "open_loop": settings.CHAT_CONTEXT_OPEN_LOOP_LIMIT,
@@ -135,9 +95,8 @@ class ChatContextService:
             "task_result_ref": settings.CHAT_CONTEXT_TASK_RESULT_LIMIT,
         }
         counts: dict[str, int] = {}
-        items = await repository.active_items(
-            chat_id=chat_id, branch_id=branch_id,
-            limit=settings.CHAT_CONTEXT_TOTAL_ITEM_LIMIT,
+        items = await repository.active_items_by_kind(
+            chat_id=chat_id, branch_id=branch_id, kind_limits=per_kind_limits,
         )
         resolved_artifacts = {}
         if owner_id and tenant_id:
@@ -159,6 +118,8 @@ class ChatContextService:
                 artifact_id = str(payload.get("artifact_id") or item.item_key)
                 resolved = resolved_artifacts.get(artifact_id)
                 if resolved is None:
+                    if len(snapshot.uncertainties) < 5:
+                        snapshot.uncertainties.append({"code": "unavailable_artifact", "message": "An unavailable artifact reference was omitted."})
                     continue
                 payload.update({"artifact_id": artifact_id, "file_name": resolved.file_name, "content_type": resolved.content_type, "size_bytes": resolved.size_bytes})
             counts[item.kind] = count + 1
@@ -194,47 +155,114 @@ class ChatContextService:
         self, *, projection: RuntimeOutcomeProjection, expected_revision: int, branch_id: str | None,
         owner_id: str, tenant_id: str, reducer,
     ) -> ChatContextApplyReceipt:
-        operations = reducer.reduce(projection=projection, expected_revision=expected_revision)
-        # An artifact claim is durable only after a fresh registry resolution.
-        # A close is a lifecycle instruction and must not be filtered through a
-        # lookup of the artifact it intentionally removes.
-        verified = []
-        references = ChatArtifactReferenceService(self.session)
+        repository = ChatContextRepository(self.session)
+        revision = expected_revision
+        # A model compaction can legitimately win the first CAS while a turn
+        # outcome is being persisted.  Rebuild deterministic operations on the
+        # new head when this turn is not older than that head; do not silently
+        # drop the canonical runtime outcome in that benign race.
+        for _ in range(3):
+            operations = reducer.reduce(projection=projection, expected_revision=revision)
+            # An artifact claim is durable only after a fresh registry
+            # resolution.  A close is a lifecycle instruction and must not be
+            # filtered through a lookup of the artifact it intentionally
+            # removes.
+            verified = await self._verified_artifact_operations(
+                operations=operations, chat_id=projection.chat_id, owner_id=owner_id, tenant_id=tenant_id,
+            )
+            receipt = await ChatContextReconciler(repository).apply(
+                chat_id=projection.chat_id, branch_id=branch_id, chat_turn_id=projection.chat_turn_id,
+                expected_revision=revision, operations=self._with_expiry_policy(verified), tenant_id=tenant_id,
+                project_keys=list(projection.project_context.get("explicit_project_keys") or []),
+            )
+            if "stale_revision" not in receipt.degradation_codes:
+                break
+            head = await repository.get_head(chat_id=projection.chat_id, branch_id=branch_id)
+            if head is None or not await repository.can_rebase_turn(
+                chat_id=projection.chat_id, chat_turn_id=projection.chat_turn_id,
+                updated_through_turn_id=head.updated_through_turn_id,
+            ):
+                break
+            revision = head.revision
+        self._record_reconciliation(origin="deterministic", receipt=receipt)
+        return receipt
+
+    async def _verified_artifact_operations(
+        self, *, operations: list[ChatContextOperation], chat_id: str, owner_id: str, tenant_id: str,
+    ) -> list[ChatContextOperation]:
+        """Keep only additions whose registry reference is still readable."""
         requested_artifact_ids = [
             operation.item_key for operation in operations
             if operation.kind == "artifact_ref" and operation.action not in {"close", "expire", "supersede"}
         ]
-        resolved_artifacts = await references.resolve_many(
-            artifact_ids=requested_artifact_ids, chat_id=projection.chat_id,
+        resolved = await ChatArtifactReferenceService(self.session).resolve_many(
+            artifact_ids=requested_artifact_ids, chat_id=chat_id,
             owner_id=owner_id, tenant_id=tenant_id,
         ) if requested_artifact_ids else {}
-        for operation in operations:
-            if operation.kind != "artifact_ref" or operation.action in {"close", "expire", "supersede"}:
-                verified.append(operation)
-                continue
-            try:
-                if operation.item_key not in resolved_artifacts:
-                    raise ChatArtifactReferenceError("artifact reference is unavailable")
-                verified.append(operation)
-            except ChatArtifactReferenceError:
-                continue
-        receipt = await ChatContextReconciler(ChatContextRepository(self.session)).apply(
-            chat_id=projection.chat_id, branch_id=branch_id, chat_turn_id=projection.chat_turn_id,
-            expected_revision=expected_revision, operations=self._with_expiry_policy(verified),
-        )
-        self._record_reconciliation(origin="deterministic", receipt=receipt)
-        return receipt
+        return [
+            operation for operation in operations
+            if operation.kind != "artifact_ref"
+            or operation.action in {"close", "expire", "supersede"}
+            or operation.item_key in resolved
+        ]
 
     async def apply_compaction(
         self, *, chat_id: str, branch_id: str | None, chat_turn_id: str,
-        expected_revision: int, operations: list[ChatContextOperation],
+        expected_revision: int, operations: list[ChatContextOperation], tenant_id: str | None = None,
     ) -> ChatContextApplyReceipt:
         """Persist only already-validated inferred operations in a worker transaction."""
         receipt = await ChatContextReconciler(ChatContextRepository(self.session)).apply(
             chat_id=chat_id, branch_id=branch_id, chat_turn_id=chat_turn_id,
-            expected_revision=expected_revision, operations=self._with_expiry_policy(operations),
+            expected_revision=expected_revision, operations=self._with_expiry_policy(operations), tenant_id=tenant_id,
         )
         self._record_reconciliation(origin="compactor", receipt=receipt)
+        return receipt
+
+    async def cancel_turn_context(
+        self, *, chat_id: str, chat_turn_id: str, branch_id: str | None = None,
+    ) -> ChatContextApplyReceipt:
+        """Close the conversational state owned by an explicitly cancelled turn.
+
+        A pause/resume lifecycle reuses one ``chat_turn_id``.  Cancellation
+        must therefore retire its open loop, but it must not close a newer
+        goal created by another turn in the same chat.
+        """
+        repository = ChatContextRepository(self.session)
+        # Cancellation is a lifecycle writer.  A concurrent normal outcome
+        # may advance the revision between the snapshot and CAS; retrying
+        # makes the close deterministic without ever closing another turn's
+        # goal.
+        receipt = ChatContextApplyReceipt(revision=0)
+        for _ in range(4):
+            head = await repository.get_head(chat_id=chat_id, branch_id=branch_id)
+            if head is None:
+                break
+            expected_revision = head.revision
+            source = [f"turn:{chat_turn_id}"]
+            active_items = await repository.active_items(chat_id=chat_id, branch_id=branch_id)
+            operations = [
+                ChatContextOperation(
+                    action="close", kind="open_loop", item_key=item.item_key,
+                    source_ids=source, expected_revision=expected_revision,
+                )
+                for item in active_items
+                if item.kind == "open_loop" and str(item.source_turn_id or "") == chat_turn_id
+            ]
+            active_goal = await repository.active_item(
+                chat_id=chat_id, branch_id=branch_id, kind="goal", item_key="active_goal",
+            )
+            if active_goal and str(active_goal.source_turn_id or "") == chat_turn_id:
+                operations.append(ChatContextOperation(
+                    action="close", kind="goal", item_key="active_goal",
+                    source_ids=source, expected_revision=expected_revision,
+                ))
+            receipt = await ChatContextReconciler(repository).apply(
+                chat_id=chat_id, branch_id=branch_id, chat_turn_id=chat_turn_id,
+                expected_revision=expected_revision, operations=operations,
+            )
+            if "stale_revision" not in receipt.degradation_codes:
+                break
+        self._record_reconciliation(origin="cancel", receipt=receipt)
         return receipt
 
     async def reset_context(self, *, chat_id: str, branch_id: str | None = None) -> ChatContextApplyReceipt:
@@ -264,9 +292,11 @@ class ChatContextService:
             "revision": snapshot.revision,
             "focus": {key: focus.get(key) for key in ("project_keys", "topic", "entity_refs") if key in focus},
             "active_goal": {key: goal.get(key) for key in ("text", "status") if key in goal} or None,
+            "term_bindings": [{key: item.model_dump().get(key) for key in ("term", "aliases") if key in item.model_dump()} for item in snapshot.term_bindings],
             "artifacts": [{key: item.model_dump().get(key) for key in ("file_name", "content_type", "size_bytes", "role") if key in item.model_dump()} for item in snapshot.artifacts],
             "open_loops": [{key: item.model_dump().get(key) for key in ("status", "reason_code", "user_message") if key in item.model_dump()} for item in snapshot.open_loops],
             "decisions": [{key: item.model_dump().get(key) for key in ("text", "constraint") if key in item.model_dump()} for item in snapshot.decisions],
+            "recent_anchor": ({key: snapshot.recent_anchor.model_dump().get(key) for key in ("user_intent", "assistant_outcome", "terminal_state") if key in snapshot.recent_anchor.model_dump()} if snapshot.recent_anchor else None),
             "task_results": [{key: item.model_dump().get(key) for key in ("outcome", "safe_summary") if key in item.model_dump()} for item in snapshot.task_result_refs],
         }
 
