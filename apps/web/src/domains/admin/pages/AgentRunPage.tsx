@@ -8,13 +8,13 @@ import { ExecutionTrace, downloadTraceLog } from '@/domains/sandbox/components/E
 import { TraceInspector } from '@/domains/sandbox/components/traceInspector/TraceInspector';
 import { replayRuntimeJournal } from '@/domains/sandbox/traceState';
 import { resolveTraceInspectionTarget, traceElapsedMs, type TraceInspectionTarget } from '@/domains/sandbox/traceProjection';
-import { agentRunTraceEvents } from '../agentRunTrace';
+import { agentRunTraceEvents, normalizeAgentRunEvents } from '../agentRunTrace';
 
 export default function AgentRunPage() {
   const { id = '' } = useParams<{ id: string }>();
   const [target, setTarget] = useState<TraceInspectionTarget | null>(null);
   const { data: run, isLoading } = useQuery({ queryKey: ['admin', 'agent-runs', id], queryFn: () => agentRunsApi.get(id), enabled: Boolean(id) });
-  const rawTrace = useMemo(() => replayRuntimeJournal(run?.events ?? []), [run]);
+  const rawTrace = useMemo(() => replayRuntimeJournal(run ? normalizeAgentRunEvents(run.events) : []), [run]);
   const trace = useMemo(() => replayRuntimeJournal(run ? agentRunTraceEvents(run) : []), [run]);
   const selectedTarget = target ? resolveTraceInspectionTarget(trace, target.key) ?? target : null;
   const agentEntity = trace.rootEntityKey ? trace.entitiesByKey[trace.rootEntityKey]
