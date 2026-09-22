@@ -9,14 +9,11 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import db_uow, get_current_user
+from app.api.deps import db_uow, get_current_user, resolve_active_user_tenant_ids
 from app.core.security import UserCtx
 from app.core.logging import get_logger
-from app.core.config import is_local
-from app.models.tenant import UserTenants, Tenants
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.services.collection_service import CollectionService
 from app.services.permission_service import PermissionService
@@ -72,44 +69,7 @@ async def _resolve_user_tenants(
     session: AsyncSession,
     user: UserCtx,
 ) -> list[uuid.UUID]:
-    resolved: list[uuid.UUID] = []
-    for raw_tenant_id in (user.tenant_ids or []):
-        try:
-            resolved.append(uuid.UUID(str(raw_tenant_id)))
-        except (TypeError, ValueError):
-            continue
-
-    if resolved:
-        return resolved
-
-    try:
-        user_id = uuid.UUID(str(user.id))
-    except (TypeError, ValueError):
-        return []
-
-    result = await session.execute(
-        select(UserTenants.tenant_id)
-        .where(UserTenants.user_id == user_id)
-        .order_by(UserTenants.is_default.desc())
-    )
-    db_tenants = [row[0] for row in result.all() if row[0] is not None]
-    if db_tenants:
-        user.tenant_ids = [str(tid) for tid in db_tenants]
-        return db_tenants
-
-    if is_local():
-        fallback = await session.execute(
-            select(Tenants.id)
-            .where(Tenants.is_active.is_(True))
-            .order_by(Tenants.created_at.asc())
-            .limit(1)
-        )
-        tenant_id = fallback.scalar_one_or_none()
-        if tenant_id:
-            user.tenant_ids = [str(tenant_id)]
-            return [tenant_id]
-
-    return []
+    return await resolve_active_user_tenant_ids(session, user)
 
 
 async def _resolve_requested_tenant_id(
@@ -211,6 +171,8 @@ async def get_collection(
     collection = await service.get_by_slug(slug)
 
     if not collection:
+        raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
+    if getattr(collection, "tenant_id", None) != resolved_tenant_id:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
     if not resolver.is_collection_allowed(
         effective_permissions=effective_permissions,

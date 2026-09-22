@@ -86,6 +86,10 @@ class RuntimeLogContext:
     run_id: UUID
     level: RuntimeLoggingLevel
     origin: str
+    # Admission level used for persistence is deliberately separate from the
+    # user-facing progress level. Chat agent scopes persist a full diagnostic
+    # journal while keeping SSE limited to the configured brief/status view.
+    progress_level: Optional[RuntimeLoggingLevel] = None
     tenant_id: Optional[UUID] = None
     user_id: Optional[UUID] = None
     chat_id: Optional[UUID] = None
@@ -103,7 +107,8 @@ class RuntimeLogContext:
     def model_dump(self) -> dict[str, Any]:
         return {
             "version": self.version, "run_id": str(self.run_id), "level": self.level.value,
-            "origin": self.origin, "tenant_id": str(self.tenant_id) if self.tenant_id else None,
+            "origin": self.origin, "progress_level": self.progress_level.value if self.progress_level else None,
+            "tenant_id": str(self.tenant_id) if self.tenant_id else None,
             "user_id": str(self.user_id) if self.user_id else None,
             "chat_id": str(self.chat_id) if self.chat_id else None,
             "entity_type": self.entity_type, "entity_id": self.entity_id,
@@ -118,6 +123,8 @@ class RuntimeLogContext:
     def from_payload(cls, payload: dict[str, Any]) -> "RuntimeLogContext":
         return cls(
             run_id=UUID(str(payload["run_id"])), level=RuntimeLoggingLevel.parse(payload.get("level")),
+            progress_level=(RuntimeLoggingLevel.parse(payload.get("progress_level"))
+                            if payload.get("progress_level") else None),
             origin=str(payload.get("origin") or "worker"),
             tenant_id=UUID(str(payload["tenant_id"])) if payload.get("tenant_id") else None,
             user_id=UUID(str(payload["user_id"])) if payload.get("user_id") else None,
@@ -149,11 +156,14 @@ class RuntimeEventLogger:
     def for_entity(
         self, *, entity_type: str, entity_id: str, parent_entity_type: Optional[str] = None,
         parent_entity_id: Optional[str] = None, level: Optional[RuntimeLoggingLevel] = None,
+        progress_level: Optional[RuntimeLoggingLevel] = None,
     ) -> "RuntimeEventLogger":
         return RuntimeEventLogger(
             context=replace(
                 self.context, entity_type=entity_type, entity_id=entity_id,
                 level=level or self.context.level,
+                progress_level=(progress_level if progress_level is not None
+                                else self.context.progress_level),
                 parent_entity_type=parent_entity_type if parent_entity_type is not None else self.context.entity_type,
                 parent_entity_id=parent_entity_id if parent_entity_id is not None else self.context.entity_id,
             ), session=self._session, session_factory=self._session_factory,
@@ -218,7 +228,14 @@ class RuntimeEventLogger:
                     "protocol_retry",
                 })
             return event_type in root_events
-        return self.should_log(event_type)
+        progress_level = self.context.progress_level
+        if progress_level is None:
+            return self.should_log(event_type)
+        if progress_level is RuntimeLoggingLevel.NONE:
+            return False
+        if progress_level is RuntimeLoggingLevel.ERROR:
+            return event_type == "error" or event_type.endswith("_rejected")
+        return progress_level is RuntimeLoggingLevel.FULL or event_type in _BRIEF_EVENTS
 
     async def event(
         self, event_type: str, *, payload: Optional[dict[str, Any]] = None,

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.core.di import get_llm_client
 from app.core.redis import get_redis
+from app.core.config import is_local
 from app.core.security import UserCtx
 from app.models.chat import Chats
 from app.models.tenant import UserTenants, Tenants
@@ -33,6 +34,53 @@ async def db_uow() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+async def resolve_active_user_tenant_ids(
+    session: AsyncSession,
+    user: UserCtx,
+) -> list[_uuid.UUID]:
+    """Return the authoritative active tenant memberships in default order.
+
+    JWT tenant ids are an authorization hint that can be stale and do not
+    encode a stable current scope after an administrator changes a user's
+    default tenant. Tenant-scoped application routes must resolve membership
+    from ``user_tenants`` instead.
+    """
+    try:
+        user_id = _uuid.UUID(str(user.id))
+    except (TypeError, ValueError):
+        return []
+
+    result = await session.execute(
+        select(UserTenants.tenant_id)
+        .join(Tenants, Tenants.id == UserTenants.tenant_id)
+        .where(
+            UserTenants.user_id == user_id,
+            Tenants.is_active.is_(True),
+            Tenants.lifecycle_status != "deprecated",
+        )
+        .order_by(UserTenants.is_default.desc(), Tenants.created_at.asc())
+    )
+    tenant_ids = [row[0] for row in result.all() if row[0] is not None]
+    if tenant_ids:
+        # Keep downstream compatibility for callers that still inspect the
+        # request principal, but never use its prior JWT ordering as scope.
+        user.tenant_ids = [str(tenant_id) for tenant_id in tenant_ids]
+        return tenant_ids
+
+    if is_local():
+        fallback = await session.execute(
+            select(Tenants.id)
+            .where(Tenants.is_active.is_(True), Tenants.lifecycle_status != "deprecated")
+            .order_by(Tenants.created_at.asc())
+            .limit(1)
+        )
+        tenant_id = fallback.scalar_one_or_none()
+        if tenant_id is not None:
+            user.tenant_ids = [str(tenant_id)]
+            return [tenant_id]
+    return tenant_ids
 
 def is_auth_enabled() -> bool:
     return (os.getenv("AUTH_ENABLED") or "false").lower() in {"1", "true", "yes", "on"}
@@ -247,7 +295,7 @@ async def resolve_chat_context(
     session: AsyncSession = Depends(db_session),
     current_user: UserCtx = Depends(get_current_user),
 ) -> ChatContext:
-    """Load chat, verify ownership and resolve tenant from chat row.
+    """Load chat, verify ownership and resolve the user's default tenant.
 
     Raises HTTPException on:
     - Invalid chat_id UUID
@@ -267,42 +315,13 @@ async def resolve_chat_context(
         raise HTTPException(status_code=404, detail="Chat not found")
     if is_sandbox_upload_chat(chat_row):
         raise HTTPException(status_code=404, detail="Chat not found")
-    tenant_id = None
-    candidate_ids: list[_uuid.UUID] = []
-    for raw_tid in (current_user.tenant_ids or []):
-        try:
-            candidate_ids.append(_uuid.UUID(str(raw_tid)))
-        except (TypeError, ValueError):
-            continue
-
-    if candidate_ids:
-        tenant_result = await session.execute(
-            select(Tenants.id)
-            .where(
-                Tenants.id.in_(candidate_ids),
-                Tenants.is_active.is_(True),
-                Tenants.lifecycle_status != "deprecated",
-            )
-            .order_by(Tenants.created_at.asc())
-            .limit(1)
-        )
-        tenant_id = tenant_result.scalar_one_or_none()
-
-    if not tenant_id:
-        tenant_result = await session.execute(
-            select(UserTenants.tenant_id)
-            .join(Tenants, Tenants.id == UserTenants.tenant_id)
-            .where(
-                UserTenants.user_id == _uuid.UUID(str(current_user.id)),
-                Tenants.is_active.is_(True),
-                Tenants.lifecycle_status != "deprecated",
-            )
-            .order_by(UserTenants.is_default.desc(), Tenants.created_at.asc())
-            .limit(1)
-        )
-        tenant_id = tenant_result.scalar_one_or_none()
-    if not tenant_id:
+    # Chats are intentionally owner-scoped, not tenant-owned (migration
+    # 0025). Resolve their runtime scope from the authoritative default
+    # membership, not the order of tenant_ids embedded in an old JWT.
+    tenant_ids = await resolve_active_user_tenant_ids(session, current_user)
+    if not tenant_ids:
         raise HTTPException(status_code=400, detail="User has no tenant assigned")
+    tenant_id = tenant_ids[0]
     return ChatContext(
         chat_id=str(chat_uuid),
         tenant_id=str(tenant_id),

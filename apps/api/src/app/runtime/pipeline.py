@@ -11,6 +11,7 @@ Responsibilities (and NOTHING else):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -52,7 +53,12 @@ from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDe
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.system_llm_role_service import SystemLLMRoleService
-from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
+from app.services.runtime_event_logger import (
+    RuntimeEventJournalFactory,
+    RuntimeEventLogger,
+    RuntimeLogContext,
+    RuntimeLoggingLevel,
+)
 from app.runtime.context_outcome import RuntimeOutcomeProjector
 
 # Memory writeback runs via Celery (single canonical execution mode).
@@ -247,9 +253,11 @@ class RuntimePipeline:
         llm_client: LLMClientProtocol,
     ) -> None:
         self._session = session
+        self._llm_client = llm_client
         self._assembler = PipelineAssembler(
             session=session, llm_client=llm_client,
         )
+        self._chat_tail_tasks: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------ #
     # Public entrypoint                                                  #
@@ -684,11 +692,19 @@ class RuntimePipeline:
                     ):
                         yield memory_ev
                 else:
-                    await self._consume_memory_finalize_background(
+                    self._dispatch_chat_post_final_tail(
                         turn_mem=turn_mem, runtime_state=runtime_state, request=request,
                         stop_reason=PipelineStopReason.COMPLETED, emitter=emitter,
+                        branch_id=branch_id,
+                        project_context=project_context.as_dict(),
+                        term_bindings=lookup.get("glossary") or [],
+                        session_factory=ctx.get_runtime_deps().session_factory,
+                        start_event=ctx.extra.get("chat_post_final_tail_ready"),
                         logging_level=run_logging_level,
                     )
+                    # The user-visible chat stream ends on synthesizer FINAL.
+                    # Context, memory and run completion continue detached.
+                    return
                 await self._apply_chat_context_outcome(
                     request=request, runtime_state=runtime_state, branch_id=branch_id,
                     terminal_state="completed", project_context=project_context.as_dict(),
@@ -861,26 +877,26 @@ class RuntimePipeline:
             )
             return
 
-        # The terminal synthesis checkpoint already emitted the final answer.
-        yield await emitter.emit(
-            RuntimeEvent.orchestrator_end(
-                orchestrator_id=orchestrator_id,
-                run_id=run_id_str,
-                status="completed",
-            ),
-            phase=OrchestrationPhase.PLANNER,
-        )
-        self._dispatch_memory_evidence_feedback(
-            recall_item=memory_recall.as_item(), runtime_state=runtime_state, tenant_id=tenant_id,
-        )
-
-        await self._apply_chat_context_outcome(
-            request=request, runtime_state=runtime_state, branch_id=branch_id,
-            terminal_state="completed", project_context=project_context.as_dict(),
-            term_bindings=lookup.get("glossary") or [],
-        )
-
+        # The terminal synthesis checkpoint already emitted FINAL. Chat must
+        # not publish any further pipeline events; sandbox keeps this tail in
+        # its observed lifecycle.
         if await_background_tail:
+            yield await emitter.emit(
+                RuntimeEvent.orchestrator_end(
+                    orchestrator_id=orchestrator_id,
+                    run_id=run_id_str,
+                    status="completed",
+                ),
+                phase=OrchestrationPhase.PLANNER,
+            )
+            self._dispatch_memory_evidence_feedback(
+                recall_item=memory_recall.as_item(), runtime_state=runtime_state, tenant_id=tenant_id,
+            )
+            await self._apply_chat_context_outcome(
+                request=request, runtime_state=runtime_state, branch_id=branch_id,
+                terminal_state="completed", project_context=project_context.as_dict(),
+                term_bindings=lookup.get("glossary") or [],
+            )
             # Sandbox/trace mode consumes the full runtime tail after final answer.
             async for memory_ev in self._finalize_memory(
                 turn_mem=turn_mem,
@@ -900,24 +916,25 @@ class RuntimePipeline:
                 phase=OrchestrationPhase.PIPELINE,
             )
         else:
-            # Chat mode should finish the user stream on FINAL and dispatch memory
-            # writeback in the background without surfacing tail events.
-            await self._consume_memory_finalize_background(
+            # Chat mode ends the user stream on FINAL. Its post-final work
+            # runs with a separate session and can never fail that stream.
+            self._dispatch_chat_post_final_tail(
                 turn_mem=turn_mem,
                 runtime_state=runtime_state,
                 request=request,
                 stop_reason=planning_outcome.stop_reason,
                 emitter=emitter,
-                budget_resolver=budget_resolver,
+                branch_id=branch_id,
+                project_context=project_context.as_dict(),
+                term_bindings=lookup.get("glossary") or [],
+                session_factory=ctx.get_runtime_deps().session_factory,
+                start_event=ctx.extra.get("chat_post_final_tail_ready"),
+                terminal_orchestrator_id=orchestrator_id,
+                recall_item=memory_recall.as_item(),
+                recall_tenant_id=tenant_id,
                 logging_level=run_logging_level,
             )
-            yield await emitter.emit(
-                RuntimeEvent.run_end(
-                    run_id=run_id_str,
-                    status=planning_outcome.stop_reason.value if planning_outcome.stop_reason else "completed",
-                ),
-                phase=OrchestrationPhase.PIPELINE,
-            )
+            return
 
     async def _apply_chat_context_outcome(
         self,
@@ -1064,6 +1081,186 @@ class RuntimePipeline:
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
+
+    def _dispatch_chat_post_final_tail(
+        self,
+        *,
+        turn_mem: TurnMemory,
+        runtime_state: RuntimeTurnState,
+        request: PipelineRequest,
+        stop_reason: PipelineStopReason | None,
+        emitter: RuntimeEventLogger,
+        branch_id: str | None,
+        project_context: dict[str, Any],
+        term_bindings: list[dict[str, Any]],
+        session_factory: Any | None,
+        start_event: asyncio.Event | None,
+        terminal_orchestrator_id: str | None = None,
+        recall_item: dict[str, Any] | None = None,
+        recall_tenant_id: UUID | None = None,
+        logging_level: Optional[str] = None,
+    ) -> None:
+        """Detach non-user-visible work after a chat synthesis FINAL.
+
+        A streaming request owns the session used to synthesize and persist the
+        assistant message.  Reusing it in a detached coroutine would race that
+        persistence (and can run after FastAPI closes the request session), so
+        the tail always opens its own session.
+        """
+        factory = session_factory
+        if factory is None:
+            from app.core.db import get_session_factory
+            factory = get_session_factory()
+
+        task = asyncio.create_task(
+            self._run_chat_post_final_tail(
+                session_factory=factory,
+                turn_mem=turn_mem,
+                runtime_state=runtime_state,
+                request=request,
+                stop_reason=stop_reason or PipelineStopReason.COMPLETED,
+                emitter=emitter,
+                branch_id=branch_id,
+                project_context=project_context,
+                term_bindings=term_bindings,
+                start_event=start_event,
+                terminal_orchestrator_id=terminal_orchestrator_id,
+                recall_item=recall_item,
+                recall_tenant_id=recall_tenant_id,
+                logging_level=logging_level,
+            ),
+            name=f"chat-runtime-tail:{runtime_state.run_id}",
+        )
+        self._chat_tail_tasks.add(task)
+
+        def _finished(completed: asyncio.Task[None]) -> None:
+            self._chat_tail_tasks.discard(completed)
+            if completed.cancelled():
+                logger.warning("chat_runtime_tail_cancelled", extra={"run_id": str(runtime_state.run_id)})
+                return
+            try:
+                completed.result()
+            except Exception:
+                logger.exception("chat_runtime_tail_failed", extra={"run_id": str(runtime_state.run_id)})
+
+        task.add_done_callback(_finished)
+
+    async def _run_chat_post_final_tail(
+        self,
+        *,
+        session_factory: Any,
+        turn_mem: TurnMemory,
+        runtime_state: RuntimeTurnState,
+        request: PipelineRequest,
+        stop_reason: PipelineStopReason,
+        emitter: RuntimeEventLogger,
+        branch_id: str | None,
+        project_context: dict[str, Any],
+        term_bindings: list[dict[str, Any]],
+        start_event: asyncio.Event | None,
+        terminal_orchestrator_id: str | None,
+        recall_item: dict[str, Any] | None,
+        recall_tenant_id: UUID | None,
+        logging_level: Optional[str],
+    ) -> None:
+        """Complete chat-only tail without coupling it to SSE delivery."""
+        tail_error: Exception | None = None
+        if start_event is not None:
+            try:
+                await asyncio.wait_for(start_event.wait(), timeout=60)
+            except TimeoutError:
+                logger.warning(
+                    "chat_runtime_tail_persistence_wait_timed_out",
+                    extra={"run_id": str(runtime_state.run_id), "chat_id": request.chat_id},
+                )
+        if terminal_orchestrator_id is not None:
+            try:
+                await emitter.emit(
+                    RuntimeEvent.orchestrator_end(
+                        orchestrator_id=terminal_orchestrator_id,
+                        run_id=str(runtime_state.run_id),
+                        status="completed",
+                    ),
+                    phase=OrchestrationPhase.PLANNER,
+                )
+            except Exception:
+                logger.exception(
+                    "chat_runtime_tail_orchestrator_end_failed",
+                    extra={"run_id": str(runtime_state.run_id)},
+                )
+        if recall_item is not None and recall_tenant_id is not None:
+            self._dispatch_memory_evidence_feedback(
+                recall_item=recall_item,
+                runtime_state=runtime_state,
+                tenant_id=recall_tenant_id,
+            )
+        try:
+            async with session_factory() as tail_session:
+                tail_pipeline = RuntimePipeline(session=tail_session, llm_client=self._llm_client)
+                try:
+                    await tail_pipeline._apply_chat_context_outcome(
+                        request=request,
+                        runtime_state=runtime_state,
+                        branch_id=branch_id,
+                        terminal_state="completed",
+                        project_context=project_context,
+                        term_bindings=term_bindings,
+                    )
+                except Exception as exc:  # Context reconciliation is post-response best effort.
+                    tail_error = exc
+                    logger.exception(
+                        "chat_runtime_context_tail_failed",
+                        extra={"run_id": str(runtime_state.run_id), "chat_id": request.chat_id},
+                    )
+
+                try:
+                    async for _ in tail_pipeline._finalize_memory(
+                        turn_mem=turn_mem,
+                        runtime_state=runtime_state,
+                        request=request,
+                        stop_reason=stop_reason,
+                        emitter=emitter,
+                        budget_resolver=BudgetResolver(tail_session),
+                        logging_level=logging_level,
+                    ):
+                        pass
+                except Exception as exc:  # Defensive: _finalize_memory is best effort itself.
+                    tail_error = tail_error or exc
+                    logger.exception(
+                        "chat_runtime_memory_tail_failed",
+                        extra={"run_id": str(runtime_state.run_id), "chat_id": request.chat_id},
+                    )
+        except Exception as exc:  # Opening the detached session must not affect chat SSE.
+            tail_error = tail_error or exc
+            logger.exception(
+                "chat_runtime_tail_session_failed",
+                extra={"run_id": str(runtime_state.run_id), "chat_id": request.chat_id},
+            )
+
+        if tail_error is not None:
+            try:
+                await emitter.emit(
+                    RuntimeEvent.status(
+                        "post_final_tail_failed",
+                        error=str(tail_error)[:500],
+                        parent_entity_type="run",
+                        parent_entity_id=str(runtime_state.run_id),
+                    ),
+                    phase=OrchestrationPhase.PIPELINE,
+                )
+            except Exception:
+                logger.exception("chat_runtime_tail_failure_not_journaled", extra={"run_id": str(runtime_state.run_id)})
+
+        try:
+            await emitter.emit(
+                RuntimeEvent.run_end(
+                    run_id=str(runtime_state.run_id),
+                    status=stop_reason.value,
+                ),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+        except Exception:
+            logger.exception("chat_runtime_tail_run_end_failed", extra={"run_id": str(runtime_state.run_id)})
 
     async def _finalize_memory(
         self,
@@ -1428,33 +1625,6 @@ class RuntimePipeline:
                 phase=OrchestrationPhase.PIPELINE,
             )
             return
-
-    async def _consume_memory_finalize_background(
-        self,
-        *,
-        turn_mem: TurnMemory,
-        runtime_state: RuntimeTurnState,
-        request: PipelineRequest,
-        stop_reason: PipelineStopReason,
-        emitter: RuntimeEventLogger,
-        budget_resolver: Optional[BudgetResolver] = None,
-        logging_level: Optional[str] = None,
-    ) -> None:
-        """Run memory finalization side effects without surfacing tail events.
-
-        Used by chat flows where the user stream must end on FINAL/STOP while
-        memory extraction/compaction continues in the background.
-        """
-        async for _ in self._finalize_memory(
-            turn_mem=turn_mem,
-            runtime_state=runtime_state,
-            request=request,
-            stop_reason=stop_reason,
-            emitter=emitter,
-            budget_resolver=budget_resolver,
-            logging_level=logging_level,
-        ):
-            pass
 
     async def _resolve_available_agents_for_planner(
         self,

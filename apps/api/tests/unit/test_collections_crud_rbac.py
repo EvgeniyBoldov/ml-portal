@@ -75,6 +75,8 @@ async def test_list_collections_filters_denied_by_rbac(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_collection_returns_404_when_denied_by_rbac(monkeypatch):
     denied = _fake_collection("denied")
+    tenant_id = uuid4()
+    denied.tenant_id = tenant_id
     fake_service = SimpleNamespace(
         get_by_slug=AsyncMock(return_value=denied),
         sync_collection_status=AsyncMock(return_value={"status": "ready", "details": {}}),
@@ -89,7 +91,7 @@ async def test_get_collection_returns_404_when_denied_by_rbac(monkeypatch):
     monkeypatch.setattr(
         collections_crud,
         "_resolve_requested_tenant_id",
-        AsyncMock(return_value=uuid4()),
+        AsyncMock(return_value=tenant_id),
     )
     monkeypatch.setattr(
         collections_crud,

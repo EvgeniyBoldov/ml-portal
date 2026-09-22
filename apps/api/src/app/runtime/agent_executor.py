@@ -576,12 +576,22 @@ class AgentExecutor:
                 runtime_state.register_descendant_logging_level(level.value)
                 parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
                 parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None
+                # Chat persistence is intentionally independent from the
+                # frontend projection: retain every agent LLM/tool event in
+                # the journal, while progress_level keeps SSE at the
+                # configured brief/status verbosity. Sandbox remains FULL.
+                journal_level = (
+                    RuntimeLoggingLevel.FULL
+                    if getattr(root_logger.context, "origin", None) == "chat"
+                    else level
+                )
                 logger = root_logger.for_entity(
                     entity_type="agent_execution",
                     entity_id=lifecycle_agent_execution_id,
                     parent_entity_type=parent_type,
                     parent_entity_id=parent_id,
-                    level=level,
+                    level=journal_level,
+                    progress_level=level,
                 )
                 # The graph emits this lifecycle event before it invokes the
                 # executor.  The root is NONE in chat mode, hence the scoped

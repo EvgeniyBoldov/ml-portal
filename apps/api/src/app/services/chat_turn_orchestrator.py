@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, AsyncGenerator, Dict, Optional
 import uuid
 
@@ -132,6 +133,7 @@ class ChatTurnOrchestrator:
         )
         context_snapshot = loaded_snapshot if isinstance(loaded_snapshot, ChatContextSnapshot) else ChatContextSnapshot(chat_id=chat_id)
 
+        post_final_tail_ready = asyncio.Event()
         tool_ctx = ToolContext(
             tenant_id=tenant_id or "",
             user_id=user_id,
@@ -140,6 +142,9 @@ class ChatTurnOrchestrator:
             extra={
                 "continuation_meta": continuation_meta or {},
                 "confirmation_tokens": list(confirmation_tokens or []),
+                # Runtime's detached post-FINAL tail must not race the
+                # assistant-message transaction below.
+                "chat_post_final_tail_ready": post_final_tail_ready,
             },
         )
 
@@ -248,6 +253,7 @@ class ChatTurnOrchestrator:
             # The optional worker must observe the same committed deterministic
             # context and assistant message as the immediately following turn.
             await self.turn_service.session.commit()
+            post_final_tail_ready.set()
             await self._dispatch_context_compaction(
                 chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
                 recent_dialogue=llm_messages, user_message_id=user_message_id, assistant_content=assistant_content,

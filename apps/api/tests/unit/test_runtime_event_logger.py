@@ -209,6 +209,21 @@ def test_chat_descendant_can_inherit_agent_full_level_without_raw_streaming() ->
     assert restored.should_log("tool_result") is True
 
 
+def test_chat_agent_full_journal_can_keep_brief_progress_projection() -> None:
+    root = RuntimeEventLogger(context=RuntimeLogContext(
+        run_id=uuid4(), level=RuntimeLoggingLevel.NONE, origin="chat",
+        stream_logs=False, stream_progress=True,
+    ))
+    agent = root.for_entity(
+        entity_type="agent_execution", entity_id=str(uuid4()),
+        level=RuntimeLoggingLevel.FULL, progress_level=RuntimeLoggingLevel.BRIEF,
+    )
+    assert agent.should_log("llm_request") is True
+    assert agent.should_log("tool_result") is True
+    assert agent.should_publish_progress("llm_request") is False
+    assert agent.should_publish_progress("intent") is True
+
+
 def test_agent_completion_progress_uses_bounded_summary() -> None:
     streamer = RuntimeProgressStreamer()
     progress = streamer.project(

@@ -16,6 +16,7 @@ async def test_resolve_table_collection_by_slug_returns_resolved_tenant_id(monke
     collection = SimpleNamespace(
         slug="orders",
         collection_type=CollectionType.TABLE.value,
+        tenant_id=tenant_id,
     )
     fake_service = SimpleNamespace(
         get_by_slug=AsyncMock(return_value=collection),
@@ -51,6 +52,7 @@ async def test_resolve_table_collection_by_slug_bootstraps_sql_storage(monkeypat
     collection = SimpleNamespace(
         slug="warehouse",
         collection_type=CollectionType.SQL.value,
+        tenant_id=tenant_id,
     )
     fake_service = SimpleNamespace(
         get_by_slug=AsyncMock(return_value=collection),
