@@ -56,16 +56,21 @@ export default function CollectionsListPage() {
   const { data, isLoading } = useQuery({
     queryKey: qk.collections.appList({ active_only: true }),
     queryFn: () => collectionsApi.list(true),
+    // A collection can be created or reconfigured in the admin surface while
+    // this cached view is inactive. Refresh whenever the user re-enters it.
+    refetchOnMount: 'always',
   });
 
   const { data: projectMemory } = useQuery({
     queryKey: qk.collections.projectMemoryOverview(),
     queryFn: () => collectionsApi.getProjectMemoryOverview(),
+    refetchOnMount: 'always',
   });
 
   const { data: glossary } = useQuery({
     queryKey: qk.collections.glossaryOverview(),
     queryFn: () => collectionsApi.getGlossaryOverview(),
+    refetchOnMount: 'always',
   });
 
   const collections = useMemo<CollectionCatalogRow[]>(() => {
