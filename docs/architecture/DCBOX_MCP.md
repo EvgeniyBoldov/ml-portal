@@ -66,3 +66,10 @@ MCP запросит:
 автоматическое построение `/api/{app}/{model}s/`. Для `dcbox.*` неизвестный
 тип отклоняется с ошибкой, чтобы опечатка не превратилась в запрос к
 неверному стандартному маршруту.
+
+Если `netbox_search_objects` вызван без `object_types`, MCP выполняет
+ограниченный поиск только по обычным NetBox типам: `dcim.device`, `dcim.rack`,
+`dcim.site`, `ipam.ipaddress` и `ipam.prefix`. Он не использует
+`/api/extras/search/`: этот endpoint не является частью обязательного API
+NetBox и отсутствует в production DCBox. Плагинный тип нужно передавать явно;
+тогда применяется маршрут из `PLUGIN_ENDPOINTS`.

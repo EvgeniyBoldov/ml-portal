@@ -161,6 +161,24 @@ class RuntimeEventLogger:
             progress_streamer=self._progress_streamer,
         )
 
+    def for_observation_level(
+        self, level: RuntimeLoggingLevel | str,
+    ) -> "RuntimeEventLogger":
+        """Keep ownership but apply a descendant's journal admission level.
+
+        A chat root deliberately stays at ``none``.  Background work spawned
+        by a traced agent still belongs to the root run, but must retain the
+        agent's observation policy when it is persisted or handed to a worker.
+        This method intentionally does not enable raw streaming.
+        """
+        return RuntimeEventLogger(
+            context=replace(self.context, level=RuntimeLoggingLevel.parse(level)),
+            session=self._session,
+            session_factory=self._session_factory,
+            stream_publisher=self._stream_publisher,
+            progress_streamer=self._progress_streamer,
+        )
+
     def worker_payload(self) -> dict[str, Any]:
         return self.context.model_dump()
 

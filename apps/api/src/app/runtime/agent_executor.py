@@ -573,6 +573,7 @@ class AgentExecutor:
             )
             level = RuntimeLoggingLevel.parse(configured_level)
             if level is not RuntimeLoggingLevel.NONE:
+                runtime_state.register_descendant_logging_level(level.value)
                 parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
                 parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None
                 logger = root_logger.for_entity(

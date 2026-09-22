@@ -3,6 +3,7 @@ from uuid import uuid4
 import pytest
 
 from app.services.runtime_event_logger import (
+    RuntimeEventJournalFactory,
     RuntimeEventLogger,
     RuntimeLogContext,
     RuntimeLoggingLevel,
@@ -187,6 +188,25 @@ def test_agent_none_hides_agent_progress() -> None:
     ))
 
     assert logger.should_publish_progress("agent_start") is False
+
+
+def test_chat_descendant_can_inherit_agent_full_level_without_raw_streaming() -> None:
+    root = RuntimeEventLogger(context=RuntimeLogContext(
+        run_id=uuid4(), level=RuntimeLoggingLevel.NONE, origin="chat",
+        entity_type="run", stream_logs=False, stream_progress=True,
+    ))
+
+    descendant = root.for_observation_level(RuntimeLoggingLevel.FULL)
+
+    assert descendant.context.entity_type == "run"
+    assert descendant.context.level is RuntimeLoggingLevel.FULL
+    assert descendant.context.stream_logs is False
+    assert descendant.should_log("llm_request") is True
+
+    restored = RuntimeEventJournalFactory.restore_worker(descendant.worker_payload())
+    assert restored.context.level is RuntimeLoggingLevel.FULL
+    assert restored.context.stream_logs is False
+    assert restored.should_log("tool_result") is True
 
 
 def test_agent_completion_progress_uses_bounded_summary() -> None:

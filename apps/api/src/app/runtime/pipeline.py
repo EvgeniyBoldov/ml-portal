@@ -1085,6 +1085,19 @@ class RuntimePipeline:
         When RUNTIME_MEMORY_INLINE is False (default), the actual writeback
         is off-loaded to Celery for lower SSE latency.
         """
+        # The chat root remains ``none`` by design.  If this turn executed an
+        # observed agent, memory finalization is its asynchronous descendant.
+        # Keep the chat root itself at ``none`` and disabled for raw streaming;
+        # the memory orchestrator gets the inherited admission level instead.
+        memory_orchestrator = _memory_orchestrator_id(str(runtime_state.run_id))
+        observation_emitter = emitter.for_observation_level(
+            runtime_state.descendant_logging_level,
+        ).for_entity(
+            entity_type="orchestrator",
+            entity_id=memory_orchestrator,
+            parent_entity_type="run",
+            parent_entity_id=str(runtime_state.run_id),
+        )
         # Convert runtime-owned logical task results to the memory writer's
         # bounded evidence DTO.
         task_projection = runtime_state.task_results
@@ -1127,26 +1140,25 @@ class RuntimePipeline:
         inline_memory = bool(RUNTIME_MEMORY_INLINE)
         if isinstance(request.sandbox_overrides, dict):
             inline_memory = inline_memory or bool(request.sandbox_overrides.get("memory_inline"))
-        yield await emitter.emit(
+        yield await observation_emitter.emit(
             RuntimeEvent.status(
                 "memory_write_start",
                 turn_number=turn_mem.turn_number,
                 agent_results=len(turn_mem.agent_results or []),
                 mode="inline" if inline_memory else "celery",
                 entity_type="orchestrator",
-                entity_id=_memory_orchestrator_id(str(runtime_state.run_id)),
+                entity_id=memory_orchestrator,
                 parent_entity_type="run",
                 parent_entity_id=str(runtime_state.run_id),
             ),
             phase=OrchestrationPhase.PIPELINE,
         )
         if inline_memory:
-            memory_orchestrator = _memory_orchestrator_id(str(runtime_state.run_id))
             component_ids = {
                 "fact_extractor": _memory_component_entity_id(str(runtime_state.run_id), "fact_extractor", 1),
                 "fact_compactor": _memory_component_entity_id(str(runtime_state.run_id), "fact_compactor", 2),
             }
-            yield await emitter.emit(
+            yield await observation_emitter.emit(
                 RuntimeEvent.orchestrator_start(
                     orchestrator_id=memory_orchestrator,
                     run_id=str(runtime_state.run_id),
@@ -1155,7 +1167,7 @@ class RuntimePipeline:
                 phase=OrchestrationPhase.PIPELINE,
             )
             for component, component_id in component_ids.items():
-                yield await emitter.emit(
+                yield await observation_emitter.emit(
                     RuntimeEvent.agent_start(
                         agent_execution_id=component_id,
                         parent_entity_type="orchestrator",
@@ -1170,7 +1182,7 @@ class RuntimePipeline:
             degraded_components: list[str] = []
             try:
                 async def _memory_llm_event(event: RuntimeEvent) -> None:
-                    await emitter.emit(event, phase=OrchestrationPhase.PIPELINE)
+                    await observation_emitter.emit(event, phase=OrchestrationPhase.PIPELINE)
 
                 writer = self._assembler.build_memory_writer(
                     llm_event_sink=lambda _component, event: _memory_llm_event(event),
@@ -1200,7 +1212,7 @@ class RuntimePipeline:
                             continue
                         decision_payload = dict(decision)
                         decision_payload.pop("stage", None)
-                        yield await emitter.emit(
+                        yield await observation_emitter.emit(
                             RuntimeEvent.status(
                                 "memory_candidate_decision",
                                 **decision_payload,
@@ -1214,7 +1226,7 @@ class RuntimePipeline:
                     # Memory degradation/skipping is a completed best-effort
                     # post-response component, not a user-interaction pause.
                     lifecycle_status = "failed" if component_status == "failed" else "completed"
-                    yield await emitter.emit(
+                    yield await observation_emitter.emit(
                         RuntimeEvent.status(
                             "memory_component_result",
                             component_name=component_name,
@@ -1234,7 +1246,7 @@ class RuntimePipeline:
                         ),
                         phase=OrchestrationPhase.PIPELINE,
                     )
-                    yield await emitter.emit(
+                    yield await observation_emitter.emit(
                         RuntimeEvent.agent_end(
                             agent_execution_id=component_entity_id,
                             parent_entity_type="orchestrator",
@@ -1249,7 +1261,7 @@ class RuntimePipeline:
                 memory_writer_finalize_failures_total.labels(
                     stop_reason=stop_reason.value if stop_reason else "unknown"
                 ).inc()
-                yield await emitter.emit(
+                yield await observation_emitter.emit(
                     RuntimeEvent.status(
                         "memory_write_failed",
                         error=str(exc)[:500],
@@ -1259,7 +1271,7 @@ class RuntimePipeline:
                     ),
                     phase=OrchestrationPhase.PIPELINE,
                 )
-            yield await emitter.emit(
+            yield await observation_emitter.emit(
                 RuntimeEvent.status(
                     "memory_write_end",
                     turn_number=turn_mem.turn_number,
@@ -1270,7 +1282,7 @@ class RuntimePipeline:
                 ),
                 phase=OrchestrationPhase.PIPELINE,
             )
-            yield await emitter.emit(
+            yield await observation_emitter.emit(
                 RuntimeEvent.orchestrator_end(
                     orchestrator_id=memory_orchestrator,
                     run_id=str(runtime_state.run_id),
@@ -1376,15 +1388,15 @@ class RuntimePipeline:
                 memory_limits=memory_limits,
                 facts_limits=facts_limits,
                 conversation_limits=conversation_limits,
-                logging_level=logging_level,
+                logging_level=observation_emitter.context.level.value,
                 runtime_log_context=(
-                    emitter.worker_payload()
-                    if getattr(emitter, "context", None) is not None
+                    observation_emitter.worker_payload()
+                    if getattr(observation_emitter, "context", None) is not None
                     else None
                 ),
             )
             finalize_memory_task.delay(payload.model_dump(mode="json"))
-            yield await emitter.emit(
+            yield await observation_emitter.emit(
                 RuntimeEvent.status(
                     "memory_write_dispatched",
                     turn_number=turn_mem.turn_number,
@@ -1405,7 +1417,7 @@ class RuntimePipeline:
             memory_writer_finalize_failures_total.labels(
                 stop_reason=stop_reason.value if stop_reason else "unknown"
             ).inc()
-            yield await emitter.emit(
+            yield await observation_emitter.emit(
                 RuntimeEvent.status(
                     "memory_write_failed",
                     error=str(exc)[:500],

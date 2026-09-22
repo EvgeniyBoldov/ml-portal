@@ -48,6 +48,20 @@ PLUGIN_ENDPOINTS = {
     "dcbox.vlan_mapping_group": "/api/plugins/dcbox/vlanmappinggroup/",
 }
 
+# DCBox does not expose NetBox's optional global ``/api/extras/search/``
+# endpoint.  A type-less search must therefore be expanded into a bounded set
+# of vanilla NetBox resources instead of assuming that the extras app exists.
+# Plugin resources are intentionally not included here: callers must name a
+# plugin object type explicitly, which is then resolved through
+# ``PLUGIN_ENDPOINTS`` above.
+DEFAULT_SEARCH_OBJECT_TYPES = (
+    "dcim.device",
+    "dcim.rack",
+    "dcim.site",
+    "ipam.ipaddress",
+    "ipam.prefix",
+)
+
 
 def _jsonrpc_ok(rpc_id: Any, result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
@@ -211,6 +225,15 @@ def _resolve_object_path(object_type: str) -> str:
     return f"/api/{app_name}/{model_path}/"
 
 
+def _search_object_types(object_types: Any) -> list[str]:
+    """Return explicit types for a bounded generic NetBox search."""
+    if not object_types:
+        return list(DEFAULT_SEARCH_OBJECT_TYPES)
+    if not isinstance(object_types, list):
+        raise ValueError("object_types must be an array of app.model values")
+    return [str(object_type).strip() for object_type in object_types if str(object_type).strip()]
+
+
 def _slim_result(obj: Any, max_results: int = 50) -> Any:
     """Trim deep nested objects and limit result list size to keep LLM context lean."""
     if isinstance(obj, list):
@@ -372,7 +395,8 @@ async def mcp_root(
                             "description": (
                                 "Full-text search across NetBox object types. "
                                 "When object_types specified, queries each type endpoint with ?q= filter and returns combined results. "
-                                "Without object_types uses NetBox global search (/api/extras/search/). "
+                                "Without object_types searches the standard device, rack, site, IP-address and prefix endpoints. "
+                                "Plugin object types must be passed explicitly. "
                                 "Useful for quick lookup when you don't know the exact type. "
                                 "For targeted queries with filters prefer netbox_get_objects."
                             ),
@@ -383,7 +407,7 @@ async def mcp_root(
                                     "object_types": {
                                         "type": "array",
                                         "items": {"type": "string"},
-                                        "description": "Optional object types to search (e.g. [\"dcim.device\", \"ipam.ipaddress\"]). Leave empty for global search.",
+                                        "description": "Optional object types to search (e.g. [\"dcim.device\", \"ipam.ipaddress\"] or [\"dcbox.capacity\"]). Leave empty to search standard NetBox resource types.",
                                     },
                                     "limit": {"type": "integer", "default": 20, "description": "Max results per type"},
                                 },
@@ -457,34 +481,25 @@ async def mcp_root(
 
             if tool_name == "netbox_search_objects":
                 q = str(arguments.get("q") or "").strip()
-                object_types = arguments.get("object_types") or []
+                object_types = _search_object_types(arguments.get("object_types"))
                 limit = int(arguments.get("limit") or 20)
-                if object_types:
-                    results = []
-                    for ot in object_types[:5]:
-                        params: Dict[str, Any] = {"limit": max(1, min(limit, 100))}
-                        if q:
-                            params["q"] = q
-                        path = _resolve_object_path(ot)
-                        try:
-                            page = await _netbox_get(
-                                base_url=base_url,
-                                token=token,
-                                path=path,
-                                params=params,
-                            )
-                            results.append({"object_type": ot, "results": page.get("results", []), "count": page.get("count", 0)})
-                        except Exception:
-                            pass
-                    return _jsonrpc_ok(rpc_id, _as_tool_result({"results": results}))
-                else:
-                    data = await _netbox_get(
-                        base_url=base_url,
-                        token=token,
-                        path="/api/extras/search/",
-                        params={"q": q, "limit": max(1, min(limit, 100))},
-                    )
-                    return _jsonrpc_ok(rpc_id, _as_tool_result(data))
+                results = []
+                for ot in object_types[:5]:
+                    params: Dict[str, Any] = {"limit": max(1, min(limit, 100))}
+                    if q:
+                        params["q"] = q
+                    path = _resolve_object_path(ot)
+                    try:
+                        page = await _netbox_get(
+                            base_url=base_url,
+                            token=token,
+                            path=path,
+                            params=params,
+                        )
+                        results.append({"object_type": ot, "results": page.get("results", []), "count": page.get("count", 0)})
+                    except Exception:
+                        pass
+                return _jsonrpc_ok(rpc_id, _as_tool_result({"results": results}))
 
             return _jsonrpc_err(rpc_id, -32005, f"Tool '{tool_name}' not found")
 

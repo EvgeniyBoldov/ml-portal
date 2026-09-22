@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, field_validator
 
 from app.runtime.memory.components import MemoryBundle, MemorySection
 from app.runtime.memory.tool_ledger import ToolLedger
@@ -54,6 +54,11 @@ class RuntimeTurnState(BaseModel):
     final_answer: Optional[str] = None
     final_error: Optional[str] = None
     deleted_artifact_ids: List[str] = Field(default_factory=list)
+
+    # Observation policy is execution-local metadata.  It must not become
+    # prompt context or durable turn state, but background descendants need it
+    # when the chat root itself is intentionally unobserved.
+    _descendant_logging_level: str = PrivateAttr(default="none")
 
     @field_validator("memory_bundle", mode="before")
     @classmethod
@@ -190,6 +195,21 @@ class RuntimeTurnState(BaseModel):
         artifact_id = str(artifact_id or "").strip()
         if artifact_id and artifact_id not in self.deleted_artifact_ids:
             self.deleted_artifact_ids.append(artifact_id)
+
+    def register_descendant_logging_level(self, level: str) -> None:
+        """Retain the most detailed policy of an executed agent this turn."""
+        rank = {"none": 0, "error": 1, "brief": 2, "full": 3}
+        normalized = str(level or "none").strip().lower()
+        if normalized == "errors":
+            normalized = "error"
+        if normalized not in rank:
+            normalized = "none"
+        if rank[normalized] > rank.get(self._descendant_logging_level, 0):
+            self._descendant_logging_level = normalized
+
+    @property
+    def descendant_logging_level(self) -> str:
+        return self._descendant_logging_level
 
     def compact_view(self) -> Dict[str, Any]:
         """Return compact diagnostics view with bounded size.
