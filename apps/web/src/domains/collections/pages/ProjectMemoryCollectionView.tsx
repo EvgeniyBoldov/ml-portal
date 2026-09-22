@@ -83,16 +83,20 @@ export default function ProjectMemoryCollectionView() {
   const [itemQueryText, setItemQueryText] = useState('');
   const [itemType, setItemType] = useState('');
   const [itemState, setItemState] = useState('');
+  const [itemPage, setItemPage] = useState(1);
+  const itemPageSize = 25;
   const overviewQuery = useQuery({
     queryKey: qk.collections.projectMemoryOverview({ query: projectQueryText }),
     queryFn: () => collectionsApi.getProjectMemoryOverview({ query: projectQueryText || undefined }),
   });
   const projectQuery = useQuery({
-    queryKey: qk.collections.projectMemoryProject(selectedProjectKey ?? '', { query: itemQueryText, item_type: itemType, state: itemState }),
+    queryKey: qk.collections.projectMemoryProject(selectedProjectKey ?? '', { query: itemQueryText, item_type: itemType, state: itemState, page: itemPage, pageSize: itemPageSize }),
     queryFn: () => collectionsApi.getProjectMemoryProject(selectedProjectKey!, {
       query: itemQueryText || undefined,
       item_type: itemType || undefined,
       state: itemState || undefined,
+      limit: itemPageSize,
+      offset: (itemPage - 1) * itemPageSize,
     }),
     enabled: selectedProjectKey !== null,
   });
@@ -146,7 +150,9 @@ export default function ProjectMemoryCollectionView() {
               data={projects}
               keyField="key"
               emptyText="Проекты не найдены"
-              onRowClick={(project) => setSelectedProjectKey(project.key)}
+              paginated
+              pageSize={20}
+              onRowClick={(project) => { setSelectedProjectKey(project.key); setItemPage(1); }}
               rowClassName={(project) => project.key === selectedProjectKey ? styles.selectedRow : undefined}
             />
           </section>
@@ -174,8 +180,8 @@ export default function ProjectMemoryCollectionView() {
                   <ProjectStatusSummary project={projectQuery.data.project} />
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-                  <Input aria-label="Поиск знаний" placeholder="Поиск по subject и содержимому" value={itemQueryText} onChange={(event) => setItemQueryText(event.target.value)} />
-                  <select aria-label="Тип знания" value={itemType} onChange={(event) => setItemType(event.target.value)}>
+                  <Input aria-label="Поиск знаний" placeholder="Поиск по subject и содержимому" value={itemQueryText} onChange={(event) => { setItemQueryText(event.target.value); setItemPage(1); }} />
+                  <select aria-label="Тип знания" value={itemType} onChange={(event) => { setItemType(event.target.value); setItemPage(1); }}>
                     <option value="">Все типы</option>
                     <option value="description">Описание</option>
                     <option value="relationship">Связь</option>
@@ -184,7 +190,7 @@ export default function ProjectMemoryCollectionView() {
                     <option value="procedure">Процедура</option>
                     <option value="decision">Решение</option>
                   </select>
-                  <select aria-label="Состояние знания" value={itemState} onChange={(event) => setItemState(event.target.value)}>
+                  <select aria-label="Состояние знания" value={itemState} onChange={(event) => { setItemState(event.target.value); setItemPage(1); }}>
                     <option value="">Все состояния</option>
                     <option value="active">Актуально</option>
                     <option value="uncertain">Требует проверки</option>
@@ -196,6 +202,12 @@ export default function ProjectMemoryCollectionView() {
                   data={projectQuery.data.items}
                   keyField="id"
                   emptyText="Текущих знаний нет"
+                  paginated
+                  serverPaginated
+                  currentPage={itemPage}
+                  pageSize={itemPageSize}
+                  totalItems={projectQuery.data.total ?? projectQuery.data.items.length}
+                  onPageChange={setItemPage}
                 />
               </>
             )}

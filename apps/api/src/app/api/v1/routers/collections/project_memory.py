@@ -22,6 +22,7 @@ from app.runtime.memory.document_memory import split_canonical_sections
 
 
 router = APIRouter(prefix="/project-memory")
+global_router = APIRouter(prefix="/global-memory")
 
 
 class ProjectMemoryProjectResponse(BaseModel):
@@ -61,6 +62,13 @@ class ProjectMemoryProjectDetailResponse(BaseModel):
     project: ProjectMemoryProjectResponse
     items: list[ProjectMemoryItemResponse]
     total: int = 0
+    limit: int = 100
+    offset: int = 0
+
+
+class GlobalMemoryOverviewResponse(BaseModel):
+    items: list[ProjectMemoryItemResponse]
+    total: int
     limit: int = 100
     offset: int = 0
 
@@ -120,6 +128,43 @@ def _effective_item_rows(rows: list[tuple[MemoryItem, MemoryClaim]]) -> list[tup
             state = "stale"
         result.append((item, winner, len({claim.document_id for claim in claims}), state))
     return result
+
+
+@global_router.get("", response_model=GlobalMemoryOverviewResponse)
+async def get_global_memory_overview(
+    session: AsyncSession = Depends(db_uow), user: UserCtx = Depends(get_current_user),
+    query: str | None = Query(default=None, max_length=200),
+    item_type: str | None = Query(default=None, pattern="^(description|relationship|rule|constraint|procedure|decision)$"),
+    state: str | None = Query(default=None, pattern="^(active|uncertain|stale)$"),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    tenant_id = await _resolve_requested_tenant_id(session, user, None)
+    rows = (await session.execute(
+        select(MemoryItem, MemoryClaim)
+        .join(MemoryClaim, MemoryClaim.memory_item_id == MemoryItem.id)
+        .join(RAGDocument, RAGDocument.id == MemoryClaim.document_id)
+        .where(MemoryItem.scope == "company", _visible_claim_filter(tenant_id))
+        .order_by(MemoryItem.updated_at.desc(), MemoryItem.subject)
+    )).all()
+    effective = _effective_item_rows(rows)
+    normalized = (query or "").strip().casefold()
+    filtered = [row for row in effective if (
+        (not normalized or normalized in row[0].subject.casefold() or normalized in row[1].content_text.casefold())
+        and (item_type is None or row[0].item_type == item_type)
+        and (state is None or row[3] == state)
+    )]
+    page = filtered[offset:offset + limit]
+    return GlobalMemoryOverviewResponse(
+        items=[ProjectMemoryItemResponse(
+            id=item.id, subject=item.subject, value=claim.content_text,
+            content=dict(claim.content or {}), kind=item.item_type, status=item_state,
+            observed_at=item.last_verified_at, last_verified_at=item.last_verified_at,
+            applicability=dict(claim.applicability or {}), source_count=source_count,
+            evidence_section_ids=list(claim.evidence_section_ids or []),
+        ) for item, claim, source_count, item_state in page],
+        total=len(filtered), limit=limit, offset=offset,
+    )
 
 
 async def _project_summary(session: AsyncSession, project: Project, tenant_id: UUID) -> ProjectMemoryProjectResponse:

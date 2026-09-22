@@ -163,7 +163,7 @@ export const qk = {
     version: (id: string, version: number) => ['collections', 'version', id, version] as const,
     data: (slug: string, params?: { limit?: number; offset?: number; search?: string; tenant_id?: string }) =>
       ['collections', 'data', slug, params] as const,
-    documents: (id: string, params?: { page?: number; size?: number; status?: string }) =>
+    documents: (id: string, params?: { page?: number; size?: number; status?: string; query?: string }) =>
       ['collections', 'documents', id, params] as const,
     projectMemoryOverview: (params?: Record<string, unknown>) => ['collections', 'project-memory', 'overview', params] as const,
     projectMemoryProject: (projectKey: string, params?: Record<string, unknown>) =>

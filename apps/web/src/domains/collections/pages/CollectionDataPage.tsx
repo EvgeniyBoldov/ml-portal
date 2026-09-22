@@ -24,7 +24,6 @@ import {
   type CollectionDocument,
   type CollectionDocumentsResponse,
   type CollectionTemplate,
-  type CollectionTemplatesResponse,
 } from '@shared/api/collections';
 import { ApiError } from '@shared/api/errors';
 import { StatusModalNew } from '@/domains/rag/components/StatusModalNew';
@@ -35,6 +34,7 @@ import { summarizeTemplateSchema } from '@shared/lib/templateSchemaSummary';
 import TemplateStatusModal from './TemplateStatusModal';
 import GlossaryCollectionView from './GlossaryCollectionView';
 import ProjectMemoryCollectionView from './ProjectMemoryCollectionView';
+import GlobalMemoryCollectionView from './GlobalMemoryCollectionView';
 import styles from './CollectionDataPage.module.css';
 
 const PAGE_SIZES = [25, 50, 100];
@@ -466,6 +466,9 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const openModalDocIdRef = useRef<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [statusFilter, setStatusFilter] = useState<DocStatusFilter>('all');
   const [sortKey, setSortKey] = useState<DocSortKey>('created_at');
   const [sortDir, setSortDir] = useState<DocSortDir>('desc');
@@ -481,6 +484,14 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const collectionId = collection.id;
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const { data: uploadPolicy } = useQuery({
     queryKey: ['collections', 'document-upload-policy'],
@@ -557,8 +568,14 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   }, [collection.fields]);
 
   const { data: docsData, isLoading: docsLoading } = useQuery({
-    queryKey: qk.collections.documents(collectionId, { page: 1, size: 500 }),
-    queryFn: () => collectionsApi.listDocuments(collectionId, { page: 1, size: 500 }),
+    queryKey: qk.collections.documents(collectionId, { page, size: pageSize, status: statusFilter, query: debouncedSearchQuery }),
+    queryFn: () => {
+      const params: NonNullable<Parameters<typeof collectionsApi.listDocuments>[1]> & { query?: string } = {
+        page, size: pageSize, status: statusFilter === 'all' ? undefined : statusFilter,
+        query: debouncedSearchQuery || undefined,
+      };
+      return collectionsApi.listDocuments(collectionId, params);
+    },
     enabled: !!collectionId,
   });
 
@@ -576,19 +593,11 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
 
   const documents = docsData?.items ?? [];
   const totalDocs = docsData?.total ?? 0;
+  const totalDocumentPages = Math.max(1, Math.ceil(totalDocs / pageSize));
+  useEffect(() => { if (page > totalDocumentPages) setPage(totalDocumentPages); }, [page, totalDocumentPages]);
 
   // Stats
-  const stats = useMemo(() => {
-    const counts = { total: documents.length, ready: 0, processing: 0, failed: 0, uploaded: 0 };
-    documents.forEach(doc => {
-      const s = doc.agg_status || 'uploaded';
-      if (s === 'ready') counts.ready++;
-      else if (PROCESSING_STATUSES.includes(s)) counts.processing++;
-      else if (s === 'failed') counts.failed++;
-      else counts.uploaded++;
-    });
-    return counts;
-  }, [documents]);
+  const stats = docsData?.stats ?? { total: totalDocs, ready: 0, processing: 0, failed: 0, uploaded: 0 };
 
   const statCards: { label: string; value: number; color: string; filter: DocStatusFilter }[] = [
     { label: 'Всего', value: stats.total, color: 'neutral', filter: 'all' },
@@ -601,25 +610,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const filteredDocuments = useMemo(() => {
     let result = [...documents];
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(doc =>
-        (doc.name || '').toLowerCase().includes(q) ||
-        (doc.tags?.join(' ') || '').toLowerCase().includes(q)
-      );
-    }
-
-    if (statusFilter !== 'all') {
-      result = result.filter(doc => {
-        const s = doc.agg_status || 'uploaded';
-        if (statusFilter === 'ready') return s === 'ready';
-        if (statusFilter === 'processing') return PROCESSING_STATUSES.includes(s);
-        if (statusFilter === 'failed') return s === 'failed';
-        if (statusFilter === 'uploaded') return s === 'uploaded';
-        return true;
-      });
-    }
-
     result.sort((a, b) => {
       let cmp = 0;
       if (sortKey === 'name') cmp = (a.name || '').localeCompare(b.name || '');
@@ -629,7 +619,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     });
 
     return result;
-  }, [documents, searchQuery, statusFilter, sortKey, sortDir]);
+  }, [documents, sortKey, sortDir]);
 
   // Selection helpers
   const handleSort = (key: DocSortKey) => {
@@ -920,7 +910,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
           <button
             key={card.label}
             className={`${styles.statCard} ${styles[card.color]} ${statusFilter === card.filter ? styles.active : ''}`}
-            onClick={() => setStatusFilter(card.filter)}
+            onClick={() => { setStatusFilter(card.filter); setPage(1); }}
           >
             <span className={styles.statValue}>{card.value}</span>
             <span className={styles.statLabel}>{card.label}</span>
@@ -1099,6 +1089,20 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
           </table>
         )}
       </div>
+
+      {totalDocs > 0 && (
+        <div className={styles.pagination}>
+          <div className={styles.paginationInfo}>Показано {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalDocs)} из {totalDocs.toLocaleString()}</div>
+          <div className={styles.paginationControls}>
+            <button className={styles.paginationBtn} onClick={() => setPage(1)} disabled={page === 1}><Icon name="chevrons-left" size={16} /></button>
+            <button className={styles.paginationBtn} onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1}><Icon name="chevron-left" size={16} /></button>
+            <span style={{ margin: '0 8px', fontSize: 13 }}>Страница {page} из {totalDocumentPages}</span>
+            <button className={styles.paginationBtn} onClick={() => setPage((value) => Math.min(totalDocumentPages, value + 1))} disabled={page >= totalDocumentPages}><Icon name="chevron-right" size={16} /></button>
+            <button className={styles.paginationBtn} onClick={() => setPage(totalDocumentPages)} disabled={page >= totalDocumentPages}><Icon name="chevrons-right" size={16} /></button>
+          </div>
+          <div className={styles.pageSize}><span>Показывать:</span><select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>{PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></div>
+        </div>
+      )}
 
       {/* Upload modal */}
       <Modal
@@ -1302,6 +1306,9 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -1311,9 +1318,19 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
 
   const collectionId = collection.id;
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const templateQueryKey = useMemo(() => ['collections', 'templates', collectionId, { page, size: pageSize, query: debouncedSearchQuery }] as const, [collectionId, page, pageSize, debouncedSearchQuery]);
+
   const { data: templatesData, isLoading: templatesLoading } = useQuery({
-    queryKey: ['collections', 'templates', collectionId, { page: 1, size: 500 }],
-    queryFn: () => collectionsApi.listTemplates(collectionId, { page: 1, size: 500 }),
+    queryKey: templateQueryKey,
+    queryFn: () => collectionsApi.listTemplates(collectionId, { page, size: pageSize, query: debouncedSearchQuery || undefined }),
     enabled: !!collectionId,
     refetchInterval: 10000,
   });
@@ -1321,21 +1338,9 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   const templates = templatesData?.items ?? [];
   const totalTemplates = templatesData?.total ?? 0;
 
-  const filteredTemplates = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return templates;
-      return templates.filter((item) => {
-      const fileName = String((item.file as Record<string, unknown> | undefined)?.filename ?? '').toLowerCase();
-      return (
-        String(item.title ?? '').toLowerCase().includes(query)
-        || String(item.description ?? '').toLowerCase().includes(query)
-        || String(item.source ?? '').toLowerCase().includes(query)
-        || String(item.template_version ?? '').toLowerCase().includes(query)
-        || String(item.runtime_status ?? item.status ?? '').toLowerCase().includes(query)
-        || fileName.includes(query)
-      );
-    });
-  }, [searchQuery, templates]);
+  const filteredTemplates = templates;
+  const totalPages = Math.max(1, Math.ceil(totalTemplates / pageSize));
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
   const invalidateTemplates = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
@@ -1383,31 +1388,13 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
           if (!payload) continue;
 
           if (event.type === 'rag.snapshot') {
-            const items = (payload.items as CollectionTemplate[] | undefined) ?? [];
-            if (Array.isArray(items)) {
-              queryClient.setQueryData(
-                ['collections', 'templates', collectionId, { page: 1, size: 500 }],
-                (old: CollectionTemplatesResponse | undefined) => old ? { ...old, items, total: items.length } : old,
-              );
-            }
+            void queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
             continue;
           }
 
           const item = payload.item as CollectionTemplate | undefined;
           if (!item?.id) continue;
-          queryClient.setQueryData(
-            ['collections', 'templates', collectionId, { page: 1, size: 500 }],
-            (old: CollectionTemplatesResponse | undefined) => {
-              if (!old) return old;
-              const exists = old.items.some((row) => row.id === item.id);
-              return {
-                ...old,
-                items: exists
-                  ? old.items.map((row) => (row.id === item.id ? { ...row, ...item } : row))
-                  : [item, ...old.items],
-              };
-            },
-          );
+          void queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
         }
       },
     });
@@ -1415,7 +1402,7 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     return () => {
       client.disconnect();
     };
-  }, [collectionId, queryClient]);
+  }, [collectionId, queryClient, templateQueryKey]);
 
   const handleSelectAll = useCallback(() => {
     const visibleIds = filteredTemplates.map((item) => item.id);
@@ -1665,6 +1652,20 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
         )}
       </div>
 
+      {totalTemplates > 0 && (
+        <div className={styles.pagination}>
+          <div className={styles.paginationInfo}>Показано {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalTemplates)} из {totalTemplates.toLocaleString()}</div>
+          <div className={styles.paginationControls}>
+            <button className={styles.paginationBtn} onClick={() => setPage(1)} disabled={page === 1}><Icon name="chevrons-left" size={16} /></button>
+            <button className={styles.paginationBtn} onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1}><Icon name="chevron-left" size={16} /></button>
+            <span style={{ margin: '0 8px', fontSize: 13 }}>Страница {page} из {totalPages}</span>
+            <button className={styles.paginationBtn} onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page === totalPages}><Icon name="chevron-right" size={16} /></button>
+            <button className={styles.paginationBtn} onClick={() => setPage(totalPages)} disabled={page === totalPages}><Icon name="chevrons-right" size={16} /></button>
+          </div>
+          <div className={styles.pageSize}><span>Показывать:</span><select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>{PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></div>
+        </div>
+      )}
+
       <Modal
         open={uploadModalOpen}
         onClose={() => { setUploadModalOpen(false); setUploadFile(null); }}
@@ -1763,11 +1764,15 @@ export default function CollectionDataPage() {
   const { data: collection, isLoading: collectionLoading } = useQuery({
     queryKey: ['collections', 'detail', slug],
     queryFn: () => collectionsApi.getBySlug(slug!),
-    enabled: !!slug && slug !== 'project-memory' && slug !== 'glossary',
+    enabled: !!slug && slug !== 'project-memory' && slug !== 'global-memory' && slug !== 'glossary',
   });
 
   if (slug === 'project-memory') {
     return <ProjectMemoryCollectionView />;
+  }
+
+  if (slug === 'global-memory') {
+    return <GlobalMemoryCollectionView />;
   }
 
   if (slug === 'glossary') {

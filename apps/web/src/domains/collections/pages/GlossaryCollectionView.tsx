@@ -64,9 +64,11 @@ export default function GlossaryCollectionView() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
   const glossaryQuery = useQuery({
-    queryKey: qk.collections.glossaryOverview({ query, scope }),
-    queryFn: () => collectionsApi.getGlossaryOverview({ query: query || undefined, scope: scope || undefined }),
+    queryKey: qk.collections.glossaryOverview({ query, scope, page, pageSize }),
+    queryFn: () => collectionsApi.getGlossaryOverview({ query: query || undefined, scope: scope || undefined, limit: pageSize, offset: (page - 1) * pageSize }),
   });
 
   if (glossaryQuery.isLoading) {
@@ -103,8 +105,8 @@ export default function GlossaryCollectionView() {
 
       <main className={styles.content}>
         <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-          <Input aria-label="Поиск по глоссарию" placeholder="Поиск термина, алиаса или определения" value={query} onChange={(event) => setQuery(event.target.value)} />
-          <select aria-label="Область глоссария" value={scope} onChange={(event) => setScope(event.target.value)}>
+          <Input aria-label="Поиск по глоссарию" placeholder="Поиск термина, алиаса или определения" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} />
+          <select aria-label="Область глоссария" value={scope} onChange={(event) => { setScope(event.target.value); setPage(1); }}>
             <option value="">Все области</option>
             <option value="global">Компания</option>
             <option value="tenant">Tenant</option>
@@ -112,7 +114,7 @@ export default function GlossaryCollectionView() {
             <option value="project">Проект</option>
           </select>
         </div>
-        {entries.length === 0 ? (
+        {entries.length === 0 && !glossaryQuery.data?.total ? (
           <EmptyState
             title="В глоссарии пока нет терминов"
             description="Общие и tenant-термины появятся здесь после добавления или подтверждения."
@@ -123,6 +125,12 @@ export default function GlossaryCollectionView() {
             data={entries}
             keyField="canonical_term"
             emptyText="Термины не найдены"
+            paginated
+            serverPaginated
+            currentPage={page}
+            pageSize={pageSize}
+            totalItems={glossaryQuery.data?.total ?? 0}
+            onPageChange={setPage}
           />
         )}
       </main>

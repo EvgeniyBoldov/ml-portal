@@ -7,7 +7,7 @@ import json
 import uuid
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Query
-from sqlalchemy import select
+from sqlalchemy import String, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_uow, get_current_user, get_redis_client
@@ -133,6 +133,7 @@ async def list_collection_documents(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=500),
     status: str | None = Query(None),
+    query: str | None = Query(None, max_length=200),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
@@ -159,11 +160,46 @@ async def list_collection_documents(
             )
         )
         if status:
-            base_q = base_q.where(RAGDocument.status == status)
+            if status in {"ready", "failed", "uploaded", "processing"}:
+                aggregate = func.coalesce(RAGDocument.agg_status, RAGDocument.status)
+                if status == "processing":
+                    base_q = base_q.where(aggregate.in_(["processing", "embedding", "chunked", "normalized"]))
+                else:
+                    base_q = base_q.where(aggregate == status)
+            else:
+                base_q = base_q.where(RAGDocument.status == status)
+        normalized_query = (query or "").strip()
+        if normalized_query:
+            pattern = f"%{normalized_query}%"
+            base_q = base_q.where(or_(
+                RAGDocument.name.ilike(pattern),
+                RAGDocument.filename.ilike(pattern),
+                RAGDocument.title.ilike(pattern),
+                RAGDocument.tags.cast(String).ilike(pattern),
+            ))
         base_q = base_q.order_by(RAGDocument.created_at.desc())
 
         count_q = select(sa_func.count()).select_from(base_q.subquery())
         total = (await session.execute(count_q)).scalar() or 0
+
+        status_rows = (await session.execute(
+            select(func.coalesce(RAGDocument.agg_status, RAGDocument.status), sa_func.count())
+            .join(Source, RAGDocument.id == Source.source_id)
+            .join(DocumentCollectionMembership, DocumentCollectionMembership.source_id == Source.source_id)
+            .where(
+                DocumentCollectionMembership.collection_id == collection_id,
+                DocumentCollectionMembership.tenant_id == collection.tenant_id,
+            )
+            .group_by(func.coalesce(RAGDocument.agg_status, RAGDocument.status))
+        )).all()
+        status_counts = {str(key or "uploaded"): int(count) for key, count in status_rows}
+        stats = {
+            "total": sum(status_counts.values()),
+            "ready": status_counts.get("ready", 0),
+            "failed": status_counts.get("failed", 0),
+            "processing": sum(status_counts.get(key, 0) for key in ("processing", "embedding", "chunked", "normalized")),
+            "uploaded": status_counts.get("uploaded", 0),
+        }
 
         offset = (page - 1) * size
         rows = (await session.execute(base_q.offset(offset).limit(size))).all()
@@ -270,7 +306,7 @@ async def list_collection_documents(
                                     meta_fields[fname] = val
                             row_id_map[rid]["meta_fields"] = meta_fields
 
-        return {"items": items, "total": total, "page": page, "size": size, "has_more": offset + size < total}
+        return {"items": items, "total": total, "page": page, "size": size, "has_more": offset + size < total, "stats": stats}
     except HTTPException:
         raise
     except Exception as e:
