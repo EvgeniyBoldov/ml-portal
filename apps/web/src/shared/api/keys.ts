@@ -63,7 +63,7 @@ export const qk = {
     },
     systemLlmRoles: {
       all: () => ['admin', 'system-llm-roles'] as const,
-      active: (role: 'planner' | 'turn_preflight' | 'memory' | 'synthesizer' | 'fact_extractor' | 'fact_compactor' | 'chat_context_compactor') =>
+      active: (role: 'planner' | 'turn_preflight' | 'memory' | 'synthesizer' | 'fact_extractor' | 'fact_compactor' | 'document_memory_extractor' | 'chat_context_compactor') =>
         ['admin', 'system-llm-roles', 'active', role] as const,
     },
     audit: (params?: {

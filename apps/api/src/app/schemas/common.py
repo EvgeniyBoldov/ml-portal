@@ -18,15 +18,20 @@ class ProblemDetails(BaseModel):
 
 
 class DocumentStatus(str, Enum):
-    """Document processing status"""
-    QUEUED = "queued"
-    EXTRACTING = "extracting"
-    CHUNKING = "chunking"
-    EMBEDDING = "embedding"
-    INDEXING = "indexing"
+    """Persisted lifecycle status of a RAG document.
+
+    This is deliberately distinct from ``StageStatus``: the latter describes
+    individual nodes in the ingest graph (pending/queued/completed/etc.).
+    Values here must stay aligned with PostgreSQL's ``documentstatus`` enum.
+    """
+    UPLOADED = "uploaded"
+    UPLOADING = "uploading"
+    PROCESSING = "processing"
+    PROCESSED = "processed"
     READY = "ready"
     FAILED = "failed"
-    CANCELED = "canceled"
+    ARCHIVED = "archived"
+    QUEUED = "queued"
 
 
 class Step(str, Enum):

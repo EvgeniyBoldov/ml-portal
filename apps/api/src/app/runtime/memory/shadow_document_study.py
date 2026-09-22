@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Literal, Sequence
+from typing import Any, Awaitable, Callable, Literal, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -24,8 +24,7 @@ from app.models.project import Project
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.memory.shadow_study_prompts import (
-    SHADOW_DOCUMENT_SCREENING_PROMPT,
-    SHADOW_DOCUMENT_STUDY_PROMPT,
+    document_memory_prompt,
 )
 
 
@@ -63,14 +62,30 @@ class ShadowDocumentStudyAgent:
     def __init__(self, *, session: AsyncSession, llm_client: LLMClientProtocol) -> None:
         self._structured = StructuredLLMCall(session=session, llm_client=llm_client)
 
-    async def screen(self, *, document: dict[str, Any], sample_sections: Sequence[dict[str, Any]], tenant_id: UUID) -> ShadowScreeningOutput:
+    async def _prompt(self, stage: Literal["screening", "study"]) -> str:
+        config = await self._structured.role_service.get_role_config(SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR)
+        return document_memory_prompt(config.get("extras"), stage=stage)
+
+    async def screen(
+        self,
+        *,
+        document: dict[str, Any],
+        sample_sections: Sequence[dict[str, Any]],
+        tenant_id: UUID,
+        agent_execution_id: str | None = None,
+        event_sink: Callable[[Any], Awaitable[Any]] | None = None,
+    ) -> ShadowScreeningOutput:
         result = await self._structured.invoke(
             role=SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR,
-            system_prompt=SHADOW_DOCUMENT_SCREENING_PROMPT,
+            system_prompt=await self._prompt("screening"),
             payload={"document": document, "sample_sections": list(sample_sections)},
             schema=ShadowScreeningOutput,
             tenant_id=tenant_id,
             use_default_model=True,
+            agent_execution_id=agent_execution_id,
+            trace_parent_entity_type="agent_execution",
+            trace_parent_entity_id=agent_execution_id,
+            event_sink=event_sink,
         )
         return result.value
 
@@ -83,10 +98,12 @@ class ShadowDocumentStudyAgent:
         glossary: Sequence[dict[str, Any]],
         projects: Sequence[dict[str, Any]],
         tenant_id: UUID,
+        agent_execution_id: str | None = None,
+        event_sink: Callable[[Any], Awaitable[Any]] | None = None,
     ) -> ShadowStudyOutput:
         result = await self._structured.invoke(
             role=SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR,
-            system_prompt=SHADOW_DOCUMENT_STUDY_PROMPT,
+            system_prompt=await self._prompt("study"),
             payload={
                 "document": document,
                 "sections": list(sections),
@@ -97,6 +114,10 @@ class ShadowDocumentStudyAgent:
             schema=ShadowStudyOutput,
             tenant_id=tenant_id,
             use_default_model=True,
+            agent_execution_id=agent_execution_id,
+            trace_parent_entity_type="agent_execution",
+            trace_parent_entity_id=agent_execution_id,
+            event_sink=event_sink,
         )
         return result.value
 

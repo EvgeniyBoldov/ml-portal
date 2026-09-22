@@ -35,6 +35,10 @@ class DocumentMemorySnapshot(Base):
     visibility_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     canonical_checksum: Mapped[str] = mapped_column(String(128), nullable=False)
     extractor_version: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # A shadow study spans several Celery tasks. This durable relation is the
+    # sole correlation key for its runtime journal; task names and timestamps
+    # are never used to reconstruct the trace.
+    trace_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
     metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

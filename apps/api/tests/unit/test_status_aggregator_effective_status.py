@@ -22,7 +22,7 @@ def test_effective_status_archived_has_priority():
         tenant_secondary_model_alias=None,
         model_availability={"emb.a": True},
     )
-    assert agg_status in {"ready", "partial", "processing", "uploaded", "failed"}
+    assert agg_status == "archived"
     assert details["effective_status"] == "archived"
 
 
@@ -84,4 +84,3 @@ def test_effective_status_limited_when_only_secondary_is_usable():
         model_availability={"emb.a": False, "emb.b": True},
     )
     assert details["effective_status"] == "limited"
-

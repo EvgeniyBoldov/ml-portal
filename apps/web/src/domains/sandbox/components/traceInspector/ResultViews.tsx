@@ -55,6 +55,56 @@ export function ExecutorResultView({ executor }: { executor: TraceExecutorRun })
   return <ExecutorResultFields result={executor.result} />;
 }
 
+type MemoryOutput = Record<string, unknown>;
+
+const memoryStageLabel = (stage: unknown): string => ({
+  memory_screening_completed: 'Оценка документа',
+  memory_batch_persisted: 'Извлечение из секций',
+  memory_candidates_finalized: 'Кандидаты подготовлены',
+  memory_conflicts_checked: 'Проверка конфликтов',
+}[String(stage)] ?? 'Итог этапа');
+
+const memoryDecisionLabel = (decision: unknown): string => ({ study: 'Изучать документ', skip: 'Не извлекать' }[String(decision)] ?? String(decision));
+const memorySnapshotStatusLabel = (status: unknown): string => ({
+  awaiting_review: 'Ожидает проверки в админке',
+  published: 'Опубликовано',
+  rejected: 'Отклонено',
+}[String(status)] ?? String(status));
+
+function MemoryField({ label, value }: { label: string; value: unknown }) {
+  if (value === undefined || value === null) return null;
+  const scalar = typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? value
+    : JSON.stringify(value);
+  return <InspectorFieldRow label={label}><InspectorScalar value={scalar} /></InspectorFieldRow>;
+}
+
+/** Human-readable summary of the deterministic memory-extraction status payload. */
+export function MemoryExtractionResultView({ result }: { result: TraceExecutorResult }) {
+  const output = result.output;
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return <ExecutorResultFields result={result} />;
+  const value = output as MemoryOutput;
+  const sections = Array.isArray(value.section_ids) ? value.section_ids.filter((item): item is string => typeof item === 'string').join(', ') : undefined;
+  return <InspectorFieldGroup>
+    <InspectorFieldRow label="Статус"><InspectorStatus label={result.statusLabel} tone={tone(result.status)} /></InspectorFieldRow>
+    <MemoryField label="Этап" value={memoryStageLabel(value.stage)} />
+    {value.decision !== undefined ? <MemoryField label="Решение" value={memoryDecisionLabel(value.decision)} /> : null}
+    <MemoryField label="Тип документа" value={value.document_kind} />
+    <MemoryField label="Секции" value={sections} />
+    <MemoryField label="Обработано секций" value={value.section_count} />
+    <MemoryField label="Найдено кандидатов" value={value.item_count} />
+    <MemoryField label="Создано" value={value.created} />
+    <MemoryField label="Дополнено" value={value.extended} />
+    <MemoryField label="Отклонено валидацией" value={value.rejected} />
+    <MemoryField label="Всего кандидатов" value={value.candidates} />
+    <MemoryField label="Значений глоссария" value={value.glossary_meanings} />
+    <MemoryField label="Конфликтов" value={value.conflicts} />
+    <MemoryField label="Дубликатов" value={value.duplicates} />
+    <MemoryField label="Автоодобрено" value={value.autoeligible} />
+    {value.snapshot_status !== undefined ? <MemoryField label="Статус снимка" value={memorySnapshotStatusLabel(value.snapshot_status)} /> : null}
+  </InspectorFieldGroup>;
+}
+
 export const AgentResultViewer = ExecutorResultView;
 export const SynthesizerResultViewer = ExecutorResultView;
 

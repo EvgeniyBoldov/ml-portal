@@ -439,12 +439,14 @@ class RAGStatusManager:
             started_at=datetime.now(timezone.utc),
             finished_at=datetime.now(timezone.utc),
         )
+        await self._update_aggregate_status(doc_id)
 
     async def unarchive_document(self, doc_id: UUID) -> None:
         """Разархивировать документ."""
         logger.info(f"Unarchiving document {doc_id}")
 
         await self.status_repo.delete_node(doc_id, 'archive', 'archive')
+        await self._update_aggregate_status(doc_id)
 
     async def get_document_status(self, doc_id: UUID) -> Dict[str, Any]:
         return await build_document_status(self.status_repo, doc_id)
@@ -579,13 +581,28 @@ class RAGStatusManager:
         new_effective = agg_details.get("effective_status")
         status_changed = (agg_status != prev_agg_status) or (new_effective != prev_effective)
 
+        lifecycle_status = {
+            "uploaded": "uploaded",
+            "processing": "processing",
+            "ready": "ready",
+            "partial": "processed",
+            "failed": "failed",
+            "archived": "archived",
+        }.get(agg_status)
+        document_values = {
+            "agg_status": agg_status,
+            "agg_details_json": agg_details,
+        }
+        # Keep the legacy lifecycle field a valid projection of the graph for
+        # old API consumers and SQL filters.  Never erase an explicit archive
+        # with a non-archive aggregate.
+        if lifecycle_status:
+            document_values["status"] = lifecycle_status
+
         await self.session.execute(
             update(RAGDocument)
             .where(RAGDocument.id == doc_id)
-            .values(
-                agg_status=agg_status,
-                agg_details_json=agg_details,
-            )
+            .values(**document_values)
         )
 
         # Публикуем только если пользователь-видимый статус изменился

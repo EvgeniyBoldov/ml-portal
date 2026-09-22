@@ -189,3 +189,18 @@ export const FACT_COMPACTOR_INPUT_CONTRACT = {
   },
   required: ['candidates', 'current_facts'],
 };
+
+export const DOCUMENT_MEMORY_EXTRACTOR_INPUT_CONTRACT = {
+  type: 'object',
+  description: 'Вход зависит от этапа: screening, study_sections или conflict review.',
+  properties: {
+    document: { type: 'object', description: 'Метаданные изучаемого документа' },
+    sample_sections: { type: 'array', description: 'Выборка секций для первичной оценки' },
+    sections: { type: 'array', description: 'Текущий batch адресуемых секций документа' },
+    candidate_ledger: { type: 'array', description: 'Ранее извлечённые кандидаты этого документа' },
+    glossary: { type: 'array', description: 'Доступный контекст глоссария' },
+    project_catalog: { type: 'array', description: 'Каталог проектов, допустимых для привязки' },
+    candidate: { type: 'object', description: 'Кандидат для проверки конфликта' },
+    existing: { type: 'object', description: 'Существующий кандидат для сравнения' },
+  },
+};

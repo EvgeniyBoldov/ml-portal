@@ -10,6 +10,11 @@
 
 ### Осталось до production-ready Memory
 
+- Реализовать управляемый уровень логирования для extraction memory-задач
+  (brief/full/error) с учётом фонового trace и безопасного хранения prompt и
+  document content.
+- Перенести промпты extraction memory в web/admin и подключить их к настройкам
+  соответствующей system LLM role.
 - Добавить PostgreSQL integration-тесты для повторной extraction того же
   checksum, удаления исчезнувших кандидатов, rollback, конфликтующих claims и
   tenant ACL для content, aliases, relations и evidence.

@@ -43,6 +43,7 @@ export type SystemLLMRoleType =
   | 'synthesizer'
   | 'fact_extractor'
   | 'fact_compactor'
+  | 'document_memory_extractor'
   | 'chat_context_compactor';
 export type RetryBackoffType = 'none' | 'linear' | 'exp';
 
@@ -161,6 +162,7 @@ export type MemoryRoleUpdate = SystemLLMRoleUpdate;
 export type SynthesizerRoleUpdate = SystemLLMRoleUpdate;
 export type FactExtractorRoleUpdate = SystemLLMRoleUpdate;
 export type FactCompactorRoleUpdate = SystemLLMRoleUpdate;
+export type DocumentMemoryExtractorRoleUpdate = SystemLLMRoleUpdate;
 
 export interface UserCreate {
   login: string;
@@ -1009,6 +1011,34 @@ export interface AgentRunDetail {
 export const agentRunsApi = {
   list: (): Promise<AgentRunListItem[]> => apiRequest('/admin/agent-runs', { method: 'GET' }),
   get: (id: string): Promise<AgentRunDetail> => apiRequest(`/admin/agent-runs/${encodeURIComponent(id)}`, { method: 'GET' }),
+};
+
+export interface MemoryJobListItem {
+  id: string;
+  document_id: string;
+  trace_run_id?: string | null;
+  status: string;
+  candidate_count: number;
+  canonical_checksum: string;
+  visibility_tenant_id?: string | null;
+  document_title?: string | null;
+  document_filename?: string | null;
+  created_at: string;
+  updated_at: string;
+  metrics: Record<string, unknown>;
+}
+
+export interface MemoryJobDetail extends MemoryJobListItem {
+  events: AgentRunDetail['events'];
+}
+
+export const memoryJobsApi = {
+  list: (): Promise<MemoryJobListItem[]> => apiRequest('/admin/memory-jobs', { method: 'GET' }),
+  get: (id: string): Promise<MemoryJobDetail> => apiRequest(`/admin/memory-jobs/${encodeURIComponent(id)}`, { method: 'GET' }),
+  stream: async (id: string, signal?: AbortSignal): Promise<Response> => {
+    const { fetchSseWithAuth } = await import('@/shared/api/streamAuth');
+    return fetchSseWithAuth(`/admin/memory-jobs/${encodeURIComponent(id)}/stream`, signal);
+  },
 };
 
 export const systemLLMRolesApi = {

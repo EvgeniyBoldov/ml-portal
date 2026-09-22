@@ -497,10 +497,15 @@ const callHasError = (call: TraceCall): boolean => (
   || (call.kind === 'llm' && call.response !== undefined && llmResponseStatus(call.response.payload) === 'error')
   || (call.kind === 'tool' && toolResult(call.response?.payload ?? {}).success === false)
 );
+const isDocumentMemoryExecutor = (executor: TraceExecutorRun): boolean => executor.executorSlug === 'document_memory_extractor';
+const isDocumentMemoryStage = (stage: TraceStage): boolean => stage.executorRuns.some(isDocumentMemoryExecutor);
 export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[] {
+  if (target.kind === 'stage' && isDocumentMemoryStage(target.stage)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
+  if (target.kind === 'step' && isDocumentMemoryStage(target.step.stage)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
   if (target.kind === 'stage') return [tab('info', 'Инфо'), ...(target.stage.plan ? [tab('plan', 'План')] : []), tab('result', 'Результат'), tab('raw', 'RAW')];
   if (target.kind === 'step') return [tab('info', 'Инфо'), tab('task', 'Задача'), tab('result', 'Результат'), tab('raw', 'RAW')];
   if (target.kind === 'executor') {
+    if (isDocumentMemoryExecutor(target.executor)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
     const primary = target.executor.kind === 'planner'
       ? target.stage.plan ? [tab('plan', 'План')] : [tab('result', 'Результат')]
       : target.executor.kind === 'preflight' ? [tab('result', 'Маршрут')]
@@ -1150,6 +1155,24 @@ function resultMessageFrom(payload: Record<string, unknown>): string | undefined
   return undefined;
 }
 
+function documentMemoryResult(events: RuntimeJournalEvent[]): Record<string, unknown> | undefined {
+  const event = [...events].reverse().find((item) => (
+    item.event_type === 'status' && typeof item.payload.stage === 'string'
+      && item.payload.stage.startsWith('memory_')
+  ));
+  if (!event) return undefined;
+  const payload = event.payload;
+  const fields = [
+    'stage', 'decision', 'document_kind', 'cursor', 'section_count', 'item_count',
+    'section_ids', 'next_section', 'created', 'extended', 'rejected', 'candidates',
+    'glossary_meanings', 'conflicts', 'duplicates', 'autoeligible', 'snapshot_status',
+  ];
+  const result = Object.fromEntries(fields
+    .filter((key) => payload[key] !== undefined)
+    .map((key) => [key, payload[key]]));
+  return Object.keys(result).length ? result : undefined;
+}
+
 function executorResultFor(
   state: SandboxTraceState,
   entity: TraceEntity,
@@ -1179,8 +1202,11 @@ function executorResultFor(
   const endPayload = asRecord(ended?.payload) ?? {};
   const finalPayload = asRecord(final?.payload) ?? {};
   const errorPayload = asRecord(error?.payload) ?? {};
+  const memoryOutput = executorSlug === 'document_memory_extractor'
+    ? documentMemoryResult(executorEvents)
+    : undefined;
   const resultPayload = isSynthesizer && Object.keys(finalPayload).length ? finalPayload : endPayload;
-  const output = resultOutputFrom(resultPayload);
+  const output = memoryOutput ?? resultOutputFrom(resultPayload);
   const toolCalls = calls.filter((call) => call.kind === 'tool');
   const succeeded = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === true).length;
   const failed = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === false).length;
@@ -1712,6 +1738,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
       const isMemory = entity.type === 'orchestrator' && asString(start.payload.role) === 'memory';
       const isMemoryPreparation = entity.type === 'orchestrator' && ['memory_preparation', 'memory_recall'].includes(asString(start.payload.role));
       const isSynthesis = entity.type === 'synthesis_run';
+      const memoryStage = asString(start.payload.memory_stage);
       if (!isPreflight && !isMemory && !isMemoryPreparation && !isSynthesis) return null;
       const executorRuns = isSynthesis
         ? [synthesizerExecutorFor(state, entity)].filter((executor): executor is TraceExecutorRun => Boolean(executor))
@@ -1747,8 +1774,16 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         entity, start, number: plannerStages.length + 1, iterationNumber: plannerStages.length + 1,
         stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : isPreflight ? 'turn_preflight' : 'memory',
         kind: isSynthesis ? 'synthesis' : isPreflight ? 'turn_preflight' : isMemoryPreparation ? 'memory_preparation' : 'memory_writeback',
-        label: isSynthesis ? 'Подготовка ответа' : isPreflight ? 'Turn Preflight' : isMemoryPreparation ? 'Подготовка контекста' : 'Сохранение контекста диалога',
-        task: isSynthesis ? 'Подготовка финального ответа' : isPreflight ? 'Маршрутизация запроса' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
+        label: memoryStage === 'screening' ? 'Скрининг документа'
+          : memoryStage === 'study_sections' ? 'Извлечение из секций'
+            : memoryStage === 'finalize_review' ? 'Финализация и проверка конфликтов'
+              : memoryStage === 'reconcile_conflicts' ? 'Повторная проверка конфликтов'
+                : isSynthesis ? 'Подготовка ответа' : isPreflight ? 'Turn Preflight' : isMemoryPreparation ? 'Подготовка контекста' : 'Сохранение контекста диалога',
+        task: memoryStage === 'screening' ? 'Определение полезности документа для памяти'
+          : memoryStage === 'study_sections' ? 'Извлечение кандидатов из секций документа'
+            : memoryStage === 'finalize_review' ? 'Подготовка кандидатов к админской проверке'
+              : memoryStage === 'reconcile_conflicts' ? 'Повторная проверка конфликтов памяти'
+                : isSynthesis ? 'Подготовка финального ответа' : isPreflight ? 'Маршрутизация запроса' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
       };
       if (isMemory || isMemoryPreparation) {
@@ -1758,7 +1793,11 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           stage,
           number: index + 1,
           kind: stepKindFor(stage.kind, executor),
-          title: executor.executorSlug === 'fact_extractor' ? 'Извлечение фактов'
+          title: memoryStage === 'screening' ? 'Скрининг документа'
+            : memoryStage === 'study_sections' ? 'Извлечение кандидатов'
+              : memoryStage === 'finalize_review' ? 'Финализация и конфликты'
+                : memoryStage === 'reconcile_conflicts' ? 'Проверка конфликтов'
+            : executor.executorSlug === 'fact_extractor' ? 'Извлечение фактов'
             : executor.executorSlug === 'fact_compactor' ? 'Компактация фактов'
               : 'Подготовка memory context',
           objective: executor.task,

@@ -17,6 +17,7 @@ import {
   type SynthesizerRoleUpdate,
   type FactExtractorRoleUpdate,
   type FactCompactorRoleUpdate,
+  type DocumentMemoryExtractorRoleUpdate,
   type ActorLimits,
   type ActorLimitsResolution,
   type RuntimeLimits,
@@ -286,6 +287,14 @@ export function useActiveFactCompactorRole() {
   });
 }
 
+export function useActiveDocumentMemoryExtractorRole() {
+  return useQuery({
+    queryKey: qk.admin.systemLlmRoles.active('document_memory_extractor'),
+    queryFn: () => systemLLMRolesApi.getActive('document_memory_extractor'),
+    staleTime: 30_000,
+  });
+}
+
 export function useUpdateSynthesizerRole() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
@@ -326,6 +335,20 @@ export function useUpdateFactCompactorRole() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('fact_compactor') });
       showSuccess('Настройки Fact Compactor обновлены');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+}
+
+export function useUpdateDocumentMemoryExtractorRole() {
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+  return useMutation({
+    mutationFn: (data: DocumentMemoryExtractorRoleUpdate) => systemLLMRolesApi.updateActive('document_memory_extractor', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('document_memory_extractor') });
+      showSuccess('Настройки изучателя документов обновлены');
     },
     onError: (err: Error) => showError(err.message),
   });

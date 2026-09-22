@@ -67,15 +67,17 @@ class RAGIngestService:
         if not document:
             raise ValueError(f"Document {request.document_id} not found")
 
-        # Guard: already processing
-        processing_statuses = {
-            DocumentStatus.PROCESSING, DocumentStatus.QUEUED,
-        }
-        if document.status in processing_statuses:
+        # The graph is the source of truth for active work.  The document
+        # lifecycle field is a denormalised projection and must not be used to
+        # decide whether another ingest may start.
+        ingest_policy = await self.status_manager.get_ingest_policy(request.document_id)
+        if not ingest_policy["start_allowed"]:
+            if ingest_policy.get("start_reason") != "ingest_already_running":
+                raise ValueError(f"Ingest is not allowed: {ingest_policy.get('start_reason')}")
             logger.warning(f"Document {request.document_id} is already being processed")
             return IngestResponse(
                 document_id=request.document_id,
-                status=DocumentStatus(document.status),
+                status=DocumentStatus.PROCESSING,
                 progress=await self._get_progress(request.document_id),
             )
 
@@ -83,9 +85,6 @@ class RAGIngestService:
         if not target_models:
             raise ValueError("No embedding models configured for this document tenant")
         await self.status_manager.start_ingest(request.document_id)
-        await self.rag_repo.update(
-            self.repo_factory.tenant_id, request.document_id, status=DocumentStatus.QUEUED,
-        )
         run = await self._runs.create(
             request.document_id,
             trigger="upload",
@@ -95,7 +94,7 @@ class RAGIngestService:
 
         return IngestResponse(
             document_id=request.document_id,
-            status=DocumentStatus.QUEUED,
+            status=DocumentStatus.PROCESSING,
             progress=await self._get_progress(request.document_id),
         )
 
@@ -166,12 +165,18 @@ class RAGIngestService:
             logger.warning(f"No chunks_key found for {document_id}, falling back to full ingest")
             return await self.retry_failed(document_id, Step.EXTRACT)
 
-        await self.status_manager.status_repo.upsert_node(
-            doc_id=document_id, node_type="embedding", node_key=model_alias, status=StageStatus.QUEUED.value,
+        await self.status_manager.transition_stage(
+            doc_id=document_id,
+            stage=f"embed.{model_alias}",
+            new_status=StageStatus.QUEUED,
         )
-        await self.status_manager.status_repo.upsert_node(
-            doc_id=document_id, node_type="index", node_key=model_alias, status=StageStatus.PENDING.value,
+        await self.status_manager._reset_stage_if_needed(
+            document_id,
+            f"index.{model_alias}",
+            StageStatus.PENDING,
+            force=True,
         )
+        await self.status_manager._update_aggregate_status(document_id)
         run = await self._runs.create(
             document_id,
             trigger="reindex",
@@ -296,11 +301,11 @@ class RAGIngestService:
         """Cancel ingest pipeline."""
         logger.info(f"Canceling ingest for document {document_id}")
 
-        await self.rag_repo.update_status(document_id, DocumentStatus.CANCELED)
+        await self.status_manager.stop_ingest(document_id)
         await self.session.commit()
 
         return {
             "document_id": str(document_id),
-            "status": "canceled",
+            "status": "cancelled",
             "canceled_at": datetime.now(timezone.utc).isoformat(),
         }
