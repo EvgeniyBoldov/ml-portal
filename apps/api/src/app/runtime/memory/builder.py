@@ -11,12 +11,10 @@ from dataclasses import replace
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.memory import FactScope
-from app.models.sandbox import SandboxBranch
 from app.runtime.memory.components import (
     AgentExecutionMemoryComponent,
     AttachmentMemoryComponent,
@@ -190,27 +188,6 @@ class MemoryBuilder:
         persisted because the sandbox code path skips MemoryWriter.
         """
         if chat_id is None:
-            if sandbox_branch_id is not None:
-                row = await self._session.execute(
-                    select(SandboxBranch).where(SandboxBranch.id == sandbox_branch_id)
-                )
-                branch = row.scalar_one_or_none()
-                if branch is not None and isinstance(branch.summary_artifact_json, dict):
-                    summary_payload = dict(branch.summary_artifact_json or {})
-                    summary = SummaryDTO(
-                        chat_id=uuid4(),
-                        goals=list(summary_payload.get("goals") or []),
-                        done=list(summary_payload.get("done") or []),
-                        entities={
-                            str(k): str(v)
-                            for k, v in dict(summary_payload.get("entities") or {}).items()
-                            if str(k).strip() and str(v).strip()
-                        },
-                        open_questions=list(summary_payload.get("open_questions") or []),
-                        raw_tail=str(summary_payload.get("raw_tail") or ""),
-                        last_updated_turn=int(summary_payload.get("last_updated_turn") or 0),
-                    )
-                    return _apply_branch_summary_overrides(summary, sandbox_overrides=sandbox_overrides)
             return _apply_branch_summary_overrides(SummaryDTO.empty(uuid4()), sandbox_overrides=sandbox_overrides)
 
         existing = await self._summary_store.load(chat_id)

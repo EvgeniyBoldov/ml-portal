@@ -272,6 +272,7 @@ export function useSandboxRun(sessionId: string) {
         } : prev);
         if (hasMemoryWriteEnded(detail.events)) {
           qc.invalidateQueries({ queryKey: ['sandbox', 'branch-artifacts'] });
+          qc.invalidateQueries({ queryKey: ['sandbox', 'branch-memory'] });
           return;
         }
       } catch {
@@ -286,6 +287,7 @@ export function useSandboxRun(sessionId: string) {
     if (branchId) qc.invalidateQueries({ queryKey: qk.sandbox.runs.list(sessionId, branchId) });
     qc.invalidateQueries({ queryKey: qk.sandbox.sessions.detail(sessionId) });
     qc.invalidateQueries({ queryKey: ['sandbox', 'branch-artifacts'] });
+    qc.invalidateQueries({ queryKey: ['sandbox', 'branch-memory'] });
   }, [qc, sessionId]);
 
   const run = useCallback(async (

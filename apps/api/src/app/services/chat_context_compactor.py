@@ -13,7 +13,7 @@ from app.core.logging import get_logger
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredLLMCall
 from app.services.chat_context_contracts import (
-    ChatContextOperation, DecisionPayload, GoalPayload, RecentAnchorPayload,
+    ChatContextOperation, DecisionPayload, GoalPayload, RecentAnchorPayload, TopicScopePayload,
 )
 
 logger = get_logger(__name__)
@@ -40,8 +40,13 @@ class _AnchorCompactionOperation(_CompactionOperationBase):
     payload: RecentAnchorPayload
 
 
+class _TopicCompactionOperation(_CompactionOperationBase):
+    kind: Literal["scope"]
+    payload: TopicScopePayload
+
+
 _CompactionOperation = Annotated[
-    Union[_GoalCompactionOperation, _DecisionCompactionOperation, _AnchorCompactionOperation],
+    Union[_GoalCompactionOperation, _DecisionCompactionOperation, _AnchorCompactionOperation, _TopicCompactionOperation],
     Field(discriminator="kind"),
 ]
 
@@ -80,7 +85,7 @@ class ChatContextCompactor:
             item_key, action = _canonical_key(item.kind, item.action, item.source_ids, payload)
             operations.append(ChatContextOperation(
                 action=action, kind=item.kind, item_key=item_key,
-                payload={**payload, "trust_class": "compacted"}, source_ids=item.source_ids,
+                payload={**payload, "trust_class": "model_inferred"}, source_ids=item.source_ids,
                 expected_revision=expected_revision, confidence=0.5,
             ))
         return operations
@@ -101,8 +106,8 @@ def _bounded_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _canonical_key(kind: str, action: str, source_ids: list[str], payload: dict[str, Any]) -> tuple[str, str]:
-    if kind == "goal":
-        return "active_goal", "update"
+    if kind in {"goal", "scope"}:
+        return ("active_goal" if kind == "goal" else "current_scope"), "update"
     if kind == "recent_anchor":
         return "recent_anchor", "update"
     fingerprint = hashlib.sha256(repr((sorted(source_ids), sorted(payload.items()))).encode()).hexdigest()[:20]

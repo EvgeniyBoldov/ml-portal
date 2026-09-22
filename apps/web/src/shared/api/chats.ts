@@ -17,9 +17,11 @@ export interface ChatContextInspection {
   revision: number;
   focus: Record<string, unknown>;
   active_goal: Record<string, unknown> | null;
+  term_bindings: Array<Record<string, unknown>>;
   artifacts: Array<Record<string, unknown>>;
   open_loops: Array<Record<string, unknown>>;
   decisions: Array<Record<string, unknown>>;
+  recent_anchor: Record<string, unknown> | null;
   task_results: Array<Record<string, unknown>>;
 }
 

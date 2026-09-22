@@ -281,7 +281,7 @@ def compact_chat_context(payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 receipt = await ChatContextService(session, llm_client, None).apply_compaction(
                     chat_id=payload.chat_id, branch_id=payload.sandbox_branch_id,
                     chat_turn_id=payload.chat_turn_id, expected_revision=payload.expected_revision,
-                    operations=operations,
+                    operations=operations, tenant_id=payload.tenant_id,
                 )
             return {"status": "completed", "revision": receipt.revision, "applied": receipt.applied_count, "skipped": receipt.skipped_count, "degraded": receipt.degradation_codes}
 

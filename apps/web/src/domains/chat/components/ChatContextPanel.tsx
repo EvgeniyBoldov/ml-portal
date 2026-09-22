@@ -108,9 +108,14 @@ export function ChatContextPanel({ chatId }: { chatId: string }) {
                 <h3>Фокус</h3>
                 <p className={styles.value}>{textFrom(context.focus, ['topic', 'project_keys', 'entity_refs']) ?? 'Не задан'}</p>
               </section>
+              <ContextList title="Термины" items={context.term_bindings} fields={['term', 'aliases']} emptyText="Термины не закреплены." />
               <ContextList title="Файлы" items={context.artifacts} fields={['file_name', 'role']} emptyText="Файлы не закреплены." />
               <ContextList title="Открытые вопросы" items={context.open_loops} fields={['user_message', 'reason_code', 'status']} emptyText="Нет открытых вопросов." />
               <ContextList title="Решения" items={context.decisions} fields={['text', 'summary', 'decision']} emptyText="Решения не сохранены." />
+              <section className={styles.section}>
+                <h3>Последний ориентир</h3>
+                <p className={styles.value}>{textFrom(context.recent_anchor, ['user_intent', 'assistant_outcome', 'terminal_state']) ?? 'Нет данных'}</p>
+              </section>
               <ContextList title="Результаты задач" items={context.task_results} fields={['safe_summary', 'outcome']} emptyText="Результаты задач отсутствуют." />
             </>
           ) : null}

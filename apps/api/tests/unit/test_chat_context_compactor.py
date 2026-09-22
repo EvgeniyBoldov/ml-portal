@@ -5,6 +5,7 @@ from app.services.chat_context_compactor import _bounded_payload, _canonical_key
 
 def test_compactor_uses_stable_singleton_keys() -> None:
     assert _canonical_key("goal", "add", ["turn:1"], {"text": "continue"}) == ("active_goal", "update")
+    assert _canonical_key("scope", "add", ["turn:1"], {"topic": "reports"}) == ("current_scope", "update")
     assert _canonical_key("recent_anchor", "add", ["turn:1"], {"intent": "continue"}) == ("recent_anchor", "update")
 
 

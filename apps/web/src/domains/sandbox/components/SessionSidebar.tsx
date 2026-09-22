@@ -90,9 +90,9 @@ export default function SessionSidebar({
     enabled: activeBranchId.length > 0,
     staleTime: 15_000,
   });
-  const { data: branchArtifacts } = useQuery({
-    queryKey: qk.sandbox.branchArtifacts.meta(sessionId, activeBranchId),
-    queryFn: () => sandboxApi.getBranchArtifactsMeta(sessionId, activeBranchId),
+  const { data: branchMemory } = useQuery({
+    queryKey: qk.sandbox.branchMemory(sessionId, activeBranchId),
+    queryFn: () => sandboxApi.getBranchMemory(sessionId, activeBranchId),
     enabled: activeBranchId.length > 0,
     staleTime: 15_000,
   });
@@ -656,22 +656,28 @@ export default function SessionSidebar({
         )}
       </AccordionSection>
 
-      <AccordionSection title="Артефакты" count={1}>
+      <AccordionSection title="Память" count={2} defaultExpanded>
         <div className={styles['nav-list']}>
-          <button
-            type="button"
-            className={`${styles['nav-item']} ${
-              selectedItem?.type === 'artifact' && selectedItem.artifactKind === 'facts'
-                ? styles['nav-item-active']
-                : ''
-            }`}
-            onClick={() => onSelectItem({ type: 'artifact', id: 'branch-facts', name: 'Факты', artifactKind: 'facts' })}
-          >
-            <span className={styles['nav-name']}>Факты</span>
-            <span className={styles['nav-desc']}>
-              {typeof branchArtifacts?.facts_count === 'number' ? `${branchArtifacts.facts_count} шт.` : '—'}
-            </span>
-          </button>
+          <div className={styles['group-name']}>Память чата / ветки</div>
+          {([
+            ['chat_context', 'Контекст'], ['chat_artifacts', 'Артефакты'],
+          ] as const).map(([memoryKind, name]) => <button key={memoryKind} type="button"
+            className={`${styles['nav-item']} ${selectedItem?.type === 'memory' && selectedItem.memoryKind === memoryKind ? styles['nav-item-active'] : ''}`}
+            onClick={() => onSelectItem({ type: 'memory', id: memoryKind, name, memoryKind })}>
+            <span className={styles['nav-name']}>{name}</span>
+          </button>)}
+          <div className={styles['group-name']}>Долговременная память</div>
+          {([
+            ['user_facts', 'User facts', branchMemory?.user_facts.length],
+            ['tenant_facts', 'Tenant facts', branchMemory?.tenant_facts.length],
+            ['glossary', 'Глоссарий', branchMemory?.glossary.length],
+            ['project_memory', 'Project memory', branchMemory?.project_memory.length],
+          ] as const).map(([memoryKind, name, count]) => <button key={memoryKind} type="button"
+            className={`${styles['nav-item']} ${selectedItem?.type === 'memory' && selectedItem.memoryKind === memoryKind ? styles['nav-item-active'] : ''}`}
+            onClick={() => onSelectItem({ type: 'memory', id: memoryKind, name, memoryKind })}>
+            <span className={styles['nav-name']}>{name}</span>
+            <span className={styles['nav-desc']}>{typeof count === 'number' ? `${count} шт.` : '—'}</span>
+          </button>)}
         </div>
       </AccordionSection>
 

@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.services.chat_context_service import ChatContextService
+from app.services.chat_context_contracts import ChatContextApplyReceipt
 
 
 @pytest.fixture
@@ -23,6 +24,66 @@ def service(mock_session, mock_llm_client, messages_repo) -> ChatContextService:
 
 
 class TestChatContextService:
+
+    @pytest.mark.asyncio
+    async def test_snapshot_requests_bounds_per_kind_not_one_global_limit(self, service: ChatContextService) -> None:
+        repository = AsyncMock()
+        repository.get_head = AsyncMock(return_value=None)
+        repository.active_items_by_kind = AsyncMock(return_value=[])
+
+        with patch("app.services.chat_context_service.ChatContextRepository", return_value=repository):
+            await service.load_snapshot(chat_id=str(uuid4()))
+
+        requested = repository.active_items_by_kind.await_args.kwargs["kind_limits"]
+        assert requested["scope"] == 1
+        assert requested["goal"] == 1
+        assert requested["recent_anchor"] == 1
+        assert "limit" not in repository.active_items_by_kind.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_snapshot_omits_unavailable_artifact_without_mutating_context(self, service: ChatContextService) -> None:
+        artifact_id = str(uuid4())
+        repository = AsyncMock()
+        repository.get_head = AsyncMock(return_value=None)
+        repository.active_items_by_kind = AsyncMock(return_value=[SimpleNamespace(
+            kind="artifact_ref", item_key=artifact_id, payload={"artifact_id": artifact_id},
+        )])
+        references = AsyncMock()
+        references.resolve_many = AsyncMock(return_value={})
+
+        with patch("app.services.chat_context_service.ChatContextRepository", return_value=repository), \
+             patch("app.services.chat_context_service.ChatArtifactReferenceService", return_value=references):
+            snapshot = await service.load_snapshot(
+                chat_id=str(uuid4()), owner_id=str(uuid4()), tenant_id=str(uuid4()),
+            )
+
+        assert snapshot.artifacts == []
+        assert snapshot.revision == 0
+        assert snapshot.uncertainties[0]["code"] == "unavailable_artifact"
+        assert all("close_unavailable_artifacts" not in str(call) for call in repository.mock_calls)
+
+    @pytest.mark.asyncio
+    async def test_cancel_closes_only_the_goal_owned_by_the_cancelled_turn(self, service: ChatContextService) -> None:
+        chat_id = str(uuid4())
+        turn_id = str(uuid4())
+        repository = AsyncMock()
+        repository.get_head = AsyncMock(return_value=SimpleNamespace(revision=4))
+        repository.active_items = AsyncMock(return_value=[SimpleNamespace(
+            kind="open_loop", item_key="blocked:run-1", source_turn_id=turn_id,
+        )])
+        repository.active_item = AsyncMock(return_value=SimpleNamespace(source_turn_id=turn_id))
+        reconciler = AsyncMock()
+        reconciler.apply = AsyncMock(return_value=ChatContextApplyReceipt(revision=5, applied_count=2))
+
+        with patch("app.services.chat_context_service.ChatContextRepository", return_value=repository), \
+             patch("app.services.chat_context_service.ChatContextReconciler", return_value=reconciler):
+            receipt = await service.cancel_turn_context(chat_id=chat_id, chat_turn_id=turn_id)
+
+        operations = reconciler.apply.await_args.kwargs["operations"]
+        assert receipt.applied_count == 2
+        assert {(item.kind, item.item_key) for item in operations} == {
+            ("open_loop", "blocked:run-1"), ("goal", "active_goal"),
+        }
     @pytest.mark.asyncio
     async def test_load_chat_context_normalizes_text_and_json_content(self, service: ChatContextService, messages_repo: AsyncMock):
         messages_repo.get_recent_chat_messages.return_value = [
@@ -72,50 +133,3 @@ class TestChatContextService:
                 "meta": {"attachments": [{"id": "att-1", "file_name": "file.txt"}]},
             }
         ]
-
-    @pytest.mark.asyncio
-    async def test_load_chat_context_with_summary_uses_summary_plus_recent(self, service: ChatContextService):
-        service.get_latest_summary_text = AsyncMock(return_value="short summary")
-        service.load_chat_context = AsyncMock(return_value=[{"role": "user", "content": "recent"}])
-
-        result = await service.load_chat_context_with_summary(str(uuid4()), recent_limit=3)
-
-        assert result == [
-            {"role": "system", "content": "Conversation summary so far:\nshort summary"},
-            {"role": "user", "content": "recent"},
-        ]
-
-    @pytest.mark.asyncio
-    async def test_load_chat_context_with_summary_falls_back_to_raw_messages(self, service: ChatContextService):
-        service.get_latest_summary_text = AsyncMock(return_value=None)
-        service.load_chat_context = AsyncMock(side_effect=[
-            [{"role": "user", "content": "ignored"}],
-            [{"role": "user", "content": "fallback-1"}, {"role": "assistant", "content": "fallback-2"}],
-        ])
-
-        result = await service.load_chat_context_with_summary(str(uuid4()), recent_limit=3)
-
-        assert result == [
-            {"role": "user", "content": "fallback-1"},
-            {"role": "assistant", "content": "fallback-2"},
-        ]
-
-    @pytest.mark.asyncio
-    async def test_store_summary_passes_message_count_and_tenant(self, service: ChatContextService, mock_session):
-        chat_id = uuid4()
-        tenant_id = uuid4()
-        service.load_chat_context = AsyncMock(return_value=[{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}])
-
-        summary_service = AsyncMock()
-        summary_service.create_or_update_summary = AsyncMock()
-
-        with patch("app.services.chat_context_service.ChatSummaryService", return_value=summary_service):
-            await service.store_summary(chat_id=chat_id, summary="summary", tenant_id=tenant_id)
-
-        summary_service.create_or_update_summary.assert_awaited_once_with(
-            chat_id=chat_id,
-            summary_text="summary",
-            message_count=2,
-            tenant_id=tenant_id,
-            summary_metadata=None,
-        )

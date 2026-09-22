@@ -83,6 +83,10 @@ def build_default_beat_schedule() -> dict:
             "task": "app.workers.tasks_rag_reindex.reconcile_stale_rag_reindex",
             "schedule": 900.0,  # 15 minutes
         },
+        "rag-ingest-outbox-reconcile": {
+            "task": "app.workers.tasks_rag_ingest.reconcile.reconcile_rag_ingest_outbox",
+            "schedule": 60.0,
+        },
         "memory-index-reconcile": {
             "task": "app.workers.tasks_memory.reconcile_memory_index",
             "schedule": 900.0,  # 15 minutes
@@ -192,6 +196,9 @@ app.conf.task_routes = {
     "app.workers.tasks_rag_ingest.chunk.chunk_document": {"queue": "ingest.chunk", "priority": 5},
     "app.workers.tasks_rag_ingest.embed.embed_chunks_model": {"queue": "ingest.embed", "priority": 4},
     "app.workers.tasks_rag_ingest.index.index_model": {"queue": "ingest.index", "priority": 3},
+    "app.workers.tasks_rag_ingest.dispatch.dispatch_rag_ingest_outbox": {"queue": "maintenance.default", "priority": 2},
+    "app.workers.tasks_rag_ingest.dispatch.dispatch_rag_ingest_stage_outbox": {"queue": "maintenance.default", "priority": 2},
+    "app.workers.tasks_rag_ingest.reconcile.reconcile_rag_ingest_outbox": {"queue": "maintenance.default", "priority": 1},
     # Collection vectorization tasks
     "app.workers.tasks_collection_vectorize.vectorize_collection_rows": {"queue": "ingest.embed", "priority": 4},
     "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization": {"queue": "maintenance.default", "priority": 1},

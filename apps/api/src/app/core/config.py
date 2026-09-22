@@ -82,7 +82,6 @@ class Settings(BaseSettings):
     CHAT_CONTEXT_DECISION_LIMIT: int = Field(default=10, ge=1, le=50)
     CHAT_CONTEXT_TASK_RESULT_LIMIT: int = Field(default=20, ge=1, le=100)
     CHAT_CONTEXT_HISTORY_LIMIT: int = Field(default=12, ge=1, le=50)
-    CHAT_CONTEXT_TOTAL_ITEM_LIMIT: int = Field(default=120, ge=10, le=300)
     
     # Embedding runtime behavior flags.
     EMB_OFFLINE: bool = Field(default=True, description="Disallow network downloads for embedding models")

@@ -12,7 +12,6 @@ from app.models.sandbox import (
     SandboxOverrideSnapshot,
 )
 from app.services.sandbox_override_resolver import SandboxOverrideResolver
-from app.runtime.memory.sandbox_overlays import OVERLAY_DELETED, OVERLAY_SET, normalize_overrides
 
 
 class SandboxBranchStateManager:
@@ -80,70 +79,11 @@ class SandboxBranchStateManager:
             await self.host.branches.update(
                 new_branch,
                 {
-                    "facts_artifact_json": list(source_branch.facts_artifact_json or []),
                     "fact_overrides_json": dict(source_branch.fact_overrides_json or {}),
-                    "summary_artifact_json": dict(source_branch.summary_artifact_json or {}),
                     "artifacts_updated_at": source_branch.artifacts_updated_at,
                 },
             )
         return new_branch
-
-    async def get_branch_artifacts(self, branch_id: UUID) -> Optional[SandboxBranch]:
-        return await self.host.branches.get_by_id(branch_id)
-
-    async def update_branch_artifacts(
-        self,
-        *,
-        branch_id: UUID,
-        facts: Optional[List[Dict[str, Any]]] = None,
-        summary: Optional[Dict[str, Any]] = None,
-    ) -> Optional[SandboxBranch]:
-        branch = await self.host.branches.get_by_id(branch_id)
-        if branch is None:
-            return None
-        payload: Dict[str, Any] = {
-            "artifacts_updated_at": datetime.now(timezone.utc),
-        }
-        if facts is not None:
-            payload["facts_artifact_json"] = list(facts)
-        if summary is not None:
-            payload["summary_artifact_json"] = dict(summary)
-        return await self.host.branches.update(branch, payload)
-
-    async def upsert_fact_override(
-        self,
-        *,
-        branch_id: UUID,
-        scope: str,
-        subject: str,
-        entry: Dict[str, Any],
-    ) -> Optional[SandboxBranch]:
-        branch = await self.host.branches.get_by_id(branch_id)
-        if branch is None:
-            return None
-        overrides = normalize_overrides(branch.fact_overrides_json)
-        overrides.setdefault(scope, {})[subject] = entry
-        return await self.host.branches.update(branch, {
-            "fact_overrides_json": overrides,
-            "artifacts_updated_at": datetime.now(timezone.utc),
-        })
-
-    async def delete_fact_override(self, *, branch_id: UUID, scope: str, subject: str) -> bool:
-        branch = await self.host.branches.get_by_id(branch_id)
-        if branch is None:
-            return False
-        overrides = normalize_overrides(branch.fact_overrides_json)
-        entries = overrides.get(scope) or {}
-        if subject not in entries:
-            return False
-        del entries[subject]
-        if not entries:
-            overrides.pop(scope, None)
-        await self.host.branches.update(branch, {
-            "fact_overrides_json": overrides,
-            "artifacts_updated_at": datetime.now(timezone.utc),
-        })
-        return True
 
     async def list_branch_overrides(self, branch_id: UUID) -> List[SandboxBranchOverride]:
         return await self.host.branch_overrides.list_by_branch(branch_id)

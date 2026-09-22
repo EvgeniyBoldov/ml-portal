@@ -8,7 +8,7 @@ import type { RuntimeJournalEvent } from '@/domains/sandbox/types';
  * of changing the shared trace components or polluting the persisted journal.
  */
 export function agentRunTraceEvents(run: AgentRunDetail): RuntimeJournalEvent[] {
-  const events = run.events.map((event) => ({ ...event })) as RuntimeJournalEvent[];
+  const events = normalizeAgentRunEvents(run.events);
   const agentStart = events.find((event) => event.event_type === 'agent_start' && event.entity_type === 'agent_execution');
   if (!agentStart?.entity_id) return events;
   const stepId = agentStart.parent_entity_id || `agent-run-step-${run.agent_execution_id}`;
@@ -36,4 +36,17 @@ export function agentRunTraceEvents(run: AgentRunDetail): RuntimeJournalEvent[] 
       ? { ...event, parent_entity_type: 'step', parent_entity_id: stepId, payload: { ...event.payload, parent_entity_type: 'step', parent_entity_id: stepId } }
       : event
   ))];
+}
+
+/** Convert the API's optional nullable fields to the canonical journal shape. */
+export function normalizeAgentRunEvents(events: AgentRunDetail['events']): RuntimeJournalEvent[] {
+  return events.map((event) => ({
+    ...event,
+    entity_type: event.entity_type ?? null,
+    entity_id: event.entity_id ?? null,
+    parent_entity_type: event.parent_entity_type ?? null,
+    parent_entity_id: event.parent_entity_id ?? null,
+    caused_by_event_id: event.caused_by_event_id ?? null,
+    duration_ms: event.duration_ms ?? null,
+  }));
 }

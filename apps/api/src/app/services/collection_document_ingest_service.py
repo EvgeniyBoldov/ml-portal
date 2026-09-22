@@ -14,7 +14,8 @@ Pipeline dispatch is handled by the caller via RAGIngestService.
 from __future__ import annotations
 
 import uuid
-from typing import Optional, List
+from datetime import date, datetime
+from typing import Any, Optional, List
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,6 +74,7 @@ class CollectionDocumentUploadService:
     ) -> dict:
         """Upload a file into a document collection and persist RAG bookkeeping."""
         collection = await self._get_document_collection(collection_id)
+        normalized_meta_fields = self._validate_document_metadata(collection, meta_fields or {})
         UploadIntakePolicy.validate_document_upload(
             filename=filename,
             content_type=content_type,
@@ -104,7 +106,7 @@ class CollectionDocumentUploadService:
                 source_val=source,
                 scope=scope,
                 tags=",".join(tags) if tags else None,
-                meta_fields=meta_fields or {},
+                meta_fields=normalized_meta_fields,
             )
             if isinstance(row_insert_result, tuple):
                 row_id, prefilter = row_insert_result
@@ -145,6 +147,20 @@ class CollectionDocumentUploadService:
                 memory_policy="collection" if memory_enabled is None else "explicit",
                 project_keys=project_keys,
             )
+            # Only declared fields are allowed to affect retrieval/prompt
+            # context.  Store the exact projection alongside the source so it
+            # remains stable even if the dynamic collection row is edited.
+            collection_fields = {field.get("name"): field for field in (collection.fields or [])}
+            retrieval_fields = {
+                name: value for name, value in normalized_meta_fields.items()
+                if collection_fields.get(name, {}).get("used_in_retrieval") and value is not None
+            }
+            prompt_fields = {
+                name: value for name, value in normalized_meta_fields.items()
+                if collection_fields.get(name, {}).get("used_in_prompt_context") and value is not None
+            }
+            source_meta["collection"]["retrieval_fields"] = retrieval_fields
+            source_meta["collection"]["prompt_fields"] = prompt_fields
 
             src = Source(
                 source_id=doc_id,
@@ -197,6 +213,59 @@ class CollectionDocumentUploadService:
             "message": "Document uploaded to collection",
             "artifacts": source_meta["artifacts"],
         }
+
+    @staticmethod
+    def _validate_document_metadata(collection: Collection, raw: dict[str, Any]) -> dict[str, Any]:
+        """Reject unknown/invalid user fields before creating external artifacts."""
+        if not isinstance(raw, dict):
+            raise CollectionDocumentUploadError("meta_fields must be an object")
+        fields = {str(field.get("name")): field for field in (collection.fields or []) if field.get("name")}
+        unknown = sorted(set(raw) - set(fields))
+        if unknown:
+            raise CollectionDocumentUploadError(f"Unknown document metadata fields: {', '.join(unknown)}")
+
+        derived = {"file", "file_name", "file_content_type", "file_size_bytes", "title", "source", "scope", "tags"}
+        result: dict[str, Any] = {}
+        for name, field in fields.items():
+            value = raw.get(name)
+            if value is None:
+                if field.get("required") and name not in derived:
+                    raise CollectionDocumentUploadError(f"Required document metadata field is missing: {name}")
+                continue
+            field_type = field.get("data_type")
+            try:
+                if field_type == FieldType.INTEGER.value:
+                    if isinstance(value, bool):
+                        raise ValueError()
+                    value = int(value)
+                elif field_type == FieldType.FLOAT.value:
+                    if isinstance(value, bool):
+                        raise ValueError()
+                    value = float(value)
+                elif field_type == FieldType.BOOLEAN.value:
+                    if isinstance(value, str):
+                        lowered = value.strip().lower()
+                        if lowered not in {"true", "false"}:
+                            raise ValueError()
+                        value = lowered == "true"
+                    elif not isinstance(value, bool):
+                        raise ValueError()
+                elif field_type in {FieldType.STRING.value, FieldType.TEXT.value, FieldType.ENUM.value}:
+                    if not isinstance(value, str):
+                        raise ValueError()
+                    allowed = field.get("enum_values") or field.get("options")
+                    if field_type == FieldType.ENUM.value and isinstance(allowed, list) and value not in allowed:
+                        raise ValueError()
+                elif field_type == FieldType.DATE.value:
+                    value = date.fromisoformat(str(value)).isoformat()
+                elif field_type == FieldType.DATETIME.value:
+                    value = datetime.fromisoformat(str(value).replace("Z", "+00:00")).isoformat()
+                elif field_type == FieldType.JSON.value and not isinstance(value, (dict, list)):
+                    raise ValueError()
+            except (TypeError, ValueError):
+                raise CollectionDocumentUploadError(f"Invalid value for document metadata field '{name}'") from None
+            result[name] = value
+        return result
 
     async def _get_document_collection(self, collection_id: uuid.UUID) -> Collection:
         svc = CollectionService(self.session)

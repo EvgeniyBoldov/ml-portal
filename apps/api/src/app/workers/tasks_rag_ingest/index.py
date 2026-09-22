@@ -24,7 +24,7 @@ from app.workers.tasks_rag_ingest.stage_results import EmbedResult, IndexResult
 logger = get_logger(__name__)
 
 _INDEX_POINT_NAMESPACE = uuid.UUID("4b32c67e-86c7-4efb-8980-1e0570f31d16")
-_DOC_INDEX_VERSION = "doc-v2-prefilter"
+_DOC_INDEX_VERSION = "doc-v3-model-scoped"
 
 
 def _build_stable_point_id(tenant_id: str, source_id: str, model_alias: str, chunk_id: str) -> str:
@@ -43,7 +43,9 @@ def _prefilter_payload_key(field_name: str) -> str:
     acks_late=True,
     reject_on_worker_lost=True,
 )
-def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
+def index_model(
+    self: Task, embed_result: Dict[str, Any], tenant_id: str, run_id: str | None = None, generation: int | None = None,
+) -> Dict[str, Any]:
     """
     Index embeddings into Qdrant vector store.
 
@@ -153,6 +155,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                         DocumentCollectionMembership.collection_id,
                         DocumentCollectionMembership.collection_row_id,
                         Collection.qdrant_collection_name,
+                        Collection.vector_config,
                     )
                     .join(
                         Collection,
@@ -167,7 +170,23 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
             ).first()
 
             coll_qdrant_name = membership_row.qdrant_collection_name if membership_row else None
-            collection_name = coll_qdrant_name or f"{ctx.tenant_id_str}__{model_alias}"
+            base_collection_name = coll_qdrant_name or f"{ctx.tenant_id_str}__documents"
+            # Index, search, provisioning and cleanup must derive exactly the
+            # same physical target.  The previous code used the base target
+            # until a dimensional collision happened, while search always
+            # looked at model-scoped targets for secondary models.
+            from app.services.collection.vector_lifecycle import (
+                get_vector_config_model_aliases,
+                get_model_scoped_qdrant_collection_name,
+            )
+            target_models = get_vector_config_model_aliases(
+                membership_row.vector_config if membership_row else None
+            )
+            if model_alias not in target_models:
+                target_models.append(model_alias)
+            collection_name = get_model_scoped_qdrant_collection_name(
+                base_collection_name, model_alias, target_models[0] if target_models else model_alias
+            )
 
             # Collection context for payload enrichment
             coll_collection_id = str(membership_row.collection_id) if membership_row else None
@@ -231,21 +250,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                         vectors.append(vector)
                         vector_dim = len(vector) if isinstance(vector, (list, tuple)) else model_info.dimensions
                         if not collection_ready:
-                            try:
-                                await vector_store.ensure_collection(collection_name, vector_dim)
-                            except ValueError as exc:
-                                if coll_qdrant_name:
-                                    model_specific_collection = f"{coll_qdrant_name}__{model_alias}"
-                                    logger.warning(
-                                        "Qdrant collection dim mismatch for %s (%s), fallback to %s",
-                                        collection_name,
-                                        str(exc),
-                                        model_specific_collection,
-                                    )
-                                    collection_name = model_specific_collection
-                                    await vector_store.ensure_collection(collection_name, vector_dim)
-                                else:
-                                    raise
+                            await vector_store.ensure_collection(collection_name, vector_dim)
                             collection_ready = True
 
                         ids.append(
@@ -267,6 +272,7 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
                             "embed_model_alias": model_alias,
                             "index_version": _DOC_INDEX_VERSION,
                             "version": model_info.version,
+                            "index_revision": _DOC_INDEX_VERSION,
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                             "tags": [],
                             "text": chunk.meta.get("text", "") if chunk.meta else "",
@@ -328,4 +334,6 @@ def index_model(self: Task, embed_result: Dict[str, Any], tenant_id: str) -> Dic
         tenant_id=tenant_id,
         celery_task=self,
         execute_fn=_execute,
+        run_id=run_id,
+        generation=generation,
     )

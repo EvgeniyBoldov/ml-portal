@@ -56,7 +56,9 @@ def smart_normalize(text: str) -> str:
     acks_late=True,
     reject_on_worker_lost=True,
 )
-def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
+def normalize_document(
+    self: Task, extract_result: Dict[str, Any], tenant_id: str, run_id: str | None = None, generation: int | None = None,
+) -> Dict[str, Any]:
     """
     Normalize text and convert to canonical format.
 
@@ -177,4 +179,6 @@ def normalize_document(self: Task, extract_result: Dict[str, Any], tenant_id: st
         tenant_id=tenant_id,
         celery_task=self,
         execute_fn=_execute,
+        run_id=run_id,
+        generation=generation,
     )

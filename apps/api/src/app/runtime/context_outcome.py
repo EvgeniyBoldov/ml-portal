@@ -9,6 +9,33 @@ from app.runtime.turn_state import RuntimeTurnState
 from app.runtime.redactor import RuntimeRedactor
 
 
+def _verified_artifacts(task_result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize only runtime-verified artifact DTO variants.
+
+    Agent/tool adapters historically used both ``artifact_id`` and
+    ``artifact_ref`` and may nest the collection beneath ``verified``.  Raw
+    task output is deliberately not considered here: registry accessibility
+    alone is not provenance that the current run produced or used a file.
+    """
+    verified = task_result.get("verified") if isinstance(task_result.get("verified"), dict) else {}
+    candidates = verified.get("artifacts") or verified.get("artifact_refs") or []
+    result: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        artifact_id = str(item.get("artifact_id") or item.get("artifact_ref") or "").strip()
+        if not artifact_id:
+            continue
+        result.append({
+            "artifact_id": artifact_id,
+            "file_name": str(item.get("file_name") or item.get("name") or "")[:255],
+            "content_type": str(item.get("content_type") or "")[:255] or None,
+            "size_bytes": item.get("size_bytes") if isinstance(item.get("size_bytes"), int) else None,
+            "role": str(item.get("role") or "generated")[:64],
+        })
+    return result
+
+
 class RuntimeOutcomeProjection(BaseModel):
     schema_version: int = 1
     run_id: str
@@ -55,9 +82,7 @@ class RuntimeOutcomeProjector:
         for result in runtime_state.task_results:
             if not isinstance(result, dict):
                 continue
-            for artifact in (result.get("verified") or {}).get("artifacts") or []:
-                if isinstance(artifact, dict):
-                    artifacts.append(dict(artifact))
+            artifacts.extend(_verified_artifacts(result))
         limitations = []
         for item in runtime_state.task_results:
             if not isinstance(item, dict) or item.get("outcome") not in {"blocked", "unfulfillable"}:
@@ -77,11 +102,9 @@ class RuntimeOutcomeProjector:
             task_entity_id = str(item.get("task_entity_id") or item.get("task_id") or "").strip()
             if outcome not in {"completed", "unfulfillable"} or not plan_id or not task_entity_id:
                 continue
-            verified = item.get("verified") if isinstance(item.get("verified"), dict) else {}
             artifact_ids = [
-                str(artifact.get("artifact_id") or artifact.get("artifact_ref") or "").strip()
-                for artifact in verified.get("artifacts") or [] if isinstance(artifact, dict)
-                and str(artifact.get("artifact_id") or artifact.get("artifact_ref") or "").strip()
+                str(artifact["artifact_id"])
+                for artifact in _verified_artifacts(item)
             ]
             task_result_refs.append({
                 "plan_id": plan_id, "task_entity_id": task_entity_id, "outcome": outcome,

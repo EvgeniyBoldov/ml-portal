@@ -55,3 +55,15 @@ def test_task_outcome_is_stored_as_a_reference_not_raw_output() -> None:
     assert operation.item_key == "plan-1:task-1"
     assert operation.payload["safe_summary"] == "Отчёт подготовлен"
     assert "outputs" not in operation.payload
+
+
+def test_failed_turn_does_not_persist_a_technical_error_as_context() -> None:
+    projection = RuntimeOutcomeProjection(
+        run_id="run-1", chat_id="chat-1", chat_turn_id="turn-1", terminal_state="failed",
+        effective_goal="Проверить отчёт", current_user_intent="Проверь отчёт",
+        assistant_outcome={"summary": "provider timeout"},
+    )
+
+    operations = ChatContextReducer().reduce(projection=projection, expected_revision=2)
+
+    assert not any(item.kind in {"goal", "recent_anchor"} for item in operations)

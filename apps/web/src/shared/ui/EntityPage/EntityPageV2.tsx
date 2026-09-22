@@ -62,6 +62,8 @@ export function Tab(_props: TabProps): React.ReactElement | null {
 export interface EntityPageV2Props {
   /** Page title */
   title: string;
+  /** Optional muted identifier displayed beneath the title. */
+  subtitle?: React.ReactNode;
   /** Page mode */
   mode: EntityPageMode;
   /** Loading state */

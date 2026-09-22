@@ -91,26 +91,13 @@ export interface SandboxBranchOverride {
   updated_at: string;
 }
 
-export interface SandboxBranchArtifactsMeta {
+export interface SandboxBranchMemory {
   branch_id: string;
-  facts_count: number;
-  summary_present: boolean;
-  updated_at: string | null;
-}
-
-export interface SandboxBranchFactsArtifact {
-  branch_id: string;
-  base: Record<'user' | 'tenant' | 'project', Record<string, unknown>[]>;
-  overrides: Record<'user' | 'tenant' | 'project', Record<string, Record<string, unknown>>>;
-  effective: Record<'user' | 'tenant' | 'project', Record<string, unknown>[]>;
-  facts: Record<string, unknown>[];
-  updated_at: string | null;
-}
-
-export interface SandboxBranchSummaryArtifact {
-  branch_id: string;
-  summary: Record<string, unknown>;
-  updated_at: string | null;
+  chat_context: Record<string, unknown>;
+  user_facts: Record<string, unknown>[];
+  tenant_facts: Record<string, unknown>[];
+  glossary: Record<string, unknown>[];
+  project_memory: Record<string, unknown>[];
 }
 
 // ── Run ─────────────────────────────────────────────────────────────────────
@@ -295,7 +282,7 @@ export interface SandboxCatalog {
   resolver_blueprints: SandboxResolverBlueprint[];
 }
 
-export type SandboxSelectableType = 'agent' | 'tool' | 'router' | 'parameter' | 'run' | 'artifact';
+export type SandboxSelectableType = 'agent' | 'tool' | 'router' | 'parameter' | 'run' | 'artifact' | 'memory';
 
 export interface SandboxSelectedItem {
   type: SandboxSelectableType;
@@ -303,4 +290,5 @@ export interface SandboxSelectedItem {
   name: string;
   versionId?: string | null;
   artifactKind?: 'facts' | 'summary';
+  memoryKind?: 'chat_context' | 'chat_artifacts' | 'user_facts' | 'tenant_facts' | 'glossary' | 'project_memory';
 }

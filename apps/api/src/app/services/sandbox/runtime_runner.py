@@ -18,6 +18,8 @@ from app.services.runtime_terminal_status import planner_terminal_from_event
 from app.services.runtime_tail_event_bus import RuntimeRunControlSubscriber, RuntimeTailEventBus
 from app.services.sandbox_service import SandboxService
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
+from app.services.chat_context_service import ChatContextService
+from app.services.chat_turn_service import ChatTurnService
 
 logger = get_logger(__name__)
 
@@ -209,6 +211,10 @@ class SandboxRuntimeRunner:
                     )
                 else:
                     await service.finish_run(command.run_id, status, error)
+                await self._persist_chat_turn_terminal(
+                    terminal_db=terminal_db, command=command, status=status,
+                    error=error, paused_payload=paused_payload,
+                )
                 await terminal_db.commit()
         except Exception:  # noqa: BLE001
             logger.exception("sandbox_runtime_terminal_persist_failed run_id=%s", command.run_id)
@@ -231,6 +237,40 @@ class SandboxRuntimeRunner:
                 RuntimeEvent.run_end(run_id=str(command.run_id), status=status),
                 phase=OrchestrationPhase.PIPELINE,
             )
+
+    @staticmethod
+    async def _persist_chat_turn_terminal(
+        *, terminal_db: Any, command: SandboxRuntimeCommand, status: str,
+        error: Optional[str], paused_payload: Optional[dict[str, Any]],
+    ) -> None:
+        """Keep the hidden sandbox chat turn in the same lifecycle state.
+
+        The sandbox run is the execution owner, but chat-context provenance
+        requires its companion turn to be a real lifecycle record as well.
+        """
+        turn_id = command.pipeline_request.chat_turn_id
+        if not turn_id:
+            return
+        turns = ChatTurnService(terminal_db)
+        if paused_payload is not None:
+            await turns.pause_turn(
+                turn_id, pause_status=str(paused_payload["reason"]),
+                runtime_run_id=command.run_id,
+                paused_action=paused_payload["action"], paused_context=paused_payload["context"],
+            )
+            return
+        if status == "completed":
+            await turns.complete_turn(turn_id)
+            return
+        if status == "cancelled":
+            turn = await turns.cancel_turn(turn_id, error_message=error or "Cancelled by user")
+            branch_id = (command.pipeline_request.sandbox_overrides or {}).get("sandbox_branch_id")
+            if turn is not None and branch_id:
+                await ChatContextService(terminal_db, None, None).cancel_turn_context(
+                    chat_id=str(turn.chat_id), chat_turn_id=str(turn.id), branch_id=str(branch_id),
+                )
+            return
+        await turns.fail_turn(turn_id, error_message=error or "Sandbox runtime failed")
 
     async def _emit_error(self, *, command: SandboxRuntimeCommand, session_factory: Any, exc: Exception) -> None:
         error_logger = RuntimeEventJournalFactory.create(

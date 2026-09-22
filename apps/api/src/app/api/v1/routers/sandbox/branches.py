@@ -3,6 +3,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, require_admin
@@ -10,23 +11,23 @@ from app.core.security import UserCtx
 from app.schemas.sandbox import (
     SandboxBranchCreate,
     SandboxBranchForkRequest,
-    SandboxBranchArtifactsMetaResponse,
-    SandboxBranchFactsArtifactResponse,
-    SandboxBranchSummaryArtifactResponse,
+    SandboxBranchMemoryResponse,
     SandboxBranchListItem,
     SandboxBranchOverrideResponse,
     SandboxBranchOverrideUpsert,
     SandboxSnapshotResponse,
-    SandboxFactOverrideUpsert,
 )
 from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.service import MemoryService
 from app.runtime.memory.sandbox_overlays import (
-    OVERLAY_DELETED,
-    OVERLAY_SET,
-    fact_to_payload,
     inspector_payload,
 )
+from app.models.chat import Chats
+from app.models.glossary import GlossaryEntry
+from app.models.memory import MemoryItem, MemoryItemSource
+from app.models.project import Project
+from app.services.chat_context_service import ChatContextService
+from app.services.chat_visibility import make_sandbox_upload_chat_name
 from app.services.sandbox_service import SandboxService
 from app.services.sandbox_override_resolver import SandboxOverrideResolver
 
@@ -130,147 +131,79 @@ async def fork_branch(
 
 
 @router.get(
-    "/sessions/{session_id}/branches/{branch_id}/artifacts",
-    response_model=SandboxBranchArtifactsMetaResponse,
+    "/sessions/{session_id}/branches/{branch_id}/memory",
+    response_model=SandboxBranchMemoryResponse,
 )
-async def get_branch_artifacts_meta(
+async def get_branch_memory(
     session_id: uuid.UUID,
     branch_id: uuid.UUID,
     db: AsyncSession = Depends(db_session),
     user: UserCtx = Depends(require_admin),
 ):
+    """Expose the two canonical memory layers for the sandbox navigation.
+
+    This intentionally does not consult legacy branch artifact JSON.  Facts
+    remain a branch overlay over durable memory; chat context stays isolated
+    by the hidden chat and the selected branch.
+    """
     svc = SandboxService(db)
     await check_session_owner(svc, session_id, user)
-    branch = await svc.get_branch_artifacts(branch_id)
+    branch = await svc.get_branch(branch_id)
     if not branch or branch.session_id != session_id:
         raise HTTPException(status_code=404, detail="Branch not found")
+    owner_id = user_uuid(user)
+    tenant_id = await tenant_uuid(db, user)
     snapshot = await MemoryService(fact_store=FactStore(db)).read_snapshot(
-        user_id=user_uuid(user),
-        tenant_id=await tenant_uuid(db, user),
-        limit=100,
+        user_id=owner_id, tenant_id=tenant_id, limit=100,
     )
     effective = inspector_payload(snapshot.entries, branch.fact_overrides_json)["effective"]
-    return SandboxBranchArtifactsMetaResponse(
-        branch_id=branch.id,
-        facts_count=sum(len(effective.get(scope, [])) for scope in ("user", "tenant", "project")),
-        summary_present=bool(branch.summary_artifact_json),
-        updated_at=branch.artifacts_updated_at,
-    )
-
-
-@router.get(
-    "/sessions/{session_id}/branches/{branch_id}/artifacts/facts",
-    response_model=SandboxBranchFactsArtifactResponse,
-)
-async def get_branch_facts_artifact(
-    session_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    db: AsyncSession = Depends(db_session),
-    user: UserCtx = Depends(require_admin),
-):
-    svc = SandboxService(db)
-    await check_session_owner(svc, session_id, user)
-    branch = await svc.get_branch_artifacts(branch_id)
-    if not branch or branch.session_id != session_id:
-        raise HTTPException(status_code=404, detail="Branch not found")
-    snapshot = await MemoryService(fact_store=FactStore(db)).read_snapshot(
-        user_id=user_uuid(user),
-        tenant_id=await tenant_uuid(db, user),
-        limit=100,
-    )
-    view = inspector_payload(snapshot.entries, branch.fact_overrides_json)
-    effective = view["effective"]
-    return SandboxBranchFactsArtifactResponse(
-        branch_id=branch.id,
-        base=view["base"],
-        overrides=view["overrides"],
-        effective=effective,
-        facts=[*effective.get("user", []), *effective.get("tenant", []), *effective.get("project", [])],
-        updated_at=branch.artifacts_updated_at,
-    )
-
-
-@router.put(
-    "/sessions/{session_id}/branches/{branch_id}/artifacts/facts/{scope}/{subject}",
-    response_model=SandboxBranchFactsArtifactResponse,
-)
-async def upsert_fact_override(
-    session_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    scope: str,
-    subject: str,
-    data: SandboxFactOverrideUpsert,
-    db: AsyncSession = Depends(db_session),
-    user: UserCtx = Depends(require_admin),
-):
-    if scope not in {"user", "tenant", "project"} or not subject.strip():
-        raise HTTPException(status_code=422, detail="Fact scope and subject are invalid")
-    if data.state == OVERLAY_SET and not (data.value or "").strip():
-        raise HTTPException(status_code=422, detail="A set fact override requires a value")
-    svc = SandboxService(db)
-    await check_session_owner(svc, session_id, user)
-    branch = await svc.get_branch(branch_id)
-    if not branch or branch.session_id != session_id:
-        raise HTTPException(status_code=404, detail="Branch not found")
-    entry = {"state": data.state}
-    if data.state == OVERLAY_SET:
-        entry["fact"] = {
-            "scope": scope,
-            "subject": subject.strip(),
-            "value": data.value.strip() if data.value else "",
-            "source": data.source,
-            "confidence": data.confidence,
-            "source_ref": data.source_ref,
-        }
-    await svc.upsert_fact_override(
+    hidden_chat = await db.scalar(select(Chats).where(
+        Chats.owner_id == owner_id,
+        Chats.name == make_sandbox_upload_chat_name(session_id),
+    ))
+    chat_context = {}
+    if hidden_chat is not None:
+        chat_context = await ChatContextService(db, None, None).inspect_snapshot(
+            chat_id=str(hidden_chat.id), owner_id=str(owner_id), tenant_id=str(tenant_id), branch_id=str(branch_id),
+        )
+    glossary_rows = list((await db.execute(
+        select(GlossaryEntry, Project.key)
+        .outerjoin(Project, Project.id == GlossaryEntry.project_id)
+        .where(
+            GlossaryEntry.is_active.is_(True),
+            or_(
+                GlossaryEntry.scope == "global",
+                (GlossaryEntry.scope == "user") & (GlossaryEntry.user_id == owner_id),
+                (GlossaryEntry.scope == "tenant") & (GlossaryEntry.tenant_id == tenant_id),
+                GlossaryEntry.scope == "project",
+            ),
+        ).order_by(GlossaryEntry.canonical_term).limit(100)
+    )).all())
+    semantic_rows = list((await db.execute(
+        select(MemoryItem, Project.key, func.count(MemoryItemSource.id))
+        .outerjoin(Project, Project.id == MemoryItem.project_id)
+        .outerjoin(MemoryItemSource, MemoryItemSource.memory_item_id == MemoryItem.id)
+        .where(MemoryItem.scope == "project", MemoryItem.state == "active")
+        .group_by(MemoryItem.id, Project.key)
+        .order_by(MemoryItem.updated_at.desc()).limit(100)
+    )).all())
+    return SandboxBranchMemoryResponse(
         branch_id=branch_id,
-        scope=scope,
-        subject=subject.strip(),
-        entry=entry,
-    )
-    await db.commit()
-    return await get_branch_facts_artifact(session_id, branch_id, db, user)
-
-
-@router.delete("/sessions/{session_id}/branches/{branch_id}/artifacts/facts/{scope}/{subject}", status_code=204)
-async def reset_fact_override(
-    session_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    scope: str,
-    subject: str,
-    db: AsyncSession = Depends(db_session),
-    user: UserCtx = Depends(require_admin),
-):
-    if scope not in {"user", "tenant", "project"}:
-        raise HTTPException(status_code=422, detail="Fact scope is invalid")
-    svc = SandboxService(db)
-    await check_session_owner(svc, session_id, user)
-    branch = await svc.get_branch(branch_id)
-    if not branch or branch.session_id != session_id:
-        raise HTTPException(status_code=404, detail="Branch not found")
-    await svc.delete_fact_override(branch_id=branch_id, scope=scope, subject=subject)
-    await db.commit()
-
-
-@router.get(
-    "/sessions/{session_id}/branches/{branch_id}/artifacts/summary",
-    response_model=SandboxBranchSummaryArtifactResponse,
-)
-async def get_branch_summary_artifact(
-    session_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    db: AsyncSession = Depends(db_session),
-    user: UserCtx = Depends(require_admin),
-):
-    svc = SandboxService(db)
-    await check_session_owner(svc, session_id, user)
-    branch = await svc.get_branch_artifacts(branch_id)
-    if not branch or branch.session_id != session_id:
-        raise HTTPException(status_code=404, detail="Branch not found")
-    return SandboxBranchSummaryArtifactResponse(
-        branch_id=branch.id,
-        summary=dict(branch.summary_artifact_json or {}),
-        updated_at=branch.artifacts_updated_at,
+        chat_context=chat_context,
+        user_facts=list(effective.get("user", [])),
+        tenant_facts=list(effective.get("tenant", [])),
+        glossary=[{
+            "term": entry.canonical_term, "description": entry.description or "",
+            "aliases": list(entry.aliases or []), "scope": entry.scope, "project_key": project_key,
+            "entity_type": entry.entity_type, "entity_id": entry.entity_id,
+            "status": entry.status, "support_count": entry.support_count,
+        } for entry, project_key in glossary_rows],
+        project_memory=[{
+            "subject": item.subject, "content": item.content_text, "item_type": item.item_type,
+            "project_key": project_key, "confidence": item.confidence, "state": item.state,
+            "applicability": item.applicability, "visibility": item.visibility,
+            "last_verified_at": item.last_verified_at, "source_count": source_count,
+        } for item, project_key, source_count in semantic_rows],
     )
 
 

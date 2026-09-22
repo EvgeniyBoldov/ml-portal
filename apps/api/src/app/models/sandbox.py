@@ -186,21 +186,8 @@ class SandboxBranch(Base):
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    facts_artifact_json: Mapped[List[Dict[str, Any]]] = mapped_column(
-        JSONB,
-        nullable=False,
-        default=list,
-    )
-    # Branch-local memory overlay.  It is intentionally separate from the
-    # historical flat artifact above: the latter is retained read-only for
-    # compatibility while new sandbox runs resolve this structured overlay
-    # against durable user/tenant facts.
+    # Branch-local memory overlay over durable user/tenant facts.
     fact_overrides_json: Mapped[Dict[str, Any]] = mapped_column(
-        JSONB,
-        nullable=False,
-        default=dict,
-    )
-    summary_artifact_json: Mapped[Dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
         default=dict,

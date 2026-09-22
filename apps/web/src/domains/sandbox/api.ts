@@ -11,9 +11,7 @@ import type {
   SandboxSessionUpdate,
   SandboxBranchListItem,
   SandboxBranchOverride,
-  SandboxBranchArtifactsMeta,
-  SandboxBranchFactsArtifact,
-  SandboxBranchSummaryArtifact,
+  SandboxBranchMemory,
   SandboxRunListItem,
   SandboxRunDetail,
   RuntimeResumeRequest,
@@ -133,31 +131,8 @@ export const sandboxApi = {
     );
   },
 
-  getBranchArtifactsMeta: (sessionId: string, branchId: string): Promise<SandboxBranchArtifactsMeta> =>
-    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts`),
-
-  getBranchFactsArtifact: (sessionId: string, branchId: string): Promise<SandboxBranchFactsArtifact> =>
-    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/facts`),
-
-  upsertFactOverride: (
-    sessionId: string,
-    branchId: string,
-    scope: 'user' | 'tenant' | 'project',
-    subject: string,
-    data: { state: 'set' | 'deleted'; value?: string; source?: 'user_utterance' | 'tool_result' | 'manual' | 'system'; confidence?: number; source_ref?: string | null },
-  ): Promise<SandboxBranchFactsArtifact> =>
-    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/facts/${encodeURIComponent(scope)}/${encodeURIComponent(subject)}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-
-  resetFactOverride: (sessionId: string, branchId: string, scope: 'user' | 'tenant' | 'project', subject: string): Promise<void> =>
-    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/facts/${encodeURIComponent(scope)}/${encodeURIComponent(subject)}`, {
-      method: 'DELETE',
-    }),
-
-  getBranchSummaryArtifact: (sessionId: string, branchId: string): Promise<SandboxBranchSummaryArtifact> =>
-    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/artifacts/summary`),
+  getBranchMemory: (sessionId: string, branchId: string): Promise<SandboxBranchMemory> =>
+    apiRequest(`${BASE}/sessions/${sessionId}/branches/${branchId}/memory`),
 
   // ── Runs ────────────────────────────────────────────────────────────────
 

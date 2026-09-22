@@ -17,14 +17,25 @@ ChatContextAction = Literal["add", "update", "supersede", "close", "expire", "to
 
 class _Payload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    trust_class: Literal["application_verified", "runtime_normalized", "compacted"] = "runtime_normalized"
+    trust_class: Literal["application_verified", "runtime_normalized", "user_explicit", "model_inferred"] = "runtime_normalized"
 
 
 class ScopePayload(_Payload):
     project_keys: list[str] = Field(default_factory=list, max_length=20)
+    project_keys_trust_class: Literal["application_verified", "runtime_normalized", "user_explicit", "model_inferred"] = "application_verified"
     topic: str = Field(default="", max_length=600)
+    topic_trust_class: Literal["application_verified", "runtime_normalized", "user_explicit", "model_inferred"] = "runtime_normalized"
     entity_refs: list[str] = Field(default_factory=list, max_length=20)
-    source: Literal["explicit"] = "explicit"
+    entity_refs_trust_class: Literal["application_verified", "runtime_normalized", "user_explicit", "model_inferred"] = "application_verified"
+    source: Literal["explicit", "inferred"] = "explicit"
+
+
+class TopicScopePayload(BaseModel):
+    """The compactor may infer a topic, never a project or entity identity."""
+    model_config = ConfigDict(extra="forbid")
+    topic: str = Field(min_length=1, max_length=600)
+    topic_trust_class: Literal["model_inferred"] = "model_inferred"
+    source: Literal["inferred"] = "inferred"
 
 
 class GoalPayload(_Payload):

@@ -141,7 +141,8 @@ class RAGStatusManager:
         new_status: StageStatus,
         error: Optional[str] = None,
         metrics: Optional[Dict[str, Any]] = None,
-        celery_task_id: Optional[str] = None
+        celery_task_id: Optional[str] = None,
+        model_version: Optional[str] = None,
     ) -> None:
         """
         Изменить статус этапа с валидацией
@@ -187,6 +188,8 @@ class RAGStatusManager:
         
         if metrics:
             update_data['metrics_json'] = metrics
+        if model_version is not None:
+            update_data['model_version'] = model_version
         
         # Временные метки
         if new_status == StageStatus.PROCESSING:
@@ -317,39 +320,6 @@ class RAGStatusManager:
         
         logger.info(f"Ingest started for document {doc_id}")
 
-    async def dispatch_ingest_pipeline(self, doc_id: UUID, tenant_id: UUID) -> List[str]:
-        """Enqueue the full ingest pipeline for a document."""
-        from app.workers.tasks_rag_ingest import (
-            extract_document,
-            normalize_document,
-            chunk_document,
-            embed_chunks_model,
-            index_model,
-        )
-        from celery import chain, group
-        embedding_models = await self._get_target_models(doc_id)
-        if not embedding_models:
-            raise ValueError(
-                f"No embedding models configured for tenant {tenant_id}. "
-                "Configure embedding models in Admin (models + defaults/tenant overrides)."
-            )
-
-        extract_task = extract_document.s(str(doc_id), str(tenant_id))
-        normalize_task = normalize_document.s(str(tenant_id))
-        chunk_task = chunk_document.s(str(tenant_id))
-
-        embedding_index_chains = [
-            chain(
-                embed_chunks_model.s(str(tenant_id), model_alias),
-                index_model.s(str(tenant_id)),
-            )
-            for model_alias in embedding_models
-        ]
-
-        pipeline = chain(extract_task, normalize_task, chunk_task, group(embedding_index_chains))
-        pipeline.apply_async()
-        return embedding_models
-    
     async def stop_stage(self, doc_id: UUID, stage: str) -> Optional[str]:
         """
         Остановить выполнение этапа
@@ -456,30 +426,6 @@ class RAGStatusManager:
             return
 
         await self._cascade_reset_downstream(doc_id, stage, reset_to_pending=True)
-
-    async def dispatch_stage_retry(self, doc_id: UUID, tenant_id: UUID, stage: str) -> None:
-        """Enqueue concrete retry execution for a supported stage."""
-        from celery import chain
-        from app.workers.tasks_rag_ingest import embed_chunks_model, index_model
-
-        if stage == "extract":
-            await self.dispatch_ingest_pipeline(doc_id, tenant_id)
-            return
-
-        if stage.startswith("embed."):
-            model_alias = stage.split(".", 1)[1]
-            chain(
-                embed_chunks_model.s({"source_id": str(doc_id)}, str(tenant_id), model_alias),
-                index_model.s(str(tenant_id)),
-            ).apply_async()
-            return
-
-        if stage.startswith("index."):
-            model_alias = stage.split(".", 1)[1]
-            index_model.delay({"source_id": str(doc_id), "model_alias": model_alias}, str(tenant_id))
-            return
-
-        raise ValueError(f"Retry dispatch is not supported for stage '{stage}'")
 
     async def archive_document(self, doc_id: UUID) -> None:
         """Архивировать документ."""

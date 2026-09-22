@@ -88,11 +88,9 @@ class RAGBatchReindexOrchestrator:
             try:
                 repo_factory = AsyncRepositoryFactory(self.session, tenant_id=uuid.UUID(tenant))
                 status_manager = RAGStatusManager(self.session, repo_factory)
-                await status_manager.retry_stage(uuid.UUID(doc_id), f"embed.{alias}")
-                await status_manager.dispatch_stage_retry(
-                    uuid.UUID(doc_id),
-                    uuid.UUID(tenant),
-                    f"embed.{alias}",
+                from app.services.rag_ingest_service import RAGIngestService
+                await RAGIngestService(self.session, repo_factory, status_manager).reindex_document(
+                    uuid.UUID(doc_id), alias
                 )
                 queued += 1
                 items.append(

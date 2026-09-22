@@ -132,3 +132,109 @@ class RAGStatus(Base):
         Index('ix_rag_statuses_updated_at', 'updated_at'),
     )
 
+
+class RAGIngestRun(Base):
+    """A durable, fenced execution of the document ingest state machine.
+
+    Celery task ids are deliberately not the source of truth here: a broker can
+    accept a message before the request transaction commits, or lose a message
+    after it commits.  A run is created in the same transaction as its outbox
+    command and carries a monotonically increasing generation for the document.
+    """
+
+    __tablename__ = "rag_ingest_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    doc_id = Column(UUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    generation = Column(Integer, nullable=False)
+    trigger = Column(String(32), nullable=False)
+    status = Column(String(20), nullable=False, server_default="queued")
+    target_models = Column(JSONB, nullable=False, server_default="[]")
+    resume_stage = Column(String(64), nullable=True)
+    error_short = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("doc_id", "generation", name="uq_rag_ingest_runs_doc_generation"),
+        Index("ix_rag_ingest_runs_doc_id", "doc_id"),
+        Index("ix_rag_ingest_runs_status", "status"),
+    )
+
+
+class RAGIngestOutbox(Base):
+    """Transactional command to dispatch a durable ingest run to Celery."""
+
+    __tablename__ = "rag_ingest_outbox"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("rag_ingest_runs.id", ondelete="CASCADE"), nullable=False)
+    command = Column(String(32), nullable=False)
+    payload = Column(JSONB, nullable=False, server_default="{}")
+    status = Column(String(20), nullable=False, server_default="pending")
+    attempts = Column(Integer, nullable=False, server_default="0")
+    celery_task_id = Column(String(64), nullable=True)
+    last_error = Column(Text, nullable=True)
+    available_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    dispatched_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_rag_ingest_outbox_run"),
+        Index("ix_rag_ingest_outbox_status_available", "status", "available_at"),
+    )
+
+
+class RAGIngestStageRun(Base):
+    """Durable input/output record for one forward ingest stage."""
+
+    __tablename__ = "rag_ingest_stage_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("rag_ingest_runs.id", ondelete="CASCADE"), nullable=False)
+    stage_key = Column(String(128), nullable=False)
+    status = Column(String(20), nullable=False, server_default="pending")
+    celery_task_id = Column(String(64), nullable=True)
+    input_fingerprint = Column(String(128), nullable=True)
+    output_fingerprint = Column(String(128), nullable=True)
+    result_json = Column(JSONB, nullable=True)
+    metrics_json = Column(JSONB, nullable=True)
+    error_short = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "stage_key", name="uq_rag_ingest_stage_runs_run_stage"),
+        Index("ix_rag_ingest_stage_runs_run", "run_id"),
+        Index("ix_rag_ingest_stage_runs_status", "status"),
+    )
+
+
+class RAGIngestStageOutbox(Base):
+    """One durable dispatch command per stage of an ingest run."""
+
+    __tablename__ = "rag_ingest_stage_outbox"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("rag_ingest_runs.id", ondelete="CASCADE"), nullable=False)
+    stage_key = Column(String(128), nullable=False)
+    payload = Column(JSONB, nullable=False, server_default="{}")
+    status = Column(String(20), nullable=False, server_default="pending")
+    attempts = Column(Integer, nullable=False, server_default="0")
+    celery_task_id = Column(String(64), nullable=True)
+    last_error = Column(Text, nullable=True)
+    available_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    dispatched_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "stage_key", name="uq_rag_ingest_stage_outbox_run_stage"),
+        Index("ix_rag_ingest_stage_outbox_status_available", "status", "available_at"),
+    )
