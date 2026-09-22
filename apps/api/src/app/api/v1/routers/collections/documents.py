@@ -31,16 +31,24 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-async def _cleanup_document_vectors(collection_name: str | None, doc_id: uuid.UUID) -> None:
-    if not collection_name:
+async def _cleanup_document_vectors(collection, session: AsyncSession, doc_id: uuid.UUID) -> None:
+    if not collection.qdrant_collection_name:
         return
     try:
         from app.adapters.impl.qdrant import QdrantVectorStore
+        from app.services.collection.vector_lifecycle import (
+            CollectionVectorLifecycleService,
+            build_model_scoped_qdrant_collections,
+        )
 
         vector_store = QdrantVectorStore()
-        await vector_store.delete_by_filter(collection_name, {"source_id": str(doc_id)})
+        target_models = await CollectionVectorLifecycleService(session).resolve_target_vector_models(collection.tenant_id)
+        targets = build_model_scoped_qdrant_collections(collection.qdrant_collection_name, target_models)
+        for _, target_name in targets:
+            if await vector_store.collection_exists(target_name):
+                await vector_store.delete_by_filter(target_name, {"source_id": str(doc_id)})
     except Exception as exc:
-        logger.warning(f"Vector cleanup failed for {doc_id} in {collection_name}: {exc}")
+        logger.warning(f"Vector cleanup failed for {doc_id} in {collection.qdrant_collection_name}: {exc}")
 
 
 @router.post("/{collection_id}/upload-document")
@@ -352,7 +360,7 @@ async def delete_collection_documents(
                 except Exception as exc:
                     logger.warning(f"S3 folder delete failed for {doc_prefix}: {exc}")
 
-                await _cleanup_document_vectors(collection.qdrant_collection_name, did)
+                await _cleanup_document_vectors(collection, session, did)
 
                 row_id = meta.get("collection", {}).get("row_id")
                 if row_id and collection.table_name:
@@ -464,8 +472,9 @@ async def reindex_collection_documents(
                     })
                     continue
 
-                await status_manager.retry_stage(doc_id, "extract")
-                await status_manager.dispatch_stage_retry(doc_id, collection.tenant_id, "extract")
+                from app.schemas.common import Step
+                ingest_service = RAGIngestService(session, repo_factory, status_manager)
+                await ingest_service.retry_failed(doc_id, Step.EXTRACT)
                 queued += 1
                 items.append({
                     "document_id": str(doc_id),

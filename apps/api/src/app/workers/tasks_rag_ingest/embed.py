@@ -28,7 +28,10 @@ logger = get_logger(__name__)
     acks_late=True,
     reject_on_worker_lost=True,
 )
-def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str, model_alias: str = "all-MiniLM-L6-v2") -> Dict[str, Any]:
+def embed_chunks_model(
+    self: Task, chunk_result: Dict[str, Any], tenant_id: str, model_alias: str = "all-MiniLM-L6-v2",
+    run_id: str | None = None, generation: int | None = None,
+) -> Dict[str, Any]:
     """
     Generate embeddings for chunks using specified model.
 
@@ -59,9 +62,13 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
             if not source:
                 raise ValueError(f"Source {source_id} not found")
 
+            await EmbeddingModelConfigService.ensure_registered(ctx.session, model_alias)
+            embedding_service = EmbeddingServiceFactory.get_service(model_alias)
+            model_info = embedding_service.get_model_info()
+
             # 2. Check idempotency
             cached = await ctx.check_idempotency(model_alias=model_alias, s3_key_field="embeddings_key")
-            if cached:
+            if cached and cached.get("model_version") == model_info.version:
                 logger.info(f"Embedding cached for {source_id}:{model_alias}")
                 await ctx.set_completed(metrics={"status": "already_processed", "cached": True})
                 await ctx.session.commit()
@@ -86,13 +93,11 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
             if not chunks:
                 raise ValueError(f"No chunks found in file for {source_id}")
 
-            # 4. Prepare Embedding Service
-            await EmbeddingModelConfigService.ensure_registered(ctx.session, model_alias)
-            embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-            model_info = embedding_service.get_model_info()
-            max_chars = int(getattr(model_info, "max_tokens", 0) or 0)
-            if max_chars <= 0:
-                max_chars = 512
+            # 4. Model identity was resolved before the cache check. It is
+            # part of both the artifact fingerprint and the cache record.
+            max_tokens = int(getattr(model_info, "max_tokens", 0) or 0)
+            if max_tokens <= 0:
+                max_tokens = 512
 
             await emb_status_repo.create_or_update(
                 source_id=ctx.source_id,
@@ -113,9 +118,13 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                 batch_texts = []
                 for chunk in batch_chunks:
                     raw_text = str(chunk.get("text", "") or "")
-                    if len(raw_text) > max_chars:
+                    # Chunking is configured in whitespace-token units. Do
+                    # not treat a model token limit as a character limit: that
+                    # silently discarded most non-ASCII content.
+                    tokens = raw_text.split()
+                    if len(tokens) > max_tokens:
                         truncated_chunks += 1
-                        raw_text = raw_text[:max_chars]
+                        raw_text = " ".join(tokens[:max_tokens])
                     batch_texts.append(raw_text)
 
                 batch_vectors = await asyncio.to_thread(embedding_service.embed_texts, batch_texts)
@@ -147,7 +156,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
             # 6. Save Embeddings to S3 (JSONL)
             embeddings_jsonl = "\n".join(json.dumps(e, ensure_ascii=False) for e in embeddings_data)
             embeddings_checksum = calculate_text_checksum(
-                f"{resolved_chunks_key}:{model_alias}:{len(embeddings_data)}"
+                f"{resolved_chunks_key}:{model_alias}:{model_info.version}:{len(embeddings_data)}"
             )
 
             embeddings_key = get_embeddings_path(
@@ -178,7 +187,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
                 "vectors": len(embeddings_data),
                 "model_version": model_info.version,
                 "dimensions": model_info.dimensions,
-                "max_chars": max_chars,
+                "max_tokens": max_tokens,
                 "truncated_chunks": truncated_chunks,
                 "duration_sec": duration,
                 "vectors_per_sec": round(len(embeddings_data) / duration, 1) if duration > 0 else 0,
@@ -199,7 +208,7 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
             await ctx.session.flush()
 
             await ctx.save_idempotency(
-                {"status": "completed", "embeddings_key": embeddings_key, "count": len(embeddings_data)},
+                {"status": "completed", "embeddings_key": embeddings_key, "count": len(embeddings_data), "model_version": model_info.version},
                 model_alias=model_alias,
             )
             await ctx.session.commit()
@@ -221,4 +230,6 @@ def embed_chunks_model(self: Task, chunk_result: Dict[str, Any], tenant_id: str,
         celery_task=self,
         execute_fn=_execute,
         error_notify_fn=_error_notify,
+        run_id=run_id,
+        generation=generation,
     )

@@ -233,31 +233,6 @@ class TestRAGStatusManager:
         assert mock_status_repo.upsert_node.call_count >= 1
 
     @pytest.mark.asyncio
-    async def test_dispatch_stage_retry_embed_chains_index(self, status_manager):
-        """Retrying embed.* should enqueue embed->index chain."""
-        doc_id = uuid4()
-        tenant_id = uuid4()
-
-        embed_sig = MagicMock(name="embed_sig")
-        index_sig = MagicMock(name="index_sig")
-        embed_task = MagicMock()
-        embed_task.s.return_value = embed_sig
-        index_task = MagicMock()
-        index_task.s.return_value = index_sig
-        chain_result = MagicMock()
-        chain_result.apply_async = MagicMock()
-
-        with patch("app.workers.tasks_rag_ingest.embed_chunks_model", embed_task), \
-             patch("app.workers.tasks_rag_ingest.index_model", index_task), \
-             patch("celery.chain", return_value=chain_result) as chain_mock:
-            await status_manager.dispatch_stage_retry(doc_id, tenant_id, "embed.emb.mini.l6")
-
-        embed_task.s.assert_called_once_with({"source_id": str(doc_id)}, str(tenant_id), "emb.mini.l6")
-        index_task.s.assert_called_once_with(str(tenant_id))
-        chain_mock.assert_called_once_with(embed_sig, index_sig)
-        chain_result.apply_async.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_stop_ingest_cancels_all_active_stages(self, status_manager, mock_status_repo):
         """stop_ingest should cancel all queued/processing nodes and return task ids."""
         doc_id = uuid4()

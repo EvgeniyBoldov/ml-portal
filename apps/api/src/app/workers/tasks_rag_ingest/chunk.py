@@ -71,7 +71,9 @@ async def _resolve_chunk_config(
     acks_late=True,
     reject_on_worker_lost=True,
 )
-def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
+def chunk_document(
+    self: Task, normalize_result: Dict[str, Any], tenant_id: str, run_id: str | None = None, generation: int | None = None,
+) -> Dict[str, Any]:
     """
     Chunk document text.
 
@@ -113,6 +115,13 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str)
 
         canonical_doc = json.loads(await ctx.s3_get(canonical_key))
         text = canonical_doc.get("text", "")
+        collection_meta = normalize_document_source_meta(source.meta).get("collection") or {}
+        retrieval_fields = collection_meta.get("retrieval_fields") or {}
+        if retrieval_fields:
+            retrieval_prefix = "\n".join(
+                f"{key}: {value}" for key, value in retrieval_fields.items()
+            )
+            text = f"{retrieval_prefix}\n\n{text}" if text else retrieval_prefix
 
         if not text:
             logger.warning(f"Empty text in canonical doc for {source_id}")
@@ -191,4 +200,6 @@ def chunk_document(self: Task, normalize_result: Dict[str, Any], tenant_id: str)
         tenant_id=tenant_id,
         celery_task=self,
         execute_fn=_execute,
+        run_id=run_id,
+        generation=generation,
     )

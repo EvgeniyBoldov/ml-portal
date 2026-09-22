@@ -310,8 +310,6 @@ async def start_ingest(
                     reason=reason,
                 )
         
-        await status_manager.start_ingest(doc_uuid)
-        
         # Публикуем событие
         await event_publisher.publish_ingest_started(
             doc_id=doc_uuid,
@@ -319,8 +317,14 @@ async def start_ingest(
             user_id=user.id
         )
         
-        # Запускаем Celery pipeline через единый диспетчер
-        embedding_models = await status_manager.dispatch_ingest_pipeline(doc_uuid, document.tenant_id)
+        # The service writes a durable run/outbox and commits it before the
+        # dispatcher is allowed to publish to Celery.
+        from app.schemas.rag import IngestRequest
+        from app.services.rag_ingest_service import RAGIngestService
+        response = await RAGIngestService(session, repo_factory, status_manager).start_ingest(
+            IngestRequest(document_id=doc_uuid)
+        )
+        embedding_models = await status_manager._get_target_models(doc_uuid)
         
         return {
             'status': 'success',
@@ -531,8 +535,17 @@ async def retry_ingest(
             status=current.value,
         )
 
-    await status_manager.retry_stage(doc_uuid, stage)
-    await status_manager.dispatch_stage_retry(doc_uuid, document.tenant_id, stage)
+    from app.schemas.common import Step
+    from app.services.rag_ingest_service import RAGIngestService
+    ingest_service = RAGIngestService(session, repo_factory, status_manager)
+    if stage == "extract":
+        await ingest_service.retry_failed(doc_uuid, Step.EXTRACT)
+    elif stage.startswith(("embed.", "index.")):
+        # Index-only retries can otherwise reuse an unverified old embedding
+        # artifact. Re-embedding provides a fresh versioned input.
+        await ingest_service.reindex_document(doc_uuid, stage.split(".", 1)[1])
+    else:
+        raise _rag_problem(409, "Retry is not supported for stage", "retry_not_supported", stage=stage)
 
     return {
         'status': 'success',

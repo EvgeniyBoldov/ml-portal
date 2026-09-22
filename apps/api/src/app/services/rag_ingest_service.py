@@ -1,8 +1,9 @@
 """
 RAG service for managing ingest pipeline.
 
-Delegates pipeline construction to RAGIngestOrchestrator.
-Owns document-level validation, progress calculation, and cancel logic.
+Owns document-level validation, progress calculation, cancel logic and durable
+ingest-run creation.  Broker dispatch is intentionally performed only after
+the transaction containing the upload/status/run has committed.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from app.repositories.factory import AsyncRepositoryFactory
 from app.schemas.common import DocumentStatus, Step
 from app.schemas.rag import IngestRequest, IngestResponse, IngestProgress
 from app.services.document_artifacts import get_document_artifact_key
-from app.services.rag_ingest_orchestrator import RAGIngestOrchestrator
+from app.services.rag_ingest_run_service import RAGIngestRunService
 from app.services.rag_status_manager import RAGStatusManager, StageStatus
 
 logger = get_logger(__name__)
@@ -37,7 +38,24 @@ class RAGIngestService:
         self.status_manager = status_manager
         self.rag_repo = repo_factory.get_rag_documents_repository()
         self.source_repo = repo_factory.get_source_repository()
-        self._orchestrator = RAGIngestOrchestrator(session, repo_factory, status_manager)
+        self._runs = RAGIngestRunService(session, repo_factory, status_manager)
+
+    async def _commit_and_dispatch(self, run_id: UUID) -> str:
+        """Commit the command before publishing it; recovery can replay it."""
+        await self.session.commit()
+        from app.models.rag_ingest import RAGIngestOutbox
+        from sqlalchemy import select
+        outbox = (await self.session.execute(
+            select(RAGIngestOutbox).where(RAGIngestOutbox.run_id == run_id)
+        )).scalar_one()
+        try:
+            from app.workers.tasks_rag_ingest.dispatch import dispatch_rag_ingest_outbox
+            dispatch_rag_ingest_outbox.delay(str(outbox.id))
+        except Exception as exc:
+            # Do not undo the durable command. The periodic reconciler will
+            # deliver it once the broker is healthy again.
+            logger.exception("RAG ingest command committed but initial dispatch failed: %s", exc)
+        return str(outbox.id)
 
     # ── start ────────────────────────────────────────────
 
@@ -51,8 +69,7 @@ class RAGIngestService:
 
         # Guard: already processing
         processing_statuses = {
-            DocumentStatus.EXTRACTING, DocumentStatus.CHUNKING,
-            DocumentStatus.EMBEDDING, DocumentStatus.INDEXING,
+            DocumentStatus.PROCESSING, DocumentStatus.QUEUED,
         }
         if document.status in processing_statuses:
             logger.warning(f"Document {request.document_id} is already being processed")
@@ -62,12 +79,19 @@ class RAGIngestService:
                 progress=await self._get_progress(request.document_id),
             )
 
-        task_id = await self._orchestrator.start_full_pipeline(request.document_id)
-
+        target_models = await self.status_manager._get_target_models(request.document_id)
+        if not target_models:
+            raise ValueError("No embedding models configured for this document tenant")
+        await self.status_manager.start_ingest(request.document_id)
         await self.rag_repo.update(
             self.repo_factory.tenant_id, request.document_id, status=DocumentStatus.QUEUED,
         )
-        await self.session.commit()
+        run = await self._runs.create(
+            request.document_id,
+            trigger="upload",
+            target_models=target_models,
+        )
+        await self._commit_and_dispatch(run.id)
 
         return IngestResponse(
             document_id=request.document_id,
@@ -86,7 +110,11 @@ class RAGIngestService:
             raise ValueError(f"Document {document_id} not found")
 
         if step == Step.EXTRACT:
-            task_id = await self._orchestrator.retry_from_extract(document_id)
+            target_models = await self.status_manager._get_target_models(document_id)
+            if not target_models:
+                raise ValueError("No embedding models configured for this document tenant")
+            await self.status_manager.retry_stage(document_id, "extract")
+            run = await self._runs.create(document_id, trigger="retry", target_models=target_models)
         elif step == Step.EMBED:
             if not model_alias:
                 raise ValueError("Model alias required for embed step")
@@ -94,13 +122,22 @@ class RAGIngestService:
             chunks_key = get_document_artifact_key(source.meta if source else None, "chunks")
             if not chunks_key:
                 logger.warning(f"No chunks_key for {document_id}, falling back to full retry")
-                task_id = await self._orchestrator.retry_from_extract(document_id)
+                target_models = await self.status_manager._get_target_models(document_id)
+                await self.status_manager.retry_stage(document_id, "extract")
+                run = await self._runs.create(document_id, trigger="retry", target_models=target_models)
             else:
-                task_id = await self._orchestrator.retry_embed_model(document_id, model_alias, chunks_key)
+                await self.status_manager.retry_stage(document_id, f"embed.{model_alias}")
+                run = await self._runs.create(
+                    document_id,
+                    trigger="retry",
+                    target_models=[model_alias],
+                    resume_stage="embed",
+                    payload={"model_alias": model_alias, "chunks_key": chunks_key},
+                )
         else:
             raise ValueError(f"Unsupported step for retry: {step}. Use extract or embed.<model>.")
 
-        await self.session.commit()
+        task_id = await self._commit_and_dispatch(run.id)
 
         return {
             "document_id": str(document_id),
@@ -129,8 +166,20 @@ class RAGIngestService:
             logger.warning(f"No chunks_key found for {document_id}, falling back to full ingest")
             return await self.retry_failed(document_id, Step.EXTRACT)
 
-        task_id = await self._orchestrator.reindex_with_model(document_id, model_alias, chunks_key)
-        await self.session.commit()
+        await self.status_manager.status_repo.upsert_node(
+            doc_id=document_id, node_type="embedding", node_key=model_alias, status=StageStatus.QUEUED.value,
+        )
+        await self.status_manager.status_repo.upsert_node(
+            doc_id=document_id, node_type="index", node_key=model_alias, status=StageStatus.PENDING.value,
+        )
+        run = await self._runs.create(
+            document_id,
+            trigger="reindex",
+            target_models=[model_alias],
+            resume_stage="embed",
+            payload={"model_alias": model_alias, "chunks_key": chunks_key},
+        )
+        task_id = await self._commit_and_dispatch(run.id)
 
         return {
             "document_id": str(document_id),

@@ -21,6 +21,10 @@ def generate_content_hash(content: str) -> str:
 
 def chunk_text_by_tokens(text: str, chunk_size: int = 512, overlap: int = 50) -> List[Dict[str, Any]]:
     """Chunk text by tokens with overlap"""
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be positive")
+    if overlap < 0 or overlap >= chunk_size:
+        raise ValueError("overlap must be non-negative and smaller than chunk_size")
     words = text.split()
     chunks = []
     
@@ -101,7 +105,7 @@ def chunk_text_by_paragraphs(text: str, max_chunk_size: int = 512) -> List[Dict[
         words = paragraph.split()
         if len(words) > max_chunk_size:
             # Split long paragraph by tokens
-            sub_chunks = chunk_text_by_tokens(paragraph, max_chunk_size)
+            sub_chunks = chunk_text_by_tokens(paragraph, max_chunk_size, overlap=0)
             chunks.extend(sub_chunks)
         else:
             chunks.append({
@@ -156,18 +160,36 @@ def chunker(text: str, profile: ChunkProfile = ChunkProfile.BY_TOKENS, **kwargs)
     if profile == ChunkProfile.BY_TOKENS:
         chunk_size = kwargs.get('chunk_size', 512)
         overlap = kwargs.get('overlap', 50)
-        return chunk_text_by_tokens(text, chunk_size, overlap)
+        chunks = chunk_text_by_tokens(text, chunk_size, overlap)
     elif profile == ChunkProfile.BY_SENTENCES:
-        max_chunk_size = kwargs.get('max_chunk_size', 512)
-        return chunk_text_by_sentences(text, max_chunk_size)
+        chunks = chunk_text_by_sentences(text, kwargs.get('chunk_size', kwargs.get('max_chunk_size', 512)))
     elif profile == ChunkProfile.BY_PARAGRAPHS:
-        max_chunk_size = kwargs.get('max_chunk_size', 512)
-        return chunk_text_by_paragraphs(text, max_chunk_size)
+        chunks = chunk_text_by_paragraphs(text, kwargs.get('chunk_size', kwargs.get('max_chunk_size', 512)))
     elif profile == ChunkProfile.BY_MARKDOWN:
-        max_chunk_size = kwargs.get('max_chunk_size', 512)
-        return chunk_text_by_markdown(text, max_chunk_size)
+        chunks = chunk_text_by_markdown(text, kwargs.get('chunk_size', kwargs.get('max_chunk_size', 512)))
+    elif profile == ChunkProfile.BY_PAGES:
+        # Page boundaries require a canonical document with page spans.  The
+        # current text-only canonical artifact cannot honestly provide them.
+        raise ValueError("by_pages requires page spans and is not supported by text canonical documents")
     else:
         raise ValueError(f"Unknown chunking profile: {profile}")
+
+    # All profiles must use monotonically increasing *character* offsets. The
+    # old sentence/paragraph/markdown implementations wrote zero for every
+    # chunk, violating uq_chunks_source_offset and generating colliding IDs.
+    cursor = 0
+    for chunk in chunks:
+        value = str(chunk.get("text", ""))
+        start = text.find(value, cursor)
+        if start < 0:
+            # A formatter may have normalized whitespace. Keep a deterministic
+            # non-overlapping range rather than silently reusing offset zero.
+            start = cursor
+        end = start + len(value)
+        chunk["start_pos"] = start
+        chunk["end_pos"] = end
+        cursor = max(cursor, end)
+    return chunks
 
 
 def generate_chunk_id(document_id: UUID, start_pos: int, end_pos: int) -> str:

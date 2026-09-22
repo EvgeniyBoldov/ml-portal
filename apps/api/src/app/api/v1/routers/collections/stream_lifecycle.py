@@ -73,9 +73,11 @@ async def start_collection_ingest(
                 raise _problem(409, "Document is archived", reason)
             raise _problem(409, "Ingest not allowed", reason)
 
-        await status_manager.start_ingest(doc_uuid)
         await event_publisher.publish_ingest_started(doc_id=doc_uuid, tenant_id=document.tenant_id, user_id=user.id)
-        embedding_models = await status_manager.dispatch_ingest_pipeline(doc_uuid, document.tenant_id)
+        from app.schemas.rag import IngestRequest
+        ingest_service = RAGIngestService(session, repo_factory, status_manager)
+        await ingest_service.start_ingest(IngestRequest(document_id=doc_uuid))
+        embedding_models = await status_manager._get_target_models(doc_uuid)
         return {"status": "success", "message": "Ingest started", "document_id": doc_id, "embedding_models": embedding_models}
     finally:
         if start_lock is not None and lock_acquired:
@@ -160,6 +162,12 @@ async def retry_collection_ingest(
     if not control.get("can_retry"):
         raise _problem(409, "Stage is not retryable", "stage_not_retryable", stage=stage, status=current.value)
 
-    await status_manager.retry_stage(doc_uuid, stage)
-    await status_manager.dispatch_stage_retry(doc_uuid, document.tenant_id, stage)
+    from app.schemas.common import Step
+    ingest_service = RAGIngestService(session, repo_factory, status_manager)
+    if stage == "extract":
+        await ingest_service.retry_failed(doc_uuid, Step.EXTRACT)
+    elif stage.startswith(("embed.", "index.")):
+        await ingest_service.reindex_document(doc_uuid, stage.split(".", 1)[1])
+    else:
+        raise _problem(409, "Retry is not supported for stage", "retry_not_supported", stage=stage)
     return {"status": "success", "message": "Stage restarted", "document_id": doc_id, "stage": stage}

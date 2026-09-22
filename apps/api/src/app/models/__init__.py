@@ -7,7 +7,10 @@ from .chat import Chats, ChatMessages
 from .chat_attachment import ChatAttachment
 from .chat_artifact_reference import ChatArtifactReference
 from .rag import RAGDocument, RAGChunk
-from .rag_ingest import Source, Chunk, EmbStatus, RAGStatus, DocumentCollectionMembership
+from .rag_ingest import (
+    Source, Chunk, EmbStatus, RAGStatus, DocumentCollectionMembership,
+    RAGIngestRun, RAGIngestOutbox, RAGIngestStageRun, RAGIngestStageOutbox,
+)
 from .template_analysis_status import TemplateAnalysisStatus
 from .model_registry import ModelRegistry
 from .events import EventOutbox
@@ -90,6 +93,10 @@ __all__ = [
     "EmbStatus",
     "RAGStatus",
     "DocumentCollectionMembership",
+    "RAGIngestRun",
+    "RAGIngestOutbox",
+    "RAGIngestStageRun",
+    "RAGIngestStageOutbox",
     "TemplateAnalysisStatus",
     "ModelRegistry",
     "EventOutbox",

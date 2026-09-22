@@ -71,7 +71,9 @@ def _detect_ext(filename: str) -> str:
     acks_late=True,
     reject_on_worker_lost=True,
 )
-def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, Any]:
+def extract_document(
+    self: Task, source_id: str, tenant_id: str, run_id: str | None = None, generation: int | None = None,
+) -> Dict[str, Any]:
     """
     Extract text from document.
 
@@ -229,4 +231,6 @@ def extract_document(self: Task, source_id: str, tenant_id: str) -> Dict[str, An
         tenant_id=tenant_id,
         celery_task=self,
         execute_fn=_execute,
+        run_id=run_id,
+        generation=generation,
     )

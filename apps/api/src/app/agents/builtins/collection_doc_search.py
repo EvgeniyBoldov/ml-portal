@@ -128,7 +128,6 @@ class CollectionDocSearchTool(VersionedTool):
         from app.services.collection.vector_lifecycle import (
             CollectionVectorLifecycleService,
             build_model_scoped_qdrant_collections,
-            get_model_scoped_qdrant_collection_name,
         )
         from app.services.collection_service import CollectionService
 
@@ -216,24 +215,15 @@ class CollectionDocSearchTool(VersionedTool):
                 )
                 search_targets: list[tuple[str, str]] = []
                 for model_alias, scoped_collection_name in model_scoped_collections:
-                    candidate_names = [scoped_collection_name]
-                    fallback_name = get_model_scoped_qdrant_collection_name(
-                        collection.qdrant_collection_name,
-                        model_alias,
-                        None,
+                    exists = await vector_store.collection_exists(scoped_collection_name)
+                    log.info(
+                        "Qdrant collection existence check",
+                        qdrant_collection_name=scoped_collection_name,
+                        exists=exists,
+                        model_alias=model_alias,
                     )
-                    if fallback_name and fallback_name not in candidate_names:
-                        candidate_names.append(fallback_name)
-                    for candidate_name in candidate_names:
-                        exists = await vector_store.collection_exists(candidate_name)
-                        log.info(
-                            "Qdrant collection existence check",
-                            qdrant_collection_name=candidate_name,
-                            exists=exists,
-                            model_alias=model_alias,
-                        )
-                        if exists:
-                            search_targets.append((model_alias, candidate_name))
+                    if exists:
+                        search_targets.append((model_alias, scoped_collection_name))
                 if not search_targets:
                     log.warning("Qdrant collection does not exist yet")
                     return ToolResult.ok(
@@ -268,7 +258,7 @@ class CollectionDocSearchTool(VersionedTool):
                     model_results = await vector_store.search(
                         collection=candidate_name,
                         query=query_embedding[0],
-                        top_k=k * 2,
+                        top_k=k * 4,
                         filter=qdrant_prefilter,
                     )
                     for hit in model_results:
@@ -280,41 +270,9 @@ class CollectionDocSearchTool(VersionedTool):
                     "Qdrant search completed",
                     qdrant_collection_name=collection.qdrant_collection_name,
                     results_count=len(results),
-                    top_k=k * 2,
+                    top_k=k * 4,
                     filters_applied=bool(filters),
                 )
-
-                # Backward compatibility: old indexed docs may not have payload prefilter fields yet.
-                # Fallback to SQL row_id prefilter for non-empty filters.
-                if not results and filters:
-                    row_ids = await self._resolve_filtered_row_ids(session, collection, filters)
-                    if not row_ids:
-                        return ToolResult.ok(
-                            data={"hits": [], "total": 0, "collection": collection.slug, "applied_filters": filters},
-                            logs=log.entries_dict(),
-                        )
-                    if len(row_ids) > 2000:
-                        return ToolResult.fail(
-                            "Filters are too broad. Please narrow filters to 2000 rows or fewer.",
-                            logs=log.entries_dict(),
-                        )
-                    results = []
-                    for model_alias, candidate_name in search_targets:
-                        embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-                        query_embedding = await asyncio.to_thread(
-                            embedding_service.embed_texts, [query]
-                        )
-                        model_results = await vector_store.search(
-                            collection=candidate_name,
-                            query=query_embedding[0],
-                            top_k=k * 2,
-                            filter={"row_id": row_ids},
-                        )
-                        for hit in model_results:
-                            payload = hit.setdefault("payload", {})
-                            payload.setdefault("embed_model_alias", model_alias)
-                            payload.setdefault("qdrant_collection_name", candidate_name)
-                        results.extend(model_results)
 
                 if not results:
                     log.info("No results found")
@@ -330,7 +288,10 @@ class CollectionDocSearchTool(VersionedTool):
                     if chunk_id not in seen or hit["score"] > seen[chunk_id]["score"]:
                         seen[chunk_id] = hit
 
-                sorted_hits = sorted(seen.values(), key=lambda h: h["score"], reverse=True)[:k]
+                # Keep a larger cross-model candidate pool through reranking;
+                # truncating before rerank discarded exactly the candidates the
+                # reranker is meant to rescue.
+                sorted_hits = sorted(seen.values(), key=lambda h: h["score"], reverse=True)[: k * 4]
                 log.info("Deduplicated hits", dedup_count=len(sorted_hits))
 
                 # 6.1 Rerank results (required for document collections)
@@ -346,6 +307,7 @@ class CollectionDocSearchTool(VersionedTool):
                         top_k=len(rerank_inputs),
                     )
                     sorted_hits = apply_rerank_to_items(sorted_hits, reranked, score_field="score")
+                    sorted_hits = sorted_hits[:k]
                     log.info("Rerank applied", rerank_count=len(reranked), post_rerank_count=len(sorted_hits))
                 except RerankClientError as exc:
                     log.error("Rerank required but unavailable", error=str(exc))
@@ -482,7 +444,7 @@ class CollectionDocSearchTool(VersionedTool):
         non_file_fields = [
             f["name"]
             for f in collection.fields
-            if f.get("data_type") != "file"
+            if f.get("data_type") != "file" and f.get("used_in_prompt_context", False)
         ]
         if not non_file_fields:
             return {}
