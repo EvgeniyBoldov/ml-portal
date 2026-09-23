@@ -169,6 +169,15 @@ export interface ProjectCatalogItem {
   aliases: string[];
 }
 
+export interface MemoryScopeCatalogItem {
+  id: string;
+  scope_type: 'product' | 'project' | 'team';
+  key: string;
+  name: string;
+  aliases: string[];
+  is_all: boolean;
+}
+
 export interface ProjectMemoryOverviewResponse {
   projects: ProjectMemoryProject[];
   total: number;
@@ -304,6 +313,7 @@ export interface UploadDocumentRequest {
   auto_ingest?: boolean;
   memory_enabled?: boolean;
   project_keys?: string[];
+  memory_scope_keys?: string[];
 }
 
 export interface UploadDocumentResponse {
@@ -405,6 +415,7 @@ export interface CollectionDocument {
     enabled: boolean | null;
     effective_enabled: boolean;
     project_keys: string[];
+    scope_keys?: string[];
     extraction_status: string;
     extraction_metrics: Record<string, unknown>;
   };
@@ -704,6 +715,7 @@ export const collectionsApi = {
     if (data.auto_ingest !== undefined) formData.append('auto_ingest', String(data.auto_ingest));
     if (data.memory_enabled !== undefined) formData.append('memory_enabled', String(data.memory_enabled));
     if (data.project_keys?.length) formData.append('project_keys', JSON.stringify(data.project_keys));
+    if (data.memory_scope_keys?.length) formData.append('memory_scope_keys', JSON.stringify(data.memory_scope_keys));
 
     return apiRequest<UploadDocumentResponse>(
       `/collections/${collectionId}/upload-document`,
@@ -817,6 +829,9 @@ export const collectionsApi = {
 
   getProjectCatalog: async (): Promise<ProjectCatalogItem[]> =>
     apiRequest<ProjectCatalogItem[]>('/collections/project-memory/catalog'),
+
+  getMemoryScopeCatalog: async (): Promise<MemoryScopeCatalogItem[]> =>
+    apiRequest<MemoryScopeCatalogItem[]>('/collections/project-memory/scope-catalog'),
 
   getProjectMemoryProject: async (
     projectKey: string,

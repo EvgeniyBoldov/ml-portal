@@ -14,11 +14,13 @@ from app.api.deps import db_uow, get_current_user
 from app.api.v1.routers.collections.crud import _resolve_requested_tenant_id
 from app.core.security import UserCtx
 from app.models.memory import MemoryClaim, MemoryItem
+from app.models.memory_scope import MemoryClaimScope
 from app.models.project import Project
 from app.models.rag import RAGDocument
 from app.adapters.s3_client import s3_manager
 from app.core.config import get_settings
 from app.runtime.memory.document_memory import split_canonical_sections
+from app.services.memory_scope_catalog import list_memory_scopes
 
 
 router = APIRouter(prefix="/project-memory")
@@ -56,6 +58,15 @@ class ProjectCatalogItemResponse(BaseModel):
     key: str
     name: str
     aliases: list[str] = Field(default_factory=list)
+
+
+class MemoryScopeCatalogItemResponse(BaseModel):
+    id: UUID
+    scope_type: str
+    key: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    is_all: bool
 
 
 class ProjectMemoryProjectDetailResponse(BaseModel):
@@ -102,6 +113,17 @@ async def get_project_catalog(
     return [ProjectCatalogItemResponse(key=p.key, name=p.name, aliases=list(p.aliases or [])) for p in projects]
 
 
+@router.get("/scope-catalog", response_model=list[MemoryScopeCatalogItemResponse])
+async def get_memory_scope_catalog(
+    session: AsyncSession = Depends(db_uow), user: UserCtx = Depends(get_current_user),
+):
+    await _resolve_requested_tenant_id(session, user, None)
+    return [MemoryScopeCatalogItemResponse(
+        id=row.id, scope_type=row.scope_type, key=row.key, name=row.name,
+        aliases=list(row.aliases or []), is_all=row.is_all,
+    ) for row in await list_memory_scopes(session)]
+
+
 def _effective_item_rows(rows: list[tuple[MemoryItem, MemoryClaim]]) -> list[tuple[MemoryItem, MemoryClaim, int, str]]:
     """Project the content from claims already visible to the caller.
 
@@ -144,7 +166,8 @@ async def get_global_memory_overview(
         select(MemoryItem, MemoryClaim)
         .join(MemoryClaim, MemoryClaim.memory_item_id == MemoryItem.id)
         .join(RAGDocument, RAGDocument.id == MemoryClaim.document_id)
-        .where(MemoryItem.scope == "company", _visible_claim_filter(tenant_id))
+        .where(MemoryItem.scope == "company", _visible_claim_filter(tenant_id),
+               ~select(MemoryClaimScope.claim_id).where(MemoryClaimScope.claim_id == MemoryClaim.id).exists())
         .order_by(MemoryItem.updated_at.desc(), MemoryItem.subject)
     )).all()
     effective = _effective_item_rows(rows)

@@ -193,11 +193,11 @@ a writer and cannot turn them into durable facts.
 
 After terminal synthesis, the chat path emits the answer and dispatches
 `finalize_memory` asynchronously. That worker runs `FactExtractor`,
-`FactCompactor` and `FactReconciler`; evidence is deduplicated into
-`FactObservation`, active rows use supersede semantics, and only confirmed
-facts are read by a later turn. Writeback failures are isolated from the user
-answer. Sandbox fact overlays never persist directly to the durable `facts`
-table.
+`FactCompactor` and `FactReconciler` for user/tenant dialogue facts; project
+knowledge is not written through this path. Document-derived Semantic Memory
+uses the separate source-backed extraction and review flow described in
+[`MEMORY.md`](MEMORY.md). Writeback failures are isolated from the user answer.
+Sandbox fact overlays never persist directly to the durable `facts` table.
 
 ### Единый journal boundary
 
@@ -370,24 +370,16 @@ request и проверенный fingerprint операции.
 - в prompts, planner и inspect surfaces используем только canonical tool names,
 - raw builtin slugs остаются внутренним адаптерным слоем.
 
-## Project Memory Candidate Flow
+## Semantic Memory retrieval
 
-`memory.lookup` is a global system operation which accepts multiple suspicious
-terms, resolves confirmed glossary aliases, resolves matching project catalogue
-entries, and returns bounded project-memory keys without values. `memory.read`
-returns confirmed compact facts only for exact project keys and selected keys.
-`memory.mark` never writes the database: it accepts only the runtime
-`evidence_call_id` exposed by a successful tool result from the current turn and
-stores bounded candidates in `RuntimeTurnState`. After Synthesizer
-has returned the user answer, the normal asynchronous memory worker combines
-those candidates with extracted user/tenant facts and sends project candidates
-through the FactCompactor LLM before `FactReconciler` persists them.
-
-The same writeback worker handles user and tenant candidates extracted from the
-turn. `memory.mark` only places bounded evidence-backed candidates in
-the current `RuntimeTurnState`; it is never a direct database write. Manual
-admin fact edits use the separate admin fact service and are not treated as
-LLM-extracted evidence.
+`memory.search` is the bounded system operation for document-derived project
+and company knowledge and confirmed glossary terms. It applies runtime ACL and
+returns typed, source-aware results. TurnPreflight uses a separate mechanical
+lookup for candidate aliases/projects/entities; it does not call `memory.search`
+itself. Planner and agents may call `memory.search` when they need durable
+knowledge. Project memory is source-backed and is not written by conversational
+`FactExtractor` writeback. See [`MEMORY.md`](MEMORY.md) for extraction,
+publication and UI contracts.
 
 ## Runtime Evaluation Harness
 

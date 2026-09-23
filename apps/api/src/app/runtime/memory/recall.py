@@ -1,7 +1,7 @@
 """Structured, mandatory semantic-memory recall before planning."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from typing import Any, Awaitable, Callable
 from uuid import UUID
@@ -12,12 +12,14 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import MemoryClaim, MemoryItem, MemoryRelation
+from app.models.memory_scope import MemoryClaimScope, MemoryScope
 from app.models.knowledge_entity import KnowledgeEntity, KnowledgeEntitySource
 from app.models.rag import RAGDocument
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.dto import FactDTO
 from app.runtime.memory.preparer import MemoryPreparer, PreparedMemoryContext
 from app.runtime.memory.semantic_index import MemorySemanticIndex
+from app.runtime.memory.scope_precedence import apply_scope_precedence
 from app.services.glossary_service import GlossaryService
 
 
@@ -115,6 +117,7 @@ class MemoryRecallService:
         semantic_items = await self._accessible_semantic_items(
             project_ids=project_ids, semantic_ids=candidate_ids, tenant_id=tenant_id,
         )
+        semantic_items, scope_uncertainties = apply_scope_precedence(semantic_items, project_ids)
         project_facts = [{
             "project_id": item["project_id"],
             "project_key": project_by_id.get(str(item["project_id"]), {}).get("key"),
@@ -141,6 +144,11 @@ class MemoryRecallService:
             sandbox_overrides=sandbox_overrides, event_sink=event_sink,
             agent_execution_id=agent_execution_id,
         )
+        if scope_uncertainties:
+            prepared = replace(
+                prepared, needs_source_check=True,
+                source_check_reasons=[*prepared.source_check_reasons, *scope_uncertainties],
+            )
         return self._structure(
             prepared, resolved_entities=resolved_entities, entity_ambiguities=entity_ambiguities,
         ), prepared
@@ -262,6 +270,7 @@ class MemoryRecallService:
 
     async def _accessible_semantic_items(
         self, *, project_ids: list[UUID], semantic_ids: list[UUID], tenant_id: UUID | None,
+        context_scope_keys: list[str] | tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         if not project_ids and not semantic_ids:
             return []
@@ -296,10 +305,22 @@ class MemoryRecallService:
                 by_item[item.id] = (item, [claim])
             else:
                 current[1].append(claim)
+        claim_ids = [claim.id for _, claims in by_item.values() for claim in claims]
+        scope_rows = (await self._session.execute(
+            select(MemoryClaimScope.claim_id, MemoryScope)
+            .join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id)
+            .where(MemoryClaimScope.claim_id.in_(claim_ids))
+        )).all() if claim_ids else []
+        claim_scopes: dict[UUID, list[MemoryScope]] = {}
+        for claim_id, scope in scope_rows:
+            claim_scopes.setdefault(claim_id, []).append(scope)
+        trusted_scope_keys = {str(key).strip().lower() for key in context_scope_keys}
         rank = {item_id: index for index, item_id in enumerate(semantic_ids)}
         result: list[dict[str, Any]] = []
         for item_id, (item, claims) in by_item.items():
-            applicable_claims = [claim for claim in claims if _item_is_applicable(item, project_ids, tenant_id, claim.applicability)]
+            applicable_claims = [claim for claim in claims if
+                _item_is_applicable(item, project_ids, tenant_id, claim.applicability)
+                and _claim_scopes_apply(claim_scopes.get(claim.id, []), project_ids, trusted_scope_keys)]
             if not applicable_claims:
                 continue
             claims = applicable_claims
@@ -312,6 +333,7 @@ class MemoryRecallService:
             conflicting = len({claim.content_text for claim in claims}) > 1
             result.append({
                 "id": item.id, "project_id": item.project_id, "kind": item.item_type,
+                "scope_keys": sorted(scope.key for scope in claim_scopes.get(winner.id, [])),
                 "subject": item.subject, "content": dict(winner.content or {}), "content_text": winner.content_text,
                 "confidence": winner.confidence,
                 # Item-level uncertainty can come from an inaccessible tenant
@@ -490,3 +512,28 @@ def _item_is_applicable(
         return False
     required_tenants = {str(value) for value in applicability.get("tenant_ids") or []}
     return not required_tenants or tenant_key in required_tenants
+
+
+def _claim_scopes_apply(
+    scopes: list[MemoryScope], project_ids: list[UUID], context_scope_keys: set[str],
+) -> bool:
+    """OR within a type and AND between types; *.all needs a verified type value."""
+    if not scopes:
+        return True  # Legacy company claims have no typed binding.
+    groups: dict[str, list[MemoryScope]] = {}
+    for scope in scopes:
+        groups.setdefault(scope.scope_type, []).append(scope)
+    projects = set(project_ids)
+    for scope_type, group in groups.items():
+        if any(scope.is_all for scope in group):
+            if scope_type == "project":
+                if not projects and not any(key.startswith("project.") and key != "project.all" for key in context_scope_keys):
+                    return False
+            elif not any(key.startswith(f"{scope_type}.") and key != f"{scope_type}.all" for key in context_scope_keys):
+                return False
+            continue
+        if not any(scope.key in context_scope_keys or
+                   (scope.scope_type == "project" and scope.project_id in projects)
+                   for scope in group):
+            return False
+    return True

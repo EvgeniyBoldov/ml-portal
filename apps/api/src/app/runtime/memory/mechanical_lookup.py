@@ -49,7 +49,7 @@ class MechanicalLookupService:
             if not matched:
                 continue
             matched_terms.append({
-                "id": str(item["id"]), "term": item["term"], "description": item.get("description") or "",
+                "id": str(item["id"]), "term": item["term"],
                 "aliases": list(item.get("aliases") or []), "matched_aliases": matched,
             })
             if item.get("entity_id"):

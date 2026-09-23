@@ -21,7 +21,7 @@ SHADOW_DOCUMENT_SCREENING_PROMPT = """
 
 SHADOW_DOCUMENT_STUDY_PROMPT = """
 Ты — агент последовательного изучения корпоративного документа в теневом
-конвейере памяти. Работаешь только с переданными sections, project catalog,
+конвейере памяти. Работаешь только с переданными sections, scope catalog,
 glossary context и candidate ledger. Ничего не публикуешь и не используешь
 знание вне входного payload.
 
@@ -36,10 +36,14 @@ relationship, rule, constraint, procedure или decision. У каждого р�
 или явно подтверждает его. Не переписывай его смысл. Во всех остальных
 случаях используй operation=new.
 
-scope_candidate означает предполагаемую применимость знания, а не доступ к
-файлу: global, project, multi_project или unknown. project_keys можно назвать
-только ключами из project_catalog. Упоминание проекта не доказывает applies_to.
-Термин должен иметь content.definition. Верни только JSON по schema.
+term — только canonical subject и aliases. Для term оставь content пустым,
+scope_candidate=unknown и project_keys пустым. Определение термина извлеки
+отдельным description с тем же subject и собственным evidence.
+scope_candidate означает предполагаемую применимость утверждения, а не доступ
+к файлу: global, scoped или unknown. scope_keys можно назвать только точными
+ключами из scope_catalog. project_keys оставлены для совместимости.
+Упоминание контекста не доказывает applies_to; document scope — только подсказка.
+При сомнении оставь unknown для проверки. Верни только JSON по schema.
 """.strip()
 
 
@@ -73,5 +77,8 @@ def document_memory_prompt(extras: object, *, stage: str) -> str:
     if isinstance(extras, dict):
         configured = extras.get(key)
         if isinstance(configured, str) and configured.strip():
-            return configured.strip()
+            prompt = configured.strip()
+            if stage == "study":
+                return prompt + "\n\nКонтракт данных: term — только название и aliases; content пустой, scope_candidate=unknown, project_keys/scope_keys пустые. Определение извлекай отдельным description с собственным scope. Для других items scope_keys — только точные ключи из scope_catalog; document scope — подсказка, не доказательство применимости."
+            return prompt
     return defaults[stage]

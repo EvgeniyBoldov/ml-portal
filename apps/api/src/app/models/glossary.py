@@ -1,4 +1,4 @@
-"""Canonical glossary entries used to resolve company terminology."""
+"""Legacy scoped entries retained for conversational-fact compatibility."""
 from __future__ import annotations
 
 import uuid
@@ -29,11 +29,7 @@ class GlossaryStatus(str, Enum):
 
 
 class GlossaryEntry(Base):
-    """A canonical term, abbreviation, or entity alias.
-
-    This is intentionally separate from facts: it answers "what entity does
-    this spelling refer to?", not "what is true about that entity?".
-    """
+    """Legacy entry; document terms use scope-free ``GlossaryTerm``."""
 
     __tablename__ = "glossary_entries"
     __table_args__ = (

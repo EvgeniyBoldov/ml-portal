@@ -83,7 +83,11 @@ class SemanticMemoryAdminService:
             .limit(max(1, min(limit, 200)))
             .offset(max(0, offset))
         )
-        if scope:
+        if scope == "scoped":
+            stmt = stmt.where(MemoryItem.scope_signature != "legacy")
+        elif scope == "company":
+            stmt = stmt.where(MemoryItem.scope == "company", MemoryItem.scope_signature == "legacy")
+        elif scope:
             stmt = stmt.where(MemoryItem.scope == scope)
         if state:
             stmt = stmt.where(MemoryItem.state == state)
@@ -165,7 +169,12 @@ class SemanticMemoryAdminService:
 
 
 def _item_filters(scope, state, item_type, project_id, query):
-    if scope:
+    if scope == "scoped":
+        yield MemoryItem.scope_signature != "legacy"
+    elif scope == "company":
+        yield MemoryItem.scope == "company"
+        yield MemoryItem.scope_signature == "legacy"
+    elif scope:
         yield MemoryItem.scope == scope
     if state:
         yield MemoryItem.state == state

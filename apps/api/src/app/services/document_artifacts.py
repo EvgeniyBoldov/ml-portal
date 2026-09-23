@@ -136,6 +136,7 @@ def build_document_source_meta(
     memory_enabled: Optional[bool] = None,
     memory_policy: Optional[str] = None,
     project_keys: Optional[list[str]] = None,
+    memory_scope_keys: Optional[list[str]] = None,
     language: str = "en",
 ) -> Dict[str, Any]:
     meta = normalize_document_source_meta(None)
@@ -165,6 +166,8 @@ def build_document_source_meta(
         meta.setdefault("memory", {})["project_keys"] = [
             str(key).strip().lower() for key in project_keys if str(key).strip()
         ][:20]
+    if memory_scope_keys:
+        meta.setdefault("memory", {})["scope_keys"] = list(memory_scope_keys)
     meta["artifacts"]["original"] = {
         "key": original_key,
         "filename": filename,

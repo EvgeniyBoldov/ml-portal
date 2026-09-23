@@ -35,6 +35,13 @@ const relationColumns: DataTableColumn<SemanticMemoryAdminDetail['relations'][nu
   { key: 'target_id', label: 'ЦЕЛЬ' },
 ];
 
+const claimColumns: DataTableColumn<SemanticMemoryAdminDetail['claims'][number]>[] = [
+  { key: 'document_id', label: 'ДОКУМЕНТ', render: (row) => row.document_id },
+  { key: 'scope_keys', label: 'СКОУПЫ', render: (row) => row.scope_keys.length ? row.scope_keys.join(', ') : row.scope },
+  { key: 'state', label: 'СОСТОЯНИЕ' },
+  { key: 'confidence', label: 'УВЕРЕННОСТЬ', render: (row) => `${Math.round(row.confidence * 100)}%` },
+];
+
 function ProcedureSteps({ steps }: { steps: unknown }) {
   if (!Array.isArray(steps) || !steps.length) return <span>Шаги не указаны</span>;
   const rows = steps.map((step, index) => {
@@ -87,6 +94,7 @@ export default function MemoryItemPage() {
       {data.item_type === 'procedure' && <Block title="Шаги процедуры" icon="list" iconVariant="info" width="full"><ProcedureSteps steps={data.content.steps} /></Block>}
     </Tab>
     <Tab title="Происхождение" id="provenance" layout="full">
+      <Block title="Утверждения и скоупы" icon="database" iconVariant="info"><DataTable columns={claimColumns} data={data.claims} keyField="id" emptyText="Утверждений нет" /></Block>
       <Block title="Источники" icon="file" iconVariant="info"><DataTable columns={sourceColumns} data={data.sources} keyField="section_id" emptyText="Источники не найдены" /></Block>
       <Block title="Связи" icon="link" iconVariant="primary"><DataTable columns={relationColumns} data={data.relations.map((row, index) => ({ ...row, id: `${row.relation_type}:${row.target_type}:${row.target_id}:${index}` }))} keyField="id" emptyText="Связи не найдены" /></Block>
     </Tab>

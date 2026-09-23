@@ -85,7 +85,6 @@ class MemoryPreparer:
                 {
                     "index": index,
                     "term": item["term"],
-                    "description": item["description"],
                     "aliases": item["aliases"],
                 }
                 for index, item in enumerate(glossary)
@@ -193,9 +192,7 @@ class MemoryPreparer:
         ] + [
             {
                 "type": "glossary",
-                "scope": "global",
                 "term": item["term"],
-                "description": item["description"],
                 "aliases": item["aliases"],
             }
             for item in chosen_glossary

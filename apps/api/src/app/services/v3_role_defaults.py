@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from app.models.system_llm_role import SystemLLMRoleType
+from app.runtime.memory.shadow_study_prompts import SHADOW_DOCUMENT_STUDY_PROMPT
 
 
 MEMORY_V3: Dict[str, Any] = {
@@ -82,6 +83,10 @@ DOCUMENT_MEMORY_EXTRACTOR_V1: Dict[str, Any] = {
     },
     "temperature": 0.0, "max_tokens": 2400, "timeout_s": 60, "max_retries": 1, "retry_backoff": "none",
 }
+
+# Keep the active shadow-study bootstrap prompt aligned with its schema. The
+# older direct-extraction role fields above remain for historical records.
+DOCUMENT_MEMORY_EXTRACTOR_V1["extras"]["document_memory_study_prompt"] = SHADOW_DOCUMENT_STUDY_PROMPT
 
 MEMORY_EVALUATOR_V1: Dict[str, Any] = {
     "model": "llm.llama4.scout",

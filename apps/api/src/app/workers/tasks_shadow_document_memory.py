@@ -298,7 +298,7 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str)
             if snapshot.status in {"conflict_checking", "awaiting_review", "approved", "rejected", "skipped", "superseded", "failed"}:
                 return {"snapshot_id": snapshot_id, "status": snapshot.status, "cached": True}
             try:
-                document, _source, canonical, sections, checksum = await _document_context(
+                document, source, canonical, sections, checksum = await _document_context(
                     session, source_id=snapshot.document_id, tenant_id=tenant_uuid,
                 )
             except Exception as exc:
@@ -335,15 +335,18 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str)
                 task_id=self.request.id, retry=self.request.retries,
             )
             projects_by_key, projects = await service.project_catalog()
+            scopes_by_key, scopes = await service.scope_catalog()
             try:
                 output = await ShadowDocumentStudyAgent(session=session, llm_client=get_llm_client()).study(
                     document={
                         "id": str(document.id), "title": document.title, "filename": document.filename,
                         "metadata": dict(canonical.get("metadata") or {}),
+                        "scope_hints": list(dict((source.meta or {}).get("memory") or {}).get("scope_keys") or []),
                     },
                     sections=batch,
                     candidate_ledger=await service.ledger(snapshot.id),
-                    glossary=await service.glossary_context(visibility_tenant_id=snapshot.visibility_tenant_id), projects=projects, tenant_id=tenant_uuid,
+                    glossary=await service.glossary_context(visibility_tenant_id=snapshot.visibility_tenant_id), projects=projects,
+                    scopes=scopes, tenant_id=tenant_uuid,
                     agent_execution_id=execution_id,
                     event_sink=lambda event: logger.emit(event, phase=OrchestrationPhase.AGENT),
                 )
@@ -363,6 +366,7 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str)
             counts = await service.persist_batch(
                 snapshot=snapshot, items=output.items,
                 section_ids={str(section["id"]) for section in batch}, projects_by_key=projects_by_key,
+                scopes_by_key=scopes_by_key,
             )
             snapshot.status = "studying"
             snapshot.metrics = {**dict(snapshot.metrics or {}), "next_section": cursor + len(batch), "last_batch": counts}

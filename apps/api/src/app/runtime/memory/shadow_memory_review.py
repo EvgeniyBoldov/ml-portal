@@ -16,6 +16,7 @@ from app.models.document_memory_staging import (
     MemoryExtractionCandidate,
 )
 from app.models.system_llm_role import SystemLLMRoleType
+from app.models.memory_scope import MemoryCandidateScope, MemoryScope
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.memory.shadow_study_prompts import document_memory_prompt
 from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService
@@ -60,6 +61,10 @@ class ShadowMemoryReviewService:
                 ),
             ).limit(12))).scalars().all())
             for existing in matches:
+                if candidate.candidate_type == "term":
+                    # Repeated spellings contribute aliases; they do not
+                    # assert competing scoped definitions.
+                    continue
                 if existing.snapshot_id == snapshot.id and str(existing.id) <= str(candidate.id):
                     continue
                 kind, rationale = await self._classify(
@@ -110,8 +115,14 @@ class ShadowMemoryReviewService:
         agent_execution_id: str | None = None,
         event_sink: Callable[[Any], Awaitable[Any]] | None = None,
     ) -> tuple[str, str]:
-        if candidate.content_text == existing.content_text and candidate.scope_candidate == existing.scope_candidate:
+        candidate_scopes = await self._scope_keys(candidate.id)
+        existing_scopes = await self._scope_keys(existing.id)
+        if (candidate.content_text == existing.content_text
+                and candidate.scope_candidate == existing.scope_candidate
+                and candidate_scopes == existing_scopes):
             return "duplicate", "Exact canonical content in the same proposed scope."
+        if candidate_scopes != existing_scopes:
+            return "scope_override", "Same subject has different proposed applicability; review both scope sets."
         if {candidate.scope_candidate, existing.scope_candidate} == {"global", "project"}:
             return "scope_override", "Same subject has global and project-specific candidates; review applicability."
         try:
@@ -121,8 +132,8 @@ class ShadowMemoryReviewService:
                 role=SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR,
                 system_prompt=document_memory_prompt(role_config.get("extras"), stage="conflict"),
                 payload={
-                    "candidate": _candidate_payload(candidate),
-                    "existing": _candidate_payload(existing),
+                    "candidate": {**_candidate_payload(candidate), "scope_keys": sorted(candidate_scopes)},
+                    "existing": {**_candidate_payload(existing), "scope_keys": sorted(existing_scopes)},
                 },
                 schema=_ConflictOutput,
                 tenant_id=tenant_id,
@@ -137,6 +148,14 @@ class ShadowMemoryReviewService:
             # Failure must never silently turn an unknown contradiction into a
             # publishable fact.
             return "insufficient_evidence", "Conflict classifier unavailable; manual review required."
+
+    async def _scope_keys(self, candidate_id: UUID) -> set[str]:
+        rows = (await self._session.execute(select(MemoryScope.key).join(
+            MemoryCandidateScope, MemoryCandidateScope.scope_id == MemoryScope.id,
+        ).where(MemoryCandidateScope.candidate_id == candidate_id,
+                MemoryCandidateScope.role == "applies_to",
+                MemoryCandidateScope.status != "rejected"))).scalars().all()
+        return set(rows)
 
 
 def _candidate_payload(candidate: MemoryExtractionCandidate) -> dict[str, object]:

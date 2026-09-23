@@ -7,25 +7,24 @@ from typing import Any, Awaitable, Callable, Literal, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.models.document_memory_staging import (
     DocumentMemorySnapshot,
-    GlossaryMeaning,
-    GlossaryMeaningProjectBinding,
-    GlossaryMeaningSource,
     GlossaryTerm,
     MemoryCandidateProjectBinding,
     MemoryExtractionCandidate,
 )
+from app.models.memory_scope import MemoryCandidateScope, MemoryScope
 from app.models.project import Project
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.memory.shadow_study_prompts import (
     document_memory_prompt,
 )
+from app.services.glossary_service import GlossaryService
 
 
 SHADOW_STUDY_BATCH_SIZE = 2
@@ -45,8 +44,9 @@ class ShadowStudyItem(BaseModel):
     candidate_type: Literal["term", "description", "relationship", "rule", "constraint", "procedure", "decision"]
     subject: str = Field(min_length=1, max_length=200)
     content: dict[str, Any] = Field(default_factory=dict)
-    scope_candidate: Literal["global", "project", "multi_project", "unknown"] = "unknown"
+    scope_candidate: Literal["global", "project", "multi_project", "scoped", "unknown"] = "unknown"
     project_keys: list[str] = Field(default_factory=list, max_length=20)
+    scope_keys: list[str] = Field(default_factory=list, max_length=20)
     evidence_section_ids: list[str] = Field(default_factory=list, max_length=8)
     aliases: list[str] = Field(default_factory=list, max_length=20)
     extraction_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
@@ -97,6 +97,7 @@ class ShadowDocumentStudyAgent:
         candidate_ledger: Sequence[dict[str, Any]],
         glossary: Sequence[dict[str, Any]],
         projects: Sequence[dict[str, Any]],
+        scopes: Sequence[dict[str, Any]] = (),
         tenant_id: UUID,
         agent_execution_id: str | None = None,
         event_sink: Callable[[Any], Awaitable[Any]] | None = None,
@@ -110,6 +111,7 @@ class ShadowDocumentStudyAgent:
                 "candidate_ledger": list(candidate_ledger),
                 "glossary": list(glossary),
                 "project_catalog": list(projects),
+                "scope_catalog": list(scopes),
             },
             schema=ShadowStudyOutput,
             tenant_id=tenant_id,
@@ -157,19 +159,10 @@ class ShadowDocumentStudyService:
         } for row in reversed(rows)]
 
     async def glossary_context(self, *, visibility_tenant_id: UUID | None) -> list[dict[str, Any]]:
-        rows = (await self._session.execute(select(GlossaryTerm, GlossaryMeaning)
-            .outerjoin(GlossaryMeaning, GlossaryMeaning.term_id == GlossaryTerm.id)
-            .where(
-                GlossaryMeaning.resolution_status == "resolved",
-                or_(GlossaryMeaning.visibility_tenant_id.is_(None), GlossaryMeaning.visibility_tenant_id == visibility_tenant_id),
-                or_(GlossaryTerm.visibility_tenant_id.is_(None), GlossaryTerm.visibility_tenant_id == visibility_tenant_id),
-            )
+        rows = (await self._session.execute(GlossaryService.published_terms_query()
             .order_by(GlossaryTerm.canonical_term)
-            .limit(MAX_GLOSSARY_ITEMS))).all()
-        return [{
-            "term": term.canonical_term, "aliases": list(term.aliases or []),
-            "definition": meaning.definition, "scope": meaning.scope_candidate,
-        } for term, meaning in rows]
+            .limit(MAX_GLOSSARY_ITEMS))).scalars().all()
+        return [{"term": term.canonical_term, "aliases": list(term.aliases or [])} for term in rows]
 
     async def project_catalog(self) -> tuple[dict[str, Project], list[dict[str, Any]]]:
         rows = list((await self._session.execute(select(Project).where(
@@ -180,6 +173,16 @@ class ShadowDocumentStudyService:
             [{"key": project.key, "name": project.name, "aliases": list(project.aliases or [])} for project in rows],
         )
 
+    async def scope_catalog(self) -> tuple[dict[str, MemoryScope], list[dict[str, Any]]]:
+        rows = list((await self._session.execute(select(MemoryScope).order_by(
+            MemoryScope.scope_type, MemoryScope.key,
+        ))).scalars().all())
+        return (
+            {scope.key: scope for scope in rows},
+            [{"key": scope.key, "type": scope.scope_type, "name": scope.name,
+              "aliases": list(scope.aliases or []), "is_all": scope.is_all} for scope in rows],
+        )
+
     async def persist_batch(
         self,
         *,
@@ -187,6 +190,7 @@ class ShadowDocumentStudyService:
         items: Sequence[ShadowStudyItem],
         section_ids: set[str],
         projects_by_key: dict[str, Project],
+        scopes_by_key: dict[str, MemoryScope] | None = None,
     ) -> dict[str, int]:
         known = {UUID(item["id"]): item for item in await self.ledger(snapshot.id)}
         maximum = (await self._session.execute(select(func.max(MemoryExtractionCandidate.ordinal)).where(
@@ -194,12 +198,22 @@ class ShadowDocumentStudyService:
         ))).scalar_one_or_none()
         next_ordinal = int(maximum if maximum is not None else -1) + 1
         counts = {"created": 0, "extended": 0, "rejected": 0}
+        expanded: list[ShadowStudyItem] = []
         for item in items:
+            if item.candidate_type == "term":
+                definition = str(item.content.get("definition") or "").strip()
+                # Older operator prompts still emit a definition inside a term.
+                # Preserve it as an independent, scoped knowledge candidate.
+                if definition:
+                    expanded.append(item.model_copy(update={
+                        "candidate_type": "description", "content": {"summary": definition, "details": ""},
+                        "aliases": [], "operation": "new", "existing_candidate_id": None,
+                    }))
+                item = item.model_copy(update={"content": {}, "scope_candidate": "unknown", "project_keys": [], "scope_keys": []})
+            expanded.append(item)
+        for item in expanded:
             evidence = list(dict.fromkeys(value for value in item.evidence_section_ids if value in section_ids))
             if not evidence:
-                counts["rejected"] += 1
-                continue
-            if item.candidate_type == "term" and not str(item.content.get("definition") or "").strip():
                 counts["rejected"] += 1
                 continue
             if item.operation == "extend_existing":
@@ -218,13 +232,24 @@ class ShadowDocumentStudyService:
             if not subject:
                 counts["rejected"] += 1
                 continue
+            proposed_scope_keys = list(dict.fromkeys(
+                value.strip().lower() for value in [*item.scope_keys, *(f"project.{key}" for key in item.project_keys)]
+                if value.strip()
+            ))
+            unresolved_scopes = any(key not in (scopes_by_key or {}) for key in proposed_scope_keys)
+            proposed_scope = item.scope_candidate
+            if (proposed_scope == "global" and proposed_scope_keys) or (
+                proposed_scope == "scoped" and (not proposed_scope_keys or unresolved_scopes)
+            ):
+                proposed_scope = "unknown"
             row = MemoryExtractionCandidate(
                 snapshot_id=snapshot.id, ordinal=next_ordinal, candidate_type=item.candidate_type,
                 visibility_tenant_id=snapshot.visibility_tenant_id,
                 subject=item.subject.strip()[:200], normalized_subject=subject,
                 content=dict(item.content or {}), content_text=json.dumps(item.content, ensure_ascii=False, sort_keys=True),
                 evidence_section_ids=evidence, aliases=_unique(item.aliases),
-                extraction_confidence=item.extraction_confidence, scope_candidate=item.scope_candidate,
+                extraction_confidence=item.extraction_confidence,
+                scope_candidate=None if item.candidate_type == "term" else proposed_scope,
                 resolution_status="extracted", resolution_method="llm_suggestion",
             )
             next_ordinal += 1
@@ -238,6 +263,14 @@ class ShadowDocumentStudyService:
                     candidate_id=row.id, project_id=project.id, role="applies_to", status="suggested",
                     method="llm_suggestion", confidence=item.extraction_confidence,
                 ))
+            for key in proposed_scope_keys:
+                scope = (scopes_by_key or {}).get(key)
+                if scope is None:
+                    continue
+                self._session.add(MemoryCandidateScope(
+                    candidate_id=row.id, scope_id=scope.id, role="applies_to", status="suggested",
+                    method="llm_suggestion", confidence=item.extraction_confidence,
+                ))
             counts["created"] += 1
         return counts
 
@@ -246,57 +279,11 @@ class ShadowDocumentStudyService:
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
             MemoryExtractionCandidate.resolution_status == "extracted",
         ))).scalars().all())
-        glossary_meanings = 0
         for candidate in candidates:
-            if candidate.candidate_type == "term":
-                glossary_meanings += await self._materialize_term(candidate)
             candidate.resolution_status = "needs_review"
         snapshot.status = "conflict_checking"
-        snapshot.metrics = {**dict(snapshot.metrics or {}), "candidates": len(candidates), "glossary_meanings": glossary_meanings, "ready_at": datetime.now(timezone.utc).isoformat()}
-        return {"candidates": len(candidates), "glossary_meanings": glossary_meanings}
-
-    async def _materialize_term(self, candidate: MemoryExtractionCandidate) -> int:
-        term = (await self._session.execute(select(GlossaryTerm).where(
-            GlossaryTerm.normalized_term == candidate.normalized_subject,
-            GlossaryTerm.visibility_tenant_id == candidate.visibility_tenant_id,
-        ))).scalar_one_or_none()
-        if term is None:
-            term = GlossaryTerm(canonical_term=candidate.subject, normalized_term=candidate.normalized_subject,
-                                visibility_tenant_id=candidate.visibility_tenant_id, aliases=list(candidate.aliases or []))
-            self._session.add(term)
-            await self._session.flush()
-        else:
-            term.aliases = _unique([*(term.aliases or []), *(candidate.aliases or [])])
-        meaning = (await self._session.execute(select(GlossaryMeaning).where(
-            GlossaryMeaning.candidate_id == candidate.id,
-        ))).scalar_one_or_none()
-        if meaning is not None:
-            return 0
-        meaning = GlossaryMeaning(
-            term_id=term.id, candidate_id=candidate.id,
-            definition=str(candidate.content.get("definition") or candidate.subject),
-            scope_candidate=candidate.scope_candidate or "unknown", resolution_status="needs_review",
-            resolution_method="llm_suggestion", confidence=candidate.extraction_confidence,
-        )
-        self._session.add(meaning)
-        await self._session.flush()
-        snapshot = await self._session.get(DocumentMemorySnapshot, candidate.snapshot_id)
-        self._session.add(GlossaryMeaningSource(
-            meaning_id=meaning.id, candidate_id=candidate.id,
-            document_id=snapshot.document_id if snapshot is not None else None,
-            visibility_tenant_id=candidate.visibility_tenant_id,
-            evidence_section_ids=list(candidate.evidence_section_ids or []),
-        ))
-        bindings = list((await self._session.execute(select(MemoryCandidateProjectBinding).where(
-            MemoryCandidateProjectBinding.candidate_id == candidate.id,
-            MemoryCandidateProjectBinding.role == "applies_to",
-        ))).scalars().all())
-        for binding in bindings:
-            self._session.add(GlossaryMeaningProjectBinding(
-                meaning_id=meaning.id, project_id=binding.project_id, status="suggested",
-                method=binding.method, confidence=binding.confidence,
-            ))
-        return 1
+        snapshot.metrics = {**dict(snapshot.metrics or {}), "candidates": len(candidates), "ready_at": datetime.now(timezone.utc).isoformat()}
+        return {"candidates": len(candidates)}
 
 
 def _normalized(value: str) -> str:

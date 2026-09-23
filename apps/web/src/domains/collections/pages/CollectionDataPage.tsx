@@ -478,7 +478,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadMetaFields, setUploadMetaFields] = useState<Record<string, string>>({});
   const [uploadMemoryPolicy, setUploadMemoryPolicy] = useState<'collection' | 'enabled' | 'disabled'>('collection');
-  const [uploadProjectKeys, setUploadProjectKeys] = useState<string[]>([]);
+  const [uploadMemoryScopeKeys, setUploadMemoryScopeKeys] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -497,9 +497,9 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     queryKey: ['collections', 'document-upload-policy'],
     queryFn: () => collectionsApi.getDocumentUploadPolicy(),
   });
-  const { data: projectCatalog = [] } = useQuery({
-    queryKey: ['collections', 'project-catalog'],
-    queryFn: () => collectionsApi.getProjectCatalog(),
+  const { data: memoryScopeCatalog = [] } = useQuery({
+    queryKey: ['collections', 'memory-scope-catalog'],
+    queryFn: () => collectionsApi.getMemoryScopeCatalog(),
   });
 
   const uploadAccept = useMemo(() => {
@@ -752,7 +752,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
             meta_fields: Object.keys(uploadMetaFields).length > 0 ? uploadMetaFields : undefined,
             auto_ingest: true,
             memory_enabled: uploadMemoryPolicy === 'collection' ? undefined : uploadMemoryPolicy === 'enabled',
-            project_keys: uploadProjectKeys,
+            memory_scope_keys: uploadMemoryScopeKeys,
           })
         )
       );
@@ -764,7 +764,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       setUploadFiles([]);
       setUploadMetaFields({});
       setUploadMemoryPolicy('collection');
-      setUploadProjectKeys([]);
+      setUploadMemoryScopeKeys([]);
       setUploadError(null);
       invalidateDocs();
     } catch {
@@ -1052,7 +1052,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                       {doc.memory ? (
                         <div style={{ display: 'grid', gap: '0.2rem' }}>
                           <span>{doc.memory.effective_enabled ? 'Включена' : 'Выключена'} · {doc.memory.policy === 'collection' ? 'наследуется' : 'явная настройка'}</span>
-                          <small>{doc.memory.extraction_status}{doc.memory.project_keys.length ? ` · ${doc.memory.project_keys.join(', ')}` : ''}</small>
+                          <small>{doc.memory.extraction_status}{(doc.memory.scope_keys ?? doc.memory.project_keys).length ? ` · ${(doc.memory.scope_keys ?? doc.memory.project_keys).join(', ')}` : ''}</small>
                         </div>
                       ) : '—'}
                     </td>
@@ -1107,7 +1107,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       {/* Upload modal */}
       <Modal
         open={uploadModalOpen}
-        onClose={() => { setUploadModalOpen(false); setUploadFiles([]); setUploadMetaFields({}); setUploadMemoryPolicy('collection'); setUploadProjectKeys([]); setUploadError(null); }}
+        onClose={() => { setUploadModalOpen(false); setUploadFiles([]); setUploadMetaFields({}); setUploadMemoryPolicy('collection'); setUploadMemoryScopeKeys([]); setUploadError(null); }}
         title="Загрузка документов"
         footer={
           <>
@@ -1156,17 +1156,17 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
             </select>
           </label>
           <label className={styles.uploadField}>
-            <span>Связанные проекты</span>
+            <span>Контексты документа</span>
             <select
               multiple
-              value={uploadProjectKeys}
-              onChange={(event) => setUploadProjectKeys(Array.from(event.target.selectedOptions, option => option.value))}
-              aria-label="Связанные проекты"
-              size={Math.min(5, Math.max(2, projectCatalog.length))}
+              value={uploadMemoryScopeKeys}
+              onChange={(event) => setUploadMemoryScopeKeys(Array.from(event.target.selectedOptions, option => option.value))}
+              aria-label="Контексты документа"
+              size={Math.min(6, Math.max(2, memoryScopeCatalog.length))}
             >
-              {projectCatalog.map((project) => <option key={project.key} value={project.key}>{project.name} ({project.key})</option>)}
+              {memoryScopeCatalog.map((scope) => <option key={scope.key} value={scope.key}>{scope.name} ({scope.key})</option>)}
             </select>
-            <small>Каталог проектов общий для компании; доступ к документу определяет видимость знания.</small>
+            <small>Контексты помогают изучить документ; применимость каждого знания подтверждается отдельно.</small>
           </label>
           {uploadFiles.length > 0 && (
             <div className={styles.fileList}>

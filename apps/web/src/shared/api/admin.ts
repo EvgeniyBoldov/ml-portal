@@ -489,24 +489,15 @@ export interface SemanticMemoryAdminDetail extends SemanticMemoryAdminItem {
   applicability: Record<string, unknown>;
   visibility: Record<string, unknown>;
   sources: Array<{ document_id: string; canonical_checksum: string; section_id: string; label: string | null; start_offset: number | null; end_offset: number | null }>;
-  claims: Array<{ id: string; document_id: string; canonical_checksum: string; scope: string; item_type: string; project_id: string | null; normalized_subject: string; confidence: number; state: string; evidence_section_ids: string[]; content: Record<string, unknown>; applicability: Record<string, unknown>; visibility_tenant_id: string | null; updated_at: string }>;
+  claims: Array<{ id: string; document_id: string; canonical_checksum: string; scope: string; item_type: string; project_id: string | null; scope_keys: string[]; normalized_subject: string; confidence: number; state: string; evidence_section_ids: string[]; content: Record<string, unknown>; applicability: Record<string, unknown>; visibility_tenant_id: string | null; updated_at: string }>;
   relations: Array<{ relation_type: string; target_type: string; target_id: string }>;
   evaluations: Array<{ tool_call_id: string; outcome: string; reason: string; evidence_refs: string[]; created_at: string }>;
 }
 
 export interface AdminGlossaryEntry {
   id: string;
-  scope: string;
   canonical_term: string;
   aliases: string[];
-  entity_type: string;
-  entity_id: string | null;
-  description: string | null;
-  tenant_id: string | null;
-  project_id: string | null;
-  is_active: boolean;
-  status: string;
-  support_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -523,6 +514,8 @@ export interface ShadowMemoryCandidate {
   resolution_status: string;
   extraction_confidence: number;
   project_ids: string[];
+  scope_ids: string[];
+  scope_keys: string[];
   conflict_ids: string[];
 }
 
@@ -542,7 +535,7 @@ export const adminApi = {
   async getShadowMemoryCandidates(status: 'needs_review' | 'conflict' | 'resolved' | 'rejected' = 'needs_review'): Promise<ShadowMemoryCandidate[]> {
     return apiRequest(`/admin/memory/staging/candidates?status=${status}`);
   },
-  async approveShadowMemoryCandidate(id: string, body: { reason?: string; scope?: 'global' | 'project'; project_id?: string; promote_to_company?: boolean; content?: Record<string, unknown> } = {}): Promise<ShadowMemoryCandidate> {
+  async approveShadowMemoryCandidate(id: string, body: { reason?: string; scope?: 'global' | 'project' | 'scoped'; project_id?: string; scope_ids?: string[]; promote_to_company?: boolean; content?: Record<string, unknown> } = {}): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/approve`, { method: 'POST', body: JSON.stringify(body) });
   },
   async rejectShadowMemoryCandidate(id: string, reason?: string): Promise<ShadowMemoryCandidate> {

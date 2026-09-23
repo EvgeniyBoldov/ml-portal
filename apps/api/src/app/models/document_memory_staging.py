@@ -55,7 +55,7 @@ class MemoryExtractionCandidate(Base):
         Index("ix_memory_candidates_resolution", "resolution_status", "scope_candidate"),
         Index("ix_memory_candidates_subject", "candidate_type", "normalized_subject"),
         CheckConstraint("candidate_type IN ('term', 'description', 'relationship', 'rule', 'constraint', 'procedure', 'decision')", name="ck_memory_candidate_type"),
-        CheckConstraint("scope_candidate IS NULL OR scope_candidate IN ('global', 'project', 'multi_project', 'unknown')", name="ck_memory_candidate_scope"),
+        CheckConstraint("scope_candidate IS NULL OR scope_candidate IN ('global', 'project', 'multi_project', 'scoped', 'unknown')", name="ck_memory_candidate_scope"),
         CheckConstraint("resolution_status IN ('extracted', 'conflict', 'needs_review', 'resolved', 'rejected', 'stale')", name="ck_memory_candidate_resolution"),
         CheckConstraint("resolution_method IS NULL OR resolution_method IN ('document_hint', 'exact_project_key', 'unique_alias', 'content_evidence', 'llm_suggestion', 'manual', 'migration')", name="ck_memory_candidate_resolution_method"),
         CheckConstraint("extraction_confidence >= 0.0 AND extraction_confidence <= 1.0", name="ck_memory_candidate_confidence"),
@@ -113,28 +113,21 @@ class MemoryCandidateProjectBinding(Base):
 
 
 class GlossaryTerm(Base):
-    """A canonical lexical identity, independent from any one definition."""
+    """A scope-free canonical spelling and its aliases, without a definition."""
 
     __tablename__ = "glossary_terms"
-    __table_args__ = (
-        # A lexical identity itself may be private.  PostgreSQL treats NULL as
-        # distinct in a normal composite unique constraint, hence COALESCE.
-        Index("uq_glossary_terms_normalized_visibility", "normalized_term", text("COALESCE(visibility_tenant_id, '00000000-0000-0000-0000-000000000000'::uuid)"), unique=True),
-    )
+    __table_args__ = (UniqueConstraint("normalized_term", name="uq_glossary_terms_normalized"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     canonical_term: Mapped[str] = mapped_column(String(255), nullable=False)
     normalized_term: Mapped[str] = mapped_column(String(255), nullable=False)
-    visibility_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
-    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, default="term", server_default="term")
-    entity_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class GlossaryMeaning(Base):
-    """One scoped definition of a glossary term, with independent resolution."""
+    """Historical scoped definition; new definitions are memory candidates."""
 
     __tablename__ = "glossary_meanings"
     __table_args__ = (
