@@ -13,6 +13,7 @@ export function AdminLayout() {
     <div className={styles.shell}>
       <AppHeader
         brandName="Почемучка"
+        brandTo="/admin"
         variant="default"
         userLabel={user?.email || user?.role || ''}
         showBackToApp

@@ -42,6 +42,7 @@ export default function GPTLayout() {
     <div className={styles.shell}>
       <AppHeader
         brandName="Почемучка"
+        brandTo="/gpt/chat"
         variant="default"
         userLabel={user?.role || ''}
         centerContent={centerNav}

@@ -5,7 +5,7 @@
  * Supports different visual modes via `variant` prop.
  */
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import Button from '../Button';
 import ThemeSwitch from '../ThemeSwitch';
 import styles from './AppHeader.module.css';
@@ -15,6 +15,8 @@ export interface AppHeaderProps {
   brandName?: string;
   /** Logo image source */
   logoSrc?: string;
+  /** Route opened when the brand is clicked */
+  brandTo?: string;
   /** Visual variant: 'default' (full-width) or 'contained' (with border-radius) */
   variant?: 'default' | 'contained';
   /** User email or role to display */
@@ -45,6 +47,7 @@ export interface AppHeaderProps {
 export function AppHeader({
   brandName = 'ML Portal',
   logoSrc = '/logo.png',
+  brandTo,
   variant = 'default',
   userLabel,
   centerContent,
@@ -65,7 +68,7 @@ export function AppHeader({
   return (
     <header className={headerClass}>
       {/* Left: logo + brand */}
-      <div className={styles.brand}>
+      <Link to={brandTo || '/gpt/chat'} className={styles.brand} aria-label={`${brandName} — на главную`}>
         <img
           src={logoSrc}
           alt={`${brandName} logo`}
@@ -75,7 +78,7 @@ export function AppHeader({
           }}
         />
         <div className={styles.brandName}>{brandName}</div>
-      </div>
+      </Link>
 
       {/* Center: navigation or spacer to push right content */}
       {centerContent ? (

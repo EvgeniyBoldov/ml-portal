@@ -46,6 +46,10 @@ class CollectionCapabilityBinding:
 
 
 _OPERATION_SPECS: Dict[str, OperationSpec] = {
+    "calculator": OperationSpec(
+        canonical_op_slug="calculator", domain="system", title="Calculator",
+        description="Evaluate a basic arithmetic expression safely.", result_kind="number", scope_kind="system",
+    ),
     "memory.search": OperationSpec(
         canonical_op_slug="memory.search", domain="memory", title="Search Memory",
         description="Search bounded project and company memory.", result_kind="memory", scope_kind="system",
