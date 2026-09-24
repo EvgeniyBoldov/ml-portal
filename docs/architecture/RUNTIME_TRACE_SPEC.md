@@ -234,6 +234,9 @@ below the answer and do not require the synthesizer to emit markdown links.
   provider bodies and tracebacks remain application-log diagnostics.
 - RBAC, budget, limit, plan and terminal-invocation state are snapshots owned by the
   entity making the decision.
+- Planner agent filtering is recorded as `rbac_snapshot` on each
+  `planner_iteration`, including iterations whose LLM call later fails. The
+  planner orchestrator also retains the audit in its start context snapshot.
 - Persisted plan tasks are always `agent` tasks and are trace graph nodes.
   Planner and synthesis are terminal checkpoint outcomes rather than tasks or
   agent executions.

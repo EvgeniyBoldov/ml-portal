@@ -191,6 +191,17 @@ class GraphPlanningStage:
                 except ValueError:
                     event_phase = OrchestrationPhase.PLANNER
                 yield PhasedEvent(runtime_event, event_phase)
+                if runtime_event.type == RuntimeEventType.PLANNER_ITERATION_START and planner_rbac_audit:
+                    yield PhasedEvent(
+                        RuntimeEvent(RuntimeEventType.RBAC_SNAPSHOT, {
+                            "entity_type": "planner_iteration",
+                            "entity_id": runtime_event.data["entity_id"],
+                            "parent_entity_type": "orchestrator",
+                            "parent_entity_id": runtime_event.data["parent_entity_id"],
+                            "rbac": dict(planner_rbac_audit),
+                        }),
+                        OrchestrationPhase.PLANNER,
+                    )
         except asyncio.CancelledError:
             await self._store.cancel_plan(plan.id, reason="orchestrator_cancelled")
             raise

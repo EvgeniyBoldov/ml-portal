@@ -171,9 +171,31 @@ class TurnPreflight:
                 user_request=user_request,
                 memory_candidates=decision.memory_candidates,
             )
+        if decision.route == "synthesis" and self._needs_collection_inventory(user_request):
+            return TurnPreflightDecision(
+                route="planner",
+                task_brief=TaskBrief(
+                    goal=user_request,
+                    direction="Проверить актуальные коллекции и разрешённые пользователю операции с учётом его прав доступа.",
+                    expected_result="Подтверждённый список доступных коллекций и операций либо явное ограничение, если проверить их нельзя.",
+                ),
+                memory_candidates=decision.memory_candidates,
+            )
         if recall_context is not None and decision.route == "recall":
             raise ValueError("TurnPreflight may request recall only once per turn")
         return decision
+
+    @staticmethod
+    def _needs_collection_inventory(user_request: str) -> bool:
+        """A terminology lookup cannot establish current collection access."""
+        text = " ".join((user_request or "").lower().split())
+        if not re.search(r"\bколлекци\w*\b|\bcollections?\b", text):
+            return False
+        return bool(re.search(
+            r"\b(?:доступ\w*|разреш\w*|мо[ийяе]|наш\w*|могу|можем|операци\w*|оперир\w*|"
+            r"available|accessible|access|allowed|my|our|can|permissions?)\b",
+            text,
+        ))
 
     @classmethod
     def _routing_request(cls, user_request: str) -> str:

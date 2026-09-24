@@ -425,6 +425,14 @@ function accessFor(snapshot: unknown): TraceAccessView | undefined {
     if (!Array.isArray(values)) return;
     for (const item of values) if (typeof item === 'string' && item) rows.push({ kind, name: item, allowed, reason });
   };
+  const agentAccess = asRecord(rbac.agent_access);
+  if (agentAccess && typeof agentAccess.allowed === 'boolean') {
+    const slug = asString(agentAccess.slug) || asString(rbac.agent_slug);
+    if (slug) rows.push({
+      kind: 'Агент', name: slug, allowed: agentAccess.allowed,
+      reason: asString(agentAccess.reason) || (agentAccess.allowed ? 'Разрешён runtime RBAC' : 'Запрещён runtime RBAC'),
+    });
+  }
   add('Агент', rbac.allowed, true, 'Разрешён эффективной политикой');
   add('Агент', rbac.denied_by_rbac, false, 'Запрещён RBAC');
   add('Коллекция', collectionFilter.allowed, true, 'Доступна выбранному агенту');
@@ -1416,6 +1424,8 @@ function planForStage(state: SandboxTraceState, iteration: TraceEntity): PlanVie
 function plannerExecutorFor(state: SandboxTraceState, iteration: TraceEntity): TraceExecutorRun | null {
   const start = startFor(state, iteration);
   if (!start) return null;
+  const orchestrator = iteration.parentKey ? state.entitiesByKey[iteration.parentKey] : undefined;
+  const orchestratorSnapshot = asRecord(orchestrator && startFor(state, orchestrator)?.payload.context_snapshot);
   const calls = groupLogicalLlmCalls(iteration.childKeys
     .map((key) => state.entitiesByKey[key])
     .filter((child): child is TraceEntity => Boolean(child))
@@ -1449,6 +1459,8 @@ function plannerExecutorFor(state: SandboxTraceState, iteration: TraceEntity): T
     info: executorInfoFor(result, calls, metrics.elapsedMs),
     metrics,
     prompt: promptFor(eventsFor(state, iteration), calls),
+    access: accessFor(latestPayload(eventsFor(state, iteration), 'rbac_snapshot')?.rbac)
+      ?? accessFor(orchestratorSnapshot?.rbac),
   };
 }
 

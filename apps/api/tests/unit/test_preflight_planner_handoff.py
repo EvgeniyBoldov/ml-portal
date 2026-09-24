@@ -140,3 +140,37 @@ async def test_preflight_does_not_claim_glossary_write_before_writeback() -> Non
     assert result.synthesis_brief is not None
     assert "успешно" not in result.synthesis_brief.answer_draft.lower()
     assert "провер" in result.synthesis_brief.answer_draft.lower()
+
+
+@pytest.mark.asyncio
+async def test_empty_mechanical_lookup_cannot_ground_collection_access_answer() -> None:
+    preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
+    preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(
+        value=TurnPreflightDecision.model_validate({
+            "route": "synthesis",
+            "synthesis_brief": {
+                "synthesis_brief": {
+                    "user_question": "посмотри доступные мне коллекции",
+                    "planned_work": "Проверить коллекции",
+                    "purpose": "Ответить",
+                    "answer_requirements": "Кратко",
+                },
+                "answer_draft": "Доступных коллекций нет.",
+            },
+        }),
+    ))
+
+    result = await preflight.decide(
+        user_request="посмотри доступные мне коллекции и скажи чем я могу оперировать",
+        mechanical_lookup={"projects": [], "glossary": [], "entities": []},
+    )
+
+    assert result.route == "planner"
+    assert result.task_brief is not None
+    assert result.task_brief.goal == "посмотри доступные мне коллекции и скажи чем я могу оперировать"
+    assert result.synthesis_brief is None
+
+
+def test_collection_concept_question_does_not_require_inventory() -> None:
+    assert not TurnPreflight._needs_collection_inventory("Что такое коллекция документов?")
+    assert TurnPreflight._needs_collection_inventory("Which collections can I access?")

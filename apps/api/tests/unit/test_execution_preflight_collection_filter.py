@@ -19,6 +19,7 @@ from app.agents.runtime_graph import (
     OperationRuntimeContext,
     RuntimeExecutionGraph,
 )
+from app.core.exceptions import AgentUnavailableError, AppError
 
 
 def _resolved_instance(*, slug: str, collection_id: str, collection_slug: str) -> ResolvedDataInstance:
@@ -108,6 +109,7 @@ def _build_preflight(
         ),
     )
     preflight.runtime_rbac_resolver = SimpleNamespace(
+        resolve_effective_permissions=AsyncMock(return_value=operation_result.effective_permissions),
         is_agent_allowed=Mock(return_value=True),
         filter_agents_by_slug=Mock(return_value=([], [])),
     )
@@ -130,12 +132,15 @@ async def test_collection_filter_keeps_all_when_agent_allows_any_and_rbac_allows
             _resolved_instance(slug="beta", collection_id=c2, collection_slug="collection.beta"),
         ],
     )
+    event_sink = SimpleNamespace(emit=AsyncMock())
 
     result = await preflight.prepare(
         agent_slug="agent-a",
         user_id=uuid4(),
         tenant_id=uuid4(),
         include_routable_agents=False,
+        event_sink=event_sink,
+        trace_parent_id=str(uuid4()),
     )
 
     assert {inst.slug for inst in result.resolved_data_instances} == {"alpha", "beta"}
@@ -144,6 +149,9 @@ async def test_collection_filter_keeps_all_when_agent_allows_any_and_rbac_allows
         "instance.alpha.search",
         "instance.beta.search",
     }
+    rbac_events = [call.args[0] for call in event_sink.emit.await_args_list if call.args[0].type.value == "rbac_snapshot"]
+    assert len(rbac_events) == 2
+    assert rbac_events[-1].data["rbac"]["collection_filter"]["allowed"] == ["collection.alpha", "collection.beta"]
 
 
 @pytest.mark.asyncio
@@ -303,3 +311,58 @@ async def test_preflight_passes_agent_version_id_to_agent_resolver():
 
     preflight.agent_resolver.resolve.assert_awaited_once()
     assert preflight.agent_resolver.resolve.await_args.kwargs["agent_version_id"] == version_id
+
+
+@pytest.mark.asyncio
+async def test_preflight_blocks_agent_invocation_when_rbac_denies_agent():
+    collection_id = str(uuid4())
+    preflight = _build_preflight(
+        allowed_collection_ids=[collection_id],
+        rbac_allow_fn=lambda _slug: True,
+        instances=[_resolved_instance(slug="alpha", collection_id=collection_id, collection_slug="collection.alpha")],
+    )
+    preflight.runtime_rbac_resolver.is_agent_allowed.return_value = False
+    event_sink = SimpleNamespace(emit=AsyncMock())
+    agent_execution_id = str(uuid4())
+
+    with pytest.raises(AgentUnavailableError) as error:
+        await preflight.prepare(
+            agent_slug="agent-a",
+            user_id=uuid4(),
+            tenant_id=uuid4(),
+            include_routable_agents=False,
+            event_sink=event_sink,
+            trace_parent_id=agent_execution_id,
+        )
+
+    assert error.value.reason_code == "rbac_agent_invoke_denied"
+    preflight.operation_router.resolve.assert_not_awaited()
+    rbac_events = [call.args[0] for call in event_sink.emit.await_args_list if call.args[0].type.value == "rbac_snapshot"]
+    assert len(rbac_events) == 1
+    assert rbac_events[0].data["entity_id"] == agent_execution_id
+    assert rbac_events[0].data["rbac"]["agent_access"]["allowed"] is False
+
+
+@pytest.mark.asyncio
+async def test_preflight_logs_agent_rbac_before_operation_resolution_fails():
+    preflight = _build_preflight(
+        allowed_collection_ids=None,
+        allow_all_collections=True,
+        rbac_allow_fn=lambda _slug: True,
+        instances=[],
+    )
+    preflight.operation_router.resolve.side_effect = RuntimeError("credentials unavailable")
+    event_sink = SimpleNamespace(emit=AsyncMock())
+    agent_execution_id = str(uuid4())
+
+    with pytest.raises(AppError, match="credentials unavailable"):
+        await preflight.prepare(
+            agent_slug="agent-a", user_id=uuid4(), tenant_id=uuid4(),
+            include_routable_agents=False, event_sink=event_sink,
+            trace_parent_id=agent_execution_id,
+        )
+
+    rbac_events = [call.args[0] for call in event_sink.emit.await_args_list if call.args[0].type.value == "rbac_snapshot"]
+    assert len(rbac_events) == 1
+    assert rbac_events[0].data["entity_id"] == agent_execution_id
+    assert rbac_events[0].data["rbac"]["agent_access"]["allowed"] is True

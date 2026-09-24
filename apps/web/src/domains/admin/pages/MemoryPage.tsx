@@ -1,9 +1,16 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, DataTable, EntityPageV2, Input, Modal, Tab, LifecycleDeleteDialog, type DataTableColumn } from '@/shared/ui';
+import { Badge, Button, Checkbox, DataTable, EntityPageV2, Input, Modal, Select, Tab, LifecycleDeleteDialog, type DataTableColumn } from '@/shared/ui';
 import { adminApi, type AdminGlossaryEntry, type MemoryScopeAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
 import MemoryReviewDialog, { type MemoryApproval } from '@/domains/admin/components/MemoryReviewDialog';
+import styles from './MemoryPage.module.css';
+
+const slugifyScopeName = (value: string) => {
+  const transliteration: Record<string, string> = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'kh', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'shch', ы: 'y', э: 'e', ю: 'yu', я: 'ya', ь: '', ъ: '' };
+  return value.toLocaleLowerCase().replace(/[а-яё]/g, (char) => transliteration[char] ?? char)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+};
 
 const glossaryColumns: DataTableColumn<AdminGlossaryEntry>[] = [
   { key: 'canonical_term', label: 'ТЕРМИН', sortable: true, filter: { kind: 'text', placeholder: 'Термин' }, render: (row) => <strong>{row.canonical_term}</strong> },
@@ -134,12 +141,11 @@ export default function MemoryPage() {
     </EntityPageV2>
     <Modal open={Boolean(scopeEditor)} title={scopeEditor === 'new' ? 'Новый скоуп памяти' : 'Изменить скоуп памяти'} onClose={() => setScopeEditor(null)}>
       <div style={{ display: 'grid', gap: 12 }}>
-        <label>Тип<select value={scopeForm.scope_type} disabled={scopeEditor !== 'new'} onChange={(event) => { const nextType = event.target.value as MemoryScopeAdminItem['scope_type']; const suffix = scopeForm.key.startsWith(`${scopeForm.scope_type}.`) ? scopeForm.key.slice(scopeForm.scope_type.length + 1) : scopeForm.key; setScopeForm({ ...scopeForm, scope_type: nextType, key: scopeForm.is_all ? `${nextType}.all` : suffix ? `${nextType}.${suffix}` : '' }); }}><option value="product">product</option><option value="project">project</option><option value="team">team</option></select></label>
-        <label>Ключ<Input value={scopeForm.key} disabled={scopeEditor !== 'new'} placeholder="team.architects" onChange={(event) => setScopeForm({ ...scopeForm, key: event.target.value.toLowerCase().replace(/\s+/g, '-') })} /></label>
+        <label className={styles.scopeField}>Тип<Select options={[{ value: 'product', label: 'product' }, { value: 'project', label: 'project' }, { value: 'team', label: 'team' }]} value={scopeForm.scope_type} disabled={scopeEditor !== 'new'} onChange={(value) => { const nextType = value as MemoryScopeAdminItem['scope_type']; setScopeForm({ ...scopeForm, scope_type: nextType, key: scopeForm.is_all ? `${nextType}.all` : `${nextType}.${slugifyScopeName(scopeForm.name)}` }); }} /></label>
         {scopeEditor !== 'new' && <small style={{ color: 'var(--muted)' }}>Тип и ключ фиксируют идентичность скоупа; здесь можно изменить название и алиасы.</small>}
-        <label>Название<Input value={scopeForm.name} onChange={(event) => setScopeForm({ ...scopeForm, name: event.target.value })} /></label>
-        <label>Алиасы<Input value={scopeForm.aliases} placeholder="архитекторы, архитектурная команда" onChange={(event) => setScopeForm({ ...scopeForm, aliases: event.target.value })} /></label>
-        {scopeEditor === 'new' && <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input type="checkbox" checked={scopeForm.is_all} onChange={(event) => setScopeForm({ ...scopeForm, is_all: event.target.checked, key: event.target.checked ? `${scopeForm.scope_type}.all` : '' })} />Общий скоуп типа (team.all и т. п.)</label>}
+        <label className={styles.scopeField}>Название<Input value={scopeForm.name} onChange={(event) => setScopeForm({ ...scopeForm, name: event.target.value, key: scopeForm.is_all ? scopeForm.key : `${scopeForm.scope_type}.${slugifyScopeName(event.target.value)}` })} /></label>
+        <label className={styles.scopeField}>Алиасы<Input value={scopeForm.aliases} placeholder="архитекторы, архитектурная команда" onChange={(event) => setScopeForm({ ...scopeForm, aliases: event.target.value })} /></label>
+        {scopeEditor === 'new' && <Checkbox checked={scopeForm.is_all} onChange={(checked) => setScopeForm({ ...scopeForm, is_all: checked, key: checked ? `${scopeForm.scope_type}.all` : `${scopeForm.scope_type}.${slugifyScopeName(scopeForm.name)}` })} label="Общий скоуп типа" description={`Для этого типа будет создан ключ ${scopeForm.scope_type}.all.`} />}
         {saveScope.isError && <p role="alert">Не удалось сохранить скоуп. Проверьте уникальность ключа и соответствие типа.</p>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button variant="outline" onClick={() => setScopeEditor(null)}>Отмена</Button><Button disabled={!scopeForm.key || !scopeForm.name.trim() || saveScope.isPending} onClick={() => saveScope.mutate()}>{saveScope.isPending ? 'Сохраняем…' : 'Сохранить'}</Button></div>
       </div>
