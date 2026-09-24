@@ -185,7 +185,7 @@ def build_tools_prompt(
     if not tool_schemas:
         return ""
 
-    tools_json = json.dumps(tool_schemas, ensure_ascii=False, indent=2)
+    tools_json = json.dumps(tool_schemas, ensure_ascii=False, separators=(",", ":"))
     labels = prompt_labels if isinstance(prompt_labels, dict) else {}
     budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
     heading = _prompt_label(labels, "operations_heading", "Доступные инструменты")
@@ -217,10 +217,9 @@ def build_tools_prompt(
 {rules_block}
 
     Правила выбора инструментов:
-- Сначала сопоставь задачу с нужной коллекцией или системной возможностью из capability card выше.
-- Перед работой с любой коллекцией сначала вызови `collection.info` для этой коллекции.
-- Другие collection-bound действия не придумывай по памяти: используй только те имена и аргументы, которые вернулись в результате `collection.info`.
-- Для collection-bound операций всегда передавай `collection_slug` ровно из capability card или результата `collection.info`. Не передавай `collection_id`: он разрешается и проверяется внутри runtime.
+- Сопоставь задачу с назначением коллекций выше и сразу используй подходящую доступную операцию.
+- Если результат пустой или структура источника неясна, вызови доступный для неё `collection.info` и уточни запрос.
+- Для операций коллекции передавай `collection_slug` из списка коллекций. Не передавай `collection_id`: он разрешается и проверяется внутри runtime.
 - В поле `tool` используй имя инструмента ровно в том виде, как оно указано в списке ниже.
 
 {call_heading}

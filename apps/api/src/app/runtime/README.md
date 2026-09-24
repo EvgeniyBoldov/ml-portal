@@ -122,19 +122,19 @@ LLM-facing agent prompts use a collection-centered structure:
 - base agent prompt
 - `Доступные коллекции`
 - for each collection:
-  - slug/name/type/purpose/data from current version
-  - no per-collection operation contracts in the initial prompt
-  - the model must call `collection.info` first before using that collection
+  - slug/name/type/purpose/data and usage rules from current version
+  - business fields and available operation names
+  - the model may call `collection.info` when a result is empty or the schema is unclear
 - `Системные операции`
 - machine-oriented `tool_call` JSON contract for:
   - system operations
-  - `collection.info` bindings only
+  - all preflight-authorized collection operations
 
 Rules:
 - Diagnostic/runtime readiness data must not be rendered into the LLM prompt.
 - Collections without bound operations must not appear in the LLM prompt.
 - System operations must be rendered separately from collection-bound operations.
-- Detailed collection-bound operation contracts must come from `collection.info` results, not from the initial prompt.
+- Detailed operation argument contracts come from the initial native tools payload or plaintext tools appendix.
 
 ## Lifecycle Persistence Policy
 

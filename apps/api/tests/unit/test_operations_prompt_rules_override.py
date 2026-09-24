@@ -1,5 +1,5 @@
-from app.agents.protocol import build_tools_prompt
-from app.agents.runtime.prompt_assembler import OperationPromptRenderer, PromptAssembler, filter_prompt_visible_operations
+from app.agents.protocol import build_tools_payload, build_tools_prompt
+from app.agents.runtime.prompt_assembler import OperationPromptRenderer, PromptAssembler
 
 
 def test_build_tools_prompt_uses_default_mandatory_rules():
@@ -31,9 +31,8 @@ def test_prompt_assembler_resolves_operations_rules_override_priority():
 
 def test_build_tools_prompt_includes_collection_selection_guidance():
     prompt = build_tools_prompt([{"type": "function", "function": {"name": "x", "parameters": {}}}])
-    assert "Сначала сопоставь задачу с нужной коллекцией" in prompt
-    assert "сначала вызови `collection.info`" in prompt.lower()
-    assert "которые вернулись в результате `collection.info`" in prompt
+    assert "Сопоставь задачу с назначением коллекций" in prompt
+    assert "Если результат пустой" in prompt
     assert "имя инструмента ровно в том виде" in prompt
 
 
@@ -51,7 +50,7 @@ def test_prompt_assembler_separates_collection_and_system_sections():
                     "domain": "collection.document",
                     "usage_purpose": "Искать регламенты",
                     "data_description": "Документы с регламентами",
-                    "usage_rules": "Сначала info, потом search.",
+                    "usage_rules": "Для регламентов используй семантический поиск.",
                     "remote_tables": [],
                 },
             )()
@@ -105,8 +104,9 @@ def test_prompt_assembler_separates_collection_and_system_sections():
     )
 
     assert "## Доступные коллекции" in collection_prompt
-    assert "сначала вызови `collection.info`" in collection_prompt.lower()
-    assert "collection.document.search" not in collection_prompt
+    assert "если результат пустой" in collection_prompt.lower()
+    assert "правила использования: Для регламентов используй семантический поиск." in collection_prompt
+    assert "`collection.document.search`" in collection_prompt
     assert "рекомендуемый порядок" not in collection_prompt
     assert "## Системные операции" in system_prompt
     assert "`file.generate`" in system_prompt
@@ -195,7 +195,7 @@ def test_operation_prompt_renderer_publishes_public_collection_info_schema():
     assert schema["function"]["name"] == "collection.info"
     assert schema["function"]["parameters"]["properties"]["collection_slug"]["type"] == "string"
     assert schema["function"]["parameters"]["required"] == ["collection_slug"]
-    assert "inspect one available collection by slug" in schema["function"]["description"]
+    assert "inspect an available collection's fields" in schema["function"]["description"]
 
 
 def test_operation_prompt_renderer_hides_collection_id_for_bound_template_operation():
@@ -242,7 +242,7 @@ def test_operation_prompt_renderer_hides_collection_id_for_bound_template_operat
     assert "row_id must come from collection.template.list" in schema["function"]["description"]
 
 
-def test_prompt_assembler_operation_schemas_keep_only_collection_info_and_system():
+def test_prompt_assembler_operation_schemas_include_collection_tools_from_first_call():
     assembler = PromptAssembler()
     operations = [
         type(
@@ -252,6 +252,12 @@ def test_prompt_assembler_operation_schemas_keep_only_collection_info_and_system
                 "scope": "collection",
                 "operation": "collection.info",
                 "operation_slug": "instance.template.collection.info",
+                "name": "Collection Info",
+                "description": "Inspect collection",
+                "input_schema": {},
+                "collection_slug": "template",
+                "data_instance_slug": "template",
+                "result_kind": "catalog",
                 "published": type("Published", (), {"canonical_name": "collection.info"})(),
             },
         )(),
@@ -262,6 +268,12 @@ def test_prompt_assembler_operation_schemas_keep_only_collection_info_and_system
                 "scope": "collection",
                 "operation": "collection.template.search",
                 "operation_slug": "instance.template.collection.template.search",
+                "name": "Search Templates",
+                "description": "Search templates",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                "collection_slug": "template",
+                "data_instance_slug": "template",
+                "result_kind": "rows",
                 "published": type("Published", (), {"canonical_name": "collection.template.search"})(),
             },
         )(),
@@ -272,6 +284,10 @@ def test_prompt_assembler_operation_schemas_keep_only_collection_info_and_system
                 "scope": "system",
                 "operation": "file.read",
                 "operation_slug": "file.read",
+                "name": "Read File",
+                "description": "Read file",
+                "input_schema": {},
+                "result_kind": "file",
                 "published": type("Published", (), {"canonical_name": "file.read"})(),
             },
         )(),
@@ -281,23 +297,10 @@ def test_prompt_assembler_operation_schemas_keep_only_collection_info_and_system
     names = [item["function"]["name"] for item in schemas]
     assert "collection.info" in names
     assert "file.read" in names
-    assert "instance.template.collection.template.search" not in names
-
-    visible_names = [item.operation_slug for item in filter_prompt_visible_operations(operations)]
-    assert visible_names == ["instance.template.collection.info", "file.read"]
-
-    activated_names = [
-        item.operation_slug
-        for item in filter_prompt_visible_operations(
-            operations,
-            active_collection_operation_slugs={"instance.template.collection.template.search"},
-        )
-    ]
-    assert activated_names == [
-        "instance.template.collection.info",
-        "instance.template.collection.template.search",
-        "file.read",
-    ]
+    assert "collection.template.search" in names
+    assert "collection_slug" in schemas[1]["function"]["parameters"]["required"]
+    native_names = [item["function"]["name"] for item in build_tools_payload(operations)]
+    assert native_names == ["collection.info", "collection.template.search", "file.read"]
 
 
 def test_prompt_assembler_omits_text_tool_contract_for_native_tool_calling():

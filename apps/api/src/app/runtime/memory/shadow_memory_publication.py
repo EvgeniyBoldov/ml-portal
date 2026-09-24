@@ -16,6 +16,7 @@ from app.models.document_memory_staging import (
 from app.models.memory import MemoryClaim, MemoryItem, MemoryItemSource
 from app.models.memory_scope import MemoryCandidateScope, MemoryClaimScope, MemoryScope
 from app.models.project import Project
+from app.runtime.memory.content_contracts import normalize_memory_content
 
 
 def _scope_signature(scopes: list[MemoryScope], *, legacy_project: bool = False) -> str:
@@ -36,7 +37,7 @@ class ShadowMemoryPublicationService:
                       scope_ids: list[UUID] | None = None,
                       automatic: bool = False) -> MemoryExtractionCandidate:
         candidate = await self._required_candidate(candidate_id)
-        if candidate.resolution_status not in {"needs_review", "conflict"}:
+        if candidate.resolution_status not in {"extracted", "needs_review", "conflict"}:
             return candidate
         snapshot = await self._session.get(DocumentMemorySnapshot, candidate.snapshot_id)
         if snapshot is None:
@@ -45,6 +46,13 @@ class ShadowMemoryPublicationService:
             candidate.content = content
             candidate.content_text = json.dumps(content, ensure_ascii=False, sort_keys=True)
         is_term = candidate.candidate_type == "term"
+        if not is_term:
+            try:
+                normalized_content = normalize_memory_content(candidate.candidate_type, dict(candidate.content or {}))
+            except ValueError as exc:
+                raise ValueError(f"Invalid candidate content: {exc}") from exc
+            candidate.content = normalized_content
+            candidate.content_text = json.dumps(normalized_content, ensure_ascii=False, sort_keys=True)
         chosen_scope = None if is_term else (scope or candidate.scope_candidate)
         if not is_term and chosen_scope not in {"global", "project", "scoped"}:
             raise ValueError("Choose global or scoped applicability before approval")
@@ -186,6 +194,7 @@ class ShadowMemoryPublicationService:
         ))).scalar_one_or_none()
         if claim is None:
             claim = MemoryClaim(memory_item_id=item.id, document_id=snapshot.document_id, canonical_checksum=snapshot.canonical_checksum,
+                approved_candidate_id=candidate.id,
                 scope=scope, item_type=candidate.candidate_type, project_id=project.id if project else None,
                 scope_signature=signature,
                 visibility_tenant_id=visibility, normalized_subject=candidate.normalized_subject,
@@ -196,6 +205,8 @@ class ShadowMemoryPublicationService:
             await self._session.flush()
         elif claim.content_text != candidate.content_text:
             raise ValueError("A different claim already exists for this document and subject")
+        else:
+            claim.approved_candidate_id = candidate.id
         existing_scope_ids = set((await self._session.execute(select(MemoryClaimScope.scope_id).where(
             MemoryClaimScope.claim_id == claim.id,
         ))).scalars().all())

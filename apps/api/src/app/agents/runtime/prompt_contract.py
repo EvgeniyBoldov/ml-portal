@@ -104,15 +104,14 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
     notes: List[str] = []
 
     if canonical == "collection.info":
-        notes.append("use before applying filters or guessing field values")
-        notes.append("returns filterable fields and observed values/choices when available")
+        notes.append("inspect schema and observed values when a result is empty or fields are unclear")
         return notes
 
     input_schema = dict(getattr(op, "input_schema", {}) or {})
     properties = input_schema.get("properties")
     if isinstance(properties, dict) and "filters" in properties:
         notes.append("use filters only on schema-declared filterable fields")
-        notes.append("if filter names or values are unknown, call collection.info first")
+        notes.append("if filter names or values are unclear, use collection.info when available")
         notes.append("do not invent filter values")
 
     if canonical == "collection.document.search":

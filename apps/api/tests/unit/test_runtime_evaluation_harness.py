@@ -29,6 +29,19 @@ def test_runtime_eval_passes_document_retrieval_case():
     assert "collection.document.search" in result.seen_operations
 
 
+def test_table_or_sql_case_accepts_direct_retrieval_without_info():
+    case = next(item for item in default_runtime_eval_cases() if item.key == "table_or_sql_retrieval")
+    events = [
+        {"type": "status", "data": {"operation_slug": "collection.table.search"}},
+        {"type": "final", "data": {"message": "ok"}},
+    ]
+
+    result = evaluate_runtime_case(case, events)
+
+    assert result.passed is True
+    assert "collection.info" not in result.seen_operations
+
+
 def test_runtime_eval_fails_when_forbidden_operation_seen():
     case = RuntimeEvaluationCase(
         key="forbidden_case",

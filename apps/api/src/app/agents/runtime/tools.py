@@ -44,7 +44,6 @@ logger = get_logger(__name__)
 # output. These limits only govern the follow-up prompt used to choose the
 # next operation.
 MAX_TOOL_CONTEXT_CHARS = 4_000
-MAX_COLLECTION_INFO_TOOLS = 12
 MAX_COLLECTION_INFO_TEXT_CHARS = 320
 MAX_COLLECTION_INFO_RULES_CHARS = 1_200
 MAX_TEMPLATE_SEARCH_HITS = 8
@@ -115,21 +114,6 @@ class OperationExecutionFacade:
                 tool_name=operation.operation_slug,
                 arguments=operation_call.arguments,
             )
-
-        collection_gate_error = self._validate_collection_interaction(
-            operation=operation,
-            ctx=ctx,
-        )
-        if collection_gate_error is not None:
-            return ToolResult.fail(
-                collection_gate_error.message,
-                **{
-                    **collection_gate_error.to_metadata(),
-                    "user_message": collection_gate_error.message,
-                    "operator_message": collection_gate_error.message,
-                    "source": "runtime",
-                },
-            ), []
 
         normalized_arguments = self._normalize_args(operation, operation_call.arguments)
         if normalized_arguments is not operation_call.arguments:
@@ -473,39 +457,6 @@ class OperationExecutionFacade:
         return OperationExecutionFacade._strip_optional_nulls(arguments, schema)
 
     @staticmethod
-    def _validate_collection_interaction(
-        *,
-        operation: ResolvedOperation,
-        ctx: ToolContext,
-    ) -> Optional[OperationValidationError]:
-        """Require a successful ``collection.info`` before collection use.
-
-        AgentRuntime opts into this gate for every execution.  Keeping the
-        state on ``ToolContext`` makes the check apply to both native and text
-        tool calls, while preserving compatibility for non-agent callers.
-        """
-        state = ctx.extra.get("collection_interaction_state")
-        if not isinstance(state, dict) or not state.get("enabled"):
-            return None
-        if operation.scope != "collection" or operation.operation == "collection.info":
-            return None
-        active_slugs = state.get("active_operation_slugs") or set()
-        if operation.operation_slug in active_slugs:
-            return None
-        collection_slug = str(getattr(operation, "collection_slug", "") or "").strip()
-        message = (
-            f"Call collection.info for collection '{collection_slug}' before using this operation."
-            if collection_slug
-            else "Call collection.info before using this collection operation."
-        )
-        code = (
-            RuntimeErrorCode.COLLECTION_OPERATION_NOT_ACTIVATED
-            if state.get("opened_collections")
-            else RuntimeErrorCode.COLLECTION_INFO_REQUIRED
-        )
-        return OperationValidationError(code=code, message=message, retryable=True)
-
-    @staticmethod
     def _normalize_template_fill_args(
         operation: ResolvedOperation,
         arguments: Dict[str, Any],
@@ -718,7 +669,6 @@ class OperationExecutionFacade:
         result: ToolResult,
         *,
         operation_slug: Optional[str] = None,
-        include_operation_contracts: bool = True,
         evidence_call_id: Optional[str] = None,
     ) -> str:
         """Format a bounded, action-oriented tool result for the next LLM turn.
@@ -741,7 +691,6 @@ class OperationExecutionFacade:
                 if canonical_operation == "collection.info":
                     raw_output = OperationExecutionFacade._compact_collection_info_for_context(
                         raw_output,
-                        include_operation_contracts=include_operation_contracts,
                     )
                 elif canonical_operation == "collection.template.search":
                     raw_output = OperationExecutionFacade._compact_template_search_for_context(raw_output)
@@ -754,9 +703,30 @@ class OperationExecutionFacade:
                 if evidence_call_id:
                     raw_output["evidence_call_id"] = evidence_call_id
             try:
-                return _json.dumps(raw_output, ensure_ascii=False, default=str)[
-                    :MAX_TOOL_CONTEXT_CHARS
-                ]
+                rendered = _json.dumps(raw_output, ensure_ascii=False, default=str)
+                if canonical_operation == "collection.info":
+                    # Keep this diagnostic response parseable when a schema is large.
+                    while len(rendered) > MAX_TOOL_CONTEXT_CHARS:
+                        sections = [
+                            raw_output.get("field_profiles"),
+                            raw_output.get("filter_hints"),
+                            raw_output.get("fields"),
+                            raw_output.get("remote_objects"),
+                        ]
+                        populated = [section for section in sections if isinstance(section, list) and section]
+                        if not populated:
+                            raw_output.pop("field_profiles", None)
+                            raw_output.pop("filter_hints", None)
+                            raw_output.pop("fields", None)
+                            raw_output.pop("remote_objects", None)
+                            collection = raw_output.get("collection") or {}
+                            collection.pop("usage_rules", None)
+                            rendered = _json.dumps(raw_output, ensure_ascii=False, default=str)
+                            break
+                        max(populated, key=len).pop()
+                        rendered = _json.dumps(raw_output, ensure_ascii=False, default=str)
+                    return rendered
+                return rendered[:MAX_TOOL_CONTEXT_CHARS]
             except Exception:
                 return str(raw_output)[:MAX_TOOL_CONTEXT_CHARS]
         return f"Error: {result.error or 'unknown'}"
@@ -772,10 +742,8 @@ class OperationExecutionFacade:
     @staticmethod
     def _compact_collection_info_for_context(
         raw_output: Dict[str, Any],
-        *,
-        include_operation_contracts: bool,
     ) -> Dict[str, Any]:
-        """Return the minimum collection.info contract required by an agent."""
+        """Show bounded schema diagnostics; operation contracts are already published."""
 
         def text(value: Any, limit: int = MAX_COLLECTION_INFO_TEXT_CHARS) -> str:
             normalized = str(value or "").strip()
@@ -783,33 +751,14 @@ class OperationExecutionFacade:
 
         collection = raw_output.get("collection") or {}
         readiness = raw_output.get("readiness") or {}
-        tools = raw_output.get("tools") or []
-
-        compact_tools: List[Dict[str, Any]] = []
-        if isinstance(tools, list):
-            for item in tools[:MAX_COLLECTION_INFO_TOOLS]:
-                if not isinstance(item, dict):
-                    continue
-                compact_tools.append(
-                    {
-                        key: value
-                        for key, value in {
-                            "tool_name": text(item.get("tool_name")),
-                            "invoke_as": text(item.get("invoke_as")),
-                            "description": text(item.get("description")),
-                            "arguments": item.get("arguments")
-                            if isinstance(item.get("arguments"), list)
-                            else [],
-                        }.items()
-                        if value not in ("", [])
-                    }
-                )
+        schema = raw_output.get("schema") or {}
+        hints = (raw_output.get("filter_hints") or {}).get("fields") or {}
+        enrichment = (raw_output.get("runtime_enrichment") or {}).get("data") or {}
 
         projection = {
             "collection": {
                 key: value
                 for key, value in {
-                    "id": text(collection.get("id")),
                     "slug": text(collection.get("slug")),
                     "name": text(collection.get("name")),
                     "type": text(collection.get("type")),
@@ -821,20 +770,35 @@ class OperationExecutionFacade:
                 }.items()
                 if value
             },
-            "readiness": {
-                key: value
-                for key, value in {
-                    "status": text(readiness.get("status")),
-                    "schema_freshness": text(readiness.get("schema_freshness")),
-                    "operations_count": readiness.get("operations_count"),
-                }.items()
-                if value not in ("", None)
-            },
+            "readiness": {"status": text(readiness.get("status")), "schema_freshness": text(readiness.get("schema_freshness"))},
+            "fields": [
+                {
+                    "name": text(field.get("name"), 100),
+                    "type": text(field.get("data_type"), 40),
+                    "description": text(field.get("description"), 160),
+                    "filterable": bool(field.get("filterable")),
+                }
+                for field in (schema.get("fields") or [])[:24]
+                if isinstance(field, dict)
+            ],
+            "filter_hints": [
+                {
+                    "field": text(name, 100),
+                    "coverage": text(hint.get("coverage"), 40),
+                    "choices": list(hint.get("choices") or [])[:8],
+                    "top_values": list(hint.get("top_values") or [])[:5],
+                }
+                for name, hint in list(hints.items())[:12]
+                if isinstance(hint, dict)
+            ],
+            "field_profiles": [
+                {"field": text(name, 100), "complete": bool(profile.get("complete")),
+                 "values": list(profile.get("values") or profile.get("top_values") or [])[:5]}
+                for name, profile in list((enrichment.get("field_profiles") or {}).items())[:12]
+                if isinstance(profile, dict)
+            ],
+            "remote_objects": list(enrichment.get("tables") or enrichment.get("entities") or [])[:12],
         }
-        # A native tools payload is the authoritative operation contract. The
-        # list below is required only by the plaintext tool-call protocol.
-        if include_operation_contracts:
-            projection["tools"] = compact_tools
         return projection
 
     @staticmethod

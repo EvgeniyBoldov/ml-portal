@@ -467,6 +467,7 @@ export interface SemanticMemoryAdminItem {
   scope: string;
   item_type: string;
   project_id: string | null;
+  scope_keys: string[];
   subject: string;
   content_text: string;
   confidence: number;
@@ -486,6 +487,10 @@ export interface SemanticMemoryAdminPage {
 
 export interface SemanticMemoryAdminDetail extends SemanticMemoryAdminItem {
   content: Record<string, unknown>;
+  content_text: string;
+  aliases: string[];
+  related_entities: Array<Record<string, unknown>>;
+  related_project_keys: string[];
   applicability: Record<string, unknown>;
   visibility: Record<string, unknown>;
   sources: Array<{ document_id: string; canonical_checksum: string; section_id: string; label: string | null; start_offset: number | null; end_offset: number | null }>;
@@ -509,6 +514,12 @@ export interface ShadowMemoryCandidate {
   candidate_type: string;
   subject: string;
   content: Record<string, unknown>;
+  content_text: string;
+  content_valid: boolean;
+  content_error: string | null;
+  aliases: string[];
+  related_entities: Array<Record<string, unknown>>;
+  related_project_keys: string[];
   evidence_section_ids: string[];
   scope_candidate: string | null;
   resolution_status: string;
@@ -546,7 +557,7 @@ export const adminApi = {
   async getGlossary(): Promise<AdminGlossaryEntry[]> {
     return apiRequest('/admin/glossary');
   },
-  async getSemanticMemory(params: { query?: string; scope?: string; state?: string; item_type?: string; project_id?: string; limit?: number; offset?: number } = {}): Promise<SemanticMemoryAdminPage> {
+  async getSemanticMemory(params: { query?: string; scope?: string; scope_type?: string; scope_id?: string; state?: string; item_type?: string; project_id?: string; limit?: number; offset?: number } = {}): Promise<SemanticMemoryAdminPage> {
     const search = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') search.set(key, String(value)); });
     return apiRequest(`/admin/memory?${search.toString()}`);
@@ -554,8 +565,12 @@ export const adminApi = {
   async getSemanticMemoryItem(itemId: string): Promise<SemanticMemoryAdminDetail> {
     return apiRequest(`/admin/memory/${itemId}`);
   },
-  async getShadowMemoryCandidates(status: 'needs_review' | 'conflict' | 'resolved' | 'rejected' = 'needs_review'): Promise<ShadowMemoryCandidate[]> {
-    return apiRequest(`/admin/memory/staging/candidates?status=${status}`);
+  async getShadowMemoryCandidates(status: 'pending' | 'needs_review' | 'conflict' | 'resolved' | 'rejected' = 'pending', params: { candidate_type?: string; limit?: number; offset?: number } = {}): Promise<ShadowMemoryCandidate[]> {
+    const search = new URLSearchParams({ status });
+    if (params.candidate_type) search.set('candidate_type', params.candidate_type);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return apiRequest(`/admin/memory/staging/candidates?${search.toString()}`);
   },
   async approveShadowMemoryCandidate(id: string, body: { reason?: string; scope?: 'global' | 'project' | 'scoped'; project_id?: string; scope_ids?: string[]; promote_to_company?: boolean; content?: Record<string, unknown> } = {}): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/approve`, { method: 'POST', body: JSON.stringify(body) });

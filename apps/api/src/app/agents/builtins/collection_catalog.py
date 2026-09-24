@@ -38,6 +38,7 @@ _OUTPUT_SCHEMA_V1 = {
         "tools": {"type": "array"},
         "contracts": {"type": "object"},
         "schema": {"type": "object"},
+        "filter_hints": {"type": "object"},
         "runtime_enrichment": {"type": "object"},
     },
 }

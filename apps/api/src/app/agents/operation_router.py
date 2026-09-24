@@ -303,6 +303,7 @@ class OperationRouter:
         usage_purpose: Optional[str] = None
         usage_rules: Optional[str] = None
         remote_tables: List[str] = []
+        schema_fields: List[dict] = []
         if collection is not None:
             entity_type = collection.entity_type or None
             collection_type = (
@@ -315,6 +316,16 @@ class OperationRouter:
                     table_schema=collection.table_schema if isinstance(collection.table_schema, dict) else {},
                     source_contract=collection.source_contract if isinstance(collection.source_contract, dict) else {},
                 )
+            schema_fields = [
+                {
+                    "name": field.get("name"),
+                    "type": field.get("data_type"),
+                    "description": field.get("description"),
+                    "filterable": bool(field.get("filterable")),
+                }
+                for field in collection.get_business_fields()
+                if isinstance(field, dict) and field.get("name")
+            ]
             current_version = getattr(collection, "current_version", None)
             if current_version is not None:
                 data_description = getattr(current_version, "data_description", None) or None
@@ -338,6 +349,7 @@ class OperationRouter:
             usage_purpose=usage_purpose,
             usage_rules=usage_rules,
             remote_tables=remote_tables,
+            schema_fields=schema_fields,
             readiness=readiness,
         )
 

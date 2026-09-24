@@ -35,12 +35,18 @@ async def test_prompt_assembler_renders_collection_semantics_from_current_versio
         entity_type="device",
         collection_type="table",
         status=CollectionStatus.READY.value,
-        fields=[],
+        fields=[{
+            "name": "site",
+            "category": "user",
+            "data_type": "string",
+            "description": "Площадка устройства",
+            "filterable": True,
+        }],
     )
     collection.current_version = SimpleNamespace(
         data_description="Netbox devices inventory",
         usage_purpose="Поиск устройств и атрибутов инвентаря",
-        usage_rules="Сначала проверь доступные поля, потом используй поиск.",
+        usage_rules="Для устройств используй поиск по имени или площадке.",
     )
 
     instance = ToolInstance(
@@ -102,13 +108,15 @@ async def test_prompt_assembler_renders_collection_semantics_from_current_versio
     )
 
     assert "## Доступные коллекции" in prompt
-    assert "сначала вызови `collection.info`" in prompt.lower()
+    assert "если результат пустой" in prompt.lower()
     assert "### `netbox_devices`" in prompt
     assert "- название: Netbox devices" in prompt
     assert "- данные: Netbox devices inventory" in prompt
     assert "- назначение: Поиск устройств и атрибутов инвентаря" in prompt
+    assert "- правила использования: Для устройств используй поиск по имени или площадке." in prompt
+    assert "`site` (string) [фильтр]: Площадка устройства" in prompt
+    assert "`collection.api.search`" in prompt
     assert "instance.netbox-devices-instance.collection.api.search" not in prompt
-    assert "collection.api.search" not in prompt
     assert "legacy collection description" not in prompt
     assert "fallback instance description" not in prompt
     assert "готовность" not in prompt.lower()

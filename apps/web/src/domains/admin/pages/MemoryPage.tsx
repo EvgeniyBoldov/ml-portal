@@ -19,30 +19,48 @@ const glossaryColumns: DataTableColumn<AdminGlossaryEntry>[] = [
   { key: 'updated_at', label: 'ОБНОВЛЁН', width: 170, render: (row) => row.updated_at ? new Date(row.updated_at).toLocaleString('ru-RU') : '—' },
 ];
 
-const projectMemoryColumns: DataTableColumn<SemanticMemoryAdminItem>[] = [
+const memoryColumns: DataTableColumn<SemanticMemoryAdminItem>[] = [
   { key: 'subject', label: 'ЗНАНИЕ', sortable: true, filter: { kind: 'text', placeholder: 'Знание', getValue: (row) => `${row.subject} ${row.content_text}` }, render: (row) => <div><strong>{row.subject}</strong><div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>{row.content_text}</div></div> },
   { key: 'item_type', label: 'ТИП', width: 150, filter: { kind: 'select', placeholder: 'Все типы', options: ['description', 'relationship', 'rule', 'constraint', 'procedure', 'decision'].map((value) => ({ value, label: value })), getValue: (row) => row.item_type }, render: (row) => <Badge tone="neutral">{row.item_type}</Badge> },
-  { key: 'project_id', label: 'ПРОЕКТ', width: 220, filter: { kind: 'text', placeholder: 'Project ID' }, render: (row) => row.project_id || '—' },
+  { key: 'scope_keys', label: 'СКОУПЫ', width: 260, filter: { kind: 'text', placeholder: 'Ключ скоупа', getValue: (row) => row.scope_keys.join(' ') }, render: (row) => row.scope_keys.length ? row.scope_keys.join(', ') : 'Без скоупа' },
   { key: 'state', label: 'СОСТОЯНИЕ', width: 150, filter: { kind: 'select', placeholder: 'Все состояния', options: ['active', 'uncertain', 'stale'].map((value) => ({ value, label: value })), getValue: (row) => row.state }, render: (row) => <Badge tone={row.state === 'active' ? 'success' : row.state === 'uncertain' ? 'warn' : 'danger'}>{row.state}</Badge> },
   { key: 'confidence', label: 'УВЕРЕННОСТЬ', width: 130, align: 'right', filter: { kind: 'select', placeholder: 'Любая', options: [{ value: 'high', label: '≥ 80%' }, { value: 'medium', label: '50–79%' }, { value: 'low', label: '< 50%' }], getValue: (row) => row.confidence >= 0.8 ? 'high' : row.confidence >= 0.5 ? 'medium' : 'low' }, render: (row) => `${Math.round(row.confidence * 100)}%` },
   { key: 'source_count', label: 'ИСТОЧНИКИ', width: 110, align: 'right', sortable: true, filter: { kind: 'select', placeholder: 'Любое число', options: [{ value: 'one', label: '1' }, { value: 'multiple', label: '2+' }], getValue: (row) => row.source_count > 1 ? 'multiple' : 'one' }, render: (row) => row.source_count },
 ];
 
-const companyMemoryColumns: DataTableColumn<SemanticMemoryAdminItem>[] = [
-  { key: 'subject', label: 'ЗНАНИЕ', sortable: true, filter: { kind: 'text', placeholder: 'Знание', getValue: (row) => `${row.subject} ${row.content_text}` }, render: (row) => <div><strong>{row.subject}</strong><div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>{row.content_text}</div></div> },
-  { key: 'item_type', label: 'ТИП', width: 150, filter: { kind: 'select', placeholder: 'Все типы', options: ['description', 'relationship', 'rule', 'constraint', 'procedure', 'decision'].map((value) => ({ value, label: value })), getValue: (row) => row.item_type }, render: (row) => <Badge tone="neutral">{row.item_type}</Badge> },
-  { key: 'state', label: 'СОСТОЯНИЕ', width: 150, filter: { kind: 'select', placeholder: 'Все состояния', options: ['active', 'uncertain', 'stale'].map((value) => ({ value, label: value })), getValue: (row) => row.state }, render: (row) => <Badge tone={row.state === 'active' ? 'success' : row.state === 'uncertain' ? 'warn' : 'danger'}>{row.state}</Badge> },
-  { key: 'confidence', label: 'УВЕРЕННОСТЬ', width: 130, align: 'right', filter: { kind: 'select', placeholder: 'Любая', options: [{ value: 'high', label: '≥ 80%' }, { value: 'medium', label: '50–79%' }, { value: 'low', label: '< 50%' }], getValue: (row) => row.confidence >= 0.8 ? 'high' : row.confidence >= 0.5 ? 'medium' : 'low' }, render: (row) => `${Math.round(row.confidence * 100)}%` },
-  { key: 'source_count', label: 'ИСТОЧНИКИ', width: 110, align: 'right', sortable: true, filter: { kind: 'select', placeholder: 'Любое число', options: [{ value: 'one', label: '1' }, { value: 'multiple', label: '2+' }], getValue: (row) => row.source_count > 1 ? 'multiple' : 'one' }, render: (row) => row.source_count },
-];
+const candidateTypeLabels: Record<string, string> = {
+  term: 'Термин', description: 'Описание', relationship: 'Связь', rule: 'Правило',
+  constraint: 'Ограничение', procedure: 'Процедура', decision: 'Решение',
+};
+
+const candidateContent = (row: ShadowMemoryCandidate): string => {
+  const content = row.content && Object.keys(row.content).length > 0 ? row.content : null;
+  if (content) {
+    const values = Object.entries(content).flatMap(([key, value]) => {
+      if (value === null || value === undefined || value === '') return [];
+      const rendered = Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return [`${key}: ${rendered}`];
+    });
+    if (values.length) return values.slice(0, 3).join(' · ');
+  }
+  if (row.aliases.length) return `Алиасы: ${row.aliases.join(', ')}`;
+  if (row.related_project_keys.length) return `Проекты: ${row.related_project_keys.join(', ')}`;
+  return 'Содержание не извлечено';
+};
+
+const candidateConfidence = (value: number): string => {
+  if (!Number.isFinite(value) || value < 0 || value > 1) return '—';
+  return `${Math.round(value * 100)}%${value >= 1 ? ' · максимум модели' : ''}`;
+};
 
 const reviewColumns = (onDecision: (row: ShadowMemoryCandidate, action: 'review' | 'approve' | 'reject') => void, pending: boolean): DataTableColumn<ShadowMemoryCandidate>[] => [
-  { key: 'subject', label: 'КАНДИДАТ', sortable: true, sortValue: (row) => row.subject, filter: { kind: 'text', placeholder: 'Кандидат или содержимое', getValue: (row) => `${row.subject} ${JSON.stringify(row.content)}` }, render: (row) => <div><strong>{row.subject}</strong><div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>{JSON.stringify(row.content)}</div></div> },
-  { key: 'candidate_type', label: 'ТИП', width: 150, sortable: true, filter: { kind: 'text', placeholder: 'Тип' }, render: (row) => <Badge tone="neutral">{row.candidate_type}</Badge> },
+  { key: 'subject', label: 'КАНДИДАТ', sortable: true, sortValue: (row) => row.subject, filter: { kind: 'text', placeholder: 'Кандидат или содержимое', getValue: (row) => `${row.subject} ${candidateContent(row)}` }, render: (row) => <div><strong>{row.subject}</strong><div style={{ color: row.content && Object.keys(row.content).length ? 'var(--muted)' : 'var(--danger)', fontSize: '0.8rem' }}>{candidateContent(row)}</div></div> },
+  { key: 'candidate_type', label: 'ТИП', width: 150, sortable: true, filter: { kind: 'text', placeholder: 'Тип' }, render: (row) => <Badge tone="neutral">{candidateTypeLabels[row.candidate_type] ?? row.candidate_type}</Badge> },
+  { key: 'content_valid', label: 'ФОРМАТ', width: 150, render: (row) => row.content_valid ? <Badge tone="success">корректный</Badge> : <Badge tone="danger" title={row.content_error ?? undefined}>неполный</Badge> },
   { key: 'scope_candidate', label: 'ОБЛАСТЬ', width: 240, sortable: true, filter: { kind: 'select', placeholder: 'Все области', options: ['global', 'scoped', 'project', 'multi_project', 'unknown'].map((value) => ({ value, label: value })), getValue: (row) => row.scope_candidate || 'unknown' }, render: (row) => <div><Badge tone="info">{row.scope_candidate || 'unknown'}</Badge>{row.scope_keys.length > 0 && <div style={{ fontSize: '0.8rem' }}>Применимость: {row.scope_keys.join(', ')}</div>}{row.mentioned_scope_keys.length > 0 && <div style={{ fontSize: '0.8rem' }}>Упомянуты: {row.mentioned_scope_keys.join(', ')}</div>}{row.unmatched_scope_names.length > 0 && <div style={{ fontSize: '0.8rem' }}>Нет в каталоге: {row.unmatched_scope_names.join(', ')}</div>}</div> },
   { key: 'evidence_section_ids', label: 'ИСТОЧНИКИ', width: 130, align: 'right', sortable: true, sortValue: (row) => row.evidence_section_ids.length, render: (row) => row.evidence_section_ids.length },
   { key: 'conflict_ids', label: 'КОНФЛИКТЫ', width: 130, align: 'right', sortable: true, sortValue: (row) => row.conflict_ids.length, filter: { kind: 'select', placeholder: 'Все', options: [{ value: 'yes', label: 'Есть' }, { value: 'no', label: 'Нет' }], getValue: (row) => row.conflict_ids.length ? 'yes' : 'no' }, render: (row) => <Badge tone={row.conflict_ids.length ? 'danger' : 'success'}>{row.conflict_ids.length}</Badge> },
-  { key: 'extraction_confidence', label: 'УВЕРЕННОСТЬ', width: 140, align: 'right', sortable: true, filter: { kind: 'select', placeholder: 'Любая', options: [{ value: 'high', label: '≥ 80%' }, { value: 'medium', label: '50–79%' }, { value: 'low', label: '< 50%' }], getValue: (row) => row.extraction_confidence >= 0.8 ? 'high' : row.extraction_confidence >= 0.5 ? 'medium' : 'low' }, render: (row) => `${Math.round(row.extraction_confidence * 100)}%` },
+  { key: 'extraction_confidence', label: 'УВЕРЕННОСТЬ', width: 170, align: 'right', sortable: true, filter: { kind: 'select', placeholder: 'Любая', options: [{ value: 'high', label: '≥ 80%' }, { value: 'medium', label: '50–79%' }, { value: 'low', label: '< 50%' }], getValue: (row) => row.extraction_confidence >= 0.8 ? 'high' : row.extraction_confidence >= 0.5 ? 'medium' : 'low' }, render: (row) => <span title="Самооценка экстрактора, не подтверждение администратора">{candidateConfidence(row.extraction_confidence)}</span> },
   { key: 'actions', label: '', width: 205, render: (row) => <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><Button type="button" size="sm" variant="success" disabled={pending || (row.candidate_type === 'term' && row.conflict_ids.length > 0)} onClick={() => onDecision(row, row.candidate_type === 'term' ? 'approve' : 'review')}>{row.candidate_type === 'term' ? 'Утвердить' : 'Проверить'}</Button><Button type="button" size="sm" variant="danger" disabled={pending} onClick={() => onDecision(row, 'reject')}>Отклонить</Button></div> },
 ];
 
@@ -50,6 +68,11 @@ export default function MemoryPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('glossary');
   const [query, setQuery] = useState('');
+  const [memoryScopeType, setMemoryScopeType] = useState('');
+  const [memoryScopeId, setMemoryScopeId] = useState('');
+  const [memoryPage, setMemoryPage] = useState(0);
+  const [reviewPage, setReviewPage] = useState(0);
+  const [reviewType, setReviewType] = useState('');
   const [scopeEditor, setScopeEditor] = useState<MemoryScopeAdminItem | 'new' | null>(null);
   const [scopeToDelete, setScopeToDelete] = useState<MemoryScopeAdminItem | null>(null);
   const [scopeLifecycleAction, setScopeLifecycleAction] = useState<'delete' | 'restore'>('delete');
@@ -57,7 +80,7 @@ export default function MemoryPage() {
   const [scopeForm, setScopeForm] = useState({ scope_type: 'team' as MemoryScopeAdminItem['scope_type'], key: '', name: '', aliases: '', is_all: false });
   const queryClient = useQueryClient();
   const { data: memoryScopes, isLoading: scopesLoading, isError: scopesError } = useQuery({
-    queryKey: ['admin', 'memory', 'scopes'], queryFn: () => adminApi.getMemoryScopes(), enabled: activeTab === 'scopes' || activeTab === 'review',
+    queryKey: ['admin', 'memory', 'scopes'], queryFn: () => adminApi.getMemoryScopes(), enabled: activeTab === 'scopes' || activeTab === 'review' || activeTab === 'memory',
   });
   const saveScope = useMutation({
     mutationFn: () => {
@@ -71,24 +94,18 @@ export default function MemoryPage() {
     queryFn: () => adminApi.getGlossary(),
     enabled: activeTab === 'glossary',
   });
-  const { data: projectMemory, isLoading: memoryLoading, isError: memoryError } = useQuery({
-    queryKey: ['admin', 'memory', 'project', query],
-    queryFn: () => adminApi.getSemanticMemory({ scope: 'project', query: query || undefined }),
-    enabled: activeTab === 'project-memory',
-  });
-  const { data: companyMemory, isLoading: companyMemoryLoading, isError: companyMemoryError } = useQuery({
-    queryKey: ['admin', 'memory', 'company', query],
-    queryFn: () => adminApi.getSemanticMemory({ scope: 'company', query: query || undefined }),
-    enabled: activeTab === 'company-memory',
-  });
-  const { data: scopedMemory, isLoading: scopedMemoryLoading, isError: scopedMemoryError } = useQuery({
-    queryKey: ['admin', 'memory', 'scoped', query],
-    queryFn: () => adminApi.getSemanticMemory({ scope: 'scoped', query: query || undefined }),
-    enabled: activeTab === 'scoped-memory',
+  const { data: memory, isLoading: memoryLoading, isError: memoryError } = useQuery({
+    queryKey: ['admin', 'memory', 'approved', query, memoryScopeType, memoryScopeId, memoryPage],
+    queryFn: () => adminApi.getSemanticMemory({
+      query: query || undefined,
+      scope_type: memoryScopeType || undefined, scope_id: memoryScopeId || undefined,
+      limit: 100, offset: memoryPage * 100,
+    }),
+    enabled: activeTab === 'memory',
   });
   const { data: review, isLoading: reviewLoading, isError: reviewError } = useQuery({
-    queryKey: ['admin', 'memory', 'staging-review'],
-    queryFn: () => adminApi.getShadowMemoryCandidates('needs_review'),
+    queryKey: ['admin', 'memory', 'staging-review', reviewType, reviewPage],
+    queryFn: () => adminApi.getShadowMemoryCandidates('pending', { candidate_type: reviewType || undefined, limit: 101, offset: reviewPage * 100 }),
     enabled: activeTab === 'review',
   });
   const decision = useMutation({
@@ -102,6 +119,8 @@ export default function MemoryPage() {
     if (!needle) return glossary ?? [];
     return (glossary ?? []).filter((row) => [row.canonical_term, ...row.aliases].join(' ').toLocaleLowerCase().includes(needle));
   }, [glossary, query]);
+  const activeMemoryScopes = (memoryScopes ?? []).filter((scope) => scope.lifecycle_status === 'active');
+  const memoryScopeTypes = [...new Set(activeMemoryScopes.map((scope) => scope.scope_type))].sort();
   const scopeColumns: DataTableColumn<MemoryScopeAdminItem>[] = [
     { key: 'scope_type', label: 'ТИП', width: 130, sortable: true, render: (row) => <Badge tone="info">{row.scope_type}</Badge> },
     { key: 'key', label: 'КЛЮЧ', sortable: true, filter: { kind: 'text', placeholder: 'Ключ' }, render: (row) => <code>{row.key}</code> },
@@ -117,22 +136,37 @@ export default function MemoryPage() {
       title="Мемори"
       mode="view"
       onTabChange={setActiveTab}
-      headerActions={<Input aria-label="Поиск в активном разделе memory" placeholder="Поиск в текущем разделе" value={query} onChange={(event) => setQuery(event.target.value)} />}
+      headerActions={<Input aria-label="Поиск в активном разделе memory" placeholder="Поиск в текущем разделе" value={query} onChange={(event) => { setQuery(event.target.value); setMemoryPage(0); }} />}
     >
       <Tab title="Глоссарий" id="glossary" layout="full">
         {glossaryError ? <p role="alert">Не удалось загрузить глоссарий.</p> : <DataTable columns={glossaryColumns} data={filteredGlossary} keyField="id" loading={glossaryLoading} emptyText="Термины не найдены" paginated pageSize={20} />}
       </Tab>
-      <Tab title="Память проектов" id="project-memory" layout="full">
-        {memoryError ? <p role="alert">Не удалось загрузить память проектов.</p> : <DataTable columns={projectMemoryColumns} data={projectMemory?.items ?? []} keyField="id" loading={memoryLoading} emptyText="Знания проектов не найдены" paginated pageSize={20} onRowClick={(row) => navigate(`/admin/memory/${row.id}`)} />}
-      </Tab>
-      <Tab title="Глобальная память" id="company-memory" layout="full">
-        {companyMemoryError ? <p role="alert">Не удалось загрузить глобальную память.</p> : <DataTable columns={companyMemoryColumns} data={companyMemory?.items ?? []} keyField="id" loading={companyMemoryLoading} emptyText="Глобальных знаний пока нет" paginated pageSize={20} onRowClick={(row) => navigate(`/admin/memory/${row.id}`)} />}
-      </Tab>
-      <Tab title="Память контекстов" id="scoped-memory" layout="full">
-        {scopedMemoryError ? <p role="alert">Не удалось загрузить память контекстов.</p> : <DataTable columns={companyMemoryColumns} data={scopedMemory?.items ?? []} keyField="id" loading={scopedMemoryLoading} emptyText="Знаний с типизированными скоупами пока нет" paginated pageSize={20} onRowClick={(row) => navigate(`/admin/memory/${row.id}`)} />}
+      <Tab title="Память" id="memory" layout="full">
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+          <label className={styles.scopeField}>Тип скоупа
+            <Select value={memoryScopeType} options={[{ value: '', label: 'Все типы' }, { value: 'global', label: 'Без скоупа' }, ...memoryScopeTypes.map((value) => ({ value, label: value }))]} onChange={(value) => { setMemoryScopeType(value); setMemoryScopeId(''); setMemoryPage(0); }} />
+          </label>
+          <label className={styles.scopeField}>Скоуп
+            <Select value={memoryScopeId} options={[{ value: '', label: 'Все скоупы' }, ...activeMemoryScopes.filter((scope) => !memoryScopeType || scope.scope_type === memoryScopeType).map((scope) => ({ value: scope.id, label: `${scope.name} (${scope.key})` }))]} disabled={memoryScopeType === 'global'} onChange={(value) => { setMemoryScopeId(value); setMemoryPage(0); }} />
+          </label>
+        </div>
+        {memoryError ? <p role="alert">Не удалось загрузить утверждённую память.</p> : <DataTable key={`${memoryPage}:${memoryScopeType}:${memoryScopeId}:${query}`} columns={memoryColumns} data={memory?.items ?? []} keyField="id" loading={memoryLoading} emptyText="Утверждённой памяти с выбранными фильтрами нет" paginated pageSize={20} onRowClick={(row) => navigate(`/admin/memory/${row.id}`)} />}
+        {(memoryPage > 0 || (memory?.total ?? 0) > 100) && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, marginTop: 12 }}>
+          <Button variant="outline" disabled={memoryPage === 0} onClick={() => setMemoryPage(memoryPage - 1)}>Назад</Button>
+          <span>{Math.min(memoryPage * 100 + 1, memory?.total ?? 0)}–{Math.min((memoryPage + 1) * 100, memory?.total ?? 0)} из {memory?.total ?? 0}</span>
+          <Button variant="outline" disabled={(memoryPage + 1) * 100 >= (memory?.total ?? 0)} onClick={() => setMemoryPage(memoryPage + 1)}>Далее</Button>
+        </div>}
       </Tab>
       <Tab title="На проверке" id="review" layout="full">
-        {reviewError ? <p role="alert">Не удалось загрузить очередь проверки.</p> : <DataTable columns={reviewColumns((row, action) => action === 'review' ? setReviewEditor(row) : decision.mutate({ row, action }), decision.isPending)} data={review ?? []} keyField="id" loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20} />}
+        <label className={styles.scopeField} style={{ width: 260, marginBottom: 12 }}>Тип кандидата
+          <Select value={reviewType} options={[{ value: '', label: 'Все типы' }, ...['term', 'description', 'relationship', 'rule', 'constraint', 'procedure', 'decision'].map((value) => ({ value, label: value }))]} onChange={(value) => { setReviewType(value); setReviewPage(0); }} />
+        </label>
+        {reviewError ? <p role="alert">Не удалось загрузить очередь проверки.</p> : <DataTable key={`${reviewPage}:${reviewType}`} columns={reviewColumns((row, action) => action === 'review' ? setReviewEditor(row) : decision.mutate({ row, action }), decision.isPending)} data={(review ?? []).slice(0, 100)} keyField="id" loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20} />}
+        {(reviewPage > 0 || (review?.length ?? 0) > 100) && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, marginTop: 12 }}>
+          <Button variant="outline" disabled={reviewPage === 0} onClick={() => setReviewPage(reviewPage - 1)}>Назад</Button>
+          <span>Страница {reviewPage + 1}</span>
+          <Button variant="outline" disabled={(review?.length ?? 0) <= 100} onClick={() => setReviewPage(reviewPage + 1)}>Далее</Button>
+        </div>}
       </Tab>
       <Tab title="Скоупы" id="scopes" layout="full">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}><Button onClick={() => { setScopeForm({ scope_type: 'team', key: '', name: '', aliases: '', is_all: false }); setScopeEditor('new'); }}>Создать скоуп</Button></div>

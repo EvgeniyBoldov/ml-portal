@@ -29,7 +29,7 @@
   invoke schemas; provider URLs and execution bindings remain internal.
 
 ## Prompt Contract
-- Capability card shows collections, purposes, and available actions.
+- Capability card shows collections, purposes, usage rules, business fields, and available actions.
 - Callable tools appendix shows exact invoke name, concise description, collection binding, and input schema.
 - Internal provider URLs, credentials and execution bindings stay out of the
   LLM prompt and belong in runtime/operator surfaces only if needed.

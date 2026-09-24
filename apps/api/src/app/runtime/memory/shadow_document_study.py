@@ -17,17 +17,21 @@ from app.models.document_memory_staging import (
     MemoryCandidateProjectBinding,
     MemoryExtractionCandidate,
 )
-from app.models.memory_scope import MemoryCandidateScope, MemoryScope
+from app.models.memory_scope import DocumentMemoryScope, MemoryCandidateScope, MemoryScope
 from app.models.project import Project
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.memory.shadow_study_prompts import (
     document_memory_prompt,
 )
+from app.runtime.memory.content_contracts import normalize_memory_content
 from app.services.glossary_service import GlossaryService
 
 
-SHADOW_STUDY_BATCH_SIZE = 2
+# Keep each structured request below providers' token-per-minute limits. The
+# ledger and scope catalogs grow with every section, so two sections can push
+# otherwise valid documents over the request budget.
+SHADOW_STUDY_BATCH_SIZE = 1
 MAX_LEDGER_ITEMS = 60
 MAX_GLOSSARY_ITEMS = 80
 
@@ -202,6 +206,17 @@ class ShadowDocumentStudyService:
               "aliases": list(scope.aliases or []), "is_all": scope.is_all} for scope in rows],
         )
 
+    async def document_scope_hints(self, document_id: UUID) -> list[dict[str, Any]]:
+        """Read the current upload hints from typed document bindings."""
+        rows = (await self._session.execute(select(MemoryScope).join(
+            DocumentMemoryScope, DocumentMemoryScope.scope_id == MemoryScope.id,
+        ).where(
+            DocumentMemoryScope.document_id == document_id,
+            MemoryScope.lifecycle_status == "active",
+        ).order_by(MemoryScope.scope_type, MemoryScope.key))).scalars().all()
+        return [{"key": scope.key, "type": scope.scope_type, "name": scope.name,
+                 "aliases": list(scope.aliases or []), "is_all": scope.is_all} for scope in rows]
+
     async def persist_batch(
         self,
         *,
@@ -225,7 +240,7 @@ class ShadowDocumentStudyService:
                 # Preserve it as an independent, scoped knowledge candidate.
                 if definition:
                     expanded.append(item.model_copy(update={
-                        "candidate_type": "description", "content": {"summary": definition, "details": ""},
+                        "candidate_type": "description", "content": {"summary": definition, "details": []},
                         "aliases": [], "operation": "new", "existing_candidate_id": None,
                     }))
                 item = item.model_copy(update={"content": {}, "scope_candidate": "unknown", "project_keys": [],
@@ -237,6 +252,13 @@ class ShadowDocumentStudyService:
                 counts["rejected"] += 1
                 continue
             applies, mentions, unmatched, proposed_scope = _scope_proposal(item, scopes_by_key or {}, projects_by_key)
+            content = dict(item.content or {})
+            if item.candidate_type != "term":
+                try:
+                    content = normalize_memory_content(item.candidate_type, content)
+                except ValueError:
+                    counts["rejected"] += 1
+                    continue
             if item.operation == "extend_existing":
                 if item.existing_candidate_id not in known:
                     counts["rejected"] += 1
@@ -277,7 +299,7 @@ class ShadowDocumentStudyService:
                 snapshot_id=snapshot.id, ordinal=next_ordinal, candidate_type=item.candidate_type,
                 visibility_tenant_id=snapshot.visibility_tenant_id,
                 subject=item.subject.strip()[:200], normalized_subject=subject,
-                content=dict(item.content or {}), content_text=json.dumps(item.content, ensure_ascii=False, sort_keys=True),
+                content=content, content_text=json.dumps(content, ensure_ascii=False, sort_keys=True),
                 evidence_section_ids=evidence, aliases=_unique(item.aliases),
                 unmatched_scope_names=unmatched,
                 extraction_confidence=item.extraction_confidence,

@@ -4,7 +4,7 @@ from app.agents.context import ToolResult
 from app.agents.runtime.tools import OperationExecutionFacade
 
 
-def test_collection_info_context_projection_keeps_next_operation_contract():
+def test_collection_info_context_projection_keeps_schema_diagnostics():
     result = ToolResult.ok(
         {
             "collection": {
@@ -32,7 +32,8 @@ def test_collection_info_context_projection_keeps_next_operation_contract():
                 }
             ],
             "contracts": {"workflow": ["type-derived guidance"]},
-            "schema": {"fields": [{"name": "large inspection-only field list"}]},
+            "schema": {"fields": [{"name": "priority", "data_type": "string", "filterable": True}]},
+            "filter_hints": {"fields": {"priority": {"coverage": "complete", "choices": ["urgent"]}}},
         }
     )
 
@@ -41,8 +42,9 @@ def test_collection_info_context_projection_keeps_next_operation_contract():
         operation_slug="instance.local-template-tools.collection.info",
     )
 
-    assert "collection.template.list" in context
-    assert "instance.template.list" in context
+    assert "collection.template.list" not in context
+    assert '"name": "priority"' in context
+    assert '"urgent"' in context
     assert "Find a template, inspect its schema, then fill it." in context
     assert "type-derived guidance" not in context
     assert "must-not-enter-context" not in context
@@ -85,7 +87,7 @@ def test_collection_info_context_projection_keeps_runtime_evidence_call_id():
     assert json.loads(context)["evidence_call_id"] == "runtime-info-1"
 
 
-def test_collection_info_native_projection_omits_duplicate_tool_contracts():
+def test_collection_info_projection_omits_duplicate_tool_contracts():
     context = OperationExecutionFacade.format_result_for_context(
         ToolResult.ok(
             {
@@ -99,11 +101,29 @@ def test_collection_info_native_projection_omits_duplicate_tool_contracts():
             }
         ),
         operation_slug="instance.local-template-tools.collection.info",
-        include_operation_contracts=False,
     )
 
     assert "collection.template.search" not in context
     assert "Search, get schema, then fill." in context
+
+
+def test_collection_info_large_schema_projection_stays_valid_json():
+    context = OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok({
+            "collection": {"slug": "large", "usage_rules": "Use the schema"},
+            "schema": {"fields": [
+                {"name": f"field_{index}", "data_type": "string", "description": "A" * 200, "filterable": True}
+                for index in range(100)
+            ]},
+            "filter_hints": {"fields": {f"field_{index}": {"choices": ["value" * 100] * 10} for index in range(20)}},
+        }),
+        operation_slug="collection.info",
+    )
+
+    payload = json.loads(context)
+    assert len(context) <= 4000
+    assert payload["collection"]["slug"] == "large"
+    assert payload["fields"] or payload["filter_hints"]
 
 
 def test_template_context_projections_keep_only_next_call_contract():

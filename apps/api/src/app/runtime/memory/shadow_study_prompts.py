@@ -45,9 +45,17 @@ scope_candidate означает предполагаемую применимо
 утверждения. Скоуп, который лишь упомянут, укажи в mentioned_scope_keys.
 Если нужное название отсутствует в каталоге, укажи его в unmatched_scope_names;
 не придумывай ключ и не создавай скоуп. project_keys оставлены для совместимости.
-scope_rationale кратко объясняет основание выбора. document scope — только
-подсказка. *.all относится лишь к своему типу и не означает global.
+scope_rationale кратко объясняет основание выбора. document.scope_hint_catalog
+содержит выбранные при загрузке скоупы с актуальными именами и алиасами;
+это только подсказки для сопоставления, не доказательство применимости
+каждого утверждения. *.all относится лишь к своему типу и не означает global.
 При сомнении оставь unknown для проверки. Верни только JSON по schema.
+Для каждого item, кроме term, content обязателен и должен соответствовать
+типизированному формату: rule/constraint/decision содержат statement или
+decision, procedure — goal, prechecks, steps, verification и rollback,
+description/relationship — summary. extraction_confidence — калиброванная
+оценка от 0 до 1; не ставь 1.0 без исключительной уверенности и полного
+evidence.
 """.strip()
 
 
@@ -83,6 +91,6 @@ def document_memory_prompt(extras: object, *, stage: str) -> str:
         if isinstance(configured, str) and configured.strip():
             prompt = configured.strip()
             if stage == "study":
-                return prompt + "\n\nКонтракт данных: term — только название и aliases; content пустой, scope_candidate=unknown, project_keys/scope_keys пустые. Определение извлекай отдельным description с собственным scope. Для других items scope_keys — только доказанная применимость из scope_catalog; mentioned_scope_keys — простые упоминания; неизвестные названия — в unmatched_scope_names, без создания скоупа. document scope — подсказка, не доказательство применимости."
+                return prompt + "\n\nКонтракт данных: term — только название и aliases; content пустой, scope_candidate=unknown, project_keys/scope_keys пустые. Определение извлекай отдельным description с собственным scope. Для других items content обязателен и должен соответствовать типу; scope_keys — только доказанная применимость из scope_catalog; mentioned_scope_keys — простые упоминания; неизвестные названия — в unmatched_scope_names, без создания скоупа. document.scope_hint_catalog содержит скоупы загрузки с актуальными именами и алиасами; это подсказка для сопоставления, не доказательство применимости утверждения. extraction_confidence — калиброванная оценка 0..1; не ставь 1.0 без полного evidence."
             return prompt
     return defaults[stage]

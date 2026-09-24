@@ -1,11 +1,15 @@
 from uuid import uuid4
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
 from types import SimpleNamespace
 
-from app.runtime.memory.shadow_document_study import ShadowScreeningOutput, ShadowStudyItem, _scope_proposal
+from app.runtime.memory.shadow_document_study import (
+    ShadowDocumentStudyAgent, ShadowDocumentStudyService, ShadowScreeningOutput,
+    ShadowStudyItem, ShadowStudyOutput, _scope_proposal,
+)
 from app.runtime.memory.shadow_study_prompts import (
     SHADOW_DOCUMENT_SCREENING_PROMPT,
     SHADOW_DOCUMENT_STUDY_PROMPT,
@@ -57,6 +61,35 @@ def test_scope_proposal_separates_applicability_mentions_and_unknown_names() -> 
                                    "mentioned_scope_keys": [], "unmatched_scope_names": []})
     project_scopes = {"project.alpha": SimpleNamespace(scope_type="project")}
     assert _scope_proposal(project_item, project_scopes, {"alpha": object()})[3] == "project"
+
+
+@pytest.mark.asyncio
+async def test_document_scope_hints_use_current_catalog_values() -> None:
+    scope = SimpleNamespace(key="team.ops", scope_type="team", name="Operations",
+                            aliases=["Ops"], is_all=False)
+    session = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(
+        scalars=lambda: SimpleNamespace(all=lambda: [scope]),
+    )))
+    hints = await ShadowDocumentStudyService(session).document_scope_hints(uuid4())
+    assert hints == [{"key": "team.ops", "type": "team", "name": "Operations",
+                      "aliases": ["Ops"], "is_all": False}]
+    sql = str(session.execute.call_args.args[0])
+    assert "document_memory_scopes" in sql
+    assert "memory_scopes.lifecycle_status" in sql
+
+
+@pytest.mark.asyncio
+async def test_study_passes_scope_catalog_and_document_hints_to_extractor() -> None:
+    agent = ShadowDocumentStudyAgent(session=AsyncMock(), llm_client=AsyncMock())
+    agent._prompt = AsyncMock(return_value="study prompt")
+    agent._structured.invoke = AsyncMock(return_value=SimpleNamespace(value=ShadowStudyOutput()))
+    hint = {"key": "team.ops", "type": "team", "name": "Operations", "aliases": ["Ops"], "is_all": False}
+    document = {"id": str(uuid4()), "scope_hints": ["team.ops"], "scope_hint_catalog": [hint]}
+    await agent.study(document=document, sections=[], candidate_ledger=[], glossary=[],
+                      projects=[], scopes=[hint], tenant_id=uuid4())
+    payload = agent._structured.invoke.call_args.kwargs["payload"]
+    assert payload["document"]["scope_hint_catalog"] == [hint]
+    assert payload["scope_catalog"] == [hint]
 
 
 def test_shadow_study_uses_index_group_source_id_once() -> None:

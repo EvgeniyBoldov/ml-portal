@@ -304,6 +304,9 @@ class MemoryClaim(Base, LifecycleMixin):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     memory_item_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("memory_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    approved_candidate_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
     document_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=False, index=True)
     canonical_checksum: Mapped[str] = mapped_column(String(128), nullable=False)
     scope: Mapped[str] = mapped_column(String(16), nullable=False)

@@ -1,9 +1,13 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import pytest
+
+from app.models.memory_scope import MemoryCandidateScope
 from app.runtime.memory.recall import _claim_scopes_apply
 from app.runtime.memory.search import _apply_project_precedence
-from app.runtime.memory.shadow_memory_publication import _scope_signature
+from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService, _scope_signature
 
 
 def scope(kind: str, key: str, *, project_id=None, is_all: bool = False, lifecycle_status: str = "active"):
@@ -57,3 +61,22 @@ def test_scope_signature_preserves_distinct_applicability_identities() -> None:
     assert _scope_signature([project, team]) == _scope_signature([team, project])
     assert _scope_signature([project]) != _scope_signature([project, team])
     assert _scope_signature([]) == "legacy"
+
+
+@pytest.mark.asyncio
+async def test_admin_scope_override_replaces_extractor_suggestion() -> None:
+    suggested = SimpleNamespace(scope_id=uuid4(), status="suggested")
+    selected = SimpleNamespace(id=uuid4())
+    session = SimpleNamespace(
+        execute=AsyncMock(return_value=SimpleNamespace(
+            scalars=lambda: SimpleNamespace(all=lambda: [suggested]),
+        )),
+        add=Mock(),
+    )
+    await ShadowMemoryPublicationService(session)._confirm_scope_bindings(uuid4(), [selected])
+    assert suggested.status == "rejected"
+    binding = session.add.call_args.args[0]
+    assert isinstance(binding, MemoryCandidateScope)
+    assert binding.scope_id == selected.id
+    assert binding.status == "confirmed"
+    assert binding.method == "manual"

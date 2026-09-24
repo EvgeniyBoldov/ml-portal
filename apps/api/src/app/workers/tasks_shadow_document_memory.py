@@ -298,7 +298,7 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str)
             if snapshot.status in {"conflict_checking", "awaiting_review", "approved", "rejected", "skipped", "superseded", "failed"}:
                 return {"snapshot_id": snapshot_id, "status": snapshot.status, "cached": True}
             try:
-                document, source, canonical, sections, checksum = await _document_context(
+                document, _source, canonical, sections, checksum = await _document_context(
                     session, source_id=snapshot.document_id, tenant_id=tenant_uuid,
                 )
             except Exception as exc:
@@ -336,12 +336,14 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str)
             )
             projects_by_key, projects = await service.project_catalog()
             scopes_by_key, scopes = await service.scope_catalog()
+            document_scopes = await service.document_scope_hints(document.id)
             try:
                 output = await ShadowDocumentStudyAgent(session=session, llm_client=get_llm_client()).study(
                     document={
                         "id": str(document.id), "title": document.title, "filename": document.filename,
                         "metadata": dict(canonical.get("metadata") or {}),
-                        "scope_hints": list(dict((source.meta or {}).get("memory") or {}).get("scope_keys") or []),
+                        "scope_hints": [scope["key"] for scope in document_scopes],
+                        "scope_hint_catalog": document_scopes,
                     },
                     sections=batch,
                     candidate_ledger=await service.ledger(snapshot.id),
@@ -361,6 +363,14 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str)
                     logger=logger, snapshot=snapshot, stage="study_sections", cursor=cursor,
                     execution_id=execution_id, status="failed", error_type=type(exc).__name__,
                 )
+                # A provider outage after one or more successful batches must
+                # not strand those candidates in `extracted` forever. Expose
+                # the partial snapshot for review once retries are exhausted.
+                if self.request.retries >= 3:
+                    service = ShadowDocumentStudyService(session)
+                    await service.finalize(snapshot)
+                    await session.commit()
+                    finalize_shadow_document_study.delay(snapshot_id, tenant_id)
                 await session.commit()
                 raise
             counts = await service.persist_batch(

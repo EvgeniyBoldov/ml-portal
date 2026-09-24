@@ -15,6 +15,7 @@ class RuntimeEvaluationCase:
     required_memory_facts: tuple[str, ...] = ()
     forbidden_memory_facts: tuple[str, ...] = ()
     required_operations: tuple[str, ...] = ()
+    one_of_operations: tuple[str, ...] = ()
     forbidden_operations: tuple[str, ...] = ()
     expected_terminal_event: str = "final"
     grounding_requirements: tuple[str, ...] = ()
@@ -74,7 +75,7 @@ def default_runtime_eval_cases() -> tuple[RuntimeEvaluationCase, ...]:
         RuntimeEvaluationCase(
             key="table_or_sql_retrieval",
             title="Table or SQL retrieval path",
-            required_operations=("collection.info",),
+            one_of_operations=("collection.table.search", "collection.sql.search_objects", "collection.sql.execute"),
         ),
         RuntimeEvaluationCase(
             key="missing_credential_path",
@@ -264,7 +265,7 @@ def _extract_operation_from_mapping(payload: Dict[str, Any], seen: Set[str]) -> 
 
 
 def _score_tool_choice(case: RuntimeEvaluationCase, seen_operations: Set[str], notes: List[str]) -> float:
-    total = len(case.required_operations) + len(case.forbidden_operations)
+    total = len(case.required_operations) + len(case.forbidden_operations) + bool(case.one_of_operations)
     if total == 0:
         return 1.0
     score = 0.0
@@ -274,6 +275,11 @@ def _score_tool_choice(case: RuntimeEvaluationCase, seen_operations: Set[str], n
             score += weight
         else:
             notes.append(f"Required operation not found: {required}")
+    if case.one_of_operations:
+        if any(operation in seen_operations for operation in case.one_of_operations):
+            score += weight
+        else:
+            notes.append(f"None of the expected operations found: {', '.join(case.one_of_operations)}")
     for forbidden in case.forbidden_operations:
         if forbidden in seen_operations:
             notes.append(f"Forbidden operation detected: {forbidden}")

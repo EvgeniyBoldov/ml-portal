@@ -42,7 +42,7 @@ class ShadowMemoryReviewService:
     ) -> dict[str, int]:
         candidates = list((await self._session.execute(select(MemoryExtractionCandidate).where(
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
-            MemoryExtractionCandidate.resolution_status == "needs_review",
+            MemoryExtractionCandidate.resolution_status.in_(("extracted", "needs_review")),
         ))).scalars().all())
         counts = {"conflicts": 0, "duplicates": 0, "autoeligible": 0}
         for candidate in candidates:

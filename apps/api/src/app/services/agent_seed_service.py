@@ -37,7 +37,7 @@ SEED_AGENTS = [
             ),
             "tool_use_rules": (
                 "Memory Recall уже раскрывает термины, проекты и правила. "
-                "Для документов используй collection.document.search после collection.info; для таблиц — collection.table.search. "
+                "Для документов используй collection.document.search; для таблиц — collection.table.search. "
                 "Используй только memory_recall как границу долговременной памяти; проверяемые сведения из документов ищи через collection.document.search."
             ),
             "output_format": "Краткий ответ с проверяемыми выводами и источниками; не показывай внутренние ID вызовов инструментов.",
@@ -90,11 +90,11 @@ SEED_AGENTS = [
                 "- collection.table.search — SQL/DSL поиск по table collections. "
                 "Поддерживает query, filters, sort, limit, offset.\n\n"
                 "Стратегия:\n"
-                "1. Когда вопрос про структуру/метаданные коллекции, сначала используй collection.info.\n"
                 "1. Для документов (регламенты, политики) используй collection.document.search.\n"
-                "2. Для tabular data сначала используй collection.table.search с filters/query.\n"
-                "3. Начинай с широкого запроса, уточняй при необходимости.\n"
-                "4. Используй top_k=5 для первого поиска, увеличь до 10 если мало результатов."
+                "2. Для tabular data используй collection.table.search с filters/query.\n"
+                "3. Если результат пустой или структура неясна, используй collection.info и уточни поиск.\n"
+                "4. Начинай с широкого запроса, уточняй при необходимости.\n"
+                "5. Используй top_k=5 для первого поиска, увеличь до 10 если мало результатов."
             ),
             "output_format": (
                 "Структурированный ответ с секциями:\n"
@@ -155,11 +155,11 @@ SEED_AGENTS = [
                 "- collection.table.aggregate — агрегация данных. "
                 "Параметры: metrics, group_by, filters, time_bucket, having.\n\n"
                 "Стратегия:\n"
-                "1. Когда запрос про структуру, поля или доступные категории, начни с collection.info.\n"
                 "1. Поиск тикетов -> collection.table.search.\n"
                 "2. Статистика -> collection.table.aggregate с group_by.\n"
                 "3. Детали записи -> collection.table.get по ID.\n"
-                "4. Сначала сужай выборку filters/query, затем при необходимости уточняй поиск дополнительными условиями."
+                "4. Если результат пустой или структура неясна, используй collection.info и уточни запрос.\n"
+                "5. Сначала сужай выборку filters/query, затем при необходимости уточняй поиск дополнительными условиями."
             ),
             "output_format": (
                 "Структурированный ответ:\n"

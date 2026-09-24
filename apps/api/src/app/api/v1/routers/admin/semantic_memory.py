@@ -24,6 +24,7 @@ from app.services.semantic_memory_admin_service import (
     SemanticMemoryListRow,
 )
 from app.services.memory_scope_catalog import list_memory_scopes
+from app.runtime.memory.content_contracts import content_contract_error
 
 
 router = APIRouter(prefix="/memory")
@@ -34,6 +35,7 @@ class SemanticMemoryItemResponse(BaseModel):
     scope: str
     item_type: str
     project_id: UUID | None
+    scope_keys: list[str] = Field(default_factory=list)
     subject: str
     content_text: str
     content: dict[str, Any] = Field(default_factory=dict)
@@ -109,6 +111,12 @@ class ShadowCandidateResponse(BaseModel):
     candidate_type: str
     subject: str
     content: dict[str, Any]
+    content_text: str = ""
+    content_valid: bool = True
+    content_error: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    related_entities: list[dict[str, Any]] = Field(default_factory=list)
+    related_project_keys: list[str] = Field(default_factory=list)
     evidence_section_ids: list[str]
     scope_candidate: str | None
     resolution_status: str
@@ -209,6 +217,7 @@ def _item_response(row: SemanticMemoryListRow) -> SemanticMemoryItemResponse:
     return SemanticMemoryItemResponse(
         id=item.id, scope="scoped" if item.scope_signature != "legacy" else item.scope,
         item_type=item.item_type, project_id=item.project_id,
+        scope_keys=list(row.scope_keys),
         subject=item.subject, content_text=item.content_text, content=dict(item.content or {}), confidence=item.confidence,
         state=item.state, applicability=dict(item.applicability or {}), visibility=dict(item.visibility or {}),
         last_verified_at=item.last_verified_at, updated_at=item.updated_at,
@@ -222,6 +231,8 @@ async def list_semantic_memory(
     state: str | None = Query(default=None, pattern="^(active|stale|uncertain)$"),
     item_type: str | None = Query(default=None, pattern="^(description|relationship|rule|constraint|procedure|decision)$"),
     project_id: UUID | None = None,
+    scope_type: str | None = Query(default=None, max_length=80),
+    scope_id: UUID | None = None,
     query: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -230,6 +241,7 @@ async def list_semantic_memory(
 ):
     rows = await SemanticMemoryAdminService(db).list_items(
         scope=scope, state=state, item_type=item_type, project_id=project_id,
+        scope_type=scope_type, scope_id=scope_id,
         query=query, limit=limit, offset=offset,
     )
     return SemanticMemoryPageResponse(
@@ -275,20 +287,27 @@ async def get_semantic_memory_staging_overview(
 
 @router.get("/staging/candidates", response_model=list[ShadowCandidateResponse])
 async def list_shadow_candidates(
-    status: str | None = Query(default=None, pattern="^(needs_review|conflict|resolved|rejected)$"),
+    status: str | None = Query(default=None, pattern="^(pending|needs_review|conflict|resolved|rejected)$"),
+    candidate_type: str | None = Query(default=None, pattern="^(term|description|relationship|rule|constraint|procedure|decision)$"),
     tenant_id: UUID | None = None,
     limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    stmt = select(MemoryExtractionCandidate).order_by(MemoryExtractionCandidate.updated_at.desc()).limit(limit)
-    if status:
+    stmt = select(MemoryExtractionCandidate).order_by(MemoryExtractionCandidate.updated_at.desc(), MemoryExtractionCandidate.id).limit(limit).offset(offset)
+    if status == "pending":
+        stmt = stmt.where(MemoryExtractionCandidate.resolution_status.in_(("extracted", "needs_review", "conflict")))
+    elif status:
         stmt = stmt.where(MemoryExtractionCandidate.resolution_status == status)
     if tenant_id:
         stmt = stmt.where(MemoryExtractionCandidate.visibility_tenant_id == tenant_id)
+    if candidate_type:
+        stmt = stmt.where(MemoryExtractionCandidate.candidate_type == candidate_type)
     rows = list((await db.execute(stmt)).scalars().all())
     result: list[ShadowCandidateResponse] = []
     for row in rows:
+        validation_error = None if row.candidate_type == "term" else content_contract_error(row.candidate_type, dict(row.content or {}))
         project_ids = list((await db.execute(select(MemoryCandidateProjectBinding.project_id).where(
             MemoryCandidateProjectBinding.candidate_id == row.id,
         ))).scalars().all())
@@ -302,6 +321,8 @@ async def list_shadow_candidates(
         conflict_ids = list((await db.execute(select(MemoryConflictMember.conflict_id).join(MemoryConflictCase, MemoryConflictCase.id == MemoryConflictMember.conflict_id).where(MemoryConflictMember.candidate_id == row.id, MemoryConflictCase.status == "open"))).scalars().all())
         result.append(ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
             candidate_type=row.candidate_type, subject=row.subject, content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),
+            content_text=row.content_text, aliases=list(row.aliases or []), related_entities=list(row.related_entities or []), related_project_keys=list(row.related_project_keys or []),
+            content_valid=validation_error is None, content_error=validation_error,
             scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence,
             project_ids=project_ids,
             scope_ids=[scope_id for scope_id, _, role in scope_rows if role == "applies_to"],
@@ -324,7 +345,9 @@ async def approve_shadow_candidate(candidate_id: UUID, request: ShadowCandidateD
         await db.rollback(); raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
         candidate_type=row.candidate_type, subject=row.subject, content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),
-        scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence)
+        content_text=row.content_text, aliases=list(row.aliases or []), related_entities=list(row.related_entities or []), related_project_keys=list(row.related_project_keys or []),
+        scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence,
+        project_ids=[], scope_ids=[], scope_keys=[], mentioned_scope_keys=[], unmatched_scope_names=[], conflict_ids=[])
 
 
 @router.post("/staging/candidates/{candidate_id}/reject", response_model=ShadowCandidateResponse)
@@ -336,7 +359,9 @@ async def reject_shadow_candidate(candidate_id: UUID, request: ShadowCandidateDe
         await db.rollback(); raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
         candidate_type=row.candidate_type, subject=row.subject, content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),
-        scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence)
+        content_text=row.content_text, aliases=list(row.aliases or []), related_entities=list(row.related_entities or []), related_project_keys=list(row.related_project_keys or []),
+        scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence,
+        project_ids=[], scope_ids=[], scope_keys=[], mentioned_scope_keys=[], unmatched_scope_names=[], conflict_ids=[])
 
 
 @router.get("/{item_id}", response_model=SemanticMemoryDetailResponse)
@@ -357,6 +382,7 @@ async def get_semantic_memory_item(
     claim_scope_keys: dict[UUID, list[str]] = {}
     for claim_id, key in scope_rows:
         claim_scope_keys.setdefault(claim_id, []).append(key)
+    base["scope_keys"] = sorted({key for keys in claim_scope_keys.values() for key in keys})
     return SemanticMemoryDetailResponse(
         **base,
         sources=[SemanticMemorySourceResponse(

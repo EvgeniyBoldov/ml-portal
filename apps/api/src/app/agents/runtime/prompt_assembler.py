@@ -1,7 +1,6 @@
 """Prompt assembler for runtime-facing agent prompts."""
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
@@ -19,7 +18,6 @@ if TYPE_CHECKING:
 @dataclass(slots=True)
 class PromptAssembly:
     base_prompt: str
-    capability_prompt: str = ""
     collection_prompt: str = ""
     system_operations_prompt: str = ""
     operations_prompt: str = ""
@@ -32,23 +30,22 @@ class OperationPromptRenderer:
 
     @staticmethod
     def render_schema(op: "ResolvedOperation") -> Dict[str, Any]:
-        prompt_meta = OperationPromptRenderer._build_prompt_metadata(op)
         description = build_prompt_operation_description(op, summary=getattr(op, "published", None), max_chars=OperationPromptRenderer.MAX_DESCRIPTION_CHARS)
         return {
             "type": "function",
             "function": {
                 "name": op.operation,
                 "description": description,
-                "parameters": _compact_json_schema(build_prompt_input_schema(op)),
+                "parameters": build_prompt_input_schema(op),
             },
         }
 
     @staticmethod
     def render_public_collection_info_schema(op: "ResolvedOperation") -> Dict[str, Any]:
         description = (
-            "Collection Info | inspect one available collection by slug before any other collection-bound action | "
+            "Collection Info | inspect an available collection's fields and observed values when a result is empty or the structure is unclear | "
             "required args: collection_slug: string | "
-            "returns schema, readiness, available tools/contracts, and runtime enrichment hints."
+            "returns fields, filter hints, observed values, and source metadata."
         )
         return {
             "type": "function",
@@ -63,29 +60,6 @@ class OperationPromptRenderer:
                     "required": ["collection_slug"],
                 },
             },
-        }
-
-    @staticmethod
-    def _build_prompt_metadata(op: "ResolvedOperation") -> Dict[str, Any]:
-        published = getattr(op, "published", None)
-        canonical_name = _text(getattr(published, "canonical_name", None)) or op.operation
-        collection_slug = (
-            _text(getattr(published, "collection_slug", None))
-            or _text(getattr(op, "collection_slug", None))
-            or (_text(getattr(op, "data_instance_slug", None)) if op.scope == "collection" else "")
-        )
-        collection_type = _text(getattr(published, "collection_type", None))
-        result_kind = _text(getattr(published, "result_kind", None)) or _text(getattr(op, "result_kind", None))
-        title = _text(getattr(published, "title", None)) or _text(getattr(op, "name", None))
-        description = _text(getattr(published, "description", None)) or _text(getattr(op, "description", None))
-        return {
-            "canonical_name": canonical_name,
-            "scope_kind": op.scope,
-            "collection_slug": collection_slug or None,
-            "collection_type": collection_type or None,
-            "result_kind": result_kind or None,
-            "title": title or None,
-            "description": description or None,
         }
 
 class PromptAssembler:
@@ -128,7 +102,6 @@ class PromptAssembler:
             str(getattr(op, "operation_slug", "")) for op in resolved_operations
         }:
             base_prompt = base_prompt.replace("file.create", "file.generate")
-        capability_prompt = ""
         collection_prompt = self.assemble_collection_prompt(
             exec_request.resolved_data_instances,
             resolved_operations=resolved_operations,
@@ -186,7 +159,6 @@ class PromptAssembler:
         ]
         return PromptAssembly(
             base_prompt=base_prompt,
-            capability_prompt=capability_prompt,
             collection_prompt=collection_prompt,
             system_operations_prompt=system_operations_prompt,
             operations_prompt=operations_prompt,
@@ -281,7 +253,7 @@ class PromptAssembler:
             return []
         schemas: List[Dict[str, Any]] = []
         seen_canonical: set[str] = set()
-        for op in filter_prompt_visible_operations(resolved_operations):
+        for op in resolved_operations:
             canonical_name = (
                 _text(getattr(getattr(op, "published", None), "canonical_name", None))
                 or _text(getattr(op, "operation", None))
@@ -384,79 +356,3 @@ class PromptAssembler:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
-
-
-def filter_prompt_visible_operations(
-    resolved_operations: Sequence["ResolvedOperation"],
-    *,
-    active_collection_operation_slugs: Optional[set[str]] = None,
-) -> List["ResolvedOperation"]:
-    """Expose collection tools only after their collection was inspected.
-
-    ``collection.info`` is the discovery gateway.  The agent runtime passes
-    the operation slugs returned by successful info calls on later turns;
-    callers that omit the argument retain the safe initial surface.
-    """
-    active_slugs = active_collection_operation_slugs or set()
-    visible_operations: List["ResolvedOperation"] = []
-    for op in resolved_operations:
-        canonical_name = (
-            _text(getattr(getattr(op, "published", None), "canonical_name", None))
-            or _text(getattr(op, "operation", None))
-        )
-        if (
-            op.scope == "system"
-            or canonical_name == "collection.info"
-            or op.operation_slug in active_slugs
-        ):
-            visible_operations.append(op)
-    return visible_operations
-
-
-def _compact_json(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    except TypeError:
-        return _text(value)
-
-
-def _compact_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Keep only prompt-relevant JSON schema parts to reduce token overhead."""
-    if not isinstance(schema, dict) or not schema:
-        return {}
-
-    compact: Dict[str, Any] = {}
-    root_type = schema.get("type")
-    if isinstance(root_type, str):
-        compact["type"] = root_type
-    elif "properties" in schema:
-        compact["type"] = "object"
-
-    properties = schema.get("properties")
-    if isinstance(properties, dict) and properties:
-        compact_props: Dict[str, Any] = {}
-        for idx, (name, field) in enumerate(properties.items()):
-            if idx >= 12:
-                break
-            if not isinstance(field, dict):
-                continue
-            prop: Dict[str, Any] = {}
-            field_type = field.get("type")
-            if isinstance(field_type, str):
-                prop["type"] = field_type
-            if "enum" in field and isinstance(field.get("enum"), list):
-                prop["enum"] = list(field.get("enum")[:8])
-            if "items" in field and isinstance(field.get("items"), dict):
-                items_type = field["items"].get("type")
-                if isinstance(items_type, str):
-                    prop["items"] = {"type": items_type}
-            if prop:
-                compact_props[name] = prop
-        if compact_props:
-            compact["properties"] = compact_props
-
-    required = schema.get("required")
-    if isinstance(required, list) and required:
-        compact["required"] = [str(x) for x in required[:12] if str(x).strip()]
-
-    return compact or {"type": "object"}

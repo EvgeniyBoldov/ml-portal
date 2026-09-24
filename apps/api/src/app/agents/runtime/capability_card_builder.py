@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 MAX_COLLECTIONS_IN_CARD = 20
 MAX_OPERATIONS_IN_CARD = 12
+MAX_FIELDS_IN_CARD = 40
 
 
 @dataclass(slots=True)
@@ -72,21 +73,21 @@ class CapabilityCardBuilder:
             summary.collection_slug: summary
             for summary in build_published_collection_summaries(items, operations)
         }
+        visible_items = [
+            item for item in items
+            if (summary := summaries.get(self._text(item.collection_slug or item.slug)))
+            and summary.available_operations
+        ]
         lines: List[str] = [f"## {self._label(labels, 'collections_title', 'Доступные коллекции')}"]
         lines.append(
-            f"- {self._label(labels, 'collections_info_rule', 'Перед работой с любой коллекцией сначала вызови `collection.info` для этой коллекции.')}"
-        )
-        lines.append(
-            "- `template`, `reglament` и другие значения ниже — это slug коллекций, а не префиксы инструментов. "
-            "Не придумывай имена вроде `template.info` или `reglament.search`."
+            "Выбирай коллекцию по назначению и описанию данных. Если результат пустой или структура "
+            "источника неясна, вызови доступный для неё `collection.info` и уточни запрос."
         )
         shown = 0
         max_items = self._budget(budgets, "max_collections_in_card", MAX_COLLECTIONS_IN_CARD)
-        for item in items:
+        for item in visible_items:
             slug = self._text(item.collection_slug or item.slug)
             summary = summaries.get(slug)
-            if summary is None:
-                continue
             if shown >= max_items:
                 break
             shown += 1
@@ -106,16 +107,41 @@ class CapabilityCardBuilder:
                 lines.append(f"- {self._label(labels, 'purpose_label', 'назначение')}: {purpose}")
             if data_description:
                 lines.append(f"- {self._label(labels, 'data_label', 'данные')}: {data_description}")
+            usage_rules = self._text(summary.usage_rules)
+            if usage_rules:
+                lines.append(f"- {self._label(labels, 'usage_rules_label', 'правила использования')}: {usage_rules}")
             if remote_tables:
                 preview = ", ".join(f"`{name}`" for name in remote_tables[:5])
                 if len(remote_tables) > 5:
                     preview += f", +{len(remote_tables) - 5} ещё"
                 lines.append(f"- {self._label(labels, 'tables_label', 'таблицы')}: {preview}")
+            schema_fields = getattr(item, "schema_fields", None) or []
+            max_fields = self._budget(budgets, "max_fields_in_card", MAX_FIELDS_IN_CARD)
+            if schema_fields:
+                lines.append("- поля:")
+                for field in schema_fields[:max_fields]:
+                    name = self._text(field.get("name"))
+                    if not name:
+                        continue
+                    field_type = self._text(field.get("type"))
+                    description = self._text(field.get("description"))
+                    flags = " [фильтр]" if field.get("filterable") else ""
+                    detail = f": {description}" if description else ""
+                    lines.append(f"  - `{name}` ({field_type}){flags}{detail}")
+                if len(schema_fields) > max_fields:
+                    lines.append(f"  - ... и ещё {len(schema_fields) - max_fields} полей; подробности через `collection.info`")
+            operation_names = sorted({
+                self._text(op.canonical_name or op.operation_slug)
+                for op in summary.available_operations
+                if self._text(op.canonical_name or op.operation_slug)
+            })
+            if operation_names:
+                lines.append("- операции: " + ", ".join(f"`{name}`" for name in operation_names))
 
         if shown == 0:
             return ""
-        if len(items) > shown:
-            lines.append(f"- ... и ещё {len(items) - shown} коллекций")
+        if len(visible_items) > shown:
+            lines.append(f"- ... и ещё {len(visible_items) - shown} коллекций")
         return "\n".join(lines)
 
     def _build_system_operations_card(
