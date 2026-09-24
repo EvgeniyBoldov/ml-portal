@@ -77,7 +77,8 @@ class SemanticMemoryAdminService:
                 func.count(func.distinct(MemoryClaim.id)).label("claim_count"),
             )
             .outerjoin(MemoryItemSource, MemoryItemSource.memory_item_id == MemoryItem.id)
-            .outerjoin(MemoryClaim, MemoryClaim.memory_item_id == MemoryItem.id)
+            .outerjoin(MemoryClaim, (MemoryClaim.memory_item_id == MemoryItem.id) & (MemoryClaim.lifecycle_status == "active"))
+            .where(MemoryItem.lifecycle_status == "active")
             .group_by(MemoryItem.id)
             .order_by(MemoryItem.updated_at.desc(), MemoryItem.subject)
             .limit(max(1, min(limit, 200)))
@@ -99,7 +100,7 @@ class SemanticMemoryAdminService:
             pattern = f"%{query.strip()}%"
             stmt = stmt.where(or_(MemoryItem.subject.ilike(pattern), MemoryItem.content_text.ilike(pattern)))
         rows = (await self._session.execute(stmt)).all()
-        count_stmt = select(func.count()).select_from(MemoryItem)
+        count_stmt = select(func.count()).select_from(MemoryItem).where(MemoryItem.lifecycle_status == "active")
         for predicate in _item_filters(scope, state, item_type, project_id, query):
             count_stmt = count_stmt.where(predicate)
         total = int((await self._session.execute(count_stmt)).scalar_one())
@@ -110,14 +111,14 @@ class SemanticMemoryAdminService:
 
     async def get_item(self, item_id: UUID) -> SemanticMemoryDetail | None:
         item = await self._session.get(MemoryItem, item_id)
-        if item is None:
+        if item is None or item.lifecycle_status != "active":
             return None
         sources = (await self._session.execute(
             select(MemoryItemSource).where(MemoryItemSource.memory_item_id == item_id)
             .order_by(MemoryItemSource.created_at.desc())
         )).scalars().all()
         claims = (await self._session.execute(
-            select(MemoryClaim).where(MemoryClaim.memory_item_id == item_id)
+            select(MemoryClaim).where(MemoryClaim.memory_item_id == item_id, MemoryClaim.lifecycle_status == "active")
             .order_by(MemoryClaim.updated_at.desc())
         )).scalars().all()
         relations = (await self._session.execute(

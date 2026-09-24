@@ -3,7 +3,9 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.runtime.memory.shadow_document_study import ShadowScreeningOutput, ShadowStudyItem
+from types import SimpleNamespace
+
+from app.runtime.memory.shadow_document_study import ShadowScreeningOutput, ShadowStudyItem, _scope_proposal
 from app.runtime.memory.shadow_study_prompts import (
     SHADOW_DOCUMENT_SCREENING_PROMPT,
     SHADOW_DOCUMENT_STUDY_PROMPT,
@@ -34,6 +36,27 @@ def test_shadow_study_output_rejects_invalid_candidate_shape() -> None:
     )
     assert item.operation == "new"
     assert ShadowScreeningOutput(decision="study").document_kind == "unknown"
+
+
+def test_scope_proposal_separates_applicability_mentions_and_unknown_names() -> None:
+    scopes = {
+        "team.arch": SimpleNamespace(scope_type="team"),
+        "product.core": SimpleNamespace(scope_type="product"),
+    }
+    item = ShadowStudyItem(candidate_type="rule", subject="Deploy", scope_candidate="scoped",
+                           scope_keys=["team.arch", "team.new"], mentioned_scope_keys=["product.core"],
+                           unmatched_scope_names=["Новая команда"])
+    applies, mentions, unmatched, proposed = _scope_proposal(item, scopes, {})
+    assert applies == ["team.arch"]
+    assert mentions == ["product.core"]
+    assert unmatched == ["Новая команда", "team.new"]
+    assert proposed == "unknown"
+    global_item = item.model_copy(update={"scope_candidate": "global", "scope_keys": []})
+    assert _scope_proposal(global_item, scopes, {})[3] == "global"
+    project_item = item.model_copy(update={"scope_candidate": "project", "scope_keys": ["project.alpha"],
+                                   "mentioned_scope_keys": [], "unmatched_scope_names": []})
+    project_scopes = {"project.alpha": SimpleNamespace(scope_type="project")}
+    assert _scope_proposal(project_item, project_scopes, {"alpha": object()})[3] == "project"
 
 
 def test_shadow_study_uses_index_group_source_id_once() -> None:

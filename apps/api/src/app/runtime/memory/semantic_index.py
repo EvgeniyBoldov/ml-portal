@@ -58,12 +58,13 @@ class MemorySemanticIndex:
             return 0
         await EmbeddingModelConfigService.ensure_registered(self.session, model.alias)
         service = EmbeddingServiceFactory.get_service(model.alias)
-        active = [item for item in items if item.state in {"active", "uncertain"}]
+        active = [item for item in items if item.state in {"active", "uncertain"} and item.lifecycle_status == "active"]
         if not active:
             return 0
         claim_rows = (await self.session.execute(select(MemoryClaim).where(
             MemoryClaim.memory_item_id.in_([item.id for item in active]),
             MemoryClaim.state == "active",
+            MemoryClaim.lifecycle_status == "active",
         ))).scalars().all()
         texts_by_item: dict[UUID, list[str]] = {}
         for claim in claim_rows:
@@ -112,7 +113,7 @@ class MemorySemanticIndex:
         indexed = 0
         cursor: UUID | None = None
         while True:
-            stmt = select(MemoryItem).where(MemoryItem.state.in_(("active", "uncertain")))
+            stmt = select(MemoryItem).where(MemoryItem.state.in_(("active", "uncertain")), MemoryItem.lifecycle_status == "active")
             if cursor is not None:
                 stmt = stmt.where(MemoryItem.id > cursor)
             rows = list((await self.session.execute(

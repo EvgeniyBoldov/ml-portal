@@ -13,7 +13,7 @@ from app.schemas.lifecycle import DependencyGraphResponse, LifecycleReportRespon
 from app.services.lifecycle_admin_service import LifecycleAdminService
 
 router = APIRouter(tags=["lifecycle"])
-LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule"]
+LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "memory_scope"]
 
 
 class SoftDeleteBody(BaseModel):
@@ -88,6 +88,8 @@ async def delete_entity(
             raise HTTPException(status_code=409, detail="platform_default_tenant_not_found") from exc
         if str(exc) == "last_admin":
             raise HTTPException(status_code=409, detail="last_admin") from exc
+        if str(exc) == "memory_scope_has_dependencies":
+            raise HTTPException(status_code=409, detail="memory_scope_has_dependencies") from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {

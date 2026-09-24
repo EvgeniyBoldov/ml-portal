@@ -54,6 +54,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.mixins.lifecycle import LifecycleMixin
 
 
 class FactScope(str, Enum):
@@ -208,7 +209,7 @@ class FactObservation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
-class MemoryItem(Base):
+class MemoryItem(Base, LifecycleMixin):
     """Typed, document-derived semantic memory.
 
     Unlike legacy ``Fact``, a MemoryItem may carry a complete procedure or
@@ -286,7 +287,7 @@ class MemoryItemSource(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
-class MemoryClaim(Base):
+class MemoryClaim(Base, LifecycleMixin):
     """One source-backed extraction claim, prior to semantic consolidation."""
 
     __tablename__ = "memory_claims"

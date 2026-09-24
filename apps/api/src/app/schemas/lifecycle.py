@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule"]
+LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "memory_scope"]
 LifecycleMode = Literal["soft", "hard", "restore"]
 
 
@@ -20,7 +20,7 @@ class DependencyEntry(BaseModel):
     count: int = Field(ge=0)
     action: str
     will_be: Literal["cascade_deprecated", "cascade_deleted", "migrated", "set_null", "blocker", "already_deprecated"] = "cascade_deleted"
-    entities: list[DependencyEntity] = Field(default_factory=list, max_length=5)
+    entities: list[DependencyEntity] = Field(default_factory=list)
     migration_target: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
 

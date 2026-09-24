@@ -59,12 +59,15 @@ class ShadowMemoryPublicationService:
         if chosen_scope == "project" and project is not None and not selected_scopes:
             selected_scopes = list((await self._session.execute(select(MemoryScope).where(
                 MemoryScope.project_id == project.id,
+                MemoryScope.lifecycle_status == "active",
             ))).scalars().all())
             if not selected_scopes:
-                raise ValueError("Project has no memory scope; add it through a catalog migration")
+                raise ValueError("Project has no active memory scope; add it in the scope catalog")
         if chosen_scope == "project" and (len(selected_scopes) != 1 or selected_scopes[0].project_id != project.id):
             raise ValueError("Project applicability must use exactly the selected project scope")
         visibility = None if promote_to_company else candidate.visibility_tenant_id
+        if not is_term:
+            await self._confirm_scope_bindings(candidate.id, selected_scopes)
         if is_term:
             await self._publish_term(candidate)
             await self._queue_legacy_definition(candidate)
@@ -126,21 +129,33 @@ class ShadowMemoryPublicationService:
         if project_id and not scope_ids:
             return list((await self._session.execute(select(MemoryScope).where(
                 MemoryScope.project_id == project_id,
+                MemoryScope.lifecycle_status == "active",
             ))).scalars().all())
         selected_ids = list(dict.fromkeys(scope_ids))
         rows = list((await self._session.execute(select(MemoryScope).where(
             MemoryScope.id.in_(selected_ids),
+            MemoryScope.lifecycle_status == "active",
         ))).scalars().all()) if selected_ids else []
         if len(rows) != len(selected_ids):
             raise ValueError("Unknown memory scope ID")
-        bindings = list((await self._session.execute(select(MemoryCandidateScope).where(
-            MemoryCandidateScope.candidate_id == candidate.id,
-            MemoryCandidateScope.scope_id.in_(selected_ids),
-            MemoryCandidateScope.role == "applies_to",
-        ))).scalars().all()) if selected_ids else []
-        for binding in bindings:
-            binding.status = "confirmed"
         return rows
+
+    async def _confirm_scope_bindings(self, candidate_id: UUID, selected_scopes: list[MemoryScope]) -> None:
+        bindings = list((await self._session.execute(select(MemoryCandidateScope).where(
+            MemoryCandidateScope.candidate_id == candidate_id,
+            MemoryCandidateScope.role == "applies_to",
+        ))).scalars().all())
+        selected_by_id = {scope.id: scope for scope in selected_scopes}
+        bound_ids = set()
+        for binding in bindings:
+            binding.status = "confirmed" if binding.scope_id in selected_by_id else "rejected"
+            bound_ids.add(binding.scope_id)
+        for scope_id in selected_by_id.keys() - bound_ids:
+            self._session.add(MemoryCandidateScope(
+                candidate_id=candidate_id, scope_id=scope_id, role="applies_to",
+                status="confirmed", method="manual", confidence=1.0,
+                rationale="Selected by administrator during approval",
+            ))
 
     async def _publish_memory(self, candidate: MemoryExtractionCandidate, snapshot: DocumentMemorySnapshot,
                               project: Project | None, visibility: UUID | None,

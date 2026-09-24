@@ -516,11 +516,33 @@ export interface ShadowMemoryCandidate {
   project_ids: string[];
   scope_ids: string[];
   scope_keys: string[];
+  mentioned_scope_keys: string[];
+  unmatched_scope_names: string[];
+  scope_rationale: string | null;
   conflict_ids: string[];
+}
+
+export interface MemoryScopeAdminItem {
+  id: string;
+  scope_type: 'product' | 'project' | 'team';
+  key: string;
+  name: string;
+  aliases: string[];
+  is_all: boolean;
+  project_id: string | null;
+  lifecycle_status: 'active' | 'deprecated';
+  retention_days: number;
 }
 
 // API functions
 export const adminApi = {
+  async getMemoryScopes(): Promise<MemoryScopeAdminItem[]> { return apiRequest('/admin/memory/scopes'); },
+  async createMemoryScope(body: Pick<MemoryScopeAdminItem, 'scope_type' | 'key' | 'name' | 'aliases' | 'is_all'>): Promise<MemoryScopeAdminItem> {
+    return apiRequest('/admin/memory/scopes', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateMemoryScope(id: string, body: Pick<MemoryScopeAdminItem, 'scope_type' | 'key' | 'name' | 'aliases' | 'is_all'>): Promise<MemoryScopeAdminItem> {
+    return apiRequest(`/admin/memory/scopes/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  },
   async getGlossary(): Promise<AdminGlossaryEntry[]> {
     return apiRequest('/admin/glossary');
   },

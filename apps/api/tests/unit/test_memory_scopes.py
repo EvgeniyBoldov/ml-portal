@@ -6,8 +6,9 @@ from app.runtime.memory.search import _apply_project_precedence
 from app.runtime.memory.shadow_memory_publication import _scope_signature
 
 
-def scope(kind: str, key: str, *, project_id=None, is_all: bool = False):
-    return SimpleNamespace(scope_type=kind, key=key, project_id=project_id, is_all=is_all)
+def scope(kind: str, key: str, *, project_id=None, is_all: bool = False, lifecycle_status: str = "active"):
+    return SimpleNamespace(scope_type=kind, key=key, project_id=project_id, is_all=is_all,
+                           lifecycle_status=lifecycle_status)
 
 
 def test_scope_applicability_ors_within_type_and_ands_between_types() -> None:
@@ -29,6 +30,14 @@ def test_all_scope_is_wildcard_only_for_its_type() -> None:
     assert not _claim_scopes_apply(scopes, [], set())
     assert not _claim_scopes_apply([scope("team", "team.all", is_all=True)], [], set())
     assert _claim_scopes_apply([scope("team", "team.all", is_all=True)], [], {"team.ops"})
+
+
+def test_deprecated_scope_never_broadens_claim_applicability() -> None:
+    scopes = [scope("product", "product.core"), scope("team", "team.ops", lifecycle_status="deprecated")]
+    assert not _claim_scopes_apply(scopes, [], {"product.core"})
+    assert not _claim_scopes_apply([scope("team", "team.ops", lifecycle_status="deprecated")], [], set())
+    alternatives = [scope("team", "team.ops", lifecycle_status="deprecated"), scope("team", "team.arch")]
+    assert _claim_scopes_apply(alternatives, [], {"team.arch"})
 
 
 def test_divergent_typed_scopes_do_not_select_an_arbitrary_winner() -> None:

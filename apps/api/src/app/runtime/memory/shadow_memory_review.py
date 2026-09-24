@@ -154,7 +154,8 @@ class ShadowMemoryReviewService:
             MemoryCandidateScope, MemoryCandidateScope.scope_id == MemoryScope.id,
         ).where(MemoryCandidateScope.candidate_id == candidate_id,
                 MemoryCandidateScope.role == "applies_to",
-                MemoryCandidateScope.status != "rejected"))).scalars().all()
+                MemoryCandidateScope.status != "rejected",
+                MemoryScope.lifecycle_status == "active"))).scalars().all()
         return set(rows)
 
 

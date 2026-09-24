@@ -173,13 +173,13 @@ async def list_collection_documents(
                 DocumentCollectionMembership.tenant_id == collection.tenant_id,
             )
         )
+        aggregate_status = func.coalesce(RAGDocument.agg_status, RAGDocument.status.cast(String))
         if status:
             if status in {"ready", "failed", "uploaded", "processing"}:
-                aggregate = func.coalesce(RAGDocument.agg_status, RAGDocument.status)
                 if status == "processing":
-                    base_q = base_q.where(aggregate.in_(["processing", "embedding", "chunked", "normalized"]))
+                    base_q = base_q.where(aggregate_status.in_(["processing", "embedding", "chunked", "normalized"]))
                 else:
-                    base_q = base_q.where(aggregate == status)
+                    base_q = base_q.where(aggregate_status == status)
             else:
                 base_q = base_q.where(RAGDocument.status == status)
         normalized_query = (query or "").strip()
@@ -197,14 +197,14 @@ async def list_collection_documents(
         total = (await session.execute(count_q)).scalar() or 0
 
         status_rows = (await session.execute(
-            select(func.coalesce(RAGDocument.agg_status, RAGDocument.status), sa_func.count())
+            select(aggregate_status, sa_func.count())
             .join(Source, RAGDocument.id == Source.source_id)
             .join(DocumentCollectionMembership, DocumentCollectionMembership.source_id == Source.source_id)
             .where(
                 DocumentCollectionMembership.collection_id == collection_id,
                 DocumentCollectionMembership.tenant_id == collection.tenant_id,
             )
-            .group_by(func.coalesce(RAGDocument.agg_status, RAGDocument.status))
+            .group_by(aggregate_status)
         )).all()
         status_counts = {str(key or "uploaded"): int(count) for key, count in status_rows}
         stats = {

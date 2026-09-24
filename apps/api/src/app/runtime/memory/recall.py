@@ -288,7 +288,9 @@ class MemoryRecallService:
             .where(
                 candidate_filter,
                 MemoryItem.state.in_(("active", "uncertain")),
+                MemoryItem.lifecycle_status == "active",
                 MemoryClaim.state == "active",
+                MemoryClaim.lifecycle_status == "active",
                 claim_visibility,
                 document_access,
                 RAGDocument.status != "archived",
@@ -524,7 +526,10 @@ def _claim_scopes_apply(
     for scope in scopes:
         groups.setdefault(scope.scope_type, []).append(scope)
     projects = set(project_ids)
-    for scope_type, group in groups.items():
+    for scope_type, all_scopes in groups.items():
+        group = [scope for scope in all_scopes if getattr(scope, "lifecycle_status", "active") == "active"]
+        if not group:
+            return False
         if any(scope.is_all for scope in group):
             if scope_type == "project":
                 if not projects and not any(key.startswith("project.") and key != "project.all" for key in context_scope_keys):

@@ -1,6 +1,6 @@
 import { apiRequest } from './http';
 
-export type LifecycleKind = 'tenant' | 'user' | 'collection' | 'agent' | 'rbac_rule';
+export type LifecycleKind = 'tenant' | 'user' | 'collection' | 'agent' | 'rbac_rule' | 'memory_scope';
 export type LifecycleMode = 'soft' | 'hard';
 export type DependencyWillBe =
   | 'cascade_deprecated'

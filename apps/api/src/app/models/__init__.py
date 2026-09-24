@@ -46,6 +46,7 @@ from .sandbox import SandboxSession, SandboxOverride, SandboxRun
 from .discovered_tool import DiscoveredTool
 from .memory import Fact, FactScope, FactSource, DialogueSummary
 from .memory import FactObservation, FactStatus, MemoryClaim, MemoryItem, MemoryItemSource, MemoryItemEvaluation, MemoryRelation
+from .memory_scope import MemoryScope, MemoryCandidateScope, MemoryClaimScope, DocumentMemoryScope
 from .project import Project
 from .glossary import GlossaryEntry, GlossaryObservation, GlossaryScope, GlossaryStatus
 from .knowledge_entity import KnowledgeEntity, KnowledgeEntitySource

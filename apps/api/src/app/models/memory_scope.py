@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, ENUM, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.mixins.lifecycle import LifecycleMixin
 
 
 class MemoryScopeType(str, Enum):
@@ -18,7 +19,7 @@ class MemoryScopeType(str, Enum):
     TEAM = "team"
 
 
-class MemoryScope(Base):
+class MemoryScope(Base, LifecycleMixin):
     __tablename__ = "memory_scopes"
     __table_args__ = (
         UniqueConstraint("scope_type", "key", name="uq_memory_scopes_type_key"),

@@ -78,6 +78,7 @@ class MemoryExtractionCandidate(Base):
     aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     related_entities: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     related_project_keys: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    unmatched_scope_names: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     extraction_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     scope_candidate: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     resolution_status: Mapped[str] = mapped_column(String(16), nullable=False, default="extracted", server_default="extracted")

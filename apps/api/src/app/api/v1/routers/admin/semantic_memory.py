@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, require_admin
@@ -15,6 +16,7 @@ from app.core.security import UserCtx
 from app.models.rag import RAGDocument
 from app.models.document_memory_staging import DocumentMemorySnapshot, MemoryCandidateProjectBinding, MemoryConflictCase, MemoryConflictMember, MemoryExtractionCandidate
 from app.models.memory_scope import MemoryCandidateScope, MemoryClaimScope, MemoryScope
+from app.models.project import Project
 from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService
 from app.models.rag_ingest import RAGStatus, Source
 from app.services.semantic_memory_admin_service import (
@@ -114,6 +116,9 @@ class ShadowCandidateResponse(BaseModel):
     project_ids: list[UUID] = Field(default_factory=list)
     scope_ids: list[UUID] = Field(default_factory=list)
     scope_keys: list[str] = Field(default_factory=list)
+    mentioned_scope_keys: list[str] = Field(default_factory=list)
+    unmatched_scope_names: list[str] = Field(default_factory=list)
+    scope_rationale: str | None = None
     conflict_ids: list[UUID] = Field(default_factory=list)
 
 
@@ -133,13 +138,70 @@ class MemoryScopeResponse(BaseModel):
     name: str
     aliases: list[str]
     is_all: bool
+    project_id: UUID | None = None
+    lifecycle_status: str = "active"
+    retention_days: int = 14
+
+
+class MemoryScopeWriteRequest(BaseModel):
+    scope_type: str = Field(pattern="^(product|project|team)$")
+    key: str = Field(min_length=3, max_length=180, pattern="^[a-z0-9][a-z0-9._-]*$")
+    name: str = Field(min_length=1, max_length=255)
+    aliases: list[str] = Field(default_factory=list, max_length=50)
+    is_all: bool = False
+
+
+def _memory_scope_response(row: MemoryScope) -> MemoryScopeResponse:
+    return MemoryScopeResponse(id=row.id, scope_type=row.scope_type, key=row.key, name=row.name,
+                               aliases=list(row.aliases or []), is_all=row.is_all, project_id=row.project_id,
+                               lifecycle_status=row.lifecycle_status, retention_days=row.retention_days)
 
 
 @router.get("/scopes", response_model=list[MemoryScopeResponse])
 async def get_memory_scopes(db: AsyncSession = Depends(db_session), _: UserCtx = Depends(require_admin)):
-    return [MemoryScopeResponse(id=row.id, scope_type=row.scope_type, key=row.key,
-                                name=row.name, aliases=list(row.aliases or []), is_all=row.is_all)
-            for row in await list_memory_scopes(db)]
+    return [_memory_scope_response(row) for row in await list_memory_scopes(db, include_deprecated=True)]
+
+
+@router.post("/scopes", response_model=MemoryScopeResponse, status_code=201)
+async def create_memory_scope(body: MemoryScopeWriteRequest, db: AsyncSession = Depends(db_session), _: UserCtx = Depends(require_admin)):
+    if not body.key.startswith(f"{body.scope_type}.") or body.is_all != (body.key == f"{body.scope_type}.all"):
+        raise HTTPException(status_code=422, detail="scope_key_type_mismatch")
+    row = MemoryScope(scope_type=body.scope_type, key=body.key, name=body.name.strip(),
+                      aliases=[alias.strip() for alias in body.aliases if alias.strip()], is_all=body.is_all)
+    if body.scope_type == "project" and not body.is_all:
+        row.project_id = (await db.execute(select(Project.id).where(
+            Project.key == body.key.removeprefix("project."),
+        ))).scalar_one_or_none()
+    db.add(row)
+    try:
+        await db.flush()
+        await db.commit()
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="memory_scope_identity_conflict") from exc
+    return _memory_scope_response(row)
+
+
+@router.patch("/scopes/{scope_id}", response_model=MemoryScopeResponse)
+async def update_memory_scope(scope_id: UUID, body: MemoryScopeWriteRequest,
+                              db: AsyncSession = Depends(db_session), _: UserCtx = Depends(require_admin)):
+    row = await db.get(MemoryScope, scope_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    if not body.key.startswith(f"{body.scope_type}.") or body.is_all != (body.key == f"{body.scope_type}.all"):
+        raise HTTPException(status_code=422, detail="scope_key_type_mismatch")
+    if body.scope_type != row.scope_type or body.key != row.key or body.is_all != row.is_all:
+        raise HTTPException(status_code=409, detail="scope_identity_is_immutable")
+    row.scope_type = body.scope_type
+    row.key = body.key
+    row.name = body.name.strip()
+    row.aliases = [alias.strip() for alias in body.aliases if alias.strip()]
+    row.is_all = body.is_all
+    try:
+        await db.flush()
+        await db.commit()
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="memory_scope_identity_conflict") from exc
+    return _memory_scope_response(row)
 
 
 def _item_response(row: SemanticMemoryListRow) -> SemanticMemoryItemResponse:
@@ -230,19 +292,24 @@ async def list_shadow_candidates(
         project_ids = list((await db.execute(select(MemoryCandidateProjectBinding.project_id).where(
             MemoryCandidateProjectBinding.candidate_id == row.id,
         ))).scalars().all())
-        scope_rows = (await db.execute(select(MemoryCandidateScope.scope_id, MemoryScope.key).join(
+        scope_rows = (await db.execute(select(MemoryCandidateScope.scope_id, MemoryScope.key, MemoryCandidateScope.role).join(
             MemoryScope, MemoryScope.id == MemoryCandidateScope.scope_id,
         ).where(
             MemoryCandidateScope.candidate_id == row.id,
-            MemoryCandidateScope.role == "applies_to",
             MemoryCandidateScope.status != "rejected",
+            MemoryScope.lifecycle_status == "active",
         ))).all()
         conflict_ids = list((await db.execute(select(MemoryConflictMember.conflict_id).join(MemoryConflictCase, MemoryConflictCase.id == MemoryConflictMember.conflict_id).where(MemoryConflictMember.candidate_id == row.id, MemoryConflictCase.status == "open"))).scalars().all())
         result.append(ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
             candidate_type=row.candidate_type, subject=row.subject, content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),
             scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence,
-            project_ids=project_ids, scope_ids=[scope_id for scope_id, _ in scope_rows],
-            scope_keys=[key for _, key in scope_rows], conflict_ids=conflict_ids))
+            project_ids=project_ids,
+            scope_ids=[scope_id for scope_id, _, role in scope_rows if role == "applies_to"],
+            scope_keys=[key for _, key, role in scope_rows if role == "applies_to"],
+            mentioned_scope_keys=[key for _, key, role in scope_rows if role == "mentions"],
+            unmatched_scope_names=list(row.unmatched_scope_names or []),
+            scope_rationale=row.resolution_rationale,
+            conflict_ids=conflict_ids))
     return result
 
 

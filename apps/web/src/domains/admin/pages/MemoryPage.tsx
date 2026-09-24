@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, DataTable, EntityPageV2, Input, Tab, type DataTableColumn } from '@/shared/ui';
-import { adminApi, type AdminGlossaryEntry, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
+import { Badge, Button, DataTable, EntityPageV2, Input, Modal, Tab, LifecycleDeleteDialog, type DataTableColumn } from '@/shared/ui';
+import { adminApi, type AdminGlossaryEntry, type MemoryScopeAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
+import MemoryReviewDialog, { type MemoryApproval } from '@/domains/admin/components/MemoryReviewDialog';
 
 const glossaryColumns: DataTableColumn<AdminGlossaryEntry>[] = [
   { key: 'canonical_term', label: 'ТЕРМИН', sortable: true, filter: { kind: 'text', placeholder: 'Термин' }, render: (row) => <strong>{row.canonical_term}</strong> },
@@ -28,21 +29,36 @@ const companyMemoryColumns: DataTableColumn<SemanticMemoryAdminItem>[] = [
   { key: 'source_count', label: 'ИСТОЧНИКИ', width: 110, align: 'right', sortable: true, filter: { kind: 'select', placeholder: 'Любое число', options: [{ value: 'one', label: '1' }, { value: 'multiple', label: '2+' }], getValue: (row) => row.source_count > 1 ? 'multiple' : 'one' }, render: (row) => row.source_count },
 ];
 
-const reviewColumns = (onDecision: (row: ShadowMemoryCandidate, action: 'approve' | 'reject') => void, pending: boolean): DataTableColumn<ShadowMemoryCandidate>[] => [
+const reviewColumns = (onDecision: (row: ShadowMemoryCandidate, action: 'review' | 'approve' | 'reject') => void, pending: boolean): DataTableColumn<ShadowMemoryCandidate>[] => [
   { key: 'subject', label: 'КАНДИДАТ', sortable: true, sortValue: (row) => row.subject, filter: { kind: 'text', placeholder: 'Кандидат или содержимое', getValue: (row) => `${row.subject} ${JSON.stringify(row.content)}` }, render: (row) => <div><strong>{row.subject}</strong><div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>{JSON.stringify(row.content)}</div></div> },
   { key: 'candidate_type', label: 'ТИП', width: 150, sortable: true, filter: { kind: 'text', placeholder: 'Тип' }, render: (row) => <Badge tone="neutral">{row.candidate_type}</Badge> },
-  { key: 'scope_candidate', label: 'ОБЛАСТЬ', width: 220, sortable: true, filter: { kind: 'select', placeholder: 'Все области', options: ['global', 'scoped', 'project', 'multi_project', 'unknown'].map((value) => ({ value, label: value })), getValue: (row) => row.scope_candidate || 'unknown' }, render: (row) => <div><Badge tone="info">{row.scope_candidate || 'unknown'}</Badge>{row.scope_keys.length > 0 && <div style={{ fontSize: '0.8rem' }}>{row.scope_keys.join(', ')}</div>}</div> },
+  { key: 'scope_candidate', label: 'ОБЛАСТЬ', width: 240, sortable: true, filter: { kind: 'select', placeholder: 'Все области', options: ['global', 'scoped', 'project', 'multi_project', 'unknown'].map((value) => ({ value, label: value })), getValue: (row) => row.scope_candidate || 'unknown' }, render: (row) => <div><Badge tone="info">{row.scope_candidate || 'unknown'}</Badge>{row.scope_keys.length > 0 && <div style={{ fontSize: '0.8rem' }}>Применимость: {row.scope_keys.join(', ')}</div>}{row.mentioned_scope_keys.length > 0 && <div style={{ fontSize: '0.8rem' }}>Упомянуты: {row.mentioned_scope_keys.join(', ')}</div>}{row.unmatched_scope_names.length > 0 && <div style={{ fontSize: '0.8rem' }}>Нет в каталоге: {row.unmatched_scope_names.join(', ')}</div>}</div> },
   { key: 'evidence_section_ids', label: 'ИСТОЧНИКИ', width: 130, align: 'right', sortable: true, sortValue: (row) => row.evidence_section_ids.length, render: (row) => row.evidence_section_ids.length },
   { key: 'conflict_ids', label: 'КОНФЛИКТЫ', width: 130, align: 'right', sortable: true, sortValue: (row) => row.conflict_ids.length, filter: { kind: 'select', placeholder: 'Все', options: [{ value: 'yes', label: 'Есть' }, { value: 'no', label: 'Нет' }], getValue: (row) => row.conflict_ids.length ? 'yes' : 'no' }, render: (row) => <Badge tone={row.conflict_ids.length ? 'danger' : 'success'}>{row.conflict_ids.length}</Badge> },
   { key: 'extraction_confidence', label: 'УВЕРЕННОСТЬ', width: 140, align: 'right', sortable: true, filter: { kind: 'select', placeholder: 'Любая', options: [{ value: 'high', label: '≥ 80%' }, { value: 'medium', label: '50–79%' }, { value: 'low', label: '< 50%' }], getValue: (row) => row.extraction_confidence >= 0.8 ? 'high' : row.extraction_confidence >= 0.5 ? 'medium' : 'low' }, render: (row) => `${Math.round(row.extraction_confidence * 100)}%` },
-  { key: 'actions', label: '', width: 205, render: (row) => <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><Button type="button" size="sm" variant="success" disabled={pending || row.conflict_ids.length > 0 || (row.candidate_type !== 'term' && row.scope_candidate !== 'global' && !(row.scope_candidate === 'project' && row.project_ids.length === 1) && !(row.scope_candidate === 'scoped' && row.scope_ids.length > 0))} title={row.conflict_ids.length > 0 ? 'Сначала разрешите конфликты' : row.candidate_type !== 'term' && row.scope_candidate === 'unknown' ? 'Сначала определите область применения' : undefined} onClick={() => onDecision(row, 'approve')}>Утвердить</Button><Button type="button" size="sm" variant="danger" disabled={pending} onClick={() => onDecision(row, 'reject')}>Отклонить</Button></div> },
+  { key: 'actions', label: '', width: 205, render: (row) => <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><Button type="button" size="sm" variant="success" disabled={pending || (row.candidate_type === 'term' && row.conflict_ids.length > 0)} onClick={() => onDecision(row, row.candidate_type === 'term' ? 'approve' : 'review')}>{row.candidate_type === 'term' ? 'Утвердить' : 'Проверить'}</Button><Button type="button" size="sm" variant="danger" disabled={pending} onClick={() => onDecision(row, 'reject')}>Отклонить</Button></div> },
 ];
 
 export default function MemoryPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('glossary');
   const [query, setQuery] = useState('');
+  const [scopeEditor, setScopeEditor] = useState<MemoryScopeAdminItem | 'new' | null>(null);
+  const [scopeToDelete, setScopeToDelete] = useState<MemoryScopeAdminItem | null>(null);
+  const [scopeLifecycleAction, setScopeLifecycleAction] = useState<'delete' | 'restore'>('delete');
+  const [reviewEditor, setReviewEditor] = useState<ShadowMemoryCandidate | null>(null);
+  const [scopeForm, setScopeForm] = useState({ scope_type: 'team' as MemoryScopeAdminItem['scope_type'], key: '', name: '', aliases: '', is_all: false });
   const queryClient = useQueryClient();
+  const { data: memoryScopes, isLoading: scopesLoading, isError: scopesError } = useQuery({
+    queryKey: ['admin', 'memory', 'scopes'], queryFn: () => adminApi.getMemoryScopes(), enabled: activeTab === 'scopes' || activeTab === 'review',
+  });
+  const saveScope = useMutation({
+    mutationFn: () => {
+      const payload = { ...scopeForm, aliases: scopeForm.aliases.split(',').map((value) => value.trim()).filter(Boolean) };
+      return scopeEditor === 'new' ? adminApi.createMemoryScope(payload) : adminApi.updateMemoryScope(scopeEditor!.id, payload);
+    },
+    onSuccess: () => { setScopeEditor(null); queryClient.invalidateQueries({ queryKey: ['admin', 'memory', 'scopes'] }); },
+  });
   const { data: glossary, isLoading: glossaryLoading, isError: glossaryError } = useQuery({
     queryKey: ['admin', 'glossary'],
     queryFn: () => adminApi.getGlossary(),
@@ -69,23 +85,27 @@ export default function MemoryPage() {
     enabled: activeTab === 'review',
   });
   const decision = useMutation({
-    mutationFn: ({ row, action }: { row: ShadowMemoryCandidate; action: 'approve' | 'reject' }) => action === 'approve'
-      ? adminApi.approveShadowMemoryCandidate(row.id, row.candidate_type === 'term'
-        ? {} : row.scope_candidate === 'scoped'
-          ? { scope: 'scoped', scope_ids: row.scope_ids }
-          : row.scope_candidate === 'project'
-          ? { scope: 'project', project_id: row.project_ids[0] }
-          : { scope: 'global' })
+    mutationFn: ({ row, action, body }: { row: ShadowMemoryCandidate; action: 'approve' | 'reject'; body?: MemoryApproval }) => action === 'approve'
+      ? adminApi.approveShadowMemoryCandidate(row.id, body ?? {})
       : adminApi.rejectShadowMemoryCandidate(row.id, 'Rejected by administrator'),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'memory', 'staging-review'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] }),
   });
   const filteredGlossary = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return glossary ?? [];
     return (glossary ?? []).filter((row) => [row.canonical_term, ...row.aliases].join(' ').toLocaleLowerCase().includes(needle));
   }, [glossary, query]);
+  const scopeColumns: DataTableColumn<MemoryScopeAdminItem>[] = [
+    { key: 'scope_type', label: 'ТИП', width: 130, sortable: true, render: (row) => <Badge tone="info">{row.scope_type}</Badge> },
+    { key: 'key', label: 'КЛЮЧ', sortable: true, filter: { kind: 'text', placeholder: 'Ключ' }, render: (row) => <code>{row.key}</code> },
+    { key: 'name', label: 'НАЗВАНИЕ', sortable: true, filter: { kind: 'text', placeholder: 'Название' }, render: (row) => <div><strong>{row.name}</strong>{row.is_all && <div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>Все {row.scope_type === 'team' ? 'подразделения' : row.scope_type === 'project' ? 'проекты' : 'продукты'}</div>}</div> },
+    { key: 'aliases', label: 'АЛИАСЫ', render: (row) => row.aliases.join(', ') || '—' },
+    { key: 'lifecycle_status', label: 'СТАТУС', width: 140, render: (row) => <Badge tone={row.lifecycle_status === 'active' ? 'success' : 'warn'}>{row.lifecycle_status === 'active' ? 'активен' : `удалится через ${row.retention_days} дн.`}</Badge> },
+    { key: 'actions', label: '', width: 210, render: (row) => <div style={{ display: 'flex', gap: 8 }}>{row.lifecycle_status === 'active' && <><Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); setScopeForm({ scope_type: row.scope_type, key: row.key, name: row.name, aliases: row.aliases.join(', '), is_all: row.is_all }); setScopeEditor(row); }}>Изменить</Button><Button size="sm" variant="danger" onClick={(event) => { event.stopPropagation(); setScopeLifecycleAction('delete'); setScopeToDelete(row); }}>Удалить</Button></>}{row.lifecycle_status === 'deprecated' && <Button size="sm" variant="success" onClick={(event) => { event.stopPropagation(); setScopeLifecycleAction('restore'); setScopeToDelete(row); }}>Восстановить</Button>}</div> },
+  ];
 
   return (
+    <>
     <EntityPageV2
       title="Мемори"
       mode="view"
@@ -105,8 +125,27 @@ export default function MemoryPage() {
         {scopedMemoryError ? <p role="alert">Не удалось загрузить память контекстов.</p> : <DataTable columns={companyMemoryColumns} data={scopedMemory?.items ?? []} keyField="id" loading={scopedMemoryLoading} emptyText="Знаний с типизированными скоупами пока нет" paginated pageSize={20} onRowClick={(row) => navigate(`/admin/memory/${row.id}`)} />}
       </Tab>
       <Tab title="На проверке" id="review" layout="full">
-        {reviewError ? <p role="alert">Не удалось загрузить очередь проверки.</p> : <DataTable columns={reviewColumns((row, action) => decision.mutate({ row, action }), decision.isPending)} data={review ?? []} keyField="id" loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20} />}
+        {reviewError ? <p role="alert">Не удалось загрузить очередь проверки.</p> : <DataTable columns={reviewColumns((row, action) => action === 'review' ? setReviewEditor(row) : decision.mutate({ row, action }), decision.isPending)} data={review ?? []} keyField="id" loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20} />}
+      </Tab>
+      <Tab title="Скоупы" id="scopes" layout="full">
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}><Button onClick={() => { setScopeForm({ scope_type: 'team', key: '', name: '', aliases: '', is_all: false }); setScopeEditor('new'); }}>Создать скоуп</Button></div>
+        {scopesError ? <p role="alert">Не удалось загрузить скоупы памяти.</p> : <DataTable columns={scopeColumns} data={memoryScopes ?? []} keyField="id" loading={scopesLoading} emptyText="Скоупов пока нет" paginated pageSize={20} />}
       </Tab>
     </EntityPageV2>
+    <Modal open={Boolean(scopeEditor)} title={scopeEditor === 'new' ? 'Новый скоуп памяти' : 'Изменить скоуп памяти'} onClose={() => setScopeEditor(null)}>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <label>Тип<select value={scopeForm.scope_type} disabled={scopeEditor !== 'new'} onChange={(event) => { const nextType = event.target.value as MemoryScopeAdminItem['scope_type']; const suffix = scopeForm.key.startsWith(`${scopeForm.scope_type}.`) ? scopeForm.key.slice(scopeForm.scope_type.length + 1) : scopeForm.key; setScopeForm({ ...scopeForm, scope_type: nextType, key: scopeForm.is_all ? `${nextType}.all` : suffix ? `${nextType}.${suffix}` : '' }); }}><option value="product">product</option><option value="project">project</option><option value="team">team</option></select></label>
+        <label>Ключ<Input value={scopeForm.key} disabled={scopeEditor !== 'new'} placeholder="team.architects" onChange={(event) => setScopeForm({ ...scopeForm, key: event.target.value.toLowerCase().replace(/\s+/g, '-') })} /></label>
+        {scopeEditor !== 'new' && <small style={{ color: 'var(--muted)' }}>Тип и ключ фиксируют идентичность скоупа; здесь можно изменить название и алиасы.</small>}
+        <label>Название<Input value={scopeForm.name} onChange={(event) => setScopeForm({ ...scopeForm, name: event.target.value })} /></label>
+        <label>Алиасы<Input value={scopeForm.aliases} placeholder="архитекторы, архитектурная команда" onChange={(event) => setScopeForm({ ...scopeForm, aliases: event.target.value })} /></label>
+        {scopeEditor === 'new' && <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input type="checkbox" checked={scopeForm.is_all} onChange={(event) => setScopeForm({ ...scopeForm, is_all: event.target.checked, key: event.target.checked ? `${scopeForm.scope_type}.all` : '' })} />Общий скоуп типа (team.all и т. п.)</label>}
+        {saveScope.isError && <p role="alert">Не удалось сохранить скоуп. Проверьте уникальность ключа и соответствие типа.</p>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button variant="outline" onClick={() => setScopeEditor(null)}>Отмена</Button><Button disabled={!scopeForm.key || !scopeForm.name.trim() || saveScope.isPending} onClick={() => saveScope.mutate()}>{saveScope.isPending ? 'Сохраняем…' : 'Сохранить'}</Button></div>
+      </div>
+    </Modal>
+    <LifecycleDeleteDialog open={Boolean(scopeToDelete)} action={scopeLifecycleAction} kind="memory_scope" entityId={scopeToDelete?.id ?? ''} entityLabel={scopeToDelete?.name ?? ''} onCancel={() => setScopeToDelete(null)} onSuccess={() => { setScopeToDelete(null); queryClient.invalidateQueries({ queryKey: ['admin', 'memory', 'scopes'] }); queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] }); }} />
+    {reviewEditor && <MemoryReviewDialog key={reviewEditor.id} candidate={reviewEditor} scopes={memoryScopes ?? []} pending={decision.isPending} onClose={() => setReviewEditor(null)} onApprove={async (body) => { await decision.mutateAsync({ row: reviewEditor, action: 'approve', body }); setReviewEditor(null); }} />}
+    </>
   );
 }

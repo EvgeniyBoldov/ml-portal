@@ -40,9 +40,13 @@ term — только canonical subject и aliases. Для term оставь con
 scope_candidate=unknown и project_keys пустым. Определение термина извлеки
 отдельным description с тем же subject и собственным evidence.
 scope_candidate означает предполагаемую применимость утверждения, а не доступ
-к файлу: global, scoped или unknown. scope_keys можно назвать только точными
-ключами из scope_catalog. project_keys оставлены для совместимости.
-Упоминание контекста не доказывает applies_to; document scope — только подсказка.
+к файлу: global, scoped, project или unknown. scope_keys — только те точные ключи
+из scope_catalog, для которых sections доказывают применимость именно этого
+утверждения. Скоуп, который лишь упомянут, укажи в mentioned_scope_keys.
+Если нужное название отсутствует в каталоге, укажи его в unmatched_scope_names;
+не придумывай ключ и не создавай скоуп. project_keys оставлены для совместимости.
+scope_rationale кратко объясняет основание выбора. document scope — только
+подсказка. *.all относится лишь к своему типу и не означает global.
 При сомнении оставь unknown для проверки. Верни только JSON по schema.
 """.strip()
 
@@ -79,6 +83,6 @@ def document_memory_prompt(extras: object, *, stage: str) -> str:
         if isinstance(configured, str) and configured.strip():
             prompt = configured.strip()
             if stage == "study":
-                return prompt + "\n\nКонтракт данных: term — только название и aliases; content пустой, scope_candidate=unknown, project_keys/scope_keys пустые. Определение извлекай отдельным description с собственным scope. Для других items scope_keys — только точные ключи из scope_catalog; document scope — подсказка, не доказательство применимости."
+                return prompt + "\n\nКонтракт данных: term — только название и aliases; content пустой, scope_candidate=unknown, project_keys/scope_keys пустые. Определение извлекай отдельным description с собственным scope. Для других items scope_keys — только доказанная применимость из scope_catalog; mentioned_scope_keys — простые упоминания; неизвестные названия — в unmatched_scope_names, без создания скоупа. document scope — подсказка, не доказательство применимости."
             return prompt
     return defaults[stage]

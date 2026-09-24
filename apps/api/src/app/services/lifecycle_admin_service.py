@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 import inspect
 
-from sqlalchemy import func, select
+from sqlalchemy import String, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent import Agent
@@ -16,6 +16,10 @@ from app.models.rbac import RbacRule
 from app.models.sandbox import SandboxSession
 from app.models.tenant import Tenants, UserTenants
 from app.models.user import Users
+from app.models.memory import MemoryClaim, MemoryItem
+from app.models.memory_scope import (
+    DocumentMemoryScope, MemoryCandidateScope, MemoryClaimScope, MemoryScope,
+)
 from app.services.agent_service import AgentService
 from app.services.chats_service import ChatsService
 from app.services.collection_service import CollectionService
@@ -25,7 +29,7 @@ from app.services.tenant_migration_service import TenantMigrationService
 from app.services.tenants_service import AsyncTenantsService
 from app.services.sandbox_service import SandboxService
 
-LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "chat", "sandbox_session"]
+LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "chat", "sandbox_session", "memory_scope"]
 
 
 @dataclass
@@ -71,6 +75,7 @@ class LifecycleAdminService:
         "rbac_rules": "rbac_rule",
         "chats": "chat",
         "sandbox_sessions": "sandbox_session",
+        "memory_scopes": "memory_scope",
     }
 
     LIFECYCLE_DEPENDENCY_RESOURCES = {
@@ -80,6 +85,11 @@ class LifecycleAdminService:
         "rbac_rules",
         "chats",
         "sandbox_sessions",
+        "memory_scopes",
+        "memory_claims",
+        "memory_candidates",
+        "document_scope_hints",
+        "memory_items",
     }
 
     async def get_dependencies(
@@ -92,6 +102,11 @@ class LifecycleAdminService:
         full_entities: bool = False,
     ) -> list[dict[str, Any]]:
         direct = await self._get_direct_dependencies(kind, entity_id, full_entities=full_entities)
+        if kind == "memory_scope" and not cascade:
+            for entry in direct:
+                if int(entry.get("count") or 0) > 0:
+                    entry["action"] = "block_delete_without_cascade"
+                    entry["will_be"] = "blocker"
         expanded: list[dict[str, Any]] = []
         if cascade:
             visited: set[tuple[str, str]] = {(kind, str(entity_id))}
@@ -113,6 +128,8 @@ class LifecycleAdminService:
             return await self._agent_dependencies(entity_id, full_entities=full_entities)
         if kind in {"rbac_rule", "chat", "sandbox_session"}:
             return []
+        if kind == "memory_scope":
+            return await self._memory_scope_dependencies(entity_id, full_entities=full_entities)
         raise ValueError(f"Unsupported lifecycle kind: {kind}")
 
     async def _expand_cascade_dependencies(
@@ -192,6 +209,7 @@ class LifecycleAdminService:
             "rbac_rule": "rbac_rules",
             "chat": "chats",
             "sandbox_session": "sandbox_sessions",
+            "memory_scope": "memory_scopes",
         }[kind]
 
     async def _apply_deprecated_state(
@@ -233,6 +251,10 @@ class LifecycleAdminService:
 
         if kind in {"tenant", "user", "collection"} and hasattr(entity, "is_active"):
             entity.is_active = False
+
+        if kind == "memory_scope":
+            await self._deprecate_scope_memory(entity_id, actor_id=actor_id, reason=reason,
+                                               retention_days=retention_days, root_id=root_id)
 
         if counts is not None:
             resource_key = self._resource_counter_key(kind)
@@ -301,6 +323,17 @@ class LifecycleAdminService:
                         root_id=entity_id,
                         counts=cascaded_counts,
                     )
+            if kind == "memory_scope":
+                for model, resource in ((MemoryClaim, "memory_claims"), (MemoryItem, "memory_items")):
+                    count = await self._count(select(func.count()).select_from(model).where(
+                        model.lifecycle_status == "deprecated",
+                        model.deprecated_root_kind == "memory_scope",
+                        model.deprecated_root_id == entity_id,
+                    ))
+                    if count:
+                        cascaded_counts[resource] = count
+                cascaded_counts["memory_candidates"] = await self._count(select(func.count()).select_from(MemoryCandidateScope).where(MemoryCandidateScope.scope_id == entity_id))
+                cascaded_counts["document_scope_hints"] = await self._count(select(func.count()).select_from(DocumentMemoryScope).where(DocumentMemoryScope.scope_id == entity_id))
 
         return LifecycleReport(
             kind=kind,
@@ -323,7 +356,7 @@ class LifecycleAdminService:
 
         restored_counts: dict[str, int] = {}
         await self._restore_entity_state(kind, entity_id, restored_counts=restored_counts)
-        for dep_kind in ("tenant", "user", "collection", "agent", "rbac_rule", "chat", "sandbox_session"):
+        for dep_kind in ("tenant", "user", "collection", "agent", "rbac_rule", "chat", "sandbox_session", "memory_claim", "memory_item"):
             for dep_id in await self._find_cascaded_entity_ids(dep_kind, root_kind=kind, root_id=entity_id):
                 await self._restore_entity_state(dep_kind, dep_id, restored_counts=restored_counts)
 
@@ -585,6 +618,55 @@ class LifecycleAdminService:
                 restored={},
             )
 
+        if kind == "memory_scope":
+            scope = await self.session.get(MemoryScope, entity_id)
+            if scope is None:
+                raise ValueError("not_found")
+            if not cascade:
+                deps = await self._memory_scope_dependencies(entity_id, full_entities=False)
+                if any(int(d.get("count") or 0) > 0 for d in deps):
+                    raise ValueError("memory_scope_has_dependencies")
+            claim_ids = list((await self.session.execute(
+                select(MemoryClaimScope.claim_id).where(MemoryClaimScope.scope_id == entity_id)
+            )).scalars().all())
+            candidate_count = await self._count(select(func.count()).select_from(MemoryCandidateScope).where(MemoryCandidateScope.scope_id == entity_id))
+            document_hint_count = await self._count(select(func.count()).select_from(DocumentMemoryScope).where(DocumentMemoryScope.scope_id == entity_id))
+            retained_claim_ids = set((await self.session.execute(
+                select(MemoryClaimScope.claim_id).join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id)
+                .where(MemoryClaimScope.claim_id.in_(claim_ids), MemoryClaimScope.scope_id != entity_id,
+                       MemoryScope.scope_type == scope.scope_type)
+            )).scalars().all()) if claim_ids else set()
+            claims_to_delete = set(claim_ids) - retained_claim_ids
+            item_ids = list((await self.session.execute(
+                select(MemoryClaim.memory_item_id).where(MemoryClaim.id.in_(claims_to_delete))
+            )).scalars().all()) if claims_to_delete else []
+            unique_item_ids = set(item_ids)
+            deleted_items = 0
+            if claim_ids:
+                await self.session.execute(delete(MemoryClaimScope).where(
+                    MemoryClaimScope.claim_id.in_(claim_ids), MemoryClaimScope.scope_id == entity_id,
+                ))
+            if claims_to_delete:
+                await self.session.execute(delete(MemoryClaim).where(MemoryClaim.id.in_(claims_to_delete)))
+            if cascade:
+                # A claim remains constrained when another scope of this type survives.
+                for item_id in unique_item_ids:
+                    remaining = await self._count(select(func.count()).select_from(MemoryClaim).where(MemoryClaim.memory_item_id == item_id))
+                    if remaining == 0:
+                        deleted_items += int((await self.session.execute(delete(MemoryItem).where(MemoryItem.id == item_id))).rowcount or 0)
+                await self.session.execute(delete(MemoryCandidateScope).where(MemoryCandidateScope.scope_id == entity_id))
+                await self.session.execute(delete(DocumentMemoryScope).where(DocumentMemoryScope.scope_id == entity_id))
+            else:
+                await self.session.execute(delete(MemoryCandidateScope).where(MemoryCandidateScope.scope_id == entity_id))
+                await self.session.execute(delete(DocumentMemoryScope).where(DocumentMemoryScope.scope_id == entity_id))
+            await self.session.delete(scope)
+            await self.session.flush()
+            return LifecycleReport(kind=kind, entity_id=str(entity_id), mode="hard", lifecycle_status="deleted",
+                                   details={"claims_deleted": len(claims_to_delete), "claims_retained_for_other_scopes": len(retained_claim_ids)}, migrated={},
+                                   cascaded={"memory_claims": len(claims_to_delete), "memory_items": deleted_items,
+                                             "memory_candidates": candidate_count, "document_scope_hints": document_hint_count},
+                                   set_null={}, rbac_rules_removed=0, renamed=[], restored={})
+
         raise ValueError(f"Unsupported lifecycle kind: {kind}")
 
     async def _remove_collection_from_agent_bindings(self, collection_id: uuid.UUID) -> None:
@@ -603,6 +685,92 @@ class LifecycleAdminService:
             agent.allowed_collection_ids = filtered
             self.session.add(agent)
 
+    async def _memory_scope_dependencies(self, scope_id: uuid.UUID, *, full_entities: bool = False) -> list[dict[str, Any]]:
+        limit = None if full_entities else 5
+        claim_count = await self._count(select(func.count()).select_from(MemoryClaimScope).where(MemoryClaimScope.scope_id == scope_id))
+        candidate_count = await self._count(select(func.count()).select_from(MemoryCandidateScope).where(MemoryCandidateScope.scope_id == scope_id))
+        document_count = await self._count(select(func.count()).select_from(DocumentMemoryScope).where(DocumentMemoryScope.scope_id == scope_id))
+        claims = await self._sample_entities(
+            select(MemoryClaim.id, MemoryClaim.normalized_subject).join(MemoryClaimScope, MemoryClaimScope.claim_id == MemoryClaim.id)
+            .where(MemoryClaimScope.scope_id == scope_id), resource_type="memory_claims", limit=limit,
+        )
+        candidates = await self._sample_entities(
+            select(MemoryCandidateScope.candidate_id, MemoryCandidateScope.candidate_id.cast(String)).where(MemoryCandidateScope.scope_id == scope_id),
+            resource_type="memory_candidates", limit=limit,
+        )
+        documents = await self._sample_entities(
+            select(DocumentMemoryScope.document_id, DocumentMemoryScope.document_id.cast(String)).where(DocumentMemoryScope.scope_id == scope_id),
+            resource_type="document_scope_hints", limit=limit,
+        )
+        item_count = int((await self.session.execute(
+            select(func.count(func.distinct(MemoryClaim.memory_item_id)))
+            .select_from(MemoryClaim).join(MemoryClaimScope, MemoryClaimScope.claim_id == MemoryClaim.id)
+            .where(MemoryClaimScope.scope_id == scope_id)
+        )).scalar_one())
+        items = await self._sample_entities(
+            select(MemoryItem.id, MemoryItem.subject).join(MemoryClaim, MemoryClaim.memory_item_id == MemoryItem.id)
+            .join(MemoryClaimScope, MemoryClaimScope.claim_id == MemoryClaim.id)
+            .where(MemoryClaimScope.scope_id == scope_id).distinct(),
+            resource_type="memory_items", limit=limit,
+        )
+        return [
+            asdict(DependencyEntry("memory_claims", claim_count, "cascade_delete", will_be="cascade_deleted", entities=claims)),
+            asdict(DependencyEntry("memory_items", item_count, "cascade_delete_when_unreferenced", will_be="cascade_deleted", entities=items)),
+            asdict(DependencyEntry("memory_candidates", candidate_count, "remove_scope_binding", will_be="cascade_deleted", entities=candidates)),
+            asdict(DependencyEntry("document_scope_hints", document_count, "remove_scope_binding", will_be="cascade_deleted", entities=documents)),
+        ]
+
+    async def _deprecate_scope_memory(self, scope_id: uuid.UUID, *, actor_id: uuid.UUID | None,
+                                      reason: str | None, retention_days: int | None, root_id: uuid.UUID) -> None:
+        claim_ids = list((await self.session.execute(select(MemoryClaimScope.claim_id).where(
+            MemoryClaimScope.scope_id == scope_id
+        ))).scalars().all())
+        if not claim_ids:
+            return
+        now = datetime.now(timezone.utc)
+        claims = (await self.session.execute(select(MemoryClaim).where(MemoryClaim.id.in_(claim_ids)))).scalars().all()
+        item_ids: set[uuid.UUID] = set()
+        scope = await self.session.get(MemoryScope, scope_id)
+        retained_claim_ids = set((await self.session.execute(
+            select(MemoryClaimScope.claim_id).join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id)
+            .where(MemoryClaimScope.claim_id.in_(claim_ids), MemoryClaimScope.scope_id != scope_id,
+                   MemoryScope.scope_type == scope.scope_type,
+                   MemoryScope.lifecycle_status == "active")
+        )).scalars().all())
+        affected_claim_ids = set(claim_ids) - retained_claim_ids
+        for claim in claims:
+            if claim.id in retained_claim_ids:
+                continue
+            item_ids.add(claim.memory_item_id)
+            if claim.lifecycle_status == "active":
+                claim.lifecycle_status = "deprecated"
+                claim.deprecated_at = now
+                claim.deprecated_by = actor_id
+                claim.deprecated_reason = reason
+                claim.retention_days = retention_days if retention_days is not None else claim.retention_days
+                claim.delete_cascade = True
+                claim.deprecated_root_kind = "memory_scope"
+                claim.deprecated_root_id = root_id
+        for item_id in item_ids:
+            active_elsewhere = await self._count(select(func.count()).select_from(MemoryClaim).where(
+                MemoryClaim.memory_item_id == item_id,
+                MemoryClaim.lifecycle_status == "active",
+                MemoryClaim.id.not_in(affected_claim_ids),
+            ))
+            if active_elsewhere:
+                continue
+            item = await self.session.get(MemoryItem, item_id)
+            if item is None or item.lifecycle_status == "deprecated":
+                continue
+            item.lifecycle_status = "deprecated"
+            item.deprecated_at = now
+            item.deprecated_by = actor_id
+            item.deprecated_reason = reason
+            item.retention_days = retention_days if retention_days is not None else item.retention_days
+            item.delete_cascade = True
+            item.deprecated_root_kind = "memory_scope"
+            item.deprecated_root_id = root_id
+
     async def _get_entity(self, kind: LifecycleKind, entity_id: uuid.UUID):
         model_map = {
             "tenant": Tenants,
@@ -612,6 +780,9 @@ class LifecycleAdminService:
             "rbac_rule": RbacRule,
             "chat": Chats,
             "sandbox_session": SandboxSession,
+            "memory_scope": MemoryScope,
+            "memory_claim": MemoryClaim,
+            "memory_item": MemoryItem,
         }
         model = model_map.get(kind)
         if model is None:
@@ -633,6 +804,9 @@ class LifecycleAdminService:
             "rbac_rule": RbacRule,
             "chat": Chats,
             "sandbox_session": SandboxSession,
+            "memory_scope": MemoryScope,
+            "memory_claim": MemoryClaim,
+            "memory_item": MemoryItem,
         }
         model = model_map[kind]
         result = await self.session.execute(
@@ -676,6 +850,9 @@ class LifecycleAdminService:
             "rbac_rule": "rbac_rules",
             "chat": "chats",
             "sandbox_session": "sandbox_sessions",
+            "memory_scope": "memory_scopes",
+            "memory_claim": "memory_claims",
+            "memory_item": "memory_items",
         }.get(kind)
         if resource_key is not None:
             restored_counts[resource_key] = restored_counts.get(resource_key, 0) + 1

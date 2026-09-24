@@ -11,7 +11,9 @@ async def resolve_memory_scopes(session: AsyncSession, keys: list[str]) -> list[
     normalized = list(dict.fromkeys(str(key).strip().lower() for key in keys if str(key).strip()))
     if not normalized:
         return []
-    rows = list((await session.execute(select(MemoryScope).where(MemoryScope.key.in_(normalized)))).scalars().all())
+    rows = list((await session.execute(select(MemoryScope).where(
+        MemoryScope.key.in_(normalized), MemoryScope.lifecycle_status == "active",
+    ))).scalars().all())
     by_key = {row.key: row for row in rows}
     missing = [key for key in normalized if key not in by_key]
     if missing:
@@ -19,5 +21,8 @@ async def resolve_memory_scopes(session: AsyncSession, keys: list[str]) -> list[
     return [by_key[key] for key in normalized]
 
 
-async def list_memory_scopes(session: AsyncSession) -> list[MemoryScope]:
-    return list((await session.execute(select(MemoryScope).order_by(MemoryScope.scope_type, MemoryScope.key))).scalars().all())
+async def list_memory_scopes(session: AsyncSession, *, include_deprecated: bool = False) -> list[MemoryScope]:
+    stmt = select(MemoryScope).order_by(MemoryScope.scope_type, MemoryScope.key)
+    if not include_deprecated:
+        stmt = stmt.where(MemoryScope.lifecycle_status == "active")
+    return list((await session.execute(stmt)).scalars().all())
