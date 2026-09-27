@@ -14,6 +14,7 @@ class DiscoveredToolListItem(BaseModel):
     slug: str
     name: str
     description: Optional[str] = None
+    risk_level: Optional[str] = None
     source: str
     provider_instance_id: Optional[UUID] = None
     connector_slug: Optional[str] = None
@@ -33,6 +34,7 @@ class DiscoveredToolDetailResponse(BaseModel):
     slug: str
     name: str
     description: Optional[str] = None
+    risk_level: Optional[str] = None
     source: str
     provider_instance_id: Optional[UUID] = None
     connector_slug: Optional[str] = None
@@ -94,3 +96,4 @@ class DiscoveredToolUpdateRequest(BaseModel):
         default=None,
         description="Publication container link. NULL means discovered-only capability.",
     )
+    risk_level: Optional[str] = Field(default=None, max_length=100)

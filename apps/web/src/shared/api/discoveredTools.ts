@@ -9,6 +9,7 @@ export interface DiscoveredToolListItem {
   slug: string;
   name: string;
   description: string | null;
+  risk_level: string | null;
   source: string;
   provider_instance_id: string | null;
   connector_slug: string | null;
@@ -32,6 +33,7 @@ export interface RescanResponse {
 
 export interface DiscoveredToolUpdateRequest {
   tool_id?: string | null;
+  risk_level?: string | null;
 }
 
 export interface McpProbeToolItem {
@@ -84,6 +86,13 @@ export const discoveredToolsApi = {
 
   get: async (id: string): Promise<DiscoveredToolDetail> => {
     return apiRequest<DiscoveredToolDetail>(`/admin/discovered-tools/${id}`, { method: 'GET' });
+  },
+
+  update: async (id: string, data: DiscoveredToolUpdateRequest): Promise<DiscoveredToolDetail> => {
+    return apiRequest<DiscoveredToolDetail>(`/admin/discovered-tools/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
   },
 
   probeMcp: async (providerInstanceId: string): Promise<McpProbeResponse> => {

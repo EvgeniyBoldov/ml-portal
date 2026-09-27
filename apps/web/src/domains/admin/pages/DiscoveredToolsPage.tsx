@@ -86,6 +86,18 @@ export function DiscoveredToolsPage() {
       ),
     },
     {
+      key: 'risk_level',
+      label: 'Уровень риска',
+      width: 160,
+      sortable: true,
+      filter: {
+        kind: 'text',
+        placeholder: 'Уровень риска',
+        getValue: (row) => row.risk_level ?? '',
+      },
+      render: (row) => row.risk_level || '—',
+    },
+    {
       key: 'connector_slug',
       label: 'Коннектор',
       width: 180,

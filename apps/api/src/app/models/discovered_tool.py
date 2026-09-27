@@ -35,6 +35,10 @@ class DiscoveredTool(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    risk_level: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True,
+        comment="Risk level reported by the provider or set by an administrator",
+    )
     tool_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tools.id", ondelete="SET NULL"),

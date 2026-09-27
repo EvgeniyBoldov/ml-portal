@@ -34,7 +34,7 @@
 
 В discovery-парсинге проверяются допустимые значения:
 
-- `risk_level`: только `safe | write | destructive`
+- `risk_level`: рекомендуемые значения `safe | write | destructive`; другие строки сохраняются как исходная оценка риска, а runtime пока трактует неизвестное значение как `destructive`
 - `credential_scope`: только `platform | user | auto`
 - `side_effects`: только boolean
 - `requires_confirmation`: только boolean
@@ -50,3 +50,8 @@
 - `requires_confirmation`
 
 Явные значения `platform` и `user` имеют приоритет над автоматической стратегией.
+
+Исключение для credential safety: если итоговый риск операции равен `write`,
+runtime всегда использует `USER_ONLY`, даже при явно заданном
+`credential_scope = "platform"`. Для `safe` продолжает действовать выбранный
+`credential_scope` или стратегия политики `PLATFORM_FIRST` при `auto`.

@@ -159,6 +159,10 @@ class ToolResolver:
             if discovered_operation.description and discovered_operation.description.strip()
             else (publication.spec.description if publication else "")
         )
+        runtime_risk_level = _resolve_risk_level(
+            getattr(discovered_tool, "risk_level", None),
+            discovered_operation.risk_level,
+        )
         return ResolvedTool(
             raw_slug=raw_operation_name,
             operation_name=operation_name,
@@ -170,7 +174,7 @@ class ToolResolver:
             domain=publication.spec.domain if publication else None,
             result_kind=publication.spec.result_kind if publication else None,
             scope_kind=(publication.scope_kind if publication else "collection"),  # type: ignore[arg-type]
-            risk_level=discovered_operation.risk_level,
+            risk_level=runtime_risk_level,
             side_effects=discovered_operation.side_effects,
             requires_confirmation=discovered_operation.requires_confirmation,
             credential_scope=discovered_operation.credential_scope,
@@ -182,6 +186,21 @@ class ToolResolver:
                 "runtime_domain": runtime_domain,
             },
         )
+
+
+def _resolve_risk_level(
+    discovered_risk_level: Optional[str],
+    schema_risk_level: Literal["safe", "write", "destructive"],
+) -> Literal["safe", "write", "destructive"]:
+    """Use the catalog risk label when it maps to a runtime risk category."""
+    normalized = str(discovered_risk_level or "").strip().lower().replace("-", "_")
+    if normalized in {"safe", "read_only", "readonly"}:
+        return "safe"
+    if normalized in {"write", "mutable", "mutating"}:
+        return "write"
+    if normalized in {"destructive", "dangerous"}:
+        return "destructive"
+    return schema_risk_level
 
 
 def _build_title(discovered_name: Optional[str], slug: str) -> str:

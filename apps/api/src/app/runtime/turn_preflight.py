@@ -183,7 +183,54 @@ class TurnPreflight:
             )
         if recall_context is not None and decision.route == "recall":
             raise ValueError("TurnPreflight may request recall only once per turn")
+        if decision.route == "planner" and decision.task_brief is not None:
+            assignee = self._self_jira_assignee(user_request, facts_context or [])
+            if assignee:
+                task_brief = decision.task_brief
+                entity_hints = list(task_brief.entity_hints)
+                if assignee not in entity_hints:
+                    entity_hints.append(assignee)
+                constraint = (
+                    f"Для запроса о собственных задачах Jira обязательно фильтруй по assignee={assignee}."
+                )
+                constraints = list(task_brief.constraints)
+                if constraint not in constraints:
+                    constraints.append(constraint)
+                decision = decision.model_copy(update={
+                    "task_brief": task_brief.model_copy(update={
+                        "entity_hints": entity_hints,
+                        "constraints": constraints,
+                    }),
+                })
         return decision
+
+    @staticmethod
+    def _self_jira_assignee(
+        user_request: str, facts_context: list[dict[str, Any]],
+    ) -> str | None:
+        """Resolve a self-assignee only from one unambiguous confirmed user fact."""
+        text = " ".join(str(user_request or "").lower().split())
+        asks_for_own_tasks = bool(re.search(
+            r"\b(?:мо\w*|у\s+меня|мне|my|mine|assigned\s+to\s+me)\b", text,
+        )) and bool(re.search(r"\b(?:задач\w*|тикет\w*|issue\w*|ticket\w*)\b", text))
+        mentions_jira = bool(re.search(r"\bjira\b", text))
+        if not (asks_for_own_tasks and mentions_jira):
+            return None
+
+        accepted_subjects = {
+            "учетная запись", "учётная запись", "логин", "jira username",
+            "username", "user.jira.username",
+        }
+        candidates = {
+            str(item.get("value") or "").strip()
+            for item in facts_context
+            if isinstance(item, dict)
+            and item.get("scope") == "user"
+            and item.get("kind") == "fact"
+            and str(item.get("subject") or "").strip().lower() in accepted_subjects
+            and re.fullmatch(r"[A-Za-z0-9._-]{2,80}", str(item.get("value") or "").strip())
+        }
+        return next(iter(candidates)) if len(candidates) == 1 else None
 
     @staticmethod
     def _needs_collection_inventory(user_request: str) -> bool:

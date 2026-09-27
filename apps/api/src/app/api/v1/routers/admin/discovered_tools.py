@@ -94,7 +94,7 @@ async def update_discovered_tool(
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Link or unlink discovered capability with a tool publication container."""
+    """Update discovered capability metadata."""
     stmt = (
         select(DiscoveredTool)
         .options(selectinload(DiscoveredTool.tool))
@@ -113,6 +113,9 @@ async def update_discovered_tool(
             tool.tool_id = linked_tool.id
         else:
             tool.tool_id = None
+
+    if "risk_level" in data.model_fields_set:
+        tool.risk_level = data.risk_level.strip() if data.risk_level and data.risk_level.strip() else None
 
     await db.flush()
     await db.refresh(tool)
