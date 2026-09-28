@@ -432,6 +432,7 @@ class AgentToolRuntime(BaseRuntime):
                 llm_start = time.time()
                 effective_max_tokens = gen.max_tokens
                 raw_response_dict: Optional[Dict[str, Any]] = None
+                tools_payload = build_tools_payload(available_operations) if native_tool_calling else None
                 yield RuntimeEvent.llm_request(
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
@@ -440,6 +441,7 @@ class AgentToolRuntime(BaseRuntime):
                     max_tokens=effective_max_tokens,
                     timeout_s=effective_llm_timeout_s,
                     messages=llm_messages,
+                    tools=tools_payload,
                     parent_entity_type="agent_execution",
                     parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
                     agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
@@ -449,9 +451,6 @@ class AgentToolRuntime(BaseRuntime):
                     actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
                 )
                 try:
-                    tools_payload = None
-                    if native_tool_calling:
-                        tools_payload = build_tools_payload(available_operations)
                     if native_tool_calling and tools_payload:
                         raw_response_dict = await self.llm.call_raw(
                             messages=llm_messages,

@@ -82,6 +82,9 @@ def build_prompt_operation_description(
     if getattr(op, "scope", "collection") == "collection":
         type_note = f" ({collection_type})" if collection_type else ""
         parts.append(f"requires collection_slug target{type_note}")
+    # Put execution guidance before the provider's often lengthy description,
+    # so the character budget cannot silently drop the important caveats.
+    parts.extend(_build_usage_notes(op))
     if base_description:
         parts.append(base_description)
     if result_kind:
@@ -90,9 +93,6 @@ def build_prompt_operation_description(
     argument_summary = _build_argument_summary(op)
     if argument_summary:
         parts.append(argument_summary)
-    usage_notes = _build_usage_notes(op)
-    parts.extend(usage_notes)
-
     rendered = " | ".join(part for part in parts if part)
     if len(rendered) > max_chars:
         rendered = rendered[:max_chars].rstrip()
@@ -104,14 +104,18 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
     notes: List[str] = []
 
     if canonical == "collection.info":
-        notes.append("inspect schema and observed values when a result is empty or fields are unclear")
+        notes.append("inspect available schema metadata when fields are unclear; API sources may have no live observed values")
         return notes
 
     input_schema = dict(getattr(op, "input_schema", {}) or {})
     properties = input_schema.get("properties")
     if isinstance(properties, dict) and "filters" in properties:
-        notes.append("use filters only on schema-declared filterable fields")
-        notes.append("if filter names or values are unclear, use collection.info when available")
+        filter_schema = properties.get("filters")
+        filter_properties = filter_schema.get("properties") if isinstance(filter_schema, dict) else None
+        if isinstance(filter_properties, dict) and filter_properties:
+            notes.append("use only schema-declared filterable fields")
+        else:
+            notes.append("filter keys depend on the object type; check source metadata when available")
         notes.append("do not invent filter values")
 
     if canonical == "collection.document.search":

@@ -43,9 +43,9 @@ class OperationPromptRenderer:
     @staticmethod
     def render_public_collection_info_schema(op: "ResolvedOperation") -> Dict[str, Any]:
         description = (
-            "Collection Info | inspect an available collection's fields and observed values when a result is empty or the structure is unclear | "
+            "Collection Info | inspect stored fields and filter hints when the structure is unclear; API sources may have no live observed values | "
             "required args: collection_slug: string | "
-            "returns fields, filter hints, observed values, and source metadata."
+            "returns available schema and source metadata."
         )
         return {
             "type": "function",
