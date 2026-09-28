@@ -44,7 +44,7 @@ class GoalPayload(_Payload):
 
 
 class TermBindingPayload(_Payload):
-    glossary_entry_id: str = Field(min_length=1, max_length=255)
+    glossary_term_id: str = Field(min_length=1, max_length=255)
     term: str = Field(min_length=1, max_length=255)
     aliases: list[str] = Field(default_factory=list, max_length=10)
 

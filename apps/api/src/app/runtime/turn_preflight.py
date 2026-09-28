@@ -53,7 +53,7 @@ class MemoryCandidate(BaseModel):
     # may propose user/tenant candidates only; project publication stays in
     # the document-ingestion workflow.
     scope: Literal["user", "tenant"]
-    kind: Literal["fact", "glossary"] = "fact"
+    kind: Literal["fact"] = "fact"
     subject: str = Field(..., min_length=1)
     value: str = Field(..., min_length=1)
     evidence_source_ids: list[str] = Field(default_factory=list)
@@ -117,6 +117,8 @@ class TurnPreflight:
         budget_registry: Any = None,
         budget_entity_id: str | None = None,
     ) -> TurnPreflightDecision:
+        if self._is_glossary_write_request(user_request):
+            return self._glossary_document_decision(user_request=user_request)
         result = await self._llm.invoke(
             role=SystemLLMRoleType.TURN_PREFLIGHT,
             payload={
@@ -156,18 +158,6 @@ class TurnPreflight:
         # it to recall or planner.
         if self._is_explicit_fact_memory_write(user_request):
             return self._memory_write_synthesis_decision(
-                user_request=user_request,
-                memory_candidates=decision.memory_candidates,
-            )
-        # Writeback intentionally happens after the user-facing answer. A
-        # direct route with glossary candidates may acknowledge receipt, but
-        # cannot truthfully claim that publication has completed yet.
-        if (
-            decision.route == "synthesis"
-            and decision.memory_candidates
-            and self._is_glossary_write_request(user_request)
-        ):
-            return self._glossary_write_synthesis_decision(
                 user_request=user_request,
                 memory_candidates=decision.memory_candidates,
             )
@@ -269,31 +259,28 @@ class TurnPreflight:
     @staticmethod
     def _is_glossary_write_request(user_request: str) -> bool:
         text = " ".join((user_request or "").lower().split())
-        return bool(re.search(
-            r"(?:добав(?:ь|ьте)|сохрани(?:ть|те)|запомни(?:ть|те)|add|save)"
-            r".{0,120}(?:глоссар|glossar)",
-            text,
-        ))
+        action = r"(?:добав(?:ь|ьте)|внеси(?:те)?|сохрани(?:ть|те)|запомни(?:ть|те)|add|save)"
+        glossary = r"(?:глоссар|glossar)"
+        return bool(re.search(rf"{action}.{{0,120}}{glossary}|{glossary}.{{0,120}}{action}", text))
 
     @staticmethod
-    def _glossary_write_synthesis_decision(
-        *, user_request: str, memory_candidates: list[MemoryCandidate],
+    def _glossary_document_decision(
+        *, user_request: str,
     ) -> TurnPreflightDecision:
         return TurnPreflightDecision(
             route="synthesis",
             synthesis_brief=DirectAnswerBrief(
                 synthesis_brief=SynthesisBrief(
                     user_question=user_request,
-                    planned_work="Передать предоставленные термины на проверку перед добавлением в глоссарий.",
-                    purpose="Подтвердить принятие терминов без заявления о завершённой записи.",
+                    planned_work="Объяснить документный порядок публикации определения.",
+                    purpose="Указать, что глоссарий пополняется после изучения и утверждения документа.",
                     answer_requirements=(
-                        "Кратко подтвердить, что термины приняты для проверки; "
-                        "не утверждать, что они уже добавлены или доступны в глоссарии."
+                        "Предложить загрузить документ с определением для изучения и проверки. "
+                        "Не утверждать, что термин добавлен или принят на публикацию."
                     ),
                 ),
-                answer_draft="Термины приняты для проверки перед добавлением в глоссарий.",
+                answer_draft="Загрузите документ с определением. После изучения и утверждения термина он появится в глоссарии.",
             ),
-            memory_candidates=memory_candidates,
         )
 
     @staticmethod

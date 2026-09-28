@@ -340,7 +340,6 @@ class RuntimePipeline:
         project_context = await ProjectContextResolver(self._session).resolve(
             request_text=effective_user_query,
             facts=turn_mem.durable_snapshot.entries,
-            tenant_id=tenant_id,
             chat_project_keys=scope_payload.get("project_keys") or [],
         )
         turn_mem.project_context = project_context.as_dict()

@@ -1,4 +1,4 @@
-"""Pre-planner selection of durable memory and project terminology."""
+"""Pre-planner selection of durable memory and published definitions."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,9 +19,9 @@ from app.runtime.memory.dto import FactDTO
 
 
 class _PreparationOutput(BaseModel):
+    model_config = {"extra": "forbid"}
     fact_indexes: list[int] = Field(default_factory=list)
     project_indexes: list[int] = Field(default_factory=list)
-    glossary_indexes: list[int] = Field(default_factory=list)
     memory_indexes: list[int] = Field(default_factory=list)
     ambiguities: list[str] = Field(default_factory=list)
     # Missing intent must never silently downgrade a potentially risky request.
@@ -40,7 +40,7 @@ class PreparedMemoryContext:
     selected_project_fact_count: int
     selected_glossary_count: int
     ambiguities: list[str]
-    resolved_terms: list[str]
+    resolved_terms: list[dict[str, Any]]
     resolved_projects: list[str]
     needs_source_check: bool
     source_check_reasons: list[str]
@@ -61,7 +61,7 @@ class MemoryPreparer:
         *,
         request_text: str,
         facts: Sequence[FactDTO],
-        project_glossary: Sequence[dict[str, Any]],
+        projects: Sequence[dict[str, Any]],
         glossary: Sequence[dict[str, Any]],
         project_facts: Sequence[dict[str, Any]] = (),
         user_id: UUID | None,
@@ -71,6 +71,19 @@ class MemoryPreparer:
         event_sink: Callable[[RuntimeEvent], Awaitable[None]] | None = None,
         agent_execution_id: str | None = None,
     ) -> PreparedMemoryContext:
+        # Recall has already matched published aliases; the selector cannot
+        # reinterpret or discard their definitions.
+        chosen_glossary = list(glossary[:24])
+        glossary_items = [{
+            "type": "glossary", "term": item["term"], "aliases": list(item["aliases"]),
+            "subject": item["term"], "value": item["definition"],
+            "source_references": list(item.get("source_references") or []),
+        } for item in chosen_glossary]
+        resolved_glossary = [{
+            "id": str(item["id"]), "term": item["term"],
+            "definition": item["definition"], "aliases": list(item["aliases"]),
+            "source_references": list(item.get("source_references") or []),
+        } for item in chosen_glossary]
         payload = {
             "request": request_text,
             "facts": [
@@ -79,15 +92,7 @@ class MemoryPreparer:
             ],
             "projects": [
                 {"index": index, "id": str(item["id"]), "key": item["key"], "name": item["name"], "aliases": item["aliases"]}
-                for index, item in enumerate(project_glossary)
-            ],
-            "glossary": [
-                {
-                    "index": index,
-                    "term": item["term"],
-                    "aliases": item["aliases"],
-                }
-                for index, item in enumerate(glossary)
+                for index, item in enumerate(projects)
             ],
             # These are already ACL-filtered retrieval candidates.  Their
             # order carries hybrid retrieval rank, so the selector may retain
@@ -115,13 +120,13 @@ class MemoryPreparer:
             )
         except Exception:  # memory preparation is optional
             return PreparedMemoryContext(
-                items=[],
+                items=glossary_items,
                 selected_fact_count=0,
                 selected_project_count=0,
                 selected_project_fact_count=0,
-                selected_glossary_count=0,
+                selected_glossary_count=len(chosen_glossary),
                 ambiguities=[],
-                resolved_terms=[],
+                resolved_terms=resolved_glossary,
                 resolved_projects=[],
                 needs_source_check=True,
                 source_check_reasons=[
@@ -143,17 +148,10 @@ class MemoryPreparer:
             if item.scope.value != "user" or _fact_matches_request(item, request_text)
         ]
         chosen_projects = _by_indexes(
-            project_glossary,
+            projects,
             _merge_indexes(
                 output.project_indexes,
-                _exact_match_indexes(request_text, project_glossary, ("key", "name", "aliases")),
-            ),
-        )
-        chosen_glossary = _by_indexes(
-            glossary,
-            _merge_indexes(
-                output.glossary_indexes,
-                _exact_match_indexes(request_text, glossary, ("term", "aliases")),
+                _exact_match_indexes(request_text, projects, ("key", "name", "aliases")),
             ),
         )
         # The indexes refer exactly to ``semantic_memory`` in the payload.
@@ -189,18 +187,11 @@ class MemoryPreparer:
                 "observed_at": item.get("observed_at"),
             }
             for item in selected_project_facts
-        ] + [
-            {
-                "type": "glossary",
-                "term": item["term"],
-                "aliases": item["aliases"],
-            }
-            for item in chosen_glossary
-        ]
+        ] + glossary_items
         ambiguities = [item[:240] for item in output.ambiguities[:4] if item.strip()]
         source_check_reasons: list[str] = []
         knowledge_need = output.knowledge_need
-        if knowledge_need == "durable" and not selected_project_facts and not chosen_facts:
+        if knowledge_need == "durable" and not selected_project_facts and not chosen_facts and not chosen_glossary:
             source_check_reasons.append("semantic_memory_missing")
         elif chosen_projects and not selected_project_facts:
             source_check_reasons.append("semantic_memory_missing")
@@ -218,11 +209,7 @@ class MemoryPreparer:
             selected_project_fact_count=len(selected_project_facts),
             selected_glossary_count=len(chosen_glossary),
             ambiguities=ambiguities,
-            resolved_terms=[
-                str(item.get("term"))
-                for item in chosen_glossary
-                if isinstance(item, dict) and str(item.get("term") or "").strip()
-            ],
+            resolved_terms=resolved_glossary,
             resolved_projects=[
                 str(item.get("key"))
                 for item in chosen_projects

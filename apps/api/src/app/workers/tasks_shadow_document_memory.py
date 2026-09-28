@@ -21,7 +21,7 @@ from app.models.document_memory_staging import DocumentMemorySnapshot
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import Source
 from app.models.runtime_observability import RuntimeExecutionEvent
-from app.runtime.memory.document_memory import split_canonical_sections
+from app.runtime.memory.document_sections import split_canonical_sections
 from app.runtime.memory.shadow_document_study import (
     SHADOW_STUDY_BATCH_SIZE,
     ShadowDocumentStudyAgent,
@@ -210,7 +210,8 @@ def shadow_study_rag_document(self: Task, index_results: Any, tenant_id: str) ->
             )
             service = ShadowDocumentStudyService(session)
             snapshot = await service.get_or_create_snapshot(
-                document_id=source_uuid, checksum=checksum, visibility_tenant_id=tenant_uuid,
+                document_id=source_uuid, checksum=checksum,
+                visibility_tenant_id=None if document.scope == "global" else tenant_uuid,
             )
             logger = _trace_logger(session=session, snapshot=snapshot, tenant_id=tenant_uuid)
             await _start_trace(session=session, logger=logger, snapshot=snapshot, tenant_id=tenant_uuid)
@@ -341,13 +342,14 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str)
                 output = await ShadowDocumentStudyAgent(session=session, llm_client=get_llm_client()).study(
                     document={
                         "id": str(document.id), "title": document.title, "filename": document.filename,
+                        "access_scope": document.scope,
                         "metadata": dict(canonical.get("metadata") or {}),
                         "scope_hints": [scope["key"] for scope in document_scopes],
                         "scope_hint_catalog": document_scopes,
                     },
                     sections=batch,
                     candidate_ledger=await service.ledger(snapshot.id),
-                    glossary=await service.glossary_context(visibility_tenant_id=snapshot.visibility_tenant_id), projects=projects,
+                    glossary=await service.glossary_context(), projects=projects,
                     scopes=scopes, tenant_id=tenant_uuid,
                     agent_execution_id=execution_id,
                     event_sink=lambda event: logger.emit(event, phase=OrchestrationPhase.AGENT),
@@ -375,6 +377,7 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str)
                 raise
             counts = await service.persist_batch(
                 snapshot=snapshot, items=output.items,
+                document_scope=document.scope,
                 section_ids={str(section["id"]) for section in batch}, projects_by_key=projects_by_key,
                 scopes_by_key=scopes_by_key,
             )

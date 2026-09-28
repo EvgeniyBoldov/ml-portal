@@ -22,7 +22,6 @@ from app.models.memory import FactScope, FactSource, MemoryClaim, MemoryItem
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, RAGStatus, Source
 from app.models.collection import Collection
-from app.models.glossary import GlossaryObservation
 from app.workers.session_factory import get_worker_session
 from app.workers.transaction_utils import checkpoint_commit, worker_transaction
 from app.models.system_llm_role import SystemLLMRoleType
@@ -54,11 +53,10 @@ def reextract_stale_document_memory(batch_size: int = 20) -> Dict[str, Any]:
                 select(RAGDocument, Source, RAGStatus)
                 .join(Source, Source.source_id == RAGDocument.id)
                 .outerjoin(MemoryClaim, MemoryClaim.document_id == RAGDocument.id)
-                .outerjoin(GlossaryObservation, GlossaryObservation.document_id == RAGDocument.id)
                 .outerjoin(RAGStatus, (RAGStatus.doc_id == RAGDocument.id)
                            & (RAGStatus.node_type == "memory") & (RAGStatus.node_key == "extract"))
                 .where(
-                    or_(MemoryClaim.state == "stale", GlossaryObservation.state == "stale"),
+                    MemoryClaim.state == "stale",
                     RAGDocument.status != "archived",
                     RAGDocument.s3_key_processed.is_not(None),
                 )
@@ -186,7 +184,7 @@ def refresh_memory_freshness() -> Dict[str, Any]:
 def reconcile_collection_memory_policy(collection_id: str) -> Dict[str, Any]:
     """Converge existing collection documents after its memory policy changes."""
     async def _reconcile() -> Dict[str, Any]:
-        from app.runtime.memory.document_memory import retire_document_memory
+        from app.runtime.memory.document_retirement import retire_document_memory
 
         enabled_jobs: list[tuple[str, dict[str, str]]] = []
         stale_ids: set[UUID] = set()

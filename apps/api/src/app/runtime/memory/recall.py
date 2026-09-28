@@ -13,21 +13,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import MemoryClaim, MemoryItem, MemoryRelation
 from app.models.memory_scope import MemoryClaimScope, MemoryScope
-from app.models.knowledge_entity import KnowledgeEntity, KnowledgeEntitySource
 from app.models.rag import RAGDocument
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.dto import FactDTO
 from app.runtime.memory.preparer import MemoryPreparer, PreparedMemoryContext
 from app.runtime.memory.semantic_index import MemorySemanticIndex
 from app.runtime.memory.scope_precedence import apply_scope_precedence
-from app.services.glossary_service import GlossaryService
+from app.services.glossary_service import GlossaryService, ambiguous_glossary_aliases, matching_glossary_terms
+from app.services.project_catalog_service import ProjectCatalogService
 
 
 @dataclass(frozen=True)
 class MemoryRecallContext:
     """The only long-term-memory payload visible to planner and sub-agents."""
 
-    resolved_terms: list[str]
+    resolved_terms: list[dict[str, Any]]
     resolved_entities: list[dict[str, Any]]
     relevant_projects: list[str]
     relevant_knowledge: list[dict[str, Any]]
@@ -86,19 +86,12 @@ class MemoryRecallService:
         # Resolve exact company names from the whole catalogue before applying
         # the prompt budget.  A tenant must not lose project #201 merely
         # because projects are alphabetically ordered.
-        all_project_glossary = await GlossaryService(self._session).list_project_terms()
-        project_ids = _query_project_ids(request_text, all_project_glossary)
-        project_glossary = [item for item in all_project_glossary if item.get("id") in set(project_ids)]
-        all_glossary = await GlossaryService(self._session).list_confirmed_terms(tenant_id=tenant_id)
-        glossary = _matching_glossary_terms(request_text, all_glossary)
-        entity_refs = _query_glossary_entity_refs(request_text, glossary)
-        glossary_project_ids = _glossary_project_ids(glossary)
-        resolved_entities, entity_project_ids, entity_ambiguities = await self._resolve_visible_entities(
-            entity_refs=entity_refs, tenant_id=tenant_id, explicit_project_ids=project_ids,
-        )
-        project_ids = list(dict.fromkeys([*project_ids, *glossary_project_ids, *entity_project_ids]))
-        project_by_id = {str(item["id"]): item for item in all_project_glossary if item.get("id")}
-        project_glossary = [item for item in all_project_glossary if item.get("id") in set(project_ids)]
+        all_projects = await ProjectCatalogService(self._session).list_projects()
+        project_ids = _query_project_ids(request_text, all_projects)
+        all_glossary = await GlossaryService(self._session).list_confirmed_terms()
+        glossary = matching_glossary_terms(request_text, all_glossary)
+        project_by_id = {str(item["id"]): item for item in all_projects if item.get("id")}
+        projects = [item for item in all_projects if item.get("id") in set(project_ids)]
         semantic_ids = await MemorySemanticIndex(self._session).search_ids(request_text, limit=48)
         lexical_ids = await self._lexical_ids(request_text, limit=48)
         related_ids = await self._visible_relation_item_ids(
@@ -108,12 +101,7 @@ class MemoryRecallService:
             )] if project_ids else [],
             tenant_id=tenant_id,
         )
-        entity_related_ids: list[UUID] = []
-        if entity_refs:
-            clauses = [and_(MemoryRelation.target_type == item["type"], MemoryRelation.target_id == item["id"])
-                       for item in entity_refs]
-            entity_related_ids = await self._visible_relation_item_ids(clauses, tenant_id=tenant_id)
-        candidate_ids = list(dict.fromkeys([*semantic_ids, *lexical_ids, *related_ids, *entity_related_ids]))
+        candidate_ids = list(dict.fromkeys([*semantic_ids, *lexical_ids, *related_ids]))
         semantic_items = await self._accessible_semantic_items(
             project_ids=project_ids, semantic_ids=candidate_ids, tenant_id=tenant_id,
         )
@@ -137,83 +125,23 @@ class MemoryRecallService:
             "claim_ids": item["claim_ids"],
         } for item in semantic_items]
         prepared = await self._preparer.prepare(
-            request_text=request_text, facts=facts, project_glossary=project_glossary,
+            request_text=request_text, facts=facts, projects=projects,
             project_facts=project_facts,
             glossary=glossary,
             user_id=user_id, tenant_id=tenant_id, chat_id=chat_id,
             sandbox_overrides=sandbox_overrides, event_sink=event_sink,
             agent_execution_id=agent_execution_id,
         )
+        ambiguous_terms = [f"ambiguous_glossary_alias:{form}" for form in
+                           ambiguous_glossary_aliases(request_text, glossary)]
+        if ambiguous_terms:
+            prepared = replace(prepared, ambiguities=[*prepared.ambiguities, *ambiguous_terms])
         if scope_uncertainties:
             prepared = replace(
                 prepared, needs_source_check=True,
                 source_check_reasons=[*prepared.source_check_reasons, *scope_uncertainties],
             )
-        return self._structure(
-            prepared, resolved_entities=resolved_entities, entity_ambiguities=entity_ambiguities,
-        ), prepared
-
-    async def _resolve_visible_entities(
-        self, *, entity_refs: list[dict[str, str]], tenant_id: UUID | None,
-        explicit_project_ids: list[UUID],
-    ) -> tuple[list[dict[str, Any]], list[UUID], list[str]]:
-        refs = [item for item in entity_refs if item.get("type") != "project"]
-        if not refs:
-            return [], [], []
-        entity_ids: list[UUID] = []
-        for ref in refs:
-            try:
-                entity_ids.append(UUID(str(ref["id"])))
-            except (KeyError, TypeError, ValueError):
-                continue
-        if not entity_ids:
-            return [], [], []
-        visibility = KnowledgeEntitySource.visibility_tenant_id.is_(None)
-        document_access = RAGDocument.scope == "global"
-        if tenant_id is not None:
-            visibility = or_(visibility, KnowledgeEntitySource.visibility_tenant_id == tenant_id)
-            document_access = or_(document_access, RAGDocument.tenant_id == tenant_id)
-        rows = (await self._session.execute(
-            select(KnowledgeEntity, KnowledgeEntitySource)
-            .join(KnowledgeEntitySource, KnowledgeEntitySource.entity_id == KnowledgeEntity.id)
-            .join(RAGDocument, RAGDocument.id == KnowledgeEntitySource.document_id)
-            .where(
-                KnowledgeEntity.id.in_(entity_ids), KnowledgeEntity.is_active.is_(True), visibility,
-                document_access, RAGDocument.status != "archived",
-            )
-        )).all()
-        sources_by_entity: dict[UUID, list[KnowledgeEntitySource]] = {}
-        entities: dict[UUID, KnowledgeEntity] = {}
-        for entity, source in rows:
-            entities[entity.id] = entity
-            sources_by_entity.setdefault(entity.id, []).append(source)
-        explicit = set(explicit_project_ids)
-        resolved: list[dict[str, Any]] = []
-        inferred_projects: list[UUID] = []
-        ambiguities: list[str] = []
-        matched_forms = {
-            str(ref["id"]): ref.get("matched_form")
-            for ref in refs if ref.get("id")
-        }
-        for entity_id, sources in sources_by_entity.items():
-            entity = entities[entity_id]
-            project_ids = {source.project_id for source in sources if source.project_id is not None}
-            candidates = project_ids.intersection(explicit) if explicit else project_ids
-            if len(candidates) == 1:
-                inferred_projects.extend(candidates)
-            elif len(candidates) > 1:
-                ambiguities.append(f"ambiguous_entity_project:{entity.canonical_name}")
-            resolved.append({
-                "id": str(entity.id), "type": entity.entity_type,
-                "canonical_name": entity.canonical_name,
-                "matched_form": matched_forms.get(str(entity.id)),
-                "project_ids": [str(value) for value in sorted(project_ids, key=str)],
-                "source_references": [
-                    {"document_id": str(source.document_id), "section_id": section_id}
-                    for source in sources for section_id in list(source.evidence_section_ids or [])[:2]
-                ][:3],
-            })
-        return resolved, list(dict.fromkeys(inferred_projects)), ambiguities
+        return self._structure(prepared), prepared
 
     async def _visible_relation_item_ids(
         self, clauses: list[Any], *, tenant_id: UUID | None,
@@ -288,6 +216,7 @@ class MemoryRecallService:
             .where(
                 candidate_filter,
                 MemoryItem.state.in_(("active", "uncertain")),
+                MemoryItem.item_type != "term",
                 MemoryItem.lifecycle_status == "active",
                 MemoryClaim.state == "active",
                 MemoryClaim.lifecycle_status == "active",
@@ -368,12 +297,11 @@ class MemoryRecallService:
         ]
         def typed(kind: str) -> list[dict[str, Any]]:
             return [item for item in knowledge if item.get("kind") == kind]
+        glossary_items = [item for item in prepared.items if item.get("type") == "glossary"]
         source_refs = [
-            ref for item in knowledge for ref in item.get("source_references", [])
+            ref for item in [*knowledge, *glossary_items] for ref in item.get("source_references", [])
             if isinstance(ref, dict)
         ]
-        # `prepare` keeps compatibility-shaped entries; sources are restored
-        # below by their stable source_ref in a following normalization pass.
         return MemoryRecallContext(
             resolved_terms=prepared.resolved_terms,
             resolved_entities=resolved_entities or [],
@@ -393,19 +321,6 @@ class MemoryRecallService:
 
 def _query_tokens(value: str) -> list[str]:
     return list(dict.fromkeys(re.findall(r"[\wа-яА-ЯёЁ-]{3,}", str(value or "").casefold())))
-
-
-def _glossary_project_ids(glossary: list[dict[str, Any]]) -> list[UUID]:
-    result: list[UUID] = []
-    for term in glossary:
-        raw = term.get("project_id")
-        if raw is None and term.get("entity_type") == "project":
-            raw = term.get("entity_id")
-        try:
-            result.append(UUID(str(raw)))
-        except (TypeError, ValueError):
-            continue
-    return list(dict.fromkeys(result))
 
 
 def _selection_text(kind: str, content: dict[str, Any]) -> str:
@@ -429,34 +344,6 @@ def _query_project_ids(request_text: str, projects: list[dict[str, Any]]) -> lis
         if any(_project_form_matches(str(form or ""), query) for form in forms):
             result.append(raw_id)
     return list(dict.fromkeys(result))
-
-
-def _query_glossary_entity_refs(request_text: str, glossary: list[dict[str, Any]]) -> list[dict[str, str]]:
-    query = " ".join(_query_tokens(request_text))
-    result: list[dict[str, str]] = []
-    for term in glossary:
-        entity_type = str(term.get("entity_type") or "").strip()
-        entity_id = str(term.get("entity_id") or "").strip()
-        forms = [term.get("term"), *(term.get("aliases") or [])]
-        matched_form = next(
-            (str(form) for form in forms if _project_form_matches(str(form or ""), query)),
-            None,
-        )
-        if entity_type and entity_id and matched_form is not None:
-            # One entity can be represented by several safe source aliases;
-            # retain one form for observability without duplicating the graph
-            # lookup and its relation candidates.
-            if not any(ref["type"] == entity_type and ref["id"] == entity_id for ref in result):
-                result.append({"type": entity_type, "id": entity_id, "matched_form": matched_form})
-    return result
-
-
-def _matching_glossary_terms(request_text: str, glossary: list[dict[str, Any]], *, limit: int = 24) -> list[dict[str, Any]]:
-    query = " ".join(_query_tokens(request_text))
-    return [
-        term for term in glossary
-        if any(_project_form_matches(str(form or ""), query) for form in [term.get("term"), *(term.get("aliases") or [])])
-    ][:limit]
 
 
 def _project_form_matches(form: str, query: str) -> bool:

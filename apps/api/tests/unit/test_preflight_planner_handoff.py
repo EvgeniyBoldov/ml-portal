@@ -112,7 +112,7 @@ async def test_preflight_routes_explicit_fact_memory_write_to_synthesis() -> Non
 
 
 @pytest.mark.asyncio
-async def test_preflight_does_not_claim_glossary_write_before_writeback() -> None:
+async def test_preflight_routes_glossary_write_to_document_study() -> None:
     preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
     preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(
         value=TurnPreflightDecision.model_validate({
@@ -125,10 +125,6 @@ async def test_preflight_does_not_claim_glossary_write_before_writeback() -> Non
                 },
                 "answer_draft": "Термин успешно добавлен в глоссарий.",
             },
-            "memory_candidates": [{
-                "scope": "tenant", "kind": "glossary", "subject": "АВР",
-                "value": "Автоматический ввод резерва",
-            }],
         }),
     ))
 
@@ -138,8 +134,8 @@ async def test_preflight_does_not_claim_glossary_write_before_writeback() -> Non
 
     assert result.route == "synthesis"
     assert result.synthesis_brief is not None
-    assert "успешно" not in result.synthesis_brief.answer_draft.lower()
-    assert "провер" in result.synthesis_brief.answer_draft.lower()
+    assert result.memory_candidates == []
+    assert "документ" in result.synthesis_brief.answer_draft.lower()
 
 
 @pytest.mark.asyncio

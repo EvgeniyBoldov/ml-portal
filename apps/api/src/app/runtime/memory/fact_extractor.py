@@ -40,10 +40,7 @@ class _LLMFactCandidate(BaseModel):
     subject: str
     value: str
     confidence: float = 1.0
-    # This is a routing contract, not free-form taxonomy: ``glossary`` is
-    # persisted in glossary_entries; ``fact`` is persisted in facts.
-    kind: Literal["fact", "glossary"] = "fact"
-    aliases: List[str] = Field(default_factory=list)
+    kind: Literal["fact"] = "fact"
     evidence_source_ids: List[str] = Field(default_factory=list)
 
 
@@ -61,9 +58,7 @@ class FactEvidence(BaseModel):
     source_ref: str
     text: str
     label: Optional[str] = None
-    # Stable source identity used for confirmation.  A runtime tool-call ID is
-    # suitable for provenance, but repeated retrieval of the same document
-    # must not count as independent glossary support.
+    # Stable source identity used for confirmation.
     support_ref: Optional[str] = None
 
 
@@ -91,9 +86,6 @@ class FactExtractionResult:
 # --- Extractor --------------------------------------------------------------
 
 
-# A pasted glossary routinely contains more than eight terms. Keep this in
-# sync with the preflight/retrieval contract (12) so valid candidates are not
-# silently lost between routing and writeback.
 MAX_FACTS_PER_TURN = 12
 MAX_SUBJECT_LEN = 200
 MAX_VALUE_LEN = 500  # persisted as TEXT; cap so rogue outputs don't blow prompts later
@@ -299,11 +291,8 @@ class FactExtractor:
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "missing_owner"))
                 continue
             kind = (cand.kind or "fact").strip().lower()
-            if kind not in {"fact", "glossary"}:
+            if kind != "fact":
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "unsupported_kind"))
-                continue
-            if kind == "glossary" and scope not in {FactScope.USER, FactScope.TENANT}:
-                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "invalid_glossary_scope"))
                 continue
             confidence = max(0.0, min(1.0, float(cand.confidence)))
             if confidence < confidence_min:
@@ -331,11 +320,6 @@ class FactExtractor:
             if scope == FactScope.USER and not any(item.source_type == "user_message" for item in matched_evidence):
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "user_evidence_required"))
                 continue
-            # Turn-level tool evidence does not carry the RAG document scope
-            # through this transport.  Never promote it to company glossary:
-            # document ingestion is the only source-aware publication path.
-            glossary_scope = None
-
             fact = FactDTO(
                     scope=scope,
                     subject=subject,
@@ -345,9 +329,7 @@ class FactExtractor:
                     kind=kind,
                     confidence=confidence,
                     metadata={
-                        "aliases": _normalize_aliases(cand.aliases),
                         "evidence": [item.model_dump() for item in matched_evidence],
-                        "glossary_scope": glossary_scope,
                         JOURNAL_CANDIDATE_IDS: [candidate_id],
                     },
                 )
@@ -430,29 +412,3 @@ def _resolve_fact_policy(role_extras: Optional[dict], sandbox_overrides: Optiona
         if isinstance(val, (int, float)):
             cfg["confidence_min"] = max(0.0, min(1.0, float(val)))
     return cfg
-
-
-def _normalize_aliases(raw: Sequence[str]) -> list[str]:
-    aliases: list[str] = []
-    seen: set[str] = set()
-    for value in raw[:8]:
-        alias = " ".join(str(value or "").strip().split())[:120]
-        key = alias.casefold()
-        if not alias or key in seen:
-            continue
-        seen.add(key)
-        aliases.append(alias)
-    return aliases
-
-
-def _has_grounded_glossary_evidence(evidence: Sequence[FactEvidence]) -> bool:
-    """Whether a candidate comes from a verified knowledge retrieval result."""
-    return any(
-        item.source_type == "tool_result"
-        and str(item.label or "").strip() in {
-            "collection.document.search",
-            "collection.table.search",
-        }
-        and bool(str(item.support_ref or item.source_ref or "").strip())
-        for item in evidence
-    )

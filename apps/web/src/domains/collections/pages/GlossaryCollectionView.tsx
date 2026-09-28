@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import {
   collectionsApi,
-  type GlossaryCatalogEntry,
+  type GlossaryCatalogTerm,
 } from '@/shared/api/collections';
 import { qk } from '@/shared/api/keys';
 import {
@@ -19,7 +19,7 @@ import {
 } from '@/shared/ui';
 import styles from './GlossaryCollectionView.module.css';
 
-const GLOSSARY_COLUMNS: DataTableColumn<GlossaryCatalogEntry>[] = [
+const GLOSSARY_COLUMNS: DataTableColumn<GlossaryCatalogTerm>[] = [
   {
     key: 'canonical_term',
     label: 'ТЕРМИН',
@@ -37,38 +37,24 @@ const GLOSSARY_COLUMNS: DataTableColumn<GlossaryCatalogEntry>[] = [
   },
   {
     key: 'description',
-    label: 'ОПИСАНИЕ',
-    render: (entry) => entry.description
-      ? <span className={styles.description}>{entry.description}</span>
-      : <span className={styles.muted}>—</span>,
+    label: 'ОПРЕДЕЛЕНИЕ',
+    render: (entry) => <span className={styles.description}>{entry.description}</span>,
   },
   {
-    key: 'entity_type',
-    label: 'ТИП',
-    width: 150,
-    render: (entry) => <Badge tone="neutral">{entry.entity_type}</Badge>,
-  },
-  {
-    key: 'scope',
-    label: 'ОБЛАСТЬ',
-    width: 150,
-    render: (entry) => (
-      <Badge tone={entry.scope === 'global' ? 'info' : entry.scope === 'user' ? 'neutral' : entry.scope === 'project' ? 'warn' : 'success'}>
-        {entry.scope === 'global' ? 'Компания' : entry.scope === 'user' ? 'Личный' : entry.scope === 'project' ? 'Проект' : 'Текущий tenant'}
-      </Badge>
-    ),
+    key: 'source_document_title',
+    label: 'ДОКУМЕНТ',
+    render: (entry) => entry.source_document_title,
   },
 ];
 
 export default function GlossaryCollectionView() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  const [scope, setScope] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 50;
   const glossaryQuery = useQuery({
-    queryKey: qk.collections.glossaryOverview({ query, scope, page, pageSize }),
-    queryFn: () => collectionsApi.getGlossaryOverview({ query: query || undefined, scope: scope || undefined, limit: pageSize, offset: (page - 1) * pageSize }),
+    queryKey: qk.collections.glossaryOverview({ query, page, pageSize }),
+    queryFn: () => collectionsApi.getGlossaryOverview({ query: query || undefined, limit: pageSize, offset: (page - 1) * pageSize }),
   });
 
   if (glossaryQuery.isLoading) {
@@ -98,7 +84,7 @@ export default function GlossaryCollectionView() {
           </Button>
           <div>
             <h1>Глоссарий</h1>
-            <p>Канонические термины, сокращения и их алиасы.</p>
+            <p>Утверждённые определения из корпоративных документов.</p>
           </div>
         </div>
       </header>
@@ -106,18 +92,11 @@ export default function GlossaryCollectionView() {
       <main className={styles.content}>
         <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
           <Input aria-label="Поиск по глоссарию" placeholder="Поиск термина, алиаса или определения" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} />
-          <select aria-label="Область глоссария" value={scope} onChange={(event) => { setScope(event.target.value); setPage(1); }}>
-            <option value="">Все области</option>
-            <option value="global">Компания</option>
-            <option value="tenant">Tenant</option>
-            <option value="user">Личные</option>
-            <option value="project">Проект</option>
-          </select>
         </div>
         {entries.length === 0 && !glossaryQuery.data?.total ? (
           <EmptyState
             title="В глоссарии пока нет терминов"
-            description="Общие и tenant-термины появятся здесь после добавления или подтверждения."
+            description="Термины появятся здесь после утверждения определения из документа."
           />
         ) : (
           <DataTable

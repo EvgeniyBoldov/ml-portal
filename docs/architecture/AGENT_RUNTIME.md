@@ -159,7 +159,7 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 ## Runtime flow
 
 ```
-1. `ChatStreamService` или sandbox создаёт `ToolContext`; runtime выполняет bounded mechanical lookup glossary/project/entity candidates.
+1. `ChatStreamService` или sandbox создаёт `ToolContext`; runtime выполняет ограниченный поиск опубликованных терминов и проектов.
 2. `TurnPreflight` возвращает `synthesis`, `planner`, `recall` или `clarify` и соответствующий строгий brief/request.
 3. `synthesis` передаёт `SynthesisBrief` напрямую Synthesizer без persisted plan и агентских задач. `recall` читает только запрошенный scoped context и вызывает TurnPreflight повторно.
 4. `planner` передаёт `TaskBrief` в GraphPlanner. Planner сам использует canonical memory tools и генерирует полную неизменяемую iteration proposal только для агентской работы.

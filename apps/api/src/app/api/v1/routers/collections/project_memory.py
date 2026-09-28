@@ -19,7 +19,7 @@ from app.models.project import Project
 from app.models.rag import RAGDocument
 from app.adapters.s3_client import s3_manager
 from app.core.config import get_settings
-from app.runtime.memory.document_memory import split_canonical_sections
+from app.runtime.memory.document_sections import split_canonical_sections
 from app.services.memory_scope_catalog import list_memory_scopes
 
 

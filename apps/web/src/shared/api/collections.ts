@@ -223,19 +223,18 @@ export interface ProjectMemoryEvidencePreview {
   excerpt: string;
 }
 
-export interface GlossaryCatalogEntry {
+export interface GlossaryCatalogTerm {
   canonical_term: string;
   aliases: string[];
-  description: string | null;
-  entity_type: string;
-  entity_id: string | null;
-  project_id: string | null;
-  scope: 'global' | 'tenant' | 'user' | 'project';
+  description: string;
   updated_at: string;
+  source_document_id: string;
+  source_document_title: string;
+  source_section_ids: string[];
 }
 
 export interface GlossaryOverviewResponse {
-  entries: GlossaryCatalogEntry[];
+  entries: GlossaryCatalogTerm[];
   total: number;
   limit?: number;
   offset?: number;
@@ -860,12 +859,9 @@ export const collectionsApi = {
     return apiRequest<GlobalMemoryOverviewResponse>(`/collections/global-memory${search.toString() ? `?${search}` : ''}`);
   },
 
-  getGlossaryOverview: async (params?: { query?: string; scope?: string; entity_type?: string; project_id?: string; limit?: number; offset?: number }): Promise<GlossaryOverviewResponse> => {
+  getGlossaryOverview: async (params?: { query?: string; limit?: number; offset?: number }): Promise<GlossaryOverviewResponse> => {
     const search = new URLSearchParams();
     if (params?.query) search.set('query', params.query);
-    if (params?.scope) search.set('scope', params.scope);
-    if (params?.entity_type) search.set('entity_type', params.entity_type);
-    if (params?.project_id) search.set('project_id', params.project_id);
     if (params?.limit !== undefined) search.set('limit', String(params.limit));
     if (params?.offset !== undefined) search.set('offset', String(params.offset));
     return apiRequest<GlossaryOverviewResponse>(`/collections/glossary${search.toString() ? `?${search}` : ''}`);

@@ -65,10 +65,14 @@ MAX_SUB_AGENT_MESSAGE_CHARS = 600
 def _render_memory_recall(recall: Dict[str, Any]) -> list[str]:
     """Keep remembered statements distinct from their documentary evidence."""
     lines: list[str] = []
-    terms = ", ".join(str(item) for item in recall.get("resolved_terms") or [] if str(item).strip())
+    terms = [item for item in recall.get("resolved_terms") or [] if isinstance(item, dict)]
     projects = ", ".join(str(item) for item in recall.get("relevant_projects") or [] if str(item).strip())
     if terms:
-        lines.append(f"[Resolved terms] {terms}")
+        for item in terms[:12]:
+            term = str(item.get("term") or "").strip()
+            definition = str(item.get("definition") or "").strip()
+            if term and definition:
+                lines.append(f"[Glossary definition] {term}: {definition}")
     if projects:
         lines.append(f"[Relevant projects] {projects}")
     for entity in (recall.get("resolved_entities") or [])[:6]:

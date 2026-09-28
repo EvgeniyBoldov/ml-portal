@@ -2,7 +2,8 @@
 
 ## Start Here
 - [Platform Overview](PLATFORM_OVERVIEW.md) — обзор платформы и бизнес-контуров
-- [Glossary](GLOSSARY.md) — основные термины
+- [Корпоративный глоссарий](GLOSSARY.md) — определения из документов
+- [Термины разработки](DEVELOPER_TERMS.md) — понятия реализации портала
 
 ## Admin Guides
 - [Admin Docs Index](admin/README.md) — навигация для администраторов

@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,10 +14,10 @@ from app.models.chat_memory import ChatMemoryItem
 from app.models.chat_turn import ChatTurn
 from app.models.chat import ChatMessages
 from app.models.chat_artifact_reference import ChatArtifactReference
-from app.models.glossary import GlossaryEntry
+from app.models.document_memory_staging import GlossaryTerm
 from app.models.runtime_plan import RuntimePlan, RuntimePlanTask
-from app.models.project import Project
 from app.runtime.entity_ids import runtime_task_id
+from app.services.glossary_service import GlossaryService
 
 
 class ChatContextRepository:
@@ -172,33 +172,9 @@ class ChatContextRepository:
                     raise ValueError("artifact source is outside context chat")
             elif prefix == "glossary":
                 glossary_id = uuid.UUID(value)
-                scope_clause = or_(
-                    GlossaryEntry.scope == "global",
-                    and_(GlossaryEntry.scope == "user", GlossaryEntry.user_id == turn.user_id),
-                )
-                if tenant_id:
-                    tenant_uuid = uuid.UUID(str(tenant_id))
-                    scope_clause = or_(
-                        scope_clause,
-                        and_(GlossaryEntry.scope == "tenant", GlossaryEntry.tenant_id == tenant_uuid),
-                    )
-                normalized_project_keys = [str(key).strip().casefold() for key in project_keys or [] if str(key).strip()]
-                if normalized_project_keys:
-                    scope_clause = or_(
-                        scope_clause,
-                        and_(
-                            GlossaryEntry.scope == "project",
-                            GlossaryEntry.project_id.in_(
-                                select(Project.id).where(
-                                    Project.is_active.is_(True),
-                                    func.lower(Project.key).in_(normalized_project_keys),
-                                )
-                            ),
-                        ),
-                    )
-                present = await self._session.scalar(select(GlossaryEntry.id).where(
-                    GlossaryEntry.id == glossary_id, GlossaryEntry.is_active.is_(True),
-                    scope_clause,
+                published = GlossaryService.published_terms_query().with_only_columns(GlossaryTerm.id)
+                present = await self._session.scalar(select(GlossaryTerm.id).where(
+                    GlossaryTerm.id == glossary_id, GlossaryTerm.id.in_(published),
                 ))
                 if present is None:
                     raise ValueError("glossary source is unavailable")

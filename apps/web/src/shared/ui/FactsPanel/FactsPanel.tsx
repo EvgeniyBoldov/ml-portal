@@ -41,6 +41,8 @@ export function FactsPanel({ mode, ownerId }: FactsPanelProps) {
   const [editing, setEditing] = useState<Fact | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<Fact | null>(null);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string | number>>(new Set());
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
 
   const { data = [], isLoading } = useQuery({
     queryKey,
@@ -70,6 +72,29 @@ export function FactsPanel({ mode, ownerId }: FactsPanelProps) {
     onSuccess: () => { invalidate(); setDeleting(null); showSuccess('Факт удалён'); },
     onError: (error: Error) => showError(error.message || 'Не удалось удалить факт'),
   });
+  const selectedFacts = data.filter((fact) => selectedKeys.has(fact.id) && fact.can_edit !== false);
+  const deleteManyMutation = useMutation({
+    mutationFn: async () => {
+      const ids = (facts: Fact[]) => facts.map((fact) => fact.id);
+      if (isProfile) {
+        const personal = selectedFacts.filter((fact) => fact.owner_type !== 'tenant');
+        const tenantGroups = new Map<string, Fact[]>();
+        selectedFacts.filter((fact) => fact.owner_type === 'tenant' && fact.owner_id).forEach((fact) => {
+          const group = tenantGroups.get(fact.owner_id!) ?? [];
+          group.push(fact);
+          tenantGroups.set(fact.owner_id!, group);
+        });
+        await Promise.all([
+          ...(personal.length ? [factsApi.deleteProfile(ids(personal))] : []),
+          ...[...tenantGroups].map(([tenantId, facts]) => factsApi.deleteAdminMany('tenant', tenantId, ids(facts))),
+        ]);
+      } else {
+        await factsApi.deleteAdminMany(owner, ownerId!, ids(selectedFacts));
+      }
+    },
+    onSuccess: () => { invalidate(); setSelectedKeys(new Set()); setConfirmBulkDelete(false); showSuccess(`Удалено фактов: ${selectedFacts.length}`); },
+    onError: (error: Error) => showError(error.message || 'Не удалось удалить выбранные факты'),
+  });
   const columns: DataTableColumn<Fact>[] = [
     { key: 'subject', label: 'SUBJECT', render: (fact) => <code>{fact.subject}</code> },
     { key: 'value', label: 'ЗНАЧЕНИЕ', render: (fact) => <span className={styles.value}>{fact.value}</span> },
@@ -81,11 +106,14 @@ export function FactsPanel({ mode, ownerId }: FactsPanelProps) {
   return (
     <div className={styles.container}>
       <div className={styles.header}><p>{isProfile ? 'Личные и доступные tenant-факты памяти' : 'Подтверждённые факты памяти'}</p><Button onClick={() => setCreating(true)}>Добавить факт</Button></div>
-      <DataTable columns={columns} data={data} keyField="id" loading={isLoading} emptyText="Факты пока отсутствуют" />
+      <DataTable columns={columns} data={data} keyField="id" loading={isLoading} emptyText="Факты пока отсутствуют"
+        selectable selectedKeys={selectedKeys} onSelectionChange={setSelectedKeys}
+        bulkActions={<Button size="sm" variant="danger" disabled={!selectedFacts.length || deleteManyMutation.isPending} onClick={() => setConfirmBulkDelete(true)}>Удалить выбранные</Button>} />
       <Modal open={creating || Boolean(editing)} title={editing ? 'Изменить факт' : 'Добавить факт'} onClose={() => { setCreating(false); setEditing(null); }}>
         <FactForm initial={editing ?? undefined} onSubmit={(input) => mutation.mutate(input)} saving={mutation.isPending} />
       </Modal>
       <ConfirmDialog open={Boolean(deleting)} title="Удалить факт?" message={deleting?.subject ?? ''} confirmLabel="Удалить" cancelLabel="Отмена" variant="danger" onCancel={() => setDeleting(null)} onConfirm={() => deleting && deleteMutation.mutate(deleting)} />
+      <ConfirmDialog open={confirmBulkDelete} title={`Удалить факты (${selectedFacts.length})?`} message="Выбранные факты будут мягко удалены и перестанут участвовать в памяти." confirmLabel="Удалить выбранные" cancelLabel="Отмена" variant="danger" confirmLoading={deleteManyMutation.isPending} onCancel={() => setConfirmBulkDelete(false)} onConfirm={() => deleteManyMutation.mutate()} />
     </div>
   );
 }

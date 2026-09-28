@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "memory_scope"]
+LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "memory_scope", "memory_item"]
 LifecycleMode = Literal["soft", "hard", "restore"]
 
 

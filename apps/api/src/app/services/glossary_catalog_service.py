@@ -11,15 +11,14 @@ from app.repositories.glossary_catalog_repository import GlossaryCatalogReposito
 
 
 @dataclass(frozen=True)
-class GlossaryCatalogEntry:
+class GlossaryCatalogTerm:
     canonical_term: str
     aliases: tuple[str, ...]
-    description: str | None
-    entity_type: str
-    scope: str
+    description: str
     updated_at: datetime
-    entity_id: str | None = None
-    project_id: UUID | None = None
+    source_document_id: UUID
+    source_document_title: str
+    source_section_ids: tuple[str, ...]
 
 
 class GlossaryCatalogService:
@@ -28,18 +27,17 @@ class GlossaryCatalogService:
     def __init__(self, session: AsyncSession) -> None:
         self._repository = GlossaryCatalogRepository(session)
 
-    async def list_entries(self, *, user_id: UUID, tenant_id: UUID) -> list[GlossaryCatalogEntry]:
-        rows = await self._repository.list_visible(user_id=user_id, tenant_id=tenant_id)
+    async def list_entries(self) -> list[GlossaryCatalogTerm]:
+        rows = await self._repository.list_visible()
         return [
-            GlossaryCatalogEntry(
+            GlossaryCatalogTerm(
                 canonical_term=row.canonical_term,
                 aliases=row.aliases,
                 description=row.description,
-                entity_type=row.entity_type,
-                entity_id=row.entity_id,
-                project_id=row.project_id,
-                scope=row.scope,
                 updated_at=row.updated_at,
+                source_document_id=row.source_document_id,
+                source_document_title=row.source_document_title,
+                source_section_ids=row.source_section_ids,
             )
             for row in rows
         ]

@@ -499,10 +499,14 @@ export interface SemanticMemoryAdminDetail extends SemanticMemoryAdminItem {
   evaluations: Array<{ tool_call_id: string; outcome: string; reason: string; evidence_refs: string[]; created_at: string }>;
 }
 
-export interface AdminGlossaryEntry {
+export interface AdminGlossaryTerm {
   id: string;
   canonical_term: string;
+  normalized_term: string;
   aliases: string[];
+  definition: string;
+  is_active: boolean;
+  approved_candidate_id: string;
   created_at: string;
   updated_at: string;
 }
@@ -513,6 +517,7 @@ export interface ShadowMemoryCandidate {
   visibility_tenant_id: string | null;
   candidate_type: string;
   subject: string;
+  normalized_subject: string;
   content: Record<string, unknown>;
   content_text: string;
   content_valid: boolean;
@@ -531,6 +536,11 @@ export interface ShadowMemoryCandidate {
   unmatched_scope_names: string[];
   scope_rationale: string | null;
   conflict_ids: string[];
+}
+
+export interface ShadowCandidateEvidence {
+  document_title: string;
+  sections: Array<{ id: string; label: string; text: string }>;
 }
 
 export interface MemoryScopeAdminItem {
@@ -554,13 +564,25 @@ export const adminApi = {
   async updateMemoryScope(id: string, body: Pick<MemoryScopeAdminItem, 'scope_type' | 'key' | 'name' | 'aliases' | 'is_all'>): Promise<MemoryScopeAdminItem> {
     return apiRequest(`/admin/memory/scopes/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
   },
-  async getGlossary(): Promise<AdminGlossaryEntry[]> {
+  async getGlossary(): Promise<AdminGlossaryTerm[]> {
     return apiRequest('/admin/glossary');
+  },
+  async deactivateGlossaryTerms(ids: string[]): Promise<{ deactivated: number }> {
+    return apiRequest('/admin/glossary/bulk-deactivate', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+  async activateGlossaryTerms(ids: string[]): Promise<{ activated: number }> {
+    return apiRequest('/admin/glossary/bulk-activate', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+  async deleteGlossaryTerms(ids: string[]): Promise<{ deleted: number }> {
+    return apiRequest('/admin/glossary', { method: 'DELETE', body: JSON.stringify({ ids }) });
   },
   async getSemanticMemory(params: { query?: string; scope?: string; scope_type?: string; scope_id?: string; state?: string; item_type?: string; project_id?: string; limit?: number; offset?: number } = {}): Promise<SemanticMemoryAdminPage> {
     const search = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') search.set(key, String(value)); });
     return apiRequest(`/admin/memory?${search.toString()}`);
+  },
+  async deactivateSemanticMemory(ids: string[]): Promise<{ deactivated: number }> {
+    return apiRequest('/admin/memory/bulk-deactivate', { method: 'POST', body: JSON.stringify({ ids }) });
   },
   async getSemanticMemoryItem(itemId: string): Promise<SemanticMemoryAdminDetail> {
     return apiRequest(`/admin/memory/${itemId}`);
@@ -572,11 +594,23 @@ export const adminApi = {
     if (params.offset !== undefined) search.set('offset', String(params.offset));
     return apiRequest(`/admin/memory/staging/candidates?${search.toString()}`);
   },
-  async approveShadowMemoryCandidate(id: string, body: { reason?: string; scope?: 'global' | 'project' | 'scoped'; project_id?: string; scope_ids?: string[]; promote_to_company?: boolean; content?: Record<string, unknown> } = {}): Promise<ShadowMemoryCandidate> {
+  async approveShadowMemoryCandidate(id: string, body: { reason?: string; scope?: 'global' | 'project' | 'scoped'; project_id?: string; scope_ids?: string[]; promote_to_company?: boolean; replace_existing_definition?: boolean; content?: Record<string, unknown> } = {}): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/approve`, { method: 'POST', body: JSON.stringify(body) });
+  },
+  async getShadowCandidateEvidence(id: string): Promise<ShadowCandidateEvidence> {
+    return apiRequest(`/admin/memory/staging/candidates/${id}/evidence`);
+  },
+  async bulkApproveShadowTerms(ids: string[]): Promise<{ approved_ids: string[]; review_ids: string[] }> {
+    return apiRequest('/admin/memory/staging/candidates/bulk-approve', { method: 'POST', body: JSON.stringify({ ids }) });
   },
   async rejectShadowMemoryCandidate(id: string, reason?: string): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
+  },
+  async deactivateShadowMemoryCandidates(ids: string[]): Promise<{ changed: number }> {
+    return apiRequest('/admin/memory/staging/candidates/bulk-deactivate', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+  async deleteShadowMemoryCandidates(ids: string[]): Promise<{ changed: number }> {
+    return apiRequest('/admin/memory/staging/candidates', { method: 'DELETE', body: JSON.stringify({ ids }) });
   },
   // Users
   async getUsers(

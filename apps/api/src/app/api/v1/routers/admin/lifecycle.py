@@ -13,7 +13,7 @@ from app.schemas.lifecycle import DependencyGraphResponse, LifecycleReportRespon
 from app.services.lifecycle_admin_service import LifecycleAdminService
 
 router = APIRouter(tags=["lifecycle"])
-LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "memory_scope"]
+LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "memory_scope", "memory_item"]
 
 
 class SoftDeleteBody(BaseModel):

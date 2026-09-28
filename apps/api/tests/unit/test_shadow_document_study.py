@@ -19,15 +19,17 @@ from app.runtime.memory.shadow_study_prompts import (
 from app.workers.tasks_shadow_document_memory import _source_id, _trace_entity_id
 
 
-def test_shadow_study_prompt_defaults_and_operator_overrides_require_evidence() -> None:
+def test_shadow_study_prompt_requires_configuration_and_document_evidence() -> None:
     assert "candidate ledger" in SHADOW_DOCUMENT_STUDY_PROMPT
     assert "evidence_section_id" in SHADOW_DOCUMENT_STUDY_PROMPT
     assert "теневого" in SHADOW_DOCUMENT_SCREENING_PROMPT
     assert "ничего не публикуй" in SHADOW_MEMORY_CONFLICT_PROMPT
-    assert document_memory_prompt({}, stage="study") == SHADOW_DOCUMENT_STUDY_PROMPT
+    with pytest.raises(ValueError, match="not configured"):
+        document_memory_prompt({}, stage="study")
     operator_prompt = document_memory_prompt({"document_memory_study_prompt": "операторский промпт"}, stage="study")
     assert operator_prompt.startswith("операторский промпт")
     assert "scope_catalog" in operator_prompt
+    assert "document.access_scope=global" in operator_prompt
 
 
 def test_shadow_study_output_rejects_invalid_candidate_shape() -> None:

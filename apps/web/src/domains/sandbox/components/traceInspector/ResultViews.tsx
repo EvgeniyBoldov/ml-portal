@@ -97,7 +97,6 @@ export function MemoryExtractionResultView({ result }: { result: TraceExecutorRe
     <MemoryField label="Дополнено" value={value.extended} />
     <MemoryField label="Отклонено валидацией" value={value.rejected} />
     <MemoryField label="Всего кандидатов" value={value.candidates} />
-    <MemoryField label="Значений глоссария" value={value.glossary_meanings} />
     <MemoryField label="Конфликтов" value={value.conflicts} />
     <MemoryField label="Дубликатов" value={value.duplicates} />
     <MemoryField label="Автоодобрено" value={value.autoeligible} />

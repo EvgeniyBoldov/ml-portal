@@ -32,4 +32,5 @@ export const factsApi = {
   createAdmin: (owner: FactOwner, ownerId: string, data: FactInput) => apiRequest<Fact>(`/admin/${owner === 'user' ? 'users' : 'tenants'}/${ownerId}/facts`, { method: 'POST', body: data }),
   updateAdmin: (owner: FactOwner, ownerId: string, factId: string, data: FactInput) => apiRequest<Fact>(`/admin/${owner === 'user' ? 'users' : 'tenants'}/${ownerId}/facts/${factId}`, { method: 'PUT', body: data }),
   deleteAdmin: (owner: FactOwner, ownerId: string, factId: string) => apiRequest<void>(`/admin/${owner === 'user' ? 'users' : 'tenants'}/${ownerId}/facts/${factId}`, { method: 'DELETE' }),
+  deleteAdminMany: (owner: FactOwner, ownerId: string, ids: string[]) => apiRequest<{ deleted: number }>(`/admin/${owner === 'user' ? 'users' : 'tenants'}/${ownerId}/facts`, { method: 'DELETE', body: { ids } }),
 };

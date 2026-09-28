@@ -1173,7 +1173,7 @@ function documentMemoryResult(events: RuntimeJournalEvent[]): Record<string, unk
   const fields = [
     'stage', 'decision', 'document_kind', 'cursor', 'section_count', 'item_count',
     'section_ids', 'next_section', 'created', 'extended', 'rejected', 'candidates',
-    'glossary_meanings', 'conflicts', 'duplicates', 'autoeligible', 'snapshot_status',
+    'conflicts', 'duplicates', 'autoeligible', 'snapshot_status',
   ];
   const result = Object.fromEntries(fields
     .filter((key) => payload[key] !== undefined)

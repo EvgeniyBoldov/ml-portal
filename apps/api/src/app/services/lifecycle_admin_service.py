@@ -29,7 +29,7 @@ from app.services.tenant_migration_service import TenantMigrationService
 from app.services.tenants_service import AsyncTenantsService
 from app.services.sandbox_service import SandboxService
 
-LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "chat", "sandbox_session", "memory_scope"]
+LifecycleKind = Literal["tenant", "user", "collection", "agent", "rbac_rule", "chat", "sandbox_session", "memory_scope", "memory_item"]
 
 
 @dataclass
@@ -210,6 +210,7 @@ class LifecycleAdminService:
             "chat": "chats",
             "sandbox_session": "sandbox_sessions",
             "memory_scope": "memory_scopes",
+            "memory_item": "memory_items",
         }[kind]
 
     async def _apply_deprecated_state(

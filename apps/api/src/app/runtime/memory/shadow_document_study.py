@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable, Literal, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
@@ -138,6 +138,20 @@ class ShadowDocumentStudyService:
         self._session = session
 
     async def get_or_create_snapshot(self, *, document_id: UUID, checksum: str, visibility_tenant_id: UUID | None) -> DocumentMemorySnapshot:
+        old_snapshots = select(DocumentMemorySnapshot.id).where(
+            DocumentMemorySnapshot.document_id == document_id,
+            DocumentMemorySnapshot.canonical_checksum != checksum,
+        )
+        old_candidates = select(MemoryExtractionCandidate.id).where(
+            MemoryExtractionCandidate.snapshot_id.in_(old_snapshots),
+        )
+        await self._session.execute(update(GlossaryTerm).where(
+            GlossaryTerm.approved_candidate_id.in_(old_candidates),
+        ).values(is_active=False))
+        await self._session.execute(update(DocumentMemorySnapshot).where(
+            DocumentMemorySnapshot.id.in_(old_snapshots),
+            DocumentMemorySnapshot.status != "superseded",
+        ).values(status="superseded"))
         row = (await self._session.execute(select(DocumentMemorySnapshot).where(
             DocumentMemorySnapshot.document_id == document_id,
             DocumentMemorySnapshot.canonical_checksum == checksum,
@@ -179,11 +193,12 @@ class ShadowDocumentStudyService:
             "evidence_section_ids": list(row.evidence_section_ids or []),
         } for row in reversed(rows)]
 
-    async def glossary_context(self, *, visibility_tenant_id: UUID | None) -> list[dict[str, Any]]:
+    async def glossary_context(self) -> list[dict[str, Any]]:
         rows = (await self._session.execute(GlossaryService.published_terms_query()
             .order_by(GlossaryTerm.canonical_term)
             .limit(MAX_GLOSSARY_ITEMS))).scalars().all()
-        return [{"term": term.canonical_term, "aliases": list(term.aliases or [])} for term in rows]
+        return [{"term": term.canonical_term, "definition": term.definition,
+                 "aliases": list(term.aliases or [])} for term in rows]
 
     async def project_catalog(self) -> tuple[dict[str, Project], list[dict[str, Any]]]:
         rows = list((await self._session.execute(select(Project).where(
@@ -222,6 +237,7 @@ class ShadowDocumentStudyService:
         *,
         snapshot: DocumentMemorySnapshot,
         items: Sequence[ShadowStudyItem],
+        document_scope: str,
         section_ids: set[str],
         projects_by_key: dict[str, Project],
         scopes_by_key: dict[str, MemoryScope] | None = None,
@@ -231,42 +247,45 @@ class ShadowDocumentStudyService:
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
         ))).scalar_one_or_none()
         next_ordinal = int(maximum if maximum is not None else -1) + 1
-        counts = {"created": 0, "extended": 0, "rejected": 0}
-        expanded: list[ShadowStudyItem] = []
+        counts = {"created": 0, "extended": 0, "rejected": 0, "invalid_content": 0}
         for item in items:
             if item.candidate_type == "term":
-                definition = str(item.content.get("definition") or "").strip()
-                # Older operator prompts still emit a definition inside a term.
-                # Preserve it as an independent, scoped knowledge candidate.
-                if definition:
-                    expanded.append(item.model_copy(update={
-                        "candidate_type": "description", "content": {"summary": definition, "details": []},
-                        "aliases": [], "operation": "new", "existing_candidate_id": None,
-                    }))
-                item = item.model_copy(update={"content": {}, "scope_candidate": "unknown", "project_keys": [],
+                if document_scope != "global":
+                    counts["rejected"] += 1
+                    continue
+                item = item.model_copy(update={"scope_candidate": "unknown", "project_keys": [],
                                                "scope_keys": [], "mentioned_scope_keys": [], "unmatched_scope_names": []})
-            expanded.append(item)
-        for item in expanded:
             evidence = list(dict.fromkeys(value for value in item.evidence_section_ids if value in section_ids))
             if not evidence:
                 counts["rejected"] += 1
                 continue
             applies, mentions, unmatched, proposed_scope = _scope_proposal(item, scopes_by_key or {}, projects_by_key)
             content = dict(item.content or {})
-            if item.candidate_type != "term":
-                try:
-                    content = normalize_memory_content(item.candidate_type, content)
-                except ValueError:
+            try:
+                content = normalize_memory_content(item.candidate_type, content)
+            except ValueError:
+                if item.candidate_type == "term":
                     counts["rejected"] += 1
                     continue
+                # Keep source-backed memory proposals visible for human review.
+                counts["invalid_content"] += 1
             if item.operation == "extend_existing":
                 if item.existing_candidate_id not in known:
                     counts["rejected"] += 1
                     continue
                 row = await self._session.get(MemoryExtractionCandidate, item.existing_candidate_id)
-                if row is None:
+                if row is None or row.candidate_type != item.candidate_type or row.normalized_subject != _normalized(item.subject):
                     counts["rejected"] += 1
                     continue
+                if item.candidate_type == "term":
+                    existing_definition = str((row.content or {}).get("definition") or "").strip()
+                    incoming_definition = str(content["definition"])
+                    if existing_definition and " ".join(existing_definition.split()).casefold() != incoming_definition.casefold():
+                        counts["rejected"] += 1
+                        continue
+                    if not existing_definition:
+                        row.content = content
+                        row.content_text = json.dumps(content, ensure_ascii=False, sort_keys=True)
                 row.evidence_section_ids = list(dict.fromkeys([*(row.evidence_section_ids or []), *evidence]))
                 row.aliases = _unique([*(row.aliases or []), *item.aliases])
                 if row.candidate_type != "term":

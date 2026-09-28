@@ -68,6 +68,17 @@ class FactAdminService:
             raise AdminFactNotFoundError(fact_id)
         await self._repo.supersede(fact_id=current.id, replacement_id=current.id)
 
+    async def delete_many(self, *, fact_ids: list[UUID], owner_type: str, owner_id: UUID) -> int:
+        current = [
+            await self._repo.get_active(fact_id=fact_id, owner_type=owner_type, owner_id=owner_id)
+            for fact_id in dict.fromkeys(fact_ids)
+        ]
+        if any(fact is None for fact in current):
+            raise AdminFactNotFoundError("One or more facts were not found")
+        for fact in current:
+            await self._repo.supersede(fact_id=fact.id, replacement_id=fact.id)
+        return len(current)
+
 
 def _subject(value: str) -> str:
     return " ".join(value.strip().lower().split())[:200]
@@ -79,4 +90,3 @@ def _value(value: str) -> str:
 
 def _normalized(value: str) -> str:
     return " ".join(value.lower().split())[:500]
-

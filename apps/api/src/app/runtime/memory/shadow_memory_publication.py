@@ -6,16 +6,17 @@ import hashlib
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document_memory_staging import (
-    DocumentMemorySnapshot, GlossaryMeaning, GlossaryTerm,
+    DocumentMemorySnapshot, GlossaryTerm,
     MemoryCandidateDecision, MemoryCandidateProjectBinding, MemoryExtractionCandidate,
 )
 from app.models.memory import MemoryClaim, MemoryItem, MemoryItemSource
 from app.models.memory_scope import MemoryCandidateScope, MemoryClaimScope, MemoryScope
 from app.models.project import Project
+from app.models.rag import RAGDocument
 from app.runtime.memory.content_contracts import normalize_memory_content
 
 
@@ -35,9 +36,12 @@ class ShadowMemoryPublicationService:
                       content: dict | None = None, scope: str | None = None,
                       project_id: UUID | None = None, promote_to_company: bool = False,
                       scope_ids: list[UUID] | None = None,
+                      replace_existing_definition: bool = False,
                       automatic: bool = False) -> MemoryExtractionCandidate:
         candidate = await self._required_candidate(candidate_id)
         if candidate.resolution_status not in {"extracted", "needs_review", "conflict"}:
+            if replace_existing_definition:
+                raise ValueError("Only an open term candidate can replace a glossary definition")
             return candidate
         snapshot = await self._session.get(DocumentMemorySnapshot, candidate.snapshot_id)
         if snapshot is None:
@@ -46,13 +50,28 @@ class ShadowMemoryPublicationService:
             candidate.content = content
             candidate.content_text = json.dumps(content, ensure_ascii=False, sort_keys=True)
         is_term = candidate.candidate_type == "term"
-        if not is_term:
-            try:
-                normalized_content = normalize_memory_content(candidate.candidate_type, dict(candidate.content or {}))
-            except ValueError as exc:
-                raise ValueError(f"Invalid candidate content: {exc}") from exc
-            candidate.content = normalized_content
-            candidate.content_text = json.dumps(normalized_content, ensure_ascii=False, sort_keys=True)
+        if replace_existing_definition and (not is_term or automatic or not str(reason or "").strip()):
+            raise ValueError("Replacing a glossary definition requires manual approval and a reason")
+        if is_term:
+            document = await self._session.get(RAGDocument, snapshot.document_id)
+            if document is None or document.scope != "global" or document.status == "archived":
+                raise ValueError("Glossary publication requires a global source document")
+            if snapshot.status in {"superseded", "failed", "rejected"}:
+                raise ValueError("Glossary publication requires a current document snapshot")
+            newer_snapshot = await self._session.scalar(select(DocumentMemorySnapshot.id).where(
+                DocumentMemorySnapshot.document_id == snapshot.document_id,
+                DocumentMemorySnapshot.created_at > snapshot.created_at,
+            ).limit(1))
+            if newer_snapshot is not None:
+                raise ValueError("Glossary publication requires the latest document snapshot")
+            if not candidate.evidence_section_ids:
+                raise ValueError("Glossary definition requires document section evidence")
+        try:
+            normalized_content = normalize_memory_content(candidate.candidate_type, dict(candidate.content or {}))
+        except ValueError as exc:
+            raise ValueError(f"Invalid candidate content: {exc}") from exc
+        candidate.content = normalized_content
+        candidate.content_text = json.dumps(normalized_content, ensure_ascii=False, sort_keys=True)
         chosen_scope = None if is_term else (scope or candidate.scope_candidate)
         if not is_term and chosen_scope not in {"global", "project", "scoped"}:
             raise ValueError("Choose global or scoped applicability before approval")
@@ -73,12 +92,11 @@ class ShadowMemoryPublicationService:
                 raise ValueError("Project has no active memory scope; add it in the scope catalog")
         if chosen_scope == "project" and (len(selected_scopes) != 1 or selected_scopes[0].project_id != project.id):
             raise ValueError("Project applicability must use exactly the selected project scope")
-        visibility = None if promote_to_company else candidate.visibility_tenant_id
+        visibility = None if is_term or promote_to_company else candidate.visibility_tenant_id
         if not is_term:
             await self._confirm_scope_bindings(candidate.id, selected_scopes)
         if is_term:
-            await self._publish_term(candidate)
-            await self._queue_legacy_definition(candidate)
+            await self._publish_term(candidate, replace_existing_definition=replace_existing_definition)
         else:
             await self._publish_memory(candidate, snapshot, project, visibility, selected_scopes)
         candidate.scope_candidate = chosen_scope
@@ -91,7 +109,8 @@ class ShadowMemoryPublicationService:
             action="autoapprove" if automatic else "approve", reason=reason,
             payload={"scope": chosen_scope, "project_id": str(project.id) if project else None,
                      "scope_ids": [str(row.id) for row in selected_scopes],
-                     "promote_to_company": promote_to_company},
+                     "promote_to_company": promote_to_company,
+                     "replace_existing_definition": replace_existing_definition},
         ))
         await self._update_snapshot(snapshot)
         return candidate
@@ -101,10 +120,6 @@ class ShadowMemoryPublicationService:
         candidate.resolution_status = "rejected"
         candidate.resolution_method = "manual"
         candidate.resolution_rationale = reason
-        await self._session.execute(
-            update(GlossaryMeaning).where(GlossaryMeaning.candidate_id == candidate.id)
-            .values(resolution_status="rejected", resolution_method="manual", resolution_rationale=reason)
-        )
         self._session.add(MemoryCandidateDecision(candidate_id=candidate.id, actor_user_id=actor_id, action="reject", reason=reason))
         snapshot = await self._session.get(DocumentMemorySnapshot, candidate.snapshot_id)
         if snapshot:
@@ -225,58 +240,33 @@ class ShadowMemoryPublicationService:
                     canonical_checksum=snapshot.canonical_checksum, section_id=section_id))
 
 
-    async def _publish_term(self, candidate: MemoryExtractionCandidate) -> None:
+    async def _publish_term(self, candidate: MemoryExtractionCandidate,
+                            *, replace_existing_definition: bool = False) -> None:
+        definition = str(candidate.content["definition"]).strip()
         term = (await self._session.execute(select(GlossaryTerm).where(
             GlossaryTerm.normalized_term == candidate.normalized_subject,
         ))).scalar_one_or_none()
         if term is None:
             term = GlossaryTerm(canonical_term=candidate.subject,
                                 normalized_term=candidate.normalized_subject,
+                                definition=definition,
+                                approved_candidate_id=candidate.id,
                                 aliases=list(candidate.aliases or []))
             self._session.add(term)
         else:
-            seen = {value.casefold() for value in term.aliases or []}
-            aliases = list(term.aliases or [])
+            different_definition = " ".join(term.definition.split()).casefold() != definition.casefold()
+            if different_definition and not replace_existing_definition:
+                raise ValueError("Term already has a different canonical definition")
+            term.definition = definition
+            term.approved_candidate_id = candidate.id
+            term.is_active = True
+            aliases = [] if different_definition else list(term.aliases or [])
+            seen = {value.casefold() for value in aliases}
             for value in candidate.aliases or []:
                 if value.casefold() not in seen and value.casefold() != term.normalized_term:
                     aliases.append(value)
                     seen.add(value.casefold())
             term.aliases = aliases
-        await self._session.execute(update(GlossaryMeaning).where(
-            GlossaryMeaning.candidate_id == candidate.id,
-        ).values(resolution_status="resolved", resolution_method="manual"))
-
-    async def _queue_legacy_definition(self, candidate: MemoryExtractionCandidate) -> None:
-        """Older study runs bundled a scoped definition inside a term."""
-        definition = str(candidate.content.get("definition") or "").strip()
-        if not definition:
-            return
-        maximum = (await self._session.execute(select(func.max(MemoryExtractionCandidate.ordinal)).where(
-            MemoryExtractionCandidate.snapshot_id == candidate.snapshot_id,
-        ))).scalar_one()
-        content = {"summary": definition, "details": ""}
-        description = MemoryExtractionCandidate(
-            snapshot_id=candidate.snapshot_id, ordinal=int(maximum or 0) + 1,
-            candidate_type="description", visibility_tenant_id=candidate.visibility_tenant_id,
-            subject=candidate.subject, normalized_subject=candidate.normalized_subject,
-            content=content,
-            content_text=json.dumps(content, ensure_ascii=False, sort_keys=True),
-            evidence_section_ids=list(candidate.evidence_section_ids or []), aliases=[],
-            extraction_confidence=candidate.extraction_confidence,
-            scope_candidate=candidate.scope_candidate or "unknown",
-            resolution_status="needs_review", resolution_method="migration",
-        )
-        self._session.add(description)
-        await self._session.flush()
-        bindings = (await self._session.execute(select(MemoryCandidateProjectBinding).where(
-            MemoryCandidateProjectBinding.candidate_id == candidate.id,
-        ))).scalars().all()
-        for binding in bindings:
-            self._session.add(MemoryCandidateProjectBinding(
-                candidate_id=description.id, project_id=binding.project_id,
-                role=binding.role, status="suggested", method="migration",
-                confidence=binding.confidence, rationale="Carried from legacy term definition",
-            ))
 
     async def _update_snapshot(self, snapshot: DocumentMemorySnapshot) -> None:
         open_count = (await self._session.execute(select(MemoryExtractionCandidate.id).where(

@@ -62,8 +62,8 @@ class ShadowMemoryReviewService:
             ).limit(12))).scalars().all())
             for existing in matches:
                 if candidate.candidate_type == "term":
-                    # Repeated spellings contribute aliases; they do not
-                    # assert competing scoped definitions.
+                    # The single canonical definition is checked during
+                    # publication. Terms have no scoped meanings to classify.
                     continue
                 if existing.snapshot_id == snapshot.id and str(existing.id) <= str(candidate.id):
                     continue

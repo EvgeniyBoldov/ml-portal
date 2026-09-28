@@ -1,8 +1,7 @@
 """Fixed prompts for the shadow document-memory study pipeline.
 
-These are bootstrap defaults. Operators edit the active prompts from the
-"Изучатель документов" orchestration tab; the runtime falls back to these
-values for installations that have not yet applied the prompt data migration.
+These are the seeded prompts. Operators edit the active prompts from the
+"Изучатель документов" orchestration tab; runtime requires a configured prompt.
 """
 
 SHADOW_DOCUMENT_SCREENING_PROMPT = """
@@ -36,9 +35,15 @@ relationship, rule, constraint, procedure или decision. У каждого р�
 или явно подтверждает его. Не переписывай его смысл. Во всех остальных
 случаях используй operation=new.
 
-term — только canonical subject и aliases. Для term оставь content пустым,
-scope_candidate=unknown и project_keys пустым. Определение термина извлеки
-отдельным description с тем же subject и собственным evidence.
+term — внутренний или неоднозначный термин с единым определением:
+canonical subject, aliases и content.definition. Определение должно быть явно
+подтверждено section; без него term не создавай. Не извлекай общеизвестные
+аббревиатуры без особого значения в компании. Для term оставь
+scope_candidate=unknown и project_keys/scope_keys пустыми. Не создавай
+отдельный description для определения термина. Значения и параметры,
+связанные с термином, извлекай как отдельные утверждения памяти.
+Создавай term только если document.access_scope=global; локальный документ не
+может менять общий словарь.
 scope_candidate означает предполагаемую применимость утверждения, а не доступ
 к файлу: global, scoped, project или unknown. scope_keys — только те точные ключи
 из scope_catalog, для которых sections доказывают применимость именно этого
@@ -50,10 +55,10 @@ scope_rationale кратко объясняет основание выбора.
 это только подсказки для сопоставления, не доказательство применимости
 каждого утверждения. *.all относится лишь к своему типу и не означает global.
 При сомнении оставь unknown для проверки. Верни только JSON по schema.
-Для каждого item, кроме term, content обязателен и должен соответствовать
+Для каждого item content обязателен и должен соответствовать
 типизированному формату: rule/constraint/decision содержат statement или
 decision, procedure — goal, prechecks, steps, verification и rollback,
-description/relationship — summary. extraction_confidence — калиброванная
+description/relationship — summary, term — definition. extraction_confidence — калиброванная
 оценка от 0 до 1; не ставь 1.0 без исключительной уверенности и полного
 evidence.
 """.strip()
@@ -80,17 +85,11 @@ DOCUMENT_MEMORY_PROMPT_EXTRA_KEYS = {
 
 def document_memory_prompt(extras: object, *, stage: str) -> str:
     """Return the operator-managed prompt for a document-memory stage."""
-    defaults = {
-        "screening": SHADOW_DOCUMENT_SCREENING_PROMPT,
-        "study": SHADOW_DOCUMENT_STUDY_PROMPT,
-        "conflict": SHADOW_MEMORY_CONFLICT_PROMPT,
-    }
     key = DOCUMENT_MEMORY_PROMPT_EXTRA_KEYS[stage]
-    if isinstance(extras, dict):
-        configured = extras.get(key)
-        if isinstance(configured, str) and configured.strip():
-            prompt = configured.strip()
-            if stage == "study":
-                return prompt + "\n\nКонтракт данных: term — только название и aliases; content пустой, scope_candidate=unknown, project_keys/scope_keys пустые. Определение извлекай отдельным description с собственным scope. Для других items content обязателен и должен соответствовать типу; scope_keys — только доказанная применимость из scope_catalog; mentioned_scope_keys — простые упоминания; неизвестные названия — в unmatched_scope_names, без создания скоупа. document.scope_hint_catalog содержит скоупы загрузки с актуальными именами и алиасами; это подсказка для сопоставления, не доказательство применимости утверждения. extraction_confidence — калиброванная оценка 0..1; не ставь 1.0 без полного evidence."
-            return prompt
-    return defaults[stage]
+    configured = extras.get(key) if isinstance(extras, dict) else None
+    if not isinstance(configured, str) or not configured.strip():
+        raise ValueError(f"Document memory prompt {key} is not configured")
+    prompt = configured.strip()
+    if stage == "study":
+        return prompt + "\n\nОбязательный контракт данных: term содержит название, aliases и content.definition из evidence. Без определения term не создавай. Создавай term только для document.access_scope=global. Не извлекай общеизвестные сокращения без особого значения в компании. Для term scope_candidate=unknown, project_keys/scope_keys пустые; определение не дублируй отдельным description. Значения и параметры термина — отдельные утверждения памяти. Для других items content обязателен и должен соответствовать типу; scope_keys — только доказанная применимость из scope_catalog; mentioned_scope_keys — простые упоминания; неизвестные названия — в unmatched_scope_names, без создания скоупа. document.scope_hint_catalog содержит скоупы загрузки с актуальными именами и алиасами; это подсказка для сопоставления, не доказательство применимости утверждения. extraction_confidence — калиброванная оценка 0..1; не ставь 1.0 без полного evidence."
+    return prompt

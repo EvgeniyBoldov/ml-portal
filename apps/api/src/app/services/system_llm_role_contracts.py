@@ -70,8 +70,8 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
         from app.runtime.memory.preparer import _PreparationOutput
         model = _PreparationOutput
     elif role == SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR:
-        from app.runtime.memory.document_memory import _DocumentMemoryOutput
-        model = _DocumentMemoryOutput
+        from app.runtime.memory.shadow_document_study import ShadowStudyOutput
+        model = ShadowStudyOutput
     elif role == SystemLLMRoleType.MEMORY_EVALUATOR:
         from app.runtime.memory.evidence_feedback import _MemoryEvaluationOutput
         model = _MemoryEvaluationOutput

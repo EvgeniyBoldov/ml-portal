@@ -16,7 +16,6 @@ from app.models.memory import (
 )
 from app.models.document_memory_staging import (
     DocumentMemorySnapshot,
-    GlossaryMeaning,
     MemoryCandidateProjectBinding,
     MemoryExtractionCandidate,
 )
@@ -51,8 +50,6 @@ class SemanticMemoryStagingOverview:
     snapshots: dict[str, int]
     candidates: dict[str, int]
     project_bindings: dict[str, int]
-    glossary_meanings: dict[str, int]
-    conflicting_glossary_terms: int
 
 
 class SemanticMemoryAdminService:
@@ -158,22 +155,10 @@ class SemanticMemoryAdminService:
         project_bindings = await self._count_by(
             MemoryCandidateProjectBinding.role, MemoryCandidateProjectBinding.status,
         )
-        meanings = await self._count_by(GlossaryMeaning.resolution_status)
-        conflicts = (await self._session.execute(
-            select(func.count()).select_from(
-                select(GlossaryMeaning.term_id)
-                .where(GlossaryMeaning.resolution_status == "resolved")
-                .group_by(GlossaryMeaning.term_id)
-                .having(func.count(func.distinct(GlossaryMeaning.definition)) > 1)
-                .subquery()
-            )
-        )).scalar_one()
         return SemanticMemoryStagingOverview(
             snapshots=snapshots,
             candidates=candidates,
             project_bindings=project_bindings,
-            glossary_meanings=meanings,
-            conflicting_glossary_terms=int(conflicts),
         )
 
     async def _count_by(self, *columns) -> dict[str, int]:

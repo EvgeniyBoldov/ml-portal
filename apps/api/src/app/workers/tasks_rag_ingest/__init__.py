@@ -6,7 +6,6 @@ from .chunk import chunk_document
 from .embed import embed_chunks_model
 from .index import index_model
 from .cleanup import cleanup_document_artifacts
-from .document_memory import extract_document_memory
 from .dispatch import dispatch_rag_ingest_outbox, dispatch_rag_ingest_stage_outbox
 from .reconcile import reconcile_rag_ingest_outbox
 
@@ -17,7 +16,6 @@ __all__ = [
     "embed_chunks_model",
     "index_model",
     "cleanup_document_artifacts",
-    "extract_document_memory",
     "dispatch_rag_ingest_outbox",
     "dispatch_rag_ingest_stage_outbox",
     "reconcile_rag_ingest_outbox",
