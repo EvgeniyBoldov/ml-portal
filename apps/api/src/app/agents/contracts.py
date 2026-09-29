@@ -235,6 +235,7 @@ class ResolvedDataInstance(BaseModel):
     usage_purpose: Optional[str] = None
     usage_rules: Optional[str] = None
     remote_tables: List[str] = Field(default_factory=list)
+    schema_fields: List[Dict[str, Any]] = Field(default_factory=list)
     readiness: Optional[CollectionRuntimeReadiness] = None
 
 

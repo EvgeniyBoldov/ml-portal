@@ -8,6 +8,7 @@ import {
   useActivePlannerRole,
   useActiveTurnPreflightRole,
   useActiveFactCompactorRole,
+  useActiveDocumentMemoryExtractorRole,
   useActiveSynthesizerRole,
   useOrchestratorExecutionLimits,
   useUpdateFactExtractorRole,
@@ -16,6 +17,7 @@ import {
   useUpdatePlannerRole,
   useUpdateTurnPreflightRole,
   useUpdateFactCompactorRole,
+  useUpdateDocumentMemoryExtractorRole,
   useUpdateSynthesizerRole,
 } from '@/shared/api/hooks/usePlatformSettings';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
@@ -51,6 +53,31 @@ const DEFAULT_ROLE_FORM: RoleFormData = {
   max_retries: null,
   retry_backoff: 'exp',
 };
+
+const DOCUMENT_PROMPT_KEYS = {
+  screening: 'document_memory_screening_prompt',
+  study: 'document_memory_study_prompt',
+  conflict: 'document_memory_conflict_prompt',
+} as const;
+
+type DocumentMemoryRoleForm = RoleFormData & {
+  screening_prompt: string;
+  study_prompt: string;
+  conflict_prompt: string;
+};
+
+const DEFAULT_DOCUMENT_MEMORY_ROLE_FORM: DocumentMemoryRoleForm = {
+  ...DEFAULT_ROLE_FORM,
+  screening_prompt: '',
+  study_prompt: '',
+  conflict_prompt: '',
+};
+
+const DOCUMENT_MEMORY_PROMPT_FIELDS: FieldConfig[] = [
+  { key: 'screening_prompt', label: 'Первичная оценка', type: 'textarea', rows: 8, description: 'Промпт, который решает: изучать документ, пропустить или передать на проверку.' },
+  { key: 'study_prompt', label: 'Извлечение из секций', type: 'textarea', rows: 12, description: 'Промпт для извлечения кандидатов памяти из очередного batch секций.' },
+  { key: 'conflict_prompt', label: 'Проверка конфликта', type: 'textarea', rows: 8, description: 'Промпт для сравнения нового кандидата с существующим знанием.' },
+];
 
 const ORCHESTRATOR_LIMIT_FIELDS: FieldConfig[] = [
   { key: 'llm_calls_max', type: 'number', label: 'LLM-вызовы', description: 'Пустое поле наследует platform default.' },
@@ -147,6 +174,31 @@ function mapRoleToFields(role?: SystemLLMRole): RoleFormData {
   };
 }
 
+function mapDocumentMemoryRoleToFields(role?: SystemLLMRole): DocumentMemoryRoleForm {
+  const base = mapRoleToFields(role);
+  const extras = role?.extras ?? {};
+  const prompt = (key: string): string => typeof extras[key] === 'string' ? extras[key] as string : '';
+  return {
+    ...base,
+    screening_prompt: prompt(DOCUMENT_PROMPT_KEYS.screening),
+    study_prompt: prompt(DOCUMENT_PROMPT_KEYS.study),
+    conflict_prompt: prompt(DOCUMENT_PROMPT_KEYS.conflict),
+  };
+}
+
+function documentMemoryRoleUpdate(form: DocumentMemoryRoleForm): SystemLLMRoleUpdate {
+  const { screening_prompt, study_prompt, conflict_prompt, ...role } = form;
+  return {
+    ...role,
+    extras: {
+      ...(role.extras as Record<string, unknown>),
+      [DOCUMENT_PROMPT_KEYS.screening]: screening_prompt,
+      [DOCUMENT_PROMPT_KEYS.study]: study_prompt,
+      [DOCUMENT_PROMPT_KEYS.conflict]: conflict_prompt,
+    },
+  };
+}
+
 function canEditOutputRequirements(_contract: ResponseContract | null | undefined): boolean {
   return true;
 }
@@ -173,12 +225,16 @@ export function OrchestrationPage() {
   const [compactForm, setCompactForm] = useState<RoleFormData>(DEFAULT_ROLE_FORM);
   const [compactLimitsForm, setCompactLimitsForm] = useState<Record<string, unknown>>({});
 
+  const [documentStudyMode, setDocumentStudyMode] = useState<'view' | 'edit'>('view');
+  const [documentStudyForm, setDocumentStudyForm] = useState<DocumentMemoryRoleForm>(DEFAULT_DOCUMENT_MEMORY_ROLE_FORM);
+
   const { data: plannerRole, isLoading: plannerLoading } = useActivePlannerRole();
   const { data: preflightRole, isLoading: preflightLoading } = useActiveTurnPreflightRole();
   const { data: synthesizerRole, isLoading: synthesizerLoading } = useActiveSynthesizerRole();
   const { data: factExtractorRole, isLoading: factExtractorLoading } = useActiveFactExtractorRole();
   const { data: memoryRole, isLoading: memoryLoading } = useActiveMemoryRole();
   const { data: factCompactorRole, isLoading: factCompactorLoading } = useActiveFactCompactorRole();
+  const { data: documentStudyRole, isLoading: documentStudyLoading } = useActiveDocumentMemoryExtractorRole();
 
   const { data: plannerLimits, isLoading: plannerLimitsLoading } = useOrchestratorExecutionLimits('planner');
   const { data: synthLimits, isLoading: synthLimitsLoading } = useOrchestratorExecutionLimits('synthesizer');
@@ -191,6 +247,7 @@ export function OrchestrationPage() {
   const updateFactExtractorRole = useUpdateFactExtractorRole();
   const updateMemoryRole = useUpdateMemoryRole();
   const updateFactCompactorRole = useUpdateFactCompactorRole();
+  const updateDocumentStudyRole = useUpdateDocumentMemoryExtractorRole();
 
   const updatePlannerLimits = useUpdateOrchestratorExecutionLimits('planner');
   const updateSynthLimits = useUpdateOrchestratorExecutionLimits('synthesizer');
@@ -269,7 +326,7 @@ export function OrchestrationPage() {
         ]}
       >
         <Tab
-          title="Planner"
+          title="Планировщик"
           layout="grid"
           actions={buildEntityCrudActions({
             mode: plannerMode,
@@ -301,7 +358,7 @@ export function OrchestrationPage() {
         </Tab>
 
         <Tab
-          title="Turn Preflight"
+          title="Маршрутизатор запроса"
           layout="grid"
           actions={buildEntityCrudActions({
             mode: preflightMode,
@@ -320,7 +377,7 @@ export function OrchestrationPage() {
         </Tab>
 
         <Tab
-          title="Synthesizer"
+          title="Синтезатор ответа"
           layout="grid"
           actions={buildEntityCrudActions({
             mode: synthMode,
@@ -348,7 +405,7 @@ export function OrchestrationPage() {
         </Tab>
 
         <Tab
-          title="Fact Extractor"
+          title="Экстрактор фактов"
           layout="grid"
           actions={buildEntityCrudActions({
             mode: factMode,
@@ -376,7 +433,7 @@ export function OrchestrationPage() {
         </Tab>
 
         <Tab
-          title="Подготовка контекста planner"
+          title="Подбор контекста памяти"
           layout="grid"
           actions={buildEntityCrudActions({
             mode: memoryMode,
@@ -398,7 +455,7 @@ export function OrchestrationPage() {
         </Tab>
 
         <Tab
-          title="Fact Compactor"
+          title="Нормализатор фактов"
           layout="grid"
           actions={buildEntityCrudActions({
             mode: compactMode,
@@ -424,9 +481,29 @@ export function OrchestrationPage() {
           <Block title="Примеры и дополнительные параметры" icon="code" iconVariant="info" width="full" fields={resolvedFactCompactorFields.filter((f) => ROLE_AUXILIARY_KEYS.includes(f.key))} data={compactMode === 'edit' ? compactForm : mapRoleToFields(factCompactorRole)} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactForm((p) => ({ ...p, [k]: v })) : undefined} />
           <Block title="Лимиты исполнения" icon="zap" iconVariant="warning" width="1/2" fields={ORCHESTRATOR_LIMIT_FIELDS} data={compactMode === 'edit' ? compactLimitsForm : (compactLimits?.effective || {})} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactLimitsForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
+
+        <Tab
+          title="Изучатель документов"
+          layout="grid"
+          actions={buildEntityCrudActions({
+            mode: documentStudyMode,
+            saving: updateDocumentStudyRole.isPending,
+            tone: 'default',
+            labels: { edit: 'Изменить' },
+            onEdit: () => { setDocumentStudyForm(mapDocumentMemoryRoleToFields(documentStudyRole)); setDocumentStudyMode('edit'); },
+            onSave: async () => {
+              await updateDocumentStudyRole.mutateAsync(documentMemoryRoleUpdate(documentStudyForm));
+              setDocumentStudyMode('view');
+            },
+            onCancel: () => { setDocumentStudyMode('view'); setDocumentStudyForm(DEFAULT_DOCUMENT_MEMORY_ROLE_FORM); },
+          })}
+        >
+          <Block title="Промпты этапов" icon="shield" iconVariant="primary" width="2/3" fields={DOCUMENT_MEMORY_PROMPT_FIELDS} data={documentStudyMode === 'edit' ? documentStudyForm : mapDocumentMemoryRoleToFields(documentStudyRole)} editable={documentStudyMode === 'edit'} onChange={documentStudyMode === 'edit' ? (key, value) => setDocumentStudyForm((form) => ({ ...form, [key]: value })) : undefined} />
+          <Block title="Параметры вызова" icon="settings" iconVariant="info" width="1/3" fields={roleFields(modelOptions, { identity: '', mission: '', rules: '', safety: '', outputRequirements: '', model: 'LLM-модель изучателя документов.' }, documentStudyRole?.response_contract ?? null, null).filter((field) => ROLE_PARAM_KEYS.includes(field.key))} data={documentStudyMode === 'edit' ? documentStudyForm : mapDocumentMemoryRoleToFields(documentStudyRole)} editable={documentStudyMode === 'edit'} onChange={documentStudyMode === 'edit' ? (key, value) => setDocumentStudyForm((form) => ({ ...form, [key]: value })) : undefined} />
+        </Tab>
       </EntityPageV2>
 
-      {(modelsLoading || plannerLoading || preflightLoading || synthesizerLoading || factExtractorLoading || memoryLoading || factCompactorLoading || plannerLimitsLoading || synthLimitsLoading || factLimitsLoading || compactLimitsLoading) && (
+      {(modelsLoading || plannerLoading || preflightLoading || synthesizerLoading || factExtractorLoading || memoryLoading || factCompactorLoading || documentStudyLoading || plannerLimitsLoading || synthLimitsLoading || factLimitsLoading || compactLimitsLoading) && (
         <div>Загрузка настроек оркестрации…</div>
       )}
     </>

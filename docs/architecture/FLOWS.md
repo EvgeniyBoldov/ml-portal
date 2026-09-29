@@ -177,7 +177,7 @@ They are intentionally lightweight:
 ## 9. Turn Routing and Memory Contract
 
 Flow:
-1. Code resolves ACL-safe glossary aliases, projects and entities without an
+1. Code resolves scope-free glossary aliases and project names without an
    LLM call; values from durable memory are not injected at this stage.
 2. `TurnPreflight` returns a strict `synthesis`, `planner`, `recall` or
    `clarify` decision. It provides a `SynthesisBrief`, `TaskBrief`,
@@ -196,8 +196,9 @@ Binding rule:
 - `MemorySnapshot` is the immutable read projection for one run,
 - `TurnPreflight` never reads storage directly, creates plans/tasks or writes
   durable memory,
-- `facts` is durable business memory; `runtime_execution_events` remains the
-  execution journal and is not a memory store,
+- `facts` stores confirmed user/tenant dialogue facts; document-derived
+  business knowledge lives in source-backed Semantic Memory.
+  `runtime_execution_events` remains the execution journal and is not a memory store,
 - sandbox overlays are branch-scoped and never directly persist durable facts.
 
 ## 10. Chat Context Materialization Flow

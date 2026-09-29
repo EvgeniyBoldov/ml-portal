@@ -28,7 +28,6 @@ from app.runtime.memory.fact_extractor import (
 )
 from app.runtime.memory.fact_compactor import FactCompactor
 from app.runtime.memory.fact_reconciler import FactReconciler
-from app.runtime.memory.glossary_reconciler import GlossaryReconciler
 from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.dto import FactDTO
 from app.runtime.memory.decisions import MemoryDecision, decision_counts
@@ -112,7 +111,6 @@ class MemoryWriter:
         self._extractor = FactExtractor(session=session, llm_client=llm_client)
         self._fact_compactor = FactCompactor(session=session, llm_client=llm_client)
         self._fact_reconciler = FactReconciler(session)
-        self._glossary_reconciler = GlossaryReconciler(session)
         self._llm_event_sink = llm_event_sink
         self._component_execution_ids = dict(component_execution_ids or {})
         # Single AsyncSession is not concurrency-safe for writes.
@@ -263,8 +261,7 @@ class MemoryWriter:
         persist_chat_scoped: bool = True,
     ) -> tuple[int, list[dict[str, Any]], list[MemoryDecision], str | None]:
         branch_id = _resolve_sandbox_branch_id(sandbox_overrides)
-        # Project knowledge is document-derived; this path persists only
-        # conversational user/tenant facts and glossary updates.
+        # Document knowledge and terminology are published only by review.
         all_candidates = list(candidates)
         if not all_candidates:
             return 0, [], [], None
@@ -282,7 +279,7 @@ class MemoryWriter:
                 event_sink=(lambda event: self._llm_event_sink("fact_compactor", event)) if self._llm_event_sink else None,
                 agent_execution_id=self._component_execution_ids.get("fact_compactor"),
             )
-            branch_facts = [item for item in compaction.facts if item.kind != "glossary"]
+            branch_facts = compaction.facts
             saved = await self._write_branch_facts(
                 branch_id=branch_id,
                 facts=branch_facts,
@@ -312,10 +309,6 @@ class MemoryWriter:
                 user_id=memory.user_id,
                 tenant_id=memory.tenant_id,
             )
-            current.extend(await self._glossary_reconciler.current_for(
-                user_id=memory.user_id,
-                tenant_id=memory.tenant_id,
-            ))
             compaction = await self._fact_compactor.compact_with_decisions(
                 candidates=all_candidates,
                 current_facts=current,
@@ -327,17 +320,12 @@ class MemoryWriter:
                 agent_execution_id=self._component_execution_ids.get("fact_compactor"),
             )
             fact_result = await self._fact_reconciler.apply_with_decisions(
-                candidates=[item for item in compaction.facts if item.kind != "glossary"],
-                user_id=memory.user_id,
-                tenant_id=memory.tenant_id,
-            )
-            glossary_result = await self._glossary_reconciler.apply_with_decisions(
-                candidates=[item for item in compaction.facts if item.kind == "glossary"],
+                candidates=compaction.facts,
                 user_id=memory.user_id,
                 tenant_id=memory.tenant_id,
             )
         changes = fact_result.changes
-        return len(changes) + glossary_result.changed, [
+        return len(changes), [
             {
                 "scope": item.scope,
                 "kind": item.kind,
@@ -352,7 +340,7 @@ class MemoryWriter:
                 "compaction_action": item.compaction_action,
             }
             for item in changes
-        ], [*compaction.decisions, *fact_result.decisions, *glossary_result.decisions], compaction.error_code
+        ], [*compaction.decisions, *fact_result.decisions], compaction.error_code
 
     async def _chat_exists(self, chat_id) -> bool:
         if chat_id is None:

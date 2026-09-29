@@ -165,8 +165,8 @@ class ChatContextReconciler:
         """Bind a typed payload identifier to its typed provenance reference."""
         sources = set(operation.source_ids)
         if operation.kind == "term_binding" and operation.action not in {"close", "expire", "supersede"}:
-            if f"glossary:{payload.get('glossary_entry_id')}" not in sources:
-                raise ValueError("term binding must cite its glossary entry")
+            if f"glossary:{payload.get('glossary_term_id')}" not in sources:
+                raise ValueError("term binding must cite its published glossary term")
         if operation.kind == "artifact_ref":
             artifact_id = operation.item_key if operation.action in {"close", "expire", "supersede"} else str(payload.get("artifact_id") or "")
             if f"artifact:{artifact_id}" not in sources:

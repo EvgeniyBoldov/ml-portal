@@ -19,11 +19,11 @@ class ChatContextReducer:
             operations.append(ChatContextOperation(action="update", kind="scope", item_key="current_scope",
                 payload={"project_keys": normalized, "source": "explicit", "trust_class": "application_verified"}, source_ids=source, expected_revision=expected_revision))
         for binding in projection.term_bindings:
-            entry_id = str(binding.get("id") or binding.get("glossary_entry_id") or "").strip()
+            entry_id = str(binding.get("id") or "").strip()
             term = str(binding.get("term") or "").strip()
             if entry_id and term:
                 operations.append(ChatContextOperation(action="touch", kind="term_binding", item_key=entry_id,
-                    payload={"glossary_entry_id": entry_id, "term": term, "aliases": list(binding.get("matched_aliases") or binding.get("aliases") or [])[:10], "trust_class": "application_verified"}, source_ids=[*source, f"glossary:{entry_id}"], expected_revision=expected_revision))
+                    payload={"glossary_term_id": entry_id, "term": term, "aliases": list(binding.get("matched_aliases") or binding.get("aliases") or [])[:10], "trust_class": "application_verified"}, source_ids=[*source, f"glossary:{entry_id}"], expected_revision=expected_revision))
         # A technical failure is not conversational memory.  In particular,
         # it must not create a new goal or recent anchor from a provider/tool
         # failure.  Safe blocked limitations below are the only error-derived

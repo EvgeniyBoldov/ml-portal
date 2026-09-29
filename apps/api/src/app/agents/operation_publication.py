@@ -46,6 +46,10 @@ class CollectionCapabilityBinding:
 
 
 _OPERATION_SPECS: Dict[str, OperationSpec] = {
+    "calculator": OperationSpec(
+        canonical_op_slug="calculator", domain="system", title="Calculator",
+        description="Evaluate a basic arithmetic expression safely.", result_kind="number", scope_kind="system",
+    ),
     "memory.search": OperationSpec(
         canonical_op_slug="memory.search", domain="memory", title="Search Memory",
         description="Search bounded project and company memory.", result_kind="memory", scope_kind="system",
@@ -668,11 +672,11 @@ def build_collection_workflow_steps(
     if "collection.info" in ops:
         if collection_type in {"table", "document", "template"}:
             steps.append(
-                "Сначала вызови `collection.info`, если нужно понять поля, фильтры, наблюдаемые значения или структуру данных."
+                "При неясной структуре или пустом результате вызови `collection.info`, чтобы проверить поля, фильтры и наблюдаемые значения."
             )
         elif collection_type in {"sql", "api"}:
             steps.append(
-                "Сначала вызови `collection.info`, чтобы понять доступную структуру, сущности и ограничения источника."
+                "При неясной структуре или пустом результате вызови `collection.info`, чтобы проверить сущности и ограничения источника."
             )
 
     if collection_type == "document":

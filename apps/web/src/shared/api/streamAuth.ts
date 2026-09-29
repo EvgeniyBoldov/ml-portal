@@ -7,6 +7,22 @@ type StreamFetchOptions = {
   idempotencyKey?: string;
 };
 
+export async function fetchSseWithAuth(path: string, signal?: AbortSignal): Promise<Response> {
+  const buildHeaders = () => {
+    const headers: Record<string, string> = { Accept: 'text/event-stream' };
+    const token = getAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  };
+  const makeRequest = (headers: Record<string, string>) => fetch(`${API_BASE}${path}`, {
+    method: 'GET', headers, credentials: 'include', signal,
+  });
+  let response = await makeRequest(buildHeaders());
+  if (response.status !== 401) return response;
+  await refreshAccessToken();
+  return makeRequest(buildHeaders());
+}
+
 export async function fetchStreamWithAuth(
   path: string,
   options: StreamFetchOptions,

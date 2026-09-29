@@ -72,10 +72,13 @@ class CredentialScopeResolver:
         """Return strict credential lookup strategy for the given flags.
 
         Rules (in order):
-        1. Explicit `credential_scope` always wins, unless it is "auto".
-        2. "auto" + safe read-only operation → PLATFORM_FIRST.
-        3. "auto" + side effects/write/destructive → USER_ONLY.
+        1. A `write` operation always requires user credentials.
+        2. Other explicit `credential_scope` values are honored.
+        3. "auto" + safe read-only operation → PLATFORM_FIRST.
+        4. "auto" + side effects/destructive → USER_ONLY.
         """
+        if flags.risk_level == "write":
+            return CredentialStrategy.USER_ONLY
         explicit = self._EXPLICIT_SCOPE_MAP.get(flags.credential_scope)
         if explicit is not None:
             return explicit

@@ -21,7 +21,7 @@ interface ProjectMemoryCollectionRow {
   id: 'project-memory';
   slug: 'project-memory';
   name: 'Project Memory';
-  collection_type: 'project_memory';
+  collection_type: 'memory';
   is_active: true;
   total_rows: number;
   created_at?: string;
@@ -32,21 +32,32 @@ interface GlossaryCollectionRow {
   id: 'glossary';
   slug: 'glossary';
   name: 'Глоссарий';
-  collection_type: 'glossary';
+  collection_type: 'memory';
   is_active: true;
   total_rows: number;
   created_at?: string;
   updated_at?: string;
 }
 
-type CollectionCatalogRow = Collection | ProjectMemoryCollectionRow | GlossaryCollectionRow;
+interface GlobalMemoryCollectionRow {
+  id: 'global-memory';
+  slug: 'global-memory';
+  name: 'Глобальная память';
+  collection_type: 'memory';
+  is_active: true;
+  total_rows: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+type CollectionCatalogRow = Collection | ProjectMemoryCollectionRow | GlossaryCollectionRow | GlobalMemoryCollectionRow;
 
 function isProjectMemoryCollection(row: CollectionCatalogRow): row is ProjectMemoryCollectionRow {
-  return row.collection_type === 'project_memory';
+  return row.slug === 'project-memory';
 }
 
 function isGlossaryCollection(row: CollectionCatalogRow): row is GlossaryCollectionRow {
-  return row.collection_type === 'glossary';
+  return row.slug === 'glossary';
 }
 
 export default function CollectionsListPage() {
@@ -73,6 +84,12 @@ export default function CollectionsListPage() {
     refetchOnMount: 'always',
   });
 
+  const { data: globalMemory } = useQuery({
+    queryKey: ['collections', 'global-memory', 'overview'],
+    queryFn: () => collectionsApi.getGlobalMemoryOverview({ limit: 1 }),
+    refetchOnMount: 'always',
+  });
+
   const collections = useMemo<CollectionCatalogRow[]>(() => {
     const latestUpdate = projectMemory?.projects.reduce<string | undefined>(
       (latest, project) => {
@@ -86,7 +103,7 @@ export default function CollectionsListPage() {
         id: 'project-memory',
         slug: 'project-memory',
         name: 'Project Memory',
-        collection_type: 'project_memory',
+        collection_type: 'memory',
         is_active: true,
         total_rows: projectMemory?.total ?? 0,
         updated_at: latestUpdate,
@@ -95,7 +112,7 @@ export default function CollectionsListPage() {
         id: 'glossary',
         slug: 'glossary',
         name: 'Глоссарий',
-        collection_type: 'glossary',
+        collection_type: 'memory',
         is_active: true,
         total_rows: glossary?.total ?? 0,
         updated_at: glossary?.entries.reduce<string | undefined>(
@@ -103,9 +120,17 @@ export default function CollectionsListPage() {
           undefined,
         ),
       },
+      {
+        id: 'global-memory',
+        slug: 'global-memory',
+        name: 'Глобальная память',
+        collection_type: 'memory',
+        is_active: true,
+        total_rows: globalMemory?.total ?? 0,
+      },
       ...(data?.items ?? []),
     ];
-  }, [data?.items, glossary, projectMemory]);
+  }, [data?.items, glossary, globalMemory, projectMemory]);
 
   const filteredCollections = useMemo(() => {
     if (!search.trim()) return collections;
@@ -164,18 +189,15 @@ export default function CollectionsListPage() {
           { value: 'sql', label: 'SQL' },
           { value: 'api', label: 'API' },
           { value: 'template', label: 'Шаблоны' },
-          { value: 'project_memory', label: 'Project Memory' },
-          { value: 'glossary', label: 'Глоссарий' },
+          { value: 'memory', label: 'Память' },
         ],
         getValue: (row) => row.collection_type,
       },
       render: (row) => (
         <Badge
           className={
-            row.collection_type === 'project_memory'
+          row.collection_type === 'memory'
               ? styles['type-memory']
-              : row.collection_type === 'glossary'
-                ? styles['type-glossary']
               : row.collection_type === 'document'
               ? styles['type-document']
               : row.collection_type === 'sql'
@@ -185,10 +207,8 @@ export default function CollectionsListPage() {
                   : styles['type-table']
           }
         >
-          {row.collection_type === 'project_memory'
-            ? 'Project Memory'
-            : row.collection_type === 'glossary'
-              ? 'Глоссарий'
+          {row.collection_type === 'memory'
+            ? 'Память'
             : row.collection_type === 'document'
               ? 'Документы'
               : row.collection_type === 'sql'
@@ -235,9 +255,11 @@ export default function CollectionsListPage() {
         getValue: (row) => row.total_rows,
       },
       render: (row) => isProjectMemoryCollection(row)
-        ? `${row.total_rows.toLocaleString()} проектов`
+        ? `${row.total_rows.toLocaleString()} фактов`
         : isGlossaryCollection(row)
           ? `${row.total_rows.toLocaleString()} терминов`
+          : row.slug === 'global-memory'
+            ? `${row.total_rows.toLocaleString()} фактов`
           : row.total_rows?.toLocaleString() ?? '0',
     },
     {

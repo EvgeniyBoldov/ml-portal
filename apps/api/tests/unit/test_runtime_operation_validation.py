@@ -229,37 +229,11 @@ async def test_template_fill_keeps_invalid_values_string_for_schema_error():
 
 
 @pytest.mark.asyncio
-async def test_collection_operation_requires_successful_collection_info_activation():
+async def test_collection_operation_is_available_without_collection_info():
     operation = _template_fill_operation()
     ctx = _ctx()
-    ctx.extra["collection_interaction_state"] = {
-        "enabled": True,
-        "active_operation_slugs": set(),
-        "opened_collections": set(),
-    }
     call = ToolCall(
         id="template-before-info",
-        tool_name=operation.operation_slug,
-        arguments={"collection_slug": "templates", "row_id": "row-1", "values": {"author": "Alice"}},
-    )
-
-    result, _ = await ToolExecutor().execute(call, ctx, [operation])
-
-    assert result.success is False
-    assert result.metadata["error_code"] == RuntimeErrorCode.COLLECTION_INFO_REQUIRED.value
-
-
-@pytest.mark.asyncio
-async def test_collection_operation_runs_after_collection_info_activation():
-    operation = _template_fill_operation()
-    ctx = _ctx()
-    ctx.extra["collection_interaction_state"] = {
-        "enabled": True,
-        "active_operation_slugs": {operation.operation_slug},
-        "opened_collections": {"templates"},
-    }
-    call = ToolCall(
-        id="template-after-info",
         tool_name=operation.operation_slug,
         arguments={"collection_slug": "templates", "row_id": "row-1", "values": {"author": "Alice"}},
     )

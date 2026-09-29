@@ -1,7 +1,7 @@
 """Structured, mandatory semantic-memory recall before planning."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from typing import Any, Awaitable, Callable
 from uuid import UUID
@@ -12,20 +12,22 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import MemoryClaim, MemoryItem, MemoryRelation
-from app.models.knowledge_entity import KnowledgeEntity, KnowledgeEntitySource
+from app.models.memory_scope import MemoryClaimScope, MemoryScope
 from app.models.rag import RAGDocument
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.dto import FactDTO
 from app.runtime.memory.preparer import MemoryPreparer, PreparedMemoryContext
 from app.runtime.memory.semantic_index import MemorySemanticIndex
-from app.services.glossary_service import GlossaryService
+from app.runtime.memory.scope_precedence import apply_scope_precedence
+from app.services.glossary_service import GlossaryService, ambiguous_glossary_aliases, matching_glossary_terms
+from app.services.project_catalog_service import ProjectCatalogService
 
 
 @dataclass(frozen=True)
 class MemoryRecallContext:
     """The only long-term-memory payload visible to planner and sub-agents."""
 
-    resolved_terms: list[str]
+    resolved_terms: list[dict[str, Any]]
     resolved_entities: list[dict[str, Any]]
     relevant_projects: list[str]
     relevant_knowledge: list[dict[str, Any]]
@@ -84,19 +86,12 @@ class MemoryRecallService:
         # Resolve exact company names from the whole catalogue before applying
         # the prompt budget.  A tenant must not lose project #201 merely
         # because projects are alphabetically ordered.
-        all_project_glossary = await GlossaryService(self._session).list_project_terms()
-        project_ids = _query_project_ids(request_text, all_project_glossary)
-        project_glossary = [item for item in all_project_glossary if item.get("id") in set(project_ids)]
-        all_glossary = await GlossaryService(self._session).list_confirmed_terms(tenant_id=tenant_id)
-        glossary = _matching_glossary_terms(request_text, all_glossary)
-        entity_refs = _query_glossary_entity_refs(request_text, glossary)
-        glossary_project_ids = _glossary_project_ids(glossary)
-        resolved_entities, entity_project_ids, entity_ambiguities = await self._resolve_visible_entities(
-            entity_refs=entity_refs, tenant_id=tenant_id, explicit_project_ids=project_ids,
-        )
-        project_ids = list(dict.fromkeys([*project_ids, *glossary_project_ids, *entity_project_ids]))
-        project_by_id = {str(item["id"]): item for item in all_project_glossary if item.get("id")}
-        project_glossary = [item for item in all_project_glossary if item.get("id") in set(project_ids)]
+        all_projects = await ProjectCatalogService(self._session).list_projects()
+        project_ids = _query_project_ids(request_text, all_projects)
+        all_glossary = await GlossaryService(self._session).list_confirmed_terms()
+        glossary = matching_glossary_terms(request_text, all_glossary)
+        project_by_id = {str(item["id"]): item for item in all_projects if item.get("id")}
+        projects = [item for item in all_projects if item.get("id") in set(project_ids)]
         semantic_ids = await MemorySemanticIndex(self._session).search_ids(request_text, limit=48)
         lexical_ids = await self._lexical_ids(request_text, limit=48)
         related_ids = await self._visible_relation_item_ids(
@@ -106,15 +101,11 @@ class MemoryRecallService:
             )] if project_ids else [],
             tenant_id=tenant_id,
         )
-        entity_related_ids: list[UUID] = []
-        if entity_refs:
-            clauses = [and_(MemoryRelation.target_type == item["type"], MemoryRelation.target_id == item["id"])
-                       for item in entity_refs]
-            entity_related_ids = await self._visible_relation_item_ids(clauses, tenant_id=tenant_id)
-        candidate_ids = list(dict.fromkeys([*semantic_ids, *lexical_ids, *related_ids, *entity_related_ids]))
+        candidate_ids = list(dict.fromkeys([*semantic_ids, *lexical_ids, *related_ids]))
         semantic_items = await self._accessible_semantic_items(
             project_ids=project_ids, semantic_ids=candidate_ids, tenant_id=tenant_id,
         )
+        semantic_items, scope_uncertainties = apply_scope_precedence(semantic_items, project_ids)
         project_facts = [{
             "project_id": item["project_id"],
             "project_key": project_by_id.get(str(item["project_id"]), {}).get("key"),
@@ -134,78 +125,23 @@ class MemoryRecallService:
             "claim_ids": item["claim_ids"],
         } for item in semantic_items]
         prepared = await self._preparer.prepare(
-            request_text=request_text, facts=facts, project_glossary=project_glossary,
+            request_text=request_text, facts=facts, projects=projects,
             project_facts=project_facts,
             glossary=glossary,
             user_id=user_id, tenant_id=tenant_id, chat_id=chat_id,
             sandbox_overrides=sandbox_overrides, event_sink=event_sink,
             agent_execution_id=agent_execution_id,
         )
-        return self._structure(
-            prepared, resolved_entities=resolved_entities, entity_ambiguities=entity_ambiguities,
-        ), prepared
-
-    async def _resolve_visible_entities(
-        self, *, entity_refs: list[dict[str, str]], tenant_id: UUID | None,
-        explicit_project_ids: list[UUID],
-    ) -> tuple[list[dict[str, Any]], list[UUID], list[str]]:
-        refs = [item for item in entity_refs if item.get("type") != "project"]
-        if not refs:
-            return [], [], []
-        entity_ids: list[UUID] = []
-        for ref in refs:
-            try:
-                entity_ids.append(UUID(str(ref["id"])))
-            except (KeyError, TypeError, ValueError):
-                continue
-        if not entity_ids:
-            return [], [], []
-        visibility = KnowledgeEntitySource.visibility_tenant_id.is_(None)
-        document_access = RAGDocument.scope == "global"
-        if tenant_id is not None:
-            visibility = or_(visibility, KnowledgeEntitySource.visibility_tenant_id == tenant_id)
-            document_access = or_(document_access, RAGDocument.tenant_id == tenant_id)
-        rows = (await self._session.execute(
-            select(KnowledgeEntity, KnowledgeEntitySource)
-            .join(KnowledgeEntitySource, KnowledgeEntitySource.entity_id == KnowledgeEntity.id)
-            .join(RAGDocument, RAGDocument.id == KnowledgeEntitySource.document_id)
-            .where(
-                KnowledgeEntity.id.in_(entity_ids), KnowledgeEntity.is_active.is_(True), visibility,
-                document_access, RAGDocument.status != "archived",
+        ambiguous_terms = [f"ambiguous_glossary_alias:{form}" for form in
+                           ambiguous_glossary_aliases(request_text, glossary)]
+        if ambiguous_terms:
+            prepared = replace(prepared, ambiguities=[*prepared.ambiguities, *ambiguous_terms])
+        if scope_uncertainties:
+            prepared = replace(
+                prepared, needs_source_check=True,
+                source_check_reasons=[*prepared.source_check_reasons, *scope_uncertainties],
             )
-        )).all()
-        sources_by_entity: dict[UUID, list[KnowledgeEntitySource]] = {}
-        entities: dict[UUID, KnowledgeEntity] = {}
-        for entity, source in rows:
-            entities[entity.id] = entity
-            sources_by_entity.setdefault(entity.id, []).append(source)
-        explicit = set(explicit_project_ids)
-        resolved: list[dict[str, Any]] = []
-        inferred_projects: list[UUID] = []
-        ambiguities: list[str] = []
-        matched_forms = {
-            str(ref["id"]): ref.get("matched_form")
-            for ref in refs if ref.get("id")
-        }
-        for entity_id, sources in sources_by_entity.items():
-            entity = entities[entity_id]
-            project_ids = {source.project_id for source in sources if source.project_id is not None}
-            candidates = project_ids.intersection(explicit) if explicit else project_ids
-            if len(candidates) == 1:
-                inferred_projects.extend(candidates)
-            elif len(candidates) > 1:
-                ambiguities.append(f"ambiguous_entity_project:{entity.canonical_name}")
-            resolved.append({
-                "id": str(entity.id), "type": entity.entity_type,
-                "canonical_name": entity.canonical_name,
-                "matched_form": matched_forms.get(str(entity.id)),
-                "project_ids": [str(value) for value in sorted(project_ids, key=str)],
-                "source_references": [
-                    {"document_id": str(source.document_id), "section_id": section_id}
-                    for source in sources for section_id in list(source.evidence_section_ids or [])[:2]
-                ][:3],
-            })
-        return resolved, list(dict.fromkeys(inferred_projects)), ambiguities
+        return self._structure(prepared), prepared
 
     async def _visible_relation_item_ids(
         self, clauses: list[Any], *, tenant_id: UUID | None,
@@ -262,6 +198,7 @@ class MemoryRecallService:
 
     async def _accessible_semantic_items(
         self, *, project_ids: list[UUID], semantic_ids: list[UUID], tenant_id: UUID | None,
+        context_scope_keys: list[str] | tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         if not project_ids and not semantic_ids:
             return []
@@ -279,7 +216,10 @@ class MemoryRecallService:
             .where(
                 candidate_filter,
                 MemoryItem.state.in_(("active", "uncertain")),
+                MemoryItem.item_type != "term",
+                MemoryItem.lifecycle_status == "active",
                 MemoryClaim.state == "active",
+                MemoryClaim.lifecycle_status == "active",
                 claim_visibility,
                 document_access,
                 RAGDocument.status != "archived",
@@ -296,10 +236,22 @@ class MemoryRecallService:
                 by_item[item.id] = (item, [claim])
             else:
                 current[1].append(claim)
+        claim_ids = [claim.id for _, claims in by_item.values() for claim in claims]
+        scope_rows = (await self._session.execute(
+            select(MemoryClaimScope.claim_id, MemoryScope)
+            .join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id)
+            .where(MemoryClaimScope.claim_id.in_(claim_ids))
+        )).all() if claim_ids else []
+        claim_scopes: dict[UUID, list[MemoryScope]] = {}
+        for claim_id, scope in scope_rows:
+            claim_scopes.setdefault(claim_id, []).append(scope)
+        trusted_scope_keys = {str(key).strip().lower() for key in context_scope_keys}
         rank = {item_id: index for index, item_id in enumerate(semantic_ids)}
         result: list[dict[str, Any]] = []
         for item_id, (item, claims) in by_item.items():
-            applicable_claims = [claim for claim in claims if _item_is_applicable(item, project_ids, tenant_id, claim.applicability)]
+            applicable_claims = [claim for claim in claims if
+                _item_is_applicable(item, project_ids, tenant_id, claim.applicability)
+                and _claim_scopes_apply(claim_scopes.get(claim.id, []), project_ids, trusted_scope_keys)]
             if not applicable_claims:
                 continue
             claims = applicable_claims
@@ -312,6 +264,7 @@ class MemoryRecallService:
             conflicting = len({claim.content_text for claim in claims}) > 1
             result.append({
                 "id": item.id, "project_id": item.project_id, "kind": item.item_type,
+                "scope_keys": sorted(scope.key for scope in claim_scopes.get(winner.id, [])),
                 "subject": item.subject, "content": dict(winner.content or {}), "content_text": winner.content_text,
                 "confidence": winner.confidence,
                 # Item-level uncertainty can come from an inaccessible tenant
@@ -344,12 +297,11 @@ class MemoryRecallService:
         ]
         def typed(kind: str) -> list[dict[str, Any]]:
             return [item for item in knowledge if item.get("kind") == kind]
+        glossary_items = [item for item in prepared.items if item.get("type") == "glossary"]
         source_refs = [
-            ref for item in knowledge for ref in item.get("source_references", [])
+            ref for item in [*knowledge, *glossary_items] for ref in item.get("source_references", [])
             if isinstance(ref, dict)
         ]
-        # `prepare` keeps compatibility-shaped entries; sources are restored
-        # below by their stable source_ref in a following normalization pass.
         return MemoryRecallContext(
             resolved_terms=prepared.resolved_terms,
             resolved_entities=resolved_entities or [],
@@ -369,19 +321,6 @@ class MemoryRecallService:
 
 def _query_tokens(value: str) -> list[str]:
     return list(dict.fromkeys(re.findall(r"[\wа-яА-ЯёЁ-]{3,}", str(value or "").casefold())))
-
-
-def _glossary_project_ids(glossary: list[dict[str, Any]]) -> list[UUID]:
-    result: list[UUID] = []
-    for term in glossary:
-        raw = term.get("project_id")
-        if raw is None and term.get("entity_type") == "project":
-            raw = term.get("entity_id")
-        try:
-            result.append(UUID(str(raw)))
-        except (TypeError, ValueError):
-            continue
-    return list(dict.fromkeys(result))
 
 
 def _selection_text(kind: str, content: dict[str, Any]) -> str:
@@ -405,34 +344,6 @@ def _query_project_ids(request_text: str, projects: list[dict[str, Any]]) -> lis
         if any(_project_form_matches(str(form or ""), query) for form in forms):
             result.append(raw_id)
     return list(dict.fromkeys(result))
-
-
-def _query_glossary_entity_refs(request_text: str, glossary: list[dict[str, Any]]) -> list[dict[str, str]]:
-    query = " ".join(_query_tokens(request_text))
-    result: list[dict[str, str]] = []
-    for term in glossary:
-        entity_type = str(term.get("entity_type") or "").strip()
-        entity_id = str(term.get("entity_id") or "").strip()
-        forms = [term.get("term"), *(term.get("aliases") or [])]
-        matched_form = next(
-            (str(form) for form in forms if _project_form_matches(str(form or ""), query)),
-            None,
-        )
-        if entity_type and entity_id and matched_form is not None:
-            # One entity can be represented by several safe source aliases;
-            # retain one form for observability without duplicating the graph
-            # lookup and its relation candidates.
-            if not any(ref["type"] == entity_type and ref["id"] == entity_id for ref in result):
-                result.append({"type": entity_type, "id": entity_id, "matched_form": matched_form})
-    return result
-
-
-def _matching_glossary_terms(request_text: str, glossary: list[dict[str, Any]], *, limit: int = 24) -> list[dict[str, Any]]:
-    query = " ".join(_query_tokens(request_text))
-    return [
-        term for term in glossary
-        if any(_project_form_matches(str(form or ""), query) for form in [term.get("term"), *(term.get("aliases") or [])])
-    ][:limit]
 
 
 def _project_form_matches(form: str, query: str) -> bool:
@@ -490,3 +401,31 @@ def _item_is_applicable(
         return False
     required_tenants = {str(value) for value in applicability.get("tenant_ids") or []}
     return not required_tenants or tenant_key in required_tenants
+
+
+def _claim_scopes_apply(
+    scopes: list[MemoryScope], project_ids: list[UUID], context_scope_keys: set[str],
+) -> bool:
+    """OR within a type and AND between types; *.all needs a verified type value."""
+    if not scopes:
+        return True  # Legacy company claims have no typed binding.
+    groups: dict[str, list[MemoryScope]] = {}
+    for scope in scopes:
+        groups.setdefault(scope.scope_type, []).append(scope)
+    projects = set(project_ids)
+    for scope_type, all_scopes in groups.items():
+        group = [scope for scope in all_scopes if getattr(scope, "lifecycle_status", "active") == "active"]
+        if not group:
+            return False
+        if any(scope.is_all for scope in group):
+            if scope_type == "project":
+                if not projects and not any(key.startswith("project.") and key != "project.all" for key in context_scope_keys):
+                    return False
+            elif not any(key.startswith(f"{scope_type}.") and key != f"{scope_type}.all" for key in context_scope_keys):
+                return False
+            continue
+        if not any(scope.key in context_scope_keys or
+                   (scope.scope_type == "project" and scope.project_id in projects)
+                   for scope in group):
+            return False
+    return True

@@ -4,6 +4,9 @@ This document records deliberate runtime-memory trade-offs that require
 operational awareness. It is not a substitute for access control or for the
 source-backed project-memory pipeline.
 
+For the current memory surfaces and document publication flow, see
+[`MEMORY.md`](MEMORY.md).
+
 ## Accepted risk: conversational tenant facts
 
 `FactExtractor` can classify evidence from a user message as `scope=tenant`.

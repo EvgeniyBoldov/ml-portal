@@ -20,10 +20,11 @@ export function LlmInfoView({ call }: { call: TraceCall }) {
   const request = call.requestView;
   const status = callStatusPresentation(call.info.status);
   const result = call.info.status !== 'error' ? call.info.outcome : undefined;
+  const purpose = request.purpose === 'document_memory_extractor' ? 'Извлечение памяти из документа' : request.purpose;
   return <InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={status.label} tone={status.tone} /></InspectorFieldRow>
-    <InspectorFieldRow label="Назначение"><InspectorScalar value={request.purpose} /></InspectorFieldRow>
-    <InspectorFieldRow label="Модель"><InspectorScalar value={request.model} /></InspectorFieldRow>
+    {purpose ? <InspectorFieldRow label="Назначение"><InspectorScalar value={purpose} /></InspectorFieldRow> : null}
+    {request.model ? <InspectorFieldRow label="Модель"><InspectorScalar value={request.model} /></InspectorFieldRow> : null}
     {result ? <InspectorFieldRow label="Результат"><InspectorStatus label={result.count ? `${result.label} · ${result.count}` : result.label} tone="info" /></InspectorFieldRow> : null}
     <InspectorFieldRow label="Расход"><LlmTokenUsage input={call.info.tokensIn} output={call.info.tokensOut} total={call.info.tokensTotal} /></InspectorFieldRow>
     <InspectorFieldRow label="Длительность"><InspectorScalar value={formatCallDuration(call.info.durationMs)} /></InspectorFieldRow>
@@ -74,11 +75,7 @@ export function LlmRequestSnapshotView({ call }: { call: TraceCall }) {
   const request = call.requestView;
   return <InspectorStack>
     <InspectorFieldGroup>
-      {request.temperature !== undefined ? <InspectorFieldRow label="Температура"><InspectorScalar value={request.temperature} /></InspectorFieldRow> : null}
       {request.maxTokens !== undefined ? <InspectorFieldRow label="Лимит токенов"><InspectorScalar value={request.maxTokens} /></InspectorFieldRow> : null}
-      {request.requestBytes !== undefined ? <InspectorFieldRow label="Размер запроса"><InspectorScalar value={`${request.requestBytes} B`} /></InspectorFieldRow> : null}
-      {request.inputTokensEstimate !== undefined ? <InspectorFieldRow label="Оценка входных токенов"><InspectorScalar value={request.inputTokensEstimate} /></InspectorFieldRow> : null}
-      {request.responseSchemaBytes !== undefined ? <InspectorFieldRow label="Размер response schema"><InspectorScalar value={`${request.responseSchemaBytes} B`} /></InspectorFieldRow> : null}
     </InspectorFieldGroup>
     <InspectorFieldGroup>
       <InspectorFieldRow label="Контекст вызова">
@@ -99,8 +96,6 @@ export function LlmResponseSnapshotView({ call, toolNames }: { call: TraceCall; 
   const parsed = response.content;
   const metadata = <InspectorFieldGroup>
     {semanticOutcome ? <InspectorFieldRow label="Результат"><InspectorStatus label={semanticOutcome.count ? `${semanticOutcome.label} · ${semanticOutcome.count}` : semanticOutcome.label} tone="info" /></InspectorFieldRow> : null}
-    {response.responseLength !== undefined ? <InspectorFieldRow label="Размер ответа"><InspectorScalar value={`${response.responseLength} B`} /></InspectorFieldRow> : null}
-    {response.terminal !== undefined ? <InspectorFieldRow label="Терминальный"><InspectorScalar value={response.terminal ? 'Да' : 'Нет'} /></InspectorFieldRow> : null}
   </InspectorFieldGroup>;
   if (semanticOutcome?.kind === 'tools') {
     const calls = response.toolCall ? [response.toolCall] : response.linkedToolCalls;

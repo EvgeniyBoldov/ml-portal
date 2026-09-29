@@ -53,7 +53,7 @@ class MemoryCandidate(BaseModel):
     # may propose user/tenant candidates only; project publication stays in
     # the document-ingestion workflow.
     scope: Literal["user", "tenant"]
-    kind: Literal["fact", "glossary"] = "fact"
+    kind: Literal["fact"] = "fact"
     subject: str = Field(..., min_length=1)
     value: str = Field(..., min_length=1)
     evidence_source_ids: list[str] = Field(default_factory=list)
@@ -117,6 +117,8 @@ class TurnPreflight:
         budget_registry: Any = None,
         budget_entity_id: str | None = None,
     ) -> TurnPreflightDecision:
+        if self._is_glossary_write_request(user_request):
+            return self._glossary_document_decision(user_request=user_request)
         result = await self._llm.invoke(
             role=SystemLLMRoleType.TURN_PREFLIGHT,
             payload={
@@ -159,21 +161,78 @@ class TurnPreflight:
                 user_request=user_request,
                 memory_candidates=decision.memory_candidates,
             )
-        # Writeback intentionally happens after the user-facing answer. A
-        # direct route with glossary candidates may acknowledge receipt, but
-        # cannot truthfully claim that publication has completed yet.
-        if (
-            decision.route == "synthesis"
-            and decision.memory_candidates
-            and self._is_glossary_write_request(user_request)
-        ):
-            return self._glossary_write_synthesis_decision(
-                user_request=user_request,
+        if decision.route == "synthesis" and self._needs_collection_inventory(user_request):
+            return TurnPreflightDecision(
+                route="planner",
+                task_brief=TaskBrief(
+                    goal=user_request,
+                    direction="Проверить актуальные коллекции и разрешённые пользователю операции с учётом его прав доступа.",
+                    expected_result="Подтверждённый список доступных коллекций и операций либо явное ограничение, если проверить их нельзя.",
+                ),
                 memory_candidates=decision.memory_candidates,
             )
         if recall_context is not None and decision.route == "recall":
             raise ValueError("TurnPreflight may request recall only once per turn")
+        if decision.route == "planner" and decision.task_brief is not None:
+            assignee = self._self_jira_assignee(user_request, facts_context or [])
+            if assignee:
+                task_brief = decision.task_brief
+                entity_hints = list(task_brief.entity_hints)
+                if assignee not in entity_hints:
+                    entity_hints.append(assignee)
+                constraint = (
+                    f"Для запроса о собственных задачах Jira обязательно фильтруй по assignee={assignee}."
+                )
+                constraints = list(task_brief.constraints)
+                if constraint not in constraints:
+                    constraints.append(constraint)
+                decision = decision.model_copy(update={
+                    "task_brief": task_brief.model_copy(update={
+                        "entity_hints": entity_hints,
+                        "constraints": constraints,
+                    }),
+                })
         return decision
+
+    @staticmethod
+    def _self_jira_assignee(
+        user_request: str, facts_context: list[dict[str, Any]],
+    ) -> str | None:
+        """Resolve a self-assignee only from one unambiguous confirmed user fact."""
+        text = " ".join(str(user_request or "").lower().split())
+        asks_for_own_tasks = bool(re.search(
+            r"\b(?:мо\w*|у\s+меня|мне|my|mine|assigned\s+to\s+me)\b", text,
+        )) and bool(re.search(r"\b(?:задач\w*|тикет\w*|issue\w*|ticket\w*)\b", text))
+        mentions_jira = bool(re.search(r"\bjira\b", text))
+        if not (asks_for_own_tasks and mentions_jira):
+            return None
+
+        accepted_subjects = {
+            "учетная запись", "учётная запись", "логин", "jira username",
+            "username", "user.jira.username",
+        }
+        candidates = {
+            str(item.get("value") or "").strip()
+            for item in facts_context
+            if isinstance(item, dict)
+            and item.get("scope") == "user"
+            and item.get("kind") == "fact"
+            and str(item.get("subject") or "").strip().lower() in accepted_subjects
+            and re.fullmatch(r"[A-Za-z0-9._-]{2,80}", str(item.get("value") or "").strip())
+        }
+        return next(iter(candidates)) if len(candidates) == 1 else None
+
+    @staticmethod
+    def _needs_collection_inventory(user_request: str) -> bool:
+        """A terminology lookup cannot establish current collection access."""
+        text = " ".join((user_request or "").lower().split())
+        if not re.search(r"\bколлекци\w*\b|\bcollections?\b", text):
+            return False
+        return bool(re.search(
+            r"\b(?:доступ\w*|разреш\w*|мо[ийяе]|наш\w*|могу|можем|операци\w*|оперир\w*|"
+            r"available|accessible|access|allowed|my|our|can|permissions?)\b",
+            text,
+        ))
 
     @classmethod
     def _routing_request(cls, user_request: str) -> str:
@@ -200,31 +259,28 @@ class TurnPreflight:
     @staticmethod
     def _is_glossary_write_request(user_request: str) -> bool:
         text = " ".join((user_request or "").lower().split())
-        return bool(re.search(
-            r"(?:добав(?:ь|ьте)|сохрани(?:ть|те)|запомни(?:ть|те)|add|save)"
-            r".{0,120}(?:глоссар|glossar)",
-            text,
-        ))
+        action = r"(?:добав(?:ь|ьте)|внеси(?:те)?|сохрани(?:ть|те)|запомни(?:ть|те)|add|save)"
+        glossary = r"(?:глоссар|glossar)"
+        return bool(re.search(rf"{action}.{{0,120}}{glossary}|{glossary}.{{0,120}}{action}", text))
 
     @staticmethod
-    def _glossary_write_synthesis_decision(
-        *, user_request: str, memory_candidates: list[MemoryCandidate],
+    def _glossary_document_decision(
+        *, user_request: str,
     ) -> TurnPreflightDecision:
         return TurnPreflightDecision(
             route="synthesis",
             synthesis_brief=DirectAnswerBrief(
                 synthesis_brief=SynthesisBrief(
                     user_question=user_request,
-                    planned_work="Передать предоставленные термины на проверку перед добавлением в глоссарий.",
-                    purpose="Подтвердить принятие терминов без заявления о завершённой записи.",
+                    planned_work="Объяснить документный порядок публикации определения.",
+                    purpose="Указать, что глоссарий пополняется после изучения и утверждения документа.",
                     answer_requirements=(
-                        "Кратко подтвердить, что термины приняты для проверки; "
-                        "не утверждать, что они уже добавлены или доступны в глоссарии."
+                        "Предложить загрузить документ с определением для изучения и проверки. "
+                        "Не утверждать, что термин добавлен или принят на публикацию."
                     ),
                 ),
-                answer_draft="Термины приняты для проверки перед добавлением в глоссарий.",
+                answer_draft="Загрузите документ с определением. После изучения и утверждения термина он появится в глоссарии.",
             ),
-            memory_candidates=memory_candidates,
         )
 
     @staticmethod

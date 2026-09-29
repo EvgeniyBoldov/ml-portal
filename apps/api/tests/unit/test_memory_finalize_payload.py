@@ -14,16 +14,16 @@ def test_finalize_payload_preserves_preflight_candidates() -> None:
     chat_id = uuid4()
     candidates = [{
         "scope": "tenant",
-        "kind": "glossary",
-        "subject": "SLO",
-        "value": "Целевой уровень надёжности сервиса",
+        "kind": "fact",
+        "subject": "department.reliability_target",
+        "value": "99.9%",
         "evidence_source_ids": ["user_message"],
     }]
     payload = MemoryFinalizePayload(
         chat_id=str(chat_id),
         turn_number=1,
-        user_message="Добавь SLO в глоссарий",
-        assistant_final="Термин принят для проверки.",
+        user_message="Запомни целевой уровень надёжности отдела: 99.9%",
+        assistant_final="Факт принят для проверки.",
         summary=SummaryPayload(chat_id=str(chat_id)),
         preflight_candidates=candidates,
     )

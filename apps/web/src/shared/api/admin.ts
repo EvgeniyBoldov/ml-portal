@@ -43,6 +43,7 @@ export type SystemLLMRoleType =
   | 'synthesizer'
   | 'fact_extractor'
   | 'fact_compactor'
+  | 'document_memory_extractor'
   | 'chat_context_compactor';
 export type RetryBackoffType = 'none' | 'linear' | 'exp';
 
@@ -161,6 +162,7 @@ export type MemoryRoleUpdate = SystemLLMRoleUpdate;
 export type SynthesizerRoleUpdate = SystemLLMRoleUpdate;
 export type FactExtractorRoleUpdate = SystemLLMRoleUpdate;
 export type FactCompactorRoleUpdate = SystemLLMRoleUpdate;
+export type DocumentMemoryExtractorRoleUpdate = SystemLLMRoleUpdate;
 
 export interface UserCreate {
   login: string;
@@ -465,6 +467,7 @@ export interface SemanticMemoryAdminItem {
   scope: string;
   item_type: string;
   project_id: string | null;
+  scope_keys: string[];
   subject: string;
   content_text: string;
   confidence: number;
@@ -484,27 +487,26 @@ export interface SemanticMemoryAdminPage {
 
 export interface SemanticMemoryAdminDetail extends SemanticMemoryAdminItem {
   content: Record<string, unknown>;
+  content_text: string;
+  aliases: string[];
+  related_entities: Array<Record<string, unknown>>;
+  related_project_keys: string[];
   applicability: Record<string, unknown>;
   visibility: Record<string, unknown>;
   sources: Array<{ document_id: string; canonical_checksum: string; section_id: string; label: string | null; start_offset: number | null; end_offset: number | null }>;
-  claims: Array<{ id: string; document_id: string; canonical_checksum: string; scope: string; item_type: string; project_id: string | null; normalized_subject: string; confidence: number; state: string; evidence_section_ids: string[]; content: Record<string, unknown>; applicability: Record<string, unknown>; visibility_tenant_id: string | null; updated_at: string }>;
+  claims: Array<{ id: string; document_id: string; canonical_checksum: string; scope: string; item_type: string; project_id: string | null; scope_keys: string[]; normalized_subject: string; confidence: number; state: string; evidence_section_ids: string[]; content: Record<string, unknown>; applicability: Record<string, unknown>; visibility_tenant_id: string | null; updated_at: string }>;
   relations: Array<{ relation_type: string; target_type: string; target_id: string }>;
   evaluations: Array<{ tool_call_id: string; outcome: string; reason: string; evidence_refs: string[]; created_at: string }>;
 }
 
-export interface AdminGlossaryEntry {
+export interface AdminGlossaryTerm {
   id: string;
-  scope: string;
   canonical_term: string;
+  normalized_term: string;
   aliases: string[];
-  entity_type: string;
-  entity_id: string | null;
-  description: string | null;
-  tenant_id: string | null;
-  project_id: string | null;
+  definition: string;
   is_active: boolean;
-  status: string;
-  support_count: number;
+  approved_candidate_id: string;
   created_at: string;
   updated_at: string;
 }
@@ -515,36 +517,100 @@ export interface ShadowMemoryCandidate {
   visibility_tenant_id: string | null;
   candidate_type: string;
   subject: string;
+  normalized_subject: string;
   content: Record<string, unknown>;
+  content_text: string;
+  content_valid: boolean;
+  content_error: string | null;
+  aliases: string[];
+  related_entities: Array<Record<string, unknown>>;
+  related_project_keys: string[];
   evidence_section_ids: string[];
   scope_candidate: string | null;
   resolution_status: string;
   extraction_confidence: number;
   project_ids: string[];
+  scope_ids: string[];
+  scope_keys: string[];
+  mentioned_scope_keys: string[];
+  unmatched_scope_names: string[];
+  scope_rationale: string | null;
   conflict_ids: string[];
+}
+
+export interface ShadowCandidateEvidence {
+  document_title: string;
+  sections: Array<{ id: string; label: string; text: string }>;
+}
+
+export interface MemoryScopeAdminItem {
+  id: string;
+  scope_type: 'product' | 'project' | 'team';
+  key: string;
+  name: string;
+  aliases: string[];
+  is_all: boolean;
+  project_id: string | null;
+  lifecycle_status: 'active' | 'deprecated';
+  retention_days: number;
 }
 
 // API functions
 export const adminApi = {
-  async getGlossary(): Promise<AdminGlossaryEntry[]> {
+  async getMemoryScopes(): Promise<MemoryScopeAdminItem[]> { return apiRequest('/admin/memory/scopes'); },
+  async createMemoryScope(body: Pick<MemoryScopeAdminItem, 'scope_type' | 'key' | 'name' | 'aliases' | 'is_all'>): Promise<MemoryScopeAdminItem> {
+    return apiRequest('/admin/memory/scopes', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateMemoryScope(id: string, body: Pick<MemoryScopeAdminItem, 'scope_type' | 'key' | 'name' | 'aliases' | 'is_all'>): Promise<MemoryScopeAdminItem> {
+    return apiRequest(`/admin/memory/scopes/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  },
+  async getGlossary(): Promise<AdminGlossaryTerm[]> {
     return apiRequest('/admin/glossary');
   },
-  async getSemanticMemory(params: { query?: string; scope?: string; state?: string; item_type?: string; project_id?: string; limit?: number; offset?: number } = {}): Promise<SemanticMemoryAdminPage> {
+  async deactivateGlossaryTerms(ids: string[]): Promise<{ deactivated: number }> {
+    return apiRequest('/admin/glossary/bulk-deactivate', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+  async activateGlossaryTerms(ids: string[]): Promise<{ activated: number }> {
+    return apiRequest('/admin/glossary/bulk-activate', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+  async deleteGlossaryTerms(ids: string[]): Promise<{ deleted: number }> {
+    return apiRequest('/admin/glossary', { method: 'DELETE', body: JSON.stringify({ ids }) });
+  },
+  async getSemanticMemory(params: { query?: string; scope?: string; scope_type?: string; scope_id?: string; state?: string; item_type?: string; project_id?: string; limit?: number; offset?: number } = {}): Promise<SemanticMemoryAdminPage> {
     const search = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') search.set(key, String(value)); });
     return apiRequest(`/admin/memory?${search.toString()}`);
   },
+  async deactivateSemanticMemory(ids: string[]): Promise<{ deactivated: number }> {
+    return apiRequest('/admin/memory/bulk-deactivate', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
   async getSemanticMemoryItem(itemId: string): Promise<SemanticMemoryAdminDetail> {
     return apiRequest(`/admin/memory/${itemId}`);
   },
-  async getShadowMemoryCandidates(status: 'needs_review' | 'conflict' | 'resolved' | 'rejected' = 'needs_review'): Promise<ShadowMemoryCandidate[]> {
-    return apiRequest(`/admin/memory/staging/candidates?status=${status}`);
+  async getShadowMemoryCandidates(status: 'pending' | 'needs_review' | 'conflict' | 'resolved' | 'rejected' = 'pending', params: { candidate_type?: string; limit?: number; offset?: number } = {}): Promise<ShadowMemoryCandidate[]> {
+    const search = new URLSearchParams({ status });
+    if (params.candidate_type) search.set('candidate_type', params.candidate_type);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return apiRequest(`/admin/memory/staging/candidates?${search.toString()}`);
   },
-  async approveShadowMemoryCandidate(id: string, body: { reason?: string; scope?: 'global' | 'project'; project_id?: string; promote_to_company?: boolean; content?: Record<string, unknown> } = {}): Promise<ShadowMemoryCandidate> {
+  async approveShadowMemoryCandidate(id: string, body: { reason?: string; scope?: 'global' | 'project' | 'scoped'; project_id?: string; scope_ids?: string[]; promote_to_company?: boolean; replace_existing_definition?: boolean; content?: Record<string, unknown> } = {}): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/approve`, { method: 'POST', body: JSON.stringify(body) });
+  },
+  async getShadowCandidateEvidence(id: string): Promise<ShadowCandidateEvidence> {
+    return apiRequest(`/admin/memory/staging/candidates/${id}/evidence`);
+  },
+  async bulkApproveShadowTerms(ids: string[]): Promise<{ approved_ids: string[]; review_ids: string[] }> {
+    return apiRequest('/admin/memory/staging/candidates/bulk-approve', { method: 'POST', body: JSON.stringify({ ids }) });
   },
   async rejectShadowMemoryCandidate(id: string, reason?: string): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
+  },
+  async deactivateShadowMemoryCandidates(ids: string[]): Promise<{ changed: number }> {
+    return apiRequest('/admin/memory/staging/candidates/bulk-deactivate', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+  async deleteShadowMemoryCandidates(ids: string[]): Promise<{ changed: number }> {
+    return apiRequest('/admin/memory/staging/candidates', { method: 'DELETE', body: JSON.stringify({ ids }) });
   },
   // Users
   async getUsers(
@@ -1009,6 +1075,34 @@ export interface AgentRunDetail {
 export const agentRunsApi = {
   list: (): Promise<AgentRunListItem[]> => apiRequest('/admin/agent-runs', { method: 'GET' }),
   get: (id: string): Promise<AgentRunDetail> => apiRequest(`/admin/agent-runs/${encodeURIComponent(id)}`, { method: 'GET' }),
+};
+
+export interface MemoryJobListItem {
+  id: string;
+  document_id: string;
+  trace_run_id?: string | null;
+  status: string;
+  candidate_count: number;
+  canonical_checksum: string;
+  visibility_tenant_id?: string | null;
+  document_title?: string | null;
+  document_filename?: string | null;
+  created_at: string;
+  updated_at: string;
+  metrics: Record<string, unknown>;
+}
+
+export interface MemoryJobDetail extends MemoryJobListItem {
+  events: AgentRunDetail['events'];
+}
+
+export const memoryJobsApi = {
+  list: (): Promise<MemoryJobListItem[]> => apiRequest('/admin/memory-jobs', { method: 'GET' }),
+  get: (id: string): Promise<MemoryJobDetail> => apiRequest(`/admin/memory-jobs/${encodeURIComponent(id)}`, { method: 'GET' }),
+  stream: async (id: string, signal?: AbortSignal): Promise<Response> => {
+    const { fetchSseWithAuth } = await import('@/shared/api/streamAuth');
+    return fetchSseWithAuth(`/admin/memory-jobs/${encodeURIComponent(id)}/stream`, signal);
+  },
 };
 
 export const systemLLMRolesApi = {

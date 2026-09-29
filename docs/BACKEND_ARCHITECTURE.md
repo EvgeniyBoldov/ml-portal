@@ -27,39 +27,16 @@ Runtime использует MCP-compatible tool descriptor как контра�
 
 ### Runtime Memory
 
-Runtime memory собирается компонентами под конкретный запрос. Компонент не
-должен отдавать весь свой storage в prompt: он возвращает bounded section с
-selected items, budget, priority, selection reason и diagnostics.
+Контекст одного runtime turn собирается bounded-секциями через
+`MemoryBuilder`; он включает подтверждённые user/tenant facts и данные текущего
+turn. После ответа диалоговые кандидаты проходят асинхронные
+`FactExtractor -> FactCompactor -> FactReconciler`.
 
-Базовые секции:
-
-- `facts` — query-ranked confirmed user / tenant / project facts.
-- `tool_ledger` / `agent_results` — in-turn runtime context.
-- `attachments` / `collections` — bounded context and capability context.
-
-`MemoryBuilder` создает эти sections из `MemoryService`/`FactStore` и текущего
-turn context. `TurnMemory.summary` сохраняется как compatibility DTO, но
-conversation-summary component сейчас не зарегистрирован в активном runtime
-memory registry. `TurnMemory.retrieved_facts` и `planner_memory_context` —
-bounded compatibility projections, а не самостоятельные stores.
-
-Read path:
-
-```text
-facts + effective user/tenant scope -> MemoryService -> MemorySnapshot
-                                   -> MemoryBuilder -> planner/agent context
-```
-
-Write path после terminal synthesis:
-
-```text
-turn evidence -> FactExtractor -> FactCompactor -> FactReconciler -> facts
-```
-
-По умолчанию writeback выполняется асинхронной Celery-задачей
-`finalize_memory`; ошибка writeback не отменяет уже выданный ответ. Сырые
-LLM-кандидаты не считаются durable memory без evidence, compaction и
-reconciliation.
+Документная Semantic Memory хранится отдельно в source-backed
+`MemoryItem`/`MemoryClaim` и читается через ACL-aware `memory.search`. Её
+извлечение, публикация, виртуальные коллекции и границы доступа описаны в
+[архитектуре Memory](architecture/MEMORY.md). Контекст чата и runtime trace
+также являются отдельными persistence surfaces.
 
 ### MCP runtime flags
 

@@ -63,7 +63,7 @@ export const qk = {
     },
     systemLlmRoles: {
       all: () => ['admin', 'system-llm-roles'] as const,
-      active: (role: 'planner' | 'turn_preflight' | 'memory' | 'synthesizer' | 'fact_extractor' | 'fact_compactor' | 'chat_context_compactor') =>
+      active: (role: 'planner' | 'turn_preflight' | 'memory' | 'synthesizer' | 'fact_extractor' | 'fact_compactor' | 'document_memory_extractor' | 'chat_context_compactor') =>
         ['admin', 'system-llm-roles', 'active', role] as const,
     },
     audit: (params?: {
@@ -163,7 +163,7 @@ export const qk = {
     version: (id: string, version: number) => ['collections', 'version', id, version] as const,
     data: (slug: string, params?: { limit?: number; offset?: number; search?: string; tenant_id?: string }) =>
       ['collections', 'data', slug, params] as const,
-    documents: (id: string, params?: { page?: number; size?: number; status?: string }) =>
+    documents: (id: string, params?: { page?: number; size?: number; status?: string; query?: string }) =>
       ['collections', 'documents', id, params] as const,
     projectMemoryOverview: (params?: Record<string, unknown>) => ['collections', 'project-memory', 'overview', params] as const,
     projectMemoryProject: (projectKey: string, params?: Record<string, unknown>) =>

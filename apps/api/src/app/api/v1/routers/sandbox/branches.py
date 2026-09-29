@@ -3,7 +3,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, require_admin
@@ -23,10 +23,10 @@ from app.runtime.memory.sandbox_overlays import (
     inspector_payload,
 )
 from app.models.chat import Chats
-from app.models.glossary import GlossaryEntry
 from app.models.memory import MemoryItem, MemoryItemSource
 from app.models.project import Project
 from app.services.chat_context_service import ChatContextService
+from app.services.glossary_service import GlossaryService
 from app.services.chat_visibility import make_sandbox_upload_chat_name
 from app.services.sandbox_service import SandboxService
 from app.services.sandbox_override_resolver import SandboxOverrideResolver
@@ -166,19 +166,7 @@ async def get_branch_memory(
         chat_context = await ChatContextService(db, None, None).inspect_snapshot(
             chat_id=str(hidden_chat.id), owner_id=str(owner_id), tenant_id=str(tenant_id), branch_id=str(branch_id),
         )
-    glossary_rows = list((await db.execute(
-        select(GlossaryEntry, Project.key)
-        .outerjoin(Project, Project.id == GlossaryEntry.project_id)
-        .where(
-            GlossaryEntry.is_active.is_(True),
-            or_(
-                GlossaryEntry.scope == "global",
-                (GlossaryEntry.scope == "user") & (GlossaryEntry.user_id == owner_id),
-                (GlossaryEntry.scope == "tenant") & (GlossaryEntry.tenant_id == tenant_id),
-                GlossaryEntry.scope == "project",
-            ),
-        ).order_by(GlossaryEntry.canonical_term).limit(100)
-    )).all())
+    glossary_rows = await GlossaryService(db).list_confirmed_terms(limit=100)
     semantic_rows = list((await db.execute(
         select(MemoryItem, Project.key, func.count(MemoryItemSource.id))
         .outerjoin(Project, Project.id == MemoryItem.project_id)
@@ -193,11 +181,10 @@ async def get_branch_memory(
         user_facts=list(effective.get("user", [])),
         tenant_facts=list(effective.get("tenant", [])),
         glossary=[{
-            "term": entry.canonical_term, "description": entry.description or "",
-            "aliases": list(entry.aliases or []), "scope": entry.scope, "project_key": project_key,
-            "entity_type": entry.entity_type, "entity_id": entry.entity_id,
-            "status": entry.status, "support_count": entry.support_count,
-        } for entry, project_key in glossary_rows],
+            "term": entry["term"], "description": entry["definition"],
+            "aliases": entry["aliases"], "scope": "global",
+            "source_references": entry["source_references"],
+        } for entry in glossary_rows],
         project_memory=[{
             "subject": item.subject, "content": item.content_text, "item_type": item.item_type,
             "project_key": project_key, "confidence": item.confidence, "state": item.state,

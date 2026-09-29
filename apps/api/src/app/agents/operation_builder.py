@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.agents.capability_resolver import CapabilityCandidate
 from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget, ResolvedOperation
+from app.agents.credential_resolver import CredentialsUnavailableError
 from app.agents.runtime.prompt_contract import build_prompt_input_schema, summarize_prompt_input_schema
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.tool_resolver import ResolvedTool, ToolResolver
@@ -110,27 +111,16 @@ class OperationBuilder:
         provider_for_target = provider if provider_type == "mcp" else instance
 
         credential_context = None
+        strict_credentials_unavailable = False
         resolved_has_credentials = True if provider_type == "local" else provider_for_target.is_local
         if provider_type == "mcp" and provider_for_target.is_remote:
             if user_id is not None and tenant_id is not None:
                 # For MCP providers: credentials belong to the data instance (e.g. netbox-inventory-data),
                 # not the MCP service instance. Try data instance first, fall back to provider.
                 credential_instance = instance if provider_type == "mcp" else provider_for_target
-                credential_context = await resolve_execution_credentials(
-                    credential_instance,
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    tool_slug=operation_slug,
-                    operation=operation_name,
-                    credential_scope=resolution.credential_scope,
-                    risk_level=resolution.risk_level,
-                    side_effects=resolution.side_effects,
-                    requires_confirmation=resolution.requires_confirmation,
-                )
-                _credentials_source = "data" if credential_context is not None else None
-                if credential_context is None and provider_type == "mcp":
+                try:
                     credential_context = await resolve_execution_credentials(
-                        provider_for_target,
+                        credential_instance,
                         user_id=user_id,
                         tenant_id=tenant_id,
                         tool_slug=operation_slug,
@@ -140,8 +130,51 @@ class OperationBuilder:
                         side_effects=resolution.side_effects,
                         requires_confirmation=resolution.requires_confirmation,
                     )
+                except CredentialsUnavailableError as exc:
+                    # Preserve the existing data-instance → provider
+                    # credential fallback before deciding this operation is
+                    # unavailable.
+                    logger.info(
+                        "operation_data_credentials_unavailable",
+                        extra={
+                            "operation_slug": operation_slug,
+                            "instance_slug": instance.slug,
+                            "scope_required": exc.scope_required,
+                        },
+                    )
+                    strict_credentials_unavailable = True
+                _credentials_source = "data" if credential_context is not None else None
+                if credential_context is None and provider_type == "mcp":
+                    try:
+                        credential_context = await resolve_execution_credentials(
+                            provider_for_target,
+                            user_id=user_id,
+                            tenant_id=tenant_id,
+                            tool_slug=operation_slug,
+                            operation=operation_name,
+                            credential_scope=resolution.credential_scope,
+                            risk_level=resolution.risk_level,
+                            side_effects=resolution.side_effects,
+                            requires_confirmation=resolution.requires_confirmation,
+                        )
+                    except CredentialsUnavailableError as exc:
+                        # A missing credential for one operation must not make
+                        # unrelated read operations from the same collection
+                        # unavailable. Omit this operation from the runtime
+                        # capability set; it cannot be called without credentials.
+                        logger.info(
+                            "operation_skipped_missing_credentials",
+                            extra={
+                                "operation_slug": operation_slug,
+                                "instance_slug": instance.slug,
+                                "scope_required": exc.scope_required,
+                            },
+                        )
+                        strict_credentials_unavailable = True
                     if credential_context is not None:
                         _credentials_source = "provider"
+                if credential_context is None and strict_credentials_unavailable:
+                    return None
                 if _credentials_source:
                     logger.info(
                         "credentials_resolution_source",

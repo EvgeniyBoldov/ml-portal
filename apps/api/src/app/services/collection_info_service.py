@@ -214,7 +214,7 @@ class CollectionInfoOperationResolver:
         if "collection.template.get_schema" in names or "collection.template.fill" in names:
             rules.append("Use row_id only from collection.template.list or collection.template.search results.")
         if "collection.info" in names:
-            rules.append("Call collection.info first when fields, filters, values, or operation sequence are unclear.")
+            rules.append("Use collection.info when fields, filters, or values are unclear.")
         return rules
 
 
@@ -499,6 +499,7 @@ class CollectionInfoResponseBuilder:
             "tools": self.operation_resolver.build_tools_payload(collection=collection, operations=operations),
             "contracts": self.operation_resolver.build_contracts_payload(collection=collection, operations=operations),
             "schema": inspection_payload.get("schema") or {},
+            "filter_hints": inspection_payload.get("filter_hints") or {},
             "runtime_enrichment": await self.enrichment_provider.build_runtime_enrichment(
                 session=session,
                 collection=collection,

@@ -522,14 +522,15 @@ async def list_templates(
     collection_id: uuid.UUID,
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=500),
+    query: str | None = Query(default=None, max_length=200),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
     collection = await _resolve_template_collection(collection_id, session, user)
     row_service = CollectionRowService(session)
     offset = (page - 1) * size
-    rows = await row_service.search(collection, limit=size, offset=offset)
-    total = await row_service.count(collection)
+    rows = await row_service.search(collection, limit=size, offset=offset, query=query)
+    total = await row_service.count(collection, query=query)
     rows = await _load_template_runtime_rows(collection=collection, session=session, rows=rows)
     return {
         "items": rows,

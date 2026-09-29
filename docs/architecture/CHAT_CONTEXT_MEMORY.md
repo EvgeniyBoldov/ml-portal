@@ -424,7 +424,7 @@ expires_at?
 prevent a delayed older worker from replacing newer state.
 
 Singleton items use stable keys such as `current_scope`, `active_goal`, and
-`recent_anchor`. Collection items use canonical keys such as glossary entry ID,
+`recent_anchor`. Collection items use canonical keys such as published glossary term ID,
 artifact ID, plan task entity ID, or a deterministic content fingerprint.
 
 ### 8.4 `RuntimeOutcomeProjection`
@@ -554,7 +554,7 @@ focused clarification when:
 - «тот файл» matches multiple active artifacts without a recent unique use;
 - a goal was superseded but the user refers to the old and new goal
   ambiguously;
-- a remembered term has conflicting active meanings;
+- one alias matches several published terms;
 - an artifact reference exists but is no longer authorized or available.
 
 ## 10. Write lifecycle

@@ -96,7 +96,7 @@ class FactCompactor:
         if not semantic:
             return FactCompactionResult(exact, decisions)
         payload = {
-            "stages": ["user", "tenant", "glossary"],
+            "stages": ["user", "tenant"],
             "candidates": [item_to_payload(item, index) for index, item in enumerate(semantic)],
             "current_facts": [item_to_payload(item) for item in current_facts],
         }
@@ -151,6 +151,7 @@ class FactCompactor:
                     seen_evidence.add(key)
                     evidence.append(dict(raw))
             metadata = dict(base.metadata)
+            metadata.pop("aliases", None)
             metadata["evidence"] = evidence
             metadata["compaction_action"] = output.action
             metadata["compaction_target_ids"] = [
@@ -158,15 +159,6 @@ class FactCompactor:
                 for index in output.target_current_indexes
                 if 0 <= index < len(current_facts)
             ]
-            term_aliases: list[str] = []
-            seen_term_aliases: set[str] = set()
-            for item in matches:
-                for raw_alias in item.metadata.get("aliases", []) if isinstance(item.metadata, dict) else []:
-                    alias = " ".join(str(raw_alias or "").strip().split())[:120]
-                    if alias and alias.casefold() not in seen_term_aliases:
-                        seen_term_aliases.add(alias.casefold())
-                        term_aliases.append(alias)
-            metadata["aliases"] = term_aliases
             merged_ids = [candidate_id for item in matches for candidate_id in item.metadata.get(JOURNAL_CANDIDATE_IDS, []) if isinstance(candidate_id, str)]
             metadata[JOURNAL_CANDIDATE_IDS] = merged_ids
             subject = self._grounded_subject(output.subject, matches, base.subject)

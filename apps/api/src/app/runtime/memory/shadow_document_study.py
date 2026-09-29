@@ -3,33 +3,35 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Literal, Sequence
+from typing import Any, Awaitable, Callable, Literal, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.models.document_memory_staging import (
     DocumentMemorySnapshot,
-    GlossaryMeaning,
-    GlossaryMeaningProjectBinding,
-    GlossaryMeaningSource,
     GlossaryTerm,
     MemoryCandidateProjectBinding,
     MemoryExtractionCandidate,
 )
+from app.models.memory_scope import DocumentMemoryScope, MemoryCandidateScope, MemoryScope
 from app.models.project import Project
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.memory.shadow_study_prompts import (
-    SHADOW_DOCUMENT_SCREENING_PROMPT,
-    SHADOW_DOCUMENT_STUDY_PROMPT,
+    document_memory_prompt,
 )
+from app.runtime.memory.content_contracts import normalize_memory_content
+from app.services.glossary_service import GlossaryService
 
 
-SHADOW_STUDY_BATCH_SIZE = 2
+# Keep each structured request below providers' token-per-minute limits. The
+# ledger and scope catalogs grow with every section, so two sections can push
+# otherwise valid documents over the request budget.
+SHADOW_STUDY_BATCH_SIZE = 1
 MAX_LEDGER_ITEMS = 60
 MAX_GLOSSARY_ITEMS = 80
 
@@ -46,8 +48,12 @@ class ShadowStudyItem(BaseModel):
     candidate_type: Literal["term", "description", "relationship", "rule", "constraint", "procedure", "decision"]
     subject: str = Field(min_length=1, max_length=200)
     content: dict[str, Any] = Field(default_factory=dict)
-    scope_candidate: Literal["global", "project", "multi_project", "unknown"] = "unknown"
+    scope_candidate: Literal["global", "project", "multi_project", "scoped", "unknown"] = "unknown"
     project_keys: list[str] = Field(default_factory=list, max_length=20)
+    scope_keys: list[str] = Field(default_factory=list, max_length=20)
+    mentioned_scope_keys: list[str] = Field(default_factory=list, max_length=20)
+    unmatched_scope_names: list[str] = Field(default_factory=list, max_length=8)
+    scope_rationale: str = Field(default="", max_length=600)
     evidence_section_ids: list[str] = Field(default_factory=list, max_length=8)
     aliases: list[str] = Field(default_factory=list, max_length=20)
     extraction_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
@@ -63,14 +69,30 @@ class ShadowDocumentStudyAgent:
     def __init__(self, *, session: AsyncSession, llm_client: LLMClientProtocol) -> None:
         self._structured = StructuredLLMCall(session=session, llm_client=llm_client)
 
-    async def screen(self, *, document: dict[str, Any], sample_sections: Sequence[dict[str, Any]], tenant_id: UUID) -> ShadowScreeningOutput:
+    async def _prompt(self, stage: Literal["screening", "study"]) -> str:
+        config = await self._structured.role_service.get_role_config(SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR)
+        return document_memory_prompt(config.get("extras"), stage=stage)
+
+    async def screen(
+        self,
+        *,
+        document: dict[str, Any],
+        sample_sections: Sequence[dict[str, Any]],
+        tenant_id: UUID,
+        agent_execution_id: str | None = None,
+        event_sink: Callable[[Any], Awaitable[Any]] | None = None,
+    ) -> ShadowScreeningOutput:
         result = await self._structured.invoke(
             role=SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR,
-            system_prompt=SHADOW_DOCUMENT_SCREENING_PROMPT,
+            system_prompt=await self._prompt("screening"),
             payload={"document": document, "sample_sections": list(sample_sections)},
             schema=ShadowScreeningOutput,
             tenant_id=tenant_id,
             use_default_model=True,
+            agent_execution_id=agent_execution_id,
+            trace_parent_entity_type="agent_execution",
+            trace_parent_entity_id=agent_execution_id,
+            event_sink=event_sink,
         )
         return result.value
 
@@ -82,21 +104,29 @@ class ShadowDocumentStudyAgent:
         candidate_ledger: Sequence[dict[str, Any]],
         glossary: Sequence[dict[str, Any]],
         projects: Sequence[dict[str, Any]],
+        scopes: Sequence[dict[str, Any]] = (),
         tenant_id: UUID,
+        agent_execution_id: str | None = None,
+        event_sink: Callable[[Any], Awaitable[Any]] | None = None,
     ) -> ShadowStudyOutput:
         result = await self._structured.invoke(
             role=SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR,
-            system_prompt=SHADOW_DOCUMENT_STUDY_PROMPT,
+            system_prompt=await self._prompt("study"),
             payload={
                 "document": document,
                 "sections": list(sections),
                 "candidate_ledger": list(candidate_ledger),
                 "glossary": list(glossary),
                 "project_catalog": list(projects),
+                "scope_catalog": list(scopes),
             },
             schema=ShadowStudyOutput,
             tenant_id=tenant_id,
             use_default_model=True,
+            agent_execution_id=agent_execution_id,
+            trace_parent_entity_type="agent_execution",
+            trace_parent_entity_id=agent_execution_id,
+            event_sink=event_sink,
         )
         return result.value
 
@@ -108,6 +138,20 @@ class ShadowDocumentStudyService:
         self._session = session
 
     async def get_or_create_snapshot(self, *, document_id: UUID, checksum: str, visibility_tenant_id: UUID | None) -> DocumentMemorySnapshot:
+        old_snapshots = select(DocumentMemorySnapshot.id).where(
+            DocumentMemorySnapshot.document_id == document_id,
+            DocumentMemorySnapshot.canonical_checksum != checksum,
+        )
+        old_candidates = select(MemoryExtractionCandidate.id).where(
+            MemoryExtractionCandidate.snapshot_id.in_(old_snapshots),
+        )
+        await self._session.execute(update(GlossaryTerm).where(
+            GlossaryTerm.approved_candidate_id.in_(old_candidates),
+        ).values(is_active=False))
+        await self._session.execute(update(DocumentMemorySnapshot).where(
+            DocumentMemorySnapshot.id.in_(old_snapshots),
+            DocumentMemorySnapshot.status != "superseded",
+        ).values(status="superseded"))
         row = (await self._session.execute(select(DocumentMemorySnapshot).where(
             DocumentMemorySnapshot.document_id == document_id,
             DocumentMemorySnapshot.canonical_checksum == checksum,
@@ -129,26 +173,32 @@ class ShadowDocumentStudyService:
             MemoryExtractionCandidate.snapshot_id == snapshot_id,
             MemoryExtractionCandidate.resolution_status.not_in(("rejected", "stale")),
         ).order_by(MemoryExtractionCandidate.ordinal.desc()).limit(MAX_LEDGER_ITEMS))).scalars().all()
+        scope_rows = (await self._session.execute(select(
+            MemoryCandidateScope.candidate_id, MemoryScope.key, MemoryCandidateScope.role,
+        ).join(MemoryScope, MemoryScope.id == MemoryCandidateScope.scope_id).where(
+            MemoryCandidateScope.candidate_id.in_([row.id for row in rows]),
+            MemoryCandidateScope.status != "rejected",
+            MemoryScope.lifecycle_status == "active",
+        ))).all() if rows else []
+        scopes_by_candidate: dict[UUID, dict[str, list[str]]] = {}
+        for candidate_id, key, role in scope_rows:
+            scopes_by_candidate.setdefault(candidate_id, {"applies_to": [], "mentions": []})[role].append(key)
         return [{
             "id": str(row.id), "type": row.candidate_type, "subject": row.subject,
             "content": dict(row.content or {}), "scope_candidate": row.scope_candidate,
+            "scope_keys": scopes_by_candidate.get(row.id, {}).get("applies_to", []),
+            "mentioned_scope_keys": scopes_by_candidate.get(row.id, {}).get("mentions", []),
+            "unmatched_scope_names": list(row.unmatched_scope_names or []),
+            "scope_rationale": row.resolution_rationale,
             "evidence_section_ids": list(row.evidence_section_ids or []),
         } for row in reversed(rows)]
 
-    async def glossary_context(self, *, visibility_tenant_id: UUID | None) -> list[dict[str, Any]]:
-        rows = (await self._session.execute(select(GlossaryTerm, GlossaryMeaning)
-            .outerjoin(GlossaryMeaning, GlossaryMeaning.term_id == GlossaryTerm.id)
-            .where(
-                GlossaryMeaning.resolution_status == "resolved",
-                or_(GlossaryMeaning.visibility_tenant_id.is_(None), GlossaryMeaning.visibility_tenant_id == visibility_tenant_id),
-                or_(GlossaryTerm.visibility_tenant_id.is_(None), GlossaryTerm.visibility_tenant_id == visibility_tenant_id),
-            )
+    async def glossary_context(self) -> list[dict[str, Any]]:
+        rows = (await self._session.execute(GlossaryService.published_terms_query()
             .order_by(GlossaryTerm.canonical_term)
-            .limit(MAX_GLOSSARY_ITEMS))).all()
-        return [{
-            "term": term.canonical_term, "aliases": list(term.aliases or []),
-            "definition": meaning.definition, "scope": meaning.scope_candidate,
-        } for term, meaning in rows]
+            .limit(MAX_GLOSSARY_ITEMS))).scalars().all()
+        return [{"term": term.canonical_term, "definition": term.definition,
+                 "aliases": list(term.aliases or [])} for term in rows]
 
     async def project_catalog(self) -> tuple[dict[str, Project], list[dict[str, Any]]]:
         rows = list((await self._session.execute(select(Project).where(
@@ -159,38 +209,105 @@ class ShadowDocumentStudyService:
             [{"key": project.key, "name": project.name, "aliases": list(project.aliases or [])} for project in rows],
         )
 
+    async def scope_catalog(self) -> tuple[dict[str, MemoryScope], list[dict[str, Any]]]:
+        rows = list((await self._session.execute(select(MemoryScope).where(
+            MemoryScope.lifecycle_status == "active",
+        ).order_by(
+            MemoryScope.scope_type, MemoryScope.key,
+        ))).scalars().all())
+        return (
+            {scope.key: scope for scope in rows},
+            [{"key": scope.key, "type": scope.scope_type, "name": scope.name,
+              "aliases": list(scope.aliases or []), "is_all": scope.is_all} for scope in rows],
+        )
+
+    async def document_scope_hints(self, document_id: UUID) -> list[dict[str, Any]]:
+        """Read the current upload hints from typed document bindings."""
+        rows = (await self._session.execute(select(MemoryScope).join(
+            DocumentMemoryScope, DocumentMemoryScope.scope_id == MemoryScope.id,
+        ).where(
+            DocumentMemoryScope.document_id == document_id,
+            MemoryScope.lifecycle_status == "active",
+        ).order_by(MemoryScope.scope_type, MemoryScope.key))).scalars().all()
+        return [{"key": scope.key, "type": scope.scope_type, "name": scope.name,
+                 "aliases": list(scope.aliases or []), "is_all": scope.is_all} for scope in rows]
+
     async def persist_batch(
         self,
         *,
         snapshot: DocumentMemorySnapshot,
         items: Sequence[ShadowStudyItem],
+        document_scope: str,
         section_ids: set[str],
         projects_by_key: dict[str, Project],
+        scopes_by_key: dict[str, MemoryScope] | None = None,
     ) -> dict[str, int]:
         known = {UUID(item["id"]): item for item in await self.ledger(snapshot.id)}
         maximum = (await self._session.execute(select(func.max(MemoryExtractionCandidate.ordinal)).where(
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
         ))).scalar_one_or_none()
         next_ordinal = int(maximum if maximum is not None else -1) + 1
-        counts = {"created": 0, "extended": 0, "rejected": 0}
+        counts = {"created": 0, "extended": 0, "rejected": 0, "invalid_content": 0}
         for item in items:
+            if item.candidate_type == "term":
+                if document_scope != "global":
+                    counts["rejected"] += 1
+                    continue
+                item = item.model_copy(update={"scope_candidate": "unknown", "project_keys": [],
+                                               "scope_keys": [], "mentioned_scope_keys": [], "unmatched_scope_names": []})
             evidence = list(dict.fromkeys(value for value in item.evidence_section_ids if value in section_ids))
             if not evidence:
                 counts["rejected"] += 1
                 continue
-            if item.candidate_type == "term" and not str(item.content.get("definition") or "").strip():
-                counts["rejected"] += 1
-                continue
+            applies, mentions, unmatched, proposed_scope = _scope_proposal(item, scopes_by_key or {}, projects_by_key)
+            content = dict(item.content or {})
+            try:
+                content = normalize_memory_content(item.candidate_type, content)
+            except ValueError:
+                if item.candidate_type == "term":
+                    counts["rejected"] += 1
+                    continue
+                # Keep source-backed memory proposals visible for human review.
+                counts["invalid_content"] += 1
             if item.operation == "extend_existing":
                 if item.existing_candidate_id not in known:
                     counts["rejected"] += 1
                     continue
                 row = await self._session.get(MemoryExtractionCandidate, item.existing_candidate_id)
-                if row is None:
+                if row is None or row.candidate_type != item.candidate_type or row.normalized_subject != _normalized(item.subject):
                     counts["rejected"] += 1
                     continue
+                if item.candidate_type == "term":
+                    existing_definition = str((row.content or {}).get("definition") or "").strip()
+                    incoming_definition = str(content["definition"])
+                    if existing_definition and " ".join(existing_definition.split()).casefold() != incoming_definition.casefold():
+                        counts["rejected"] += 1
+                        continue
+                    if not existing_definition:
+                        row.content = content
+                        row.content_text = json.dumps(content, ensure_ascii=False, sort_keys=True)
                 row.evidence_section_ids = list(dict.fromkeys([*(row.evidence_section_ids or []), *evidence]))
                 row.aliases = _unique([*(row.aliases or []), *item.aliases])
+                if row.candidate_type != "term":
+                    row.unmatched_scope_names = _unique([*(row.unmatched_scope_names or []), *unmatched])[:8]
+                    has_existing_applies = (await self._session.execute(select(MemoryCandidateScope.id).where(
+                        MemoryCandidateScope.candidate_id == row.id,
+                        MemoryCandidateScope.role == "applies_to",
+                        MemoryCandidateScope.status != "rejected",
+                    ).limit(1))).scalar_one_or_none() is not None
+                    if row.scope_candidate in (None, "unknown") and proposed_scope != "unknown":
+                        if proposed_scope != "global" or not has_existing_applies:
+                            row.scope_candidate = proposed_scope
+                    elif row.scope_candidate == "global" and (item.scope_keys or item.project_keys):
+                        row.scope_candidate = "unknown"
+                    elif proposed_scope not in ("unknown", row.scope_candidate):
+                        row.scope_candidate = "unknown"
+                    elif proposed_scope == "unknown" and (item.scope_keys or item.project_keys):
+                        row.scope_candidate = "unknown"
+                    if item.scope_rationale and not row.resolution_rationale:
+                        row.resolution_rationale = item.scope_rationale
+                    await self._add_project_bindings(row.id, item, applies, proposed_scope, projects_by_key)
+                    await self._add_scope_bindings(row.id, applies, mentions, scopes_by_key or {}, item)
                 counts["extended"] += 1
                 continue
             subject = _normalized(item.subject)
@@ -201,85 +318,96 @@ class ShadowDocumentStudyService:
                 snapshot_id=snapshot.id, ordinal=next_ordinal, candidate_type=item.candidate_type,
                 visibility_tenant_id=snapshot.visibility_tenant_id,
                 subject=item.subject.strip()[:200], normalized_subject=subject,
-                content=dict(item.content or {}), content_text=json.dumps(item.content, ensure_ascii=False, sort_keys=True),
+                content=content, content_text=json.dumps(content, ensure_ascii=False, sort_keys=True),
                 evidence_section_ids=evidence, aliases=_unique(item.aliases),
-                extraction_confidence=item.extraction_confidence, scope_candidate=item.scope_candidate,
+                unmatched_scope_names=unmatched,
+                extraction_confidence=item.extraction_confidence,
+                scope_candidate=None if item.candidate_type == "term" else proposed_scope,
                 resolution_status="extracted", resolution_method="llm_suggestion",
+                resolution_rationale=item.scope_rationale or None,
             )
             next_ordinal += 1
             self._session.add(row)
             await self._session.flush()
-            for key in dict.fromkeys(value.strip().lower() for value in item.project_keys if value.strip()):
-                project = projects_by_key.get(key)
-                if project is None:
-                    continue
-                self._session.add(MemoryCandidateProjectBinding(
-                    candidate_id=row.id, project_id=project.id, role="applies_to", status="suggested",
-                    method="llm_suggestion", confidence=item.extraction_confidence,
-                ))
+            await self._add_project_bindings(row.id, item, applies, proposed_scope, projects_by_key)
+            await self._add_scope_bindings(row.id, applies, mentions, scopes_by_key or {}, item)
             counts["created"] += 1
         return counts
+
+    async def _add_project_bindings(self, candidate_id: UUID, item: ShadowStudyItem, applies: list[str],
+                                    proposed_scope: str, projects_by_key: dict[str, Project]) -> None:
+        project_keys = {value.strip().lower() for value in item.project_keys if value.strip()}
+        if proposed_scope == "project":
+            project_keys.update(key.removeprefix("project.") for key in applies if key.startswith("project."))
+        existing = set((await self._session.execute(select(MemoryCandidateProjectBinding.project_id).where(
+            MemoryCandidateProjectBinding.candidate_id == candidate_id,
+        ))).scalars().all())
+        for key in project_keys:
+            project = projects_by_key.get(key)
+            if project is not None and project.id not in existing:
+                self._session.add(MemoryCandidateProjectBinding(
+                    candidate_id=candidate_id, project_id=project.id, role="applies_to", status="suggested",
+                    method="llm_suggestion", confidence=item.extraction_confidence,
+                ))
+
+    async def _add_scope_bindings(self, candidate_id: UUID, applies: list[str], mentions: list[str],
+                                  scopes_by_key: dict[str, MemoryScope], item: ShadowStudyItem) -> None:
+        existing = set((await self._session.execute(select(MemoryCandidateScope.scope_id, MemoryCandidateScope.role).where(
+            MemoryCandidateScope.candidate_id == candidate_id,
+        ))).all())
+        for role, keys in (("applies_to", applies), ("mentions", mentions)):
+            for key in keys:
+                scope = scopes_by_key[key]
+                if (scope.id, role) in existing:
+                    continue
+                self._session.add(MemoryCandidateScope(
+                    candidate_id=candidate_id, scope_id=scope.id, role=role, status="suggested",
+                    method="llm_suggestion", confidence=item.extraction_confidence,
+                    rationale=item.scope_rationale or None,
+                ))
 
     async def finalize(self, snapshot: DocumentMemorySnapshot) -> dict[str, int]:
         candidates = list((await self._session.execute(select(MemoryExtractionCandidate).where(
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
             MemoryExtractionCandidate.resolution_status == "extracted",
         ))).scalars().all())
-        glossary_meanings = 0
         for candidate in candidates:
-            if candidate.candidate_type == "term":
-                glossary_meanings += await self._materialize_term(candidate)
             candidate.resolution_status = "needs_review"
         snapshot.status = "conflict_checking"
-        snapshot.metrics = {**dict(snapshot.metrics or {}), "candidates": len(candidates), "glossary_meanings": glossary_meanings, "ready_at": datetime.now(timezone.utc).isoformat()}
-        return {"candidates": len(candidates), "glossary_meanings": glossary_meanings}
-
-    async def _materialize_term(self, candidate: MemoryExtractionCandidate) -> int:
-        term = (await self._session.execute(select(GlossaryTerm).where(
-            GlossaryTerm.normalized_term == candidate.normalized_subject,
-            GlossaryTerm.visibility_tenant_id == candidate.visibility_tenant_id,
-        ))).scalar_one_or_none()
-        if term is None:
-            term = GlossaryTerm(canonical_term=candidate.subject, normalized_term=candidate.normalized_subject,
-                                visibility_tenant_id=candidate.visibility_tenant_id, aliases=list(candidate.aliases or []))
-            self._session.add(term)
-            await self._session.flush()
-        else:
-            term.aliases = _unique([*(term.aliases or []), *(candidate.aliases or [])])
-        meaning = (await self._session.execute(select(GlossaryMeaning).where(
-            GlossaryMeaning.candidate_id == candidate.id,
-        ))).scalar_one_or_none()
-        if meaning is not None:
-            return 0
-        meaning = GlossaryMeaning(
-            term_id=term.id, candidate_id=candidate.id,
-            definition=str(candidate.content.get("definition") or candidate.subject),
-            scope_candidate=candidate.scope_candidate or "unknown", resolution_status="needs_review",
-            resolution_method="llm_suggestion", confidence=candidate.extraction_confidence,
-        )
-        self._session.add(meaning)
-        await self._session.flush()
-        snapshot = await self._session.get(DocumentMemorySnapshot, candidate.snapshot_id)
-        self._session.add(GlossaryMeaningSource(
-            meaning_id=meaning.id, candidate_id=candidate.id,
-            document_id=snapshot.document_id if snapshot is not None else None,
-            visibility_tenant_id=candidate.visibility_tenant_id,
-            evidence_section_ids=list(candidate.evidence_section_ids or []),
-        ))
-        bindings = list((await self._session.execute(select(MemoryCandidateProjectBinding).where(
-            MemoryCandidateProjectBinding.candidate_id == candidate.id,
-            MemoryCandidateProjectBinding.role == "applies_to",
-        ))).scalars().all())
-        for binding in bindings:
-            self._session.add(GlossaryMeaningProjectBinding(
-                meaning_id=meaning.id, project_id=binding.project_id, status="suggested",
-                method=binding.method, confidence=binding.confidence,
-            ))
-        return 1
+        snapshot.metrics = {**dict(snapshot.metrics or {}), "candidates": len(candidates), "ready_at": datetime.now(timezone.utc).isoformat()}
+        return {"candidates": len(candidates)}
 
 
 def _normalized(value: str) -> str:
     return " ".join(str(value or "").strip().casefold().split())[:200]
+
+
+def _scope_proposal(
+    item: ShadowStudyItem,
+    scopes_by_key: dict[str, MemoryScope],
+    projects_by_key: dict[str, Project],
+) -> tuple[list[str], list[str], list[str], str]:
+    if item.candidate_type == "term":
+        return [], [], [], "unknown"
+    raw_applies = _unique([*item.scope_keys, *(f"project.{key}" for key in item.project_keys)])
+    raw_mentions = _unique(item.mentioned_scope_keys)
+    applies = [key for key in (raw.casefold() for raw in raw_applies) if key in scopes_by_key]
+    mentions = [key for key in (raw.casefold() for raw in raw_mentions)
+                if key in scopes_by_key and key not in applies]
+    missing_applies = [raw for raw in raw_applies if raw.casefold() not in scopes_by_key]
+    missing_mentions = [raw for raw in raw_mentions if raw.casefold() not in scopes_by_key]
+    unmatched = _unique([*item.unmatched_scope_names, *missing_applies, *missing_mentions])[:8]
+    proposed_scope = item.scope_candidate
+    if proposed_scope == "global" and raw_applies:
+        proposed_scope = "unknown"
+    elif proposed_scope == "scoped" and (not applies or missing_applies):
+        proposed_scope = "unknown"
+    elif proposed_scope == "project":
+        project_scope_keys = [key for key in applies if scopes_by_key[key].scope_type == "project"]
+        if (missing_applies or len(applies) != 1 or len(project_scope_keys) != 1 or
+                project_scope_keys[0].removeprefix("project.") not in projects_by_key):
+            proposed_scope = "unknown"
+    return applies, mentions, unmatched, proposed_scope
 
 
 def _unique(values: Sequence[object]) -> list[str]:

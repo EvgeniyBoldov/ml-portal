@@ -7,7 +7,10 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.glossary_service import GlossaryService
+from app.services.glossary_service import (
+    GlossaryService, ambiguous_glossary_aliases, matched_glossary_forms,
+)
+from app.services.project_catalog_service import ProjectCatalogService
 
 
 def _forms(item: dict[str, Any], *keys: str) -> set[str]:
@@ -34,24 +37,26 @@ class MechanicalLookupService:
 
     def __init__(self, session: AsyncSession) -> None:
         self._glossary = GlossaryService(session)
+        self._projects = ProjectCatalogService(session)
 
     async def lookup(self, *, request_text: str, tenant_id: UUID | None) -> dict[str, Any]:
-        projects, glossary = await self._glossary.list_project_terms(), await self._glossary.list_confirmed_terms(tenant_id=tenant_id)
+        projects, glossary = await self._projects.list_projects(), await self._glossary.list_confirmed_terms()
         matched_projects = []
         for item in projects:
             matched = _matches(request_text, _forms(item, "key", "name", "aliases"))
             if matched:
                 matched_projects.append({"id": str(item["id"]), "key": item["key"], "name": item["name"], "matched_aliases": matched})
         matched_terms = []
-        entities = []
         for item in glossary:
-            matched = _matches(request_text, _forms(item, "term", "aliases"))
+            matched = matched_glossary_forms(request_text, _forms(item, "term", "aliases"))
             if not matched:
                 continue
             matched_terms.append({
-                "id": str(item["id"]), "term": item["term"], "description": item.get("description") or "",
+                "id": str(item["id"]), "term": item["term"],
                 "aliases": list(item.get("aliases") or []), "matched_aliases": matched,
             })
-            if item.get("entity_id"):
-                entities.append({"id": str(item["entity_id"]), "type": item.get("entity_type"), "term": item["term"]})
-        return {"projects": matched_projects[:6], "glossary": matched_terms[:12], "entities": entities[:12]}
+        return {
+            "projects": matched_projects[:6], "glossary": matched_terms[:12], "entities": [],
+            "ambiguities": [f"ambiguous_glossary_alias:{form}" for form in
+                            ambiguous_glossary_aliases(request_text, glossary)],
+        }

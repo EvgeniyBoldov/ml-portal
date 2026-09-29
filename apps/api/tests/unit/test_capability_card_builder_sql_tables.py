@@ -16,6 +16,7 @@ def test_collections_card_includes_remote_tables_preview():
         usage_rules="Сначала inspect, потом search",
         description="fallback",
         remote_tables=["tenwork_tickets", "services"],
+        schema_fields=[{"name": "site", "type": "string", "description": "Площадка устройства", "filterable": True}],
     )
 
     operation = SimpleNamespace(
@@ -34,15 +35,16 @@ def test_collections_card_includes_remote_tables_preview():
     card = builder._build_collections_card([item], [operation])  # noqa: SLF001
 
     assert "таблицы:" in card
-    assert "Перед работой с любой коллекцией сначала вызови `collection.info`" in card
-    assert "правила работы:" not in card
+    assert "если результат пустой" in card.lower()
+    assert "правила использования: Сначала inspect, потом search" in card
     assert "рекомендуемый порядок" not in card
-    assert "`collection.sql.search_objects`" not in card
+    assert "`collection.sql.search_objects`" in card
     assert "`tenwork_tickets`" in card
     assert "`services`" in card
+    assert "`site` (string) [фильтр]: Площадка устройства" in card
 
 
-def test_collections_card_keeps_collection_discovery_without_operations():
+def test_collections_card_omits_collection_without_operations():
     builder = CapabilityCardBuilder()
     item = SimpleNamespace(
         collection_slug="ticket_network",
@@ -63,9 +65,7 @@ def test_collections_card_keeps_collection_discovery_without_operations():
 
     card = builder._build_collections_card([item], [])  # noqa: SLF001
 
-    assert "## Доступные коллекции" in card
-    assert "`ticket_network`" in card
-    assert "`tenwork_tickets`" in card
+    assert card == ""
 
 
 def test_collections_card_groups_collection_operations_with_descriptions():
@@ -101,9 +101,9 @@ def test_collections_card_groups_collection_operations_with_descriptions():
 
     card = builder._build_collections_card([item], [operation])  # noqa: SLF001
 
-    assert "доступные операции:" not in card
+    assert "- операции:" in card
     assert "рекомендуемый порядок" not in card
-    assert "`collection.template.fill`" not in card
+    assert "`collection.template.fill`" in card
     assert "готовность" not in card.lower()
     assert "схема:" not in card.lower()
 
@@ -128,3 +128,48 @@ def test_system_operations_card_is_rendered_separately():
     assert "## Системные операции" in card
     assert "`file.read`" in card
     assert "Read a file by its canonical storage_uri" in card
+
+
+def test_similar_collections_keep_distinct_semantics_and_fields():
+    builder = CapabilityCardBuilder()
+    items = [
+        SimpleNamespace(
+            collection_slug=slug,
+            slug=slug,
+            name=name,
+            collection_type="table",
+            domain="collection.table",
+            usage_purpose=purpose,
+            data_description=description,
+            usage_rules=rule,
+            remote_tables=[],
+            schema_fields=[{"name": field, "type": "string", "description": field_description, "filterable": True}],
+        )
+        for slug, name, purpose, description, rule, field, field_description in [
+            ("devices", "Devices", "Find physical devices", "Hardware inventory", "Search by site", "site", "Physical site"),
+            ("tickets", "Tickets", "Find support tickets", "Support requests", "Search by assignee", "assignee", "Ticket owner"),
+        ]
+    ]
+    operations = [
+        SimpleNamespace(
+            scope="collection",
+            collection_slug=slug,
+            operation="collection.table.search",
+            operation_slug=f"instance.{slug}.collection.table.search",
+            name="Table Search",
+            published=None,
+            description="Search rows",
+            input_schema={},
+            result_kind="rows",
+            source="local",
+        )
+        for slug in ("devices", "tickets")
+    ]
+
+    card = builder._build_collections_card(items, operations)  # noqa: SLF001
+
+    assert card.count("`collection.table.search`") == 2
+    assert "### `devices`\n- название: Devices" in card
+    assert "### `tickets`\n- название: Tickets" in card
+    assert "Search by site" in card and "Physical site" in card
+    assert "Search by assignee" in card and "Ticket owner" in card

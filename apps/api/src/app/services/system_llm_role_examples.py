@@ -34,10 +34,21 @@ _EXAMPLES: Dict[SystemLLMRoleType, ExamplesV2] = {
             },
         },
     },
-    SystemLLMRoleType.MEMORY: {"input": {"request": "Заявка для Нема", "facts": [{"index": 0}], "projects": [{"index": 0, "aliases": ["Нема"]}]}, "outputs": {"default": {"fact_indexes": [0], "project_indexes": [0], "glossary_indexes": [], "ambiguities": [], "intent": "informational"}}},
+    SystemLLMRoleType.MEMORY: {"input": {"request": "Заявка для Нема", "facts": [{"index": 0}], "projects": [{"index": 0, "aliases": ["Нема"]}]}, "outputs": {"default": {"fact_indexes": [0], "project_indexes": [0], "ambiguities": [], "intent": "informational"}}},
     SystemLLMRoleType.FACT_EXTRACTOR: {"input": {"user_message": "Я сетевой инженер", "evidence": [{"source_id": "user_message", "source_type": "user_message", "source_ref": "request", "text": "Я сетевой инженер"}], "known_facts": []}, "outputs": {"default": {"facts": [{"scope": "user", "kind": "fact", "subject": "user.role", "value": "network engineer", "confidence": 0.9, "aliases": [], "project_aliases": [], "evidence_source_ids": ["user_message"]}]}}},
     SystemLLMRoleType.FACT_COMPACTOR: {"input": {"candidates": [{"index": 0, "scope": "tenant", "subject": "standard", "value": "ITIL"}], "current_facts": []}, "outputs": {"default": {"facts": [{"scope": "tenant", "subject": "standard", "value": "ITIL", "action": "merge", "source_candidate_indexes": [0], "target_current_indexes": []}]}}},
-    SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR: {"input": {"document": {"title": "Switch changes"}, "sections": [{"id": "section-1", "text": "Before a VLAN change, create a backup."}], "projects": [{"key": "network", "name": "Network"}]}, "outputs": {"default": {"items": [{"item_type": "procedure", "subject": "network.change_vlan", "content": {"goal": "Change VLAN", "applicability_conditions": [], "required_approvals": [], "prechecks": ["Create a backup"], "steps": [{"instruction": "Change VLAN", "expected_result": "VLAN is applied", "confirmation_required": True}], "verification": ["Verify connectivity"], "rollback": {"mode": "steps", "steps": ["Restore backup"], "reason": None}, "exceptions": []}, "project_key": "network", "project_confidence": 0.95, "evidence_section_ids": ["section-1"], "aliases": [], "term_kind": None}]}}},
+    SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR: {
+        "input": {
+            "document": {"title": "Корпоративный словарь", "access_scope": "global"},
+            "sections": [{"id": "section-1", "text": "СРК — система резервного копирования."}],
+            "candidate_ledger": [], "glossary": [], "projects": [], "scopes": [],
+        },
+        "outputs": {"default": {"items": [{
+            "operation": "new", "candidate_type": "term", "subject": "СРК",
+            "content": {"definition": "Система резервного копирования"},
+            "scope_candidate": "unknown", "evidence_section_ids": ["section-1"],
+        }]}},
+    },
     SystemLLMRoleType.MEMORY_EVALUATOR: {"input": {"memory_item": {"subject": "network.change_vlan", "content": {"steps": ["backup"]}}, "evidence": [{"text": "Create a backup before changing VLAN."}]}, "outputs": {"default": {"outcome": "confirmed", "reason": "The evidence states the same prerequisite.", "evidence_hit_indexes": [0]}}},
 }
 

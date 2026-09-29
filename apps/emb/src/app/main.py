@@ -453,11 +453,6 @@ async def _embed_texts(texts: List[str], model_name: str, priority: Priority) ->
     # Get model
     model = gateway.get_model(model_name)
     
-    # Check if texts exceed max tokens
-    total_chars = sum(len(text) for text in texts)
-    if total_chars > model.config.max_tokens * len(texts):
-        raise HTTPException(status_code=400, detail="Texts exceed max tokens")
-    
     # Embed texts
     vectors = await model.embed_texts(texts, priority)
     
@@ -466,8 +461,11 @@ async def _embed_texts(texts: List[str], model_name: str, priority: Priority) ->
         dim=model.config.dimensions,
         model_version=model.config.version,
         usage={
-            "prompt_tokens": total_chars,
-            "total_tokens": total_chars
+            # This service delegates tokenization/truncation to the loaded
+            # SentenceTransformer tokenizer.  Character count is not a token
+            # count and rejects perfectly valid non-ASCII text.
+            "prompt_tokens": sum(len(text) for text in texts),
+            "total_tokens": sum(len(text) for text in texts)
         }
     )
 

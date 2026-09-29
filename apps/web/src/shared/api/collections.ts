@@ -169,6 +169,15 @@ export interface ProjectCatalogItem {
   aliases: string[];
 }
 
+export interface MemoryScopeCatalogItem {
+  id: string;
+  scope_type: 'product' | 'project' | 'team';
+  key: string;
+  name: string;
+  aliases: string[];
+  is_all: boolean;
+}
+
 export interface ProjectMemoryOverviewResponse {
   projects: ProjectMemoryProject[];
   total: number;
@@ -198,6 +207,13 @@ export interface ProjectMemoryProjectDetailResponse {
   offset?: number;
 }
 
+export interface GlobalMemoryOverviewResponse {
+  items: ProjectMemoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface ProjectMemoryEvidencePreview {
   document_id: string;
   section_id: string;
@@ -207,19 +223,18 @@ export interface ProjectMemoryEvidencePreview {
   excerpt: string;
 }
 
-export interface GlossaryCatalogEntry {
+export interface GlossaryCatalogTerm {
   canonical_term: string;
   aliases: string[];
-  description: string | null;
-  entity_type: string;
-  entity_id: string | null;
-  project_id: string | null;
-  scope: 'global' | 'tenant' | 'user' | 'project';
+  description: string;
   updated_at: string;
+  source_document_id: string;
+  source_document_title: string;
+  source_section_ids: string[];
 }
 
 export interface GlossaryOverviewResponse {
-  entries: GlossaryCatalogEntry[];
+  entries: GlossaryCatalogTerm[];
   total: number;
   limit?: number;
   offset?: number;
@@ -297,6 +312,7 @@ export interface UploadDocumentRequest {
   auto_ingest?: boolean;
   memory_enabled?: boolean;
   project_keys?: string[];
+  memory_scope_keys?: string[];
 }
 
 export interface UploadDocumentResponse {
@@ -398,6 +414,7 @@ export interface CollectionDocument {
     enabled: boolean | null;
     effective_enabled: boolean;
     project_keys: string[];
+    scope_keys?: string[];
     extraction_status: string;
     extraction_metrics: Record<string, unknown>;
   };
@@ -411,6 +428,7 @@ export interface CollectionDocumentsResponse {
   page: number;
   size: number;
   has_more: boolean;
+  stats?: { total: number; ready: number; processing: number; failed: number; uploaded: number };
 }
 
 export interface CollectionReindexResponse {
@@ -696,6 +714,7 @@ export const collectionsApi = {
     if (data.auto_ingest !== undefined) formData.append('auto_ingest', String(data.auto_ingest));
     if (data.memory_enabled !== undefined) formData.append('memory_enabled', String(data.memory_enabled));
     if (data.project_keys?.length) formData.append('project_keys', JSON.stringify(data.project_keys));
+    if (data.memory_scope_keys?.length) formData.append('memory_scope_keys', JSON.stringify(data.memory_scope_keys));
 
     return apiRequest<UploadDocumentResponse>(
       `/collections/${collectionId}/upload-document`,
@@ -718,11 +737,12 @@ export const collectionsApi = {
 
   listTemplates: async (
     collectionId: string,
-    params?: { page?: number; size?: number }
+    params?: { page?: number; size?: number; query?: string }
   ): Promise<CollectionTemplatesResponse> => {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', String(params.page));
     if (params?.size) searchParams.set('size', String(params.size));
+    if (params?.query) searchParams.set('query', params.query);
     const query = searchParams.toString();
     return apiRequest<CollectionTemplatesResponse>(
       `/collections/${collectionId}/templates${query ? `?${query}` : ''}`
@@ -809,6 +829,9 @@ export const collectionsApi = {
   getProjectCatalog: async (): Promise<ProjectCatalogItem[]> =>
     apiRequest<ProjectCatalogItem[]>('/collections/project-memory/catalog'),
 
+  getMemoryScopeCatalog: async (): Promise<MemoryScopeCatalogItem[]> =>
+    apiRequest<MemoryScopeCatalogItem[]>('/collections/project-memory/scope-catalog'),
+
   getProjectMemoryProject: async (
     projectKey: string,
     params?: { query?: string; item_type?: string; state?: string; limit?: number; offset?: number },
@@ -826,12 +849,19 @@ export const collectionsApi = {
   getProjectMemoryEvidence: async (itemId: string, sectionId: string): Promise<ProjectMemoryEvidencePreview> =>
     apiRequest<ProjectMemoryEvidencePreview>(`/collections/project-memory/items/${encodeURIComponent(itemId)}/evidence/${encodeURIComponent(sectionId)}`),
 
-  getGlossaryOverview: async (params?: { query?: string; scope?: string; entity_type?: string; project_id?: string; limit?: number; offset?: number }): Promise<GlossaryOverviewResponse> => {
+  getGlobalMemoryOverview: async (params?: { query?: string; item_type?: string; state?: string; limit?: number; offset?: number }): Promise<GlobalMemoryOverviewResponse> => {
     const search = new URLSearchParams();
     if (params?.query) search.set('query', params.query);
-    if (params?.scope) search.set('scope', params.scope);
-    if (params?.entity_type) search.set('entity_type', params.entity_type);
-    if (params?.project_id) search.set('project_id', params.project_id);
+    if (params?.item_type) search.set('item_type', params.item_type);
+    if (params?.state) search.set('state', params.state);
+    if (params?.limit !== undefined) search.set('limit', String(params.limit));
+    if (params?.offset !== undefined) search.set('offset', String(params.offset));
+    return apiRequest<GlobalMemoryOverviewResponse>(`/collections/global-memory${search.toString() ? `?${search}` : ''}`);
+  },
+
+  getGlossaryOverview: async (params?: { query?: string; limit?: number; offset?: number }): Promise<GlossaryOverviewResponse> => {
+    const search = new URLSearchParams();
+    if (params?.query) search.set('query', params.query);
     if (params?.limit !== undefined) search.set('limit', String(params.limit));
     if (params?.offset !== undefined) search.set('offset', String(params.offset));
     return apiRequest<GlossaryOverviewResponse>(`/collections/glossary${search.toString() ? `?${search}` : ''}`);
@@ -962,12 +992,13 @@ export const collectionsApi = {
 
   listDocuments: async (
     collectionId: string,
-    params?: { page?: number; size?: number; status?: string }
+    params?: { page?: number; size?: number; status?: string; query?: string }
   ): Promise<CollectionDocumentsResponse> => {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', String(params.page));
     if (params?.size) searchParams.set('size', String(params.size));
     if (params?.status) searchParams.set('status', params.status);
+    if (params?.query) searchParams.set('query', params.query);
     const query = searchParams.toString();
     return apiRequest<CollectionDocumentsResponse>(
       `/collections/${collectionId}/documents${query ? `?${query}` : ''}`

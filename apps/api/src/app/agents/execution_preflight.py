@@ -173,6 +173,18 @@ class ExecutionPreflight:
                 phase=OrchestrationPhase.AGENT,
             )
 
+        async def emit_rbac(rbac_audit: Dict[str, Any]) -> None:
+            if event_sink is None or trace_parent_id is None:
+                return
+            await event_sink.emit(
+                RuntimeEvent(RuntimeEventType.RBAC_SNAPSHOT, {
+                    "entity_type": "agent_execution",
+                    "entity_id": trace_parent_id,
+                    "rbac": rbac_audit,
+                }),
+                phase=OrchestrationPhase.AGENT,
+            )
+
         await emit(RuntimeEventType.PREFLIGHT_STARTED)
 
         try:
@@ -197,6 +209,34 @@ class ExecutionPreflight:
             default_collection_allow = bool(
                 (platform_config or {}).get("default_collection_allow", True)
             )
+            effective_permissions = effective_permissions_override
+            if effective_permissions is None:
+                effective_permissions = await self.runtime_rbac_resolver.resolve_effective_permissions(
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    default_collection_allow=default_collection_allow,
+                )
+            agent_allowed = self.runtime_rbac_resolver.is_agent_allowed(
+                effective_permissions=effective_permissions,
+                agent_slug=agent_slug,
+                default_allow=False,
+            )
+            rbac_audit: Dict[str, Any] = {
+                "agent_slug": agent_slug,
+                "agent_access": {
+                    "slug": agent_slug,
+                    "allowed": agent_allowed,
+                    "reason": "Разрешён runtime RBAC" if agent_allowed else "Запрещён runtime RBAC",
+                },
+            }
+            await emit_rbac(rbac_audit)
+            if not agent_allowed:
+                raise AgentUnavailableError(
+                    f"Access denied for agent '{agent_slug}' by RBAC policy",
+                    missing=MissingRequirements(),
+                    reason_code="rbac_agent_invoke_denied",
+                    details={"agent_slug": agent_slug},
+                )
             operations_started = time.time()
             logger.debug(
                 "preflight_stage_started",
@@ -207,7 +247,7 @@ class ExecutionPreflight:
                 tenant_id=tenant_id,
                 agent_slug=agent_slug,
                 agent=agent_result.agent,
-                effective_permissions_override=effective_permissions_override,
+                effective_permissions_override=effective_permissions,
                 default_collection_allow=default_collection_allow,
             )
             logger.debug(
@@ -235,6 +275,8 @@ class ExecutionPreflight:
             )
             if collection_filter_reason:
                 routing_reasons.append(collection_filter_reason)
+            rbac_audit["collection_filter"] = collection_filter_audit
+            await emit_rbac(rbac_audit)
 
             # 2c. Apply platform operation policy filter before planner snapshot.
             filtered_out = apply_operation_policy_filter(
@@ -317,10 +359,7 @@ class ExecutionPreflight:
                 routing_reasons=routing_reasons,
                 routing_duration_ms=int((time.time() - start_time) * 1000),
                 request_text=request_text[:500] if request_text else None,
-                rbac_audit={
-                    "agent_slug": agent_slug,
-                    "collection_filter": collection_filter_audit,
-                },
+                rbac_audit=rbac_audit,
             )
 
             await self._log_decision(
@@ -403,7 +442,7 @@ class ExecutionPreflight:
         effective_permissions_override: Optional[EffectivePermissions],
         default_collection_allow: bool,
     ) -> Any:
-        """Step 2: resolve permissions + data instances + operations, enforce RBAC."""
+        """Step 2: resolve data instances and operations with checked permissions."""
         collection_ids: Optional[set[str]] = None
         if not bool(getattr(agent, "allow_all_collections", False)):
             collection_ids = {
@@ -417,17 +456,6 @@ class ExecutionPreflight:
             default_collection_allow=default_collection_allow,
             collection_ids=collection_ids,
         )
-        if not self.runtime_rbac_resolver.is_agent_allowed(
-            effective_permissions=operation_result.effective_permissions,
-            agent_slug=agent_slug,
-            default_allow=False,
-        ):
-            raise AgentUnavailableError(
-                f"Access denied for agent '{agent_slug}' by RBAC policy",
-                missing=MissingRequirements(),
-                reason_code="rbac_agent_invoke_denied",
-                details={"agent_slug": agent_slug},
-            )
         return operation_result
 
     def _apply_collection_filter(

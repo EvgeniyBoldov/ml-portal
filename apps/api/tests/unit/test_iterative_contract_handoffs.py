@@ -26,18 +26,21 @@ def _task(*, expected_outputs: list[dict] | None = None) -> TaskRequest:
     )
 
 
-def test_agent_receives_task_inputs_and_complete_output_contract() -> None:
+def test_agent_receives_task_inputs_and_terminal_contract_once() -> None:
     request = _task(expected_outputs=[{
         "key": "result", "description": "Structured finding", "required": True,
         "schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}},
     }])
 
     message = AgentExecutor._build_sub_messages([], request, "goal")[-1]["content"]
+    system_prompt = AgentExecutor._with_terminal_contract_prompt("Agent instructions", request)
 
     assert '"project_key": "project-1"' in message
-    assert "Structured finding" in message
-    assert '"required": ["name"]' in message
-    assert "typed slot" in message
+    assert "Structured finding" not in message
+    assert "typed slot" not in message
+    assert "Structured finding" in system_prompt
+    assert '"required": ["name"]' in system_prompt
+    assert "typed slot" in system_prompt
 
 
 def test_partial_artifact_is_runtime_verified_before_synthesis() -> None:

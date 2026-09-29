@@ -157,6 +157,25 @@ describe('projectTraceStages memory components', () => {
     expect(first.executorRuns[0].taskPresentation).toMatchObject({ executor: 'planner', title: 'Принятие решения по плану' });
   });
 
+  it('shows planner RBAC from the canonical event and older orchestrator snapshot', () => {
+    const audit = { allowed: ['viewer'], denied_by_rbac: ['hidden'] };
+    const base = [
+      event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'planner-1', role: 'planner', context_snapshot: { rbac: audit } }),
+      event(2, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1', parent_entity_type: 'orchestrator', parent_entity_id: 'planner-1' }),
+      event(3, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+    ];
+    for (const events of [base, [...base, event(4, 'rbac_snapshot', {
+      entity_type: 'planner_iteration', entity_id: 'iteration-1', parent_entity_type: 'orchestrator', parent_entity_id: 'planner-1', rbac: audit,
+    })]]) {
+      const state = replayRuntimeJournal(events);
+      const planner = projectTraceStages(state)[0].executorRuns[0];
+      const target = resolveTraceInspectionTarget(state, planner.inspectorKey);
+      expect(target?.tabs.map((item) => item.label)).toContain('Доступ');
+      expect(planner.access?.rows).toContainEqual({ kind: 'Агент', name: 'viewer', allowed: true, reason: 'Разрешён эффективной политикой' });
+      expect(planner.access?.rows).toContainEqual({ kind: 'Агент', name: 'hidden', allowed: false, reason: 'Запрещён RBAC' });
+    }
+  });
+
   it('shows planned tasks and a checkpoint before task execution starts', () => {
     const state = replayRuntimeJournal([
       event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1', iteration_number: 1 }),
@@ -407,7 +426,7 @@ describe('projectTraceStages memory components', () => {
       event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
       event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
       event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker', task_title: 'Выполнение' }),
-      event(4, 'rbac_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', rbac: { allowed: ['worker'] } }),
+      event(4, 'rbac_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', rbac: { agent_access: { slug: 'worker', allowed: true, reason: 'RBAC passed' }, collection_filter: { allowed: ['docs'] } } }),
       event(5, 'budget_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', own: { llm_calls: 1 }, limits: { llm_calls: 2 } }),
       event(6, 'preflight_started', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1' }),
       event(7, 'preflight_completed', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', status: 'ok', missing: { tools: [], collections: [], credentials: [] } }),
@@ -419,8 +438,40 @@ describe('projectTraceStages memory components', () => {
     const executorTarget = resolveTraceInspectionTarget(state, 'agent_execution:agent-1');
     const callTarget = resolveTraceInspectionTarget(state, 'llm_call:llm-1');
     expect(executorTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Результат', 'Промпт', 'Доступ', 'Лимиты', 'Проверка', 'RAW']);
+    if (executorTarget?.kind === 'executor') {
+      expect(executorTarget.executor.access?.rows).toContainEqual({ kind: 'Агент', name: 'worker', allowed: true, reason: 'RBAC passed' });
+      expect(executorTarget.executor.access?.rows).toContainEqual({ kind: 'Коллекция', name: 'docs', allowed: true, reason: 'Доступна выбранному агенту' });
+    }
     expect(callTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Запрос', 'Ответ', 'RAW']);
     expect(stages[0].executorRuns[0].prompt?.text).toBe('prompt');
+  });
+
+  it('shows the RBAC tab only after an access decision is logged', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker' }),
+    ]);
+    const target = resolveTraceInspectionTarget(state, 'agent_execution:agent-1');
+    expect(target?.tabs.map((item) => item.label)).toContain('Инфо');
+    expect(target?.tabs.map((item) => item.label)).not.toContain('Доступ');
+    expect(target?.kind).toBe('executor');
+    if (target?.kind === 'executor') expect(target.executor.access).toBeUndefined();
+  });
+
+  it('shows a denied agent decision even when preflight fails', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker' }),
+      event(4, 'rbac_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', rbac: { agent_access: { slug: 'worker', allowed: false, reason: 'Запрещён runtime RBAC' } } }),
+      event(5, 'preflight_failed', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', reason: 'unavailable' }),
+    ]);
+    const target = resolveTraceInspectionTarget(state, 'agent_execution:agent-1');
+    expect(target?.tabs.map((item) => item.label)).toContain('Доступ');
+    if (target?.kind === 'executor') expect(target.executor.access?.rows).toContainEqual({
+      kind: 'Агент', name: 'worker', allowed: false, reason: 'Запрещён runtime RBAC',
+    });
   });
 
   it('projects agent work statistics and only its configured limits', () => {

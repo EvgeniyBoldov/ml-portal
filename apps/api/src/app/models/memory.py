@@ -54,6 +54,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+from app.models.mixins.lifecycle import LifecycleMixin
 
 
 class FactScope(str, Enum):
@@ -208,7 +209,7 @@ class FactObservation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
-class MemoryItem(Base):
+class MemoryItem(Base, LifecycleMixin):
     """Typed, document-derived semantic memory.
 
     Unlike legacy ``Fact``, a MemoryItem may carry a complete procedure or
@@ -221,7 +222,7 @@ class MemoryItem(Base):
         Index(
             "uq_memory_items_identity", "scope", "item_type",
             text("COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
-            "normalized_subject", unique=True,
+            "normalized_subject", "scope_signature", unique=True,
         ),
         Index("ix_memory_items_project_active", "project_id", "state"),
         Index("ix_memory_items_scope_subject", "scope", "subject"),
@@ -239,6 +240,7 @@ class MemoryItem(Base):
     project_id: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True,
     )
+    scope_signature: Mapped[str] = mapped_column(String(80), nullable=False, default="legacy", server_default="legacy")
     owner_type: Mapped[str] = mapped_column(String(32), nullable=False, default="company", server_default="company")
     owner_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     applicability: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
@@ -285,7 +287,7 @@ class MemoryItemSource(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
-class MemoryClaim(Base):
+class MemoryClaim(Base, LifecycleMixin):
     """One source-backed extraction claim, prior to semantic consolidation."""
 
     __tablename__ = "memory_claims"
@@ -293,7 +295,7 @@ class MemoryClaim(Base):
         Index(
             "uq_memory_claim_source_identity", "document_id", "canonical_checksum", "scope", "item_type",
             text("COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
-            "normalized_subject", unique=True,
+            "normalized_subject", "scope_signature", unique=True,
         ),
         Index("ix_memory_claims_item_state", "memory_item_id", "state"),
         CheckConstraint("scope IN ('company', 'project')", name="ck_memory_claims_scope"),
@@ -302,11 +304,15 @@ class MemoryClaim(Base):
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     memory_item_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("memory_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    approved_candidate_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
     document_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=False, index=True)
     canonical_checksum: Mapped[str] = mapped_column(String(128), nullable=False)
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
     item_type: Mapped[str] = mapped_column(String(32), nullable=False)
     project_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    scope_signature: Mapped[str] = mapped_column(String(80), nullable=False, default="legacy", server_default="legacy")
     # NULL means company-visible source; a value means evidence available
     # only through that tenant's local document scope.
     visibility_tenant_id: Mapped[Optional[UUID]] = mapped_column(

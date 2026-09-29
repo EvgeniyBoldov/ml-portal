@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse
@@ -61,6 +62,26 @@ DEFAULT_SEARCH_OBJECT_TYPES = (
     "ipam.ipaddress",
     "ipam.prefix",
 )
+
+# NetBox API slugs are not reliably derived from Django model names by adding
+# an "s". Keep the documented inventory types explicit so a typo cannot make
+# an IPAM lookup look like an empty search result.
+OBJECT_ENDPOINTS = {
+    "dcim.device": "/api/dcim/devices/",
+    "dcim.site": "/api/dcim/sites/",
+    "dcim.rack": "/api/dcim/racks/",
+    "dcim.interface": "/api/dcim/interfaces/",
+    "dcim.cable": "/api/dcim/cables/",
+    "dcim.devicerole": "/api/dcim/device-roles/",
+    "dcim.manufacturer": "/api/dcim/manufacturers/",
+    "dcim.devicetype": "/api/dcim/device-types/",
+    "ipam.ipaddress": "/api/ipam/ip-addresses/",
+    "ipam.prefix": "/api/ipam/prefixes/",
+    "ipam.vlan": "/api/ipam/vlans/",
+    "ipam.vrf": "/api/ipam/vrfs/",
+    "virtualization.virtualmachine": "/api/virtualization/virtual-machines/",
+    "virtualization.vminterface": "/api/virtualization/interfaces/",
+}
 
 
 def _jsonrpc_ok(rpc_id: Any, result: Any) -> dict[str, Any]:
@@ -206,12 +227,16 @@ async def _netbox_get(
 def _resolve_object_path(object_type: str) -> str:
     """Resolve a canonical object type to a safe NetBox API path."""
     normalized = str(object_type or "").strip()
-    if not normalized or "." not in normalized:
+    if not re.fullmatch(r"[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*", normalized):
         raise ValueError("object_type must be in app.model format, e.g. dcim.device")
 
     plugin_path = PLUGIN_ENDPOINTS.get(normalized)
     if plugin_path:
         return plugin_path
+
+    standard_path = OBJECT_ENDPOINTS.get(normalized)
+    if standard_path:
+        return standard_path
 
     if normalized.startswith("dcbox."):
         raise ValueError(f"Unknown DCBox object type: {normalized}")
@@ -231,7 +256,17 @@ def _search_object_types(object_types: Any) -> list[str]:
         return list(DEFAULT_SEARCH_OBJECT_TYPES)
     if not isinstance(object_types, list):
         raise ValueError("object_types must be an array of app.model values")
-    return [str(object_type).strip() for object_type in object_types if str(object_type).strip()]
+    selected = [str(object_type).strip() for object_type in object_types if str(object_type).strip()]
+    if len(selected) > 5:
+        raise ValueError("netbox_search_objects supports at most five object_types per call")
+    return selected
+
+
+def _page_offset(arguments: Dict[str, Any]) -> int:
+    offset = int(arguments.get("offset") or 0)
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    return offset
 
 
 def _slim_result(obj: Any, max_results: int = 50) -> Any:
@@ -245,10 +280,13 @@ def _slim_result(obj: Any, max_results: int = 50) -> Any:
         # Keep display_url at top level so LLM can reference it
         if k in ("id", "url", "display_url", "display", "name", "slug", "status",
                  "count", "next", "previous", "results", "object_type",
+                 "searched_types", "errors", "error", "truncated",
                  "site", "rack", "role", "tenant", "primary_ip", "primary_ip4",
                  "region", "physical_address", "description", "comments",
                  "device_type", "platform", "serial", "asset_tag",
-                 "vlan_group", "vid", "prefix", "family",
+                 "vlan_group", "vid", "prefix", "family", "address",
+                 "vrf", "vlan", "scope", "assigned_object", "dns_name",
+                 "gateway", "utilization", "tags", "custom_fields",
                  "vcpus", "memory", "disk", "cluster"):
             if isinstance(v, dict):
                 # Flatten nested objects to {id, name, slug, url}
@@ -263,6 +301,9 @@ def _as_tool_result(data: Dict[str, Any]) -> Dict[str, Any]:
     results = data.get("results")
     if isinstance(results, list):
         slimmed = {"count": data.get("count", len(results)), "results": _slim_result(results)}
+        for key in ("errors", "searched_types"):
+            if key in data:
+                slimmed[key] = _slim_result(data[key])
     else:
         slimmed = _slim_result(data)
     return {
@@ -316,7 +357,7 @@ async def mcp_root(
                     "tools": [
                         {
                             "name": "netbox_get_device",
-                            "description": "Get a single NetBox device by its exact hostname. Returns device details: role, site, rack, status, primary_ip, interfaces. Use when you know the exact device name.",
+                            "description": "Look up a device by exact name. Returns the matching device record; interfaces are separate dcim.interface objects and require netbox_get_objects. A zero count means no exact match.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -338,6 +379,7 @@ async def mcp_root(
                                 "properties": {
                                     "query": {"type": "string", "description": "Search string matched against device name, description"},
                                     "limit": {"type": "integer", "default": 20, "description": "Max results (1-200)"},
+                                    "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "Page offset"},
                                 },
                                 "required": ["query"],
                             },
@@ -349,11 +391,12 @@ async def mcp_root(
                         },
                         {
                             "name": "netbox_list_sites",
-                            "description": "List all sites (datacenters/offices) in NetBox. Returns site name, slug, status, region, physical_address, device count. Use to enumerate available locations before filtering devices by site.",
+                            "description": "List a page of sites (datacenters/offices). Returns site records and NetBox count/next fields; does not calculate device counts. Use site slugs from results when filtering other objects.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "limit": {"type": "integer", "default": 50, "description": "Max results"},
+                                    "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "Page offset"},
                                 },
                             },
                             "annotations": {
@@ -365,22 +408,21 @@ async def mcp_root(
                         {
                             "name": "netbox_get_objects",
                             "description": (
-                                "Fetch objects from NetBox by type with optional filters. "
-                                "object_type format: app.model. "
-                                "Common types: dcim.device, dcim.site, dcim.rack, dcim.interface, dcim.cable, "
-                                "ipam.ipaddress, ipam.prefix, ipam.vlan, ipam.vrf, "
-                                "virtualization.virtualmachine, virtualization.vminterface, "
-                                "dcim.devicerole, dcim.manufacturer, dcim.devicetype. "
-                                "Common filters: site (slug), rack (name), role (slug), status (active/planned/staged/failed/decommissioning), "
-                                "tenant (slug), tag (slug), q (search string), name (exact). "
-                                "Example: object_type=dcim.device, filters={\"site\": \"dc1\", \"status\": \"active\"}"
+                                "Query one NetBox object type using its API list filters. "
+                                "Use ipam.prefix with filters.prefix for an exact CIDR, or ipam.ipaddress with filters.address for an exact IP. "
+                                "For interfaces use dcim.interface and filter by device. "
+                                "Supported standard types: dcim.device/site/rack/interface/cable/devicerole/manufacturer/devicetype; "
+                                "ipam.ipaddress/prefix/vlan/vrf; virtualization.virtualmachine/vminterface. "
+                                "Plugin types use their published names. Filters depend on object type; an HTTP error is not an empty result. "
+                                "Follow count/next and use offset for additional pages."
                             ),
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "object_type": {"type": "string", "description": "NetBox object type in app.model format"},
-                                    "filters": {"type": "object", "description": "Key-value filter pairs (site, rack, role, status, tag, q, name, etc.)"},
+                                    "object_type": {"type": "string", "description": "NetBox object type, e.g. ipam.prefix or dcim.device"},
+                                    "filters": {"type": "object", "description": "NetBox API query filters for this type; e.g. prefix for ipam.prefix, address for ipam.ipaddress, device for dcim.interface, site/status for dcim.device"},
                                     "limit": {"type": "integer", "default": 50, "description": "Max results (1-200)"},
+                                    "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "Page offset; advance when next is present"},
                                 },
                                 "required": ["object_type"],
                             },
@@ -393,12 +435,9 @@ async def mcp_root(
                         {
                             "name": "netbox_search_objects",
                             "description": (
-                                "Full-text search across NetBox object types. "
-                                "When object_types specified, queries each type endpoint with ?q= filter and returns combined results. "
-                                "Without object_types searches the standard device, rack, site, IP-address and prefix endpoints. "
-                                "Plugin object types must be passed explicitly. "
-                                "Useful for quick lookup when you don't know the exact type. "
-                                "For targeted queries with filters prefer netbox_get_objects."
+                                "Search up to five object types with each endpoint's q filter. Defaults to device, rack, site, IP address and prefix. "
+                                "Returns results and per-type errors; an omitted or failed type must not be treated as an empty match. "
+                                "For exact CIDR/IP or relationship queries use netbox_get_objects with type-specific filters."
                             ),
                             "inputSchema": {
                                 "type": "object",
@@ -407,9 +446,10 @@ async def mcp_root(
                                     "object_types": {
                                         "type": "array",
                                         "items": {"type": "string"},
-                                        "description": "Optional object types to search (e.g. [\"dcim.device\", \"ipam.ipaddress\"] or [\"dcbox.capacity\"]). Leave empty to search standard NetBox resource types.",
+                                        "description": "At most five object types, e.g. ipam.prefix and ipam.ipaddress; omitted means the five default types",
                                     },
                                     "limit": {"type": "integer", "default": 20, "description": "Max results per type"},
+                                    "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "Page offset applied to each type"},
                                 },
                                 "required": ["q"],
                             },
@@ -449,7 +489,7 @@ async def mcp_root(
                     base_url=base_url,
                     token=token,
                     path="/api/dcim/devices/",
-                    params={"q": query, "limit": max(1, min(limit, 200))},
+                    params={"q": query, "limit": max(1, min(limit, 200)), "offset": _page_offset(arguments)},
                 )
                 return _jsonrpc_ok(rpc_id, _as_tool_result(data))
 
@@ -459,7 +499,7 @@ async def mcp_root(
                     base_url=base_url,
                     token=token,
                     path="/api/dcim/sites/",
-                    params={"limit": max(1, min(limit, 200))},
+                    params={"limit": max(1, min(limit, 200)), "offset": _page_offset(arguments)},
                 )
                 return _jsonrpc_ok(rpc_id, _as_tool_result(data))
 
@@ -468,9 +508,12 @@ async def mcp_root(
                 if not object_type or "." not in object_type:
                     raise ValueError("object_type must be in app.model format, e.g. dcim.device")
                 limit = int(arguments.get("limit") or 50)
+                offset = _page_offset(arguments)
                 filters = arguments.get("filters") or {}
-                params: Dict[str, Any] = {"limit": max(1, min(limit, 200))}
-                params.update({k: v for k, v in filters.items() if v is not None})
+                if not isinstance(filters, dict):
+                    raise ValueError("filters must be an object")
+                params: Dict[str, Any] = {k: v for k, v in filters.items() if v is not None and k not in {"limit", "offset"}}
+                params.update({"limit": max(1, min(limit, 200)), "offset": offset})
                 data = await _netbox_get(
                     base_url=base_url,
                     token=token,
@@ -481,25 +524,38 @@ async def mcp_root(
 
             if tool_name == "netbox_search_objects":
                 q = str(arguments.get("q") or "").strip()
+                if not q:
+                    raise ValueError("q is required")
                 object_types = _search_object_types(arguments.get("object_types"))
                 limit = int(arguments.get("limit") or 20)
+                offset = _page_offset(arguments)
                 results = []
-                for ot in object_types[:5]:
-                    params: Dict[str, Any] = {"limit": max(1, min(limit, 100))}
+                errors = []
+                for ot in object_types:
+                    params: Dict[str, Any] = {"limit": max(1, min(limit, 100)), "offset": offset}
                     if q:
                         params["q"] = q
-                    path = _resolve_object_path(ot)
                     try:
+                        path = _resolve_object_path(ot)
                         page = await _netbox_get(
                             base_url=base_url,
                             token=token,
                             path=path,
                             params=params,
                         )
-                        results.append({"object_type": ot, "results": page.get("results", []), "count": page.get("count", 0)})
-                    except Exception:
-                        pass
-                return _jsonrpc_ok(rpc_id, _as_tool_result({"results": results}))
+                        results.append({"object_type": ot, "results": page.get("results", []), "count": page.get("count", 0), "next": page.get("next")})
+                    except httpx.HTTPStatusError as exc:
+                        errors.append({"object_type": ot, "status": exc.response.status_code, "error": "NetBox HTTP error"})
+                    except (httpx.RequestError, ValueError) as exc:
+                        errors.append({"object_type": ot, "error": type(exc).__name__})
+                data = {"results": results, "errors": errors, "searched_types": object_types}
+                if not results:
+                    return _jsonrpc_ok(rpc_id, {
+                        "content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False)}],
+                        "structuredContent": data,
+                        "isError": True,
+                    })
+                return _jsonrpc_ok(rpc_id, _as_tool_result(data))
 
             return _jsonrpc_err(rpc_id, -32005, f"Tool '{tool_name}' not found")
 
@@ -510,7 +566,7 @@ async def mcp_root(
             {"content": [{"type": "text", "text": str(exc)}], "isError": True},
         )
     except httpx.HTTPStatusError as exc:
-        message = f"NetBox HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+        message = f"NetBox HTTP {exc.response.status_code} at {exc.request.url.path}; query failed, not an empty result"
         return _jsonrpc_ok(
             rpc_id,
             {"content": [{"type": "text", "text": message}], "isError": True},

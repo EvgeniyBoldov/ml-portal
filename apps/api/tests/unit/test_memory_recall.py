@@ -19,7 +19,10 @@ def _prepared(*, reasons: list[str], intent: str = "informational") -> PreparedM
              "value": "{\"steps\":[\"backup\"]}", "source_references": [{"section_id": "section-1", "label": "VLAN change"}]},
         ],
         selected_fact_count=1, selected_project_count=1, selected_project_fact_count=1,
-        selected_glossary_count=1, ambiguities=[], resolved_terms=["Сфера"],
+        selected_glossary_count=1, ambiguities=[], resolved_terms=[{
+            "id": "term-1", "term": "Сфера", "definition": "Корпоративная платформа",
+            "aliases": [], "source_references": [],
+        }],
         resolved_projects=["network"], needs_source_check=bool(reasons),
         source_check_reasons=reasons, intent=intent,
     )

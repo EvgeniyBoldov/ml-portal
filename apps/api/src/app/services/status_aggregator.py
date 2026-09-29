@@ -50,6 +50,20 @@ def calculate_aggregate_status(
            - иначе (нет completed, всё failed/cancelled) → failed
     """
     
+    # Archive is a document-level terminal state.  It must be reflected in
+    # agg_status as well as effective_status, since collection cards consume
+    # agg_status directly.
+    if archived:
+        return "archived", {
+            "pipeline": {node.node_key: node.status for node in pipeline_nodes},
+            "embedding": {node.node_key: node.status for node in embedding_nodes},
+            "index": {node.node_key: node.status for node in (index_nodes or [])},
+            "policy": "document_archived",
+            "effective_status": "archived",
+            "effective_reason": "document_archived",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     # Check pipeline status first
     pipeline_statuses = {node.node_key: node.status for node in pipeline_nodes}
     

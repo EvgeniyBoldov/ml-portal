@@ -15,6 +15,8 @@ from app.services.chat_context_contracts import ChatContextApplyReceipt, ChatCon
 from app.services.chat_context_reconciler import ChatContextReconciler
 from app.runtime.context_outcome import RuntimeOutcomeProjection
 from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
+from app.models.document_memory_staging import GlossaryTerm
+from app.services.glossary_service import GlossaryService
 from app.core.config import get_settings
 
 logger = get_logger(__name__)
@@ -99,6 +101,25 @@ class ChatContextService:
             chat_id=chat_id, branch_id=branch_id, kind_limits=per_kind_limits,
         )
         resolved_artifacts = {}
+        glossary_ids = [
+            str((item.payload or {}).get("glossary_term_id") or "")
+            for item in items if item.kind == "term_binding"
+        ]
+        published_term_ids = set()
+        if glossary_ids:
+            from sqlalchemy import select
+            from uuid import UUID
+            parsed_ids = []
+            for value in glossary_ids:
+                try:
+                    parsed_ids.append(UUID(value))
+                except ValueError:
+                    continue
+            if parsed_ids:
+                published = GlossaryService.published_terms_query().with_only_columns(GlossaryTerm.id)
+                published_term_ids = {str(value) for value in (await self.session.execute(
+                    select(GlossaryTerm.id).where(GlossaryTerm.id.in_(parsed_ids), GlossaryTerm.id.in_(published))
+                )).scalars().all()}
         if owner_id and tenant_id:
             artifact_ids = [
                 str((item.payload or {}).get("artifact_id") or item.item_key)
@@ -112,6 +133,8 @@ class ChatContextService:
             if count >= per_kind_limits.get(item.kind, 1):
                 continue
             payload = dict(item.payload or {})
+            if item.kind == "term_binding" and str(payload.get("glossary_term_id") or "") not in published_term_ids:
+                continue
             if item.kind == "artifact_ref":
                 if not owner_id or not tenant_id:
                     continue

@@ -2,7 +2,8 @@
 
 ## Start Here
 - [Platform Overview](PLATFORM_OVERVIEW.md) — обзор платформы и бизнес-контуров
-- [Glossary](GLOSSARY.md) — основные термины
+- [Корпоративный глоссарий](GLOSSARY.md) — определения из документов
+- [Термины разработки](DEVELOPER_TERMS.md) — понятия реализации портала
 
 ## Admin Guides
 - [Admin Docs Index](admin/README.md) — навигация для администраторов
@@ -25,6 +26,7 @@
 - [DCBox MCP](architecture/DCBOX_MCP.md)
 - [Sandbox Runtime](architecture/SANDBOX_RUNTIME.md)
 - [Runtime Memory](architecture/RUNTIME_MEMORY.md)
+- [Memory](architecture/MEMORY.md) — текущие диалоговые и документные memory-контуры
 - [Chat Context Memory](architecture/CHAT_CONTEXT_MEMORY.md)
 - [Memory Risks and Accepted Decisions](architecture/MEMORY_RISKS.md)
 - [Chat File Attachments](architecture/CHAT_FILE_ATTACHMENTS.md)

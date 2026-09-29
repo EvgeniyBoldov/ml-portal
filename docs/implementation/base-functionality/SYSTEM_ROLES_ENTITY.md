@@ -27,13 +27,14 @@ report a limitation.
 ### Memory Preparer
 
 Memory Preparer selects bounded indexes of confirmed facts, projects and
-glossary entries for the planner. It neither writes facts nor decides routing,
+semantic memory for the planner. Runtime selects published document glossary
+terms by name and aliases. Memory Preparer neither writes facts nor decides routing,
 task lifecycle or user-visible answers. A failure produces an empty optional
 memory projection rather than failing the run.
 
 ### Fact Extractor and Fact Compactor
 
-These post-turn roles prepare evidence-backed durable-memory candidates.
+These post-turn roles prepare evidence-backed user and tenant fact candidates.
 Extractor identifies supported candidate facts; Compactor deduplicates and
 selects a compaction action. `FactReconciler`, not an LLM role, owns durable
 persistence. Neither role changes the execution plan or acts as evidence for a

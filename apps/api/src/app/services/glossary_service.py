@@ -1,116 +1,93 @@
-"""Glossary catalogue operations; matching is deliberately not part of v1."""
+"""Published company definitions backed by approved global documents."""
 from __future__ import annotations
 
-from uuid import UUID
+import re
+from collections import Counter
+from collections.abc import Iterable
 
-from sqlalchemy import or_, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.models.glossary import GlossaryEntry, GlossaryObservation, GlossaryScope, GlossaryStatus
-from app.models.project import Project
+from app.models.document_memory_staging import DocumentMemorySnapshot, GlossaryTerm, MemoryExtractionCandidate
+from app.models.rag import RAGDocument
+
+
+def matched_glossary_forms(text: str, forms: Iterable[str]) -> list[str]:
+    normalized = text.casefold()
+    values = {str(form).strip().casefold() for form in forms if str(form).strip()}
+    return [form for form in sorted(values) if re.search(rf"(?<!\w){re.escape(form)}(?!\w)", normalized)]
+
+
+def matching_glossary_terms(
+    text: str, terms: list[dict[str, object]], *, limit: int = 24,
+) -> list[dict[str, object]]:
+    return [term for term in terms if matched_glossary_forms(
+        text, [str(term.get("term") or ""), *(str(alias) for alias in term.get("aliases") or [])],
+    )][:limit]
+
+
+def ambiguous_glossary_aliases(text: str, terms: list[dict[str, object]]) -> list[str]:
+    matched = [form for term in terms for form in matched_glossary_forms(
+        text, [str(term.get("term") or ""), *(str(alias) for alias in term.get("aliases") or [])],
+    )]
+    return sorted(form for form, count in Counter(matched).items() if count > 1)
 
 
 class GlossaryService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def list_active(self) -> list[GlossaryEntry]:
-        rows = await self._session.execute(
-            select(GlossaryEntry).where(GlossaryEntry.is_active.is_(True)).order_by(GlossaryEntry.canonical_term)
+    @staticmethod
+    def published_terms_query(*, require_active: bool = True):
+        newer = aliased(DocumentMemorySnapshot)
+        query = select(GlossaryTerm).join(
+            MemoryExtractionCandidate, GlossaryTerm.approved_candidate_id == MemoryExtractionCandidate.id,
+        ).join(
+            DocumentMemorySnapshot, MemoryExtractionCandidate.snapshot_id == DocumentMemorySnapshot.id,
+        ).join(
+            RAGDocument, DocumentMemorySnapshot.document_id == RAGDocument.id,
+        ).where(
+            func.btrim(GlossaryTerm.definition) != "",
+            MemoryExtractionCandidate.resolution_status == "resolved",
+            MemoryExtractionCandidate.candidate_type == "term",
+            func.jsonb_array_length(MemoryExtractionCandidate.evidence_section_ids) > 0,
+            DocumentMemorySnapshot.status.notin_(("superseded", "failed", "rejected")),
+            ~exists(select(newer.id).where(
+                newer.document_id == DocumentMemorySnapshot.document_id,
+                newer.created_at > DocumentMemorySnapshot.created_at,
+            )),
+            RAGDocument.scope == "global",
+            RAGDocument.status != "archived",
         )
-        return list(rows.scalars().all())
+        return query.where(GlossaryTerm.is_active.is_(True)) if require_active else query
 
-    async def list_project_terms(self, *, limit: int | None = None) -> list[dict[str, object]]:
-        """Thin glossary projection over the canonical project catalogue."""
-        stmt = select(Project).where(Project.is_active.is_(True)).order_by(Project.name)
+    async def list_terms(self) -> list[dict[str, object]]:
+        rows = await self._session.execute(select(GlossaryTerm).order_by(GlossaryTerm.canonical_term))
+        terms = rows.scalars().all()
+        return [{
+            "id": term.id,
+            "canonical_term": term.canonical_term,
+            "normalized_term": term.normalized_term,
+            "aliases": list(term.aliases or []),
+            "is_active": term.is_active,
+            "definition": term.definition,
+            "approved_candidate_id": term.approved_candidate_id,
+            "created_at": term.created_at,
+            "updated_at": term.updated_at,
+        } for term in terms]
+
+    async def list_confirmed_terms(self, *, limit: int | None = None) -> list[dict[str, object]]:
+        """Return approved lexical identities and their canonical definitions."""
+        stmt = self.published_terms_query().with_only_columns(
+            GlossaryTerm, MemoryExtractionCandidate, DocumentMemorySnapshot,
+        ).order_by(GlossaryTerm.canonical_term)
         if limit is not None:
             stmt = stmt.limit(limit)
         rows = await self._session.execute(stmt)
-        return [
-            {"id": item.id, "key": item.key, "name": item.name, "aliases": list(item.aliases or [])}
-            for item in rows.scalars().all()
-        ]
-
-    async def list_confirmed_terms(self, *, tenant_id: UUID | None, limit: int | None = None) -> list[dict[str, object]]:
-        """Terms visible to one department: global plus its own terminology.
-
-        A local document is evidence for its tenant only; its terminology must
-        not be promoted merely because extraction succeeded.
-        """
-        scope_filter = GlossaryEntry.scope == GlossaryScope.GLOBAL.value
-        if tenant_id is not None:
-            scope_filter = or_(
-                scope_filter,
-                (GlossaryEntry.scope == GlossaryScope.TENANT.value) & (GlossaryEntry.tenant_id == tenant_id),
-            )
-        rows = await self._session.execute(
-            select(GlossaryEntry, GlossaryObservation)
-            .outerjoin(GlossaryObservation, GlossaryObservation.entry_id == GlossaryEntry.id)
-            .where(
-                GlossaryEntry.is_active.is_(True),
-                scope_filter,
-            ).order_by(GlossaryEntry.canonical_term)
-        )
-        grouped: dict[UUID, tuple[GlossaryEntry, list[GlossaryObservation]]] = {}
-        for entry, claim in rows.all():
-            current = grouped.setdefault(entry.id, (entry, []))
-            if claim is not None and claim.state == "active":
-                current[1].append(claim)
-        result: list[dict[str, object]] = []
-        for entry, claims in grouped.values():
-            # Legacy/manual entries without source claims retain their explicit
-            # ownership contract. Document-derived entries must have at least
-            # one source claim visible to this tenant.
-            visible = [
-                claim for claim in claims
-                if claim.visibility_tenant_id is None or claim.visibility_tenant_id == tenant_id
-            ]
-            if claims and not visible:
-                continue
-            definitions = {str(claim.definition or "").strip() for claim in visible}
-            if len(definitions) > 1:
-                continue
-            # A document-backed term is resolved from the caller-visible
-            # evidence.  Its global aggregate status may include a private,
-            # conflicting claim from another department and must not suppress
-            # this tenant's consistent meaning.  Manual terms retain their
-            # explicit confirmation gate.
-            if not visible and entry.status != GlossaryStatus.CONFIRMED.value:
-                continue
-            winner = visible[0] if visible else None
-            result.append({
-                "id": entry.id, "term": entry.canonical_term,
-                "description": (winner.definition if winner else entry.description) or entry.canonical_term,
-                "aliases": list(winner.aliases if winner else entry.aliases or []), "scope": entry.scope,
-                "entity_type": entry.entity_type, "entity_id": entry.entity_id,
-                "project_id": entry.project_id,
-            })
-            if limit is not None and len(result) >= limit:
-                break
-        return result
-
-    async def create(
-        self,
-        *,
-        scope: GlossaryScope,
-        canonical_term: str,
-        aliases: list[str],
-        entity_type: str,
-        entity_id: str | None,
-        description: str | None,
-        tenant_id: UUID | None,
-        project_id: UUID | None,
-    ) -> GlossaryEntry:
-        entry = GlossaryEntry(
-            scope=scope.value,
-            canonical_term=canonical_term,
-            aliases=aliases,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            description=description,
-            tenant_id=tenant_id,
-            project_id=project_id,
-        )
-        self._session.add(entry)
-        await self._session.flush()
-        return entry
+        return [{"id": term.id, "term": term.canonical_term,
+                 "definition": term.definition,
+                 "source_references": [{
+                     "document_id": str(snapshot.document_id), "section_id": section_id,
+                 } for section_id in list(candidate.evidence_section_ids or [])[:3]],
+                 "aliases": list(term.aliases or [])} for term, candidate, snapshot in rows.all()]

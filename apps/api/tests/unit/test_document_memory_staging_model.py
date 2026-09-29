@@ -1,9 +1,6 @@
 """Contract coverage for the P0 document-memory staging schema."""
 from app.models.document_memory_staging import (
     DocumentMemorySnapshot,
-    GlossaryMeaning,
-    GlossaryMeaningProjectBinding,
-    GlossaryMeaningSource,
     GlossaryTerm,
     MemoryCandidateProjectBinding,
     MemoryCandidateDecision,
@@ -30,11 +27,8 @@ def test_candidate_keeps_scope_resolution_separate_from_project_bindings() -> No
     assert "ck_memory_candidate_project_binding_role" in _constraint_names(MemoryCandidateProjectBinding)
 
 
-def test_glossary_term_is_separate_from_its_scoped_meanings_and_evidence() -> None:
-    assert {"canonical_term", "normalized_term", "aliases"} <= set(GlossaryTerm.__table__.c.keys())
-    assert {"term_id", "definition", "scope_candidate", "resolution_status"} <= set(GlossaryMeaning.__table__.c.keys())
-    assert {"meaning_id", "project_id", "status", "method"} <= set(GlossaryMeaningProjectBinding.__table__.c.keys())
-    assert {"meaning_id", "candidate_id", "legacy_glossary_observation_id", "evidence_section_ids"} <= set(GlossaryMeaningSource.__table__.c.keys())
+def test_glossary_term_binds_approved_document_definition() -> None:
+    assert {"canonical_term", "normalized_term", "definition", "aliases", "approved_candidate_id"} <= set(GlossaryTerm.__table__.c.keys())
 
 
 def test_snapshot_is_a_document_revision_not_a_public_memory_item() -> None:

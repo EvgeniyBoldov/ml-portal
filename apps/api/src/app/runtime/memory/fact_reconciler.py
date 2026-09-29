@@ -98,6 +98,12 @@ class FactReconciler:
         decisions: list[MemoryDecision] = []
         for candidate in candidates:
             compaction_action = str(candidate.metadata.get("compaction_action") or "add")
+            if candidate.kind != "fact":
+                decisions.append(MemoryDecision(
+                    "fact_compactor", "reconciliation", "rejected", "unsupported_kind",
+                    (candidate,), action=compaction_action,
+                ))
+                continue
             owner_type, owner_id = self._owner_for(candidate, user_id=user_id, tenant_id=tenant_id)
             if owner_id is None:
                 decisions.append(MemoryDecision("fact_compactor", "reconciliation", "rejected", "missing_owner", (candidate,), action=compaction_action))

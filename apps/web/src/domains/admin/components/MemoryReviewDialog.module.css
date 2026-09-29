@@ -1,0 +1,52 @@
+.body { max-height: min(76vh, 900px); overflow-y: auto; }
+.layout { display: grid; gap: 20px; color: var(--text); }
+.intro { padding: 4px 2px 0; }
+.intro h2 { margin: 10px 0 5px; font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
+.intro p, .sectionHead p, .hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.eyebrow { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.section { display: grid; gap: 16px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); }
+.sectionHead { display: flex; align-items: flex-start; gap: 12px; }
+.sectionHead h3 { margin: 0 0 3px; font-size: 16px; }
+.number { display: grid; flex: 0 0 28px; height: 28px; place-items: center; border-radius: 50%; background: var(--bg-hover); color: var(--text); font-weight: 700; font-size: 13px; }
+.fields { display: grid; gap: 15px; }
+.optional { border-top: 1px solid var(--border); padding-top: 12px; }
+.optional summary { color: var(--primary); cursor: pointer; font-size: 13px; font-weight: 600; }
+.optional > .fields { padding-top: 14px; }
+.field { display: grid; gap: 6px; min-width: 0; font-size: 13px; font-weight: 600; }
+.field em { color: var(--danger); font-style: normal; }
+.field textarea, .field select { box-sizing: border-box; width: 100%; min-height: 38px; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--text); font: inherit; font-weight: 400; resize: vertical; }
+.field textarea:focus, .field select:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+.field small { color: var(--muted); font-weight: 400; }
+.warning { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--danger); border-radius: var(--radius); color: var(--text); background: var(--bg-hover); font-size: 13px; }
+.warning strong { color: var(--danger); }
+.subsection { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); }
+.subsectionHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.stepCard { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-hover); }
+.check, .modeChoices label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.modeChoices { display: flex; flex-wrap: wrap; gap: 16px; }
+.scopeChoices { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.choice, .choiceActive { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+.choiceActive { border-color: var(--primary); background: var(--bg-hover); }
+.choice input, .choiceActive input { margin-top: 3px; }
+.choice span, .choiceActive span { display: grid; gap: 3px; }
+.choice strong, .choiceActive strong { font-size: 13px; }
+.choice small, .choiceActive small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.scopePicker { display: grid; gap: 12px; }
+.selectedScopes { display: flex; flex-wrap: wrap; gap: 6px; }
+.scopeList { display: grid; gap: 12px; max-height: 260px; overflow: auto; }
+.scopeList fieldset { display: grid; gap: 4px; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+.scopeList legend { padding: 0 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.scopeOption { display: flex; align-items: flex-start; gap: 8px; padding: 5px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
+.scopeOption:hover { background: var(--bg-hover); }
+.scopeOption span { display: grid; gap: 2px; }
+.scopeOption small { color: var(--muted); }
+.evidence { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; }
+.source { display: grid; gap: 10px; font-size: 13px; }
+.excerpt { margin: 0; padding: 12px 14px; border-left: 3px solid var(--primary); border-radius: var(--radius); background: var(--bg-hover); }
+.excerpt span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; }
+.excerpt p { max-height: 180px; margin: 0; overflow: auto; white-space: pre-wrap; line-height: 1.55; }
+.details { border-top: 1px solid var(--border); padding-top: 10px; font-size: 12px; }
+.details summary { color: var(--primary); cursor: pointer; }
+.details div { margin-top: 10px; }
+.details p { margin: 3px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 640px) { .section { padding: 13px; } .scopeChoices { grid-template-columns: 1fr; } }

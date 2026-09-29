@@ -1,7 +1,7 @@
 """Conflict detection for the isolated document-memory staging area."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Awaitable, Callable, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -16,8 +16,9 @@ from app.models.document_memory_staging import (
     MemoryExtractionCandidate,
 )
 from app.models.system_llm_role import SystemLLMRoleType
+from app.models.memory_scope import MemoryCandidateScope, MemoryScope
 from app.runtime.llm.structured import StructuredLLMCall
-from app.runtime.memory.shadow_study_prompts import SHADOW_MEMORY_CONFLICT_PROMPT
+from app.runtime.memory.shadow_study_prompts import document_memory_prompt
 from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService
 
 
@@ -32,10 +33,16 @@ class ShadowMemoryReviewService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def check_snapshot(self, snapshot: DocumentMemorySnapshot) -> dict[str, int]:
+    async def check_snapshot(
+        self,
+        snapshot: DocumentMemorySnapshot,
+        *,
+        agent_execution_id: str | None = None,
+        event_sink: Callable[[Any], Awaitable[Any]] | None = None,
+    ) -> dict[str, int]:
         candidates = list((await self._session.execute(select(MemoryExtractionCandidate).where(
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
-            MemoryExtractionCandidate.resolution_status == "needs_review",
+            MemoryExtractionCandidate.resolution_status.in_(("extracted", "needs_review")),
         ))).scalars().all())
         counts = {"conflicts": 0, "duplicates": 0, "autoeligible": 0}
         for candidate in candidates:
@@ -54,9 +61,16 @@ class ShadowMemoryReviewService:
                 ),
             ).limit(12))).scalars().all())
             for existing in matches:
+                if candidate.candidate_type == "term":
+                    # The single canonical definition is checked during
+                    # publication. Terms have no scoped meanings to classify.
+                    continue
                 if existing.snapshot_id == snapshot.id and str(existing.id) <= str(candidate.id):
                     continue
-                kind, rationale = await self._classify(candidate, existing, snapshot.visibility_tenant_id)
+                kind, rationale = await self._classify(
+                    candidate, existing, snapshot.visibility_tenant_id,
+                    agent_execution_id=agent_execution_id, event_sink=event_sink,
+                )
                 case = MemoryConflictCase(
                     visibility_tenant_id=snapshot.visibility_tenant_id,
                     kind=kind, rationale=rationale[:2000],
@@ -97,28 +111,52 @@ class ShadowMemoryReviewService:
         candidate: MemoryExtractionCandidate,
         existing: MemoryExtractionCandidate,
         tenant_id: UUID | None,
+        *,
+        agent_execution_id: str | None = None,
+        event_sink: Callable[[Any], Awaitable[Any]] | None = None,
     ) -> tuple[str, str]:
-        if candidate.content_text == existing.content_text and candidate.scope_candidate == existing.scope_candidate:
+        candidate_scopes = await self._scope_keys(candidate.id)
+        existing_scopes = await self._scope_keys(existing.id)
+        if (candidate.content_text == existing.content_text
+                and candidate.scope_candidate == existing.scope_candidate
+                and candidate_scopes == existing_scopes):
             return "duplicate", "Exact canonical content in the same proposed scope."
+        if candidate_scopes != existing_scopes:
+            return "scope_override", "Same subject has different proposed applicability; review both scope sets."
         if {candidate.scope_candidate, existing.scope_candidate} == {"global", "project"}:
             return "scope_override", "Same subject has global and project-specific candidates; review applicability."
         try:
-            result = await StructuredLLMCall(session=self._session, llm_client=get_llm_client()).invoke(
+            structured = StructuredLLMCall(session=self._session, llm_client=get_llm_client())
+            role_config = await structured.role_service.get_role_config(SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR)
+            result = await structured.invoke(
                 role=SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR,
-                system_prompt=SHADOW_MEMORY_CONFLICT_PROMPT,
+                system_prompt=document_memory_prompt(role_config.get("extras"), stage="conflict"),
                 payload={
-                    "candidate": _candidate_payload(candidate),
-                    "existing": _candidate_payload(existing),
+                    "candidate": {**_candidate_payload(candidate), "scope_keys": sorted(candidate_scopes)},
+                    "existing": {**_candidate_payload(existing), "scope_keys": sorted(existing_scopes)},
                 },
                 schema=_ConflictOutput,
                 tenant_id=tenant_id,
                 use_default_model=True,
+                agent_execution_id=agent_execution_id,
+                trace_parent_entity_type="agent_execution",
+                trace_parent_entity_id=agent_execution_id,
+                event_sink=event_sink,
             )
             return result.value.kind, result.value.rationale
         except Exception:
             # Failure must never silently turn an unknown contradiction into a
             # publishable fact.
             return "insufficient_evidence", "Conflict classifier unavailable; manual review required."
+
+    async def _scope_keys(self, candidate_id: UUID) -> set[str]:
+        rows = (await self._session.execute(select(MemoryScope.key).join(
+            MemoryCandidateScope, MemoryCandidateScope.scope_id == MemoryScope.id,
+        ).where(MemoryCandidateScope.candidate_id == candidate_id,
+                MemoryCandidateScope.role == "applies_to",
+                MemoryCandidateScope.status != "rejected",
+                MemoryScope.lifecycle_status == "active"))).scalars().all()
+        return set(rows)
 
 
 def _candidate_payload(candidate: MemoryExtractionCandidate) -> dict[str, object]:

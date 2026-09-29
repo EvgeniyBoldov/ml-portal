@@ -7,7 +7,7 @@ import json
 import uuid
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Query
-from sqlalchemy import select
+from sqlalchemy import String, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_uow, get_current_user, get_redis_client
@@ -18,6 +18,7 @@ from app.repositories.factory import AsyncRepositoryFactory
 from app.services.collection_service import CollectionService
 from app.services.collection_document_ingest_service import CollectionDocumentUploadService
 from app.services.document_artifacts import normalize_document_source_meta
+from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.services.rag_ingest_service import RAGIngestService
 from app.services.rag_status_manager import RAGStatusManager
 from app.services.status_aggregator import calculate_aggregate_status
@@ -62,6 +63,7 @@ async def upload_collection_document(
     meta_fields: str | None = Form(None),
     memory_enabled: bool | None = Form(None),
     project_keys: str | None = Form(None),
+    memory_scope_keys: str | None = Form(None),
     auto_ingest: bool = Form(True),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
@@ -92,6 +94,17 @@ async def upload_collection_document(
             doc_project_keys = [str(value).strip().lower() for value in raw_project_keys if str(value).strip()] if isinstance(raw_project_keys, list) else []
         except json.JSONDecodeError:
             doc_project_keys = [value.strip().lower() for value in project_keys.split(",") if value.strip()]
+    doc_memory_scope_keys: list[str] = []
+    if memory_scope_keys:
+        try:
+            raw_scope_keys = json.loads(memory_scope_keys)
+            doc_memory_scope_keys = [str(value).strip().lower() for value in raw_scope_keys if str(value).strip()] if isinstance(raw_scope_keys, list) else []
+        except json.JSONDecodeError:
+            doc_memory_scope_keys = [value.strip().lower() for value in memory_scope_keys.split(",") if value.strip()]
+    try:
+        await resolve_memory_scopes(session, [*doc_memory_scope_keys, *(f"project.{key}" for key in doc_project_keys)])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     redis = get_redis_client()
     event_publisher = RAGEventPublisher(redis) if redis else None
@@ -116,6 +129,7 @@ async def upload_collection_document(
         meta_fields=extra_meta,
         memory_enabled=memory_enabled,
         project_keys=doc_project_keys,
+        memory_scope_keys=doc_memory_scope_keys,
     )
 
     if auto_ingest:
@@ -133,6 +147,7 @@ async def list_collection_documents(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=500),
     status: str | None = Query(None),
+    query: str | None = Query(None, max_length=200),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
@@ -158,12 +173,47 @@ async def list_collection_documents(
                 DocumentCollectionMembership.tenant_id == collection.tenant_id,
             )
         )
+        aggregate_status = func.coalesce(RAGDocument.agg_status, RAGDocument.status.cast(String))
         if status:
-            base_q = base_q.where(RAGDocument.status == status)
+            if status in {"ready", "failed", "uploaded", "processing"}:
+                if status == "processing":
+                    base_q = base_q.where(aggregate_status.in_(["processing", "embedding", "chunked", "normalized"]))
+                else:
+                    base_q = base_q.where(aggregate_status == status)
+            else:
+                base_q = base_q.where(RAGDocument.status == status)
+        normalized_query = (query or "").strip()
+        if normalized_query:
+            pattern = f"%{normalized_query}%"
+            base_q = base_q.where(or_(
+                RAGDocument.name.ilike(pattern),
+                RAGDocument.filename.ilike(pattern),
+                RAGDocument.title.ilike(pattern),
+                RAGDocument.tags.cast(String).ilike(pattern),
+            ))
         base_q = base_q.order_by(RAGDocument.created_at.desc())
 
         count_q = select(sa_func.count()).select_from(base_q.subquery())
         total = (await session.execute(count_q)).scalar() or 0
+
+        status_rows = (await session.execute(
+            select(aggregate_status, sa_func.count())
+            .join(Source, RAGDocument.id == Source.source_id)
+            .join(DocumentCollectionMembership, DocumentCollectionMembership.source_id == Source.source_id)
+            .where(
+                DocumentCollectionMembership.collection_id == collection_id,
+                DocumentCollectionMembership.tenant_id == collection.tenant_id,
+            )
+            .group_by(aggregate_status)
+        )).all()
+        status_counts = {str(key or "uploaded"): int(count) for key, count in status_rows}
+        stats = {
+            "total": sum(status_counts.values()),
+            "ready": status_counts.get("ready", 0),
+            "failed": status_counts.get("failed", 0),
+            "processing": sum(status_counts.get(key, 0) for key in ("processing", "embedding", "chunked", "normalized")),
+            "uploaded": status_counts.get("uploaded", 0),
+        }
 
         offset = (page - 1) * size
         rows = (await session.execute(base_q.offset(offset).limit(size))).all()
@@ -231,6 +281,7 @@ async def list_collection_documents(
                     "enabled": bool(memory_meta.get("enabled")) if "enabled" in memory_meta else None,
                     "effective_enabled": effective_memory_enabled,
                     "project_keys": list(memory_meta.get("project_keys") or []),
+                    "scope_keys": list(memory_meta.get("scope_keys") or []),
                     "extraction_status": memory_status.status if memory_status is not None else "not_queued",
                     "extraction_metrics": dict(memory_status.metrics_json or {}) if memory_status is not None else {},
                 },
@@ -270,7 +321,7 @@ async def list_collection_documents(
                                     meta_fields[fname] = val
                             row_id_map[rid]["meta_fields"] = meta_fields
 
-        return {"items": items, "total": total, "page": page, "size": size, "has_more": offset + size < total}
+        return {"items": items, "total": total, "page": page, "size": size, "has_more": offset + size < total, "stats": stats}
     except HTTPException:
         raise
     except Exception as e:

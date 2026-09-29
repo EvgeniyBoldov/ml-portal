@@ -26,10 +26,12 @@ from app.core.logging import get_logger
 from app.models.collection import Collection, CollectionType, FieldType
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import Source, DocumentCollectionMembership
+from app.models.memory_scope import DocumentMemoryScope
 from app.repositories.factory import AsyncRepositoryFactory
 from app.services.collection_service import CollectionService
 from app.core.exceptions import CollectionNotFoundError, CollectionDocumentUploadError, NotDocumentCollectionError
 from app.services.document_artifacts import build_document_source_meta
+from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.services.rag_event_publisher import RAGEventPublisher
 from app.services.rag_status_manager import RAGStatusManager
 from app.services.upload_intake_policy import UploadIntakePolicy
@@ -71,9 +73,12 @@ class CollectionDocumentUploadService:
         meta_fields: Optional[dict] = None,
         memory_enabled: Optional[bool] = None,
         project_keys: Optional[List[str]] = None,
+        memory_scope_keys: Optional[List[str]] = None,
     ) -> dict:
         """Upload a file into a document collection and persist RAG bookkeeping."""
         collection = await self._get_document_collection(collection_id)
+        selected_scope_keys = [*(memory_scope_keys or []), *(f"project.{key}" for key in (project_keys or []))]
+        selected_scopes = await resolve_memory_scopes(self.session, selected_scope_keys)
         normalized_meta_fields = self._validate_document_metadata(collection, meta_fields or {})
         UploadIntakePolicy.validate_document_upload(
             filename=filename,
@@ -129,6 +134,10 @@ class CollectionDocumentUploadService:
             )
             self.session.add(rag_doc)
             await self.session.flush()
+            for selected_scope in selected_scopes:
+                self.session.add(DocumentMemoryScope(
+                    document_id=doc_id, scope_id=selected_scope.id, method="explicit",
+                ))
 
             source_meta = build_document_source_meta(
                 filename=filename,
@@ -146,6 +155,7 @@ class CollectionDocumentUploadService:
                 memory_enabled=bool(getattr(collection, "memory_enabled", False)) if memory_enabled is None else memory_enabled,
                 memory_policy="collection" if memory_enabled is None else "explicit",
                 project_keys=project_keys,
+                memory_scope_keys=[item.key for item in selected_scopes],
             )
             # Only declared fields are allowed to affect retrieval/prompt
             # context.  Store the exact projection alongside the source so it

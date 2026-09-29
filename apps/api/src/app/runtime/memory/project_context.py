@@ -4,10 +4,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Iterable
-from uuid import UUID
 
 from app.runtime.memory.dto import FactDTO
-from app.services.glossary_service import GlossaryService
+from app.services.project_catalog_service import ProjectCatalogService
 
 
 PROJECT_SCOPE_SUBJECT = "user.project_scope"
@@ -48,22 +47,13 @@ class ProjectContextResolver:
     """Resolves project aliases mechanically; it deliberately has no LLM path."""
 
     def __init__(self, session) -> None:
-        self._glossary = GlossaryService(session)
+        self._projects = ProjectCatalogService(session)
 
     async def resolve(
-        self, *, request_text: str, facts: Iterable[FactDTO], tenant_id: UUID | None = None,
+        self, *, request_text: str, facts: Iterable[FactDTO],
         chat_project_keys: Iterable[str] = (),
     ) -> ProjectContext:
-        projects = await self._glossary.list_project_terms()
-        glossary = await self._glossary.list_confirmed_terms(tenant_id=tenant_id)
-        by_id = {str(item.get("id")): str(item.get("key") or "").strip().casefold() for item in projects}
-        for term in glossary:
-            if str(term.get("entity_type") or "") != "project":
-                continue
-            key = by_id.get(str(term.get("entity_id") or ""))
-            if not key:
-                continue
-            projects.append({"key": key, "name": term.get("term"), "aliases": term.get("aliases") or []})
+        projects = await self._projects.list_projects()
         known = {str(item.get("key") or "").strip().casefold() for item in projects}
         defaults = _scope_keys(facts, known)
         chat_keys = list(dict.fromkeys(

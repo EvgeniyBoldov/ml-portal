@@ -20,6 +20,7 @@ from app.models.user import Users
 from app.models.collection import Collection
 from app.models.agent import Agent
 from app.models.rbac import RbacRule
+from app.models.memory_scope import MemoryScope
 from app.services.lifecycle_admin_service import LifecycleAdminService
 from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
@@ -47,6 +48,7 @@ LIFECYCLE_MODELS = (
     ("rbac_rule", RbacRule),
     ("chat", Chats),
     ("sandbox_session", SandboxSession),
+    ("memory_scope", MemoryScope),
 )
 
 

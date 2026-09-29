@@ -271,6 +271,7 @@ class ToolDiscoveryService:
                     domains=domains,
                     input_schema=discovered.input_schema,
                     output_schema=discovered.output_schema,
+                    risk_level=discovered.reported_risk_level,
                     now=now,
                 )
                 count += 1
@@ -306,6 +307,7 @@ class ToolDiscoveryService:
                 domains=domains,
                 input_schema=discovered.input_schema,
                 output_schema=discovered.output_schema,
+                risk_level=discovered.reported_risk_level,
                 now=now,
             )
             count += 1
@@ -360,6 +362,7 @@ class ToolDiscoveryService:
                         description=tool.get("description", ""),
                         input_schema=tool.get("inputSchema"),
                         output_schema=tool.get("outputSchema"),
+                        annotations=tool.get("annotations"),
                     )
                     await self._upsert(
                         slug=discovered.name,
@@ -375,6 +378,7 @@ class ToolDiscoveryService:
                         domains=[],
                         input_schema=discovered.input_schema,
                         output_schema=discovered.output_schema,
+                        risk_level=discovered.reported_risk_level,
                         now=now,
                     )
                     total += 1
@@ -462,6 +466,7 @@ class ToolDiscoveryService:
         domains: List[str],
         input_schema: Optional[Dict[str, Any]],
         output_schema: Optional[Dict[str, Any]],
+        risk_level: Optional[str],
         now: datetime,
     ) -> None:
         """Upsert a discovered tool row.
@@ -479,6 +484,7 @@ class ToolDiscoveryService:
             domains=domains,
             input_schema=input_schema,
             output_schema=output_schema,
+            risk_level=risk_level,
             is_active=True,
             last_seen_at=now,
             updated_at=now,
@@ -493,6 +499,7 @@ class ToolDiscoveryService:
                     "domains": domains,
                     "input_schema": input_schema,
                     "output_schema": output_schema,
+                    "risk_level": func.coalesce(risk_level, DiscoveredTool.risk_level),
                     "is_active": True,
                     "last_seen_at": now,
                     "updated_at": now,
@@ -508,6 +515,7 @@ class ToolDiscoveryService:
                     "domains": domains,
                     "input_schema": input_schema,
                     "output_schema": output_schema,
+                    "risk_level": func.coalesce(risk_level, DiscoveredTool.risk_level),
                     "is_active": True,
                     "last_seen_at": now,
                     "updated_at": now,

@@ -33,6 +33,7 @@ class DiscoveredOperation:
     side_effects: bool
     requires_confirmation: bool
     credential_scope: RuntimeCredentialScope
+    reported_risk_level: Optional[str]
 
 
 def _validate_json_schema_structure(tool_name: str, schema: Dict[str, Any]) -> None:
@@ -53,12 +54,24 @@ def parse_discovered_operation(
     description: Optional[str],
     input_schema: Optional[Dict[str, Any]],
     output_schema: Optional[Dict[str, Any]],
+    annotations: Optional[Dict[str, Any]] = None,
 ) -> DiscoveredOperation:
     normalized_input_schema = dict(input_schema or {})
     _validate_json_schema_structure(tool_name, normalized_input_schema)
+    runtime_payload = normalized_input_schema.get("x-runtime")
+    reported_risk_level = None
+    if isinstance(runtime_payload, dict) and runtime_payload.get("risk_level") is not None:
+        reported_risk_level = str(runtime_payload["risk_level"]).strip() or None
+    elif isinstance(annotations, dict):
+        # MCP's standard annotations are boolean hints rather than a risk
+        # taxonomy. Preserve the useful hints as readable catalog labels.
+        if annotations.get("destructiveHint") is True:
+            reported_risk_level = "destructive"
+        elif annotations.get("readOnlyHint") is True:
+            reported_risk_level = "read_only"
     runtime_flags = _parse_runtime_flags(
         tool_name=tool_name,
-        runtime_payload=normalized_input_schema.get("x-runtime"),
+        runtime_payload=runtime_payload,
     )
     normalized_input_schema["x-runtime"] = {
         "risk_level": runtime_flags.risk_level,
@@ -75,6 +88,7 @@ def parse_discovered_operation(
         side_effects=runtime_flags.side_effects,
         requires_confirmation=runtime_flags.requires_confirmation,
         credential_scope=runtime_flags.credential_scope,
+        reported_risk_level=reported_risk_level,
     )
 
 
@@ -97,11 +111,11 @@ def _parse_runtime_flags(*, tool_name: str, runtime_payload: Any) -> RuntimeFlag
 
     risk_level_raw = runtime_payload.get("risk_level", DEFAULT_RISK_LEVEL)
     risk_level = str(risk_level_raw or "").strip().lower()
+    # Preserve provider-specific labels separately for the admin catalog.
+    # Until those labels have explicit mappings, unknown values use the most
+    # restrictive runtime behavior (USER_ONLY credentials via destructive).
     if risk_level not in {"safe", "write", "destructive"}:
-        raise MCPDiscoveryValidationError(
-            f"MCP discovery error for tool '{tool_name}' operation '{tool_name}': "
-            f"invalid x-runtime.risk_level='{risk_level_raw}'"
-        )
+        risk_level = "destructive"
 
     side_effects_raw = runtime_payload.get("side_effects", DEFAULT_SIDE_EFFECTS)
     if not isinstance(side_effects_raw, bool):
@@ -137,4 +151,3 @@ def _parse_runtime_flags(*, tool_name: str, runtime_payload: Any) -> RuntimeFlag
         requires_confirmation=requires_confirmation_raw,
         credential_scope=credential_scope,  # type: ignore[arg-type]
     )
-

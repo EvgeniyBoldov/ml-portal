@@ -12,7 +12,7 @@ technical `ExecutionPreflight` that prepares an already selected agent.
 
 ```text
 user message
-  -> mechanical glossary/entity/project lookup
+  -> mechanical glossary/project lookup
   -> TurnPreflight
      -> synthesizer
      -> planner -> agents -> synthesizer
@@ -22,7 +22,7 @@ user message
 ```
 
 The mechanical lookup is code-only and bounded by ACL. It resolves only
-candidate glossary aliases, projects and entities so that TurnPreflight does
+published glossary aliases and projects so that TurnPreflight does
 not have to guess internal terminology. It does not supply unrestricted fact
 values or act as an LLM tool loop.
 
@@ -49,12 +49,12 @@ and facts needed for a plan; project memory is not pre-injected as a planner
 prompt dump. Agents use the same bounded operations only within their task
 context.
 
-TurnPreflight may propose evidence references and user/tenant durable-memory
-candidates, including explicit terminology updates. These are hints, not
-writes and not proof. Project semantic memory remains source-backed and is
-published only by document ingestion. After the final answer the normal writeback pipeline independently
+TurnPreflight may propose evidence references and user/tenant durable fact
+candidates. These are hints, not writes and not proof. Glossary definitions
+and project semantic memory are published only after document review. After
+the final answer the fact writeback pipeline independently
 validates primary user/tool evidence and runs `FactExtractor`,
-`FactCompactor` and reconcilers. A response may therefore say that a candidate
+`FactCompactor` and `FactReconciler`. A response may therefore say that a fact candidate
 was submitted for verification, never that preflight persisted it.
 
 ## Consequences

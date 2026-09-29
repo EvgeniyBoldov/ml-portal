@@ -87,7 +87,7 @@ async def archive_rag_document(
         status_manager = RAGStatusManager(session, repo_factory, event_publisher)
         
         await status_manager.archive_document(doc_uuid)
-        from app.runtime.memory.document_memory import retire_document_memory
+        from app.runtime.memory.document_retirement import retire_document_memory
         item_states = await retire_document_memory(session, document_id=doc_uuid)
         
         document.status = "archived"
@@ -169,7 +169,7 @@ async def delete_rag_document(
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        from app.runtime.memory.document_memory import retire_document_memory
+        from app.runtime.memory.document_retirement import retire_document_memory
         item_states = await retire_document_memory(session, document_id=document.id)
         await repo_factory.delete_rag_document(uuid.UUID(doc_id))
         await session.commit()

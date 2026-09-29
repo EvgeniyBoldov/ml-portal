@@ -7,9 +7,11 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import MemoryRelation
-from app.runtime.memory.recall import MemoryRecallService, _matching_glossary_terms
+from app.runtime.memory.recall import MemoryRecallService
 from app.runtime.memory.semantic_index import MemorySemanticIndex
-from app.services.glossary_service import GlossaryService
+from app.runtime.memory.scope_precedence import apply_scope_precedence as _apply_project_precedence
+from app.services.glossary_service import GlossaryService, ambiguous_glossary_aliases, matching_glossary_terms
+from app.services.project_catalog_service import ProjectCatalogService
 
 
 class MemorySearchService:
@@ -24,16 +26,24 @@ class MemorySearchService:
         user_id: UUID | None = None,
         project_keys: list[str] = (),
         fallback_project_keys: list[str] | tuple[str, ...] = (),
+        context_scope_keys: list[str] | tuple[str, ...] = (),
         scopes: list[str] = (),
         kinds: list[str] = (),
         entity_ids: list[str] = (),
         direction: str | None = None,
         limit: int = 8,
     ) -> dict[str, Any]:
-        projects = await GlossaryService(self._session).list_project_terms()
-        confirmed_glossary = await GlossaryService(self._session).list_confirmed_terms(tenant_id=tenant_id)
-        enabled_scopes = {str(scope).strip().lower() for scope in scopes if str(scope).strip()} or {"glossary", "project", "global"}
-        glossary_terms = _matching_glossary_terms(query, confirmed_glossary, limit=12) if "glossary" in enabled_scopes else []
+        projects = await ProjectCatalogService(self._session).list_projects()
+        confirmed_glossary = await GlossaryService(self._session).list_confirmed_terms()
+        enabled_scopes = {str(scope).strip().lower() for scope in scopes if str(scope).strip()} or {"glossary", "project", "product", "team", "global"}
+        glossary_terms = matching_glossary_terms(query, confirmed_glossary, limit=12) if "glossary" in enabled_scopes else []
+        glossary_uncertainties = [f"ambiguous_glossary_alias:{form}" for form in
+                                  ambiguous_glossary_aliases(query, glossary_terms)]
+        glossary_definitions = [{
+            "id": str(item["id"]), "term": item["term"], "definition": item["definition"],
+            "aliases": list(item.get("aliases") or []),
+            "source_references": list(item.get("source_references") or []),
+        } for item in glossary_terms]
         requested_keys = {str(key).strip().lower() for key in project_keys if str(key).strip()}
         project_key_set = requested_keys or {str(key).strip().lower() for key in fallback_project_keys if str(key).strip()}
         known_project_keys = {str(item.get("key") or "").strip().lower() for item in projects}
@@ -59,6 +69,7 @@ class MemorySearchService:
             project_ids=project_ids,
             semantic_ids=list(dict.fromkeys([*semantic_ids, *lexical_ids, *entity_related_ids])),
             tenant_id=tenant_id,
+            context_scope_keys=context_scope_keys,
         )
         if normalized_entity_ids:
             entity_item_id_set = set(entity_related_ids)
@@ -74,14 +85,12 @@ class MemorySearchService:
             allowed_kinds = _kinds_for_direction(direction)
         if allowed_kinds:
             items = [item for item in items if str(item.get("kind")) in allowed_kinds]
-        if "project" not in enabled_scopes:
-            items = [item for item in items if item.get("project_id") is None]
-        if "global" not in enabled_scopes:
-            items = [item for item in items if item.get("project_id") is not None]
+        items = [item for item in items if _scope_categories(item).intersection(enabled_scopes)]
         items, precedence_uncertainties = _apply_project_precedence(items, project_ids)
         values = [
             {
                 "id": str(item["id"]), "project_id": str(item["project_id"]) if item.get("project_id") else None,
+                "scope_keys": list(item.get("scope_keys") or []),
                 "kind": item["kind"], "subject": item["subject"], "content": item["content"],
                 "confidence": item["confidence"], "state": item["state"], "observed_at": item.get("observed_at"),
                 "source_references": item["source_references"],
@@ -91,18 +100,16 @@ class MemorySearchService:
         return {
             "items": values,
             "projects": [{"key": item["key"], "name": item["name"]} for item in selected],
-            "glossary": [{
-                "term": item.get("term"), "description": item.get("description"),
-                "aliases": list(item.get("aliases") or []), "scope": item.get("scope"),
-            } for item in glossary_terms],
+            "glossary": glossary_definitions,
             "count": len(values),
             "search_scope": {
                 "direction": str(direction or "").strip() or None,
                 "entity_ids": normalized_entity_ids,
                 "kinds": sorted(allowed_kinds),
             },
-            "uncertainties": precedence_uncertainties,
-            "memory_context": _memory_context(values, selected, [], glossary_terms, precedence_uncertainties),
+            "uncertainties": [*precedence_uncertainties, *glossary_uncertainties],
+            "memory_context": _memory_context(values, selected, [], glossary_definitions,
+                                              [*precedence_uncertainties, *glossary_uncertainties]),
         }
 
 
@@ -114,12 +121,19 @@ def _kinds_for_direction(direction: str | None) -> set[str]:
     if any(token in value for token in ("procedure", "process", "процедур", "процесс")):
         return {"procedure"}
     if any(token in value for token in ("term", "definition", "термин", "определени")):
-        return {"term", "description"}
+        return {"description"}
     return set()
 
 
+def _scope_categories(item: dict[str, Any]) -> set[str]:
+    keys = item.get("scope_keys") or []
+    if keys:
+        return {str(key).split(".", 1)[0] for key in keys}
+    return {"project" if item.get("project_id") else "global"}
+
+
 def _empty_result(*, direction: str | None, entity_ids: list[str], kinds: list[str], uncertainties: list[str]) -> dict[str, Any]:
-    return {"items": [], "projects": [], "count": 0,
+    return {"items": [], "projects": [], "glossary": [], "count": 0,
             "search_scope": {"direction": str(direction or "").strip() or None, "entity_ids": list(entity_ids), "kinds": list(kinds)},
             "memory_context": {"type": "memory_recall", "resolved_terms": [], "resolved_entities": [], "relevant_projects": [], "relevant_knowledge": [], "applicable_rules": [], "applicable_procedures": [], "known_constraints": [], "durable_facts": [], "uncertainties": uncertainties, "source_references": [], "rag_required": False, "tool_required": False}}
 
@@ -130,29 +144,24 @@ def _memory_context(
 ) -> dict[str, Any]:
     def typed(kind: str) -> list[dict[str, Any]]:
         return [item for item in items if item.get("kind") == kind]
-    refs = [ref for item in items for ref in item.get("source_references") or [] if isinstance(ref, dict)]
+    refs = [ref for item in [*items, *glossary] for ref in item.get("source_references") or [] if isinstance(ref, dict)]
     uncertain = [item for item in items if item.get("state") != "active"]
-    return {"type": "memory_recall", "resolved_terms": glossary, "resolved_entities": [], "relevant_projects": [{"key": item.get("key"), "name": item.get("name")} for item in projects], "relevant_knowledge": [item for item in items if item.get("kind") not in {"rule", "constraint", "procedure"}], "applicable_rules": typed("rule"), "applicable_procedures": typed("procedure"), "known_constraints": typed("constraint"), "durable_facts": durable_facts, "uncertainties": [*uncertainties, *[f"uncertain_memory:{item.get('id')}" for item in uncertain]], "source_references": refs[:24], "rag_required": bool(uncertain or uncertainties), "tool_required": False}
-
-
-def _apply_project_precedence(items: list[dict[str, Any]], project_ids: list[UUID]) -> tuple[list[dict[str, Any]], list[str]]:
-    """Never hand an arbitrary winner for divergent project rules to an LLM."""
-    if not project_ids:
-        return items, []
-    by_identity: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for item in items:
-        by_identity.setdefault((str(item.get("kind")), str(item.get("subject")).casefold()), []).append(item)
-    result: list[dict[str, Any]] = []
-    uncertainties: list[str] = []
-    project_set = {str(value) for value in project_ids}
-    for identity, rows in by_identity.items():
-        globals_ = [row for row in rows if row.get("project_id") is None]
-        scoped = {str(row.get("project_id")): row for row in rows if row.get("project_id") is not None}
-        effective = [scoped.get(project_id) or (globals_[0] if globals_ else None) for project_id in project_set]
-        effective = [row for row in effective if row is not None]
-        if len({str(row.get("content_text")) for row in effective}) > 1:
-            uncertainties.append(f"project_memory_divergence:{identity[0]}:{identity[1]}")
-            continue
-        if effective:
-            result.append(effective[0])
-    return result, uncertainties
+    clarification_reasons = [reason for reason in uncertainties if reason.startswith("ambiguous_glossary_alias:")]
+    source_uncertainties = [reason for reason in uncertainties if reason not in clarification_reasons]
+    return {
+        "type": "memory_recall",
+        "resolved_terms": glossary,
+        "resolved_entities": [],
+        "relevant_projects": [{"key": item.get("key"), "name": item.get("name")} for item in projects],
+        "relevant_knowledge": [item for item in items if item.get("kind") not in {"rule", "constraint", "procedure"}],
+        "applicable_rules": typed("rule"),
+        "applicable_procedures": typed("procedure"),
+        "known_constraints": typed("constraint"),
+        "durable_facts": durable_facts,
+        "uncertainties": [*uncertainties, *[f"uncertain_memory:{item.get('id')}" for item in uncertain]],
+        "source_references": refs[:24],
+        "rag_required": bool(uncertain or source_uncertainties),
+        "tool_required": False,
+        "clarification_required": bool(clarification_reasons),
+        "clarification_reasons": clarification_reasons,
+    }

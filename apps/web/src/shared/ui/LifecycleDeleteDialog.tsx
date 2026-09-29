@@ -59,6 +59,11 @@ const RESOURCE_TITLE: Record<string, string> = {
   rbac_rules: 'RBAC-правила',
   tenant_bindings: 'Привязки к тенантам',
   admin_guard: 'Ограничения',
+  memory_claims: 'Утверждения памяти',
+  memory_scopes: 'Скоупы памяти',
+  memory_items: 'Факты памяти',
+  memory_candidates: 'Кандидаты памяти',
+  document_scope_hints: 'Подсказки скоупа у документов',
 };
 
 function resourceLabel(type: string): string {
@@ -315,7 +320,7 @@ export default function LifecycleDeleteDialog({
                 checked={deleteDependents}
                 onChange={(e) => setDeleteDependents(e.target.checked)}
               />
-              <span>Удалить зависимые</span>
+              <span>{deleteNow ? 'Удалить зависимую память и связи' : 'Пометить зависимую память на удаление'}</span>
             </label>
           </div>
         )}

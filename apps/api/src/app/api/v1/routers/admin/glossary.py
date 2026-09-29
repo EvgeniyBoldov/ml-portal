@@ -1,109 +1,95 @@
-"""Admin API for canonical terminology and aliases."""
+"""Admin API for scope-free terminology and aliases."""
 from datetime import datetime
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select, update
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
-from app.models.glossary import GlossaryEntry, GlossaryObservation, GlossaryScope, GlossaryStatus
+from app.models.document_memory_staging import GlossaryTerm
 from app.services.glossary_service import GlossaryService
 
 router = APIRouter(prefix="/glossary")
 
 
-class GlossaryEntryInput(BaseModel):
-    scope: GlossaryScope = GlossaryScope.GLOBAL
-    canonical_term: str = Field(min_length=1, max_length=255)
-    aliases: list[str] = Field(default_factory=list)
-    entity_type: str = Field(default="term", min_length=1, max_length=64)
-    entity_id: str | None = Field(default=None, max_length=255)
-    description: str | None = None
-    tenant_id: UUID | None = None
-    project_id: UUID | None = None
-
-    @model_validator(mode="after")
-    def validate_owner(self) -> "GlossaryEntryInput":
-        if self.scope == GlossaryScope.TENANT and self.tenant_id is None:
-            raise ValueError("tenant_id is required for tenant glossary entries")
-        if self.scope == GlossaryScope.PROJECT and self.project_id is None:
-            raise ValueError("project_id is required for project glossary entries")
-        return self
-
-
-class GlossaryEntryResponse(GlossaryEntryInput):
+class GlossaryTermResponse(BaseModel):
     id: UUID
-    is_active: bool
-    status: str
-    support_count: int
+    canonical_term: str
+    normalized_term: str
+    definition: str
+    aliases: list[str]
+    is_active: bool = True
+    approved_candidate_id: UUID
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
-class GlossaryConflictResolution(BaseModel):
-    definition: str = Field(min_length=1, max_length=8000)
-    aliases: list[str] = Field(default_factory=list)
+class GlossaryBulkTermRequest(BaseModel):
+    ids: list[UUID] = Field(min_length=1, max_length=200)
 
 
-@router.get("", response_model=list[GlossaryEntryResponse])
+@router.get("", response_model=list[GlossaryTermResponse])
 async def list_glossary(db: AsyncSession = Depends(db_session), _: UserCtx = Depends(require_admin)):
-    return await GlossaryService(db).list_active()
+    return await GlossaryService(db).list_terms()
 
 
-@router.post("", response_model=GlossaryEntryResponse, status_code=201)
-async def create_glossary_entry(
-    data: GlossaryEntryInput,
+@router.post("/bulk-deactivate")
+async def deactivate_glossary_terms(
+    payload: GlossaryBulkTermRequest,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    canonical = data.canonical_term.strip()
-    aliases = list(dict.fromkeys(item.strip() for item in data.aliases if item.strip() and item.strip().casefold() != canonical.casefold()))
-    if not canonical:
-        raise HTTPException(status_code=422, detail="canonical_term is required")
-    entry = await GlossaryService(db).create(
-        scope=data.scope, canonical_term=canonical, aliases=aliases,
-        entity_type=data.entity_type.strip(), entity_id=data.entity_id,
-        description=data.description, tenant_id=data.tenant_id, project_id=data.project_id,
+    ids = list(dict.fromkeys(payload.ids))
+    found_ids = list((await db.execute(select(GlossaryTerm.id).where(GlossaryTerm.id.in_(ids)))).scalars().all())
+    if len(found_ids) != len(ids):
+        raise HTTPException(status_code=404, detail="One or more glossary terms were not found")
+    active_ids = list((await db.execute(
+        select(GlossaryTerm.id).where(GlossaryTerm.id.in_(ids), GlossaryTerm.is_active.is_(True))
+    )).scalars().all())
+    if active_ids:
+        await db.execute(update(GlossaryTerm).where(GlossaryTerm.id.in_(active_ids)).values(is_active=False))
+        await db.commit()
+    return {"deactivated": len(active_ids)}
+
+
+@router.post("/bulk-activate")
+async def activate_glossary_terms(
+    payload: GlossaryBulkTermRequest,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    ids = list(dict.fromkeys(payload.ids))
+    found_ids = list((await db.execute(select(GlossaryTerm.id).where(GlossaryTerm.id.in_(ids)))).scalars().all())
+    if len(found_ids) != len(ids):
+        raise HTTPException(status_code=404, detail="One or more glossary terms were not found")
+    eligible_ids = set((await db.execute(
+        GlossaryService.published_terms_query(require_active=False)
+        .with_only_columns(GlossaryTerm.id).where(GlossaryTerm.id.in_(ids))
+    )).scalars().all())
+    if set(ids) != eligible_ids:
+        raise HTTPException(status_code=409, detail="A term needs an approved global document definition before activation")
+    result = await db.execute(
+        update(GlossaryTerm).where(GlossaryTerm.id.in_(ids), GlossaryTerm.is_active.is_(False)).values(is_active=True)
     )
     await db.commit()
-    await db.refresh(entry)
-    return entry
+    return {"activated": result.rowcount or 0}
 
 
-@router.post("/{entry_id}/resolve", response_model=GlossaryEntryResponse)
-async def resolve_glossary_conflict(
-    entry_id: UUID,
-    data: GlossaryConflictResolution,
+@router.delete("")
+async def delete_glossary_terms(
+    payload: GlossaryBulkTermRequest,
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ):
-    """Publish one explicit administrative definition for a conflicted term."""
-    entry = (await db.execute(select(GlossaryEntry).where(GlossaryEntry.id == entry_id))).scalar_one_or_none()
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Glossary entry not found")
-    aliases = list(dict.fromkeys(
-        value.strip() for value in data.aliases
-        if value.strip() and value.strip().casefold() != entry.canonical_term.casefold()
-    ))
-    await db.execute(update(GlossaryObservation).where(
-        GlossaryObservation.entry_id == entry.id,
-        GlossaryObservation.state == "active",
-    ).values(state="conflict"))
-    db.add(GlossaryObservation(
-        entry_id=entry.id, source_type="admin", source_ref=f"admin:{uuid4()}",
-        source_label="administrative resolution", definition=data.definition.strip(), aliases=aliases,
-    ))
-    entry.aliases = aliases
-    entry.description = data.definition.strip()
-    entry.status = GlossaryStatus.CONFIRMED.value
-    entry.is_active = True
-    entry.support_count = 1
+    ids = list(dict.fromkeys(payload.ids))
+    found_ids = list((await db.execute(select(GlossaryTerm.id).where(GlossaryTerm.id.in_(ids)))).scalars().all())
+    if len(found_ids) != len(ids):
+        raise HTTPException(status_code=404, detail="One or more glossary terms were not found")
+    await db.execute(delete(GlossaryTerm).where(GlossaryTerm.id.in_(ids)))
     await db.commit()
-    await db.refresh(entry)
-    return entry
+    return {"deleted": len(ids)}

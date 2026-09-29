@@ -285,11 +285,11 @@ async def test_fact_extractor_rejects_agent_summary_without_primary_evidence(ext
 
 
 @pytest.mark.asyncio
-async def test_memory_preparer_selects_only_llm_indexed_context() -> None:
+async def test_memory_preparer_preserves_published_definition_alongside_selected_context() -> None:
     preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
     preparer._structured.invoke = AsyncMock(return_value=_llm_result(
         _PreparationOutput(
-            fact_indexes=[1], project_indexes=[0], glossary_indexes=[0],
+            fact_indexes=[1], project_indexes=[0],
             ambiguities=["Нема может означать два проекта"],
         )
     ))
@@ -299,8 +299,9 @@ async def test_memory_preparer_selects_only_llm_indexed_context() -> None:
     ]
     result = await preparer.prepare(
         request_text="Нужна заявка для Немы", facts=facts,
-        project_glossary=[{"id": uuid4(), "key": "nemesis", "name": "Немезида", "aliases": ["Нема"]}],
-        glossary=[{"term": "срк", "description": "Система резервного копирования", "aliases": ["СРК"]}],
+        projects=[{"id": uuid4(), "key": "nemesis", "name": "Немезида", "aliases": ["Нема"]}],
+        glossary=[{"id": uuid4(), "term": "срк", "definition": "Система резервного копирования", "aliases": ["СРК"],
+                   "source_references": [{"document_id": "document-1", "section_id": "section-1"}]}],
         user_id=uuid4(), tenant_id=uuid4(), chat_id=None, sandbox_overrides=None,
     )
 
@@ -309,10 +310,11 @@ async def test_memory_preparer_selects_only_llm_indexed_context() -> None:
     assert result.items[1]["key"] == "nemesis"
     assert result.items[2] == {
         "type": "glossary",
-        "scope": "global",
         "term": "срк",
-        "description": "Система резервного копирования",
+        "subject": "срк",
+        "value": "Система резервного копирования",
         "aliases": ["СРК"],
+        "source_references": [{"document_id": "document-1", "section_id": "section-1"}],
     }
     assert result.selected_glossary_count == 1
     assert result.ambiguities == ["Нема может означать два проекта"]
@@ -326,7 +328,7 @@ async def test_memory_preparer_fallback_preserves_current_state_tool_requirement
     preparer = MemoryPreparer(session=AsyncMock(), llm_client=AsyncMock())
     preparer._structured.invoke = AsyncMock(side_effect=RuntimeError("offline"))
     result = await preparer.prepare(
-        request_text="Какой сейчас статус коммутатора?", facts=[], project_glossary=[], glossary=[],
+        request_text="Какой сейчас статус коммутатора?", facts=[], projects=[], glossary=[],
         user_id=None, tenant_id=None, chat_id=None, sandbox_overrides=None,
     )
     assert result.fallback is True
@@ -347,7 +349,7 @@ async def test_memory_preparer_adds_selected_project_knowledge() -> None:
     result = await preparer.prepare(
         request_text="Как поменять VLAN в Сфере?",
         facts=[],
-        project_glossary=[{"id": "p1", "key": "sphere", "name": "Сфера", "aliases": []}],
+        projects=[{"id": "p1", "key": "sphere", "name": "Сфера", "aliases": []}],
         project_facts=[
             {
                 "project_id": "p1",
@@ -379,7 +381,7 @@ async def test_memory_preparer_keeps_model_selected_semantic_hit_without_lexical
         _PreparationOutput(memory_indexes=[0], intent="informational")
     ))
     result = await preparer.prepare(
-        request_text="Какой порядок для сегментации сети?", facts=[], project_glossary=[], glossary=[],
+        request_text="Какой порядок для сегментации сети?", facts=[], projects=[], glossary=[],
         project_facts=[{
             "project_id": None, "kind": "procedure", "subject": "switch.vlan_change",
             "value": "Перед изменением VLAN сохранить конфигурацию.", "confidence": 0.95,
@@ -401,7 +403,7 @@ async def test_memory_preparer_keeps_active_procedure_when_its_source_is_old_but
     result = await preparer.prepare(
         request_text="Что известно о VLAN в Сфере?",
         facts=[],
-        project_glossary=[{"id": "p1", "key": "sphere", "name": "Сфера", "aliases": []}],
+        projects=[{"id": "p1", "key": "sphere", "name": "Сфера", "aliases": []}],
         project_facts=[{
             "project_id": "p1", "project_key": "sphere", "kind": "procedure",
             "subject": "network.change_vlan", "value": "Сохранить конфигурацию.",
@@ -420,7 +422,7 @@ async def test_memory_preparer_degrades_to_empty_context() -> None:
     preparer._structured.invoke = AsyncMock(side_effect=RuntimeError("offline"))
 
     result = await preparer.prepare(
-        request_text="test", facts=[], project_glossary=[], glossary=[], user_id=None,
+        request_text="test", facts=[], projects=[], glossary=[], user_id=None,
         tenant_id=None, chat_id=None, sandbox_overrides=None,
     )
 
@@ -442,7 +444,7 @@ async def test_memory_preparer_drops_unrelated_user_pii_selected_by_model() -> N
 
     result = await preparer.prepare(
         request_text="Подробно опиши NIMS-3451", facts=facts,
-        project_glossary=[], glossary=[], user_id=uuid4(), tenant_id=uuid4(),
+        projects=[], glossary=[], user_id=uuid4(), tenant_id=uuid4(),
         chat_id=None, sandbox_overrides=None,
     )
 
@@ -468,71 +470,15 @@ async def test_fact_extractor_rejects_project_fact_even_with_evidence(extractor)
 
 
 @pytest.mark.asyncio
-async def test_fact_extractor_keeps_tenant_glossary_candidate(extractor) -> None:
-    extractor._structured.invoke = AsyncMock(return_value=_llm_result(
-        _LLMFactOutput(facts=[_LLMFactCandidate(
-            scope="tenant", kind="glossary", subject="evpn",
-            value="Ethernet VPN", aliases=["EVPN"], confidence=1.0,
-        )])
-    ))
-
-    facts = await extractor.extract(
-        user_message="В нашей сети EVPN означает Ethernet VPN",
-        known_facts=[], user_id=uuid4(), tenant_id=uuid4(),
-    )
-
-    assert len(facts) == 1
-    assert facts[0].kind == "glossary"
-    assert facts[0].metadata["aliases"] == ["EVPN"]
+async def test_fact_extractor_rejects_glossary_candidate() -> None:
+    with pytest.raises(ValidationError):
+        _LLMFactCandidate(scope="tenant", kind="glossary", subject="EVPN", value="Ethernet VPN")
 
 
 def test_fact_extractor_kind_is_a_strict_storage_route() -> None:
-    """Terms must be explicitly routed to glossary, never guessed from labels."""
+    """Only facts can enter conversational memory."""
     with pytest.raises(ValidationError):
         _LLMFactCandidate(
             scope="tenant", kind="definition", subject="аварийная ситуация",
             value="ситуация с вероятностью возникновения аварии", confidence=1.0,
         )
-
-
-@pytest.mark.asyncio
-async def test_fact_extractor_keeps_grounded_glossary_in_tenant_candidate(extractor) -> None:
-    extractor._structured.invoke = AsyncMock(return_value=_llm_result(
-        _LLMFactOutput(facts=[_LLMFactCandidate(
-            scope="tenant", kind="glossary", subject="срк",
-            value="Система резервного копирования", aliases=["СРК"],
-            confidence=1.0, evidence_source_ids=["search-1"],
-        )])
-    ))
-
-    facts = await extractor.extract(
-        user_message="что такое срк",
-        evidence=[FactEvidence(
-            source_id="search-1", source_type="tool_result", source_ref="tool-call-1",
-            support_ref="document-1", label="collection.document.search",
-            text="СРК — система резервного копирования.",
-        )],
-        known_facts=[], user_id=uuid4(), tenant_id=uuid4(),
-    )
-
-    assert len(facts) == 1
-    assert facts[0].metadata["glossary_scope"] is None
-
-
-@pytest.mark.asyncio
-async def test_fact_extractor_keeps_user_glossary_candidate(extractor) -> None:
-    extractor._structured.invoke = AsyncMock(return_value=_llm_result(
-        _LLMFactOutput(facts=[_LLMFactCandidate(
-            scope="user", kind="glossary", subject="my acronym",
-            value="personal shorthand", aliases=["MA"], confidence=1.0,
-        )])
-    ))
-
-    facts = await extractor.extract(
-        user_message="Для меня MA означает personal shorthand",
-        known_facts=[], user_id=uuid4(), tenant_id=uuid4(),
-    )
-
-    assert len(facts) == 1
-    assert facts[0].scope == FactScope.USER
-    assert facts[0].kind == "glossary"

@@ -3,7 +3,7 @@ import type { SandboxTraceState } from '../../traceState';
 import type { TraceInspectionTarget } from '../../traceProjection';
 import { PlanView, TextValue } from './TraceDataViews';
 import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponseView } from './CallViews';
-import { ExecutorResultView, StageResultView, StepResultView } from './ResultViews';
+import { ExecutorResultView, MemoryExtractionResultView, StageResultView, StepResultView } from './ResultViews';
 import { callDisplayName } from '../../callInspection';
 import { formatCallDuration } from '../../callPresentation';
 import type { ToolNameMap } from '../../callInspection';
@@ -15,6 +15,7 @@ interface Props { target: TraceInspectionTarget | null; trace: SandboxTraceState
 function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
   return traceStatusTone(status);
 }
+const isDocumentMemoryExecutor = (executorSlug: string | undefined): boolean => executorSlug === 'document_memory_extractor';
 
 export function TraceInspector({ target, trace, toolNames }: Props) {
   if (!target) return null;
@@ -57,9 +58,11 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'facts' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} mode={target.executor.kind === 'fact_extractor' ? 'candidates' : 'decisions'} />;
     if (tab === 'published' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} mode="published" />;
     if (tab === 'memory' && target.kind === 'executor') return <MemoryContextViewer context={target.executor.memoryContext} />;
+    if (tab === 'result' && target.kind === 'stage' && target.stage.executorRuns.length === 1 && isDocumentMemoryExecutor(target.stage.executorRuns[0].executorSlug)) return <MemoryExtractionResultView result={target.stage.executorRuns[0].result} />;
     if (tab === 'result' && target.kind === 'stage') return <StageResultView stage={target.stage} />;
+    if (tab === 'result' && target.kind === 'step' && target.step.executorRuns.length === 1 && isDocumentMemoryExecutor(target.step.executorRuns[0].executorSlug)) return <MemoryExtractionResultView result={target.step.executorRuns[0].result} />;
     if (tab === 'result' && target.kind === 'step') return <StepResultView step={target.step} />;
-    if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : target.executor.kind === 'preflight' ? <RouteViewer route={target.executor.route} /> : <ExecutorResultView executor={target.executor} />;
+    if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : target.executor.kind === 'preflight' ? <RouteViewer route={target.executor.route} /> : isDocumentMemoryExecutor(target.executor.executorSlug) ? <MemoryExtractionResultView result={target.executor.result} /> : <ExecutorResultView executor={target.executor} />;
     if (tab === 'prompt' && target.kind === 'executor') return <PromptViewer prompt={target.executor.prompt} />;
     if (tab === 'rbac' && target.kind === 'executor') return <RbacViewer access={target.executor.access} />;
     if (tab === 'limits' && target.kind === 'executor') return <LimitsViewer limits={target.executor.limits} />;

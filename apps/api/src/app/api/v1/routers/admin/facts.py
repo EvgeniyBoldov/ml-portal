@@ -4,6 +4,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, require_admin
@@ -11,6 +12,10 @@ from app.schemas.memory import AdminFactCreate, AdminFactResponse, AdminFactUpda
 from app.services.fact_admin_service import AdminFactNotFoundError, FactAdminService
 
 router = APIRouter(tags=["facts"])
+
+
+class BulkFactDeleteRequest(BaseModel):
+    ids: list[UUID] = Field(min_length=1, max_length=200)
 
 
 def _response(fact) -> AdminFactResponse:
@@ -72,9 +77,26 @@ async def _delete(
     await db.commit()
 
 
+async def _delete_many(*, owner_type: str, owner_id: UUID, payload: BulkFactDeleteRequest, db: AsyncSession) -> dict[str, int]:
+    try:
+        deleted = await FactAdminService(db).delete_many(
+            fact_ids=payload.ids, owner_type=owner_type, owner_id=owner_id,
+        )
+    except AdminFactNotFoundError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more facts were not found") from exc
+    await db.commit()
+    return {"deleted": deleted}
+
+
 @router.get("/users/{user_id}/facts", response_model=list[AdminFactResponse])
 async def list_user_facts(user_id: UUID, db: AsyncSession = Depends(db_session), _: object = Depends(require_admin)):
     return await _list(owner_type="user", owner_id=user_id, db=db)
+
+
+@router.delete("/users/{user_id}/facts")
+async def delete_user_facts(user_id: UUID, payload: BulkFactDeleteRequest, db: AsyncSession = Depends(db_session), _: object = Depends(require_admin)):
+    return await _delete_many(owner_type="user", owner_id=user_id, payload=payload, db=db)
 
 
 @router.post("/users/{user_id}/facts", response_model=AdminFactResponse, status_code=status.HTTP_201_CREATED)
@@ -97,6 +119,11 @@ async def list_tenant_facts(tenant_id: UUID, db: AsyncSession = Depends(db_sessi
     return await _list(owner_type="tenant", owner_id=tenant_id, db=db)
 
 
+@router.delete("/tenants/{tenant_id}/facts")
+async def delete_tenant_facts(tenant_id: UUID, payload: BulkFactDeleteRequest, db: AsyncSession = Depends(db_session), _: object = Depends(require_admin)):
+    return await _delete_many(owner_type="tenant", owner_id=tenant_id, payload=payload, db=db)
+
+
 @router.post("/tenants/{tenant_id}/facts", response_model=AdminFactResponse, status_code=status.HTTP_201_CREATED)
 async def create_tenant_fact(tenant_id: UUID, payload: AdminFactCreate, db: AsyncSession = Depends(db_session), _: object = Depends(require_admin)):
     return await _create(owner_type="tenant", owner_id=tenant_id, payload=payload, db=db)
@@ -110,4 +137,3 @@ async def update_tenant_fact(tenant_id: UUID, fact_id: UUID, payload: AdminFactU
 @router.delete("/tenants/{tenant_id}/facts/{fact_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tenant_fact(tenant_id: UUID, fact_id: UUID, db: AsyncSession = Depends(db_session), _: object = Depends(require_admin)):
     await _delete(owner_type="tenant", owner_id=tenant_id, fact_id=fact_id, db=db)
-

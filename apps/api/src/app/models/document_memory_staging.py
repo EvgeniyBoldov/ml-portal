@@ -35,6 +35,10 @@ class DocumentMemorySnapshot(Base):
     visibility_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     canonical_checksum: Mapped[str] = mapped_column(String(128), nullable=False)
     extractor_version: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # A shadow study spans several Celery tasks. This durable relation is the
+    # sole correlation key for its runtime journal; task names and timestamps
+    # are never used to reconstruct the trace.
+    trace_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
     metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -51,7 +55,7 @@ class MemoryExtractionCandidate(Base):
         Index("ix_memory_candidates_resolution", "resolution_status", "scope_candidate"),
         Index("ix_memory_candidates_subject", "candidate_type", "normalized_subject"),
         CheckConstraint("candidate_type IN ('term', 'description', 'relationship', 'rule', 'constraint', 'procedure', 'decision')", name="ck_memory_candidate_type"),
-        CheckConstraint("scope_candidate IS NULL OR scope_candidate IN ('global', 'project', 'multi_project', 'unknown')", name="ck_memory_candidate_scope"),
+        CheckConstraint("scope_candidate IS NULL OR scope_candidate IN ('global', 'project', 'multi_project', 'scoped', 'unknown')", name="ck_memory_candidate_scope"),
         CheckConstraint("resolution_status IN ('extracted', 'conflict', 'needs_review', 'resolved', 'rejected', 'stale')", name="ck_memory_candidate_resolution"),
         CheckConstraint("resolution_method IS NULL OR resolution_method IN ('document_hint', 'exact_project_key', 'unique_alias', 'content_evidence', 'llm_suggestion', 'manual', 'migration')", name="ck_memory_candidate_resolution_method"),
         CheckConstraint("extraction_confidence >= 0.0 AND extraction_confidence <= 1.0", name="ck_memory_candidate_confidence"),
@@ -74,6 +78,7 @@ class MemoryExtractionCandidate(Base):
     aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     related_entities: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     related_project_keys: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    unmatched_scope_names: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     extraction_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     scope_candidate: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     resolution_status: Mapped[str] = mapped_column(String(16), nullable=False, default="extracted", server_default="extracted")
@@ -109,96 +114,26 @@ class MemoryCandidateProjectBinding(Base):
 
 
 class GlossaryTerm(Base):
-    """A canonical lexical identity, independent from any one definition."""
+    """A published company definition backed by an approved document candidate."""
 
     __tablename__ = "glossary_terms"
     __table_args__ = (
-        # A lexical identity itself may be private.  PostgreSQL treats NULL as
-        # distinct in a normal composite unique constraint, hence COALESCE.
-        Index("uq_glossary_terms_normalized_visibility", "normalized_term", text("COALESCE(visibility_tenant_id, '00000000-0000-0000-0000-000000000000'::uuid)"), unique=True),
+        UniqueConstraint("normalized_term", name="uq_glossary_terms_normalized"),
+        CheckConstraint("NOT is_active OR (definition IS NOT NULL AND btrim(definition) <> '')", name="ck_glossary_active_definition"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     canonical_term: Mapped[str] = mapped_column(String(255), nullable=False)
     normalized_term: Mapped[str] = mapped_column(String(255), nullable=False)
-    visibility_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
-    aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
-    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, default="term", server_default="term")
-    entity_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-
-
-class GlossaryMeaning(Base):
-    """One scoped definition of a glossary term, with independent resolution."""
-
-    __tablename__ = "glossary_meanings"
-    __table_args__ = (
-        UniqueConstraint("legacy_glossary_entry_id", name="uq_glossary_meaning_legacy_entry"),
-        Index("ix_glossary_meanings_term_resolution", "term_id", "resolution_status"),
-        CheckConstraint("scope_candidate IN ('global', 'project', 'multi_project', 'unknown')", name="ck_glossary_meaning_scope"),
-        CheckConstraint("resolution_status IN ('extracted', 'conflict', 'needs_review', 'resolved', 'rejected', 'stale')", name="ck_glossary_meaning_resolution"),
-        CheckConstraint("resolution_method IS NULL OR resolution_method IN ('document_hint', 'exact_project_key', 'unique_alias', 'content_evidence', 'llm_suggestion', 'manual', 'migration')", name="ck_glossary_meaning_resolution_method"),
-        CheckConstraint("confidence >= 0.0 AND confidence <= 1.0", name="ck_glossary_meaning_confidence"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    term_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("glossary_terms.id", ondelete="CASCADE"), nullable=False)
-    candidate_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="SET NULL"), nullable=True)
-    legacy_glossary_entry_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("glossary_entries.id", ondelete="SET NULL"), nullable=True)
     definition: Mapped[str] = mapped_column(Text, nullable=False)
-    scope_candidate: Mapped[str] = mapped_column(String(16), nullable=False)
-    resolution_status: Mapped[str] = mapped_column(String(16), nullable=False, default="extracted", server_default="extracted")
-    resolution_method: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    resolution_rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
-    visibility_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
+    approved_candidate_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
-
-class GlossaryMeaningProjectBinding(Base):
-    """Confirmed or proposed project applicability for one glossary meaning."""
-
-    __tablename__ = "glossary_meaning_project_bindings"
-    __table_args__ = (
-        UniqueConstraint("meaning_id", "project_id", name="uq_glossary_meaning_project_binding"),
-        Index("ix_glossary_meaning_project_binding_project", "project_id", "status"),
-        CheckConstraint("status IN ('suggested', 'confirmed', 'rejected')", name="ck_glossary_meaning_project_binding_status"),
-        CheckConstraint("method IN ('document_hint', 'exact_project_key', 'unique_alias', 'content_evidence', 'llm_suggestion', 'manual', 'migration')", name="ck_glossary_meaning_project_binding_method"),
-        CheckConstraint("confidence >= 0.0 AND confidence <= 1.0", name="ck_glossary_meaning_project_binding_confidence"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    meaning_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("glossary_meanings.id", ondelete="CASCADE"), nullable=False)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="suggested", server_default="suggested")
-    method: Mapped[str] = mapped_column(String(32), nullable=False)
-    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
-    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-
-
-class GlossaryMeaningSource(Base):
-    """Evidence binding for a glossary meaning from a candidate or legacy observation."""
-
-    __tablename__ = "glossary_meaning_sources"
-    __table_args__ = (
-        UniqueConstraint("meaning_id", "legacy_glossary_observation_id", name="uq_glossary_meaning_source_legacy_observation"),
-        UniqueConstraint("meaning_id", "candidate_id", name="uq_glossary_meaning_source_candidate"),
-        Index("ix_glossary_meaning_sources_document", "document_id"),
-        CheckConstraint("(candidate_id IS NOT NULL)::integer + (legacy_glossary_observation_id IS NOT NULL)::integer = 1", name="ck_glossary_meaning_source_origin"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    meaning_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("glossary_meanings.id", ondelete="CASCADE"), nullable=False)
-    candidate_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="CASCADE"), nullable=True)
-    legacy_glossary_observation_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("glossary_observations.id", ondelete="SET NULL"), nullable=True)
-    document_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), nullable=True)
-    visibility_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
-    evidence_section_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class MemoryConflictCase(Base):

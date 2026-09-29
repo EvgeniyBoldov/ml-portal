@@ -3,7 +3,7 @@
  *
  * Использует useEntityEditor для стандартной CRUD логики.
  */
-import { useEffect, useMemo, useRef, useState as useReactState } from 'react';
+import { useEffect, useMemo, useState as useReactState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -574,44 +574,10 @@ export function CollectionPage() {
     deleteSelectedSqlTables,
   } = useSqlCollectionCatalog(collection, isNew);
 
-  // ─── Upload for document collections (hooks must be before conditional returns) ───
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useReactState(false);
+  // ─── Collection actions ───
   const queryClient = useQueryClient();
   const [showRestoreConfirm, setShowRestoreConfirm] = useReactState(false);
 
-  const isDocumentCollection = collection?.collection_type === 'document';
-  const isTemplateCollection = collection?.collection_type === 'template';
-
-  const uploadMutation = useMutation({
-    mutationFn: (file: File) =>
-      collectionsApi.uploadDocument(collection!.id, {
-        file,
-        title: file.name,
-        auto_ingest: true,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.collections.detail(collection!.id) });
-      setUploading(false);
-    },
-    onError: () => {
-      setUploading(false);
-    },
-  });
-
-  const uploadTemplateMutation = useMutation({
-    mutationFn: (file: File) =>
-      collectionsApi.uploadTemplate(collection!.id, { file }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.collections.detail(collection!.id) });
-      setUploading(false);
-    },
-    onError: () => {
-      setUploading(false);
-    },
-  });
-
-  const handleUploadClick = () => fileInputRef.current?.click();
   const reindexMutation = useMutation({
     mutationFn: () => collectionsApi.reindexDocuments(collection!.id),
     onSuccess: () => {
@@ -622,18 +588,6 @@ export function CollectionPage() {
   const handleReindexClick = () => {
     if (reindexMutation.isPending) return;
     reindexMutation.mutate();
-  };
-
-  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    if (isTemplateCollection) {
-      uploadTemplateMutation.mutate(file);
-    } else {
-      uploadMutation.mutate(file);
-    }
-    e.target.value = '';
   };
 
   // ─── Create mode ───
@@ -702,12 +656,6 @@ export function CollectionPage() {
   // ─── View / Edit mode ───
   return (
     <>
-      <input
-        ref={fileInputRef}
-        type="file"
-        style={{ display: 'none' }}
-        onChange={handleFileSelected}
-      />
       <EntityPageV2
         title={collection?.name ?? 'Коллекция'}
         mode={mode}
@@ -744,25 +692,15 @@ export function CollectionPage() {
               onCancel: handleCancel,
               onDelete: handleDelete,
             }),
-            extra: mode === 'view' && (isDocumentCollection || isTemplateCollection)
+            extra: mode === 'view' && collection?.collection_type === 'document'
               ? [
-                  ...(isDocumentCollection ? [
-                    <Button
-                      key="reindex"
-                      variant="primary"
-                      onClick={handleReindexClick}
-                      disabled={reindexMutation.isPending}
-                    >
-                      {reindexMutation.isPending ? 'Запуск...' : 'Переиндексировать'}
-                    </Button>,
-                  ] : []),
                   <Button
-                    key="upload"
-                    variant="success"
-                    onClick={handleUploadClick}
-                    disabled={uploading}
+                    key="reindex"
+                    variant="primary"
+                    onClick={handleReindexClick}
+                    disabled={reindexMutation.isPending}
                   >
-                    {uploading ? 'Загрузка...' : (isTemplateCollection ? 'Загрузить шаблон' : 'Загрузить файл')}
+                    {reindexMutation.isPending ? 'Запуск...' : 'Переиндексировать'}
                   </Button>,
                 ]
               : [],
