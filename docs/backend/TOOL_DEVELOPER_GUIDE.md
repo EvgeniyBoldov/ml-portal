@@ -44,7 +44,7 @@ Tool — это backend-исполняемый capability, который:
 2. Определить `tool_slug`, `tool_group`, `name`, `description`.
 3. Описать `input_schema` и `output_schema`.
 4. Реализовать async-метод версии (например, `v1_0_0`).
-5. Подключить `ToolLogger` через `ctx.tool_logger("tool.slug")`.
+5. Создать `ToolExecutionNotes` через `ctx.tool_notes("tool.slug")`.
 6. Зарегистрировать import в `builtins/__init__.py`.
 7. Проверить, что инструмент попадает в `ToolRegistry` и синхронизируется в БД через startup sync.
 8. Добавить тесты (happy path + validation error + runtime error).
@@ -78,7 +78,7 @@ class MyTool(VersionedTool):
         description="Initial version",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger("my.tool")
+        log = ctx.tool_notes("my.tool")
         ...
         return ToolResult.ok(data={...}, logs=log.entries_dict())
 ```

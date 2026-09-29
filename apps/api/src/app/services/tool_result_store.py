@@ -121,18 +121,31 @@ class ToolResultStore:
         mode: str,
         array_path: str = "",
         fields: list[str] | None = None,
+        paths: list[str] | None = None,
+        text_path: str = "",
+        text_offset: int = 0,
+        text_limit: int = 1500,
         group_by: str = "",
         filter_path: str = "",
         equals: str | None = None,
         offset: int = 0,
         limit: int = 25,
     ) -> dict[str, Any]:
+        if mode == "project" and not paths:
+            raise ToolResultStoreError("paths is required for project")
+        if mode == "text" and not text_path:
+            raise ToolResultStoreError("text_path is required for text")
         row = await self._authorized_row(result_id, run_id, tenant_id, user_id)
         if row is None:
             raise ToolResultStoreError("Result not found or no longer available")
         payload_type = str(row["payload_type"] or "null")
         if mode == "overview":
             return await self._overview(result_id, run_id, tenant_id, user_id, payload_type, row)
+        if mode == "project":
+            return await self._project(result_id, run_id, tenant_id, user_id, paths or [], row)
+        if mode == "text":
+            return await self._text(result_id, run_id, tenant_id, user_id,
+                                    text_path, text_offset, text_limit, row)
         if not array_path:
             raise ToolResultStoreError("array_path is required for select and aggregate")
         safe_limit = max(1, min(int(limit), 50))
@@ -148,6 +161,94 @@ class ToolResultStore:
                 filter_path, equals,
             )
         raise ToolResultStoreError("Unsupported analysis mode")
+
+    async def _project(
+        self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
+        paths: list[str], source_row: Any,
+    ) -> dict[str, Any]:
+        if len(paths) > 20:
+            raise ToolResultStoreError("Too many paths; select at most 20")
+        segments = [(path, _path_segments(path)) for path in paths]
+        if len({path for path, _ in segments}) != len(segments):
+            raise ToolResultStoreError("Duplicate paths are not allowed")
+        statement = text("""
+            SELECT jsonb_typeof(payload #> CAST(:path AS text[])) AS value_type,
+                   payload #> CAST(:path AS text[]) AS value
+            FROM runtime_tool_payloads
+            WHERE id = CAST(:result_id AS uuid) AND run_id = :run_id
+              AND tenant_id = :tenant_id AND user_id = :user_id
+              AND expires_at > now()
+        """)
+        values: dict[str, Any] = {}
+        missing_paths: list[str] = []
+        size_limit = _response_value_budget()
+        used = 0
+        async with get_tool_results_engine().connect() as connection:
+            for path, path_segments in segments:
+                item = (await connection.execute(statement, {
+                    "result_id": result_id, "run_id": run_id,
+                    "tenant_id": tenant_id, "user_id": user_id, "path": path_segments,
+                })).mappings().first()
+                if item is None:
+                    raise ToolResultStoreError("Result not found or no longer available")
+                value_type = item["value_type"]
+                if value_type is None:
+                    missing_paths.append(path)
+                    continue
+                value = item["value"]
+                if _contains_array(value):
+                    raise ToolResultStoreError(f"{path} contains an array; use select with array_path")
+                size = len(json.dumps({path: value}, ensure_ascii=False, default=str))
+                if used + size > size_limit:
+                    raise ToolResultStoreError("Selected values exceed the response limit; choose fewer or deeper paths")
+                values[path] = value
+                used += size
+        return {
+            "result_id": result_id, "source_result_id": result_id,
+            "mode": "project", "values": values,
+            "missing_paths": missing_paths, "source_complete": bool(source_row["source_complete"]),
+        }
+
+    async def _text(
+        self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
+        path: str, offset: int, limit: int, source_row: Any,
+    ) -> dict[str, Any]:
+        path_segments = _path_segments(path)
+        settings = get_settings()
+        safe_offset = max(0, min(int(offset), settings.TOOL_RESULTS_MAX_PAYLOAD_BYTES))
+        safe_limit = max(1, min(int(limit), 2000, _response_value_budget()))
+        statement = text("""
+            SELECT jsonb_typeof(payload #> CAST(:path AS text[])) AS value_type,
+                   length(payload #>> CAST(:path AS text[])) AS text_length,
+                   substring(payload #>> CAST(:path AS text[]) from :start for :limit) AS chunk
+            FROM runtime_tool_payloads
+            WHERE id = CAST(:result_id AS uuid) AND run_id = :run_id
+              AND tenant_id = :tenant_id AND user_id = :user_id
+              AND expires_at > now()
+        """)
+        async with get_tool_results_engine().connect() as connection:
+            item = (await connection.execute(statement, {
+                "result_id": result_id, "run_id": run_id, "tenant_id": tenant_id,
+                "user_id": user_id, "path": path_segments,
+                "start": safe_offset + 1, "limit": safe_limit,
+            })).mappings().first()
+        if item is None:
+            raise ToolResultStoreError("Result not found or no longer available")
+        if item["value_type"] != "string":
+            raise ToolResultStoreError("text_path must reference a string")
+        length = int(item["text_length"])
+        chunk = str(item["chunk"] or "")
+        while len(json.dumps(chunk, ensure_ascii=False)) > _response_value_budget():
+            chunk = chunk[:max(1, len(chunk) // 2)]
+        next_offset = safe_offset + len(chunk)
+        return {
+            "result_id": result_id, "source_result_id": result_id,
+            "mode": "text", "text_path": path,
+            "offset": safe_offset, "length": length, "chunk": chunk,
+            "complete": next_offset >= length,
+            "next_offset": None if next_offset >= length else next_offset,
+            "source_complete": bool(source_row["source_complete"]),
+        }
 
     async def _authorized_row(self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID):
         statement = text("""
@@ -181,7 +282,7 @@ class ToolResultStore:
             })).mappings().all()
         projected = []
         used = 0
-        size_limit = max(256, get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS - 1000)
+        size_limit = _response_value_budget()
         for item in rows:
             field = {"path": str(item["key"])[:128], "type": item["value_type"], "item_count": item["item_count"]}
             size = len(json.dumps(field, ensure_ascii=False))
@@ -240,7 +341,7 @@ class ToolResultStore:
             if fields and isinstance(value, dict):
                 value = {field: _get_path(value, _path_segments(field)) for field in fields}
             values.append({"ordinal": int(row["ordinal"]) - 1, "value": value})
-        size_limit = max(256, get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS - 1000)
+        size_limit = _response_value_budget()
         bounded: list[dict[str, Any]] = []
         used = 0
         for item in values:
@@ -287,7 +388,7 @@ class ToolResultStore:
             total_groups = int(rows[0]["group_total"]) if rows else 0
             projected_groups = []
             used = 0
-            size_limit = max(256, get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS - 1000)
+            size_limit = _response_value_budget()
             for row in rows:
                 group = {"value": str(row["group_value"] or "")[:256], "count": int(row["count"])}
                 size = len(json.dumps(group, ensure_ascii=False))
@@ -349,6 +450,20 @@ def _get_path(value: Any, path: list[str]) -> Any:
     return value
 
 
+def _response_value_budget() -> int:
+    # The agent context has a fixed 4,000-character cap; leave room for the
+    # result envelope and JSON escaping even when the configured query cap is higher.
+    return max(256, min(get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS, 3000) - 1000)
+
+
+def _contains_array(value: Any) -> bool:
+    if isinstance(value, list):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_array(item) for item in value.values())
+    return False
+
+
 def _source_total(payload: Any) -> int | None:
     if isinstance(payload, dict) and isinstance(payload.get("total"), int):
         return int(payload["total"])
@@ -370,7 +485,22 @@ def _json_type(value: Any) -> str:
 
 
 def _source_complete(payload: Any) -> bool:
-    if isinstance(payload, dict) and isinstance(payload.get("issues"), list) and isinstance(payload.get("total"), int):
-        start_at = int(payload.get("startAt") or 0)
-        return start_at == 0 and int(payload["total"]) <= len(payload["issues"])
+    """Detect incomplete pages, including Jira pages nested inside one issue."""
+    if isinstance(payload, dict):
+        total = payload.get("total")
+        if isinstance(total, int) and not isinstance(total, bool):
+            for key in ("issues", "comments", "worklogs", "values", "results"):
+                items = payload.get(key)
+                if isinstance(items, list):
+                    try:
+                        start_at = int(payload.get("startAt") or payload.get("start_at") or 0)
+                    except (TypeError, ValueError):
+                        return False
+                    if start_at != 0 or total > len(items):
+                        return False
+        if payload.get("isLast") is False or payload.get("nextPage"):
+            return False
+        return all(_source_complete(value) for value in payload.values())
+    if isinstance(payload, list):
+        return all(_source_complete(value) for value in payload)
     return True

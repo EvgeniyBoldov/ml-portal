@@ -6,7 +6,7 @@ from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
 from app.services.tool_result_store import ToolResultStore, ToolResultStoreError
 
-_INPUT_SCHEMA = {
+_INPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
         "result_id": {"type": "string", "minLength": 1},
@@ -23,7 +23,7 @@ _INPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
-_OUTPUT_SCHEMA = {
+_OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
         "result_id": {"type": "string"}, "mode": {"type": "string"},
@@ -40,6 +40,29 @@ _OUTPUT_SCHEMA = {
     "required": ["result_id", "mode"],
 }
 
+_INPUT_SCHEMA_V1_1 = {
+    **_INPUT_SCHEMA_V1,
+    "properties": {
+        **_INPUT_SCHEMA_V1["properties"],
+        "mode": {"type": "string", "enum": ["overview", "select", "aggregate", "project", "text"]},
+        "paths": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 20},
+        "text_path": {"type": "string", "minLength": 1},
+        "text_offset": {"type": "integer", "minimum": 0},
+        "text_limit": {"type": "integer", "minimum": 1, "maximum": 2000},
+    },
+}
+_OUTPUT_SCHEMA_V1_1 = {
+    **_OUTPUT_SCHEMA_V1,
+    "properties": {
+        **_OUTPUT_SCHEMA_V1["properties"],
+        "values": {"type": "object"},
+        "missing_paths": {"type": "array", "items": {"type": "string"}},
+        "chunk": {"type": "string"},
+        "length": {"type": "integer"},
+        "text_path": {"type": "string"},
+    },
+}
+
 
 @register_tool
 class ResultAnalyzeTool(VersionedTool):
@@ -48,14 +71,23 @@ class ResultAnalyzeTool(VersionedTool):
     name: ClassVar[str] = "Analyze Tool Result"
     description: ClassVar[str] = (
         "Inspect or query the complete stored result of a successful tool call in the current run. "
-        "Use overview for field and array counts, select for bounded rows with pagination, "
-        "and aggregate for exact counts or grouped counts. Never infer completeness from a preview."
+        "Use overview for field and array counts, project for selected object paths, "
+        "text for long string fields, select for bounded array rows with pagination, and aggregate for exact counts or "
+        "grouped counts. Never infer completeness from a preview."
     )
 
-    @tool_version(version="1.0.0", input_schema=_INPUT_SCHEMA, output_schema=_OUTPUT_SCHEMA,
+    @tool_version(version="1.0.0", input_schema=_INPUT_SCHEMA_V1, output_schema=_OUTPUT_SCHEMA_V1,
                   description="Run-scoped PostgreSQL JSONB result overview and bounded analytics")
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        log = ctx.tool_logger(self.tool_slug)
+        return await self._analyze(ctx, args)
+
+    @tool_version(version="1.1.0", input_schema=_INPUT_SCHEMA_V1_1, output_schema=_OUTPUT_SCHEMA_V1_1,
+                  description="Adds bounded object projection and paginated text reads")
+    async def v1_1_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
+        return await self._analyze(ctx, args)
+
+    async def _analyze(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
+        log = ctx.tool_notes(self.tool_slug)
         run_id = str(ctx.extra.get("runtime_root_run_id") or "").strip()
         result_id = str(args.get("result_id") or "").strip()
         if not run_id or not result_id:
@@ -69,6 +101,10 @@ class ResultAnalyzeTool(VersionedTool):
                 mode=str(args.get("mode") or ""),
                 array_path=str(args.get("array_path") or ""),
                 fields=[str(item) for item in args.get("fields") or []],
+                paths=[str(item) for item in args.get("paths") or []],
+                text_path=str(args.get("text_path") or ""),
+                text_offset=int(args.get("text_offset") or 0),
+                text_limit=int(args.get("text_limit") or 1500),
                 group_by=str(args.get("group_by") or ""),
                 filter_path=str(args.get("filter_path") or ""),
                 equals=str(args["equals"]) if args.get("equals") is not None else None,
