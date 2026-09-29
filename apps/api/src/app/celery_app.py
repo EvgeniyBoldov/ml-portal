@@ -131,6 +131,10 @@ def build_default_beat_schedule() -> dict:
             "task": "app.workers.tasks_cleanup.cleanup_expired_runtime_tool_results",
             "schedule": 3600.0,  # 1 hour
         },
+        "complete-tool-payloads-expired-cleanup": {
+            "task": "app.workers.tasks_cleanup.cleanup_expired_tool_payloads",
+            "schedule": 3600.0,
+        },
         "orphaned-chat-attachments-cleanup": {
             "task": "app.workers.tasks_cleanup.cleanup_orphaned_chat_attachments",
             "schedule": 3600.0,  # 1 hour
@@ -220,6 +224,7 @@ app.conf.task_routes = {
     "app.workers.tasks_ldap_sync.sync_ldap_users": {"queue": "maintenance.default", "priority": 2},
     "app.workers.tasks_ldap_sync.ldap_health_check": {"queue": "health", "priority": 3},
     "app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions": {"queue": "cleanup_low", "priority": 1},
+    "app.workers.tasks_cleanup.cleanup_expired_tool_payloads": {"queue": "cleanup_low", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_orphaned_chat_attachments": {"queue": "cleanup_low", "priority": 1},
     
     # Memory writeback tasks

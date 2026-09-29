@@ -40,9 +40,7 @@ from app.runtime.operation_errors import (
 logger = get_logger(__name__)
 
 
-# The full operation result remains in the canonical journal and observation
-# output. These limits only govern the follow-up prompt used to choose the
-# next operation.
+# Tool results are stored separately; this bounds only prompt projections.
 MAX_TOOL_CONTEXT_CHARS = 4_000
 MAX_COLLECTION_INFO_TOOLS = 12
 MAX_COLLECTION_INFO_TEXT_CHARS = 320
@@ -720,18 +718,41 @@ class OperationExecutionFacade:
         operation_slug: Optional[str] = None,
         include_operation_contracts: bool = True,
         evidence_call_id: Optional[str] = None,
+        stored_result: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Format a bounded, action-oriented tool result for the next LLM turn.
 
-        Each operation may publish a compact LLM projection which is distinct
-        from its complete result. Full results remain in the canonical journal
-        and ``AgentLoopState.tool_outputs``. This avoids asking the operation
-        loop to infer which arbitrary fields are safe to discard while keeping
-        the next tool decision supplied with its declared contract.
+        Full operation payloads live in the dedicated result store. Inline
+        output is preserved only when complete; otherwise the model gets a
+        pointer and must call result.analyze instead of receiving a clipped,
+        misleading prefix.
         """
         import json as _json
 
         if result.success:
+            if stored_result:
+                descriptor = {
+                    "_runtime_result": {
+                        key: stored_result.get(key) for key in (
+                            "result_id", "payload_type", "payload_chars",
+                            "inline_complete", "source_total", "source_complete",
+                        ) if key in stored_result
+                    },
+                    "evidence_call_id": evidence_call_id,
+                }
+                if stored_result.get("inline_complete"):
+                    raw_output = result.data or {}
+                    if isinstance(raw_output, dict):
+                        raw_output = dict(raw_output)
+                        raw_output["_runtime_result"] = descriptor["_runtime_result"]
+                        if evidence_call_id:
+                            raw_output["evidence_call_id"] = evidence_call_id
+                    else:
+                        raw_output = {"_runtime_result": descriptor["_runtime_result"], "data": raw_output,
+                                      "evidence_call_id": evidence_call_id}
+                else:
+                    raw_output = descriptor
+                return _json.dumps(raw_output, ensure_ascii=False, default=str)
             raw_output = result.data or {}
             canonical_operation = OperationExecutionFacade._canonical_operation_name(operation_slug)
             if isinstance(raw_output, dict):

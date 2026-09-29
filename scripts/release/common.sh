@@ -68,7 +68,7 @@ load_release_file() {
     /^[A-Z][A-Z0-9_]*=[-A-Za-z0-9._:\/@+]+$/ {
       split($0, pair, "=")
       key = pair[1]
-      if (key !~ /^(IMAGE_REPOSITORY|APP_IMAGE_TAG|BASE_IMAGE_TAG|BASE_INPUT_SHA|SOURCE_SHA|DB_REVISION)$/ || seen[key]++) {
+      if (key !~ /^(IMAGE_REPOSITORY|APP_IMAGE_TAG|BASE_IMAGE_TAG|BASE_INPUT_SHA|SOURCE_SHA|DB_REVISION|TOOL_RESULTS_DB_REVISION)$/ || seen[key]++) {
         exit 1
       }
       next
@@ -88,6 +88,7 @@ load_release_file() {
   : "${BASE_INPUT_SHA:?BASE_INPUT_SHA is required in release.env}"
   : "${SOURCE_SHA:?SOURCE_SHA is required in release.env}"
   : "${DB_REVISION:?DB_REVISION is required in release.env}"
+  : "${TOOL_RESULTS_DB_REVISION:?TOOL_RESULTS_DB_REVISION is required in release.env}"
 }
 
 base_input_sha() {

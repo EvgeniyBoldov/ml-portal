@@ -45,6 +45,21 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres-tool-results:
+    image: postgres:15-alpine
+    <<: *restart
+    environment:
+      POSTGRES_DB: ${TOOL_RESULTS_POSTGRES_DB}
+      POSTGRES_USER: ${TOOL_RESULTS_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${TOOL_RESULTS_POSTGRES_PASSWORD}
+    volumes:
+      - postgres_tool_results_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TOOL_RESULTS_POSTGRES_USER} -d ${TOOL_RESULTS_POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   postgres-remote:
     image: postgres:15-alpine
     <<: *restart
@@ -117,8 +132,11 @@ services:
     environment:
       - PYTHONPATH=/app
       - MODELS_ROOT=/app/models_llm
+      - TOOL_RESULTS_DB_URL=${TOOL_RESULTS_DB_URL:?TOOL_RESULTS_DB_URL is required}
     depends_on:
       postgres:
+        condition: service_healthy
+      postgres-tool-results:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -268,8 +286,11 @@ services:
     env_file: ${PROD_ENV_FILE:?PROD_ENV_FILE is required}
     environment:
       - PYTHONPATH=/app
+      - TOOL_RESULTS_DB_URL=${TOOL_RESULTS_DB_URL:?TOOL_RESULTS_DB_URL is required}
     depends_on:
       postgres:
+        condition: service_healthy
+      postgres-tool-results:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -278,6 +299,22 @@ services:
       qdrant:
         condition: service_started
     command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=4", "--max-tasks-per-child=100"]
+
+  beat:
+    image: *worker-image
+    <<: *restart
+    env_file: ${PROD_ENV_FILE:?PROD_ENV_FILE is required}
+    environment:
+      - PYTHONPATH=/app
+      - TOOL_RESULTS_DB_URL=${TOOL_RESULTS_DB_URL:?TOOL_RESULTS_DB_URL is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-tool-results:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.celery_app", "beat", "--loglevel=info", "--pidfile=/tmp/celerybeat.pid"]
 
   # ===========================================================================
   # FLOWER (Celery monitoring)
@@ -349,6 +386,7 @@ services:
 
 volumes:
   postgres_data:
+  postgres_tool_results_data:
   postgres_remote_data:
   redis_data:
   minio_data:

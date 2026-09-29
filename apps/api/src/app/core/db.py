@@ -61,6 +61,8 @@ async def lifespan(app):
         logger.info("Closing database connection...")
         if _engine:
             await _engine.dispose()
+        from app.services.tool_result_store import dispose_tool_results_engine
+        await dispose_tool_results_engine()
         await cleanup_clients()
         logger.info("Database connection closed")
 

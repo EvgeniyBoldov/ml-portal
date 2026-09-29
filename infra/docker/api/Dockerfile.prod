@@ -20,6 +20,7 @@ COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 COPY --chown=appuser:appuser apps/api/src/app/ ./app/
 COPY --chown=appuser:appuser apps/api/alembic.ini ./
+COPY --chown=appuser:appuser apps/api/tool_results_alembic.ini ./
 
 # Set environment variables
 ENV PYTHONPATH=/app \

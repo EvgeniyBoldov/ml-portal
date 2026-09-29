@@ -166,12 +166,18 @@ class RuntimeTurnState(BaseModel):
         success: bool,
         data: Any,
         sources: Optional[List[Dict[str, Any]]] = None,
+        result_id: Optional[str] = None,
+        result_inline_complete: Optional[bool] = None,
+        result_source_complete: Optional[bool] = None,
     ) -> None:
         self.tool_ledger.register_result(
             call_id=call_id,
             success=success,
             data=data,
             sources=sources,
+            result_id=result_id,
+            result_inline_complete=result_inline_complete,
+            result_source_complete=result_source_complete,
         )
 
     def consume_task_tool_call(self, task_id: str) -> None:

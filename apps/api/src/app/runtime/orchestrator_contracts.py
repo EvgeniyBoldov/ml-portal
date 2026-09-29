@@ -469,12 +469,22 @@ class ArtifactSelection(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class OutputCoverageClaim(BaseModel):
+    """Runtime-checkable proof that a declared list covers a stored selection."""
+    output_key: str = Field(..., min_length=1)
+    output_path: str = Field(default="", description="Dot-separated path to an array within the output value")
+    result_id: str = Field(..., min_length=1)
+    query_call_ids: List[str] = Field(..., min_length=1)
+    model_config = {"extra": "forbid"}
+
+
 class TaskCompletionDeclaration(BaseModel):
     """Agent-authored claim. Runtime alone verifies it and computes TaskResult."""
     completion_claim: AgentExecutionCompletion = Field(..., alias="completion")
     report: str = Field(..., min_length=1)
     outputs: Dict[str, OutputSlot] = Field(default_factory=dict)
     needs: List[DiscoveredNeed] = Field(default_factory=list)
+    coverage: List[OutputCoverageClaim] = Field(default_factory=list)
     limitation: Optional[UserLimitation] = None
     model_config = {"extra": "forbid", "populate_by_name": True}
 
@@ -604,6 +614,16 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
                 "properties": output_properties,
             },
             "needs": {"type": "array", "items": need_schema},
+            "coverage": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "output_key": {"type": "string", "minLength": 1},
+                    "output_path": {"type": "string"},
+                    "result_id": {"type": "string", "minLength": 1},
+                    "query_call_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+                },
+                "required": ["output_key", "result_id", "query_call_ids"],
+            }},
             "limitation": limitation_schema,
         },
         "required": ["completion", "report", "outputs", "needs"],

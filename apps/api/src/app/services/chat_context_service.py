@@ -320,7 +320,9 @@ class ChatContextService:
             if operation.kind == "open_loop" and operation.payload.get("status") != "blocked":
                 result.append(operation)
                 continue
-            result.append(operation.model_copy(update={"expires_at": (now + timedelta(days=ttl_days[operation.kind])).isoformat()}))
+            # Keep the domain value typed as datetime through reconciliation;
+            # model_copy(update=...) does not validate/coerce update values.
+            result.append(operation.model_copy(update={"expires_at": now + timedelta(days=ttl_days[operation.kind])}))
         return result
 
     @staticmethod

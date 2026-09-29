@@ -81,6 +81,11 @@ head_count="$(printf '%s\n' "$db_heads" | sed '/^$/d' | wc -l | tr -d ' ')"
 test "$head_count" = "1" || fail "Release requires exactly one Alembic head; found ${head_count}."
 db_revision="$db_heads"
 release_log "Database revision=${db_revision}"
+tool_results_heads="$(docker run --rm --entrypoint alembic "$api_image" -c tool_results_alembic.ini heads | awk '/\(head\)/ {print $1}')"
+tool_results_head_count="$(printf '%s\n' "$tool_results_heads" | sed '/^$/d' | wc -l | tr -d ' ')"
+test "$tool_results_head_count" = "1" || fail "Release requires exactly one tool result store Alembic head; found ${tool_results_head_count}."
+tool_results_db_revision="$tool_results_heads"
+release_log "Tool results database revision=${tool_results_db_revision}"
 release_phase_end
 
 release_phase_start "verify source and origin did not change"
@@ -100,7 +105,8 @@ printf '%s\n' \
   "BASE_IMAGE_TAG=${next_base_tag}" \
   "BASE_INPUT_SHA=${next_base_sha}" \
   "SOURCE_SHA=${source_sha}" \
-  "DB_REVISION=${db_revision}" > "$tmp_release"
+  "DB_REVISION=${db_revision}" \
+  "TOOL_RESULTS_DB_REVISION=${tool_results_db_revision}" > "$tmp_release"
 mv "$tmp_release" "$RELEASE_FILE"
 release_phase_end
 

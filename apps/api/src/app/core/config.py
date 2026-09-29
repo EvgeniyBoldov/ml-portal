@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = Field(default="postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal")
     ASYNC_DB_URL: str = Field(default="postgresql+asyncpg://ml_portal:ml_portal_password@postgres:5432/ml_portal")
+    TOOL_RESULTS_DB_URL: str = Field(default="postgresql+asyncpg://tool_results:tool_results_password@postgres-tool-results:5432/tool_results")
+    TOOL_RESULTS_RETENTION_DAYS: int = Field(default=7, ge=1, le=30)
+    TOOL_RESULTS_MAX_PAYLOAD_BYTES: int = Field(default=33554432, ge=1024)
+    TOOL_RESULTS_INLINE_CONTEXT_CHARS: int = Field(default=2500, ge=256, le=16000)
+    TOOL_RESULTS_QUERY_CONTEXT_CHARS: int = Field(default=3000, ge=256, le=12000)
 
     # Redis
     REDIS_URL: str = Field(default="redis://localhost:6379/0")

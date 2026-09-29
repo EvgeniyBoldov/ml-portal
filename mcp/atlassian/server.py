@@ -246,7 +246,12 @@ def _bounded_issue(issue: Any) -> Any:
 
 def _tool_result(data: Any) -> dict[str, Any]:
     if isinstance(data, dict) and isinstance(data.get("issues"), list):
-        display: Any = {"issues": [_bounded_issue(issue) for issue in data["issues"][:MAX_RESULTS]], "total": data.get("total")}
+        display: Any = {
+            "issues": [_bounded_issue(issue) for issue in data["issues"][:MAX_RESULTS]],
+            "total": data.get("total"),
+            "startAt": data.get("startAt", 0),
+            "maxResults": data.get("maxResults", len(data["issues"])),
+        }
     elif isinstance(data, dict) and "key" in data and "fields" in data:
         display = _bounded_issue(data)
     else:
@@ -291,8 +296,8 @@ def _tool(
 TOOLS = [
     _tool(
         "jira_search_issues",
-        "Search Jira issues with JQL. Results are bounded.",
-        {"jql": {"type": "string"}, "limit": {"type": "integer", "default": 20}},
+        "Search one bounded Jira issue page with JQL. Use start_at to fetch later pages; check total/startAt/maxResults for completeness.",
+        {"jql": {"type": "string"}, "limit": {"type": "integer", "default": 20}, "start_at": {"type": "integer", "minimum": 0, "default": 0}},
         ["jql"],
         read_only=True,
     ),
@@ -391,7 +396,7 @@ async def mcp_root(
             jql = str(arguments.get("jql") or "").strip()
             if not jql:
                 raise ValueError("jql is required")
-            data = await _jira_request(base_url=base_url, headers=auth_headers, method="GET", path="/rest/api/2/search", params={"jql": jql, "maxResults": _limit(arguments.get("limit")), "fields": "summary,description,status,issuetype,project,priority,assignee,reporter,labels,updated,created"})
+            data = await _jira_request(base_url=base_url, headers=auth_headers, method="GET", path="/rest/api/2/search", params={"jql": jql, "maxResults": _limit(arguments.get("limit")), "startAt": max(0, min(int(arguments.get("start_at") or 0), 100000)), "fields": "summary,description,status,issuetype,project,priority,assignee,reporter,labels,updated,created"})
         elif tool_name == "jira_get_issue":
             key = _issue_path_key(arguments.get("issue_key"))
             data = await _jira_request(

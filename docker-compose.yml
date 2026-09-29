@@ -19,6 +19,20 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres-tool-results:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${TOOL_RESULTS_POSTGRES_DB:-tool_results}
+      POSTGRES_USER: ${TOOL_RESULTS_POSTGRES_USER:-tool_results}
+      POSTGRES_PASSWORD: ${TOOL_RESULTS_POSTGRES_PASSWORD:-tool_results_password}
+    volumes:
+      - postgres_tool_results_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TOOL_RESULTS_POSTGRES_USER:-tool_results} -d ${TOOL_RESULTS_POSTGRES_DB:-tool_results}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Remote PostgreSQL — used by SQL MCP shim (dbhub-mcp) as demo external data source
   # postgres-remote:
   #   image: postgres:15-alpine
@@ -103,14 +117,18 @@ services:
     environment:
       - PYTHONPATH=/app
       - MODELS_ROOT=/app/models_llm
+      - TOOL_RESULTS_DB_URL=postgresql+asyncpg://${TOOL_RESULTS_POSTGRES_USER:-tool_results}:${TOOL_RESULTS_POSTGRES_PASSWORD:-tool_results_password}@postgres-tool-results:5432/${TOOL_RESULTS_POSTGRES_DB:-tool_results}
     depends_on:
       postgres:
+        condition: service_healthy
+      postgres-tool-results:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: >
       sh -c "
         alembic upgrade heads &&
+        alembic -c tool_results_alembic.ini upgrade head &&
         uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
       "
     healthcheck:
@@ -319,6 +337,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-tool-results:
+        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -339,6 +359,8 @@ services:
     env_file: .env
     depends_on:
       postgres:
+        condition: service_healthy
+      postgres-tool-results:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -389,6 +411,7 @@ services:
 
 volumes:
   postgres_data:
+  postgres_tool_results_data:
   postgres_remote_data:
   redis_data:
   minio_data:

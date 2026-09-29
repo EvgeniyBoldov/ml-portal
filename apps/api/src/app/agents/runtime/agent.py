@@ -95,6 +95,8 @@ from app.runtime.error_payloads import build_debug_payload
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.adapters.interfaces.llm import LLMProviderError
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
+from app.runtime.redactor import RuntimeRedactor
+from app.services.tool_result_store import ToolResultStore
 from app.runtime.orchestrator_contracts import parse_task_completion_declaration
 from app.services.platform_settings_defaults import (
     PLATFORM_INTENT_MESSAGES,
@@ -1230,6 +1232,32 @@ class AgentToolRuntime(BaseRuntime):
             await run_session.finish("waiting_confirmation", str(exc))
             return
 
+        stored_result = None
+        redacted_result_data = None
+        root_run_id = str(ctx.extra.get("runtime_root_run_id") or "").strip()
+        if result.success and operation_call.tool_name != "result.analyze":
+            try:
+                if not root_run_id:
+                    raise RuntimeError("root runtime run id is unavailable")
+                redacted_result_data = RuntimeRedactor().redact(result.data)
+                stored_result = await ToolResultStore().save(
+                    run_id=root_run_id, call_id=operation_call.id,
+                    operation=operation_call.tool_name, tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    task_id=str(ctx.extra.get("runtime_task_id") or "") or None,
+                    agent_execution_id=str(run_session.run_id or "") or None,
+                    payload=redacted_result_data,
+                )
+                result.data = redacted_result_data
+                result.metadata["stored_result"] = stored_result
+            except Exception:
+                # Do not retry an upstream operation: it may have had side effects.
+                result.success = False
+                result.data = None
+                result.error = "Tool result could not be stored; the operation will not be repeated automatically."
+                result.metadata.update({"error_code": "tool_result_store_failed", "retryable": False})
+                sources = []
+
         consumed_tool_call = not bool(result.metadata.get("reused"))
         if consumed_tool_call:
             operation_calls_total_ref[0] += 1
@@ -1241,6 +1269,39 @@ class AgentToolRuntime(BaseRuntime):
                 typed_error_code = RuntimeErrorCode(str(raw_error_code))
             except ValueError:
                 typed_error_code = None
+        stored_result = result.metadata.get("stored_result") if result.success else None
+        event_result_id = (
+            stored_result.get("result_id") if isinstance(stored_result, dict)
+            else result.data.get("source_result_id") if operation_call.tool_name == "result.analyze" and isinstance(result.data, dict)
+            else None
+        )
+        event_inline_complete = (
+            stored_result.get("inline_complete") if isinstance(stored_result, dict)
+            else result.data.get("inline_complete") if operation_call.tool_name == "result.analyze" and isinstance(result.data, dict)
+            else None
+        )
+        event_source_complete = (
+            stored_result.get("source_complete") if isinstance(stored_result, dict)
+            else result.data.get("source_complete") if operation_call.tool_name == "result.analyze" and isinstance(result.data, dict)
+            else None
+        )
+        safe_result_projection = ({
+            "result_id": stored_result.get("result_id"),
+            "payload_type": stored_result.get("payload_type"),
+            "payload_chars": stored_result.get("payload_chars"),
+            "fields": stored_result.get("fields", []),
+            "inline_complete": stored_result.get("inline_complete"),
+            "source_total": stored_result.get("source_total"),
+            "source_complete": stored_result.get("source_complete"),
+        } if isinstance(stored_result, dict) else (
+            {key: result.data.get(key) for key in (
+                "result_id", "source_result_id", "mode", "selection_id", "offset",
+                "matched_count", "returned_count", "complete", "source_complete",
+                "source_total", "count",
+            ) if key in result.data}
+            if operation_call.tool_name == "result.analyze" and isinstance(result.data, dict)
+            else result.data
+        ))
         envelope = OperationResultEnvelope(
             operation_slug=operation_call.tool_name,
             call_id=operation_call.id,
@@ -1252,9 +1313,9 @@ class AgentToolRuntime(BaseRuntime):
                 if "retryable" in result.metadata
                 else None
             ),
-            data=result.data if result.success else None,
+            data=safe_result_projection if result.success else None,
         )
-        sse_data = result.data if result.success else result.error
+        sse_data = safe_result_projection if result.success else result.error
         sse_truncated = False
         if result.success and isinstance(sse_data, dict):
             try:
@@ -1287,6 +1348,9 @@ class AgentToolRuntime(BaseRuntime):
             operator_message=result.metadata.get("operator_message"),
             source=result.metadata.get("source"),
             debug=result.metadata.get("debug"),
+            result_id=event_result_id,
+            result_inline_complete=event_inline_complete,
+            result_source_complete=event_source_complete,
             envelope=envelope.to_metadata(),
             truncated=sse_truncated if sse_truncated else None,
         )
@@ -1297,9 +1361,9 @@ class AgentToolRuntime(BaseRuntime):
             "success": result.success,
             "reused": bool(result.metadata.get("reused")),
             "reused_from_call_id": result.metadata.get("reused_from_call_id"),
-            "output": result.data if result.success else result.error,
-            "result": result.data if result.success else result.error,
-            "data": result.data if result.success else None,
+            "output": safe_result_projection if result.success else result.error,
+            "result": safe_result_projection if result.success else result.error,
+            "data": safe_result_projection if result.success else None,
             "error": None if result.success else str(result.error or ""),
             "safe_message": None if result.success else str(result.error or ""),
             "user_message": result.metadata.get("user_message"),
@@ -1338,6 +1402,7 @@ class AgentToolRuntime(BaseRuntime):
             operation_slug=operation_call.tool_name,
             include_operation_contracts=include_operation_contracts,
             evidence_call_id=operation_call.id if result.success else None,
+            stored_result=stored_result if isinstance(stored_result, dict) else None,
         )
         operation_results_for_context.append((operation_call, result_text))
 

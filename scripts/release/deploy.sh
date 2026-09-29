@@ -10,9 +10,9 @@ source "${script_dir}/common.sh"
 
 readonly APPLICATION_SERVICES=(
   api frontend netbox-mcp-custom dbhub-mcp atlassian-jira-mcp ml-inference-mcp
-  emb rerank worker flower nginx
+  emb rerank worker beat flower nginx
 )
-readonly STATEFUL_SERVICES=(postgres postgres-remote redis qdrant minio)
+readonly STATEFUL_SERVICES=(postgres postgres-tool-results postgres-remote redis qdrant minio)
 
 APP_ROOT="${ML_PORTAL_APP_ROOT:-/opt/ml-portal}"
 STATE_DIR="${ML_PORTAL_STATE_DIR:-/var/lib/ml-portal}"
@@ -163,6 +163,7 @@ pull_application_images() {
 apply_migrations() {
   release_phase_start "apply database migration ${DB_REVISION}"
   compose run --rm --no-deps api alembic upgrade "$DB_REVISION" || return
+  compose run --rm --no-deps api alembic -c tool_results_alembic.ini upgrade "$TOOL_RESULTS_DB_REVISION" || return
   release_phase_end
 }
 
@@ -239,6 +240,7 @@ deploy() {
   local application_stopped=0
   validate_release_bundle "$RELEASE_DIR"
   old_current="$(current_release_dir || true)"
+  compose up -d --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" postgres-tool-results
   verify_stateful_services
 
   if ! stop_application_services; then

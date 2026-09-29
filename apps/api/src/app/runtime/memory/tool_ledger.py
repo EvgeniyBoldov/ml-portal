@@ -67,6 +67,9 @@ class ToolLedgerEntry(BaseModel):
     result_fingerprint: Optional[str] = None
     result_preview: Optional[str] = None
     result_data: Any = None
+    stored_result_id: Optional[str] = None
+    result_inline_complete: Optional[bool] = None
+    result_source_complete: Optional[bool] = None
     sources: List[Dict[str, Any]] = Field(default_factory=list)
     called_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: Optional[datetime] = None
@@ -116,6 +119,9 @@ class ToolLedger(BaseModel):
         success: bool,
         data: Any,
         sources: Optional[List[Dict[str, Any]]] = None,
+        result_id: Optional[str] = None,
+        result_inline_complete: Optional[bool] = None,
+        result_source_complete: Optional[bool] = None,
     ) -> None:
         target = None
         for entry in reversed(self.entries):
@@ -132,6 +138,9 @@ class ToolLedger(BaseModel):
         target.result_fingerprint = result_fingerprint
         target.result_preview = result_preview
         target.result_data = _cacheable_result_data(data) if success else None
+        target.stored_result_id = result_id
+        target.result_inline_complete = result_inline_complete
+        target.result_source_complete = result_source_complete
         target.sources = [dict(source) for source in (sources or []) if isinstance(source, dict)]
         target.finished_at = datetime.now(timezone.utc)
 

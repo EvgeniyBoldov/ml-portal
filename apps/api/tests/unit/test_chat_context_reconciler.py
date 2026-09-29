@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -8,6 +9,20 @@ import pytest
 
 from app.services.chat_context_contracts import ChatContextOperation
 from app.services.chat_context_reconciler import ChatContextReconciler
+from app.services.chat_context_service import ChatContextService
+
+
+def test_expiry_policy_keeps_expires_at_as_datetime() -> None:
+    operation = ChatContextOperation(
+        action="add", kind="term_binding", item_key="term",
+        payload={"glossary_entry_id": "entry", "term": "term"},
+        source_ids=[f"turn:{uuid4()}"], expected_revision=0,
+    )
+
+    [updated] = ChatContextService._with_expiry_policy([operation])
+
+    assert isinstance(updated.expires_at, datetime)
+    assert updated.expires_at.tzinfo is not None
 
 
 @pytest.mark.asyncio

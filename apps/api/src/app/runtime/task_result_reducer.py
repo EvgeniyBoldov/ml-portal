@@ -99,6 +99,14 @@ class TaskAttemptResultReducer:
                     continue
                 outputs[spec.key] = value
                 states[spec.key] = {"status": "fulfilled", "fulfillment": "task_result", "value_present": True}
+                coverage_error = self._verify_output_coverage(
+                    output_key=spec.key, value=value, declaration=declaration,
+                    verified=verified,
+                )
+                if coverage_error:
+                    invalid.append(spec.key)
+                    states[spec.key] = {"status": "invalid", "reason": coverage_error}
+                    continue
                 if normalized_from_null:
                     states[spec.key]["normalized_from"] = "null"
                 continue
@@ -131,6 +139,65 @@ class TaskAttemptResultReducer:
 
         invalid.extend(sorted(set(declaration.outputs) - known_keys))
         return outputs, states, invalid, missing, evidence_selections, artifact_selections
+
+    @staticmethod
+    def _verify_output_coverage(*, output_key: str, value: Any, declaration: TaskCompletionDeclaration,
+                               verified: Dict[str, Any]) -> str | None:
+        """Reject apparently-complete arrays derived from clipped tool context."""
+        claims = [claim for claim in declaration.coverage if claim.output_key == output_key]
+        source_receipts = [item for item in verified.get("receipts") or []
+                           if isinstance(item, dict) and item.get("result_id")
+                           and item.get("inline_complete") is False]
+
+        def arrays(node: Any, prefix: str = "") -> list[tuple[str, list[Any]]]:
+            found: list[tuple[str, list[Any]]] = []
+            if isinstance(node, list):
+                if node:
+                    found.append((prefix, node))
+                for index, child in enumerate(node):
+                    found.extend(arrays(child, f"{prefix}.{index}" if prefix else str(index)))
+            elif isinstance(node, dict):
+                for key, child in node.items():
+                    found.extend(arrays(child, f"{prefix}.{key}" if prefix else str(key)))
+            return found
+
+        for path, items in arrays(value):
+            # A coverage claim is needed only where the task had a clipped
+            # source available; ordinary small inline tool results remain
+            # compatible with existing agents.
+            if not source_receipts:
+                continue
+            claim = next((item for item in claims if item.output_path == path), None)
+            if claim is None:
+                return "stored_result_array_coverage_missing"
+            if not any(str(item.get("result_id") or "") == claim.result_id for item in source_receipts):
+                return "stored_result_coverage_source_unverified"
+            pages = []
+            for call_id in claim.query_call_ids:
+                page = next((item for item in verified.get("receipts") or []
+                             if isinstance(item, dict) and item.get("call_id") == call_id), None)
+                analysis = page.get("analysis") if isinstance(page, dict) else None
+                if (not isinstance(analysis, dict) or analysis.get("mode") != "select"
+                        or analysis.get("source_result_id") != claim.result_id
+                        or not analysis.get("selection_id")):
+                    return "stored_result_array_coverage_unverified"
+                pages.append(analysis)
+            if not pages or any(not page.get("source_complete") for page in pages):
+                return "stored_result_source_incomplete"
+            selections = {page.get("selection_id") for page in pages}
+            if len(selections) != 1:
+                return "stored_result_selection_mismatch"
+            pages.sort(key=lambda page: int(page.get("offset") or 0))
+            expected_offset = 0
+            for page in pages:
+                if int(page.get("offset") or 0) != expected_offset:
+                    return "stored_result_page_gap"
+                expected_offset += int(page.get("returned_count") or 0)
+            if (not pages[-1].get("complete")
+                    or expected_offset != len(items)
+                    or int(pages[0].get("matched_count") or 0) != len(items)):
+                return "stored_result_array_incomplete"
+        return None
 
     @staticmethod
     def _matches_schema(value: Any, schema: Dict[str, Any]) -> bool:

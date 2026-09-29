@@ -395,6 +395,9 @@ class AgentExecutor:
                         call_id=str(runtime_event.data.get("call_id") or ""),
                         success=bool(runtime_event.data.get("success")),
                         data=result_payload,
+                        result_id=runtime_event.data.get("result_id"),
+                        result_inline_complete=runtime_event.data.get("result_inline_complete"),
+                        result_source_complete=runtime_event.data.get("result_source_complete"),
                         sources=[
                             dict(source)
                             for source in (runtime_event.data.get("sources") or [])
@@ -711,7 +714,18 @@ class AgentExecutor:
                 "result_fingerprint": getattr(entry, "result_fingerprint", None),
                 "result_preview": getattr(entry, "result_preview", None),
                 "retrieval": is_retrieval,
+                "result_id": getattr(entry, "stored_result_id", None),
+                "inline_complete": getattr(entry, "result_inline_complete", None),
+                "source_complete": getattr(entry, "result_source_complete", None),
             }
+            result_data = getattr(entry, "result_data", None)
+            if normalized == "result.analyze" and isinstance(result_data, dict):
+                receipt["analysis"] = {
+                    key: result_data.get(key) for key in (
+                        "mode", "source_result_id", "selection_id", "offset",
+                        "matched_count", "returned_count", "complete", "source_complete",
+                    ) if key in result_data
+                }
             receipts.append(receipt)
             evidence[receipt["call_id"]] = {"operation": operation, "result_fingerprint": receipt["result_fingerprint"]}
         artifacts = AgentExecutor._dedupe_artifacts(list(verified_artifacts or []))
@@ -896,6 +910,7 @@ class AgentExecutor:
             "The runtime owns tool execution, evidence and artifact storage. For a task_result output, return a normalized value derived from observed tool data; do not paste an unbounded raw payload.",
             "Each outputs.<key> is a typed slot: {kind:'value',value:<value>}, {kind:'evidence',refs:[result_ref]}, or {kind:'artifact',refs:[artifact_ref]} exactly as required by that output.",
             "Use evidence or artifact refs only for outputs whose fulfillment requires them; task_result outputs require a value slot.",
+            "For every non-empty array copied from a stored result whose inline_complete is false, add a coverage claim: output_key, optional dot-path output_path, result_id, and all result.analyze select query_call_ids covering the selection. Continue paging until complete=true; never claim completeness from a preview or an incomplete source.",
             "For a requested list, table, text, or structured data, task_result requires a compact normalized value from the observed tool result; do not substitute an evidence reference.",
             "An evidence ref must be an exact runtime result_ref or tool call id shown in a successful tool result. Never invent a descriptive ref such as jira_search_issues_result.",
             "completion is fulfilled, needs, or unfulfillable. fulfilled requires every required output; needs requires non-empty needs; unfulfillable requires limitation.",
@@ -927,6 +942,7 @@ class AgentExecutor:
             "outputs is a JSON object keyed by expected output key. Each value is exactly one typed slot: "
             "{kind:'value',value:<schema-validated value>}, {kind:'evidence',refs:[result_ref]}, or "
             "{kind:'artifact',refs:[artifact_ref]}. For task_result outputs, return a normalized value derived from observed tool data; "
+            "For every non-empty array copied from a stored result whose inline_complete is false, include coverage claims with result_id and query_call_ids for result.analyze select pages; page until complete=true. "
             "evidence/artifact refs are valid only for the corresponding fulfillment. "
             "Use completion=fulfilled only when required outputs are present; completion=needs only with non-empty needs; completion=unfulfillable only with limitation. "
             f"Expected outputs (including required/schema): {expected}. "

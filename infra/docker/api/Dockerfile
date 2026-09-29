@@ -12,6 +12,7 @@ USER appuser
 # Copy application code to /app/app/ (unified structure)
 COPY apps/api/src/app/ ./app/
 COPY apps/api/alembic.ini ./
+COPY apps/api/tool_results_alembic.ini ./
 
 # Set PYTHONPATH to /app so imports work as "from app."
 ENV PYTHONPATH=/app
