@@ -1,5 +1,6 @@
 # ML Portal Documentation
 
+
 ## Start Here
 - [Platform Overview](PLATFORM_OVERVIEW.md) — обзор платформы и бизнес-контуров
 - [Корпоративный глоссарий](GLOSSARY.md) — определения из документов
