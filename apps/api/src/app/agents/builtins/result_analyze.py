@@ -1,23 +1,26 @@
 """Bounded analysis of a complete tool result from the current runtime run."""
 from __future__ import annotations
 
+import logging
 from typing import Any, ClassVar, Dict
 from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
 from app.services.tool_result_store import ToolResultStore, ToolResultStoreError
 
+logger = logging.getLogger(__name__)
+
 _INPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
-        "result_id": {"type": "string", "minLength": 1},
-        "mode": {"type": "string", "enum": ["overview", "select", "aggregate"]},
-        "array_path": {"type": "string"},
-        "fields": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-        "group_by": {"type": "string"},
-        "filter_path": {"type": "string"},
-        "equals": {"type": "string"},
-        "offset": {"type": "integer", "minimum": 0},
-        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+        "result_id": {"type": "string", "minLength": 1, "description": "result_id from a successful tool result in this run."},
+        "mode": {"type": "string", "enum": ["overview", "select", "aggregate"], "description": "overview inspects top-level fields; select returns array rows; aggregate counts/groups array rows; project reads object paths; text pages through a string field."},
+        "array_path": {"type": "string", "description": "Required for select and aggregate. Dot path to an array in the stored payload, e.g. fields.subtasks."},
+        "fields": {"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "Optional dot paths projected from each selected array item."},
+        "group_by": {"type": "string", "description": "Optional dot path within each array item; used by aggregate."},
+        "filter_path": {"type": "string", "description": "Optional dot path within each array item to filter by equals."},
+        "equals": {"type": "string", "description": "Filter value used with filter_path."},
+        "offset": {"type": "integer", "minimum": 0, "description": "Row offset for select pagination."},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum rows for select (1–50). Continue with next_offset until complete=true."},
     },
     "required": ["result_id", "mode"],
     "additionalProperties": False,
@@ -44,22 +47,29 @@ _INPUT_SCHEMA_V1_1 = {
     **_INPUT_SCHEMA_V1,
     "properties": {
         **_INPUT_SCHEMA_V1["properties"],
-        "mode": {"type": "string", "enum": ["overview", "select", "aggregate", "project", "text"]},
-        "paths": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 20},
-        "text_path": {"type": "string", "minLength": 1},
-        "text_offset": {"type": "integer", "minimum": 0},
-        "text_limit": {"type": "integer", "minimum": 1, "maximum": 2000},
+        "mode": {"type": "string", "enum": ["overview", "select", "aggregate", "project", "text"], "description": "Choose exactly one operation. select/aggregate require array_path; project requires paths; text requires text_path."},
+        "paths": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 20, "description": "Required for project. Up to 20 dot paths to scalar/object values; paths resolving to arrays must use select."},
+        "text_path": {"type": "string", "minLength": 1, "description": "Required for text. Dot path to a string field, e.g. fields.description."},
+        "text_offset": {"type": "integer", "minimum": 0, "description": "Character offset for text pagination; use next_offset from the previous response."},
+        "text_limit": {"type": "integer", "minimum": 1, "maximum": 2000, "description": "Maximum text characters to return (1–2000). Continue until complete=true."},
     },
 }
 _OUTPUT_SCHEMA_V1_1 = {
     **_OUTPUT_SCHEMA_V1,
     "properties": {
         **_OUTPUT_SCHEMA_V1["properties"],
-        "values": {"type": "object"},
-        "missing_paths": {"type": "array", "items": {"type": "string"}},
-        "chunk": {"type": "string"},
-        "length": {"type": "integer"},
-        "text_path": {"type": "string"},
+        "values": {"type": "object", "description": "Values keyed by requested dot path; returned by project."},
+        "missing_paths": {"type": "array", "items": {"type": "string"}, "description": "Requested project paths that do not exist."},
+        "chunk": {"type": "string", "description": "Current bounded text page; returned by text."},
+        "length": {"type": "integer", "description": "Total source string length in characters."},
+        "text_path": {"type": "string", "description": "Path of the string being paged."},
+        "complete": {"type": "boolean", "description": "Whether this selection or text read reached the end. For select, page using next_offset until true."},
+        "next_offset": {"type": ["integer", "null"], "description": "Next row/character offset when complete is false."},
+        "source_complete": {"type": "boolean", "description": "Whether the original tool result is known to contain the complete source data."},
+        "rows": {"type": "array", "description": "Selected array rows; only the returned page when complete is false."},
+        "groups": {"type": "array", "description": "Aggregate groups for the selected array."},
+        "matched_count": {"type": "integer", "description": "Number of rows matching the filter, when available."},
+        "returned_count": {"type": "integer", "description": "Number of rows in this page."},
     },
 }
 
@@ -70,19 +80,35 @@ class ResultAnalyzeTool(VersionedTool):
     domains: ClassVar[list] = ["system", "runtime"]
     name: ClassVar[str] = "Analyze Tool Result"
     description: ClassVar[str] = (
-        "Inspect or query the complete stored result of a successful tool call in the current run. "
-        "Use overview for field and array counts, project for selected object paths, "
-        "text for long string fields, select for bounded array rows with pagination, and aggregate for exact counts or "
-        "grouped counts. Never infer completeness from a preview."
+        "Inspect a successful tool result from this runtime run using its result_id. "
+        "Modes and required arguments: overview(result_id); project(result_id, paths); "
+        "text(result_id, text_path[, text_offset, text_limit]); "
+        "select(result_id, array_path[, fields, offset, limit]); "
+        "aggregate(result_id, array_path[, group_by, filter_path, equals]). "
+        "Paths are dot-separated JSON paths. project is for object/scalar fields, not arrays. "
+        "select is for arrays and must be paged until complete=true; text must be paged using next_offset "
+        "until complete=true. A preview is never proof of completeness."
     )
 
     @tool_version(version="1.0.0", input_schema=_INPUT_SCHEMA_V1, output_schema=_OUTPUT_SCHEMA_V1,
-                  description="Run-scoped PostgreSQL JSONB result overview and bounded analytics")
+                  description=(
+                      "Inspect a successful result from this run. overview needs result_id; "
+                      "select/aggregate also need array_path. select returns a bounded page of array rows "
+                      "using fields, offset and limit; continue until complete=true. aggregate returns counts "
+                      "and optional groups using group_by. This version does not support project or text modes."
+                  ))
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         return await self._analyze(ctx, args)
 
     @tool_version(version="1.1.0", input_schema=_INPUT_SCHEMA_V1_1, output_schema=_OUTPUT_SCHEMA_V1_1,
-                  description="Adds bounded object projection and paginated text reads")
+                  description=(
+                      "Inspect a successful result from this run. Pass result_id and exactly one mode: "
+                      "overview; project with paths for object/scalar fields; text with text_path and optional "
+                      "text_offset/text_limit; select with array_path and optional fields/offset/limit; or "
+                      "aggregate with array_path and optional group_by/filter_path/equals. Paths are dot-separated. "
+                      "project cannot return arrays; use select. Page select/text using next_offset until "
+                      "complete=true. source_complete describes whether the original result was complete."
+                  ))
     async def v1_1_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         return await self._analyze(ctx, args)
 
@@ -116,6 +142,12 @@ class ResultAnalyzeTool(VersionedTool):
         except ToolResultStoreError as exc:
             log.warning("result_analysis_failed", reason=str(exc))
             return ToolResult.fail(str(exc), logs=log.entries_dict())
-        except Exception:
-            log.error("result_analysis_failed", reason="store_error")
+        except Exception as exc:
+            # Keep the user-facing result generic, but retain actionable diagnostics
+            # in API container logs without logging payloads or tool arguments.
+            logger.exception(
+                "result.analyze internal failure run_id=%s result_id=%s mode=%s error_type=%s",
+                run_id, result_id, args.get("mode"), type(exc).__name__,
+            )
+            log.error("result_analysis_failed", reason="internal_error", error_type=type(exc).__name__)
             return ToolResult.fail("Could not analyze the stored result.", logs=log.entries_dict())
