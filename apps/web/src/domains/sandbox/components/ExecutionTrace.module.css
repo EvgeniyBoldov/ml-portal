@@ -40,6 +40,7 @@
   background: var(--trace-surface-raised);
 }
 .iteration-decision { --phase-color: var(--trace-phase-planning); }
+.iteration-turn_preflight { --phase-color: var(--trace-phase-planning); }
 .iteration-replan, .iteration-checkpoint { --phase-color: var(--trace-phase-replanning); }
 .iteration-execution { --phase-color: var(--trace-phase-execution); }
 .iteration-synthesis, .iteration-extraction, .iteration-preparation { --phase-color: var(--trace-phase-replanning); }

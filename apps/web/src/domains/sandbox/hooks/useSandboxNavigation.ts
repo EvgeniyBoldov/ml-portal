@@ -1,22 +1,7 @@
-import { useMemo } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
-import { systemLLMRolesApi } from '@/shared/api/admin';
+import { useQuery } from '@tanstack/react-query';
 import { qk } from '@/shared/api/keys';
 import { sandboxApi } from '../api';
 import type { SandboxCatalog } from '../types';
-
-const ORCHESTRATOR_META: Array<{
-  id: string;
-  name: string;
-  description: string;
-}> = [
-  { id: 'planner', name: 'Планер', description: 'Планирование шагов выполнения' },
-  { id: 'memory', name: 'Подготовка контекста planner', description: 'Отбор фактов и проектов для текущего запроса' },
-  { id: 'synthesizer', name: 'Synthesizer', description: 'Сборка итогового ответа' },
-  { id: 'fact_extractor', name: 'Fact Extractor', description: 'Извлечение фактов для памяти' },
-  { id: 'fact_compactor', name: 'Fact Compactor', description: 'Сопоставление и нормализация фактов' },
-  { id: 'chat_context_compactor', name: 'Chat Context Compactor', description: 'Компактация рабочего контекста чата' },
-];
 
 export function useSandboxCatalog(sessionId: string | undefined) {
   return useQuery({
@@ -37,83 +22,9 @@ const EMPTY_CATALOG: SandboxCatalog = {
 
 export function useCatalogData(sessionId: string | undefined) {
   const { data, ...rest } = useSandboxCatalog(sessionId);
-  const orchestratorQueries = useQueries({
-    queries: [
-      {
-        queryKey: qk.admin.systemLlmRoles.active('planner'),
-        queryFn: () => systemLLMRolesApi.getActive('planner'),
-        staleTime: 30_000,
-      },
-      {
-        queryKey: qk.admin.systemLlmRoles.active('memory'),
-        queryFn: () => systemLLMRolesApi.getActive('memory'),
-        staleTime: 30_000,
-      },
-      {
-        queryKey: qk.admin.systemLlmRoles.active('synthesizer'),
-        queryFn: () => systemLLMRolesApi.getActive('synthesizer'),
-        staleTime: 30_000,
-      },
-      {
-        queryKey: qk.admin.systemLlmRoles.active('fact_extractor'),
-        queryFn: () => systemLLMRolesApi.getActive('fact_extractor'),
-        staleTime: 30_000,
-      },
-      {
-        queryKey: qk.admin.systemLlmRoles.active('fact_compactor'),
-        queryFn: () => systemLLMRolesApi.getActive('fact_compactor'),
-        staleTime: 30_000,
-      },
-      {
-        queryKey: qk.admin.systemLlmRoles.active('chat_context_compactor'),
-        queryFn: () => systemLLMRolesApi.getActive('chat_context_compactor'),
-        staleTime: 30_000,
-      },
-    ],
-  });
-
-  const orchestrators = useMemo(() => {
-    const plannerConfig = orchestratorQueries[0]?.data as Record<string, unknown> | undefined;
-    const memoryConfig = orchestratorQueries[1]?.data as Record<string, unknown> | undefined;
-    const synthesizerConfig = orchestratorQueries[2]?.data as Record<string, unknown> | undefined;
-    const factExtractorConfig = orchestratorQueries[3]?.data as Record<string, unknown> | undefined;
-    const factCompactorConfig = orchestratorQueries[4]?.data as Record<string, unknown> | undefined;
-    const chatContextCompactorConfig = orchestratorQueries[5]?.data as Record<string, unknown> | undefined;
-
-    const configById: Record<string, Record<string, unknown>> = {
-      planner: plannerConfig ?? {},
-      memory: memoryConfig ?? {},
-      synthesizer: synthesizerConfig ?? {},
-      fact_extractor: factExtractorConfig ?? {},
-      fact_compactor: factCompactorConfig ?? {},
-      chat_context_compactor: chatContextCompactorConfig ?? {},
-    };
-
-    const catalogRouters = data?.system_routers ?? [];
-    return ORCHESTRATOR_META.map((item) => {
-      const fromCatalog = catalogRouters.find((router) => router.id === item.id);
-      return {
-        id: item.id,
-        name: fromCatalog?.name ?? item.name,
-        description: fromCatalog?.description ?? item.description,
-        config: {
-          ...(fromCatalog?.config ?? {}),
-          ...(configById[item.id] ?? {}),
-        },
-        input_contract: fromCatalog?.input_contract ?? null,
-        response_contract: fromCatalog?.response_contract ?? null,
-      };
-    });
-  }, [data?.system_routers, orchestratorQueries]);
-
-  const isOrchestratorsLoading = orchestratorQueries.some((query) => query.isLoading);
 
   return {
-    data: {
-      ...(data ?? EMPTY_CATALOG),
-      system_routers: orchestrators,
-    },
-    isOrchestratorsLoading,
+    data: data ?? EMPTY_CATALOG,
     ...rest,
   };
 }

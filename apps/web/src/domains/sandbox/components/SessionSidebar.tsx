@@ -66,7 +66,7 @@ export default function SessionSidebar({
   onClearBranchOverrides,
   isClearingOverrides = false,
 }: Props) {
-  const { data: catalog, isLoading: isCatalogLoading, isOrchestratorsLoading } = useCatalogData(sessionId);
+  const { data: catalog, isLoading: isCatalogLoading } = useCatalogData(sessionId);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [showClearOverridesModal, setShowClearOverridesModal] = useState(false);
 
@@ -359,7 +359,7 @@ export default function SessionSidebar({
   return (
     <div className={styles.sidebar}>
       <AccordionSection title="Оркестраторы" count={catalog.system_routers.length}>
-        {isCatalogLoading || isOrchestratorsLoading ? (
+        {isCatalogLoading ? (
           <div className={styles['empty-section']}>Загрузка...</div>
         ) : catalog.system_routers.length === 0 ? (
           <div className={styles['empty-section']}>Нет доступных оркестраторов</div>

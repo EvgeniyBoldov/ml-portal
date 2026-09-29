@@ -7,7 +7,8 @@ import pytest
 
 from app.agents.builtins.result_analyze import ResultAnalyzeTool
 from app.agents.context import ToolContext
-from app.services.tool_result_store import ToolResultStore, ToolResultStoreError, _source_complete
+from app.agents.runtime.tools import OperationExecutionFacade
+from app.services.tool_result_store import ToolResultStore, ToolResultStoreError, _source_complete, _source_total
 
 
 @pytest.mark.asyncio
@@ -53,6 +54,42 @@ def test_nested_jira_comment_pagination_is_not_complete() -> None:
     assert not _source_complete(issue)
     issue["fields"]["comment"]["startAt"] = "unexpected"
     assert not _source_complete(issue)
+
+
+def test_netbox_count_and_pagination_mark_partial_results() -> None:
+    page = {"count": 3, "next": "page-2", "previous": None, "results": [{"id": 1}]}
+    assert _source_total(page) == 3
+    assert not _source_complete(page)
+    page["next"] = None
+    assert not _source_complete(page)
+    page["results"] = [{"id": 1}, {"id": 2}, {"id": 3}]
+    assert _source_complete(page)
+    page["previous"] = "page-1"
+    assert not _source_complete(page)
+
+
+def test_explicit_null_filter_is_preserved_by_argument_normalization() -> None:
+    schema = ResultAnalyzeTool().get_latest_version().input_schema
+    arguments = {"filter_path": "status", "equals": None, "offset": None}
+    assert OperationExecutionFacade._strip_optional_nulls(arguments, schema) == {
+        "filter_path": "status", "equals": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_explicit_null_and_false_filters_remain_distinct(monkeypatch: pytest.MonkeyPatch) -> None:
+    analyze = AsyncMock(return_value={"result_id": "result-1", "mode": "aggregate", "count": 0})
+    monkeypatch.setattr(ToolResultStore, "analyze", analyze)
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), extra={"runtime_root_run_id": "run-1"})
+    tool = ResultAnalyzeTool()
+    for value in (None, "", False, 0):
+        result = await tool.execute(ctx, {
+            "result_id": "result-1", "mode": "aggregate", "array_path": "results",
+            "filter_path": "status", "equals": value,
+        })
+        assert result.success
+        assert analyze.await_args.kwargs["equals_provided"] is True
+        assert analyze.await_args.kwargs["equals"] is value
 
 
 @pytest.mark.asyncio

@@ -348,14 +348,19 @@ export function useSandboxRun(sessionId: string) {
     if (!activeRun.runId) return false;
     const controller = new AbortController();
     abortRef.current = controller;
+    const pauseReason = activeRun.pendingConfirmation?.reason
+      ?? (activeRun.status === 'waiting_input' || activeRun.status === 'waiting_confirmation' ? activeRun.status : null);
     try {
-      const response = activeRun.status === 'waiting_input' || activeRun.status === 'waiting_confirmation'
+      const response = pauseReason === 'waiting_input' || pauseReason === 'waiting_confirmation'
         ? await sandboxApi.resumeRun(sessionId, activeRun.runId, { action: 'cancel' }, controller.signal)
         : await sandboxApi.cancelRun(sessionId, activeRun.runId, controller.signal);
       if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
       setActiveRun((prev) => ({ ...prev, error: null }));
       const runId = await consumeRunStream(response);
       await reconcileTrace(runId ?? activeRun.runId);
+      if (pauseReason === 'waiting_input') {
+        setActiveRun((prev) => ({ ...prev, status: 'cancelled', pendingConfirmation: null, error: null }));
+      }
       return true;
     } catch (error) {
       if ((error as Error).name !== 'AbortError') {
@@ -366,7 +371,7 @@ export function useSandboxRun(sessionId: string) {
     } finally {
       invalidate();
     }
-  }, [activeRun.runId, consumeRunStream, invalidate, reconcileTrace, sessionId]);
+  }, [activeRun.pendingConfirmation?.reason, activeRun.runId, activeRun.status, consumeRunStream, invalidate, reconcileTrace, sessionId]);
 
   const stop = useCallback(() => {
     const runId = activeRun.runId;

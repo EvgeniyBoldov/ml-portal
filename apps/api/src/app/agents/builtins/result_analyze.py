@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, ClassVar, Dict
+from sqlalchemy.exc import SQLAlchemyError
 from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
 from app.services.tool_result_store import ToolResultStore, ToolResultStoreError
@@ -47,6 +48,7 @@ _INPUT_SCHEMA_V1_1 = {
     **_INPUT_SCHEMA_V1,
     "properties": {
         **_INPUT_SCHEMA_V1["properties"],
+        "equals": {"type": ["string", "number", "boolean", "null"], "description": "Filter value used with filter_path. Omit both for no filter; explicit null, empty string, false, and zero are distinct values."},
         "mode": {"type": "string", "enum": ["overview", "select", "aggregate", "project", "text"], "description": "Choose exactly one operation. select/aggregate require array_path; project requires paths; text requires text_path."},
         "paths": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 20, "description": "Required for project. Up to 20 dot paths to scalar/object values; paths resolving to arrays must use select."},
         "text_path": {"type": "string", "minLength": 1, "description": "Required for text. Dot path to a string field, e.g. fields.description."},
@@ -80,14 +82,11 @@ class ResultAnalyzeTool(VersionedTool):
     domains: ClassVar[list] = ["system", "runtime"]
     name: ClassVar[str] = "Analyze Tool Result"
     description: ClassVar[str] = (
-        "Inspect a successful tool result from this runtime run using its result_id. "
-        "Modes and required arguments: overview(result_id); project(result_id, paths); "
-        "text(result_id, text_path[, text_offset, text_limit]); "
-        "select(result_id, array_path[, fields, offset, limit]); "
-        "aggregate(result_id, array_path[, group_by, filter_path, equals]). "
-        "Paths are dot-separated JSON paths. project is for object/scalar fields, not arrays. "
-        "select is for arrays and must be paged until complete=true; text must be paged using next_offset "
-        "until complete=true. A preview is never proof of completeness."
+        "Inspect a stored tool result by result_id. overview shows top-level fields; "
+        "project reads object paths; text pages a string by text_path. "
+        "For counts by type use aggregate(result_id, array_path, group_by), e.g. group_by=device_type.display. "
+        "For rows use select(result_id, array_path, fields, offset, limit) and page until complete=true. "
+        "Paths are dot-separated. Only pass filter_path together with equals; omit both for all rows."
     )
 
     @tool_version(version="1.0.0", input_schema=_INPUT_SCHEMA_V1, output_schema=_OUTPUT_SCHEMA_V1,
@@ -115,9 +114,11 @@ class ResultAnalyzeTool(VersionedTool):
     async def _analyze(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         log = ctx.tool_notes(self.tool_slug)
         run_id = str(ctx.extra.get("runtime_root_run_id") or "").strip()
-        result_id = str(args.get("result_id") or "").strip()
-        if not run_id or not result_id:
-            return ToolResult.fail("A result from the current runtime run is required.", logs=log.entries_dict())
+        result_id = str(args.get("result_id") if args.get("result_id") is not None else "").strip()
+        if not run_id:
+            return ToolResult.fail("Current runtime run_id is unavailable; cannot read a stored result.", logs=log.entries_dict())
+        if not result_id:
+            return ToolResult.fail("result_id is required; use the result_id from a successful tool result.", logs=log.entries_dict())
         try:
             data = await ToolResultStore().analyze(
                 result_id=result_id,
@@ -126,28 +127,71 @@ class ResultAnalyzeTool(VersionedTool):
                 user_id=ctx.user_id,
                 mode=str(args.get("mode") or ""),
                 array_path=str(args.get("array_path") or ""),
-                fields=[str(item) for item in args.get("fields") or []],
-                paths=[str(item) for item in args.get("paths") or []],
+                fields=_path_list(args, "fields"),
+                paths=_path_list(args, "paths"),
                 text_path=str(args.get("text_path") or ""),
-                text_offset=int(args.get("text_offset") or 0),
-                text_limit=int(args.get("text_limit") or 1500),
+                text_offset=_integer_arg(args, "text_offset", 0),
+                text_limit=_integer_arg(args, "text_limit", 1500),
                 group_by=str(args.get("group_by") or ""),
                 filter_path=str(args.get("filter_path") or ""),
-                equals=str(args["equals"]) if args.get("equals") is not None else None,
-                offset=int(args.get("offset") or 0),
-                limit=int(args.get("limit") or 25),
+                equals=args.get("equals"),
+                equals_provided="equals" in args,
+                offset=_integer_arg(args, "offset", 0),
+                limit=_integer_arg(args, "limit", 25),
             )
             log.info("result_analyzed", mode=data.get("mode"), result_id=result_id)
             return ToolResult.ok(data, logs=log.entries_dict())
         except ToolResultStoreError as exc:
             log.warning("result_analysis_failed", reason=str(exc))
             return ToolResult.fail(str(exc), logs=log.entries_dict())
+        except SQLAlchemyError as exc:
+            cause = getattr(exc, "orig", exc)
+            while getattr(cause, "__cause__", None) is not None:
+                cause = cause.__cause__
+            error_type = type(cause).__name__
+            error_detail = str(cause).splitlines()[0][:240]
+            logger.exception("result.analyze query failed run_id=%s result_id=%s mode=%s", run_id, result_id, args.get("mode"))
+            log.error("result_analysis_failed", reason="query_error", error_type=error_type)
+            return ToolResult.fail(
+                f"result.analyze database query failed ({error_type}): {error_detail}",
+                logs=log.entries_dict(),
+            )
         except Exception as exc:
-            # Keep the user-facing result generic, but retain actionable diagnostics
-            # in API container logs without logging payloads or tool arguments.
             logger.exception(
                 "result.analyze internal failure run_id=%s result_id=%s mode=%s error_type=%s",
                 run_id, result_id, args.get("mode"), type(exc).__name__,
             )
             log.error("result_analysis_failed", reason="internal_error", error_type=type(exc).__name__)
-            return ToolResult.fail("Could not analyze the stored result.", logs=log.entries_dict())
+            return ToolResult.fail(
+                f"result.analyze failed internally ({type(exc).__name__}); see API logs for the traceback.",
+                logs=log.entries_dict(),
+            )
+
+
+def _integer_arg(args: Dict[str, Any], key: str, default: int) -> int:
+    value = args.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ToolResultStoreError(f"{key} must be an integer, not a boolean")
+    if isinstance(value, float) and not value.is_integer():
+        raise ToolResultStoreError(f"{key} must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ToolResultStoreError(f"{key} must be an integer") from exc
+    minimum = 1 if key in {"limit", "text_limit"} else 0
+    if parsed < minimum:
+        raise ToolResultStoreError(f"{key} must be >= {minimum}")
+    return parsed
+
+
+def _path_list(args: Dict[str, Any], key: str) -> list[str]:
+    value = args.get(key)
+    if value is None:
+        return []
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ToolResultStoreError(f"{key} must be an array of JSON paths")
+    return value

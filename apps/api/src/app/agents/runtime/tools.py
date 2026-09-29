@@ -527,7 +527,7 @@ class OperationExecutionFacade:
         changed = False
         for key, value in list(normalized.items()):
             child_schema = properties.get(key)
-            if value is None and key not in required:
+            if value is None and key not in required and not OperationExecutionFacade._schema_accepts_null(child_schema):
                 normalized.pop(key, None)
                 changed = True
                 continue
@@ -537,6 +537,22 @@ class OperationExecutionFacade:
                     normalized[key] = nested
                     changed = True
         return normalized if changed else arguments
+
+
+    @staticmethod
+    def _schema_accepts_null(schema: Any) -> bool:
+        if not isinstance(schema, dict):
+            return False
+        declared_type = schema.get("type")
+        if declared_type == "null" or isinstance(declared_type, list) and "null" in declared_type:
+            return True
+        if schema.get("nullable") is True:
+            return True
+        return any(
+            OperationExecutionFacade._schema_accepts_null(branch)
+            for keyword in ("anyOf", "oneOf")
+            for branch in schema.get(keyword, [])
+        )
 
     @staticmethod
     def _validate_args_jsonschema(

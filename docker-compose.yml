@@ -168,24 +168,24 @@ services:
   # MCP SERVERS
   # =============================================================================
 
-  # netbox-mcp-custom:
-  #   build:
-  #     context: .
-  #     dockerfile: mcp/mcp_server.dockerfile
-  #     args:
-  #       - MCP_SERVER_DIR=netbox
-  #   ports:
-  #     - "8012:8080"
-  #   volumes:
-  #     - ./mcp/netbox/server.py:/opt/mcp/netbox/server.py:ro
-  #   environment:
-  #     - PORT=8080
-  #     - VERIFY_SSL=false
-  #     - NETBOX_TIMEOUT_SECONDS=20
-  #     - MCP_SECRET_BROKER_TIMEOUT_SECONDS=10
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"
-  #   restart: unless-stopped
+  netbox-mcp-custom:
+     build:
+       context: .
+       dockerfile: mcp/mcp_server.dockerfile
+       args:
+         - MCP_SERVER_DIR=netbox
+     ports:
+       - "8012:8080"
+     volumes:
+       - ./mcp/netbox/server.py:/opt/mcp/netbox/server.py:ro
+     environment:
+       - PORT=8080
+       - VERIFY_SSL=false
+       - NETBOX_TIMEOUT_SECONDS=20
+       - MCP_SECRET_BROKER_TIMEOUT_SECONDS=10
+     extra_hosts:
+       - "host.docker.internal:host-gateway"
+     restart: unless-stopped
 
   # dbhub-mcp:
   #   build:

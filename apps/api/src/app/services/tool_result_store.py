@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -127,14 +128,21 @@ class ToolResultStore:
         text_limit: int = 1500,
         group_by: str = "",
         filter_path: str = "",
-        equals: str | None = None,
+        equals: str | int | float | bool | None = None,
+        equals_provided: bool = False,
         offset: int = 0,
         limit: int = 25,
     ) -> dict[str, Any]:
+        if mode not in {"overview", "project", "text", "select", "aggregate"}:
+            raise ToolResultStoreError(f"Unsupported analysis mode: {mode!r}")
         if mode == "project" and not paths:
             raise ToolResultStoreError("paths is required for project")
         if mode == "text" and not text_path:
             raise ToolResultStoreError("text_path is required for text")
+        try:
+            UUID(result_id)
+        except (TypeError, ValueError) as exc:
+            raise ToolResultStoreError("result_id must be a UUID from a successful tool result") from exc
         row = await self._authorized_row(result_id, run_id, tenant_id, user_id)
         if row is None:
             raise ToolResultStoreError("Result not found or no longer available")
@@ -148,17 +156,26 @@ class ToolResultStore:
                                     text_path, text_offset, text_limit, row)
         if not array_path:
             raise ToolResultStoreError("array_path is required for select and aggregate")
+        filter_active = equals_provided or equals is not None
+        if filter_path and not filter_active:
+            raise ToolResultStoreError("filter_path requires equals; omit filter_path to analyze all rows")
+        if filter_active and not filter_path:
+            raise ToolResultStoreError("filter_path is required when equals is provided")
+        if equals is not None and not isinstance(equals, (str, int, float, bool)):
+            raise ToolResultStoreError("equals must be a string, number, boolean, or null")
+        if isinstance(equals, float) and not math.isfinite(equals):
+            raise ToolResultStoreError("equals must be a finite number")
         safe_limit = max(1, min(int(limit), 50))
         safe_offset = max(0, min(int(offset), 100000))
         if mode == "select":
             return await self._select(
                 result_id, run_id, tenant_id, user_id, array_path, fields or [],
-                filter_path, equals, safe_offset, safe_limit,
+                filter_path, equals, filter_active, safe_offset, safe_limit,
             )
         if mode == "aggregate":
             return await self._aggregate(
                 result_id, run_id, tenant_id, user_id, array_path, group_by,
-                filter_path, equals,
+                filter_path, equals, filter_active,
             )
         raise ToolResultStoreError("Unsupported analysis mode")
 
@@ -302,7 +319,8 @@ class ToolResultStore:
         }
 
     async def _select(self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
-                      array_path: str, fields: list[str], filter_path: str, equals: str | None,
+                      array_path: str, fields: list[str], filter_path: str,
+                      equals: str | int | float | bool | None, filter_active: bool,
                       offset: int, limit: int) -> dict[str, Any]:
         path = _path_segments(array_path)
         filter_segments = _path_segments(filter_path) if filter_path else []
@@ -315,7 +333,7 @@ class ToolResultStore:
             WHERE p.id = CAST(:result_id AS uuid) AND p.run_id = :run_id
               AND p.tenant_id = :tenant_id AND p.user_id = :user_id
               AND jsonb_typeof(p.payload #> CAST(:array_path AS text[])) = 'array'
-              AND (:equals IS NULL OR e.value #>> CAST(:filter_path AS text[]) = :equals)
+              AND (NOT CAST(:filter_active AS boolean) OR e.value #> CAST(:filter_path AS text[]) = CAST(:equals_json AS jsonb))
         """)
         page_statement = text("""
             SELECT e.value AS value, e.ordinality AS ordinal
@@ -326,12 +344,14 @@ class ToolResultStore:
                     WITH ORDINALITY AS e(value, ordinality)
             WHERE p.id = CAST(:result_id AS uuid) AND p.run_id = :run_id
               AND p.tenant_id = :tenant_id AND p.user_id = :user_id
-              AND (:equals IS NULL OR e.value #>> CAST(:filter_path AS text[]) = :equals)
+              AND (NOT CAST(:filter_active AS boolean) OR e.value #> CAST(:filter_path AS text[]) = CAST(:equals_json AS jsonb))
             ORDER BY e.ordinality OFFSET :offset LIMIT :limit
         """)
         args = {"result_id": result_id, "run_id": run_id, "tenant_id": tenant_id,
                 "user_id": user_id, "array_path": path,
-                "filter_path": filter_segments or [""], "equals": equals}
+                "filter_path": filter_segments or [""],
+                "filter_active": filter_active,
+                "equals_json": json.dumps(equals, ensure_ascii=False)}
         async with get_tool_results_engine().connect() as connection:
             total = int((await connection.execute(count_statement, args)).scalar_one())
             rows = (await connection.execute(page_statement, {**args, "offset": offset, "limit": limit})).mappings().all()
@@ -362,13 +382,14 @@ class ToolResultStore:
                 "rows": bounded}
 
     async def _aggregate(self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
-                         array_path: str, group_by: str, filter_path: str, equals: str | None) -> dict[str, Any]:
+                         array_path: str, group_by: str, filter_path: str,
+                         equals: str | int | float | bool | None, filter_active: bool) -> dict[str, Any]:
         path = _path_segments(array_path)
         group_segments = _path_segments(group_by) if group_by else []
         filter_segments = _path_segments(filter_path) if filter_path else [""]
         if group_segments:
             statement = text("""
-                SELECT e.value #>> CAST(:group_path AS text[]) AS group_value,
+                SELECT e.value #> CAST(:group_path AS text[]) AS group_value,
                        count(*) AS count, count(*) OVER() AS group_total
                 FROM runtime_tool_payloads p,
                      LATERAL jsonb_array_elements(CASE
@@ -376,21 +397,25 @@ class ToolResultStore:
                          THEN p.payload #> CAST(:array_path AS text[]) ELSE '[]'::jsonb END) AS e(value)
                 WHERE p.id = CAST(:result_id AS uuid) AND p.run_id = :run_id
                   AND p.tenant_id = :tenant_id AND p.user_id = :user_id
-                  AND (:equals IS NULL OR e.value #>> CAST(:filter_path AS text[]) = :equals)
+                  AND (NOT CAST(:filter_active AS boolean) OR e.value #> CAST(:filter_path AS text[]) = CAST(:equals_json AS jsonb))
                 GROUP BY group_value ORDER BY count DESC LIMIT 50
             """)
             async with get_tool_results_engine().connect() as connection:
                 rows = (await connection.execute(statement, {
                     "result_id": result_id, "run_id": run_id, "tenant_id": tenant_id,
                     "user_id": user_id, "array_path": path, "group_path": group_segments,
-                    "filter_path": filter_segments, "equals": equals,
+                    "filter_path": filter_segments,
+                    "filter_active": filter_active,
+                    "equals_json": json.dumps(equals, ensure_ascii=False),
                 })).mappings().all()
             total_groups = int(rows[0]["group_total"]) if rows else 0
             projected_groups = []
             used = 0
             size_limit = _response_value_budget()
             for row in rows:
-                group = {"value": str(row["group_value"] or "")[:256], "count": int(row["count"])}
+                group_value = row["group_value"]
+                group = {"value": group_value[:256] if isinstance(group_value, str) else group_value,
+                         "count": int(row["count"])}
                 size = len(json.dumps(group, ensure_ascii=False))
                 if used + size > size_limit:
                     break
@@ -411,13 +436,15 @@ class ToolResultStore:
                      THEN p.payload #> CAST(:array_path AS text[]) ELSE '[]'::jsonb END) AS e(value)
             WHERE p.id = CAST(:result_id AS uuid) AND p.run_id = :run_id
               AND p.tenant_id = :tenant_id AND p.user_id = :user_id
-              AND (:equals IS NULL OR e.value #>> CAST(:filter_path AS text[]) = :equals)
+              AND (NOT CAST(:filter_active AS boolean) OR e.value #> CAST(:filter_path AS text[]) = CAST(:equals_json AS jsonb))
         """)
         async with get_tool_results_engine().connect() as connection:
             count = int((await connection.execute(count_statement, {
                 "result_id": result_id, "run_id": run_id, "tenant_id": tenant_id,
                 "user_id": user_id, "array_path": path,
-                "filter_path": filter_segments, "equals": equals,
+                "filter_path": filter_segments,
+                "filter_active": filter_active,
+                "equals_json": json.dumps(equals, ensure_ascii=False),
             })).scalar_one())
         return {"result_id": result_id, "mode": "aggregate", "source_complete": await self._source_is_complete(result_id, run_id, tenant_id, user_id), "count": count}
 
@@ -465,8 +492,11 @@ def _contains_array(value: Any) -> bool:
 
 
 def _source_total(payload: Any) -> int | None:
-    if isinstance(payload, dict) and isinstance(payload.get("total"), int):
-        return int(payload["total"])
+    if isinstance(payload, dict):
+        for key in ("total", "count"):
+            value = payload.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
     return None
 
 
@@ -487,7 +517,7 @@ def _json_type(value: Any) -> str:
 def _source_complete(payload: Any) -> bool:
     """Detect incomplete pages, including Jira pages nested inside one issue."""
     if isinstance(payload, dict):
-        total = payload.get("total")
+        total = _source_total(payload)
         if isinstance(total, int) and not isinstance(total, bool):
             for key in ("issues", "comments", "worklogs", "values", "results"):
                 items = payload.get(key)
@@ -498,6 +528,8 @@ def _source_complete(payload: Any) -> bool:
                         return False
                     if start_at != 0 or total > len(items):
                         return False
+        if isinstance(payload.get("results"), list) and (payload.get("next") or payload.get("previous")):
+            return False
         if payload.get("isLast") is False or payload.get("nextPage"):
             return False
         return all(_source_complete(value) for value in payload.values())

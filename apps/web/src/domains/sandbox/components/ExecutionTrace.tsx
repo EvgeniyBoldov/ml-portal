@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SandboxTraceState } from '../traceState';
 import type { RuntimeProgress } from '../types';
 import { projectTraceStages, stepFor, traceElapsedMs, withTraceInspectorTabs, type TraceCall, type TraceExecutorRun, type TraceInspectionTarget, type TraceMetrics, type TraceStage } from '../traceProjection';
@@ -126,7 +126,7 @@ function CallSummary({ calls }: { calls: TraceCall[] }) {
 }
 
 function ExecutorRunCard({ executor, stage, onSelect, selectedTargetKey, defaultCallsExpanded = false }: { executor: TraceExecutorRun; stage: TraceStage; onSelect?: (target: TraceInspectionTarget) => void; selectedTargetKey?: string | null; defaultCallsExpanded?: boolean }) {
-  const [expanded, setExpanded] = useState(defaultCallsExpanded);
+  const [expanded, setExpanded] = useState(defaultCallsExpanded || executor.kind === 'preflight');
   const isTerminal = ['completed', 'complete', 'failed', 'fail', 'error', 'stalled'].includes(executor.entity.status);
   return (
     <article className={`${styles.executor} ${statusClass(executor.entity.status)} ${selectedTargetKey === executor.inspectorKey ? styles.isSelected : ''}`}>
@@ -173,7 +173,15 @@ export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [now, setNow] = useState(() => Date.now());
   const stages = useMemo(() => projectTraceStages(trace), [trace]);
+  const autoExpandedRunsRef = useRef(new Set<string>());
   const latestProgress = progress[progress.length - 1]?.description;
+  const hasTurnPreflight = stages.some((stage) => stage.kind === 'turn_preflight');
+  useEffect(() => {
+    const runId = trace.runId;
+    if (!hasTurnPreflight || !runId || autoExpandedRunsRef.current.has(runId)) return;
+    autoExpandedRunsRef.current.add(runId);
+    setExpanded(true);
+  }, [hasTurnPreflight, trace.runId]);
   useEffect(() => {
     if (!isRunning) return undefined;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);

@@ -1771,7 +1771,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
               const metrics = metricsFor(state, entity);
               return [{
                 entity, inspectorKey: `executor:preflight:${entity.key}`, start,
-                task: 'Маршрутизация запроса', executorType: 'TURN_PREFLIGHT', executorName: 'Turn Preflight',
+                task: 'Разбор запроса и выбор маршрута', executorType: 'ОРКЕСТРАТОР', executorName: 'Предварительная маршрутизация',
                 executorSlug: 'turn_preflight', kind: 'preflight', calls, result, route: routeFor(calls),
                 info: executorInfoFor(result, calls, metrics.elapsedMs), metrics,
                 prompt: promptFor(eventsFor(state, entity), calls),
@@ -1790,12 +1790,12 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           : memoryStage === 'study_sections' ? 'Извлечение из секций'
             : memoryStage === 'finalize_review' ? 'Финализация и проверка конфликтов'
               : memoryStage === 'reconcile_conflicts' ? 'Повторная проверка конфликтов'
-                : isSynthesis ? 'Подготовка ответа' : isPreflight ? 'Turn Preflight' : isMemoryPreparation ? 'Подготовка контекста' : 'Сохранение контекста диалога',
+                : isSynthesis ? 'Подготовка ответа' : isPreflight ? 'Предварительная маршрутизация' : isMemoryPreparation ? 'Подготовка контекста' : 'Сохранение контекста диалога',
         task: memoryStage === 'screening' ? 'Определение полезности документа для памяти'
           : memoryStage === 'study_sections' ? 'Извлечение кандидатов из секций документа'
             : memoryStage === 'finalize_review' ? 'Подготовка кандидатов к админской проверке'
               : memoryStage === 'reconcile_conflicts' ? 'Повторная проверка конфликтов памяти'
-                : isSynthesis ? 'Подготовка финального ответа' : isPreflight ? 'Маршрутизация запроса' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
+                : isSynthesis ? 'Подготовка финального ответа' : isPreflight ? 'Разбор запроса и выбор маршрута' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
       };
       if (isMemory || isMemoryPreparation) {

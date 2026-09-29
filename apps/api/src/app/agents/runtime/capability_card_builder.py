@@ -1,6 +1,7 @@
 """Runtime prompt sections for collection-centered and system operations surfaces."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence, TYPE_CHECKING
 
@@ -8,6 +9,7 @@ from app.agents.runtime.published_capabilities import (
     build_published_collection_summaries,
     build_published_operation_summary,
 )
+from app.agents.runtime.prompt_contract import build_prompt_input_schema
 
 if TYPE_CHECKING:
     from app.agents.contracts import ResolvedDataInstance, ResolvedOperation
@@ -136,8 +138,41 @@ class CapabilityCardBuilder:
                 for op in summary.available_operations
                 if self._text(op.canonical_name or op.operation_slug)
             })
+            collection_operations = [
+                operation
+                for operation in operations
+                if self._text(getattr(operation, "collection_slug", None)) == slug
+            ]
             if operation_names:
-                lines.append("- операции: " + ", ".join(f"`{name}`" for name in operation_names))
+                lines.append("- операции:")
+                for operation in collection_operations[:MAX_OPERATIONS_IN_CARD]:
+                    operation_summary = operation.published or build_published_operation_summary(
+                        operation,
+                        collection=item,
+                    )
+                    operation_name = (
+                        self._text(getattr(operation_summary, "canonical_name", None))
+                        or self._text(getattr(operation_summary, "operation_slug", None))
+                        or self._text(getattr(operation, "operation", None))
+                    )
+                    if not operation_name:
+                        continue
+                    operation_title = self._text(getattr(operation_summary, "title", None))
+                    operation_description = self._text(getattr(operation_summary, "description", None))
+                    heading = f"  - `{operation_name}`"
+                    if operation_title and operation_title != operation_name:
+                        heading += f" ({operation_title})"
+                    if operation_description:
+                        heading += f": {operation_description}"
+                    lines.append(heading)
+                    input_schema = build_prompt_input_schema(operation)
+                    arguments = self._format_schema_properties(input_schema)
+                    if arguments:
+                        lines.append(f"    вход: {arguments}")
+                if len(collection_operations) > MAX_OPERATIONS_IN_CARD:
+                    lines.append(
+                        f"  - ... и ещё {len(collection_operations) - MAX_OPERATIONS_IN_CARD} операций"
+                    )
 
         if shown == 0:
             return ""
@@ -222,3 +257,55 @@ class CapabilityCardBuilder:
     @staticmethod
     def _text(value: Optional[Any]) -> str:
         return str(value or "").strip()
+
+    @classmethod
+    def _format_schema_properties(
+        cls,
+        schema: dict[str, Any],
+        *,
+        depth: int = 0,
+        required: Optional[set[str]] = None,
+    ) -> str:
+        """Render a bounded, human-readable view of an operation's JSON Schema."""
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            return ""
+        required_names = required or {
+            str(name).strip()
+            for name in (schema.get("required") or [])
+            if str(name).strip()
+        }
+        rendered: list[str] = []
+        for index, (raw_name, definition) in enumerate(properties.items()):
+            if index >= 12:
+                rendered.append("…")
+                break
+            name = str(raw_name).strip()
+            if not name or not isinstance(definition, dict):
+                continue
+            field_type = cls._text(definition.get("type")) or "any"
+            part = f"{name}: {field_type}"
+            if name in required_names:
+                part += " (обязательно)"
+            if "default" in definition:
+                part += f"; default={json.dumps(definition['default'], ensure_ascii=False)}"
+            enum_values = definition.get("enum")
+            if isinstance(enum_values, list):
+                part += f"; варианты={json.dumps(enum_values, ensure_ascii=False)}"
+            description = cls._text(definition.get("description"))
+            if description:
+                part += f" — {description}"
+            nested = definition.get("properties")
+            if depth < 1 and isinstance(nested, dict):
+                nested_schema = {
+                    "properties": nested,
+                    "required": definition.get("required", []),
+                }
+                nested_text = cls._format_schema_properties(
+                    nested_schema,
+                    depth=depth + 1,
+                )
+                if nested_text:
+                    part += f" [{nested_text}]"
+            rendered.append(part)
+        return "; ".join(rendered)

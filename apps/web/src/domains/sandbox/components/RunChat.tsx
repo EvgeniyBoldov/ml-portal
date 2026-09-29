@@ -21,8 +21,10 @@ import styles from './RunChat.module.css';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function extractClarifyQuestion(context: Record<string, unknown> | undefined): string | null {
-  const question = context && typeof context.question === 'string' ? context.question.trim() : '';
+function extractClarifyQuestion(pause: ActiveRun['pendingConfirmation']): string | null {
+  const contextQuestion = pause && typeof pause.context.question === 'string' ? pause.context.question.trim() : '';
+  const actionQuestion = pause && typeof pause.action.question === 'string' ? pause.action.question.trim() : '';
+  const question = contextQuestion || actionQuestion;
   return question || null;
 }
 
@@ -164,6 +166,7 @@ export default function RunChat({
   const messagesRef = useRef<HTMLDivElement>(null);
   const clarifyInputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastClarificationKeyRef = useRef<string | null>(null);
 
   const branchMap = useMemo(
     () => new Map(branches.map((b) => [b.id, b])),
@@ -203,6 +206,30 @@ export default function RunChat({
   useEffect(() => {
     setInput('');
   }, [activeBranchId]);
+
+  const latestClarifyEventId = useMemo(() => {
+    for (let index = activeRun.trace.eventIdsBySequence.length - 1; index >= 0; index -= 1) {
+      const eventId = activeRun.trace.eventIdsBySequence[index];
+      if (activeRun.trace.eventsById[eventId]?.event_type === 'waiting_input') return eventId;
+    }
+    return null;
+  }, [activeRun.trace.eventIdsBySequence, activeRun.trace.eventsById]);
+
+  const latestClarifyQuestion = useMemo(
+    () => extractClarifyQuestion(activeRun.pendingConfirmation),
+    [activeRun.pendingConfirmation],
+  );
+  const clarificationKey = activeRun.runId
+    ? `${activeRun.runId}:${latestClarifyEventId ?? latestClarifyQuestion ?? 'waiting_input'}`
+    : null;
+
+  useEffect(() => {
+    if (!isWaitingInput || !clarificationKey || lastClarificationKeyRef.current === clarificationKey) return;
+    lastClarificationKeyRef.current = clarificationKey;
+    setInput('');
+    setAttachments([]);
+    setUploadError(null);
+  }, [clarificationKey, isWaitingInput]);
 
   useEffect(() => {
     const el = messagesRef.current;
@@ -357,11 +384,6 @@ export default function RunChat({
   const isPaused = activeRun.status === 'waiting_input' || activeRun.status === 'waiting_confirmation';
   const activeRunView = useMemo(() => projectTraceRun(activeRun.trace), [activeRun.trace]);
   const activeAttachments = activeRunView.attachments.length > 0 ? activeRunView.attachments : activeRun.finalAttachments;
-  const latestClarifyQuestion = useMemo(
-    () => extractClarifyQuestion(activeRun.pendingConfirmation?.context),
-    [activeRun.pendingConfirmation],
-  );
-
   const activeUserMessage = useMemo(() => {
     const fromRun = String(activeRun.requestText || '').trim();
     if (fromRun) return fromRun;
