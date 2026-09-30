@@ -167,6 +167,32 @@ apply_migrations() {
   release_phase_end
 }
 
+verify_alembic_target() {
+  local database_name="$1"
+  local expected_revision="$2"
+  shift 2
+  local -a config_args=("$@")
+  local output revisions revision_count
+
+  output="$(compose run --rm --no-deps api alembic "${config_args[@]}" heads)" || \
+    fail "Could not read ${database_name} Alembic heads from the release API image."
+  revisions="$(awk '/\(head\)/ { print $1 }' <<< "$output")"
+  revision_count="$(sed '/^$/d' <<< "$revisions" | wc -l | tr -d ' ')"
+  if test "$revision_count" != "1" || test "$revisions" != "$expected_revision"; then
+    fail "${database_name} DB_REVISION=${expected_revision} does not match the release API image Alembic head(s): ${revisions:-none}."
+  fi
+  compose run --rm --no-deps api alembic "${config_args[@]}" current >/dev/null || \
+    fail "The ${database_name} current database revision is not recognized by the release API image."
+  release_log "Verified ${database_name} Alembic head=${expected_revision} in release API image."
+}
+
+verify_release_migration_targets() {
+  release_phase_start "verify migration targets in release API image"
+  verify_alembic_target "application database" "$DB_REVISION"
+  verify_alembic_target "tool-results database" "$TOOL_RESULTS_DB_REVISION" -c tool_results_alembic.ini
+  release_phase_end
+}
+
 stop_application_services() {
   release_phase_start "stop application services before migration"
   compose stop "${APPLICATION_SERVICES[@]}" || return
@@ -210,10 +236,13 @@ record_result() {
 
 deploy_application_release() {
   local release_dir="$1"
+  local pull_images="${2:-1}"
   RELEASE_DIR="$release_dir"
   load_release_manifest "$release_dir"
   export PROD_ENV_FILE
-  pull_application_images || return
+  if test "$pull_images" = "1"; then
+    pull_application_images || return
+  fi
   start_application_services || return
   smoke_check
 }
@@ -242,6 +271,10 @@ deploy() {
   old_current="$(current_release_dir || true)"
   compose up -d --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" postgres-tool-results
   verify_stateful_services
+  if ! pull_application_images; then
+    fail "Could not pull application images before migration preflight."
+  fi
+  verify_release_migration_targets
 
   if ! stop_application_services; then
     fail "Application services could not be stopped before database migration."
@@ -261,7 +294,7 @@ deploy() {
     fail "Database migration failed before application replacement."
   fi
 
-  if ! deploy_application_release "$RELEASE_DIR"; then
+  if ! deploy_application_release "$RELEASE_DIR" 0; then
     release_log "Application deployment failed after migrations. Attempting application-only rollback."
     if test -n "$old_current"; then
       if ! rollback_to_release "$old_current"; then
