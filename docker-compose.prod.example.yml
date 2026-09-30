@@ -315,6 +315,28 @@ services:
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.celery_app", "beat", "--loglevel=info", "--pidfile=/tmp/celerybeat.pid"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import sys
+          pid_file = "/tmp/celerybeat.pid"
+          try:
+              with open(pid_file, encoding="ascii") as handle:
+                  pid = handle.read().strip()
+              if not pid.isdecimal():
+                  sys.exit(1)
+              with open(f"/proc/{pid}/cmdline", "rb") as handle:
+                  argv = handle.read().split(b"\0")
+          except (OSError, ValueError):
+              sys.exit(1)
+          sys.exit(0 if b"beat" in argv else 1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # ===========================================================================
   # FLOWER (Celery monitoring)

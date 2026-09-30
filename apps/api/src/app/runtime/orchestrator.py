@@ -66,6 +66,12 @@ def _recall_requires_tool(memory_context: Any) -> bool:
     )
 
 
+def _same_user_question(candidate: str, goal: str) -> bool:
+    """Compare immutable questions while ignoring formatting-only endings."""
+    terminal_punctuation = " \t\r\n.!?…。！？"
+    return candidate.strip().rstrip(terminal_punctuation).strip() == goal.strip().rstrip(terminal_punctuation).strip()
+
+
 def _has_successful_runtime_observation(runtime_state: Any) -> bool:
     """Accept only successful read observations, never arbitrary tool calls."""
     read_markers = (".get", ".get_", ".read", ".list", ".search", ".query", ".status", ".info", ".describe", ".aggregate")
@@ -645,7 +651,7 @@ class GraphOrchestrator:
             and not _has_successful_runtime_observation(planner_kwargs.get("runtime_state"))
         ):
             raise PlanValidationError("memory recall requires a successful runtime observation before synthesis")
-        if proposal.synthesis_brief is not None and proposal.synthesis_brief.user_question != goal:
+        if proposal.synthesis_brief is not None and not _same_user_question(proposal.synthesis_brief.user_question, goal):
             raise PlanValidationError("synthesis brief user_question must equal the immutable plan goal")
         await self.store.apply_iteration(plan_id, proposal, iteration_id=iteration_entity_id)
         return proposal
@@ -700,8 +706,17 @@ class GraphOrchestrator:
                 if isinstance(exc, PlanValidationError) and current.get("iterations"):
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_retry", reason="claimed_by_other_worker")
                     return
+                if isinstance(exc, PlanValidationError):
+                    failure_code = (
+                        "synthesis_question_mismatch"
+                        if str(exc) == "synthesis brief user_question must equal the immutable plan goal"
+                        else "proposal_validation_failed"
+                    )
+                else:
+                    failure_code = "planner_execution_failed"
                 yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
-                    iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1, status="failed",
+                    iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1,
+                    status="failed", failure_code=failure_code,
                 ))
                 await fail("initial_planning_failed", exc)
                 yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="initial_planning_failed")

@@ -864,6 +864,8 @@ class StructuredLLMCall:
                     "в inputs (например, не передавай jira_tasks=\"jira_tasks\"). "
                     "Неполные результаты и неуспешные задачи должны получить явное resolution в следующем решении планера.\n"
                     "Для terminal=synthesis не используй continue_with_tasks: в такой proposal нет replacement-задач. "
+                    "В synthesis_brief.user_question дословно скопируй исходный goal из входа, включая язык и формулировку; "
+                    "не пересказывай его и не меняй пунктуацию. Это исходный вопрос пользователя, а не краткое описание задачи. "
                     "Не повторяй уже сохранённые resolutions. Для каждой текущей незавершённой задачи выбери ровно одно "
                     "действие; continue_with_tasks допустим только если все replacement_task_ids присутствуют в tasks этой proposal.\n"
                     "memory_context содержит два безопасных вида данных: confirmed user/tenant facts и runtime facts (элементы с scope, subject, value), "
