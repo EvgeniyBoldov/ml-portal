@@ -12,6 +12,7 @@ SQLAlchemy==2.0.32
 # Settings and Validation
 pydantic-settings==2.4.0
 pydantic==2.8.2
+jsonschema>=4.23.0
 
 # Cloud Storage
 minio==7.2.7
