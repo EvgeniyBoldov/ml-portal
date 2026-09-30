@@ -182,7 +182,7 @@ verify_alembic_target() {
     fail "${database_name} DB_REVISION=${expected_revision} does not match the release API image Alembic head(s): ${revisions:-none}."
   fi
   compose run --rm --no-deps api alembic "${config_args[@]}" current >/dev/null || \
-    fail "The ${database_name} current database revision is not recognized by the release API image."
+    fail "Release blocked: the ${database_name} current database revision is not recognized by the release API image (expected head=${expected_revision}). The image must include the current database migration history."
   release_log "Verified ${database_name} Alembic head=${expected_revision} in release API image."
 }
 
@@ -250,8 +250,22 @@ deploy_application_release() {
 rollback_to_release() {
   local target_dir="$1"
   test -d "$target_dir" || fail "Rollback release directory is missing: $target_dir"
-  release_log "Rolling back application services to $(release_id_from_dir "$target_dir"). Database migrations remain forward-only."
-  deploy_application_release "$target_dir" || return
+  RELEASE_DIR="$target_dir"
+  load_release_manifest "$target_dir"
+  export PROD_ENV_FILE
+
+  release_log "Preparing application rollback to $(release_id_from_dir "$target_dir"); database migrations remain forward-only."
+  stop_application_services || return
+
+  # A previous application image may not contain the migration revision now
+  # recorded in the database. Check with that exact image before starting it;
+  # otherwise API startup can enter a restart loop (for example, 0174 against
+  # an image whose Alembic graph ends at 0172).
+  pull_application_images || return
+  verify_release_migration_targets || return
+
+  start_application_services || return
+  smoke_check || return
   switch_link current "$target_dir"
   record_result rolled_back "$target_dir"
 }

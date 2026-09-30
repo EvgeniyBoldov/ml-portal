@@ -179,7 +179,15 @@ ml-portal-deploy rollback
 ml-portal-deploy status
 ```
 
-`status` безопасна для диагностики. `rollback` возвращает только предыдущие
-application containers и сообщает текущую forward database revision. Храните
+`status` безопасна для диагностики. `rollback` сначала останавливает
+application services, затем проверяет, что образ предыдущего релиза понимает
+текущую Alembic revision, и только после этого запускает его и выполняет smoke
+checks. Миграции остаются forward-only: в частности, `0173` нельзя безопасно
+откатить, потому что она удаляет данные, которые downgrade не может восстановить.
+Если старый образ не знает текущую revision, rollback завершится с явной ошибкой
+и оставит application services остановленными, а не запустит API в цикле
+перезапусков. В этом случае нужен релиз приложения, совместимый с текущей схемой.
+GitLab разрешает ручной rollback только после успешного deploy; `resource_group`
+и host lock также не дают rollback выполняться параллельно с deploy. Храните
 release directories до момента, разрешённого политикой backup/retention; не
 удаляйте их из CI job.

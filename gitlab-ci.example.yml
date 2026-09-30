@@ -57,6 +57,8 @@ rollback-production:
   tags:
     - production
   resource_group: production
+  needs:
+    - deploy-production
   environment:
     name: production
   rules:
