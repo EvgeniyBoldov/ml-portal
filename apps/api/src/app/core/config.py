@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     TOOL_RESULTS_MAX_PAYLOAD_BYTES: int = Field(default=33554432, ge=1024)
     TOOL_RESULTS_INLINE_CONTEXT_CHARS: int = Field(default=2500, ge=256, le=16000)
     TOOL_RESULTS_QUERY_CONTEXT_CHARS: int = Field(default=3000, ge=256, le=12000)
+    TOOL_RESULTS_SQL_TIMEOUT_SECONDS: int = Field(default=10, ge=1, le=60)
 
     # Redis
     REDIS_URL: str = Field(default="redis://localhost:6379/0")

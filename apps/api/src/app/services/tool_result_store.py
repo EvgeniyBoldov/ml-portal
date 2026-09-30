@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import hashlib
 import math
-from datetime import datetime, timedelta, timezone
+import re
+from decimal import Decimal
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -40,7 +42,7 @@ class ToolResultStoreError(RuntimeError):
 
 
 class ToolResultStore:
-    """Persist payloads and run bounded PostgreSQL JSONB analysis queries."""
+    """Persist tool payloads as JSON and as run-scoped SQL rows."""
 
     async def save(
         self,
@@ -53,6 +55,9 @@ class ToolResultStore:
         task_id: str | None,
         agent_execution_id: str | None,
         payload: Any,
+        query_sql: str | None = None,
+        source_result_ids: list[str] | None = None,
+        source_complete: bool | None = None,
     ) -> dict[str, Any]:
         settings = get_settings()
         try:
@@ -62,22 +67,34 @@ class ToolResultStore:
         if len(serialized.encode("utf-8")) > settings.TOOL_RESULTS_MAX_PAYLOAD_BYTES:
             raise ToolResultStoreError("Tool result exceeds the configured storage limit")
         expires_at = datetime.now(timezone.utc) + timedelta(days=settings.TOOL_RESULTS_RETENTION_DAYS)
+        rows = _dataset_rows(payload)
+        observed_schema, sample, schema_complete, sample_complete = _profile_rows(rows)
         statement = text("""
             INSERT INTO runtime_tool_payloads
                 (run_id, call_id, operation, tenant_id, user_id, task_id,
                  agent_execution_id, payload, payload_sha256, source_total,
-                 source_complete, created_at, expires_at)
+                 source_complete, observed_schema, sample, sample_complete, schema_complete,
+                 row_count, query_sql, source_result_ids, created_at, expires_at)
             VALUES
                 (:run_id, :call_id, :operation, :tenant_id, :user_id, :task_id,
                  :agent_execution_id, CAST(:payload AS jsonb), :payload_sha256,
-                 :source_total, :source_complete, now(), :expires_at)
+                 :source_total, :source_complete, CAST(:observed_schema AS jsonb),
+                 CAST(:sample AS jsonb), :sample_complete, :schema_complete, :row_count, :query_sql,
+                 CAST(:source_result_ids AS jsonb), now(), :expires_at)
             ON CONFLICT (run_id, call_id) DO UPDATE SET
                 payload = EXCLUDED.payload,
                 payload_sha256 = EXCLUDED.payload_sha256,
                 source_total = EXCLUDED.source_total,
                 source_complete = EXCLUDED.source_complete,
+                observed_schema = EXCLUDED.observed_schema,
+                sample = EXCLUDED.sample,
+                sample_complete = EXCLUDED.sample_complete,
+                schema_complete = EXCLUDED.schema_complete,
+                row_count = EXCLUDED.row_count,
+                query_sql = EXCLUDED.query_sql,
+                source_result_ids = EXCLUDED.source_result_ids,
                 expires_at = EXCLUDED.expires_at
-            RETURNING id::text AS result_id
+            RETURNING id::text AS result_id, id AS result_uuid
         """)
         try:
             async with get_tool_results_engine().begin() as connection:
@@ -92,25 +109,156 @@ class ToolResultStore:
                     "payload": serialized,
                     "payload_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
                     "source_total": _source_total(payload),
-                    "source_complete": _source_complete(payload),
+                    "source_complete": _source_complete(payload) if source_complete is None else bool(source_complete),
+                    "observed_schema": json.dumps(observed_schema, ensure_ascii=False),
+                    "sample": json.dumps(sample, ensure_ascii=False, default=str) if sample is not None else None,
+                    "sample_complete": sample_complete,
+                    "schema_complete": schema_complete,
+                    "row_count": len(rows),
+                    "query_sql": query_sql,
+                    "source_result_ids": json.dumps(source_result_ids or []),
                     "expires_at": expires_at,
                 })).mappings().one()
-                fields = []
-                if isinstance(payload, dict):
-                    fields = [{"path": str(key)[:128], "type": _json_type(value),
-                               "item_count": len(value) if isinstance(value, list) else None}
-                              for key, value in list(payload.items())[:30]]
+                await connection.execute(text("DELETE FROM runtime_tool_result_rows WHERE result_id = :result_id"), {
+                    "result_id": row["result_uuid"],
+                })
+                if rows:
+                    await connection.execute(text("""
+                        INSERT INTO runtime_tool_result_rows (result_id, run_id, ordinal, data)
+                        VALUES (:result_id, :run_id, :ordinal, CAST(:data AS jsonb))
+                    """), [
+                        {"result_id": row["result_uuid"], "run_id": run_id,
+                         "ordinal": ordinal, "data": json.dumps(value, ensure_ascii=False, default=str)}
+                        for ordinal, value in enumerate(rows)
+                    ])
+                result_id = row["result_id"]
                 return {
-                    "result_id": row["result_id"],
+                    "result_id": result_id,
+                    "sql_ref": sql_ref_for_result(result_id),
                     "payload_chars": len(serialized),
                     "payload_type": _json_type(payload),
-                    "fields": fields,
+                    "observed_schema": observed_schema,
+                    "sample": sample,
+                    "schema_complete": schema_complete,
+                    "sample_complete": sample_complete,
+                    "row_count": len(rows),
                     "source_total": _source_total(payload),
-                    "source_complete": _source_complete(payload),
+                    "source_complete": _source_complete(payload) if source_complete is None else bool(source_complete),
                     "inline_complete": len(serialized) <= settings.TOOL_RESULTS_INLINE_CONTEXT_CHARS,
+                    "query_sql": query_sql,
+                    "source_result_ids": source_result_ids or [],
                 }
         except Exception as exc:
             raise ToolResultStoreError("Could not persist tool result") from exc
+
+    async def list_for_run(self, *, run_id: str, tenant_id: UUID, user_id: UUID) -> list[dict[str, Any]]:
+        """Return the compact SQL source catalog visible to one runtime run."""
+        statement = text("""
+            SELECT id::text AS result_id, operation, row_count,
+                   jsonb_typeof(payload) AS payload_type,
+                   source_complete, observed_schema, sample, sample_complete, schema_complete,
+                   query_sql, source_result_ids
+            FROM runtime_tool_payloads
+            WHERE run_id = :run_id AND tenant_id = :tenant_id AND user_id = :user_id
+              AND expires_at > now()
+            ORDER BY created_at, id
+        """)
+        async with get_tool_results_engine().connect() as connection:
+            rows = (await connection.execute(statement, {
+                "run_id": run_id, "tenant_id": tenant_id, "user_id": user_id,
+            })).mappings().all()
+        return [{
+            "result_id": row["result_id"],
+            "sql_ref": sql_ref_for_result(row["result_id"]),
+            "operation": row["operation"],
+            "row_count": int(row["row_count"] or 0),
+            "payload_type": row["payload_type"],
+            "source_complete": bool(row["source_complete"]),
+            "observed_schema": row["observed_schema"] or {},
+            "sample": row["sample"],
+            "schema_complete": bool(row["schema_complete"]),
+            "sample_complete": bool(row["sample_complete"]),
+            "query_sql": row["query_sql"],
+            "source_result_ids": row["source_result_ids"] or [],
+        } for row in rows]
+
+    async def execute_sql(
+        self, *, sql: str, run_id: str, tenant_id: UUID, user_id: UUID,
+        call_id: str, task_id: str | None, agent_execution_id: str | None,
+    ) -> dict[str, Any]:
+        """Execute one SQL query over result CTEs and persist its complete output."""
+        query = str(sql or "").strip()
+        if query.endswith(";"):
+            query = query[:-1].rstrip()
+        if not query or not query.lower().startswith(("select", "with")):
+            raise ToolResultStoreError("sql must be a SELECT query or a WITH query ending in SELECT")
+        sources = await self.list_for_run(run_id=run_id, tenant_id=tenant_id, user_id=user_id)
+        query_identifiers = _sql_identifiers(query)
+        used_sources = [source for source in sources if source["sql_ref"] in query_identifiers]
+        ctes: list[str] = []
+        params: dict[str, Any] = {"current_run_id": run_id}
+        source_ids: list[str] = []
+        for index, source in enumerate(sources):
+            result_id = source["result_id"]
+            ref = source["sql_ref"]
+            try:
+                UUID(result_id)
+            except (TypeError, ValueError) as exc:
+                raise ToolResultStoreError("Invalid saved result identifier") from exc
+            param_name = f"source_id_{index}"
+            ctes.append(
+                f'{ref} AS (SELECT ordinal, data::jsonb AS data FROM runtime_tool_result_rows '
+                f'WHERE result_id = CAST(:{param_name} AS uuid) AND run_id = :current_run_id '
+                'AND EXISTS (SELECT 1 FROM runtime_tool_payloads p WHERE p.id = '
+                f'CAST(:{param_name} AS uuid) AND p.run_id = :current_run_id '
+                'AND p.tenant_id = :tenant_id AND p.user_id = :user_id AND p.expires_at > now()))'
+            )
+            params[param_name] = result_id
+            if ref in query_identifiers:
+                source_ids.append(result_id)
+        params.update({"tenant_id": tenant_id, "user_id": user_id})
+        prefix = ("WITH " + ", ".join(ctes) + ", " if ctes else "WITH ")
+        settings = get_settings()
+        max_rows = 10000
+        wrapped_sql = prefix + f"_agent_query AS ({query}) SELECT * FROM _agent_query LIMIT {max_rows + 1}"
+        result_rows: list[dict[str, Any]] = []
+        result_bytes = 0
+        try:
+            async with get_tool_results_engine().begin() as connection:
+                await connection.execute(text("SET TRANSACTION READ ONLY"))
+                timeout_ms = settings.TOOL_RESULTS_SQL_TIMEOUT_SECONDS * 1000
+                await connection.execute(text(f"SET LOCAL statement_timeout = '{timeout_ms}ms'"))
+                result = await connection.execute(text(wrapped_sql), params)
+                for row in result.mappings():
+                    item = _json_compatible(dict(row))
+                    result_bytes += len(json.dumps(item, ensure_ascii=False, default=str).encode("utf-8"))
+                    if len(result_rows) >= max_rows or result_bytes > settings.TOOL_RESULTS_MAX_PAYLOAD_BYTES:
+                        raise ToolResultStoreError("SQL result exceeds the configured result limit")
+                    result_rows.append(item)
+        except ToolResultStoreError:
+            raise
+        except Exception as exc:
+            raise ToolResultStoreError(f"SQL query failed: {str(exc).splitlines()[0][:300]}") from exc
+
+        saved = await self.save(
+            run_id=run_id, call_id=call_id, operation="result.analyze.sql",
+            tenant_id=tenant_id, user_id=user_id, task_id=task_id,
+            agent_execution_id=agent_execution_id, payload=result_rows,
+            query_sql=query, source_result_ids=source_ids,
+            source_complete=all(item["source_complete"] for item in used_sources),
+        )
+        saved["inline_complete"] = saved["inline_complete"] and len(result_rows) <= 25
+        return {
+            "mode": "sql", "result_id": saved["result_id"],
+            "source_result_id": saved["result_id"], "sql_ref": saved["sql_ref"],
+            "row_count": saved["row_count"], "source_complete": all(item["source_complete"] for item in used_sources),
+            "source_count": len(source_ids), "source_result_ids": source_ids, "query_sql": query,
+            "observed_schema": saved["observed_schema"], "sample": saved["sample"],
+            "schema_complete": saved["schema_complete"],
+            "rows": result_rows[:25], "inline_complete": saved["inline_complete"],
+            "query_result_stored": True, "query_complete": True,
+            "_stored_result": saved,
+        }
 
     async def analyze(
         self,
@@ -483,6 +631,99 @@ def _response_value_budget() -> int:
     return max(256, min(get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS, 3000) - 1000)
 
 
+def sql_ref_for_result(result_id: str) -> str:
+    """Return the stable SQL identifier shown to agents for a stored result."""
+    try:
+        normalized = UUID(str(result_id)).hex
+    except (TypeError, ValueError) as exc:
+        raise ToolResultStoreError("Invalid saved result identifier") from exc
+    return f"result_{normalized}"
+
+
+def _dataset_rows(payload: Any) -> list[Any]:
+    """Expose root arrays as rows and every other JSON value as one row."""
+    return list(payload) if isinstance(payload, list) else [payload]
+
+
+def _json_compatible(value: Any) -> Any:
+    """Normalize common PostgreSQL scalar values before persisting query rows."""
+    if isinstance(value, dict):
+        return {str(key): _json_compatible(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(child) for child in value]
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    return value
+
+
+def _profile_rows(rows: list[Any]) -> tuple[dict[str, Any], Any, bool, bool]:
+    """Build bounded observed shape metadata without assuming uniform rows."""
+    max_paths = 200
+    max_depth = 12
+    counts: dict[str, dict[str, Any]] = {}
+    schema_complete = True
+    sample_complete = True
+
+    def visit(value: Any, path: str, depth: int) -> None:
+        nonlocal schema_complete
+        if depth > max_depth:
+            schema_complete = False
+            return
+        key = path or "$"
+        entry = counts.get(key)
+        if entry is None:
+            if len(counts) >= max_paths:
+                schema_complete = False
+                return
+            entry = {"types": set(), "present": 0, "null": 0, "array_items": 0}
+            counts[key] = entry
+        kind = _json_type(value)
+        entry["types"].add(kind)
+        entry["present"] += 1
+        if value is None:
+            entry["null"] += 1
+        elif isinstance(value, dict):
+            for child_key, child in value.items():
+                visit(child, f"{path}.{child_key}" if path else str(child_key), depth + 1)
+        elif isinstance(value, list):
+            entry["array_items"] += len(value)
+            for child in value:
+                visit(child, f"{path}[]" if path else "[]", depth + 1)
+
+    for row in rows:
+        visit(row, "", 0)
+    schema = {
+        path: {
+            "types": sorted(entry["types"]),
+            "present": entry["present"],
+            "missing": max(0, len(rows) - entry["present"]),
+            "null": entry["null"],
+            **({"array_items": entry["array_items"]} if entry["array_items"] else {}),
+        }
+        for path, entry in counts.items()
+    }
+    sample_rows = rows[:3]
+    sample: Any = sample_rows if len(rows) != 1 or isinstance(rows[0], (dict, list)) else rows[0]
+    try:
+        while len(json.dumps(sample, ensure_ascii=False, default=str)) > 1500 and sample_rows:
+            sample_rows = sample_rows[:max(1, len(sample_rows) // 2)]
+            sample = sample_rows if len(rows) != 1 or isinstance(rows[0], (dict, list)) else sample_rows[0]
+            if len(sample_rows) == 1 and len(json.dumps(sample, ensure_ascii=False, default=str)) > 1500:
+                sample = {"_truncated": True, "preview": json.dumps(sample, ensure_ascii=False, default=str)[:1400]}
+                sample_complete = False
+                break
+    except Exception:
+        sample = None
+        sample_complete = False
+    return schema, sample, schema_complete, sample_complete
+
+
 def _contains_array(value: Any) -> bool:
     if isinstance(value, list):
         return True
@@ -512,6 +753,61 @@ def _json_type(value: Any) -> str:
     if isinstance(value, (int, float)):
         return "number"
     return "string"
+
+
+def _sql_identifiers(sql: str) -> set[str]:
+    """Find source identifiers, excluding SQL literals and comments.
+
+    These tokens select provenance from the already authorized run catalog;
+    PostgreSQL still parses and executes the actual query.
+    """
+    result: set[str] = set()
+    index = 0
+    while index < len(sql):
+        if sql.startswith("--", index):
+            end = sql.find("\n", index + 2)
+            index = len(sql) if end < 0 else end + 1
+        elif sql.startswith("/*", index):
+            index += 2
+            depth = 1
+            while index < len(sql) and depth:
+                if sql.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif sql.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+        elif sql[index] in "'\"":
+            quote = sql[index]
+            escaped = quote == "'" and index > 0 and sql[index - 1] in "eE"
+            index += 1
+            value = ""
+            while index < len(sql):
+                if escaped and sql[index] == "\\":
+                    index += 2
+                    continue
+                if sql[index] == quote:
+                    if index + 1 < len(sql) and sql[index + 1] == quote:
+                        value += quote
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                value += sql[index]
+                index += 1
+            if quote == '"':
+                result.add(value)
+        elif sql[index] == "$" and (tag := re.match(r"\$(?:[A-Za-z_]\w*)?\$", sql[index:])):
+            end = sql.find(tag[0], index + len(tag[0]))
+            index = len(sql) if end < 0 else end + len(tag[0])
+        elif token := re.match(r"[A-Za-z_][A-Za-z_0-9$]*", sql[index:]):
+            result.add(token[0].lower())
+            index += len(token[0])
+        else:
+            index += 1
+    return result
 
 
 def _source_complete(payload: Any) -> bool:

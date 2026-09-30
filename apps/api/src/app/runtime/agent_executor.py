@@ -43,6 +43,8 @@ from app.runtime.orchestrator_contracts import (
     parse_task_completion_declaration,
     task_completion_json_schema,
 )
+from app.runtime.task_result_reducer import TaskAttemptResultReducer
+from app.runtime.task_value_normalization import TASK_COMPLETION_RULES
 from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.error_payloads import build_debug_payload
 from app.agents.runtime.published_capabilities import (
@@ -375,6 +377,15 @@ class AgentExecutor:
         final_retry_after_ms: Optional[int] = None
         success = True
 
+        def validate_terminal(raw: str) -> list[str]:
+            verified = self._verified_task_result(
+                task=task, ledger_entries=state.tool_ledger.entries[ledger_start:],
+                sources=sub_sources, verified_artifacts=artifacts,
+            )
+            return self._terminal_validation_errors(raw, task=task, verified=verified)
+
+        ctx.extra["task_completion_validator"] = validate_terminal
+
         try:
             async for runtime_event in self._tool_runtime.execute(
                 exec_request=sub_request,
@@ -395,6 +406,11 @@ class AgentExecutor:
                     )
                 elif runtime_event.type == RuntimeEventType.TOOL_RESULT:
                     result_payload = runtime_event.data.get("data")
+                    envelope = runtime_event.data.get("result")
+                    if isinstance(envelope, dict) and "data" in envelope:
+                        # The displayed preview can be truncated to a string.
+                        # Verification must use structured runtime metadata.
+                        result_payload = envelope["data"]
                     state.record_tool_result(
                         call_id=str(runtime_event.data.get("call_id") or ""),
                         success=bool(runtime_event.data.get("success")),
@@ -474,6 +490,9 @@ class AgentExecutor:
                 source="runtime",
                 debug=build_debug_payload(exc=exc),
             )
+
+        finally:
+            ctx.extra.pop("task_completion_validator", None)
 
         # 4. The terminal response is the sole task contract.  A second LLM
         # commit pass would make a valid response non-authoritative and add an
@@ -711,6 +730,7 @@ class AgentExecutor:
             is_retrieval = normalized in PUBLIC_RETRIEVAL_OPERATIONS
             fresh_retrieval = fresh_retrieval or is_retrieval
             receipt = {
+                "success": True,
                 "result_ref": str(getattr(entry, "result_ref", None) or getattr(entry, "call_id", "")),
                 "call_id": str(getattr(entry, "call_id", "")),
                 "operation": operation,
@@ -728,6 +748,7 @@ class AgentExecutor:
                     key: result_data.get(key) for key in (
                         "mode", "source_result_id", "selection_id", "offset",
                         "matched_count", "returned_count", "complete", "source_complete",
+                        "result_id", "row_count", "source_result_ids", "query_result_stored", "query_complete",
                     ) if key in result_data
                 }
             receipts.append(receipt)
@@ -908,25 +929,6 @@ class AgentExecutor:
             if len(attachment_lines) > 1:
                 final_query = "\n\n".join(["\n".join(attachment_lines), final_query])
 
-        output_contract = [
-            "[Terminal task completion declaration]",
-            "Only when you decide to finish the task, return exactly one JSON object and no prose or markdown. Tool calls are intermediate steps, not this declaration.",
-            "The runtime owns tool execution, evidence and artifact storage. For a task_result output, return a normalized value derived from observed tool data; do not paste an unbounded raw payload.",
-            "Each outputs.<key> is a typed slot: {kind:'value',value:<value>}, {kind:'evidence',refs:[result_ref]}, or {kind:'artifact',refs:[artifact_ref]} exactly as required by that output.",
-            "Use evidence or artifact refs only for outputs whose fulfillment requires them; task_result outputs require a value slot.",
-            "For every non-empty array copied from a stored result whose inline_complete is false, add a coverage claim: output_key, optional dot-path output_path, result_id, and all result.analyze select query_call_ids covering the selection. Continue paging until complete=true; never claim completeness from a preview or an incomplete source.",
-            "For a requested list, table, text, or structured data, task_result requires a compact normalized value from the observed tool result; do not substitute an evidence reference.",
-            "An evidence ref must be an exact runtime result_ref or tool call id shown in a successful tool result. Never invent a descriptive ref such as jira_search_issues_result.",
-            "completion is fulfilled, needs, or unfulfillable. fulfilled requires every required output; needs requires non-empty needs; unfulfillable requires limitation.",
-            "Required fields are completion, report, outputs, and needs. limitation is required only for unfulfillable.",
-            "A need has ref, key, kind (data|artifact|decision), description, schema, required, and context.",
-        ]
-        if task.expected_outputs:
-            output_contract.append(
-                "Expected outputs (follow required and schema exactly):\n" +
-                json.dumps([item.model_dump(mode="json", by_alias=True) for item in task.expected_outputs], ensure_ascii=False)
-            )
-        final_query = "\n\n".join(["\n".join(output_contract), final_query])
         non_system.append({"role": "user", "content": final_query})
         return non_system
 
@@ -945,13 +947,40 @@ class AgentExecutor:
             "outputs is a JSON object keyed by expected output key. Each value is exactly one typed slot: "
             "{kind:'value',value:<schema-validated value>}, {kind:'evidence',refs:[result_ref]}, or "
             "{kind:'artifact',refs:[artifact_ref]}. For task_result outputs, return a normalized value derived from observed tool data; "
-            "For every non-empty array copied from a stored result whose inline_complete is false, include coverage claims with result_id and query_call_ids for result.analyze select pages; page until complete=true. "
+            "If the task has any clipped stored tool result (inline_complete=false), every non-empty output array requires coverage with result_id and query_call_ids. For SQL-derived arrays, cite the saved SQL result_id and SQL query_call_id. "
             "evidence/artifact refs are valid only for the corresponding fulfillment. "
             "Use completion=fulfilled only when required outputs are present; completion=needs only with non-empty needs; completion=unfulfillable only with limitation. "
             f"Expected outputs (including required/schema): {expected}. "
             "Your declaration must conform to this JSON Schema: "
             f"{json.dumps(task_completion_json_schema(task), ensure_ascii=False)}.",
+            TASK_COMPLETION_RULES,
+            "Runtime evidence requirements: " + json.dumps({
+                "freshness_policy": task.freshness_policy.value,
+                "required_retrieval_operations": sorted(TaskAttemptResultReducer._required_retrieval_operations(task)),
+            }, ensure_ascii=False) + ". require_retrieval requires a successful retrieval receipt in this task; required operations must each have an observed successful receipt.",
         ] if part)
+
+    @staticmethod
+    def _terminal_validation_errors(raw: str, *, task: TaskRequest, verified: Dict[str, Any]) -> list[str]:
+        """Use the final reducer inside the agent loop, before ending an attempt."""
+        from pydantic import ValidationError
+        try:
+            declaration = parse_task_completion_declaration(AgentExecutor._unwrap_terminal_json_fence(raw))
+        except ValidationError as exc:
+            return [".".join(str(part) for part in error["loc"]) + ": " + error["msg"]
+                    for error in exc.errors(include_input=False)[:10]]
+        except ValueError as exc:
+            return [str(exc)]
+        result = TaskAttemptResultReducer().reduce(request=task, declaration=declaration, verified=verified)
+        errors = []
+        for key, state in result.output_states.items():
+            if state.get("status") == "invalid":
+                errors.append(f"outputs.{key}: {state['reason']}")
+                for error in state.get("errors", []):
+                    errors.append(f"outputs.{key}.value{error['path']}: {error['message']}")
+        if result.reason_code and not errors:
+            errors.append(f"{result.reason_code}: {result.limitation.message}")
+        return errors[:20]
 
     @staticmethod
     def _parse_structured_response(raw: str) -> Dict[str, Any]:

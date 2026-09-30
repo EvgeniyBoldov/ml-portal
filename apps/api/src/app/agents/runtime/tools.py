@@ -697,15 +697,45 @@ class OperationExecutionFacade:
 
         if result.success:
             if stored_result:
+                visible_schema = stored_result.get("observed_schema")
+                if isinstance(visible_schema, dict):
+                    visible_schema = dict(list(visible_schema.items())[:30])
                 descriptor = {
                     "_runtime_result": {
                         key: stored_result.get(key) for key in (
                             "result_id", "payload_type", "payload_chars",
-                            "inline_complete", "source_total", "source_complete",
+                            "sql_ref", "row_count",
+                            "schema_complete", "sample_complete", "inline_complete",
+                            "source_total", "source_complete",
                         ) if key in stored_result
                     },
                     "evidence_call_id": evidence_call_id,
                 }
+                if visible_schema is not None:
+                    descriptor["_runtime_result"]["observed_schema"] = visible_schema
+                    if isinstance(stored_result.get("observed_schema"), dict) and len(stored_result["observed_schema"]) > 30:
+                        descriptor["_runtime_result"]["schema_complete"] = False
+                if "sample" in stored_result:
+                    descriptor["_runtime_result"]["sample"] = stored_result.get("sample")
+                if "query_sql" in stored_result and stored_result.get("query_sql"):
+                    descriptor["_runtime_result"]["query_sql"] = str(stored_result["query_sql"])[:1200]
+                    descriptor["_runtime_result"]["query_sql_complete"] = len(str(stored_result["query_sql"])) <= 1200
+                if stored_result.get("source_result_ids"):
+                    source_ids = list(stored_result["source_result_ids"])
+                    descriptor["_runtime_result"]["source_result_ids"] = source_ids[:20]
+                    descriptor["_runtime_result"]["source_ids_truncated"] = len(source_ids) > 20
+                metadata_budget = 1100 if stored_result.get("inline_complete") else MAX_TOOL_CONTEXT_CHARS - 200
+                runtime_meta = descriptor["_runtime_result"]
+                while (len(_json.dumps(descriptor, ensure_ascii=False, default=str)) > metadata_budget
+                       and isinstance(runtime_meta.get("observed_schema"), dict)
+                       and runtime_meta["observed_schema"]):
+                    runtime_meta["observed_schema"].pop(next(reversed(runtime_meta["observed_schema"])))
+                    runtime_meta["schema_complete"] = False
+                if len(_json.dumps(descriptor, ensure_ascii=False, default=str)) > metadata_budget:
+                    runtime_meta.pop("query_sql", None)
+                    runtime_meta.pop("query_sql_complete", None)
+                if len(_json.dumps(descriptor, ensure_ascii=False, default=str)) > metadata_budget:
+                    runtime_meta.pop("sample", None)
                 if stored_result.get("inline_complete"):
                     raw_output = result.data or {}
                     if isinstance(raw_output, dict):

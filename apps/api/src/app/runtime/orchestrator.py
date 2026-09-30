@@ -15,7 +15,7 @@ from app.runtime.entity_ids import (
 from app.runtime.orchestrator_contracts import (
     AgentTaskContract, TaskContractMode, TaskExecutionReceipt, IterationProposal, PlanRequest, PlannerContext,
     SchedulerActionKind, TaskAttemptFailure, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
-    FreshnessPolicy, TaskOutputFulfillment, TerminalKind,
+    FreshnessPolicy, TaskOutputFulfillment, TaskOutputSpec, TerminalKind,
 )
 from app.runtime.plan_store import PlanValidationError
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
@@ -200,6 +200,8 @@ class OrchestratorEvent(dict):
                 attempt_id=self.get("attempt_id"),
                 agent_execution_id=self.get("agent_execution_id"),
                 step_id=self.get("step_id"),
+                reason_code=self.get("reason_code"),
+                output_states=self.get("output_states"),
             )
         if event_name in {"task_blocked", "task_paused", "task_resumed", "task_failed"}:
             lifecycle_type = {
@@ -547,7 +549,8 @@ class GraphOrchestrator:
                     replacement.executor == prior.get("executor")
                     and replacement.inputs == (prior.get("inputs") or {})
                     and [item.model_dump(mode="json", by_alias=True) for item in replacement.expected_outputs]
-                    == list(prior.get("expected_outputs") or [])
+                    == [TaskOutputSpec.model_validate(item).model_dump(mode="json", by_alias=True)
+                        for item in prior.get("expected_outputs") or []]
                 )
                 if same_contract:
                     raise PlanValidationError(
@@ -950,7 +953,14 @@ class GraphOrchestrator:
                         })
                     if result.outcome.value == "completed":
                         yield OrchestratorEvent(type="task_attempt_succeeded", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
-                    yield OrchestratorEvent(type={"completed": "task_completed", "needs_dependency": "task_needs_dependency", "unfulfillable": "task_unfulfillable"}[result.outcome.value], plan_id=str(plan_id), task_id=task_id, attempt=attempt, outcome=result.outcome.value, **trace_links)
+                    yield OrchestratorEvent(
+                        type={"completed": "task_completed", "needs_dependency": "task_needs_dependency", "unfulfillable": "task_unfulfillable"}[result.outcome.value],
+                        plan_id=str(plan_id), task_id=task_id, attempt=attempt, outcome=result.outcome.value,
+                        reason_code=result.reason_code,
+                        output_states={key: {name: state[name] for name in ("status", "reason", "errors", "normalized_from") if name in state}
+                                       for key, state in result.output_states.items()},
+                        **trace_links,
+                    )
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
                         agent_execution_id=execution_id,
                         parent_entity_type="step",

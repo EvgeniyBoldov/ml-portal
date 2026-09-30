@@ -9,6 +9,23 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.runtime.task_value_normalization import is_absent
+
+
+def _normalize_reference_list(value: Any) -> Any:
+    if is_absent(value):
+        return []
+    if not isinstance(value, list):
+        return value
+    result = []
+    for item in value:
+        if is_absent(item):
+            continue
+        item = item.strip() if isinstance(item, str) else item
+        if item not in result:
+            result.append(item)
+    return result
+
 
 class PlanStatus(str, Enum):
     DRAFT = "draft"
@@ -118,7 +135,12 @@ class UserLimitation(BaseModel):
     code: str = Field(..., min_length=1)
     message: str = Field(..., min_length=1)
     action: LimitationAction = LimitationAction.NONE
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def absent_action(cls, value: Any) -> Any:
+        return LimitationAction.NONE if is_absent(value) else value
 
 
 class DiscoveredNeed(BaseModel):
@@ -130,7 +152,18 @@ class DiscoveredNeed(BaseModel):
     json_schema: Dict[str, Any] = Field(default_factory=dict, alias="schema")
     required: bool = True
     context: Dict[str, Any] = Field(default_factory=dict)
-    model_config = {"extra": "forbid", "populate_by_name": True}
+    model_config = {"extra": "forbid", "populate_by_name": True, "str_strip_whitespace": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_optional_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        for key, default in (("kind", "data"), ("schema", {}), ("required", True), ("context", {})):
+            if key in value and is_absent(value[key]):
+                value[key] = default
+        return value
 
     @field_validator("json_schema", mode="before")
     @classmethod
@@ -142,6 +175,8 @@ class DiscoveredNeed(BaseModel):
         is planned makes an invalid agent declaration look like a successful
         ``needs_dependency`` task and fails only in a later iteration.
         """
+        if not isinstance(value, dict) and not is_absent(value):
+            raise ValueError("need schema must be a JSON Schema object")
         schema = _normalize_nullable_schema(value if isinstance(value, dict) else {})
         try:
             import jsonschema
@@ -158,12 +193,26 @@ class TaskOutputSpec(BaseModel):
     required: bool = True
     fulfillment: TaskOutputFulfillment = TaskOutputFulfillment.TASK_RESULT
     receipt_operations: List[str] = Field(default_factory=list)
-    model_config = {"extra": "forbid", "populate_by_name": True}
+    require_complete_source: bool = Field(default=False, description="Require runtime-confirmed complete source data for coverage claims; otherwise claims prove access to observed data only.")
+    model_config = {"extra": "forbid", "populate_by_name": True, "str_strip_whitespace": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_optional_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        for key, default in (("required", True), ("fulfillment", "task_result"), ("receipt_operations", []), ("require_complete_source", False)):
+            if key in value and is_absent(value[key]):
+                value[key] = default
+        return value
 
     @field_validator("json_schema", mode="before")
     @classmethod
     def normalize_schema_dialect(cls, value: Any) -> Dict[str, Any]:
         """Accept JSON Schema only; normalize the legacy OpenAPI nullable form."""
+        if not isinstance(value, dict) and not is_absent(value):
+            raise ValueError("output schema must be a JSON Schema object")
         schema = _normalize_nullable_schema(value if isinstance(value, dict) else {})
         try:
             import jsonschema
@@ -189,6 +238,8 @@ class TaskOutputSpec(BaseModel):
             raise ValueError("verified_receipt output requires receipt_operations")
         if self.fulfillment != TaskOutputFulfillment.VERIFIED_RECEIPT and self.receipt_operations:
             raise ValueError("receipt_operations are allowed only for verified_receipt outputs")
+        if self.require_complete_source and self.fulfillment != TaskOutputFulfillment.TASK_RESULT:
+            raise ValueError("require_complete_source is allowed only for task_result outputs")
         return self
 
     @staticmethod
@@ -428,6 +479,13 @@ class TaskRequest(BaseModel):
     freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
     model_config = {"extra": "forbid"}
 
+    @model_validator(mode="after")
+    def unique_output_keys(self) -> "TaskRequest":
+        keys = [spec.key for spec in self.expected_outputs]
+        if len(keys) != len(set(keys)):
+            raise ValueError("task expected_outputs must contain unique keys")
+        return self
+
 
 class ValueOutputSlot(BaseModel):
     kind: Literal["value"]
@@ -440,11 +498,21 @@ class EvidenceOutputSlot(BaseModel):
     refs: List[str] = Field(..., min_length=1)
     model_config = {"extra": "forbid"}
 
+    @field_validator("refs", mode="before")
+    @classmethod
+    def normalize_refs(cls, value: Any) -> Any:
+        return _normalize_reference_list(value)
+
 
 class ArtifactOutputSlot(BaseModel):
     kind: Literal["artifact"]
     refs: List[str] = Field(..., min_length=1)
     model_config = {"extra": "forbid"}
+
+    @field_validator("refs", mode="before")
+    @classmethod
+    def normalize_refs(cls, value: Any) -> Any:
+        return _normalize_reference_list(value)
 
 
 OutputSlot = Annotated[
@@ -475,7 +543,17 @@ class OutputCoverageClaim(BaseModel):
     output_path: str = Field(default="", description="Dot-separated path to an array within the output value")
     result_id: str = Field(..., min_length=1)
     query_call_ids: List[str] = Field(..., min_length=1)
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+    @field_validator("output_path", mode="before")
+    @classmethod
+    def normalize_root_path(cls, value: Any) -> Any:
+        return "" if is_absent(value) else value
+
+    @field_validator("query_call_ids", mode="before")
+    @classmethod
+    def normalize_calls(cls, value: Any) -> Any:
+        return _normalize_reference_list(value)
 
 
 class TaskCompletionDeclaration(BaseModel):
@@ -486,7 +564,23 @@ class TaskCompletionDeclaration(BaseModel):
     needs: List[DiscoveredNeed] = Field(default_factory=list)
     coverage: List[OutputCoverageClaim] = Field(default_factory=list)
     limitation: Optional[UserLimitation] = None
-    model_config = {"extra": "forbid", "populate_by_name": True}
+    model_config = {"extra": "forbid", "populate_by_name": True, "str_strip_whitespace": True}
+
+    @field_validator("completion_claim", mode="before")
+    @classmethod
+    def normalize_completion(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_optional_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        for key, default in (("outputs", {}), ("needs", []), ("coverage", []), ("limitation", None)):
+            if key in value and is_absent(value[key]):
+                value[key] = default
+        return value
 
     @model_validator(mode="after")
     def validate_completion(self) -> "TaskCompletionDeclaration":
@@ -503,6 +597,9 @@ class TaskCompletionDeclaration(BaseModel):
             raise ValueError("unfulfillable completion requires a limitation")
         if self.completion_claim != AgentExecutionCompletion.UNFULFILLABLE and self.limitation is not None:
             raise ValueError("only unfulfillable completion may contain a limitation")
+        paths = [(claim.output_key, claim.output_path) for claim in self.coverage]
+        if len(paths) != len(set(paths)):
+            raise ValueError("coverage must contain unique output_key/output_path pairs")
         return self
 
 
@@ -565,15 +662,22 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
     """Build the sole terminal declaration schema from the compiled contract."""
     def slot_schema(spec: TaskOutputSpec) -> Dict[str, Any]:
         if spec.fulfillment == TaskOutputFulfillment.TASK_RESULT:
+            value_schema = dict(spec.json_schema)
+            if value_schema and "$id" not in value_schema:
+                # Keep local fragments relative to the value schema when it
+                # is embedded in the terminal envelope. Each output owns its
+                # definitions rather than resolving against the envelope.
+                identity = hashlib.sha256(json.dumps([request.task_id, spec.key]).encode()).hexdigest()
+                value_schema["$id"] = f"urn:ml-portal:task-output:{identity}"
             return {
                 "type": "object", "additionalProperties": False,
-                "properties": {"kind": {"const": "value"}, "value": spec.json_schema},
+                "properties": {"kind": {"const": "value"}, "value": value_schema},
                 "required": ["kind", "value"],
             }
         kind = "evidence" if spec.fulfillment == TaskOutputFulfillment.VERIFIED_RECEIPT else "artifact"
         return {
             "type": "object", "additionalProperties": False,
-            "properties": {"kind": {"const": kind}, "refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}},
+            "properties": {"kind": {"const": kind}, "refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": "\\S"}}},
             "required": ["kind", "refs"],
         }
 
@@ -583,22 +687,22 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "ref": {"type": "string", "minLength": 1},
-            "key": {"type": "string", "minLength": 1},
+            "ref": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "key": {"type": "string", "minLength": 1, "pattern": "\\S"},
             "kind": {"enum": ["data", "artifact", "decision"]},
-            "description": {"type": "string", "minLength": 1},
+            "description": {"type": "string", "minLength": 1, "pattern": "\\S"},
             "schema": {"type": "object"},
             "required": {"type": "boolean"},
             "context": {"type": "object"},
         },
-        "required": ["ref", "key", "kind", "description", "schema", "required", "context"],
+        "required": ["ref", "key", "description"],
     }
     limitation_schema = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "code": {"type": "string", "minLength": 1},
-            "message": {"type": "string", "minLength": 1},
+            "code": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "message": {"type": "string", "minLength": 1, "pattern": "\\S"},
             "action": {"enum": [item.value for item in LimitationAction]},
         },
         "required": ["code", "message"],
@@ -608,7 +712,7 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
         "additionalProperties": False,
         "properties": {
             "completion": {"enum": [item.value for item in AgentExecutionCompletion]},
-            "report": {"type": "string", "minLength": 1},
+            "report": {"type": "string", "minLength": 1, "pattern": "\\S"},
             "outputs": {
                 "type": "object", "additionalProperties": False,
                 "properties": output_properties,
@@ -617,14 +721,14 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
             "coverage": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
                 "properties": {
-                    "output_key": {"type": "string", "minLength": 1},
-                    "output_path": {"type": "string"},
-                    "result_id": {"type": "string", "minLength": 1},
-                    "query_call_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+                    "output_key": {"type": "string", "minLength": 1, "pattern": "\\S"},
+                    "output_path": {"type": ["string", "null"], "default": "", "description": "Omitted/null/blank means the entire output value, including nested arrays."},
+                    "result_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+                    "query_call_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": "\\S"}},
                 },
                 "required": ["output_key", "result_id", "query_call_ids"],
             }},
-            "limitation": limitation_schema,
+            "limitation": {"anyOf": [limitation_schema, {"type": "null"}]},
         },
         "required": ["completion", "report", "outputs", "needs"],
     }
@@ -632,17 +736,19 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
         {
             "if": {"properties": {"completion": {"const": AgentExecutionCompletion.FULFILLED.value}}, "required": ["completion"]},
             "then": {
-                "properties": {"outputs": {"required": required_outputs}, "needs": {"maxItems": 0}},
-                "not": {"required": ["limitation"]},
+                "properties": {
+                    "outputs": {"required": required_outputs}, "needs": {"maxItems": 0},
+                    "limitation": {"type": "null"},
+                },
             },
         },
         {
             "if": {"properties": {"completion": {"const": AgentExecutionCompletion.NEEDS.value}}, "required": ["completion"]},
-            "then": {"properties": {"needs": {"minItems": 1}}, "not": {"required": ["limitation"]}},
+            "then": {"required": ["needs"], "properties": {"needs": {"minItems": 1}, "limitation": {"type": "null"}}},
         },
         {
             "if": {"properties": {"completion": {"const": AgentExecutionCompletion.UNFULFILLABLE.value}}, "required": ["completion"]},
-            "then": {"required": ["limitation"], "properties": {"needs": {"maxItems": 0}}},
+            "then": {"required": ["limitation"], "properties": {"needs": {"maxItems": 0}, "limitation": limitation_schema}},
         },
     ]
     return schema

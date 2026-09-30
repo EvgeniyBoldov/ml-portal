@@ -75,6 +75,30 @@ _OUTPUT_SCHEMA_V1_1 = {
     },
 }
 
+_INPUT_SCHEMA_V2 = {
+    "type": "object",
+    "properties": {
+        "sql": {"type": "string", "minLength": 1, "description": "One PostgreSQL SELECT query over the result_<uuid> tables listed in the saved result catalog. JSON values are available in data."},
+    },
+    "required": ["sql"],
+    "additionalProperties": False,
+}
+_OUTPUT_SCHEMA_V2 = {
+    "type": "object",
+    "properties": {
+        "mode": {"type": "string"}, "result_id": {"type": "string"},
+        "sql_ref": {"type": "string"}, "row_count": {"type": "integer"},
+        "source_complete": {"type": "boolean"}, "source_count": {"type": "integer"},
+        "query_sql": {"type": "string"}, "observed_schema": {"type": "object"},
+        "sample": {}, "schema_complete": {"type": "boolean"},
+        "rows": {"type": "array"}, "inline_complete": {"type": "boolean"},
+        "query_result_stored": {"type": "boolean"},
+        "query_complete": {"type": "boolean"},
+        "source_result_ids": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["mode", "result_id", "sql_ref", "row_count", "rows", "query_result_stored"],
+}
+
 
 @register_tool
 class ResultAnalyzeTool(VersionedTool):
@@ -82,11 +106,9 @@ class ResultAnalyzeTool(VersionedTool):
     domains: ClassVar[list] = ["system", "runtime"]
     name: ClassVar[str] = "Analyze Tool Result"
     description: ClassVar[str] = (
-        "Inspect a stored tool result by result_id. overview shows top-level fields; "
-        "project reads object paths; text pages a string by text_path. "
-        "For counts by type use aggregate(result_id, array_path, group_by), e.g. group_by=device_type.display. "
-        "For rows use select(result_id, array_path, fields, offset, limit) and page until complete=true. "
-        "Paths are dot-separated. Only pass filter_path together with equals; omit both for all rows."
+        "Query saved tool results with PostgreSQL SQL. Each saved result is available as a table named "
+        "result_<uuid_without_hyphens>, with ordinal and data JSONB columns. Use the saved-result catalog "
+        "for identifiers and observed JSON structure. SQL results are saved and can be queried again."
     )
 
     @tool_version(version="1.0.0", input_schema=_INPUT_SCHEMA_V1, output_schema=_OUTPUT_SCHEMA_V1,
@@ -110,6 +132,38 @@ class ResultAnalyzeTool(VersionedTool):
                   ))
     async def v1_1_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         return await self._analyze(ctx, args)
+
+    @tool_version(version="2.0.0", input_schema=_INPUT_SCHEMA_V2, output_schema=_OUTPUT_SCHEMA_V2,
+                  description=(
+                      "Run one PostgreSQL SELECT query over saved tool results. Use the exact "
+                      "result_<uuid_without_hyphens> table identifiers in the run result catalog; "
+                      "read arbitrary nested values from data JSONB. Every query result is stored "
+                      "and returned with its own sql_ref for later queries."
+                  ))
+    async def v2_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
+        log = ctx.tool_notes(self.tool_slug)
+        run_id = str(ctx.extra.get("runtime_root_run_id") or "").strip()
+        call_id = str(ctx.extra.get("runtime_active_tool_call_id") or "").strip()
+        if not run_id or not call_id:
+            return ToolResult.fail("Runtime run or tool call identifier is unavailable; cannot execute saved-result SQL.", logs=log.entries_dict())
+        try:
+            data = await ToolResultStore().execute_sql(
+                sql=str(args.get("sql") or ""), run_id=run_id,
+                tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+                call_id=call_id,
+                task_id=str(ctx.extra.get("runtime_task_id") or "") or None,
+                agent_execution_id=str(ctx.extra.get("run_id") or "") or None,
+            )
+            stored_result = data.pop("_stored_result")
+            log.info("sql_result_saved", result_id=stored_result["result_id"], row_count=data["row_count"])
+            return ToolResult.ok(data, logs=log.entries_dict(), stored_result=stored_result)
+        except ToolResultStoreError as exc:
+            log.warning("sql_query_failed", reason=str(exc))
+            return ToolResult.fail(str(exc), logs=log.entries_dict())
+        except SQLAlchemyError as exc:
+            logger.exception("result.analyze SQL execution failed run_id=%s", run_id)
+            log.error("sql_query_failed", reason="database_error", error_type=type(exc).__name__)
+            return ToolResult.fail(f"SQL query failed ({type(exc).__name__}).", logs=log.entries_dict())
 
     async def _analyze(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         log = ctx.tool_notes(self.tool_slug)
