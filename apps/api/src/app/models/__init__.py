@@ -46,17 +46,20 @@ from .sandbox import SandboxSession, SandboxOverride, SandboxRun
 from .discovered_tool import DiscoveredTool
 from .memory import Fact, FactScope, FactSource, DialogueSummary
 from .memory import FactObservation, FactStatus, MemoryClaim, MemoryItem, MemoryItemSource, MemoryItemEvaluation, MemoryRelation
-from .memory_scope import MemoryScope, MemoryCandidateScope, MemoryClaimScope, DocumentMemoryScope
+from .memory_scope import MemoryScope, MemoryCandidateScope, MemoryClaimScope, DocumentMemoryScope, MemoryScopeGlossaryTerm
 from .project import Project
 from .knowledge_entity import KnowledgeEntity, KnowledgeEntitySource
 from .document_memory_staging import (
     DocumentMemorySnapshot,
+    DocumentMemoryExtractionAttempt,
     MemoryExtractionCandidate,
     MemoryCandidateProjectBinding,
     GlossaryTerm,
     MemoryConflictCase,
     MemoryConflictMember,
     MemoryCandidateDecision,
+    MemoryScopeProposal,
+    MemoryCandidateScopeProposal,
 )
 from .execution_limit import (
     ActorExecutionLimit,
@@ -149,16 +152,24 @@ __all__ = [
     "MemoryItemSource",
     "MemoryItemEvaluation",
     "MemoryRelation",
+    "MemoryScope",
+    "MemoryCandidateScope",
+    "MemoryClaimScope",
+    "DocumentMemoryScope",
+    "MemoryScopeGlossaryTerm",
     "Project",
     "KnowledgeEntity",
     "KnowledgeEntitySource",
     "DocumentMemorySnapshot",
+    "DocumentMemoryExtractionAttempt",
     "MemoryExtractionCandidate",
     "MemoryCandidateProjectBinding",
     "GlossaryTerm",
     "MemoryConflictCase",
     "MemoryConflictMember",
     "MemoryCandidateDecision",
+    "MemoryScopeProposal",
+    "MemoryCandidateScopeProposal",
     "ExecutionLimit",
     "ExecutionLimitScope",
     "ActorExecutionLimit",

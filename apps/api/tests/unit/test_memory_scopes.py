@@ -52,7 +52,7 @@ def test_divergent_typed_scopes_do_not_select_an_arbitrary_winner() -> None:
          "project_id": None, "scope_keys": ["product.core"]},
     ]
     selected, uncertainties = _apply_project_precedence(items, [])
-    assert selected == []
+    assert selected == items
     assert uncertainties == ["project_memory_divergence:rule:deploy"]
 
 

@@ -83,7 +83,29 @@ class GraphPlanningStage:
                 root_run_id=run_id,
                 tenant_id=tenant_id,
                 chat_id=UUID(request.chat_id) if request.chat_id else None,
+                scope_context=dict(ctx.extra.get("project_context") or {}).get("scope_context") or {},
+                memory_context=list(planner_memory_context or []),
             )
+        else:
+            saved = await self._store.snapshot(plan.id)
+            if saved.get("iterations") and not saved.get("scope_context"):
+                raise ValueError("scope_context_missing")
+            if "memory_context" in saved:
+                planner_memory_context = list(saved["memory_context"] or [])
+            if saved.get("scope_context"):
+                ctx.extra["effective_scope_context"] = dict(saved["scope_context"])
+                selected = saved["scope_context"].get("selected") or []
+                saved_project_context = next((item for item in saved.get("memory_context") or []
+                                              if item.get("type") == "project_context"), {})
+                ctx.extra["project_context"] = {
+                    **dict(saved_project_context),
+                    "scope_context": dict(saved["scope_context"]),
+                    "effective_scope_keys": [row.get("key") for row in selected if isinstance(row, dict)],
+                    "effective_project_keys": [str(row.get("key", "")).removeprefix("project.") for row in selected
+                                                if isinstance(row, dict) and str(row.get("key", "")).startswith("project.")
+                                                and row.get("key") != "project.all"],
+                    "scope_ceiling_keys": list(saved["scope_context"].get("ceiling_keys") or []),
+                }
         if plan_created:
             yield PhasedEvent(
                 RuntimeEvent.plan_lifecycle(
@@ -139,6 +161,7 @@ class GraphPlanningStage:
             "model": request.model,
             "planner_rbac_audit": dict(planner_rbac_audit or {}),
             "planner_memory_context": list(planner_memory_context or []),
+            "scope_context": dict(ctx.extra.get("project_context") or {}).get("scope_context") or {},
             "task_brief": dict(task_brief or {}),
             "durable_memory_snapshot": durable_memory_snapshot,
             "runtime_limits": effective_runtime_limits,

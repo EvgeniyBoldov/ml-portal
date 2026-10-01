@@ -98,11 +98,19 @@ def _render_memory_recall(recall: Dict[str, Any]) -> list[str]:
             if not subject:
                 continue
             if key == "applicable_procedures":
+                if entry.get("scope_keys"):
+                    lines.append("[Procedure scope] " + ", ".join(entry["scope_keys"]))
                 lines.extend(_render_procedure(subject, entry.get("content")))
                 continue
             value = str(entry.get("value") or "").strip()
+            if not value and entry.get("content") is not None:
+                content = entry["content"]
+                value = (json.dumps(content, ensure_ascii=False, default=str)
+                         if isinstance(content, (dict, list)) else str(content))
             if subject and value:
-                lines.append(f"- [{label}] {subject}: {value}")
+                scopes = ", ".join(entry.get("scope_keys") or [])
+                location = f"; scopes={scopes}" if scopes else ""
+                lines.append(f"- [{label}{location}] {subject}: {value}")
     if recall.get("rag_required"):
         reasons = ", ".join(str(item) for item in recall.get("rag_reasons") or [])
         lines.append(f"[RAG verification required] {reasons or 'memory requires source verification'}")
@@ -113,7 +121,8 @@ def _render_memory_recall(recall: Dict[str, Any]) -> list[str]:
         lines.append(f"[Clarification required] {reasons or 'do not choose an ambiguous entity or project'}")
     for ref in (recall.get("source_references") or [])[:6]:
         if isinstance(ref, dict):
-            lines.append(f"- [Memory evidence] {ref.get('label') or ref.get('section_id') or 'document section'}")
+            lines.append(f"- [Memory evidence] {ref.get('label') or ref.get('section_id') or 'document section'}"
+                         f"; document_id={ref.get('document_id') or ''}; section_id={ref.get('section_id') or ''}")
     return lines
 
 
@@ -845,6 +854,8 @@ class AgentExecutor:
 
         # Build the final user message: inject recall context if present
         parts: List[str] = []
+        if task.scope_context:
+            parts.append("[Task scope]\n" + json.dumps(task.scope_context, ensure_ascii=False, default=str))
         if task.inputs:
             parts.append("[Task inputs]\n" + json.dumps(task.inputs, ensure_ascii=False, default=str)[:8000])
         if parts:
@@ -883,11 +894,17 @@ class AgentExecutor:
 
         if task.memory_context:
             memory_lines = ["[Relevant memory]"]
-            for item in task.memory_context[:12]:
+            recalls = [item for item in task.memory_context if item.get("type") in {"memory_recall", "planner_memory_result"}]
+            facts = [item for item in task.memory_context if item.get("type") not in {"memory_recall", "planner_memory_result"}]
+            for item in [*facts[:12], *recalls[-12:]]:
                 if not isinstance(item, dict):
                     continue
                 if item.get("type") == "memory_recall":
                     memory_lines.extend(_render_memory_recall(item))
+                    continue
+                if item.get("type") == "planner_memory_result":
+                    result = item.get("result") or {}
+                    memory_lines.extend(_render_memory_recall(result.get("memory_context") or {}))
                     continue
                 subject = str(item.get("subject") or "").strip()
                 value = str(item.get("value") or "").strip()

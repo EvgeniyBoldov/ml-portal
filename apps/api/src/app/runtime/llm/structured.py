@@ -873,6 +873,7 @@ class StructuredLLMCall:
                     "разрешения «мой/наш», project_hints и параметров задач; runtime fact current_date задаёт сегодняшнюю дату. "
                     "Не выдавай facts за текущее состояние внешней системы. "
                     "memory_recall содержит relevant_knowledge, правила и процедуры и используется только как долговременный контекст. "
+                    "Для поиска области или alias используй planner tool memory.lookup, который возвращает только identities. "
                     "Для неизвестной аббревиатуры или long memory планер может вызвать только объявленный planner tool memory.search; "
                     "не создавай для этого агентскую задачу. Если rag_required=true, "
                     "до terminal=synthesis обязательно запланируй и получи успешный collection.document.search. "
@@ -891,8 +892,21 @@ class StructuredLLMCall:
                     "именно факт выполнения/получения доказательства, и указывай только реально опубликованное canonical operation name, "
                     "а не семантический intent вроде search_jira_tickets. "
                     "Если available_agents публикует task_contracts, выбери contract.mode=registered и contract.contract_id; "
-                    "не передавай expected_outputs — runtime зафиксирует опубликованную схему. Dynamic contract используй "
+                    "не передавай expected_outputs — runtime зафиксирует опубликованную схему. Для task scope_keys "
+                    "выбирай только subset effective scope_context.ceiling_keys и указывай scope_reason; scope_mode=replace "
+                    "используй только когда задача должна целиком заменить область. Dynamic contract используй "
                     "только когда агент явно supports_dynamic_contracts."
+                )
+            if role_type == SystemLLMRoleType.TURN_PREFLIGHT.value:
+                parts.append(
+                    "# MEMORY SCOPE RESOLUTION\n"
+                    "Всегда заполняй scope_selection для любого route. Выбирай keys только из "
+                    "mechanical_lookup.scope_candidates; matched_forms и scope_ambiguities используй как evidence. "
+                    "Совпадение имени — кандидат; применимость определяй по цели задачи, а простое упоминание "
+                    "записывай в mentioned_keys без переключения выбранной области. inherit заменяет только "
+                    "типы, явно выбранные в этом turn, и сохраняет другие типы chat focus; replace полностью "
+                    "заменяет focus, включая пустой список. Объясняй выбор в rationale. При значимой неоднозначности выбери clarify. "
+                    "Не создавай product/team defaults пользователя или tenant."
                 )
             parts.append(
                 "# RUNTIME RESPONSE CONTRACT\n"

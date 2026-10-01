@@ -103,6 +103,7 @@ async def test_inferred_topic_preserves_verified_scope_field_trust() -> None:
         expires_at=None,
         payload={
             "project_keys": ["ml-portal"], "project_keys_trust_class": "application_verified",
+            "scope_keys": ["team.ops"], "suppress_project_default": True,
             "entity_refs": [], "trust_class": "application_verified", "source": "explicit",
         },
         confidence=1.0,
@@ -129,6 +130,8 @@ async def test_inferred_topic_preserves_verified_scope_field_trust() -> None:
 
     assert receipt.applied_count == 1
     assert existing.payload["project_keys"] == ["ml-portal"]
+    assert existing.payload["scope_keys"] == ["team.ops"]
+    assert existing.payload["suppress_project_default"] is True
     assert existing.payload["project_keys_trust_class"] == "application_verified"
     assert existing.payload["topic_trust_class"] == "model_inferred"
     assert existing.payload["trust_class"] == "application_verified"

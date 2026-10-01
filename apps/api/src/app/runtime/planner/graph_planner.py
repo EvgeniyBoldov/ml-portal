@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 from uuid import UUID, uuid4
+from hashlib import sha256
+import json
 
 from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
@@ -11,16 +13,19 @@ from app.runtime.input_builders import PlannerInputBuilder
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import IterationProposal, PlanRequest
 from app.runtime.memory.search import MemorySearchService
+from app.runtime.memory.mechanical_lookup import MechanicalLookupService
 from pydantic import BaseModel, Field, model_validator
 
 
 class PlannerMemoryToolCall(BaseModel):
-    operation: Literal["memory.search"]
+    operation: Literal["memory.search", "memory.lookup"]
     query: str = Field(..., min_length=1)
     project_keys: list[str] = Field(default_factory=list)
+    scope_keys: list[str] = Field(default_factory=list)
+    scope_mode: Literal["inherit", "replace"] = "inherit"
     kinds: list[str] = Field(default_factory=list)
     entity_ids: list[str] = Field(default_factory=list)
-    scopes: list[Literal["glossary", "project", "global"]] = Field(default_factory=lambda: ["glossary", "project", "global"])
+    scopes: list[Literal["glossary", "project", "product", "team", "global"]] = Field(default_factory=lambda: ["glossary", "project", "product", "team", "global"])
     direction: str | None = None
     limit: int = Field(default=8, ge=1, le=12)
     model_config = {"extra": "forbid"}
@@ -87,7 +92,7 @@ class GraphPlanner:
                 "before proposing tasks. Use it for long memory or abbreviations; "
                 "do not use it to replace the durable facts already in memory_context."
             ),
-        }]
+        }, {"operation": "memory.lookup", "description": "Find published scope and glossary candidates by name or alias; returns identities only."}]
         role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
         # Passing a hand-built prompt to StructuredLLMCall bypasses its
         # non-editable planner runtime contract. Compile the role here first,
@@ -99,7 +104,7 @@ class GraphPlanner:
             role_config, role_override if isinstance(role_override, dict) else None, schema=PlannerStep,
         ) + (
             "\n\n# PLANNER TOOL LOOP\n"
-            "Before proposing an iteration you may return kind=tool_call only for memory.search. "
+            "Before proposing an iteration you may return kind=tool_call only for memory.search or memory.lookup. "
             "Use it to resolve a glossary abbreviation or retrieve long project/company memory; "
             "After zero to three tool results return kind=proposal with the complete IterationProposal. "
             "Never create a task merely to read memory."
@@ -141,15 +146,21 @@ class GraphPlanner:
                     actor_type="planner", actor_entity_id=planner_iteration_trace_id,
                 ))
             try:
-                project_context = next((item for item in request.context.memory_context
-                                        if isinstance(item, dict) and item.get("type") == "project_context"), {})
-                data = await MemorySearchService(self._session).search(
-                    query=call.query, tenant_id=tenant_id, user_id=user_id, project_keys=call.project_keys,
-                    fallback_project_keys=list(project_context.get("effective_project_keys") or []),
-                    scopes=call.scopes,
-                    kinds=call.kinds, entity_ids=call.entity_ids,
-                    direction=call.direction, limit=call.limit,
-                )
+                effective_keys = list(request.context.scope_context.get("keys") or [])
+                if call.operation == "memory.lookup":
+                    data = await MechanicalLookupService(self._session).lookup(query=call.query,
+                                                                               tenant_id=tenant_id,
+                                                                               scope_ceiling_keys=list(request.context.scope_context.get("ceiling_keys") or []))
+                else:
+                    data = await MemorySearchService(self._session).search(
+                        query=call.query, tenant_id=tenant_id, user_id=user_id, project_keys=call.project_keys,
+                        context_scope_keys=effective_keys,
+                        scope_keys=call.scope_keys, scope_mode=call.scope_mode,
+                        scope_ceiling_keys=list(request.context.scope_context.get("ceiling_keys") or []),
+                        scopes=call.scopes,
+                        kinds=call.kinds, entity_ids=call.entity_ids,
+                        direction=call.direction, limit=call.limit,
+                    )
             except Exception as exc:
                 if event_sink:
                     await event_sink(RuntimeEvent.tool_result(
@@ -162,10 +173,20 @@ class GraphPlanner:
                 raise RuntimeError("planner memory search failed") from exc
             if event_sink:
                 await event_sink(RuntimeEvent.tool_result(
-                    tool=call.operation, call_id=call_id, success=True, data=data,
+                    tool=call.operation, call_id=call_id, success=data.get("success") is not False, data=data,
                     parent_entity_type="planner_iteration",
                     parent_entity_id=planner_iteration_trace_id,
                     actor_type="planner", actor_entity_id=planner_iteration_trace_id,
                 ))
             tool_results.append({"operation": call.operation, "arguments": call.model_dump(exclude={"operation"}), "result": data})
+            if data.get("success") is False:
+                continue
+            digest = sha256(json.dumps({"operation": call.operation, "arguments": arguments,
+                "scope_keys": sorted(request.context.scope_context.get("keys") or [])},
+                sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            request.context.planner_search_results.append({
+                "type": "planner_memory_result", "query_key": digest,
+                "operation": call.operation, "query": call.query[:300], "result": data,
+            })
+            request.context.memory_context.append(request.context.planner_search_results[-1])
         raise RuntimeError("planner memory tool-call limit exceeded without IterationProposal")

@@ -41,6 +41,15 @@ class MemoryScope(Base, LifecycleMixin):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
+class MemoryScopeGlossaryTerm(Base):
+    """A glossary term that names a typed applicability scope."""
+    __tablename__ = "memory_scope_glossary_terms"
+
+    scope_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_scopes.id", ondelete="CASCADE"), primary_key=True)
+    glossary_term_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("glossary_terms.id", ondelete="CASCADE"), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class DocumentMemoryScope(Base):
     """A document-level hint; it never grants access or scopes every claim."""
     __tablename__ = "document_memory_scopes"

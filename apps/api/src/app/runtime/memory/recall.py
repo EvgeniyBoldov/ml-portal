@@ -1,5 +1,6 @@
 """Structured, mandatory semantic-memory recall before planning."""
 from __future__ import annotations
+import json
 
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
@@ -254,36 +255,50 @@ class MemoryRecallService:
                 and _claim_scopes_apply(claim_scopes.get(claim.id, []), project_ids, trusted_scope_keys)]
             if not applicable_claims:
                 continue
-            claims = applicable_claims
-            claims.sort(key=lambda claim: (claim.confidence, claim.updated_at), reverse=True)
-            winner = claims[0]
-            # A tenant-local claim must not poison the effective truth seen by
-            # other departments.  State is derived from claims visible for
-            # this recall; the consolidated item remains an identity/index
-            # record, not an ACL-blind read model.
-            conflicting = len({claim.content_text for claim in claims}) > 1
-            result.append({
-                "id": item.id, "project_id": item.project_id, "kind": item.item_type,
-                "scope_keys": sorted(scope.key for scope in claim_scopes.get(winner.id, [])),
-                "subject": item.subject, "content": dict(winner.content or {}), "content_text": winner.content_text,
-                "confidence": winner.confidence,
-                # Item-level uncertainty can come from an inaccessible tenant
-                # claim.  This context is based solely on visible claims.
-                "state": "uncertain" if conflicting else "active",
-                "observed_at": item.last_verified_at.isoformat() if item.last_verified_at else None,
-                "source_references": [
-                    {"document_id": str(claim.document_id), "checksum": claim.canonical_checksum,
-                     "section_id": section_id, "label": section_id}
-                    for claim in claims for section_id in list(claim.evidence_section_ids or [])[:3]
-                ][:3],
-                "claim_ids": [str(claim.id) for claim in claims],
-                # The first claim is the ACL-visible winner.  Feedback must
-                # evaluate this exact wording, not an arbitrary row returned
-                # by a later SQL query.
-                "selected_claim_id": str(winner.id),
-                "rank": rank.get(item_id, len(rank)),
-            })
+            by_scope: dict[tuple[tuple[str, ...], str], list[MemoryClaim]] = {}
+            for claim in applicable_claims:
+                signature = (tuple(sorted(scope.key for scope in claim_scopes.get(claim.id, [])
+                                          if getattr(scope, "lifecycle_status", "active") == "active")),
+                             json.dumps(claim.applicability or {}, sort_keys=True))
+                by_scope.setdefault(signature, []).append(claim)
+            for claims in by_scope.values():
+                result.append(self._scoped_item_projection(item, claims, claim_scopes, rank))
         return sorted(result, key=lambda item: (item["rank"], -float(item["confidence"])))
+
+    @staticmethod
+    def _scoped_item_projection(item, claims, claim_scopes, rank) -> dict[str, Any]:
+        # Resolve wording independently for each applicability group. Two
+        # selected scopes may legitimately have different source claims.
+        claims.sort(key=lambda claim: (claim.confidence, claim.updated_at), reverse=True)
+        winner = claims[0]
+        # A tenant-local claim must not poison the effective truth seen by
+        # other departments.  State is derived from claims visible for
+        # this recall; the consolidated item remains an identity/index
+        # record, not an ACL-blind read model.
+        conflicting = len({claim.content_text for claim in claims}) > 1
+        return {
+            "id": item.id, "project_id": item.project_id, "kind": item.item_type,
+            "applicability": dict(winner.applicability or {}),
+            "scope_keys": sorted(scope.key for scope in claim_scopes.get(winner.id, [])
+                                 if getattr(scope, "lifecycle_status", "active") == "active"),
+            "subject": item.subject, "content": dict(winner.content or {}), "content_text": winner.content_text,
+            "confidence": winner.confidence,
+            # Item-level uncertainty can come from an inaccessible tenant
+            # claim.  This context is based solely on visible claims.
+            "state": "uncertain" if conflicting else "active",
+            "observed_at": item.last_verified_at.isoformat() if item.last_verified_at else None,
+            "source_references": [
+                {"document_id": str(claim.document_id), "checksum": claim.canonical_checksum,
+                 "section_id": section_id, "label": section_id}
+                for claim in claims for section_id in list(claim.evidence_section_ids or [])[:3]
+            ][:3],
+            "claim_ids": [str(claim.id) for claim in claims],
+            # The first claim is the ACL-visible winner.  Feedback must
+            # evaluate this exact wording, not an arbitrary row returned
+            # by a later SQL query.
+            "selected_claim_id": str(winner.id),
+            "rank": rank.get(item.id, len(rank)),
+        }
 
     @staticmethod
     def _structure(

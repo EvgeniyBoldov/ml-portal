@@ -21,6 +21,7 @@ from app.runtime.plan_store import PlanValidationError
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
 from app.runtime.memory.tool_ledger import canonical_operation_name, document_search_evidence_document_ids
+from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, project_memory_context, task_scope
 
 
 def _task_memory_context(task: TaskRequest, planner_memory_context: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -31,11 +32,23 @@ def _task_memory_context(task: TaskRequest, planner_memory_context: list[dict[st
     """
     selected: list[dict[str, Any]] = []
     task_text = json.dumps({"intent": task.intent, "instructions": task.instructions, "inputs": task.inputs}, ensure_ascii=False, default=str)
+    allowed = set((task.scope_context or {}).get("keys") or [
+        row.get("key") for row in (task.scope_context or {}).get("selected", []) if isinstance(row, dict)
+    ])
+
     for entry in planner_memory_context:
         if not isinstance(entry, dict) or entry.get("type") != "chat_context":
-            selected.append(entry)
+            if isinstance(entry, dict) and entry.get("type") in {"memory_recall", "planner_memory_result"}:
+                selected.append(project_memory_context(entry, allowed))
+            else:
+                selected.append(entry)
             continue
         raw = dict(entry)
+        focus = dict(raw.get("focus") or {})
+        focus.update(scope_keys=sorted(allowed),
+                     project_keys=[key.removeprefix("project.") for key in sorted(allowed)
+                                   if key.startswith("project.") and key != "project.all"])
+        focus["scope_origins"] = {key: origin for key, origin in (focus.get("scope_origins") or {}).items() if key in allowed}
         artifacts = [
             item for item in raw.get("artifacts") or []
             if isinstance(item, dict) and str(item.get("artifact_id") or "") in task_text
@@ -43,7 +56,7 @@ def _task_memory_context(task: TaskRequest, planner_memory_context: list[dict[st
         selected.append({
             "type": "chat_context",
             "revision": raw.get("revision"),
-            "focus": raw.get("focus"),
+            "focus": focus,
             "active_goal": raw.get("active_goal"),
             "term_bindings": list(raw.get("term_bindings") or [])[:10],
             "artifacts": artifacts[:10],
@@ -52,17 +65,31 @@ def _task_memory_context(task: TaskRequest, planner_memory_context: list[dict[st
     return selected
 
 
+def _memory_recalls(memory_context: Any) -> list[dict[str, Any]]:
+    recalls = []
+    for item in memory_context or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "memory_recall":
+            recalls.append(item)
+        elif item.get("type") == "planner_memory_result":
+            recalled = (item.get("result") or {}).get("memory_context")
+            if isinstance(recalled, dict):
+                recalls.append(recalled)
+    return recalls
+
+
 def _recall_requires_rag(memory_context: Any) -> bool:
     return any(
         isinstance(item, dict) and item.get("type") == "memory_recall" and item.get("rag_required")
-        for item in memory_context or []
+        for item in _memory_recalls(memory_context)
     )
 
 
 def _recall_requires_tool(memory_context: Any) -> bool:
     return any(
         isinstance(item, dict) and item.get("type") == "memory_recall" and item.get("tool_required")
-        for item in memory_context or []
+        for item in _memory_recalls(memory_context)
     )
 
 
@@ -92,7 +119,7 @@ def _has_successful_rag_evidence(runtime_state: Any, memory_context: Any = None)
     """Require a document-search receipt relevant to recalled source evidence."""
     expected_document_ids = {
         str(ref.get("document_id") or "").strip()
-        for item in memory_context or []
+        for item in _memory_recalls(memory_context)
         if isinstance(item, dict) and item.get("type") == "memory_recall"
         for ref in item.get("source_references") or []
         if isinstance(ref, dict) and str(ref.get("document_id") or "").strip()
@@ -375,8 +402,9 @@ class GraphOrchestrator:
         return PlanRequest(
             context=PlannerContext(goal=goal, trigger=trigger, execution_ledger=ledger,
                                    available_agents=available_agents, available_artifacts=available_artifacts,
-                                   memory_context=list(planner_kwargs.get("planner_memory_context") or []),
-                                   task_brief=dict(planner_kwargs.get("task_brief") or {})),
+                                   memory_context=list(snapshot.get("memory_context", planner_kwargs.get("planner_memory_context")) or []),
+                                   task_brief=dict(planner_kwargs.get("task_brief") or {}),
+                                   scope_context=dict(snapshot.get("scope_context") or planner_kwargs.get("scope_context") or {})),
             plan_id=plan_id,
             run_id=UUID(str(snapshot["root_run_id"])),
         )
@@ -431,6 +459,7 @@ class GraphOrchestrator:
             tasks.append({"task_id": task_id, "iteration_id": task.get("iteration_id"), "intent": task.get("intent"),
                           "executor": task.get("executor"), "instructions": task.get("instructions"), "inputs": task.get("inputs", {}),
                           "expected_outputs": task.get("expected_outputs", []), "freshness_policy": task.get("freshness_policy"),
+                          "scope_context": task.get("scope_context", {}),
                           "status": task.get("status"), "depends_on": task.get("depends_on", []), "attempts": task.get("attempts", 0),
                           "result": {"description": result.get("description"), "reason_code": result.get("reason_code"), "outputs": result.get("outputs", {}), "limitation": result.get("limitation"), "evidence": evidence}})
         return {"plan_status": snapshot.get("status"), "iterations": snapshot.get("iterations", []), "tasks": tasks,
@@ -448,14 +477,25 @@ class GraphOrchestrator:
         return latest
 
     @staticmethod
-    def _compile(proposal: IterationProposal, available_agents: list[dict[str, Any]], ledger: Dict[str, Any]) -> IterationProposal:
+    def _compile(proposal: IterationProposal, available_agents: list[dict[str, Any]], ledger: Dict[str, Any],
+                 scope_context: dict[str, Any] | None = None) -> IterationProposal:
         agent_catalog = {str(item.get("slug") or ""): item for item in available_agents if isinstance(item, dict)}
         available = set(agent_catalog)
         unknown = sorted({task.executor for task in proposal.tasks if task.executor not in available})
         if unknown:
             raise PlanValidationError(f"planner selected unavailable executors: {unknown}")
         compiled_tasks = []
+        effective_scope = EffectiveScopeContext.model_validate(scope_context or {})
         for task in proposal.tasks:
+            if (task.scope_keys or task.scope_mode == "replace") and not task.scope_reason.strip():
+                raise PlanValidationError(f"task {task.task_id} must explain its scope selection")
+            try:
+                task_context = task_scope(effective_scope, ScopeSelection(
+                    keys=task.scope_keys, mode=task.scope_mode, rationale=task.scope_reason,
+                ))
+            except ValueError as exc:
+                raise PlanValidationError(f"task {task.task_id} widened the turn scope") from exc
+            task = task.model_copy(update={"scope_context": task_context.model_dump(mode="json")})
             agent = agent_catalog[task.executor]
             # This is a published, versioned execution capability rather
             # than a runtime-maintained list of agent names or tags.
@@ -636,18 +676,21 @@ class GraphOrchestrator:
             planner_iteration_trace_id=str(iteration_entity_id),
             **planner_kwargs,
         )
-        proposal = self._compile(proposal, available_agents, request.context.execution_ledger)
+        proposal = self._compile(proposal, available_agents, request.context.execution_ledger,
+                                 request.context.scope_context)
+        if request.context.planner_search_results:
+            await self.store.update_memory_context(plan_id, request.context.planner_search_results)
         if (
             proposal.terminal == TerminalKind.SYNTHESIS
-            and _recall_requires_rag(planner_kwargs.get("planner_memory_context"))
+            and _recall_requires_rag(request.context.memory_context)
             and not _has_successful_rag_evidence(
-                planner_kwargs.get("runtime_state"), planner_kwargs.get("planner_memory_context"),
+                planner_kwargs.get("runtime_state"), request.context.memory_context,
             )
         ):
             raise PlanValidationError("memory recall requires successful collection.document.search before synthesis")
         if (
             proposal.terminal == TerminalKind.SYNTHESIS
-            and _recall_requires_tool(planner_kwargs.get("planner_memory_context"))
+            and _recall_requires_tool(request.context.memory_context)
             and not _has_successful_runtime_observation(planner_kwargs.get("runtime_state"))
         ):
             raise PlanValidationError("memory recall requires a successful runtime observation before synthesis")
@@ -941,11 +984,31 @@ class GraphOrchestrator:
                 ))
                 try:
                     request = TaskRequest.model_validate(await self.store.task_request(plan_id, task_id))
+                    plan_snapshot = await self.store.snapshot(plan_id)
+                    context_items = list(plan_snapshot.get("memory_context", planner_kwargs.get("planner_memory_context")) or [])
                     request = request.model_copy(update={
                         "memory_context": _task_memory_context(
-                            request, list(planner_kwargs.get("planner_memory_context") or []),
+                            request, context_items,
                         ),
                     })
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.status(
+                        "task_scope_resolved", plan_id=str(plan_id), task_id=task_id,
+                        scope_context=request.scope_context,
+                    ))
+                    task_kwargs = dict(planner_kwargs)
+                    task_ctx = task_kwargs.get("ctx")
+                    if task_ctx is not None and hasattr(task_ctx, "with_extra"):
+                        task_scope_context = dict(request.scope_context or {})
+                        selected = task_scope_context.get("selected") or []
+                        project_keys = [str(row.get("key", "")).removeprefix("project.") for row in selected
+                                        if str(row.get("key", "")).startswith("project.") and row.get("key") != "project.all"]
+                        task_kwargs["ctx"] = task_ctx.with_extra(
+                            project_context={"effective_scope_keys": [row.get("key") for row in selected],
+                                             "effective_project_keys": project_keys,
+                                             "scope_ceiling_keys": [row.get("key") for row in selected],
+                                             "scope_context": task_scope_context},
+                            effective_scope_context=task_scope_context,
+                        )
                     execution = await self._execute_with_heartbeat(
                         plan_id=plan_id,
                         task_id=task_id,
@@ -953,7 +1016,7 @@ class GraphOrchestrator:
                         request=request,
                         lifecycle_agent_execution_id=execution_id,
                         runtime_log_parent={"entity_type": "step", "entity_id": current_step_id},
-                        **planner_kwargs,
+                        **task_kwargs,
                     )
                     if not isinstance(execution, TaskExecutionReceipt):
                         raise TypeError("executor must return TaskExecutionReceipt")

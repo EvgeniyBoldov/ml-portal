@@ -42,6 +42,8 @@ class PlannerInputBuilder:
             "execution_ledger": context.execution_ledger,
             "available_artifacts": self._normalize_artifacts(context.available_artifacts),
             "memory_context": context.memory_context,
+            "scope_context": context.scope_context,
+            "planner_search_results": context.planner_search_results,
             "task_brief": context.task_brief,
             "available_agents": agents,
             "iteration_contract": {

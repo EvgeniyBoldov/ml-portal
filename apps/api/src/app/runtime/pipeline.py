@@ -48,7 +48,10 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.memory.recall import MemoryRecallContext
 from app.runtime.memory.mechanical_lookup import MechanicalLookupService
 from app.runtime.memory.project_context import ProjectContextResolver
+from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdentity, ScopeSelection, merge_selection
+from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.search import MemorySearchService
+from app.runtime.memory.turn_recall import recall_with_stable_scope
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
@@ -64,6 +67,76 @@ from app.runtime.context_outcome import RuntimeOutcomeProjector
 # Memory writeback runs via Celery (single canonical execution mode).
 RUNTIME_MEMORY_INLINE = False
 logger = get_logger(__name__)
+
+
+async def _base_scope_context(session, *, chat_context: dict[str, Any], project_defaults: list[str]) -> EffectiveScopeContext:
+    # Read the active catalog once and discard stale chat identities. Project
+    # defaults are added only when focus has not selected a project scope.
+    from app.services.memory_scope_catalog import list_memory_scopes
+    rows = await list_memory_scopes(session)
+    by_key = {row.key: row for row in rows}
+    focus = chat_context.get("focus") if isinstance(chat_context.get("focus"), dict) else chat_context.get("scope", {})
+    origins = focus.get("scope_origins") or {}
+    chat_keys = [key for key in dict.fromkeys([
+        *(str(key).casefold() for key in focus.get("scope_keys", []) if str(key).strip()),
+        *(f"project.{str(key).casefold()}" for key in focus.get("project_keys", []) if str(key).strip()),
+    ]) if origins.get(key) != "user_project_default"]
+    keys = [key for key in chat_keys if key in by_key]
+    if not focus.get("suppress_project_default") and not any(key.startswith("project.") for key in keys):
+        keys.extend(f"project.{key.casefold()}" for key in project_defaults if f"project.{key.casefold()}" in by_key)
+    selected = [ScopeIdentity(id=str(by_key[key].id), key=key, type=by_key[key].scope_type,
+                              name=by_key[key].name,
+                              source=("chat_focus" if key in chat_keys else "user_project_default"))
+                for key in dict.fromkeys(keys)]
+    return EffectiveScopeContext(revision=int(focus.get("scope_revision") or 0), selected=selected,
+                                 mentioned=[ScopeIdentity(id=str(by_key[key].id), key=key,
+                                     type=by_key[key].scope_type, name=by_key[key].name, source="chat_focus")
+                                     for key in focus.get("mentioned_scope_keys", []) if key in by_key],
+                                 mode="inherit", explicit_clear=bool(focus.get("suppress_project_default")) and not selected,
+                                 ceiling_keys=[item.key for item in selected])
+
+
+async def _turn_scope_context(session, parent: EffectiveScopeContext, decision: TurnPreflightDecision,
+                              lookup: dict[str, Any]) -> EffectiveScopeContext:
+    selection = decision.scope_selection
+    resolve_keys = list(dict.fromkeys([*selection.keys, *selection.mentioned_keys]))
+    rows = await resolve_memory_scopes(session, resolve_keys) if resolve_keys else []
+    previous = {item.key: item for item in parent.selected}
+    identities = {row.key: ScopeIdentity(id=str(row.id), key=row.key, type=row.scope_type,
+                 name=row.name, source="turn",
+                 matched_forms=next((item.get("matched_forms", []) for item in lookup.get("scope_candidates", [])
+                                     if item.get("key") == row.key), [])[:12],
+                 rationale=selection.rationale)
+                 for row in rows}
+    merged = merge_selection(parent, selection, {**previous, **identities}, source="turn")
+    ambiguities = list(parent.ambiguities)
+    for ambiguity in lookup.get("scope_ambiguities", []):
+        if ambiguity not in ambiguities:
+            ambiguities.append(ambiguity)
+    return merged.model_copy(update={"ceiling_keys": merged.keys, "ambiguities": ambiguities[:20]})
+
+
+def _project_context_payload(context: EffectiveScopeContext, base: dict[str, Any]) -> dict[str, Any]:
+    origins = {item.key: item.source for item in context.selected}
+    project_keys = [item.key.removeprefix("project.") for item in context.selected
+                    if item.type == "project" and item.key != "project.all"]
+    selected_turn = [item for item in context.selected if item.source == "turn"]
+    focus_projects = [item.key.removeprefix("project.") for item in context.selected
+                      if item.type == "project" and item.source in {"turn", "chat_focus"} and item.key != "project.all"]
+    scope_source = "turn" if any(item.source == "turn" for item in context.selected) else \
+                   "chat_context" if any(item.source == "chat_focus" for item in context.selected) else \
+                   "user_default" if context.selected else "none"
+    return {**base, "effective_scope_keys": context.keys,
+            "effective_project_keys": project_keys, "explicit_project_keys": focus_projects,
+            "explicit_scope_keys": [item.key for item in selected_turn],
+            "scope_origins": origins, "scope_revision": context.revision,
+            "scope_context": context.model_payload(), "scope_ceiling_keys": context.ceiling_keys,
+            "mentioned_scope_keys": [item.key for item in context.mentioned],
+            "scope_selection_explicit": context.mode == "replace" or any(item.source == "turn" for item in context.selected),
+            "suppress_project_default": context.explicit_clear or base.get("suppress_project_default", False)
+                                        or (context.mode == "replace" and not project_keys),
+            "source": "explicit" if scope_source == "turn" else scope_source,
+            "scope_source": scope_source}
 
 
 def _recent_dialogue(messages: list[dict[str, Any]], *, limit: int = 8, max_chars: int = 1_200) -> list[dict[str, str]]:
@@ -339,10 +412,16 @@ class RuntimePipeline:
         scope_payload = chat_context.get("focus") if isinstance(chat_context.get("focus"), dict) else chat_context.get("scope") if isinstance(chat_context.get("scope"), dict) else {}
         project_context = await ProjectContextResolver(self._session).resolve(
             request_text=effective_user_query,
-            facts=turn_mem.durable_snapshot.entries,
+            facts=[] if scope_payload.get("suppress_project_default") else turn_mem.durable_snapshot.entries,
             chat_project_keys=scope_payload.get("project_keys") or [],
         )
-        turn_mem.project_context = project_context.as_dict()
+        base_scope_context = await _base_scope_context(
+            self._session, chat_context=chat_context,
+            project_defaults=list(project_context.default_project_keys),
+        )
+        turn_mem.project_context = {**_project_context_payload(base_scope_context, project_context.as_dict()),
+                                    "explicit_scope_keys": [],
+                                    "suppress_project_default": bool(scope_payload.get("suppress_project_default"))}
         # The typed context is visible to planner/task construction and is
         # also the authoritative default for agent memory.search calls.
         turn_mem.planner_memory_context.append({"type": "project_context", **turn_mem.project_context})
@@ -537,6 +616,17 @@ class RuntimePipeline:
                 phase=OrchestrationPhase.PIPELINE,
             )
             return
+
+        effective_scope_context = await _turn_scope_context(self._session, base_scope_context, decision, lookup)
+        turn_mem.project_context = _project_context_payload(effective_scope_context, turn_mem.project_context)
+        yield await emitter.emit(RuntimeEvent.status(
+            "memory_scope_selected", route=decision.route,
+            scope_context=effective_scope_context.model_payload(),
+        ), phase=OrchestrationPhase.PREFLIGHT)
+        ctx.extra["project_context"] = turn_mem.project_context
+        for index, item in enumerate(turn_mem.planner_memory_context):
+            if isinstance(item, dict) and item.get("type") == "project_context":
+                turn_mem.planner_memory_context[index] = {**item, **turn_mem.project_context}
         recall_context: dict[str, Any] | None = None
         if decision.route == "recall":
             memory_request = decision.memory_request
@@ -554,13 +644,46 @@ class RuntimePipeline:
                 agent_slug="memory_selector", task_title="Отбор контекста памяти",
             ), phase=OrchestrationPhase.PREFLIGHT)
             try:
-                recall_context = await MemorySearchService(self._session).search(
-                    query=memory_request.query, tenant_id=tenant_id, user_id=user_id,
-                    project_keys=memory_request.project_keys, fallback_project_keys=project_context.effective_project_keys, kinds=memory_request.kinds,
-                    scopes=memory_request.scopes,
-                    entity_ids=memory_request.entity_ids, direction=memory_request.direction,
-                    limit=memory_request.limit,
+                async def search_scoped_memory(scope):
+                    return await MemorySearchService(self._session).search(
+                        query=memory_request.query, tenant_id=tenant_id, user_id=user_id,
+                        context_scope_keys=scope.keys, scope_ceiling_keys=scope.ceiling_keys,
+                        kinds=memory_request.kinds, scopes=memory_request.scopes,
+                        entity_ids=memory_request.entity_ids, direction=memory_request.direction,
+                        limit=memory_request.limit,
+                    )
+
+                async def complete_scoped_recall(recalled, scope):
+                    scoped_context = _project_context_payload(scope, turn_mem.project_context)
+                    return await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
+                        user_request=effective_user_query, mechanical_lookup=lookup,
+                        facts_context=[*(
+                            {**item, **scoped_context} if item.get("type") == "project_context" else item
+                            for item in turn_mem.planner_memory_context
+                        ), recalled.get("memory_context") or {}],
+                        project_context=scoped_context, chat_context=chat_context,
+                        recent_dialogue=_recent_dialogue(list(request.messages or [])),
+                        continuation=continuation_state, recall_context=recalled,
+                        chat_id=chat_id, tenant_id=tenant_id, user_id=user_id,
+                        sandbox_overrides=request.sandbox_overrides,
+                        trace_parent_entity_id=preflight_id,
+                        event_sink=lambda event: emitter.emit(event, phase=OrchestrationPhase.PREFLIGHT),
+                    )
+
+                async def select_recall_scope(scope, routed):
+                    return await _turn_scope_context(self._session, scope, routed, lookup)
+
+                recall_context, decision, effective_scope_context = await recall_with_stable_scope(
+                    effective_scope_context, search=search_scoped_memory,
+                    complete=complete_scoped_recall, select=select_recall_scope,
                 )
+                turn_mem.project_context = _project_context_payload(effective_scope_context, turn_mem.project_context)
+                if recall_context.get("memory_context"):
+                    turn_mem.planner_memory_context.append(recall_context["memory_context"])
+                ctx.extra["project_context"] = turn_mem.project_context
+                for index, item in enumerate(turn_mem.planner_memory_context):
+                    if isinstance(item, dict) and item.get("type") == "project_context":
+                        turn_mem.planner_memory_context[index] = {**item, **turn_mem.project_context}
                 yield await emitter.emit(RuntimeEvent.status(
                     "memory_context_prepared",
                     fallback=False,
@@ -573,18 +696,6 @@ class RuntimePipeline:
                     entity_type="agent_execution", entity_id=selector_id,
                     parent_entity_type="orchestrator", parent_entity_id=recall_id,
                 ), phase=OrchestrationPhase.PREFLIGHT)
-                decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
-                    user_request=effective_user_query, mechanical_lookup=lookup,
-                    facts_context=turn_mem.planner_memory_context,
-                    project_context=turn_mem.project_context,
-                    chat_context=chat_context,
-                    recent_dialogue=_recent_dialogue(list(request.messages or [])),
-                    continuation=continuation_state, recall_context=recall_context,
-                    chat_id=chat_id, tenant_id=tenant_id, user_id=user_id,
-                    sandbox_overrides=request.sandbox_overrides,
-                    trace_parent_entity_id=preflight_id,
-                    event_sink=lambda event: emitter.emit(event, phase=OrchestrationPhase.PREFLIGHT),
-                )
             except Exception as exc:
                 logger.error("TurnPreflight recall completion unavailable; planner route is blocked: %s", exc)
                 yield await emitter.emit(RuntimeEvent.orchestrator_end(
@@ -613,6 +724,10 @@ class RuntimePipeline:
                     run_id=run_id_str, status=PipelineStopReason.FAILED.value,
                 ), phase=OrchestrationPhase.PIPELINE)
                 return
+            yield await emitter.emit(RuntimeEvent.status(
+                "memory_scope_selected", route=decision.route,
+                scope_context=effective_scope_context.model_payload(),
+            ), phase=OrchestrationPhase.PREFLIGHT)
             yield await emitter.emit(RuntimeEvent.agent_end(
                 agent_execution_id=selector_id, parent_entity_type="orchestrator",
                 parent_entity_id=recall_id, agent_slug="memory_selector", status="completed",
@@ -653,7 +768,7 @@ class RuntimePipeline:
             )
             await self._apply_chat_context_outcome(
                 request=request, runtime_state=runtime_state, branch_id=branch_id,
-                terminal_state="waiting_input", project_context=project_context.as_dict(),
+                terminal_state="waiting_input", project_context=turn_mem.project_context,
                 clarification={"question": clarification.question, "message": clarification_context.get("message")},
                 term_bindings=lookup.get("glossary") or [],
             )
@@ -695,7 +810,7 @@ class RuntimePipeline:
                         turn_mem=turn_mem, runtime_state=runtime_state, request=request,
                         stop_reason=PipelineStopReason.COMPLETED, emitter=emitter,
                         branch_id=branch_id,
-                        project_context=project_context.as_dict(),
+                        project_context=turn_mem.project_context,
                         term_bindings=lookup.get("glossary") or [],
                         session_factory=ctx.get_runtime_deps().session_factory,
                         start_event=ctx.extra.get("chat_post_final_tail_ready"),
@@ -706,7 +821,7 @@ class RuntimePipeline:
                     return
                 await self._apply_chat_context_outcome(
                     request=request, runtime_state=runtime_state, branch_id=branch_id,
-                    terminal_state="completed", project_context=project_context.as_dict(),
+                    terminal_state="completed", project_context=turn_mem.project_context,
                     term_bindings=lookup.get("glossary") or [],
                 )
                 yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="completed"), phase=OrchestrationPhase.PIPELINE)
@@ -807,6 +922,12 @@ class RuntimePipeline:
         ):
             yield await emitter.emit(phased.event, phase=phased.phase)
 
+        persisted_project_context = dict(ctx.extra.get("project_context") or {})
+        if persisted_project_context.get("scope_context"):
+            turn_mem.project_context = _project_context_payload(
+                EffectiveScopeContext.model_validate(persisted_project_context["scope_context"]),
+                persisted_project_context,
+            )
         assert planning_stage.outcome is not None
         planning_outcome = planning_stage.outcome
         await_background_tail = bool(getattr(request, "await_background_tail", True))
@@ -870,7 +991,7 @@ class RuntimePipeline:
             await self._apply_chat_context_outcome(
                 request=request, runtime_state=runtime_state, branch_id=branch_id,
                 terminal_state=("waiting_confirmation" if terminal_status == PipelineStopReason.WAITING_CONFIRMATION.value else "waiting_input" if terminal_status == PipelineStopReason.WAITING_INPUT.value else "failed"),
-                project_context=project_context.as_dict(),
+                project_context=turn_mem.project_context,
                 clarification={"question": planning_outcome.pause_question, "message": planning_outcome.pause_message} if planning_outcome.kind == GraphPlanningOutcomeKind.PAUSED else None,
                 term_bindings=lookup.get("glossary") or [],
             )
@@ -893,7 +1014,7 @@ class RuntimePipeline:
             )
             await self._apply_chat_context_outcome(
                 request=request, runtime_state=runtime_state, branch_id=branch_id,
-                terminal_state="completed", project_context=project_context.as_dict(),
+                terminal_state="completed", project_context=turn_mem.project_context,
                 term_bindings=lookup.get("glossary") or [],
             )
             # Sandbox/trace mode consumes the full runtime tail after final answer.
@@ -924,7 +1045,7 @@ class RuntimePipeline:
                 stop_reason=planning_outcome.stop_reason,
                 emitter=emitter,
                 branch_id=branch_id,
-                project_context=project_context.as_dict(),
+                project_context=turn_mem.project_context,
                 term_bindings=lookup.get("glossary") or [],
                 session_factory=ctx.get_runtime_deps().session_factory,
                 start_event=ctx.extra.get("chat_post_final_tail_ready"),

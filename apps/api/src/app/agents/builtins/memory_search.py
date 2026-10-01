@@ -24,6 +24,8 @@ class MemorySearchTool(VersionedTool):
         version="1.0.0",
         input_schema={"type": "object", "properties": {
             "query": {"type": "string"}, "project_keys": {"type": "array", "items": {"type": "string"}},
+            "scope_keys": {"type": "array", "items": {"type": "string"}},
+            "scope_mode": {"type": "string", "enum": ["inherit", "replace"]},
             "kinds": {"type": "array", "items": {"type": "string"}},
             "entity_ids": {"type": "array", "items": {"type": "string"}},
             "direction": {"type": "string"},
@@ -42,10 +44,17 @@ class MemorySearchTool(VersionedTool):
                 query=query, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
                 project_keys=[str(value) for value in args.get("project_keys") or []],
                 fallback_project_keys=list((ctx.extra.get("project_context") or {}).get("effective_project_keys") or []),
+                context_scope_keys=list((ctx.extra.get("project_context") or {}).get("effective_scope_keys") or []),
+                scope_keys=[str(value) for value in args.get("scope_keys") or []],
+                scope_mode=str(args.get("scope_mode") or "inherit"),
+                scope_ceiling_keys=list((ctx.extra.get("project_context") or {}).get("scope_ceiling_keys",
+                                        (ctx.extra.get("project_context") or {}).get("effective_scope_keys", [])) or []),
                 scopes=[str(value) for value in args.get("scopes") or []],
                 kinds=[str(value) for value in args.get("kinds") or []],
                 entity_ids=[str(value) for value in args.get("entity_ids") or []],
                 direction=str(args.get("direction") or "").strip() or None,
                 limit=int(args.get("limit") or 8),
             )
+        if data.get("success") is False:
+            return ToolResult.fail(data["error_code"], uncertainties=data["uncertainties"])
         return ToolResult.ok(data)

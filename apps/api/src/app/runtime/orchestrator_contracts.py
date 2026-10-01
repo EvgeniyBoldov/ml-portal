@@ -315,6 +315,10 @@ class PlannedTask(BaseModel):
     contract: TaskContractRef = Field(default_factory=TaskContractRef)
     depends_on: List[str] = Field(default_factory=list)
     freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
+    scope_keys: List[str] = Field(default_factory=list, max_length=60)
+    scope_mode: Literal["inherit", "replace"] = "inherit"
+    scope_reason: str = Field(default="", max_length=600)
+    scope_context: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
@@ -446,6 +450,8 @@ class PlannerContext(BaseModel):
     available_artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
     task_brief: Dict[str, Any] = Field(default_factory=dict)
+    scope_context: Dict[str, Any] = Field(default_factory=dict)
+    planner_search_results: List[Dict[str, Any]] = Field(default_factory=list)
     model_config = {"extra": "forbid"}
 
 
@@ -477,6 +483,7 @@ class TaskRequest(BaseModel):
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
     contract: TaskContractRef = Field(default_factory=TaskContractRef)
     freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
+    scope_context: Dict[str, Any] = Field(default_factory=dict)
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")

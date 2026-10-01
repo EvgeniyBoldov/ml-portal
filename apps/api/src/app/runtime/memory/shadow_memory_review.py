@@ -10,16 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.di import get_llm_client
 from app.models.document_memory_staging import (
+    DocumentMemoryExtractionAttempt,
     DocumentMemorySnapshot,
     MemoryConflictCase,
     MemoryConflictMember,
     MemoryExtractionCandidate,
+    MemoryScopeProposal, MemoryCandidateScopeProposal,
 )
 from app.models.system_llm_role import SystemLLMRoleType
 from app.models.memory_scope import MemoryCandidateScope, MemoryScope
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.memory.shadow_study_prompts import document_memory_prompt
-from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService
 
 
 class _ConflictOutput(BaseModel):
@@ -37,11 +38,13 @@ class ShadowMemoryReviewService:
         self,
         snapshot: DocumentMemorySnapshot,
         *,
+        attempt_id: UUID | None = None,
         agent_execution_id: str | None = None,
         event_sink: Callable[[Any], Awaitable[Any]] | None = None,
     ) -> dict[str, int]:
         candidates = list((await self._session.execute(select(MemoryExtractionCandidate).where(
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
+            MemoryExtractionCandidate.attempt_id == attempt_id if attempt_id else MemoryExtractionCandidate.attempt_id.is_(None),
             MemoryExtractionCandidate.resolution_status.in_(("extracted", "needs_review")),
         ))).scalars().all())
         counts = {"conflicts": 0, "duplicates": 0, "autoeligible": 0}
@@ -52,8 +55,9 @@ class ShadowMemoryReviewService:
                 MemoryExtractionCandidate.normalized_subject == candidate.normalized_subject,
                 or_(
                     MemoryExtractionCandidate.resolution_status == "resolved",
-                    and_(MemoryExtractionCandidate.snapshot_id == snapshot.id,
-                         MemoryExtractionCandidate.resolution_status == "needs_review"),
+                and_(MemoryExtractionCandidate.snapshot_id == snapshot.id,
+                     MemoryExtractionCandidate.attempt_id == attempt_id if attempt_id else MemoryExtractionCandidate.attempt_id.is_(None),
+                     MemoryExtractionCandidate.resolution_status == "needs_review"),
                 ),
                 or_(
                     MemoryExtractionCandidate.visibility_tenant_id.is_(None),
@@ -73,7 +77,8 @@ class ShadowMemoryReviewService:
                 )
                 case = MemoryConflictCase(
                     visibility_tenant_id=snapshot.visibility_tenant_id,
-                    kind=kind, rationale=rationale[:2000],
+                    kind=kind, status=("open" if kind in {"contradiction", "insufficient_evidence"} else "resolved"),
+                    rationale=rationale[:2000],
                     evidence={"candidate": str(candidate.id), "existing_candidate": str(existing.id)},
                 )
                 self._session.add(case)
@@ -84,22 +89,12 @@ class ShadowMemoryReviewService:
                 ))
                 if kind == "duplicate":
                     counts["duplicates"] += 1
-                    # Strict auto-approval is intentionally narrower than
-                    # duplicate detection: no project binding, no promotion,
-                    # byte-identical content and identical visibility.
-                    if (candidate.scope_candidate == existing.scope_candidate == "global"
-                            and candidate.visibility_tenant_id == existing.visibility_tenant_id):
-                        await ShadowMemoryPublicationService(self._session).approve(
-                            candidate_id=candidate.id, actor_id=None, reason="Exact source-backed duplicate.",
-                            scope="global", automatic=True,
-                        )
-                        case.status = "resolved"
-                        counts["autoeligible"] += 1
                 elif kind in {"contradiction", "insufficient_evidence"}:
                     candidate.resolution_status = "conflict"
                     counts["conflicts"] += 1
         pending = (await self._session.execute(select(MemoryExtractionCandidate.id).where(
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
+            MemoryExtractionCandidate.attempt_id == attempt_id if attempt_id else MemoryExtractionCandidate.attempt_id.is_(None),
             MemoryExtractionCandidate.resolution_status.in_(("needs_review", "conflict", "extracted")),
         ).limit(1))).scalar_one_or_none()
         snapshot.status = "awaiting_review" if pending is not None else "approved"
@@ -156,7 +151,15 @@ class ShadowMemoryReviewService:
                 MemoryCandidateScope.role == "applies_to",
                 MemoryCandidateScope.status != "rejected",
                 MemoryScope.lifecycle_status == "active"))).scalars().all()
-        return set(rows)
+        proposed = (await self._session.scalars(select(MemoryScopeProposal.proposed_key).join(
+            MemoryCandidateScopeProposal, MemoryCandidateScopeProposal.scope_proposal_id == MemoryScopeProposal.id,
+        ).where(
+            MemoryCandidateScopeProposal.candidate_id == candidate_id,
+            MemoryCandidateScopeProposal.role == "applies_to",
+            MemoryCandidateScopeProposal.status.in_(("suggested", "confirmed")),
+            MemoryScopeProposal.status.in_(("awaiting_term", "needs_review", "approved")),
+        ))).all()
+        return set(rows) | set(proposed)
 
 
 def _candidate_payload(candidate: MemoryExtractionCandidate) -> dict[str, object]:

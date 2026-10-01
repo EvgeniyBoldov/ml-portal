@@ -21,7 +21,12 @@ class _Payload(BaseModel):
 
 
 class ScopePayload(_Payload):
-    project_keys: list[str] = Field(default_factory=list, max_length=20)
+    project_keys: list[str] = Field(default_factory=list, max_length=30)
+    scope_keys: list[str] = Field(default_factory=list, max_length=60)
+    scope_origins: dict[str, Literal["turn", "chat_focus", "user_project_default"]] = Field(default_factory=dict, max_length=60)
+    scope_revision: int = Field(default=0, ge=0)
+    mentioned_scope_keys: list[str] = Field(default_factory=list, max_length=30)
+    suppress_project_default: bool = False
     project_keys_trust_class: Literal["application_verified", "runtime_normalized", "user_explicit", "model_inferred"] = "application_verified"
     topic: str = Field(default="", max_length=600)
     topic_trust_class: Literal["application_verified", "runtime_normalized", "user_explicit", "model_inferred"] = "runtime_normalized"

@@ -102,12 +102,13 @@ def test_collection_context_without_rule_is_not_published_even_with_non_collecti
     assert decision is None
 
 
-def test_only_explicit_memory_search_is_published():
-    for operation in ("memory.lookup", "memory.read", "memory.mark", "project_memory.read"):
+def test_only_explicit_memory_search_and_scope_lookup_are_published():
+    for operation in ("memory.read", "memory.mark", "project_memory.read"):
         assert resolve_publication(instance_domain="memory", raw_slug=operation) is None
-    decision = resolve_publication(instance_domain="memory", raw_slug="memory.search")
-    assert decision is not None
-    assert decision.canonical_op_slug == "memory.search"
+    for operation in ("memory.search", "memory.lookup"):
+        decision = resolve_publication(instance_domain="memory", raw_slug=operation)
+        assert decision is not None
+        assert decision.canonical_op_slug == operation
 
 
 def test_runtime_operation_slug_builder():

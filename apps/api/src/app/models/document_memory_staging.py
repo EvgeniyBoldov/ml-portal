@@ -39,8 +39,30 @@ class DocumentMemorySnapshot(Base):
     # sole correlation key for its runtime journal; task names and timestamps
     # are never used to reconstruct the trace.
     trace_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    active_attempt_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("document_memory_extraction_attempts.id", ondelete="SET NULL"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
     metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class DocumentMemoryExtractionAttempt(Base):
+    """One immutable, retryable study pass for a document snapshot."""
+    __tablename__ = "document_memory_extraction_attempts"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "attempt_number", name="uq_document_memory_attempt_number"),
+        CheckConstraint("status IN ('queued', 'studying', 'awaiting_review', 'completed', 'failed', 'superseded')", name="ck_document_memory_attempt_status"),
+        CheckConstraint("attempt_number > 0", name="ck_document_memory_attempt_number"),
+        Index("ix_document_memory_attempts_status", "status", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("document_memory_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", server_default="queued")
+    next_section: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    feedback: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    trace_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -69,6 +91,7 @@ class MemoryExtractionCandidate(Base):
     legacy_memory_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_items.id", ondelete="SET NULL"), nullable=True)
     legacy_memory_claim_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_claims.id", ondelete="SET NULL"), nullable=True)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("document_memory_extraction_attempts.id", ondelete="CASCADE"), nullable=True, index=True)
     candidate_type: Mapped[str] = mapped_column(String(32), nullable=False)
     subject: Mapped[str] = mapped_column(String(200), nullable=False)
     normalized_subject: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -79,6 +102,7 @@ class MemoryExtractionCandidate(Base):
     related_entities: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     related_project_keys: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     unmatched_scope_names: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    unresolved_scope_references: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     extraction_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     scope_candidate: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     resolution_status: Mapped[str] = mapped_column(String(16), nullable=False, default="extracted", server_default="extracted")
@@ -133,6 +157,60 @@ class GlossaryTerm(Base):
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class MemoryScopeProposal(Base):
+    """A typed scope awaiting approval, grounded in an approved glossary term."""
+    __tablename__ = "memory_scope_proposals"
+    __table_args__ = (
+        CheckConstraint("scope_type IN ('product', 'project', 'team')", name="ck_memory_scope_proposal_type"),
+        CheckConstraint("status IN ('awaiting_term', 'needs_review', 'approved', 'rejected', 'superseded')", name="ck_memory_scope_proposal_status"),
+        CheckConstraint("(term_candidate_id IS NULL) <> (glossary_term_id IS NULL)", name="ck_memory_scope_proposal_term_source"),
+        Index("ix_memory_scope_proposals_status", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("document_memory_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
+    attempt_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("document_memory_extraction_attempts.id", ondelete="CASCADE"), nullable=True, index=True)
+    visibility_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    proposed_key: Mapped[str] = mapped_column(String(180), nullable=False)
+    normalized_key: Mapped[str] = mapped_column(String(180), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="'[]'::jsonb")
+    term_candidate_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="CASCADE"), nullable=True, index=True)
+    source_term_candidate_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="SET NULL"), nullable=True, index=True)
+    glossary_term_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("glossary_terms.id", ondelete="CASCADE"), nullable=True, index=True)
+    memory_scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_scopes.id", ondelete="RESTRICT"), nullable=True, index=True)
+    evidence_section_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    rationale: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="awaiting_term", server_default="awaiting_term")
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reviewed_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class MemoryCandidateScopeProposal(Base):
+    """An applies-to or mention edge to a scope proposal."""
+    __tablename__ = "memory_candidate_scope_proposals"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "scope_proposal_id", "role", name="uq_memory_candidate_scope_proposal_binding"),
+        CheckConstraint("role IN ('applies_to', 'mentions')", name="ck_memory_candidate_scope_proposal_role"),
+        CheckConstraint("status IN ('suggested', 'confirmed', 'rejected', 'superseded')", name="ck_memory_candidate_scope_proposal_status"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_memory_candidate_scope_proposal_confidence"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="CASCADE"), nullable=False, index=True)
+    scope_proposal_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("memory_scope_proposals.id", ondelete="CASCADE"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="suggested", server_default="suggested")
+    method: Mapped[str] = mapped_column(String(32), nullable=False, default="llm_suggestion", server_default="llm_suggestion")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 

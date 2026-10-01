@@ -536,6 +536,29 @@ export interface ShadowMemoryCandidate {
   unmatched_scope_names: string[];
   scope_rationale: string | null;
   conflict_ids: string[];
+  scope_proposals: Array<{ id: string; name: string; scope_type: string; status: string; role: string; binding_status: string; term_name: string | null; rejection_reason: string | null }>;
+  related_terms: Array<{ term: string; scope: string; status: string }>;
+  approval_blockers: string[];
+}
+
+export interface MemoryScopeProposalAdminItem {
+  id: string;
+  snapshot_id: string;
+  visibility_tenant_id: string | null;
+  scope_type: 'product' | 'project' | 'team';
+  proposed_key: string;
+  name: string;
+  aliases: string[];
+  term_candidate_id: string | null;
+  glossary_term_id: string | null;
+  term_name: string;
+  memory_scope_id: string | null;
+  evidence_section_ids: string[];
+  rationale: string;
+  status: 'awaiting_term' | 'needs_review' | 'approved' | 'rejected';
+  rejection_reason: string | null;
+  dependent_candidate_ids: string[];
+  approval_blockers: string[];
 }
 
 export interface ShadowCandidateEvidence {
@@ -594,23 +617,29 @@ export const adminApi = {
     if (params.offset !== undefined) search.set('offset', String(params.offset));
     return apiRequest(`/admin/memory/staging/candidates?${search.toString()}`);
   },
-  async approveShadowMemoryCandidate(id: string, body: { reason?: string; scope?: 'global' | 'project' | 'scoped'; project_id?: string; scope_ids?: string[]; promote_to_company?: boolean; replace_existing_definition?: boolean; content?: Record<string, unknown> } = {}): Promise<ShadowMemoryCandidate> {
+  async approveShadowMemoryCandidate(id: string, body: { reason?: string; replace_existing_definition?: boolean } = {}): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/approve`, { method: 'POST', body: JSON.stringify(body) });
   },
   async getShadowCandidateEvidence(id: string): Promise<ShadowCandidateEvidence> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/evidence`);
   },
-  async bulkApproveShadowTerms(ids: string[]): Promise<{ approved_ids: string[]; review_ids: string[] }> {
-    return apiRequest('/admin/memory/staging/candidates/bulk-approve', { method: 'POST', body: JSON.stringify({ ids }) });
-  },
-  async rejectShadowMemoryCandidate(id: string, reason?: string): Promise<ShadowMemoryCandidate> {
+  async rejectShadowMemoryCandidate(id: string, reason: string): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
   },
-  async deactivateShadowMemoryCandidates(ids: string[]): Promise<{ changed: number }> {
-    return apiRequest('/admin/memory/staging/candidates/bulk-deactivate', { method: 'POST', body: JSON.stringify({ ids }) });
+  async getRetryableShadowSnapshots(): Promise<Array<{ snapshot_id: string; document_title: string; status: string; attempt_number: number | null }>> {
+    return apiRequest('/admin/memory/staging/retryable-snapshots');
   },
-  async deleteShadowMemoryCandidates(ids: string[]): Promise<{ changed: number }> {
-    return apiRequest('/admin/memory/staging/candidates', { method: 'DELETE', body: JSON.stringify({ ids }) });
+  async reextractShadowMemorySnapshot(id: string): Promise<{ snapshot_id: string; attempt_id: string; attempt_number: number; status: string }> {
+    return apiRequest(`/admin/memory/staging/snapshots/${id}/reextract`, { method: 'POST' });
+  },
+  async getMemoryScopeProposals(status: 'pending' | 'needs_review' | 'awaiting_term' | 'approved' | 'rejected' = 'pending'): Promise<MemoryScopeProposalAdminItem[]> {
+    return apiRequest(`/admin/memory/staging/scope-proposals?status=${status}`);
+  },
+  async approveMemoryScopeProposal(id: string, reason?: string): Promise<MemoryScopeProposalAdminItem> {
+    return apiRequest(`/admin/memory/staging/scope-proposals/${id}/approve`, { method: 'POST', body: JSON.stringify({ reason }) });
+  },
+  async rejectMemoryScopeProposal(id: string, reason: string): Promise<MemoryScopeProposalAdminItem> {
+    return apiRequest(`/admin/memory/staging/scope-proposals/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
   },
   // Users
   async getUsers(

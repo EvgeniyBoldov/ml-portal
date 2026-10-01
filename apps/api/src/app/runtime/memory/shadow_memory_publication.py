@@ -3,18 +3,22 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document_memory_staging import (
-    DocumentMemorySnapshot, GlossaryTerm,
-    MemoryCandidateDecision, MemoryCandidateProjectBinding, MemoryExtractionCandidate,
+    DocumentMemorySnapshot, DocumentMemoryExtractionAttempt, GlossaryTerm,
+    MemoryCandidateDecision, MemoryCandidateProjectBinding, MemoryConflictCase, MemoryConflictMember,
+    MemoryCandidateScopeProposal, MemoryExtractionCandidate, MemoryScopeProposal,
 )
 from app.models.memory import MemoryClaim, MemoryItem, MemoryItemSource
-from app.models.memory_scope import MemoryCandidateScope, MemoryClaimScope, MemoryScope
+from app.models.memory_scope import (
+    MemoryCandidateScope, MemoryClaimScope, MemoryScope, MemoryScopeGlossaryTerm,
+)
 from app.models.project import Project
 from app.models.rag import RAGDocument
 from app.runtime.memory.content_contracts import normalize_memory_content
@@ -38,18 +42,29 @@ class ShadowMemoryPublicationService:
                       scope_ids: list[UUID] | None = None,
                       replace_existing_definition: bool = False,
                       automatic: bool = False) -> MemoryExtractionCandidate:
-        candidate = await self._required_candidate(candidate_id)
+        candidate = await self._required_candidate(candidate_id, lock=True)
         if candidate.resolution_status not in {"extracted", "needs_review", "conflict"}:
-            if replace_existing_definition:
-                raise ValueError("Only an open term candidate can replace a glossary definition")
-            return candidate
+            if candidate.resolution_status == "resolved" and not replace_existing_definition:
+                return candidate
+            raise ValueError("Only an open candidate can be approved")
         snapshot = await self._session.get(DocumentMemorySnapshot, candidate.snapshot_id)
         if snapshot is None:
             raise ValueError("Candidate snapshot is unavailable")
+        blocking_conflict = await self._session.scalar(select(MemoryConflictCase.id).join(
+            MemoryConflictMember, MemoryConflictMember.conflict_id == MemoryConflictCase.id,
+        ).where(
+            MemoryConflictMember.candidate_id == candidate.id,
+            MemoryConflictCase.status == "open",
+            MemoryConflictCase.kind.in_(("contradiction", "insufficient_evidence")),
+        ).limit(1))
+        if blocking_conflict is not None:
+            raise ValueError("Candidate has an unresolved contradiction or insufficient evidence")
         if content is not None:
             candidate.content = content
             candidate.content_text = json.dumps(content, ensure_ascii=False, sort_keys=True)
         is_term = candidate.candidate_type == "term"
+        if not is_term and candidate.unresolved_scope_references:
+            raise ValueError("Memory has unresolved required scope references; reject it for re-extraction")
         if replace_existing_definition and (not is_term or automatic or not str(reason or "").strip()):
             raise ValueError("Replacing a glossary definition requires manual approval and a reason")
         if is_term:
@@ -77,12 +92,28 @@ class ShadowMemoryPublicationService:
             raise ValueError("Choose global or scoped applicability before approval")
         if chosen_scope == "global" and scope_ids:
             raise ValueError("Global applicability cannot include typed memory scopes")
+        inferred_project_id = project_id
+        if not is_term and chosen_scope == "project" and inferred_project_id is None:
+            project_ids = list((await self._session.scalars(select(MemoryCandidateProjectBinding.project_id).where(
+                MemoryCandidateProjectBinding.candidate_id == candidate.id,
+                MemoryCandidateProjectBinding.role == "applies_to",
+                MemoryCandidateProjectBinding.status != "rejected",
+            ))).all())
+            if len(project_ids) == 1:
+                inferred_project_id = project_ids[0]
+        inferred_scope_ids = list(scope_ids or [])
+        if not is_term and chosen_scope == "scoped" and not inferred_scope_ids:
+            inferred_scope_ids = list((await self._session.scalars(select(MemoryCandidateScope.scope_id).where(
+                MemoryCandidateScope.candidate_id == candidate.id,
+                MemoryCandidateScope.role == "applies_to",
+                MemoryCandidateScope.status != "rejected",
+            ))).all())
         selected_scopes = [] if is_term or chosen_scope == "global" else await self._scopes_for(
-            candidate, scope_ids or [], project_id,
+            candidate, inferred_scope_ids, inferred_project_id,
         )
         if chosen_scope == "scoped" and not selected_scopes:
             raise ValueError("Scoped knowledge requires at least one confirmed memory scope")
-        project = None if is_term else await self._project_for(candidate, project_id, chosen_scope)
+        project = None if is_term else await self._project_for(candidate, inferred_project_id, chosen_scope)
         if chosen_scope == "project" and project is not None and not selected_scopes:
             selected_scopes = list((await self._session.execute(select(MemoryScope).where(
                 MemoryScope.project_id == project.id,
@@ -94,6 +125,7 @@ class ShadowMemoryPublicationService:
             raise ValueError("Project applicability must use exactly the selected project scope")
         visibility = None if is_term or promote_to_company else candidate.visibility_tenant_id
         if not is_term:
+            await self._require_scope_proposals_approved(candidate.id)
             await self._confirm_scope_bindings(candidate.id, selected_scopes)
         if is_term:
             await self._publish_term(candidate, replace_existing_definition=replace_existing_definition)
@@ -104,6 +136,8 @@ class ShadowMemoryPublicationService:
         candidate.resolution_status = "resolved"
         candidate.resolution_method = "manual" if not automatic else "content_evidence"
         candidate.resolution_rationale = reason
+        if is_term:
+            await self._activate_linked_scope_proposals(candidate.id)
         self._session.add(MemoryCandidateDecision(
             candidate_id=candidate.id, actor_user_id=actor_id,
             action="autoapprove" if automatic else "approve", reason=reason,
@@ -116,21 +150,243 @@ class ShadowMemoryPublicationService:
         return candidate
 
     async def reject(self, *, candidate_id: UUID, actor_id: UUID | None, reason: str | None) -> MemoryExtractionCandidate:
-        candidate = await self._required_candidate(candidate_id)
+        if not str(reason or "").strip():
+            raise ValueError("A rejection reason is required")
+        candidate = await self._required_candidate(candidate_id, lock=True)
+        if candidate.resolution_status not in {"extracted", "needs_review", "conflict"}:
+            raise ValueError("Only an open candidate can be rejected")
         candidate.resolution_status = "rejected"
         candidate.resolution_method = "manual"
         candidate.resolution_rationale = reason
+        open_cases = (await self._session.scalars(select(MemoryConflictCase).join(
+            MemoryConflictMember, MemoryConflictMember.conflict_id == MemoryConflictCase.id,
+        ).where(MemoryConflictMember.candidate_id == candidate.id,
+                MemoryConflictCase.status == "open"))).all()
+        for case in open_cases:
+            case.status = "dismissed"
         self._session.add(MemoryCandidateDecision(candidate_id=candidate.id, actor_user_id=actor_id, action="reject", reason=reason))
         snapshot = await self._session.get(DocumentMemorySnapshot, candidate.snapshot_id)
         if snapshot:
             await self._update_snapshot(snapshot)
         return candidate
 
-    async def _required_candidate(self, candidate_id: UUID) -> MemoryExtractionCandidate:
-        candidate = await self._session.get(MemoryExtractionCandidate, candidate_id)
+    async def _required_candidate(self, candidate_id: UUID, *, lock: bool = False) -> MemoryExtractionCandidate:
+        stmt = select(MemoryExtractionCandidate).where(MemoryExtractionCandidate.id == candidate_id)
+        if lock:
+            snapshot_id = await self._session.scalar(select(MemoryExtractionCandidate.snapshot_id).where(
+                MemoryExtractionCandidate.id == candidate_id,
+            ))
+            if snapshot_id is None:
+                raise ValueError("Memory candidate not found")
+            snapshot = await self._session.scalar(select(DocumentMemorySnapshot).where(
+                DocumentMemorySnapshot.id == snapshot_id,
+            ).with_for_update().execution_options(populate_existing=True))
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
+        candidate = await self._session.scalar(stmt)
         if candidate is None:
             raise ValueError("Memory candidate not found")
+        if lock and candidate.resolution_status != "resolved" and (
+            snapshot is None or snapshot.status == "superseded"
+            or candidate.attempt_id != snapshot.active_attempt_id
+        ):
+            raise ValueError("Candidate belongs to an inactive extraction attempt")
         return candidate
+
+    async def approve_scope_proposal(
+        self, *, proposal_id: UUID, actor_id: UUID | None, reason: str | None = None,
+    ) -> MemoryScopeProposal:
+        proposal = await self._required_scope_proposal(proposal_id)
+        if proposal.status == "approved":
+            return proposal
+        if proposal.status != "needs_review":
+            raise ValueError("Scope proposal is waiting for its glossary term or was rejected")
+        term_id = await self._approved_proposal_term_id(proposal)
+        if term_id is None:
+            raise ValueError("Scope proposal requires an approved active glossary term")
+        existing = await self._session.scalar(select(MemoryScope).where(
+            MemoryScope.scope_type == proposal.scope_type,
+            MemoryScope.key == proposal.proposed_key,
+        ).with_for_update())
+        if existing is not None and existing.lifecycle_status != "active":
+            raise ValueError("A matching scope exists but is deprecated; restore it before approving this proposal")
+        scope = existing or MemoryScope(
+            scope_type=proposal.scope_type, key=proposal.proposed_key,
+            name=proposal.name, aliases=list(proposal.aliases or []),
+        )
+        if existing is None:
+            if proposal.scope_type == "project":
+                project_key = proposal.proposed_key.removeprefix("project.")
+                scope.project_id = await self._session.scalar(select(Project.id).where(
+                    Project.key == project_key,
+                ))
+            self._session.add(scope)
+            await self._session.flush()
+        else:
+            scope.aliases = list(dict.fromkeys([*(scope.aliases or []), *(proposal.aliases or [])]))
+        term_binding = await self._session.get(MemoryScopeGlossaryTerm, scope.id)
+        if term_binding is not None and term_binding.glossary_term_id != term_id:
+            raise ValueError("Scope key is already linked to a different glossary term")
+        if term_binding is None:
+            duplicate_term_scope = await self._session.scalar(select(MemoryScopeGlossaryTerm.scope_id).where(
+                MemoryScopeGlossaryTerm.glossary_term_id == term_id,
+            ))
+            if duplicate_term_scope is not None and duplicate_term_scope != scope.id:
+                raise ValueError("Glossary term is already linked to a different scope")
+            self._session.add(MemoryScopeGlossaryTerm(scope_id=scope.id, glossary_term_id=term_id))
+        proposal.memory_scope_id = scope.id
+        proposal.status = "approved"
+        proposal.rejection_reason = None
+        proposal.reviewed_by_user_id = actor_id
+        proposal.reviewed_at = datetime.now(timezone.utc)
+        proposal.review_reason = (str(reason).strip()[:2000] if reason and reason.strip() else None)
+        for binding in (await self._session.execute(select(MemoryCandidateScopeProposal).where(
+            MemoryCandidateScopeProposal.scope_proposal_id == proposal.id,
+            MemoryCandidateScopeProposal.status == "suggested",
+        ))).scalars().all():
+            binding.status = "confirmed"
+            exists = await self._session.scalar(select(MemoryCandidateScope.id).where(
+                MemoryCandidateScope.candidate_id == binding.candidate_id,
+                MemoryCandidateScope.scope_id == scope.id,
+                MemoryCandidateScope.role == binding.role,
+            ))
+            if exists is None:
+                self._session.add(MemoryCandidateScope(
+                    candidate_id=binding.candidate_id, scope_id=scope.id,
+                    role=binding.role, status="suggested", method="llm_suggestion",
+                    confidence=binding.confidence, rationale=binding.rationale,
+                ))
+        snapshot = await self._session.get(DocumentMemorySnapshot, proposal.snapshot_id)
+        if snapshot:
+            await self._update_snapshot(snapshot)
+        return proposal
+
+    async def reject_scope_proposal(
+        self, *, proposal_id: UUID, actor_id: UUID | None, reason: str,
+    ) -> MemoryScopeProposal:
+        if not str(reason or "").strip():
+            raise ValueError("A rejection reason is required")
+        proposal = await self._required_scope_proposal(proposal_id)
+        if proposal.status not in {"awaiting_term", "needs_review"}:
+            raise ValueError("Only an open scope proposal can be rejected")
+        proposal.status = "rejected"
+        proposal.rejection_reason = reason.strip()[:2000]
+        proposal.reviewed_by_user_id = actor_id
+        proposal.reviewed_at = datetime.now(timezone.utc)
+        proposal.review_reason = reason.strip()[:2000]
+        bindings = (await self._session.execute(select(MemoryCandidateScopeProposal).where(
+            MemoryCandidateScopeProposal.scope_proposal_id == proposal.id,
+            MemoryCandidateScopeProposal.status == "suggested",
+        ))).scalars().all()
+        for binding in bindings:
+            binding.status = "rejected"
+        snapshot = await self._session.get(DocumentMemorySnapshot, proposal.snapshot_id)
+        if snapshot:
+            await self._update_snapshot(snapshot)
+        return proposal
+
+    async def _required_scope_proposal(self, proposal_id: UUID) -> MemoryScopeProposal:
+        snapshot_id = await self._session.scalar(select(MemoryScopeProposal.snapshot_id).where(
+            MemoryScopeProposal.id == proposal_id,
+        ))
+        if snapshot_id is None:
+            raise ValueError("Scope proposal not found")
+        snapshot = await self._session.scalar(select(DocumentMemorySnapshot).where(
+            DocumentMemorySnapshot.id == snapshot_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        proposal = await self._session.scalar(select(MemoryScopeProposal).where(
+            MemoryScopeProposal.id == proposal_id,
+        ).with_for_update().execution_options(populate_existing=True))
+        if proposal is None:
+            raise ValueError("Scope proposal not found")
+        if proposal.status != "approved" and (
+            snapshot is None or snapshot.status == "superseded"
+            or proposal.attempt_id != snapshot.active_attempt_id
+        ):
+            raise ValueError("Scope proposal belongs to an inactive extraction attempt")
+        return proposal
+
+    async def _approved_proposal_term_id(self, proposal: MemoryScopeProposal) -> UUID | None:
+        if proposal.glossary_term_id:
+            return await self._session.scalar(select(GlossaryTerm.id).where(
+                GlossaryTerm.id == proposal.glossary_term_id,
+                GlossaryTerm.is_active.is_(True),
+            ))
+        if not proposal.term_candidate_id:
+            return None
+        return await self._session.scalar(select(GlossaryTerm.id).join(
+            MemoryExtractionCandidate,
+            MemoryExtractionCandidate.id == GlossaryTerm.approved_candidate_id,
+        ).where(
+            MemoryExtractionCandidate.id == proposal.term_candidate_id,
+            MemoryExtractionCandidate.resolution_status == "resolved",
+            GlossaryTerm.is_active.is_(True),
+        ))
+
+    async def _activate_linked_scope_proposals(self, term_candidate_id: UUID) -> None:
+        proposals = (await self._session.execute(select(MemoryScopeProposal).where(
+            MemoryScopeProposal.term_candidate_id == term_candidate_id,
+            MemoryScopeProposal.status.in_(("awaiting_term", "needs_review")),
+        ).with_for_update())).scalars().all()
+        term_id = await self._session.scalar(select(GlossaryTerm.id).where(
+            GlossaryTerm.approved_candidate_id == term_candidate_id,
+            GlossaryTerm.is_active.is_(True),
+        ))
+        if term_id is None:
+            raise ValueError("Approved glossary term is unavailable for linked scopes")
+        for proposal in proposals:
+            proposal.source_term_candidate_id = term_candidate_id
+            proposal.glossary_term_id = term_id
+            proposal.term_candidate_id = None
+            if proposal.memory_scope_id is None:
+                proposal.status = "needs_review"
+                continue
+            binding = await self._session.get(MemoryScopeGlossaryTerm, proposal.memory_scope_id)
+            if binding is None:
+                self._session.add(MemoryScopeGlossaryTerm(
+                    scope_id=proposal.memory_scope_id, glossary_term_id=term_id,
+                ))
+            elif binding.glossary_term_id != term_id:
+                raise ValueError("Existing scope is already linked to a different glossary term")
+            proposal.status = "approved"
+
+    async def _require_scope_proposals_approved(self, candidate_id: UUID) -> None:
+        rows = (await self._session.execute(select(
+            MemoryScopeProposal.name,
+            MemoryScopeProposal.status,
+            MemoryScopeProposal.rejection_reason,
+            MemoryCandidateScopeProposal.status,
+        ).join(
+            MemoryCandidateScopeProposal,
+            MemoryCandidateScopeProposal.scope_proposal_id == MemoryScopeProposal.id,
+        ).where(
+            MemoryCandidateScopeProposal.candidate_id == candidate_id,
+            MemoryCandidateScopeProposal.role == "applies_to",
+            or_(MemoryCandidateScopeProposal.status == "rejected", MemoryScopeProposal.status != "approved",
+                MemoryScopeProposal.memory_scope_id.is_(None)),
+        ))).all()
+        if rows:
+            labels = [f"{name} (rejected: {reason or 'binding rejected'})"
+                      if status == "rejected" or binding_status == "rejected"
+                      else f"{name} ({status})"
+                      for name, status, reason, binding_status in rows]
+            raise ValueError("Memory is blocked by unapproved scopes: " + ", ".join(labels))
+        approved = (await self._session.execute(select(MemoryScopeProposal).join(
+            MemoryCandidateScopeProposal,
+            MemoryCandidateScopeProposal.scope_proposal_id == MemoryScopeProposal.id,
+        ).where(
+            MemoryCandidateScopeProposal.candidate_id == candidate_id,
+            MemoryCandidateScopeProposal.role == "applies_to",
+        ))).all()
+        for (proposal,) in approved:
+            active_scope = await self._session.scalar(select(MemoryScope.id).where(
+                MemoryScope.id == proposal.memory_scope_id,
+                MemoryScope.lifecycle_status == "active",
+            ))
+            if active_scope is None:
+                raise ValueError("Memory is blocked because its approved scope is no longer active")
+            term_ready = await self._approved_proposal_term_id(proposal)
+            if term_ready is None:
+                raise ValueError("Memory is blocked because its scope term is no longer active")
 
     async def _project_for(self, candidate: MemoryExtractionCandidate, project_id: UUID | None, scope: str) -> Project | None:
         if scope != "project":
@@ -271,7 +527,22 @@ class ShadowMemoryPublicationService:
     async def _update_snapshot(self, snapshot: DocumentMemorySnapshot) -> None:
         open_count = (await self._session.execute(select(MemoryExtractionCandidate.id).where(
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
+            MemoryExtractionCandidate.attempt_id == snapshot.active_attempt_id,
             MemoryExtractionCandidate.resolution_status.in_(("extracted", "needs_review", "conflict")),
         ).limit(1))).scalar_one_or_none()
-        if open_count is None:
-            snapshot.status = "approved"
+        open_scope = await self._session.scalar(select(MemoryScopeProposal.id).where(
+            MemoryScopeProposal.attempt_id == snapshot.active_attempt_id,
+            MemoryScopeProposal.status.in_(("awaiting_term", "needs_review")),
+        ).limit(1))
+        if open_count is None and open_scope is None:
+            resolved = await self._session.scalar(select(MemoryExtractionCandidate.id).where(
+                MemoryExtractionCandidate.attempt_id == snapshot.active_attempt_id,
+                MemoryExtractionCandidate.resolution_status == "resolved",
+            ).limit(1))
+            snapshot.status = "approved" if resolved else "rejected"
+        else:
+            snapshot.status = "awaiting_review"
+        if snapshot.active_attempt_id:
+            attempt = await self._session.get(DocumentMemoryExtractionAttempt, snapshot.active_attempt_id)
+            if attempt:
+                attempt.status = "awaiting_review" if snapshot.status == "awaiting_review" else "completed"

@@ -116,14 +116,15 @@ async def test_iteration_limit_never_creates_a_hidden_finalize_iteration() -> No
 
         async def plan(self, *, request, **kwargs):
             self.calls += 1
-            return IterationProposal(tasks=[], terminal=TerminalKind.PLANNER)
+            return IterationProposal(tasks=[PlannedTask(task_id="work", executor="research",
+                intent="inspect", instructions="Inspect")], terminal=TerminalKind.PLANNER)
 
     store = AsyncMemoryStore()
     planner = ContinuePlanner()
     events = [event async for event in GraphOrchestrator(
         store=store, planner=planner, executor=Executor(), synthesizer=Synthesizer(),
     ).run(
-        plan_id=store.plan["id"], goal="goal", available_agents=[], max_steps=1,
+        plan_id=store.plan["id"], goal="goal", available_agents=[{"slug": "research"}], max_steps=1,
         planner_kwargs={"runtime_state": State()},
     )]
 

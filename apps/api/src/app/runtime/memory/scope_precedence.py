@@ -15,14 +15,21 @@ def apply_scope_precedence(items: list[dict[str, Any]], project_ids: list[UUID])
     for identity, rows in by_identity.items():
         globals_ = [row for row in rows if row.get("project_id") is None and not row.get("scope_keys")]
         typed = [row for row in rows if row.get("project_id") is None and row.get("scope_keys")]
-        scoped = {str(row.get("project_id")): row for row in rows if row.get("project_id") is not None}
-        effective = [scoped.get(project_id) or (globals_[0] if globals_ else None) for project_id in project_set] if project_set else rows
-        effective = [row for row in effective if row is not None]
+        scoped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            if row.get("project_id") is not None:
+                scoped.setdefault(str(row["project_id"]), []).append(row)
+        effective = [row for project_id in sorted(project_set)
+                     for row in (scoped.get(project_id) or globals_)] if project_set else rows
         if project_set:
             effective.extend(typed)
         if len({str(row.get("content_text")) for row in effective}) > 1:
             uncertainties.append(f"project_memory_divergence:{identity[0]}:{identity[1]}")
-            continue
-        if effective:
-            result.append(effective[0])
+        seen = set()
+        for row in effective:
+            key = (str(row.get("selected_claim_id") or row.get("id")),
+                   tuple(sorted(row.get("scope_keys") or [])), str(row.get("content_text")))
+            if key not in seen:
+                result.append(row)
+                seen.add(key)
     return result, uncertainties

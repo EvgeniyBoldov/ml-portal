@@ -11,7 +11,7 @@ from app.runtime.entity_ids import runtime_task_id
 
 
 @pytest.mark.asyncio
-async def test_glossary_provenance_scopes_tenant_entries_to_current_tenant() -> None:
+async def test_glossary_provenance_requires_published_global_source() -> None:
     chat_id, turn_id, user_id, tenant_id, glossary_id = (uuid4() for _ in range(5))
     statements = []
 
@@ -30,10 +30,12 @@ async def test_glossary_provenance_scopes_tenant_entries_to_current_tenant() -> 
 
     params = list(statements[1].compile().params.values())
     assert "global" in params
-    assert "user" in params
-    assert "tenant" in params
-    assert "project" in params
-    assert tenant_id in params or str(tenant_id) in {str(value) for value in params}
+    assert "resolved" in params
+    assert "term" in params
+    sql = str(statements[1])
+    assert "glossary_terms.approved_candidate_id" in sql
+    assert "ragdocuments.scope" in sql
+    assert "ragdocuments.status" in sql
 
 
 @pytest.mark.asyncio

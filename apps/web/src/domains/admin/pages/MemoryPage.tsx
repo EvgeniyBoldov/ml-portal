@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Checkbox, ConfirmDialog, DataTable, EntityPageV2, Input, Modal, Select, Tab, LifecycleDeleteDialog, type DataTableColumn } from '@/shared/ui';
-import { adminApi, type AdminGlossaryTerm, type MemoryScopeAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
+import { adminApi, type AdminGlossaryTerm, type MemoryScopeAdminItem, type MemoryScopeProposalAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import MemoryReviewDialog, { type MemoryApproval } from '@/domains/admin/components/MemoryReviewDialog';
+import MemoryScopeProposalDialog from '@/domains/admin/components/MemoryScopeProposalDialog';
 import MemoryActionsMenu from '@/domains/admin/components/MemoryActionsMenu';
 import styles from './MemoryPage.module.css';
 
@@ -98,9 +99,7 @@ export default function MemoryPage() {
   const [confirmMemoryDeactivate, setConfirmMemoryDeactivate] = useState(false);
   const [reviewPage, setReviewPage] = useState(0);
   const [reviewType, setReviewType] = useState('');
-  const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string | number>>(new Set());
-  const [confirmReviewAction, setConfirmReviewAction] = useState<'delete' | 'deactivate' | 'reject' | null>(null);
-  const [reviewQueue, setReviewQueue] = useState<string[]>([]);
+  const [scopeProposalEditor, setScopeProposalEditor] = useState<MemoryScopeProposalAdminItem | null>(null);
   const [scopeEditor, setScopeEditor] = useState<MemoryScopeAdminItem | 'new' | null>(null);
   const [scopeToDelete, setScopeToDelete] = useState<MemoryScopeAdminItem | null>(null);
   const [scopeLifecycleAction, setScopeLifecycleAction] = useState<'delete' | 'restore'>('delete');
@@ -138,44 +137,40 @@ export default function MemoryPage() {
     queryFn: () => adminApi.getShadowMemoryCandidates('pending', { candidate_type: reviewType || undefined, limit: 101, offset: reviewPage * 100 }),
     enabled: activeTab === 'review',
   });
+  const { data: scopeProposals, isLoading: scopeProposalsLoading, isError: scopeProposalsError } = useQuery({
+    queryKey: ['admin', 'memory', 'scope-proposals'],
+    queryFn: () => adminApi.getMemoryScopeProposals('pending'),
+    enabled: activeTab === 'review',
+  });
+  const retryableSnapshots = useQuery({
+    queryKey: ['admin', 'memory', 'retryable-snapshots'],
+    queryFn: () => adminApi.getRetryableShadowSnapshots(),
+    enabled: activeTab === 'review',
+  });
   const decision = useMutation({
-    mutationFn: ({ row, action, body }: { row: ShadowMemoryCandidate; action: 'approve' | 'reject'; body?: MemoryApproval }) => action === 'approve'
+    mutationFn: ({ row, action, body, reason }: { row: ShadowMemoryCandidate; action: 'approve' | 'reject'; body?: MemoryApproval; reason?: string }) => action === 'approve'
       ? adminApi.approveShadowMemoryCandidate(row.id, body ?? {})
-      : adminApi.rejectShadowMemoryCandidate(row.id, 'Rejected by administrator'),
+      : adminApi.rejectShadowMemoryCandidate(row.id, reason ?? ''),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'glossary'] });
       queryClient.invalidateQueries({ queryKey: ['collections', 'glossary', 'overview'] });
     },
   });
-  const approveSelected = useMutation({
-    mutationFn: () => adminApi.bulkApproveShadowTerms([...selectedReviewIds].map(String)),
-    onSuccess: ({ approved_ids, review_ids }) => {
-      setSelectedReviewIds(new Set(review_ids));
-      setReviewQueue(review_ids);
-      setReviewEditor((review ?? []).find((row) => row.id === review_ids[0]) ?? null);
-      if (approved_ids.length) showSuccess(`Утверждено терминов: ${approved_ids.length}`);
-      queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'glossary'] });
-      queryClient.invalidateQueries({ queryKey: ['collections', 'glossary', 'overview'] });
-    },
-    onError: (error: Error) => showError(error.message || 'Не удалось утвердить выбранные записи'),
+  const scopeDecision = useMutation({
+    mutationFn: ({ row, action, reason }: { row: MemoryScopeProposalAdminItem; action: 'approve' | 'reject'; reason?: string }) => action === 'approve'
+      ? adminApi.approveMemoryScopeProposal(row.id, reason)
+      : adminApi.rejectMemoryScopeProposal(row.id, reason ?? ''),
+    onSuccess: () => { setScopeProposalEditor(null); queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] }); },
+    onError: (error: Error) => showError(error.message || 'Не удалось обработать предложение скоупа'),
   });
-  const bulkReviewAction = useMutation({
-    mutationFn: async (action: 'delete' | 'deactivate' | 'reject') => {
-      const ids = [...selectedReviewIds].map(String);
-      if (action === 'delete') return adminApi.deleteShadowMemoryCandidates(ids);
-      if (action === 'deactivate') return adminApi.deactivateShadowMemoryCandidates(ids);
-      await Promise.all(ids.map((id) => adminApi.rejectShadowMemoryCandidate(id, 'Rejected by administrator')));
-      return { changed: ids.length };
-    },
+  const reextract = useMutation({
+    mutationFn: (snapshotId: string) => adminApi.reextractShadowMemorySnapshot(snapshotId),
     onSuccess: (result) => {
-      setSelectedReviewIds(new Set());
-      setConfirmReviewAction(null);
-      showSuccess(`${confirmReviewAction === 'delete' ? 'Удалено' : confirmReviewAction === 'deactivate' ? 'Деактивировано' : 'Отклонено'} кандидатов: ${result.changed}`);
+      showSuccess(`Повторное извлечение запущено (попытка ${result.attempt_number}).`);
       queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] });
     },
-    onError: (error: Error) => showError(error.message || 'Не удалось обработать выбранных кандидатов'),
+    onError: (error: Error) => showError(error.message || 'Не удалось повторить извлечение'),
   });
   const deactivateMemory = useMutation({
     mutationFn: () => adminApi.deactivateSemanticMemory([...selectedMemoryIds].map(String)),
@@ -273,27 +268,29 @@ export default function MemoryPage() {
       <Tab title="На проверке" id="review" layout="full">
         <div className={styles.filterBar}>
           <label className={styles.scopeField}>Тип кандидата
-            <Select value={reviewType} options={[{ value: '', label: 'Все типы' }, ...['term', 'description', 'relationship', 'rule', 'constraint', 'procedure', 'decision'].map((value) => ({ value, label: value }))]} onChange={(value) => { setReviewType(value); setReviewPage(0); setSelectedReviewIds(new Set()); }} />
+            <Select value={reviewType} options={[{ value: '', label: 'Все типы' }, ...['term', 'description', 'relationship', 'rule', 'constraint', 'procedure', 'decision'].map((value) => ({ value, label: value }))]} onChange={(value) => { setReviewType(value); setReviewPage(0); }} />
           </label>
         </div>
         {reviewError ? <p role="alert">Не удалось загрузить очередь проверки.</p> : <DataTable
           key={`${reviewPage}:${reviewType}`} columns={reviewColumns} data={(review ?? []).slice(0, 100)} keyField="id"
-          loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20} selectable
-          selectedKeys={selectedReviewIds} onSelectionChange={setSelectedReviewIds}
-          bulkActions={<div className={styles.selectionActions}>
-            <Button size="sm" disabled={approveSelected.isPending || decision.isPending || bulkReviewAction.isPending}
-              onClick={() => approveSelected.mutate()}>Утвердить</Button>
-            <MemoryActionsMenu disabled={bulkReviewAction.isPending || approveSelected.isPending} items={[
-              { label: 'Отклонить', onClick: () => setConfirmReviewAction('reject') },
-              { label: 'Деактивировать', onClick: () => setConfirmReviewAction('deactivate') },
-              { label: 'Удалить', variant: 'danger', onClick: () => setConfirmReviewAction('delete') },
-            ]} />
-          </div>} />}
+          loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20}
+          onRowClick={setReviewEditor} />}
         {(reviewPage > 0 || (review?.length ?? 0) > 100) && <div className={styles.pager}>
-          <Button size="sm" variant="outline" disabled={reviewPage === 0} onClick={() => { setReviewPage(reviewPage - 1); setSelectedReviewIds(new Set()); }}>Назад</Button>
+          <Button size="sm" variant="outline" disabled={reviewPage === 0} onClick={() => setReviewPage(reviewPage - 1)}>Назад</Button>
           <span>Страница {reviewPage + 1}</span>
-          <Button size="sm" variant="outline" disabled={(review?.length ?? 0) <= 100} onClick={() => { setReviewPage(reviewPage + 1); setSelectedReviewIds(new Set()); }}>Далее</Button>
+          <Button size="sm" variant="outline" disabled={(review?.length ?? 0) <= 100} onClick={() => setReviewPage(reviewPage + 1)}>Далее</Button>
         </div>}
+        <h3>Предложенные скоупы</h3>
+        {scopeProposalsError ? <p role="alert">Не удалось загрузить предложения скоупов.</p> : <DataTable
+          columns={[
+            { key: 'scope_type', label: 'ТИП', width: 120, render: (row: MemoryScopeProposalAdminItem) => <Badge tone="info">{row.scope_type}</Badge> },
+            { key: 'name', label: 'НАЗВАНИЕ', render: (row: MemoryScopeProposalAdminItem) => <div><strong>{row.name}</strong><div style={{ color: 'var(--muted)' }}>{row.proposed_key}</div></div> },
+            { key: 'term_name', label: 'ТЕРМИН', render: (row: MemoryScopeProposalAdminItem) => row.term_name || '—' },
+            { key: 'status', label: 'СТАТУС', render: (row: MemoryScopeProposalAdminItem) => <Badge tone={row.status === 'needs_review' ? 'warn' : 'neutral'}>{row.status}</Badge> },
+          ] as DataTableColumn<MemoryScopeProposalAdminItem>[]}
+          data={scopeProposals ?? []} keyField="id" loading={scopeProposalsLoading}
+          emptyText="Предложений скоупов на проверке нет" paginated pageSize={20}
+          onRowClick={setScopeProposalEditor} />}
       </Tab>
       <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'team', key: '', name: '', aliases: '', is_all: false }); setScopeEditor('new'); }}>Создать скоуп</Button>]}>
         {scopesError ? <p role="alert">Не удалось загрузить скоупы памяти.</p> : <DataTable columns={scopeColumns} data={memoryScopes ?? []} keyField="id" loading={scopesLoading} emptyText="Скоупов пока нет" paginated pageSize={20} onRowClick={(row) => { if (row.lifecycle_status === 'active') openScopeEditor(row); }} />}
@@ -315,8 +312,22 @@ export default function MemoryPage() {
     <ConfirmDialog open={confirmGlossaryAction === 'deactivate'} title={`Деактивировать термины (${selectedGlossaryIds.size})?`} message="Термины останутся в админском списке, но перестанут попадать в глоссарий для поиска и извлечения новых документов." confirmLabel="Деактивировать" cancelLabel="Отмена" variant="warning" confirmLoading={glossaryAction.isPending} onCancel={() => setConfirmGlossaryAction(null)} onConfirm={() => glossaryAction.mutate()} />
     <ConfirmDialog open={confirmGlossaryAction === 'activate'} title={`Активировать термины (${selectedGlossaryIds.size})?`} message="Термины снова станут доступны в глоссарии для поиска и извлечения документов." confirmLabel="Активировать" cancelLabel="Отмена" variant="info" confirmLoading={glossaryAction.isPending} onCancel={() => setConfirmGlossaryAction(null)} onConfirm={() => glossaryAction.mutate()} />
     <ConfirmDialog open={confirmGlossaryAction === 'delete'} title={`Удалить термины (${selectedGlossaryIds.size})?`} message="Термины и связанные с ними определения будут удалены без возможности восстановления." confirmLabel="Удалить" cancelLabel="Отмена" variant="danger" confirmLoading={glossaryAction.isPending} onCancel={() => setConfirmGlossaryAction(null)} onConfirm={() => glossaryAction.mutate()} />
-    <ConfirmDialog open={confirmReviewAction !== null} title={`${confirmReviewAction === 'delete' ? 'Удалить' : confirmReviewAction === 'deactivate' ? 'Деактивировать' : 'Отклонить'} кандидатов (${selectedReviewIds.size})?`} message={confirmReviewAction === 'delete' ? 'Выбранные записи извлечения будут удалены без возможности восстановления.' : confirmReviewAction === 'deactivate' ? 'Кандидаты будут помечены неактивными и исчезнут из очереди проверки.' : 'Кандидаты будут отклонены и убраны из очереди проверки.'} confirmLabel={confirmReviewAction === 'delete' ? 'Удалить' : confirmReviewAction === 'deactivate' ? 'Деактивировать' : 'Отклонить'} cancelLabel="Отмена" variant={confirmReviewAction === 'deactivate' ? 'warning' : 'danger'} confirmLoading={bulkReviewAction.isPending} onCancel={() => setConfirmReviewAction(null)} onConfirm={() => confirmReviewAction && bulkReviewAction.mutate(confirmReviewAction)} />
-    {reviewEditor && <MemoryReviewDialog key={reviewEditor.id} candidate={reviewEditor} scopes={memoryScopes ?? []} pending={decision.isPending} onClose={() => { setReviewEditor(null); setReviewQueue([]); }} onApprove={async (body) => { await decision.mutateAsync({ row: reviewEditor, action: 'approve', body }); const remaining = reviewQueue.slice(1); setReviewQueue(remaining); setReviewEditor((review ?? []).find((row) => row.id === remaining[0]) ?? null); if (!remaining.length) setSelectedReviewIds(new Set()); }} />}
+    {activeTab === 'review' && retryableSnapshots.isError && <p role="alert">Не удалось загрузить документы для повторного извлечения.</p>}
+    {activeTab === 'review' && (retryableSnapshots.data?.length ?? 0) > 0 && <div style={{ display: 'grid', gap: 10, padding: 12 }}>
+      <span>Повторное извлечение учтёт причины отклонения.</span>
+      {retryableSnapshots.data?.map((row) => <div key={row.snapshot_id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span>{row.document_title}{row.attempt_number ? ` · попытка ${row.attempt_number}` : ''}</span>
+        <Button disabled={reextract.isPending} onClick={() => reextract.mutate(row.snapshot_id)}>Повторить извлечение</Button>
+      </div>)}
+    </div>}
+    {reviewEditor && <MemoryReviewDialog key={reviewEditor.id} candidate={reviewEditor} pending={decision.isPending}
+      onClose={() => setReviewEditor(null)}
+      onApprove={async (body) => { await decision.mutateAsync({ row: reviewEditor, action: 'approve', body }); setReviewEditor(null); }}
+      onReject={async (reason) => { await decision.mutateAsync({ row: reviewEditor, action: 'reject', reason }); setReviewEditor(null); }} />}
+    {scopeProposalEditor && <MemoryScopeProposalDialog key={scopeProposalEditor.id} proposal={scopeProposalEditor}
+      pending={scopeDecision.isPending} onClose={() => setScopeProposalEditor(null)}
+      onApprove={async (reason) => { await scopeDecision.mutateAsync({ row: scopeProposalEditor, action: 'approve', reason }); }}
+      onReject={async (reason) => { await scopeDecision.mutateAsync({ row: scopeProposalEditor, action: 'reject', reason }); }} />}
     </>
   );
 }

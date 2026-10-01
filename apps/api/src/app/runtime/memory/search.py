@@ -12,6 +12,7 @@ from app.runtime.memory.semantic_index import MemorySemanticIndex
 from app.runtime.memory.scope_precedence import apply_scope_precedence as _apply_project_precedence
 from app.services.glossary_service import GlossaryService, ambiguous_glossary_aliases, matching_glossary_terms
 from app.services.project_catalog_service import ProjectCatalogService
+from app.services.memory_scope_catalog import list_memory_scopes, resolve_memory_scopes
 
 
 class MemorySearchService:
@@ -27,6 +28,9 @@ class MemorySearchService:
         project_keys: list[str] = (),
         fallback_project_keys: list[str] | tuple[str, ...] = (),
         context_scope_keys: list[str] | tuple[str, ...] = (),
+        scope_keys: list[str] | tuple[str, ...] = (),
+        scope_mode: str = "inherit",
+        scope_ceiling_keys: list[str] | tuple[str, ...] | None = None,
         scopes: list[str] = (),
         kinds: list[str] = (),
         entity_ids: list[str] = (),
@@ -44,8 +48,44 @@ class MemorySearchService:
             "aliases": list(item.get("aliases") or []),
             "source_references": list(item.get("source_references") or []),
         } for item in glossary_terms]
+        if scope_mode not in {"inherit", "replace"}:
+            return _empty_result(direction=direction, entity_ids=entity_ids, kinds=kinds,
+                                 uncertainties=["invalid_scope_mode"])
+        requested_scope_keys = {str(key).strip().lower() for key in scope_keys if str(key).strip()}
+        inherited_scope_keys = {str(key).strip().lower() for key in context_scope_keys if str(key).strip()}
         requested_keys = {str(key).strip().lower() for key in project_keys if str(key).strip()}
-        project_key_set = requested_keys or {str(key).strip().lower() for key in fallback_project_keys if str(key).strip()}
+        explicit_projects = {key.removeprefix("project.") for key in requested_scope_keys
+                             if key.startswith("project.") and key != "project.all"}
+        if requested_keys and ((explicit_projects and requested_keys != explicit_projects)
+                               or "project.all" in requested_scope_keys):
+            return _empty_result(direction=direction, entity_ids=entity_ids, kinds=kinds,
+                                 uncertainties=["conflicting_project_scope"])
+        replaced_types = {key.partition(".")[0] for key in requested_scope_keys}
+        if requested_keys:
+            replaced_types.add("project")
+        effective_scope_keys = set(requested_scope_keys) if scope_mode == "replace" else {
+            key for key in inherited_scope_keys if key.partition(".")[0] not in replaced_types
+        } | requested_scope_keys
+        scope_projects = {key.removeprefix("project.") for key in effective_scope_keys
+                          if key.startswith("project.") and key != "project.all"}
+        project_key_set = requested_keys or scope_projects or (
+            {str(key).strip().lower() for key in fallback_project_keys if str(key).strip()}
+            if scope_mode == "inherit" and "project.all" not in effective_scope_keys else set()
+        )
+        effective_scope_keys |= {f"project.{key}" for key in project_key_set}
+        if scope_ceiling_keys is not None:
+            ceiling = {str(key).strip().lower() for key in scope_ceiling_keys if str(key).strip()}
+            if not effective_scope_keys.issubset(ceiling):
+                return _empty_result(direction=direction, entity_ids=entity_ids, kinds=kinds,
+                                     uncertainties=["scope_widening_denied"])
+        try:
+            await resolve_memory_scopes(self._session, sorted(effective_scope_keys))
+        except ValueError:
+            unknown = sorted(effective_scope_keys - {
+                row.key for row in await list_memory_scopes(self._session)
+            })
+            return _empty_result(direction=direction, entity_ids=entity_ids, kinds=kinds,
+                                 uncertainties=[f"unknown_scope_key:{key}" for key in unknown] or ["invalid_scope_key"])
         known_project_keys = {str(item.get("key") or "").strip().lower() for item in projects}
         unknown_project_keys = sorted(project_key_set - known_project_keys)
         if unknown_project_keys:
@@ -69,7 +109,7 @@ class MemorySearchService:
             project_ids=project_ids,
             semantic_ids=list(dict.fromkeys([*semantic_ids, *lexical_ids, *entity_related_ids])),
             tenant_id=tenant_id,
-            context_scope_keys=context_scope_keys,
+            context_scope_keys=sorted(effective_scope_keys),
         )
         if normalized_entity_ids:
             entity_item_id_set = set(entity_related_ids)
@@ -80,6 +120,14 @@ class MemorySearchService:
         if project_key_set:
             project_id_set = set(project_ids)
             items = [item for item in items if item.get("project_id") in project_id_set or item.get("project_id") is None]
+        project_keys_by_id = {str(project["id"]): f"project.{project['key']}" for project in selected}
+        for item in items:
+            bound_projects = set(str(value) for value in (item.get("applicability") or {}).get("project_ids") or [])
+            if item.get("project_id") is not None:
+                bound_projects.add(str(item["project_id"]))
+            legacy_keys = [project_keys_by_id[value] for value in sorted(bound_projects) if value in project_keys_by_id]
+            if legacy_keys and not any(key.startswith("project.") for key in item.get("scope_keys") or []):
+                item["scope_keys"] = [*(item.get("scope_keys") or []), *legacy_keys]
         allowed_kinds = {str(kind).strip() for kind in kinds if str(kind).strip()}
         if not allowed_kinds:
             allowed_kinds = _kinds_for_direction(direction)
@@ -90,6 +138,7 @@ class MemorySearchService:
         values = [
             {
                 "id": str(item["id"]), "project_id": str(item["project_id"]) if item.get("project_id") else None,
+                "selected_claim_id": item.get("selected_claim_id"),
                 "scope_keys": list(item.get("scope_keys") or []),
                 "kind": item["kind"], "subject": item["subject"], "content": item["content"],
                 "confidence": item["confidence"], "state": item["state"], "observed_at": item.get("observed_at"),
@@ -105,7 +154,8 @@ class MemorySearchService:
             "search_scope": {
                 "direction": str(direction or "").strip() or None,
                 "entity_ids": normalized_entity_ids,
-                "kinds": sorted(allowed_kinds),
+                "kinds": sorted(allowed_kinds), "scope_keys": sorted(effective_scope_keys),
+                "scope_mode": scope_mode,
             },
             "uncertainties": [*precedence_uncertainties, *glossary_uncertainties],
             "memory_context": _memory_context(values, selected, [], glossary_definitions,
@@ -133,7 +183,8 @@ def _scope_categories(item: dict[str, Any]) -> set[str]:
 
 
 def _empty_result(*, direction: str | None, entity_ids: list[str], kinds: list[str], uncertainties: list[str]) -> dict[str, Any]:
-    return {"items": [], "projects": [], "glossary": [], "count": 0,
+    return {"success": False, "error_code": uncertainties[0].split(":", 1)[0],
+            "uncertainties": uncertainties, "items": [], "projects": [], "glossary": [], "count": 0,
             "search_scope": {"direction": str(direction or "").strip() or None, "entity_ids": list(entity_ids), "kinds": list(kinds)},
             "memory_context": {"type": "memory_recall", "resolved_terms": [], "resolved_entities": [], "relevant_projects": [], "relevant_knowledge": [], "applicable_rules": [], "applicable_procedures": [], "known_constraints": [], "durable_facts": [], "uncertainties": uncertainties, "source_references": [], "rag_required": False, "tool_required": False}}
 

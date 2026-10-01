@@ -14,10 +14,23 @@ class ChatContextReducer:
         if projection.user_message_id:
             source.append(f"message:{projection.user_message_id}")
         keys = projection.project_context.get("explicit_project_keys") or []
+        scope_keys = projection.project_context.get("explicit_scope_keys") or []
         normalized = list(dict.fromkeys(str(value).strip().casefold() for value in keys if str(value).strip()))
-        if normalized:
+        normalized_scopes = list(dict.fromkeys(str(value).strip().casefold() for value in scope_keys if str(value).strip()))
+        explicit_selection = bool(projection.project_context.get("scope_selection_explicit"))
+        if normalized or normalized_scopes or explicit_selection or "effective_scope_keys" in projection.project_context:
+            if explicit_selection or "effective_project_keys" in projection.project_context:
+                normalized = list(projection.project_context.get("effective_project_keys", normalized) or [])
+            if explicit_selection or "effective_scope_keys" in projection.project_context:
+                normalized_scopes = list(projection.project_context.get("effective_scope_keys", normalized_scopes) or [])
             operations.append(ChatContextOperation(action="update", kind="scope", item_key="current_scope",
-                payload={"project_keys": normalized, "source": "explicit", "trust_class": "application_verified"}, source_ids=source, expected_revision=expected_revision))
+                payload={"project_keys": normalized, "scope_keys": normalized_scopes,
+                         "suppress_project_default": bool(projection.project_context.get("suppress_project_default")),
+                         "scope_origins": dict(projection.project_context.get("scope_origins") or {}),
+                         "scope_revision": int(projection.project_context.get("scope_revision") or 0),
+                         "mentioned_scope_keys": list(projection.project_context.get("mentioned_scope_keys") or []),
+                         "source": "explicit" if explicit_selection or normalized or normalized_scopes else "inferred",
+                         "trust_class": "application_verified"}, source_ids=source, expected_revision=expected_revision))
         for binding in projection.term_bindings:
             entry_id = str(binding.get("id") or "").strip()
             term = str(binding.get("term") or "").strip()

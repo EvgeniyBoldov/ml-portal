@@ -54,6 +54,11 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
         canonical_op_slug="memory.search", domain="memory", title="Search Memory",
         description="Search bounded project and company memory.", result_kind="memory", scope_kind="system",
     ),
+    "memory.lookup": OperationSpec(
+        canonical_op_slug="memory.lookup", domain="memory", title="Lookup Memory Scopes",
+        description="Find active scope and confirmed glossary identities by name or alias.",
+        result_kind="catalog", scope_kind="system",
+    ),
     "collection.info": OperationSpec(
         canonical_op_slug="collection.info",
         domain="collection",

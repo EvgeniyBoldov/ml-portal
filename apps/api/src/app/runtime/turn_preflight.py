@@ -12,11 +12,15 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.events import RuntimeEvent
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import SynthesisBrief
+from app.services.memory_scope_catalog import resolve_memory_scopes
+from app.runtime.memory.effective_scope import ScopeSelection
 
 
 class TaskBrief(BaseModel):
     goal: str = Field(..., min_length=1)
     project_hints: list[str] = Field(default_factory=list)
+    scope_keys: list[str] = Field(default_factory=list)
+    scope_mode: Literal["inherit", "replace"] = "inherit"
     entity_hints: list[str] = Field(default_factory=list)
     direction: str = Field(..., min_length=1)
     constraints: list[str] = Field(default_factory=list)
@@ -33,10 +37,12 @@ class DirectAnswerBrief(BaseModel):
 
 class MemoryRequest(BaseModel):
     project_keys: list[str] = Field(default_factory=list)
+    scope_keys: list[str] = Field(default_factory=list)
+    scope_mode: Literal["inherit", "replace"] = "inherit"
     direction: str = Field(..., min_length=1)
     kinds: list[str] = Field(default_factory=list)
     entity_ids: list[str] = Field(default_factory=list)
-    scopes: list[Literal["glossary", "project", "global"]] = Field(default_factory=lambda: ["glossary", "project", "global"])
+    scopes: list[Literal["glossary", "project", "product", "team", "global"]] = Field(default_factory=lambda: ["glossary", "project", "product", "team", "global"])
     query: str = Field(..., min_length=1)
     limit: int = Field(default=8, ge=1, le=12)
     model_config = {"extra": "forbid"}
@@ -67,6 +73,7 @@ class TurnPreflightDecision(BaseModel):
     memory_request: Optional[MemoryRequest] = None
     clarification: Optional[Clarification] = None
     memory_candidates: list[MemoryCandidate] = Field(default_factory=list)
+    scope_selection: ScopeSelection = Field(default_factory=ScopeSelection)
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
@@ -84,6 +91,35 @@ class TurnPreflightDecision(BaseModel):
         return self
 
 
+def _canonical_scope_selection(decision: TurnPreflightDecision) -> ScopeSelection:
+    selection = decision.scope_selection
+    legacy = decision.memory_request or decision.task_brief
+    if legacy is None:
+        return selection
+    legacy_keys = list(legacy.scope_keys)
+    if isinstance(legacy, MemoryRequest):
+        projects = {f"project.{key.strip().casefold()}" for key in legacy.project_keys if key.strip()}
+        typed_projects = {key.strip().casefold() for key in legacy.scope_keys if key.strip().casefold().startswith("project.")}
+        if projects and typed_projects and projects != typed_projects:
+            raise ValueError("conflicting_project_scope")
+        legacy_keys.extend(f"project.{key.strip()}" for key in legacy.project_keys if key.strip())
+    legacy_selection = ScopeSelection(keys=legacy_keys, mode=legacy.scope_mode)
+    explicit = bool(selection.keys or selection.mentioned_keys or selection.mode == "replace")
+    if not explicit:
+        return legacy_selection
+    if selection.mode == "replace" and not selection.keys and legacy_selection.keys:
+        raise ValueError("conflicting_scope_selection")
+    if legacy.scope_mode == "replace" and selection.mode != "replace":
+        raise ValueError("conflicting_scope_mode")
+    for scope_type in {key.partition(".")[0] for key in legacy_selection.keys}:
+        shared = {key for key in selection.keys if key.startswith(f"{scope_type}.")}
+        old = {key for key in legacy_selection.keys if key.startswith(f"{scope_type}.")}
+        if shared and shared != old:
+            raise ValueError("conflicting_scope_selection")
+    return ScopeSelection(keys=[*selection.keys, *legacy_selection.keys], mode=selection.mode,
+                          mentioned_keys=selection.mentioned_keys, rationale=selection.rationale)
+
+
 class TurnPreflight:
     """One structured root decision; all memory access remains runtime-owned."""
 
@@ -95,6 +131,7 @@ class TurnPreflight:
     _ROUTING_HEAD_CHARS = 4_500
 
     def __init__(self, *, session: Any, llm_client: LLMClientProtocol) -> None:
+        self._session = session
         self._llm = StructuredLLMCall(session=session, llm_client=llm_client)
 
     async def decide(
@@ -151,6 +188,33 @@ class TurnPreflight:
             budget_entity_id=budget_entity_id,
         )
         decision = result.value
+        try:
+            selection = _canonical_scope_selection(decision)
+        except ValueError as exc:
+            return TurnPreflightDecision(route="clarify", clarification=Clarification(
+                question="Уточните область задачи: указаны противоречащие друг другу наборы скоупов.",
+                context={"scope_error": str(exc)},
+            ))
+        keys = selection.keys
+        mentions = selection.mentioned_keys
+        if "scope_candidates" in mechanical_lookup:
+            allowed = {item["key"] for item in mechanical_lookup["scope_candidates"] if isinstance(item, dict)}
+            allowed.update((project_context or {}).get("effective_scope_keys") or [])
+            unmatched = sorted(set([*keys, *mentions]) - allowed)
+            if unmatched:
+                return TurnPreflightDecision(route="clarify", clarification=Clarification(
+                    question="Уточните область задачи: выбранный скоуп не сопоставлен с запросом.",
+                    context={"unmatched_scope_keys": unmatched},
+                ))
+        if keys or mentions:
+            try:
+                await resolve_memory_scopes(self._session, list(dict.fromkeys([*keys, *mentions])))
+            except ValueError:
+                return TurnPreflightDecision(route="clarify", clarification=Clarification(
+                    question="Уточните область задачи: выбранный скоуп отсутствует в активном каталоге.",
+                    context={"unknown_scope_keys": list(dict.fromkeys([*keys, *mentions]))},
+                ))
+        decision = decision.model_copy(update={"scope_selection": selection})
         # Durable user facts are persisted by MemoryWriter after the final
         # answer. They are not agent tasks: no planner executor is allowed to
         # claim that it has written memory. Keep an explicit "remember as a
@@ -160,7 +224,7 @@ class TurnPreflight:
             return self._memory_write_synthesis_decision(
                 user_request=user_request,
                 memory_candidates=decision.memory_candidates,
-            )
+            ).model_copy(update={"scope_selection": selection})
         if decision.route == "synthesis" and self._needs_collection_inventory(user_request):
             return TurnPreflightDecision(
                 route="planner",
@@ -170,6 +234,7 @@ class TurnPreflight:
                     expected_result="Подтверждённый список доступных коллекций и операций либо явное ограничение, если проверить их нельзя.",
                 ),
                 memory_candidates=decision.memory_candidates,
+                scope_selection=selection,
             )
         if recall_context is not None and decision.route == "recall":
             raise ValueError("TurnPreflight may request recall only once per turn")

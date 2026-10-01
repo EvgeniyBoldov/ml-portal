@@ -125,13 +125,18 @@ class ChatContextReconciler:
                     payload = {
                         **payload,
                         "project_keys": list(previous.get("project_keys") or []),
+                        "scope_keys": list(previous.get("scope_keys") or []),
+                        "scope_origins": dict(previous.get("scope_origins") or {}),
+                        "scope_revision": int(previous.get("scope_revision") or 0),
+                        "mentioned_scope_keys": list(previous.get("mentioned_scope_keys") or []),
+                        "suppress_project_default": bool(previous.get("suppress_project_default")),
                         "project_keys_trust_class": str(previous.get("project_keys_trust_class") or "application_verified"),
                         "entity_refs": list(previous.get("entity_refs") or []),
                         "entity_refs_trust_class": str(previous.get("entity_refs_trust_class") or "application_verified"),
                         "topic_trust_class": "model_inferred",
-                        "source": str(previous.get("source") or "inferred") if previous.get("project_keys") else "inferred",
+                        "source": str(previous.get("source") or "inferred") if previous.get("project_keys") or previous.get("scope_keys") or previous.get("suppress_project_default") else "inferred",
                     }
-                    if previous.get("project_keys") or previous.get("entity_refs"):
+                    if previous.get("project_keys") or previous.get("scope_keys") or previous.get("suppress_project_default") or previous.get("entity_refs"):
                         payload["trust_class"] = str(previous.get("trust_class") or "application_verified")
                 existing.payload = payload
                 existing.confidence = operation.confidence
