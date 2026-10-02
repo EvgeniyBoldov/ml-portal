@@ -22,6 +22,7 @@ from app.models.memory_scope import (
 from app.models.project import Project
 from app.models.rag import RAGDocument
 from app.runtime.memory.content_contracts import normalize_memory_content
+from app.services.glossary_service import GlossaryService
 
 
 def _scope_signature(scopes: list[MemoryScope], *, legacy_project: bool = False) -> str:
@@ -35,6 +36,84 @@ def _scope_signature(scopes: list[MemoryScope], *, legacy_project: bool = False)
 class ShadowMemoryPublicationService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+        self.published_item_ids: set[UUID] = set()
+
+    async def update_review_tags(
+        self, *, candidate_id: UUID, actor_id: UUID | None,
+        scope_ids: list[UUID], company_wide: bool, glossary_term_ids: list[UUID], reason: str = "",
+    ) -> MemoryExtractionCandidate:
+        """Save a reviewer's applicability and term links without publishing."""
+        candidate = await self._required_candidate(candidate_id, lock=True)
+        if candidate.resolution_status not in {"extracted", "needs_review", "conflict"}:
+            raise ValueError("Можно менять связи только кандидата на проверке")
+        snapshot = await self._session.get(DocumentMemorySnapshot, candidate.snapshot_id)
+        if snapshot is None or snapshot.status not in {"awaiting_review", "approved", "rejected"}:
+            raise ValueError("Дождитесь завершения извлечения документа")
+        if snapshot.active_attempt_id and candidate.attempt_id != snapshot.active_attempt_id:
+            raise ValueError("Кандидат относится к предыдущей попытке извлечения")
+        reason = reason.strip() or "Связи изменены проверяющим"
+        if company_wide and scope_ids:
+            raise ValueError("Вся компания не совмещается с отдельными областями")
+        if candidate.candidate_type == "term" and (company_wide or scope_ids):
+            raise ValueError("Определение термина относится к общему глоссарию")
+        scopes = await self._scopes_for(candidate, scope_ids, None)
+        # Within one type an all-scope already covers every specific value.
+        if any(scope.is_all and any(other.scope_type == scope.scope_type and not other.is_all
+                                   for other in scopes) for scope in scopes):
+            raise ValueError("Область «все» не совмещается с отдельными областями того же типа")
+        term_ids = list(dict.fromkeys(glossary_term_ids))
+        terms = list((await self._session.scalars(GlossaryService.published_terms_query().where(
+            GlossaryTerm.id.in_(term_ids),
+        ))).all()) if term_ids else []
+        if len(terms) != len(term_ids):
+            raise ValueError("Выберите существующие опубликованные термины")
+        previous_bindings = list((await self._session.scalars(select(MemoryCandidateScope).where(
+            MemoryCandidateScope.candidate_id == candidate.id, MemoryCandidateScope.role == "applies_to",
+        ))).all())
+        previous = {
+            "scope": candidate.scope_candidate,
+            "scope_ids": [str(binding.scope_id) for binding in previous_bindings if binding.status != "rejected"],
+            "related_entities": list(candidate.related_entities or []),
+            "unresolved_scope_references": list(candidate.unresolved_scope_references or []),
+        }
+        await self._confirm_scope_bindings(candidate.id, scopes)
+        projects = list((await self._session.scalars(select(MemoryCandidateProjectBinding).where(
+            MemoryCandidateProjectBinding.candidate_id == candidate.id,
+            MemoryCandidateProjectBinding.role == "applies_to",
+        ))).all())
+        selected_projects = {scope.project_id for scope in scopes if scope.project_id}
+        for binding in projects:
+            binding.status = "confirmed" if binding.project_id in selected_projects else "rejected"
+        candidate.related_project_keys = [scope.key.removeprefix("project.") for scope in scopes
+                                          if scope.scope_type == "project" and not scope.is_all]
+        for binding in previous_bindings:
+            if binding.scope_id in {scope.id for scope in scopes}:
+                binding.method, binding.rationale = "manual", reason.strip()
+        proposals = list((await self._session.scalars(select(MemoryCandidateScopeProposal).where(
+            MemoryCandidateScopeProposal.candidate_id == candidate.id,
+            MemoryCandidateScopeProposal.role == "applies_to",
+            MemoryCandidateScopeProposal.status != "superseded",
+        ))).all())
+        for binding in proposals:
+            binding.status = "superseded"
+            binding.rationale = reason.strip()
+        candidate.scope_candidate = (None if candidate.candidate_type == "term" else
+                                     "scoped" if scopes else "global" if company_wide or terms else "unknown")
+        candidate.unresolved_scope_references = []
+        candidate.related_entities = [entity for entity in candidate.related_entities or []
+                                      if entity.get("type") != "glossary_term"] + [
+            {"type": "glossary_term", "id": str(term.id), "name": term.canonical_term} for term in terms
+        ]
+        candidate.resolution_method = "manual"
+        candidate.resolution_rationale = reason.strip()
+        self._session.add(MemoryCandidateDecision(
+            candidate_id=candidate.id, actor_user_id=actor_id, action="edit", reason=reason.strip(),
+            payload={"review_tags": True, "before": previous, "scope": candidate.scope_candidate,
+                     "scope_ids": [str(scope.id) for scope in scopes], "glossary_term_ids": [str(term.id) for term in terms],
+                     "superseded_proposal_bindings": [str(binding.id) for binding in proposals]},
+        ))
+        await self._session.flush()
+        return candidate
 
     async def approve(self, *, candidate_id: UUID, actor_id: UUID | None, reason: str | None,
                       content: dict | None = None, scope: str | None = None,
@@ -88,8 +167,22 @@ class ShadowMemoryPublicationService:
         candidate.content = normalized_content
         candidate.content_text = json.dumps(normalized_content, ensure_ascii=False, sort_keys=True)
         chosen_scope = None if is_term else (scope or candidate.scope_candidate)
+        if not is_term and chosen_scope not in {"global", "project", "scoped"} and scope is None:
+            known_scope = await self._session.scalar(select(MemoryScope.id).join(
+                MemoryCandidateScope, MemoryCandidateScope.scope_id == MemoryScope.id,
+            ).where(
+                MemoryCandidateScope.candidate_id == candidate.id,
+                MemoryCandidateScope.role == "applies_to",
+                MemoryCandidateScope.status != "rejected",
+                MemoryScope.lifecycle_status == "active",
+            ).limit(1))
+            if known_scope is not None:
+                chosen_scope = "scoped"
+            elif any(entity.get("type") == "glossary_term" and entity.get("id")
+                     for entity in candidate.related_entities or []):
+                chosen_scope = "global"
         if not is_term and chosen_scope not in {"global", "project", "scoped"}:
-            raise ValueError("Choose global or scoped applicability before approval")
+            raise ValueError("Для утверждения выберите хотя бы один проект, команду, продукт или термин")
         if chosen_scope == "global" and scope_ids:
             raise ValueError("Global applicability cannot include typed memory scopes")
         inferred_project_id = project_id
@@ -123,6 +216,14 @@ class ShadowMemoryPublicationService:
                 raise ValueError("Project has no active memory scope; add it in the scope catalog")
         if chosen_scope == "project" and (len(selected_scopes) != 1 or selected_scopes[0].project_id != project.id):
             raise ValueError("Project applicability must use exactly the selected project scope")
+        if not is_term and not selected_scopes:
+            term_ids = [UUID(entity["id"]) for entity in candidate.related_entities or []
+                        if entity.get("type") == "glossary_term" and entity.get("id")]
+            linked_term = await self._session.scalar(GlossaryService.published_terms_query().where(
+                GlossaryTerm.id.in_(term_ids),
+            ).limit(1)) if term_ids else None
+            if linked_term is None:
+                raise ValueError("Для утверждения выберите хотя бы один проект, команду, продукт или термин")
         visibility = None if is_term or promote_to_company else candidate.visibility_tenant_id
         if not is_term:
             await self._require_scope_proposals_approved(candidate.id)
@@ -135,7 +236,7 @@ class ShadowMemoryPublicationService:
         candidate.visibility_tenant_id = visibility
         candidate.resolution_status = "resolved"
         candidate.resolution_method = "manual" if not automatic else "content_evidence"
-        candidate.resolution_rationale = reason
+        candidate.resolution_rationale = reason if reason is not None else candidate.resolution_rationale
         if is_term:
             await self._activate_linked_scope_proposals(candidate.id)
         self._session.add(MemoryCandidateDecision(
@@ -143,6 +244,8 @@ class ShadowMemoryPublicationService:
             action="autoapprove" if automatic else "approve", reason=reason,
             payload={"scope": chosen_scope, "project_id": str(project.id) if project else None,
                      "scope_ids": [str(row.id) for row in selected_scopes],
+                     "glossary_term_ids": [entity["id"] for entity in candidate.related_entities or []
+                                           if entity.get("type") == "glossary_term"],
                      "promote_to_company": promote_to_company,
                      "replace_existing_definition": replace_existing_definition},
         ))
@@ -361,6 +464,7 @@ class ShadowMemoryPublicationService:
         ).where(
             MemoryCandidateScopeProposal.candidate_id == candidate_id,
             MemoryCandidateScopeProposal.role == "applies_to",
+            MemoryCandidateScopeProposal.status != "superseded",
             or_(MemoryCandidateScopeProposal.status == "rejected", MemoryScopeProposal.status != "approved",
                 MemoryScopeProposal.memory_scope_id.is_(None)),
         ))).all()
@@ -376,6 +480,7 @@ class ShadowMemoryPublicationService:
         ).where(
             MemoryCandidateScopeProposal.candidate_id == candidate_id,
             MemoryCandidateScopeProposal.role == "applies_to",
+            MemoryCandidateScopeProposal.status != "superseded",
         ))).all()
         for (proposal,) in approved:
             active_scope = await self._session.scalar(select(MemoryScope.id).where(
@@ -478,6 +583,7 @@ class ShadowMemoryPublicationService:
             raise ValueError("A different claim already exists for this document and subject")
         else:
             claim.approved_candidate_id = candidate.id
+        self.published_item_ids.add(item.id)
         existing_scope_ids = set((await self._session.execute(select(MemoryClaimScope.scope_id).where(
             MemoryClaimScope.claim_id == claim.id,
         ))).scalars().all())

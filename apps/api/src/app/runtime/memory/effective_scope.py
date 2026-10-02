@@ -144,7 +144,7 @@ def project_memory_context(value: dict[str, Any], scope_keys: list[str] | set[st
                                        for item in result["scope_ambiguities"]
                                        if len(selected.intersection(item.get("keys", []))) > 1]
     if "count" in result and isinstance(result.get("items"), list):
-        result["count"] = len(result["items"])
+        result["count"] = len(result["items"]) + len(result.get("facts") or [])
     if "source_references" in result and any(key in result for key in item_lists):
         evidence = [item for key in (*item_lists, "resolved_terms", "glossary")
                     for item in result.get(key, []) if isinstance(item, dict)]
@@ -170,6 +170,6 @@ def project_memory_context(value: dict[str, Any], scope_keys: list[str] | set[st
             if "rag_required" in result and "rag_reasons" not in result:
                 result["rag_required"] = bool(
                     any(item.get("state", "active") != "active" for item in evidence)
-                    or any(not reason.startswith("ambiguous_glossary_alias:") for reason in result["uncertainties"])
+                    or any(not reason.startswith(("ambiguous_glossary_alias:", "fact_conflict:")) for reason in result["uncertainties"])
                 )
     return result

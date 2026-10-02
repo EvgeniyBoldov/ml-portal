@@ -25,9 +25,10 @@ class PlannerMemoryToolCall(BaseModel):
     scope_mode: Literal["inherit", "replace"] = "inherit"
     kinds: list[str] = Field(default_factory=list)
     entity_ids: list[str] = Field(default_factory=list)
-    scopes: list[Literal["glossary", "project", "product", "team", "global"]] = Field(default_factory=lambda: ["glossary", "project", "product", "team", "global"])
+    scopes: list[Literal["glossary", "project", "product", "team", "global", "user", "tenant"]] = Field(default_factory=lambda: ["glossary", "project", "product", "team", "global", "user", "tenant"])
     direction: str | None = None
     limit: int = Field(default=8, ge=1, le=12)
+    fact_subject: str | None = Field(default=None, max_length=200)
     model_config = {"extra": "forbid"}
 
 
@@ -90,7 +91,7 @@ class GraphPlanner:
             "description": (
                 "Read bounded ACL-scoped project/company memory and confirmed glossary terms "
                 "before proposing tasks. Use it for long memory or abbreviations; "
-                "do not use it to replace the durable facts already in memory_context."
+                "Use scopes=user/tenant for confirmed owned facts omitted from the initial profile; fact_subject selects an exact subject."
             ),
         }, {"operation": "memory.lookup", "description": "Find published scope and glossary candidates by name or alias; returns identities only."}]
         role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
@@ -105,7 +106,7 @@ class GraphPlanner:
         ) + (
             "\n\n# PLANNER TOOL LOOP\n"
             "Before proposing an iteration you may return kind=tool_call only for memory.search or memory.lookup. "
-            "Use it to resolve a glossary abbreviation or retrieve long project/company memory; "
+            "Use it for glossary, project/company knowledge, or confirmed user/tenant facts absent from the profile; "
             "After zero to three tool results return kind=proposal with the complete IterationProposal. "
             "Never create a task merely to read memory."
         )
@@ -159,7 +160,7 @@ class GraphPlanner:
                         scope_ceiling_keys=list(request.context.scope_context.get("ceiling_keys") or []),
                         scopes=call.scopes,
                         kinds=call.kinds, entity_ids=call.entity_ids,
-                        direction=call.direction, limit=call.limit,
+                        direction=call.direction, limit=call.limit, fact_subject=call.fact_subject,
                     )
             except Exception as exc:
                 if event_sink:

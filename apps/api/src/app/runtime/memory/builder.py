@@ -165,7 +165,7 @@ class MemoryBuilder:
             summary=summary,
             retrieved_facts=facts,
             memory_bundle=memory_bundle,
-            planner_memory_context=durable_snapshot.planner_context(limit=self._fact_limit),
+            planner_memory_context=durable_snapshot.planner_context(limit=self._fact_limit, query=goal),
             durable_snapshot=durable_snapshot,
             artifacts=[
                 item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)

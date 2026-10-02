@@ -31,3 +31,20 @@
   color: var(--text-secondary);
   font-size: var(--text-sm);
 }
+
+.reviewHint {
+  margin: 0 0 var(--sp-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.reviewTable table {
+  table-layout: fixed;
+  min-width: 1320px;
+}
+
+.reviewTable td {
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

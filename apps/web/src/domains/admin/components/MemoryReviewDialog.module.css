@@ -50,3 +50,21 @@
 .details div { margin-top: 10px; }
 .details p { margin: 3px 0 0; color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 640px) { .section { padding: 13px; } .scopeChoices { grid-template-columns: 1fr; } }
+
+.contentFields { display: grid; gap: var(--sp-3); margin: 0; overflow-wrap: anywhere; }
+.contentFields dt { color: var(--text-secondary); font-weight: 600; }
+.contentFields dd { margin: var(--sp-1) 0 0; color: var(--text-primary); white-space: pre-wrap; }
+
+.reviewBody { display: flex; flex-direction: column; height: min(72vh, 760px); overflow: hidden; }
+.reviewIntro { flex-shrink: 0; margin-bottom: var(--sp-3); }
+.reviewIntro h2 { margin: var(--sp-2) 0 0; color: var(--text-primary); font-size: var(--font-size-lg); overflow-wrap: anywhere; }
+.reviewTabs { flex: 1; min-height: 0; }
+.tabScroll { height: 100%; overflow-y: auto; padding-right: var(--sp-1); }
+.panel { display: grid; gap: var(--sp-3); }
+.panel h3, .panel h4 { margin: 0; }
+.panel p, .panel ul { margin: 0; line-height: 1.5; }
+.statusCard { display: grid; gap: var(--sp-3); padding: var(--sp-4); background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-md); color: var(--text-primary); }
+.statusCard button { justify-self: start; }
+.statusHeading { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); flex-wrap: wrap; }
+.relationCard { display: grid; gap: var(--sp-2); padding: var(--sp-3); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow-wrap: anywhere; }
+.fullExcerpt p { max-height: none; overflow: visible; }

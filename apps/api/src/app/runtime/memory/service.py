@@ -32,8 +32,18 @@ class MemorySnapshot:
     def entries(self) -> tuple[FactDTO, ...]:
         return self.user_facts + self.tenant_facts
 
-    def planner_context(self, *, limit: int = MAX_PROFILE_ITEMS) -> list[dict[str, object]]:
-        return _context(self.entries[:limit])
+    def planner_context(self, *, limit: int = MAX_PROFILE_ITEMS, query: str = "") -> list[dict[str, object]]:
+        from app.runtime.memory.fact_selection import FactSelectionPolicy, LexicalFactRanker
+        ranked = [entry.fact for entry in FactSelectionPolicy(ranker=LexicalFactRanker()).select(
+            query=query, facts=self.entries, limit=max(1, len(self.entries)),
+        ).selected]
+        # Keep both ownership levels represented; a large user profile must
+        # not displace the tenant's operating context.
+        anchors = [next((fact for fact in ranked if fact.scope == scope), None)
+                   for scope in (FactScope.USER, FactScope.TENANT)]
+        ordered = [fact for fact in anchors if fact is not None]
+        ordered.extend(fact for fact in ranked if fact not in ordered)
+        return _context(ordered[:limit])
 
     def agent_context(self, *, query: str, limit: int = MAX_PROFILE_ITEMS) -> list[dict[str, object]]:
         terms = {word.lower() for word in query.split() if len(word) > 2}
@@ -84,6 +94,6 @@ def _context(facts: Sequence[FactDTO]) -> list[dict[str, object]]:
         size = len(subject) + len(value)
         if used + size > MAX_PROFILE_CHARS:
             break
-        entries.append({"scope": fact.scope.value, "kind": fact.kind, "subject": subject, "value": value, "confidence": fact.confidence})
+        entries.append({"id": str(fact.id), "owner_type": fact.owner_type, "owner_id": str(fact.owner_id), "scope": fact.scope.value, "kind": fact.kind, "subject": subject, "value": value, "confidence": fact.confidence})
         used += size
     return entries

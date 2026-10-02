@@ -478,7 +478,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadMetaFields, setUploadMetaFields] = useState<Record<string, string>>({});
   const [uploadMemoryPolicy, setUploadMemoryPolicy] = useState<'collection' | 'enabled' | 'disabled'>('collection');
-  const [uploadMemoryScopeKeys, setUploadMemoryScopeKeys] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -497,10 +496,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     queryKey: ['collections', 'document-upload-policy'],
     queryFn: () => collectionsApi.getDocumentUploadPolicy(),
   });
-  const { data: memoryScopeCatalog = [] } = useQuery({
-    queryKey: ['collections', 'memory-scope-catalog'],
-    queryFn: () => collectionsApi.getMemoryScopeCatalog(),
-  });
+
 
   const uploadAccept = useMemo(() => {
     const list = uploadPolicy?.allowed_extensions ?? ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv'];
@@ -752,7 +748,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
             meta_fields: Object.keys(uploadMetaFields).length > 0 ? uploadMetaFields : undefined,
             auto_ingest: true,
             memory_enabled: uploadMemoryPolicy === 'collection' ? undefined : uploadMemoryPolicy === 'enabled',
-            memory_scope_keys: uploadMemoryScopeKeys,
           })
         )
       );
@@ -764,7 +759,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       setUploadFiles([]);
       setUploadMetaFields({});
       setUploadMemoryPolicy('collection');
-      setUploadMemoryScopeKeys([]);
       setUploadError(null);
       invalidateDocs();
     } catch {
@@ -1107,7 +1101,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       {/* Upload modal */}
       <Modal
         open={uploadModalOpen}
-        onClose={() => { setUploadModalOpen(false); setUploadFiles([]); setUploadMetaFields({}); setUploadMemoryPolicy('collection'); setUploadMemoryScopeKeys([]); setUploadError(null); }}
+        onClose={() => { setUploadModalOpen(false); setUploadFiles([]); setUploadMetaFields({}); setUploadMemoryPolicy('collection'); setUploadError(null); }}
         title="Загрузка документов"
         footer={
           <>
@@ -1154,19 +1148,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
               <option value="enabled">Включить для этих документов</option>
               <option value="disabled">Исключить из Semantic Memory</option>
             </select>
-          </label>
-          <label className={styles.uploadField}>
-            <span>Контексты документа</span>
-            <select
-              multiple
-              value={uploadMemoryScopeKeys}
-              onChange={(event) => setUploadMemoryScopeKeys(Array.from(event.target.selectedOptions, option => option.value))}
-              aria-label="Контексты документа"
-              size={Math.min(6, Math.max(2, memoryScopeCatalog.length))}
-            >
-              {memoryScopeCatalog.map((scope) => <option key={scope.key} value={scope.key}>{scope.name} ({scope.key})</option>)}
-            </select>
-            <small>Контексты помогают изучить документ; применимость каждого знания подтверждается отдельно.</small>
           </label>
           {uploadFiles.length > 0 && (
             <div className={styles.fileList}>

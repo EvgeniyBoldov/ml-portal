@@ -514,6 +514,8 @@ export interface AdminGlossaryTerm {
 export interface ShadowMemoryCandidate {
   id: string;
   snapshot_id: string;
+  document_title?: string | null;
+  document_access_scope?: string | null;
   visibility_tenant_id: string | null;
   candidate_type: string;
   subject: string;
@@ -524,6 +526,7 @@ export interface ShadowMemoryCandidate {
   content_error: string | null;
   aliases: string[];
   related_entities: Array<Record<string, unknown>>;
+  glossary_term_ids?: string[];
   related_project_keys: string[];
   evidence_section_ids: string[];
   scope_candidate: string | null;
@@ -540,6 +543,15 @@ export interface ShadowMemoryCandidate {
   related_terms: Array<{ term: string; scope: string; status: string }>;
   approval_blockers: string[];
 }
+
+export interface MemoryCandidateTags {
+  scope_ids: string[];
+  company_wide: boolean;
+  glossary_term_ids: string[];
+  reason: string;
+}
+
+export type PublishedMemoryTerm = Pick<AdminGlossaryTerm, 'id' | 'canonical_term' | 'definition' | 'aliases'>;
 
 export interface MemoryScopeProposalAdminItem {
   id: string;
@@ -580,6 +592,12 @@ export interface MemoryScopeAdminItem {
 
 // API functions
 export const adminApi = {
+  async getMemoryTermCatalog(): Promise<PublishedMemoryTerm[]> {
+    return apiRequest('/admin/memory/staging/term-catalog');
+  },
+  async updateShadowCandidateTags(id: string, body: MemoryCandidateTags): Promise<ShadowMemoryCandidate> {
+    return apiRequest(`/admin/memory/staging/candidates/${id}/tags`, { method: 'PATCH', body: JSON.stringify(body) });
+  },
   async getMemoryScopes(): Promise<MemoryScopeAdminItem[]> { return apiRequest('/admin/memory/scopes'); },
   async createMemoryScope(body: Pick<MemoryScopeAdminItem, 'scope_type' | 'key' | 'name' | 'aliases' | 'is_all'>): Promise<MemoryScopeAdminItem> {
     return apiRequest('/admin/memory/scopes', { method: 'POST', body: JSON.stringify(body) });
@@ -632,8 +650,11 @@ export const adminApi = {
   async reextractShadowMemorySnapshot(id: string): Promise<{ snapshot_id: string; attempt_id: string; attempt_number: number; status: string }> {
     return apiRequest(`/admin/memory/staging/snapshots/${id}/reextract`, { method: 'POST' });
   },
-  async getMemoryScopeProposals(status: 'pending' | 'needs_review' | 'awaiting_term' | 'approved' | 'rejected' = 'pending'): Promise<MemoryScopeProposalAdminItem[]> {
-    return apiRequest(`/admin/memory/staging/scope-proposals?status=${status}`);
+  async getMemoryScopeProposals(status: 'pending' | 'needs_review' | 'awaiting_term' | 'approved' | 'rejected' = 'pending', params: { limit?: number; offset?: number } = {}): Promise<MemoryScopeProposalAdminItem[]> {
+    const search = new URLSearchParams({ status });
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.offset !== undefined) search.set('offset', String(params.offset));
+    return apiRequest(`/admin/memory/staging/scope-proposals?${search.toString()}`);
   },
   async approveMemoryScopeProposal(id: string, reason?: string): Promise<MemoryScopeProposalAdminItem> {
     return apiRequest(`/admin/memory/staging/scope-proposals/${id}/approve`, { method: 'POST', body: JSON.stringify({ reason }) });

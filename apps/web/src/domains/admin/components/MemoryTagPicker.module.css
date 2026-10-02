@@ -1,0 +1,13 @@
+.picker { display: grid; gap: var(--sp-2); }
+.picker label { font-weight: 600; color: var(--text-primary); }
+.control { position: relative; }
+.tags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: 42px; padding: var(--sp-2); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--input-bg, #fff); }
+.tags:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15); }
+.tag { display: inline-flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-primary); }
+.tag button { border: none; background: transparent; color: var(--text-primary); font: inherit; cursor: pointer; padding: var(--sp-1); }
+.tag button:disabled { cursor: default; opacity: 0.5; }
+.searchInput { flex: 1; min-width: 140px; width: auto; padding: var(--sp-1); border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.searchInput:hover:not(:disabled):not(:read-only), .searchInput:focus:not(:disabled):not(:read-only) { background: transparent; box-shadow: none; }
+.options { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow-y: auto; padding: var(--sp-1); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-primary); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2); }
+.option, .optionActive { display: block; width: 100%; padding: var(--sp-2) var(--sp-3); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); text-align: left; font: inherit; cursor: pointer; }
+.option:hover, .optionActive { background: var(--bg-secondary); }

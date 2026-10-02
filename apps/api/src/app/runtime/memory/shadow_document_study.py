@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Literal, Sequence
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +32,7 @@ from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.memory.shadow_study_prompts import (
     document_memory_prompt,
 )
-from app.runtime.memory.content_contracts import normalize_memory_content
+from app.runtime.memory.content_contracts import memory_content_schemas, normalize_memory_content
 from app.services.glossary_service import GlossaryService
 
 
@@ -41,7 +41,6 @@ from app.services.glossary_service import GlossaryService
 # otherwise valid documents over the request budget.
 SHADOW_STUDY_BATCH_SIZE = 1
 MAX_LEDGER_ITEMS = 60
-MAX_GLOSSARY_ITEMS = 80
 
 
 class ShadowScreeningOutput(BaseModel):
@@ -75,11 +74,25 @@ class ShadowStudyItem(BaseModel):
     scope_rationale: str = Field(default="", max_length=600)
     evidence_section_ids: list[str] = Field(default_factory=list, max_length=8)
     aliases: list[str] = Field(default_factory=list, max_length=20)
+    glossary_term_ids: list[UUID] = Field(default_factory=list, max_length=64)
     extraction_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
 
 
 class ShadowStudyOutput(BaseModel):
     items: list[ShadowStudyItem] = Field(default_factory=list, max_length=24)
+
+    @model_validator(mode="after")
+    def validate_content_contracts(self) -> "ShadowStudyOutput":
+        # Validate while the structured call can still ask the model to repair
+        # its answer, rather than first discovering missing fields in review.
+        for index, item in enumerate(self.items):
+            if item.candidate_type != "term" and item.scope_candidate == "global" and (item.scope_keys or item.project_keys):
+                raise ValueError(f"items[{index}]: global applicability must not include scope_keys or project_keys; choose scoped for scope tags")
+            try:
+                normalize_memory_content(item.candidate_type, item.content)
+            except ValueError as exc:
+                raise ValueError(f"items[{index}] ({item.candidate_type}, {item.subject}): {exc}") from exc
+        return self
 
 
 class ShadowDocumentStudyAgent:
@@ -140,6 +153,7 @@ class ShadowDocumentStudyAgent:
                 "project_catalog": list(projects),
                 "scope_catalog": list(scopes),
                 "correction_feedback": list(correction_feedback),
+                "content_schemas": memory_content_schemas(),
             },
             schema=ShadowStudyOutput,
             tenant_id=tenant_id,
@@ -255,6 +269,8 @@ class ShadowDocumentStudyService:
         return [{
             "id": str(row.id), "type": row.candidate_type, "subject": row.subject,
             "content": dict(row.content or {}), "scope_candidate": row.scope_candidate,
+            "glossary_term_ids": [entity["id"] for entity in row.related_entities or []
+                                  if entity.get("type") == "glossary_term"],
             "scope_keys": scopes_by_candidate.get(row.id, {}).get("applies_to", []),
             "mentioned_scope_keys": scopes_by_candidate.get(row.id, {}).get("mentions", []),
             "unmatched_scope_names": list(row.unmatched_scope_names or []),
@@ -286,9 +302,8 @@ class ShadowDocumentStudyService:
 
     async def glossary_context(self) -> list[dict[str, Any]]:
         rows = (await self._session.execute(GlossaryService.published_terms_query()
-            .order_by(GlossaryTerm.canonical_term)
-            .limit(MAX_GLOSSARY_ITEMS))).scalars().all()
-        return [{"term": term.canonical_term, "definition": term.definition,
+            .order_by(GlossaryTerm.canonical_term))).scalars().all()
+        return [{"id": str(term.id), "term": term.canonical_term, "definition": term.definition,
                  "aliases": list(term.aliases or [])} for term in rows]
 
     async def project_catalog(self) -> tuple[dict[str, Project], list[dict[str, Any]]]:
@@ -426,6 +441,7 @@ class ShadowDocumentStudyService:
                     snapshot=snapshot, item=item, candidate=row,
                     term_candidate_ids=term_candidate_ids, section_ids=evidence,
                 )
+                await self._persist_term_links(row, item)
                 counts["extended"] += 1
                 continue
             subject = _normalized(item.subject)
@@ -456,8 +472,25 @@ class ShadowDocumentStudyService:
                 snapshot=snapshot, item=item, candidate=row,
                 term_candidate_ids=term_candidate_ids, section_ids=evidence,
             )
+            await self._persist_term_links(row, item)
             counts["created"] += 1
         return counts
+
+    async def _persist_term_links(self, candidate: MemoryExtractionCandidate, item: ShadowStudyItem) -> None:
+        if not item.glossary_term_ids:
+            return
+        selected = set(item.glossary_term_ids)
+        terms = list((await self._session.scalars(GlossaryService.published_terms_query().where(
+            GlossaryTerm.id.in_(selected),
+        ))).all())
+        if {term.id for term in terms} != selected:
+            raise ValueError("Extractor selected an unknown or unpublished glossary term")
+        entities = list(candidate.related_entities or [])
+        linked = {entity.get("id") for entity in entities if entity.get("type") == "glossary_term"}
+        candidate.related_entities = entities + [
+            {"type": "glossary_term", "id": str(term.id), "name": term.canonical_term}
+            for term in terms if str(term.id) not in linked
+        ]
 
     async def _persist_scope_proposals(
         self, *, snapshot: DocumentMemorySnapshot, item: ShadowStudyItem,
@@ -707,6 +740,10 @@ def _scope_proposal(
         if (missing_applies or len(applies) != 1 or len(project_scope_keys) != 1 or
                 project_scope_keys[0].removeprefix("project.") not in projects_by_key):
             proposed_scope = "unknown"
+    elif proposed_scope in {"unknown", "multi_project"} and applies and not missing_applies and not item.unmatched_scope_names:
+        # Existing catalog tags are an explicit applicability proposal. Missing
+        # required references are still recorded by _persist_scope_proposals.
+        proposed_scope = "scoped"
     return applies, mentions, unmatched, proposed_scope
 
 

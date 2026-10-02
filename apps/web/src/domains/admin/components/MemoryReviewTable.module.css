@@ -1,0 +1,12 @@
+.preview { color: var(--text-secondary); font-size: var(--font-size-sm); white-space: normal; overflow-wrap: anywhere; }
+.blocker { margin-top: var(--sp-1); color: var(--text-primary); font-size: var(--font-size-sm); white-space: normal; overflow-wrap: anywhere; }
+
+.candidate, .value { white-space: normal; overflow-wrap: anywhere; }
+.value { color: var(--text-primary); }
+.value .preview {
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

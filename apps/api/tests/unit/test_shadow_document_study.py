@@ -44,6 +44,28 @@ def test_shadow_study_output_rejects_invalid_candidate_shape() -> None:
     assert ShadowScreeningOutput(decision="study").document_kind == "unknown"
 
 
+@pytest.mark.parametrize("kind,content,missing", [
+    ("rule", {}, "effect"),
+    ("procedure", {"definition": "Настроить QoS"}, "steps"),
+    ("term", {}, "definition"),
+])
+def test_study_response_rejects_incomplete_content_before_persistence(kind, content, missing) -> None:
+    with pytest.raises(ValidationError, match=missing):
+        ShadowStudyOutput.model_validate({"items": [{
+            "candidate_type": kind, "subject": "QoS", "content": content,
+            "evidence_section_ids": ["section-1"],
+        }]})
+
+
+def test_study_response_accepts_complete_rule_content() -> None:
+    output = ShadowStudyOutput.model_validate({"items": [{
+        "candidate_type": "rule", "subject": "Согласование", "content": {
+            "statement": "Изменение требует согласования", "effect": "require",
+        }, "evidence_section_ids": ["section-1"],
+    }]})
+    assert output.items[0].content["effect"] == "require"
+
+
 def test_scope_proposal_separates_applicability_mentions_and_unknown_names() -> None:
     scopes = {
         "team.arch": SimpleNamespace(scope_type="team"),

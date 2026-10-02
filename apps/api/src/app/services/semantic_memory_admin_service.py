@@ -20,6 +20,7 @@ from app.models.document_memory_staging import (
     MemoryExtractionCandidate,
 )
 from app.models.memory_scope import MemoryClaimScope, MemoryScope
+from app.runtime.memory.read_policy import published_claim
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,7 @@ class SemanticMemoryAdminService:
                 .join(MemoryClaimScope, MemoryClaimScope.claim_id == MemoryClaim.id)
                 .join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id)
                 .where(MemoryClaim.memory_item_id.in_([row[0].id for row in rows]),
-                       MemoryClaim.approved_candidate_id.is_not(None),
+                       published_claim(),
                        MemoryClaim.lifecycle_status == "active"))).all()
             for item_id, key in scope_rows:
                 scope_keys_by_item.setdefault(item_id, set()).add(key)
@@ -172,12 +173,8 @@ class SemanticMemoryAdminService:
 
 
 def _approved_item():
-    return exists(select(MemoryClaim.id).join(
-        MemoryExtractionCandidate, MemoryExtractionCandidate.id == MemoryClaim.approved_candidate_id,
-    ).where(
-        MemoryClaim.memory_item_id == MemoryItem.id,
-        MemoryClaim.lifecycle_status == "active",
-        MemoryExtractionCandidate.resolution_status == "resolved",
+    return exists(select(MemoryClaim.id).where(
+        MemoryClaim.memory_item_id == MemoryItem.id, published_claim(),
     ))
 
 
@@ -186,14 +183,14 @@ def _scope_filters(scope_type, scope_id):
         yield ~exists(select(MemoryClaimScope.scope_id).join(
             MemoryClaim, MemoryClaim.id == MemoryClaimScope.claim_id,
         ).where(MemoryClaim.memory_item_id == MemoryItem.id,
-                MemoryClaim.approved_candidate_id.is_not(None),
+                published_claim(),
                 MemoryClaim.lifecycle_status == "active"))
     elif scope_type or scope_id:
         stmt = select(MemoryClaimScope.scope_id).join(
             MemoryClaim, MemoryClaim.id == MemoryClaimScope.claim_id,
         ).join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id).where(
             MemoryClaim.memory_item_id == MemoryItem.id,
-            MemoryClaim.approved_candidate_id.is_not(None),
+            published_claim(),
             MemoryClaim.lifecycle_status == "active",
             MemoryScope.lifecycle_status == "active",
         )

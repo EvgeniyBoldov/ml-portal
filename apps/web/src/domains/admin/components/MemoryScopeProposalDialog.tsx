@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Badge, Button, Modal } from '@/shared/ui';
 import type { MemoryScopeProposalAdminItem } from '@/shared/api/admin';
+import { scopeStatusLabels, scopeTypeLabels } from './MemoryScopeTable';
 import styles from './MemoryReviewDialog.module.css';
 
 type Props = {
@@ -28,7 +29,7 @@ export default function MemoryScopeProposalDialog({ proposal, pending, onClose, 
         : <><Button variant="danger" disabled={pending} onClick={() => setRejecting(true)}>Отклонить</Button>
           <Button disabled={pending || blocked} onClick={async () => { try { await onApprove(); } catch (value) { setError(value instanceof Error ? value.message : 'Не удалось утвердить скоуп'); } }}>Утвердить скоуп</Button></>}</>}>
     <div className={styles.layout}>
-      <header className={styles.intro}><div className={styles.eyebrow}><Badge tone="info">{proposal.scope_type}</Badge><Badge tone={proposal.status === 'needs_review' ? 'warn' : 'neutral'}>{proposal.status}</Badge></div>
+      <header className={styles.intro}><div className={styles.eyebrow}><Badge tone="info">{scopeTypeLabels[proposal.scope_type]}</Badge><Badge tone={proposal.status === 'needs_review' ? 'warn' : 'neutral'}>{scopeStatusLabels[proposal.status]}</Badge></div>
         <h2>{proposal.name}</h2><p><code>{proposal.proposed_key}</code></p></header>
       <section className={styles.section}><h3>Связанный термин</h3><p>{proposal.term_name || 'Не найден'}</p>
         {proposal.approval_blockers.map((blocker) => <p key={blocker} role="alert">{blocker}</p>)}

@@ -650,7 +650,7 @@ class RuntimePipeline:
                         context_scope_keys=scope.keys, scope_ceiling_keys=scope.ceiling_keys,
                         kinds=memory_request.kinds, scopes=memory_request.scopes,
                         entity_ids=memory_request.entity_ids, direction=memory_request.direction,
-                        limit=memory_request.limit,
+                        limit=memory_request.limit, fact_subject=memory_request.fact_subject,
                     )
 
                 async def complete_scoped_recall(recalled, scope):

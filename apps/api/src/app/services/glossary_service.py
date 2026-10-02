@@ -5,7 +5,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -51,6 +51,8 @@ class GlossaryService:
             func.btrim(GlossaryTerm.definition) != "",
             MemoryExtractionCandidate.resolution_status == "resolved",
             MemoryExtractionCandidate.candidate_type == "term",
+            or_(MemoryExtractionCandidate.attempt_id == DocumentMemorySnapshot.active_attempt_id,
+                and_(MemoryExtractionCandidate.attempt_id.is_(None), DocumentMemorySnapshot.active_attempt_id.is_(None))),
             func.jsonb_array_length(MemoryExtractionCandidate.evidence_section_ids) > 0,
             DocumentMemorySnapshot.status.notin_(("superseded", "failed", "rejected")),
             ~exists(select(newer.id).where(

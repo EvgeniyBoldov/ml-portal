@@ -14,6 +14,7 @@ from app.adapters.embeddings import EmbeddingServiceFactory
 from app.adapters.impl.qdrant import QdrantVectorStore
 from app.core.logging import get_logger
 from app.models.memory import MemoryClaim, MemoryItem
+from app.runtime.memory.read_policy import published_claim
 from app.models.model_registry import Model, ModelStatus, ModelType
 from app.services.embedding_model_config_service import EmbeddingModelConfigService
 
@@ -27,7 +28,9 @@ class MemorySemanticIndex:
         self.session = session
         self.vector_store = vector_store or QdrantVectorStore()
 
-    async def search_ids(self, query: str, *, limit: int = 40) -> list[UUID]:
+    async def search_ids(self, query: str, *, limit: int = 40, eligible_ids: list[UUID] | None = None) -> list[UUID]:
+        if eligible_ids == []:
+            return []
         model = await self._global_embedding_model()
         if model is None or not str(query or "").strip():
             return []
@@ -38,7 +41,8 @@ class MemorySemanticIndex:
             collection = await self._read_collection(model.alias)
             points = await self.vector_store.search(
                 collection, vector, top_k=limit,
-                filter={"must": {"state": ["active", "uncertain"]}},
+                filter={"must": {"state": ["active", "uncertain"],
+                    **({"memory_item_id": [str(id_) for id_ in eligible_ids]} if eligible_ids is not None else {})}},
             )
             result: list[UUID] = []
             for point in points:
@@ -60,11 +64,11 @@ class MemorySemanticIndex:
         service = EmbeddingServiceFactory.get_service(model.alias)
         active = [item for item in items if item.state in {"active", "uncertain"} and item.lifecycle_status == "active"]
         if not active:
+            await self.remove_items([item.id for item in items])
             return 0
         claim_rows = (await self.session.execute(select(MemoryClaim).where(
             MemoryClaim.memory_item_id.in_([item.id for item in active]),
-            MemoryClaim.state == "active",
-            MemoryClaim.lifecycle_status == "active",
+            published_claim(),
         ))).scalars().all()
         texts_by_item: dict[UUID, list[str]] = {}
         for claim in claim_rows:
@@ -73,6 +77,9 @@ class MemorySemanticIndex:
         # claim so a tenant-local wording can retrieve the shared identity;
         # Recall resolves the actual text again from ACL-visible claims.
         indexable = [item for item in active if texts_by_item.get(item.id)]
+        invalid_ids = [item.id for item in items if item not in indexable]
+        if invalid_ids:
+            await self.remove_items(invalid_ids)
         if not indexable:
             return 0
         vectors = await asyncio.to_thread(

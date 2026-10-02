@@ -42,9 +42,10 @@ class MemoryRequest(BaseModel):
     direction: str = Field(..., min_length=1)
     kinds: list[str] = Field(default_factory=list)
     entity_ids: list[str] = Field(default_factory=list)
-    scopes: list[Literal["glossary", "project", "product", "team", "global"]] = Field(default_factory=lambda: ["glossary", "project", "product", "team", "global"])
+    scopes: list[Literal["glossary", "project", "product", "team", "global", "user", "tenant"]] = Field(default_factory=lambda: ["glossary", "project", "product", "team", "global", "user", "tenant"])
     query: str = Field(..., min_length=1)
     limit: int = Field(default=8, ge=1, le=12)
+    fact_subject: str | None = Field(default=None, max_length=200)
     model_config = {"extra": "forbid"}
 
 

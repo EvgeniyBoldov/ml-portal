@@ -42,6 +42,7 @@ class _ContentModel(BaseModel):
 
 
 class ProcedureStep(_ContentModel):
+    order: int | None = Field(default=None, ge=1, le=MAX_PROCEDURE_STEPS)
     instruction: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
     expected_result: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
     confirmation_required: bool
@@ -90,7 +91,7 @@ class ProcedureContent(_ContentModel):
     def canonical(self) -> dict[str, Any]:
         result = self.model_dump(mode="json")
         result["steps"] = [
-            {"order": index, **step}
+            {**step, "order": index}
             for index, step in enumerate(result["steps"], start=1)
         ]
         return result
@@ -182,11 +183,31 @@ def normalize_memory_content(item_type: str, content: object) -> dict[str, Any]:
     try:
         parsed = model.model_validate(content)
     except ValidationError as exc:
-        raise ValueError(exc.errors(include_url=False)[0]["msg"]) from exc
+        errors = []
+        for error in exc.errors(include_url=False):
+            path = ".".join(str(part) for part in error["loc"]) or "content"
+            message = {
+                "missing": "обязательное поле отсутствует",
+                "extra_forbidden": "поле не предусмотрено для этого типа знания",
+                "string_too_short": "текст не должен быть пустым",
+                "string_too_long": "текст превышает допустимую длину",
+                "too_short": "список не должен быть пустым",
+                "list_type": "ожидается список",
+                "string_type": "ожидается текст",
+                "model_type": "ожидается объект",
+                "literal_error": f"допустимые значения: {error.get('ctx', {}).get('expected', '')}",
+            }.get(error["type"], error["msg"])
+            errors.append(f"{path}: {message}")
+        raise ValueError("; ".join(errors)) from exc
     result = parsed.canonical() if isinstance(parsed, ProcedureContent) else parsed.model_dump(mode="json")
     if len(json.dumps(result, ensure_ascii=False, sort_keys=True)) > MAX_CONTENT_CHARS:
         raise ValueError("memory content exceeds maximum size")
     return result
+
+
+def memory_content_schemas() -> dict[str, Any]:
+    """Expose the same content contracts to the extraction model."""
+    return {kind: model.model_json_schema() for kind, model in _MODELS.items()}
 
 
 def content_contract_error(item_type: str, content: object) -> str | None:

@@ -260,11 +260,15 @@ async def test_search_translates_legacy_claim_project_applicability_for_task_han
               "applicability": {"project_ids": [str(project)]}, "scope_keys": [], "confidence": 1,
               "state": "active", "content": {"statement": str(project)}, "content_text": str(project),
               "source_references": []} for project in (a, b)]
-    monkeypatch.setattr(search_module, "ProjectCatalogService", lambda session: SimpleNamespace(list_projects=AsyncMock(return_value=projects)))
     monkeypatch.setattr(search_module, "GlossaryService", lambda session: SimpleNamespace(list_confirmed_terms=AsyncMock(return_value=[])))
-    monkeypatch.setattr(search_module, "resolve_memory_scopes", AsyncMock())
+    monkeypatch.setattr(search_module, "resolve_memory_scopes", AsyncMock(return_value=[
+        SimpleNamespace(scope_type="project", key=f"project.{row['key']}", name=row['name'],
+                        project_id=row['id'], is_all=False) for row in projects
+    ]))
     monkeypatch.setattr(search_module, "MemorySemanticIndex", lambda session: SimpleNamespace(search_ids=AsyncMock(return_value=[])))
-    recall = SimpleNamespace(_lexical_ids=AsyncMock(return_value=[]), _visible_relation_item_ids=AsyncMock(return_value=[]),
+    recall = SimpleNamespace(eligible_item_ids=AsyncMock(return_value=[row["id"] for row in items]),
+                             _term_linked_item_ids=AsyncMock(return_value=[]),
+                             _lexical_ids=AsyncMock(return_value=[]), _visible_relation_item_ids=AsyncMock(return_value=[]),
                              _accessible_semantic_items=AsyncMock(return_value=items))
     monkeypatch.setattr(search_module, "MemoryRecallService", lambda **kwargs: recall)
     result = await search_module.MemorySearchService(object()).search(query="deploy", tenant_id=None,

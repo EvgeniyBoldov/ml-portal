@@ -17,7 +17,8 @@ class MemorySearchTool(VersionedTool):
     description: ClassVar[str] = (
         "Search allowed project/company long memory and confirmed glossary terms with "
         "bounded, source-aware results. Use it to resolve an abbreviation or retrieve "
-        "project knowledge; it is not a source of current external-system state."
+        "project knowledge or confirmed owned facts (scopes=user/tenant, optional fact_subject). "
+        "It is not a source of current external-system state."
     )
 
     @tool_version(
@@ -29,10 +30,11 @@ class MemorySearchTool(VersionedTool):
             "kinds": {"type": "array", "items": {"type": "string"}},
             "entity_ids": {"type": "array", "items": {"type": "string"}},
             "direction": {"type": "string"},
+            "fact_subject": {"type": "string", "maxLength": 200},
             "scopes": {"type": "array", "items": {"type": "string"}},
             "limit": {"type": "integer", "minimum": 1, "maximum": 12},
         }, "required": ["query"]},
-        output_schema={"type": "object", "properties": {"items": {"type": "array"}, "projects": {"type": "array"}, "glossary": {"type": "array"}, "count": {"type": "integer"}}},
+        output_schema={"type": "object", "properties": {"items": {"type": "array"}, "projects": {"type": "array"}, "glossary": {"type": "array"}, "facts": {"type": "array"}, "count": {"type": "integer"}}},
         description="Bounded ACL-aware long-memory and glossary search",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
@@ -53,7 +55,7 @@ class MemorySearchTool(VersionedTool):
                 kinds=[str(value) for value in args.get("kinds") or []],
                 entity_ids=[str(value) for value in args.get("entity_ids") or []],
                 direction=str(args.get("direction") or "").strip() or None,
-                limit=int(args.get("limit") or 8),
+                limit=int(args.get("limit") or 8), fact_subject=args.get("fact_subject"),
             )
         if data.get("success") is False:
             return ToolResult.fail(data["error_code"], uncertainties=data["uncertainties"])

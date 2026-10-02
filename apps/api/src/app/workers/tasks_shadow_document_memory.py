@@ -391,15 +391,12 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str,
             )
             projects_by_key, projects = await service.project_catalog()
             scopes_by_key, scopes = await service.scope_catalog()
-            document_scopes = await service.document_scope_hints(document.id)
             try:
                 output = await ShadowDocumentStudyAgent(session=session, llm_client=get_llm_client()).study(
                     document={
                         "id": str(document.id), "title": document.title, "filename": document.filename,
                         "access_scope": document.scope,
                         "metadata": dict(canonical.get("metadata") or {}),
-                        "scope_hints": [scope["key"] for scope in document_scopes],
-                        "scope_hint_catalog": document_scopes,
                     },
                     sections=batch,
                     candidate_ledger=await service.ledger(snapshot.id, attempt.id),

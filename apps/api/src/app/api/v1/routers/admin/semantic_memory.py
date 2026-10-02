@@ -26,6 +26,7 @@ from app.models.document_memory_staging import (
 from app.models.memory_scope import MemoryCandidateScope, MemoryClaimScope, MemoryScope
 from app.models.project import Project
 from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService
+from app.runtime.memory.index_dispatch import dispatch_memory_index
 from app.runtime.memory.shadow_document_study import ShadowDocumentStudyService
 from app.models.rag_ingest import RAGStatus, Source
 from app.services.semantic_memory_admin_service import (
@@ -33,6 +34,7 @@ from app.services.semantic_memory_admin_service import (
     SemanticMemoryListRow,
 )
 from app.services.memory_scope_catalog import list_memory_scopes
+from app.services.glossary_service import GlossaryService
 from app.services.lifecycle_admin_service import LifecycleAdminService
 from app.runtime.memory.content_contracts import content_contract_error
 from app.runtime.memory.document_sections import split_canonical_sections
@@ -145,6 +147,8 @@ class ShadowCandidateResponse(BaseModel):
     id: UUID
     snapshot_id: UUID
     visibility_tenant_id: UUID | None
+    document_title: str | None = None
+    document_access_scope: str | None = None
     candidate_type: str
     subject: str
     normalized_subject: str
@@ -154,6 +158,7 @@ class ShadowCandidateResponse(BaseModel):
     content_error: str | None = None
     aliases: list[str] = Field(default_factory=list)
     related_entities: list[dict[str, Any]] = Field(default_factory=list)
+    glossary_term_ids: list[UUID] = Field(default_factory=list)
     related_project_keys: list[str] = Field(default_factory=list)
     evidence_section_ids: list[str]
     scope_candidate: str | None
@@ -175,6 +180,21 @@ class ShadowCandidateDecisionRequest(BaseModel):
     model_config = {"extra": "forbid"}
     reason: str | None = Field(default=None, max_length=2000)
     replace_existing_definition: bool = False
+
+
+class ShadowCandidateTagsRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    scope_ids: list[UUID] = Field(max_length=64)
+    company_wide: bool
+    glossary_term_ids: list[UUID] = Field(max_length=64)
+    reason: str = Field(default="", max_length=2000)
+
+
+class MemoryTermTagResponse(BaseModel):
+    id: UUID
+    canonical_term: str
+    definition: str
+    aliases: list[str]
 
 
 class ShadowCandidateRejectRequest(BaseModel):
@@ -242,7 +262,7 @@ async def _candidate_scope_proposals(db: AsyncSession, candidate_id: UUID) -> li
     ).join(
         MemoryScopeProposal,
         MemoryScopeProposal.id == MemoryCandidateScopeProposal.scope_proposal_id,
-    ).where(MemoryCandidateScopeProposal.candidate_id == candidate_id))).all()
+    ).where(MemoryCandidateScopeProposal.candidate_id == candidate_id, MemoryCandidateScopeProposal.status != "superseded"))).all()
     result = []
     for role, binding_status, proposal_id, name, scope_type, status, rejection, term_candidate_id, glossary_term_id in rows:
         term_name = None
@@ -264,8 +284,12 @@ async def _candidate_related_terms(db: AsyncSession, candidate_id: UUID) -> list
     proposals = await db.scalars(select(MemoryScopeProposal).join(
         MemoryCandidateScopeProposal,
         MemoryCandidateScopeProposal.scope_proposal_id == MemoryScopeProposal.id,
-    ).where(MemoryCandidateScopeProposal.candidate_id == candidate_id))
+    ).where(MemoryCandidateScopeProposal.candidate_id == candidate_id, MemoryCandidateScopeProposal.status != "superseded"))
     result = []
+    candidate = await db.get(MemoryExtractionCandidate, candidate_id)
+    for entity in candidate.related_entities or [] if candidate else []:
+        if entity.get("type") == "glossary_term":
+            result.append({"id": entity.get("id"), "term": entity.get("name", ""), "scope": "", "status": "confirmed"})
     for proposal in proposals:
         term_name = None
         if proposal.term_candidate_id:
@@ -284,6 +308,7 @@ async def _candidate_related_terms(db: AsyncSession, candidate_id: UUID) -> list
 async def _candidate_approval_blockers(
     db: AsyncSession, candidate_id: UUID, candidate_type: str, scope_candidate: str | None,
     unresolved_scope_references: list[dict[str, Any]] = (),
+    glossary_term_ids: list[UUID] = (),
 ) -> list[str]:
     if candidate_type == "term":
         return []
@@ -298,6 +323,7 @@ async def _candidate_approval_blockers(
     ).where(
         MemoryCandidateScopeProposal.candidate_id == candidate_id,
         MemoryCandidateScopeProposal.role == "applies_to",
+        MemoryCandidateScopeProposal.status != "superseded",
         (MemoryCandidateScopeProposal.status == "rejected") | (MemoryScopeProposal.status != "approved"),
     ))).all()
     blockers = [
@@ -308,9 +334,20 @@ async def _candidate_approval_blockers(
     ]
     blockers.extend(f"Не разрешена применимость «{ref.get('name') or ref.get('key', '')}»: {ref.get('reason', 'unknown')}"
                     for ref in unresolved_scope_references)
-    if scope_candidate not in {"global", "project", "scoped"}:
-        blockers.append("Извлекатель не определил применимость памяти; отклоните кандидата для повторного извлечения.")
-    elif scope_candidate == "project":
+    known_scope_id = await db.scalar(select(MemoryCandidateScope.id).join(
+        MemoryScope, MemoryScope.id == MemoryCandidateScope.scope_id,
+    ).where(
+        MemoryCandidateScope.candidate_id == candidate_id,
+        MemoryCandidateScope.role == "applies_to",
+        MemoryCandidateScope.status != "rejected",
+        MemoryScope.lifecycle_status == "active",
+    ).limit(1))
+    linked_term = await db.scalar(GlossaryService.published_terms_query().where(
+        GlossaryTerm.id.in_(glossary_term_ids),
+    ).limit(1)) if glossary_term_ids else None
+    if known_scope_id is None and linked_term is None:
+        blockers.append("Выберите хотя бы один проект, команду, продукт или термин.")
+    if scope_candidate == "project":
         project_ids = list((await db.scalars(select(MemoryCandidateProjectBinding.project_id).where(
             MemoryCandidateProjectBinding.candidate_id == candidate_id,
             MemoryCandidateProjectBinding.role == "applies_to",
@@ -318,14 +355,6 @@ async def _candidate_approval_blockers(
         ))).all())
         if len(set(project_ids)) != 1:
             blockers.append("Для проектной памяти должен быть однозначно определён проект.")
-    elif scope_candidate == "scoped":
-        known_scope_id = await db.scalar(select(MemoryCandidateScope.id).where(
-            MemoryCandidateScope.candidate_id == candidate_id,
-            MemoryCandidateScope.role == "applies_to",
-            MemoryCandidateScope.status != "rejected",
-        ).limit(1))
-        if known_scope_id is None and not rows:
-            blockers.append("Для памяти с ограниченной применимостью не найден утверждённый скоуп.")
     return blockers
 
 
@@ -352,7 +381,7 @@ async def _scope_proposal_response(db: AsyncSession, proposal: MemoryScopePropos
     dependent = list((await db.scalars(select(MemoryCandidateScopeProposal.candidate_id).where(
         MemoryCandidateScopeProposal.scope_proposal_id == proposal.id,
         MemoryCandidateScopeProposal.role == "applies_to",
-        MemoryCandidateScopeProposal.status != "rejected",
+        MemoryCandidateScopeProposal.status.in_(("suggested", "confirmed")),
     ))).all())
     blockers = []
     if proposal.status == "awaiting_term" or not term_ready:
@@ -537,39 +566,82 @@ async def list_shadow_candidates(
     if candidate_type:
         stmt = stmt.where(MemoryExtractionCandidate.candidate_type == candidate_type)
     rows = list((await db.execute(stmt)).scalars().all())
+    document_rows = (await db.execute(select(
+        DocumentMemorySnapshot.id, RAGDocument.title, RAGDocument.scope,
+    ).join(RAGDocument, RAGDocument.id == DocumentMemorySnapshot.document_id).where(
+        DocumentMemorySnapshot.id.in_({row.snapshot_id for row in rows}),
+    ))).all() if rows else []
+    documents = {snapshot_id: (title, scope) for snapshot_id, title, scope in document_rows}
     result: list[ShadowCandidateResponse] = []
     for row in rows:
-        validation_error = content_contract_error(row.candidate_type, dict(row.content or {}))
-        project_ids = list((await db.execute(select(MemoryCandidateProjectBinding.project_id).where(
-            MemoryCandidateProjectBinding.candidate_id == row.id,
-        ))).scalars().all())
-        scope_rows = (await db.execute(select(MemoryCandidateScope.scope_id, MemoryScope.key, MemoryCandidateScope.role).join(
-            MemoryScope, MemoryScope.id == MemoryCandidateScope.scope_id,
-        ).where(
-            MemoryCandidateScope.candidate_id == row.id,
-            MemoryCandidateScope.status != "rejected",
-            MemoryScope.lifecycle_status == "active",
-        ))).all()
-        conflict_ids = list((await db.execute(select(MemoryConflictMember.conflict_id).join(MemoryConflictCase, MemoryConflictCase.id == MemoryConflictMember.conflict_id).where(MemoryConflictMember.candidate_id == row.id, MemoryConflictCase.status == "open", MemoryConflictCase.kind.in_(("contradiction", "insufficient_evidence"))))).scalars().all())
-        result.append(ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
-            candidate_type=row.candidate_type, subject=row.subject, normalized_subject=row.normalized_subject,
-            content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),
-            content_text=row.content_text, aliases=list(row.aliases or []), related_entities=list(row.related_entities or []), related_project_keys=list(row.related_project_keys or []),
-            content_valid=validation_error is None, content_error=validation_error,
-            scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence,
-            project_ids=project_ids,
-            scope_ids=[scope_id for scope_id, _, role in scope_rows if role == "applies_to"],
-            scope_keys=[key for _, key, role in scope_rows if role == "applies_to"],
-            mentioned_scope_keys=[key for _, key, role in scope_rows if role == "mentions"],
-            unmatched_scope_names=list(row.unmatched_scope_names or []),
-            scope_rationale=row.resolution_rationale,
-            conflict_ids=conflict_ids,
-            scope_proposals=await _candidate_scope_proposals(db, row.id),
-            related_terms=await _candidate_related_terms(db, row.id),
-            approval_blockers=await _candidate_approval_blockers(
-                db, row.id, row.candidate_type, row.scope_candidate, row.unresolved_scope_references or [],
-            )))
+        result.append(await _shadow_candidate_response(db, row, documents.get(row.snapshot_id, (None, None))))
     return result
+
+
+@router.get("/staging/term-catalog", response_model=list[MemoryTermTagResponse])
+async def list_memory_term_tags(db: AsyncSession = Depends(db_session), _: UserCtx = Depends(require_admin)):
+    return [MemoryTermTagResponse(id=term["id"], canonical_term=term["term"], definition=term["definition"],
+                                  aliases=term["aliases"])
+            for term in await GlossaryService(db).list_confirmed_terms()]
+
+
+async def _shadow_candidate_response(
+    db: AsyncSession, row: MemoryExtractionCandidate, document: tuple[str | None, str | None] = (None, None),
+) -> ShadowCandidateResponse:
+    validation_error = content_contract_error(row.candidate_type, dict(row.content or {}))
+    project_ids = list((await db.execute(select(MemoryCandidateProjectBinding.project_id).where(
+        MemoryCandidateProjectBinding.candidate_id == row.id,
+    ))).scalars().all())
+    scope_rows = (await db.execute(select(MemoryCandidateScope.scope_id, MemoryScope.key, MemoryCandidateScope.role).join(
+        MemoryScope, MemoryScope.id == MemoryCandidateScope.scope_id,
+    ).where(
+        MemoryCandidateScope.candidate_id == row.id,
+        MemoryCandidateScope.status != "rejected",
+        MemoryScope.lifecycle_status == "active",
+    ))).all()
+    conflict_ids = list((await db.execute(select(MemoryConflictMember.conflict_id).join(MemoryConflictCase, MemoryConflictCase.id == MemoryConflictMember.conflict_id).where(MemoryConflictMember.candidate_id == row.id, MemoryConflictCase.status == "open", MemoryConflictCase.kind.in_(("contradiction", "insufficient_evidence"))))).scalars().all())
+    return ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
+        document_title=document[0],
+        document_access_scope=document[1],
+        candidate_type=row.candidate_type, subject=row.subject, normalized_subject=row.normalized_subject,
+        content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),
+        glossary_term_ids=[UUID(entity["id"]) for entity in row.related_entities or [] if entity.get("type") == "glossary_term" and entity.get("id")],
+        content_text=row.content_text, aliases=list(row.aliases or []), related_entities=list(row.related_entities or []), related_project_keys=list(row.related_project_keys or []),
+        content_valid=validation_error is None, content_error=validation_error,
+        scope_candidate=row.scope_candidate, resolution_status=row.resolution_status, extraction_confidence=row.extraction_confidence,
+        project_ids=project_ids,
+        scope_ids=[scope_id for scope_id, _, role in scope_rows if role == "applies_to"],
+        scope_keys=[key for _, key, role in scope_rows if role == "applies_to"],
+        mentioned_scope_keys=[key for _, key, role in scope_rows if role == "mentions"],
+        unmatched_scope_names=list(row.unmatched_scope_names or []),
+        scope_rationale=row.resolution_rationale,
+        conflict_ids=conflict_ids,
+        scope_proposals=await _candidate_scope_proposals(db, row.id),
+        related_terms=await _candidate_related_terms(db, row.id),
+        approval_blockers=await _candidate_approval_blockers(
+            db, row.id, row.candidate_type, row.scope_candidate, row.unresolved_scope_references or [],
+            [UUID(entity["id"]) for entity in row.related_entities or []
+             if entity.get("type") == "glossary_term" and entity.get("id")],
+        ))
+
+
+@router.patch("/staging/candidates/{candidate_id}/tags", response_model=ShadowCandidateResponse)
+async def update_shadow_candidate_tags(
+    candidate_id: UUID, request: ShadowCandidateTagsRequest,
+    db: AsyncSession = Depends(db_session), user: UserCtx = Depends(require_admin),
+):
+    try:
+        row = await ShadowMemoryPublicationService(db).update_review_tags(
+            candidate_id=candidate_id, actor_id=UUID(user.id), scope_ids=request.scope_ids,
+            company_wide=request.company_wide, glossary_term_ids=request.glossary_term_ids, reason=request.reason,
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    snapshot = await db.get(DocumentMemorySnapshot, row.snapshot_id)
+    source = await db.get(RAGDocument, snapshot.document_id) if snapshot else None
+    return await _shadow_candidate_response(db, row, (source.title, source.scope) if source else (None, None))
 
 
 @router.get("/staging/retryable-snapshots")
@@ -745,14 +817,16 @@ async def get_shadow_candidate_evidence(
 
 @router.post("/staging/candidates/{candidate_id}/approve", response_model=ShadowCandidateResponse)
 async def approve_shadow_candidate(candidate_id: UUID, request: ShadowCandidateDecisionRequest, db: AsyncSession = Depends(db_session), user: UserCtx = Depends(require_admin)):
+    publisher = ShadowMemoryPublicationService(db)
     try:
-        row = await ShadowMemoryPublicationService(db).approve(candidate_id=candidate_id, actor_id=UUID(user.id), reason=request.reason,
+        row = await publisher.approve(candidate_id=candidate_id, actor_id=UUID(user.id), reason=request.reason,
             replace_existing_definition=request.replace_existing_definition)
         await db.commit()
     except ValueError as exc:
         await db.rollback(); raise HTTPException(status_code=409, detail=str(exc)) from exc
     except IntegrityError as exc:
         await db.rollback(); raise HTTPException(status_code=409, detail="memory_publication_conflict") from exc
+    await dispatch_memory_index(publisher.published_item_ids)
     return ShadowCandidateResponse(id=row.id, snapshot_id=row.snapshot_id, visibility_tenant_id=row.visibility_tenant_id,
         candidate_type=row.candidate_type, subject=row.subject, normalized_subject=row.normalized_subject,
         content=dict(row.content or {}), evidence_section_ids=list(row.evidence_section_ids or []),

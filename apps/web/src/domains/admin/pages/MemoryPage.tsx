@@ -1,12 +1,16 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Checkbox, ConfirmDialog, DataTable, EntityPageV2, Input, Modal, Select, Tab, LifecycleDeleteDialog, type DataTableColumn } from '@/shared/ui';
-import { adminApi, type AdminGlossaryTerm, type MemoryScopeAdminItem, type MemoryScopeProposalAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
+import { adminApi, type AdminGlossaryTerm, type MemoryCandidateTags, type MemoryScopeAdminItem, type MemoryScopeProposalAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
+import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import MemoryReviewDialog, { type MemoryApproval } from '@/domains/admin/components/MemoryReviewDialog';
+import MemoryBulkRejectDialog from '@/domains/admin/components/MemoryBulkRejectDialog';
 import MemoryScopeProposalDialog from '@/domains/admin/components/MemoryScopeProposalDialog';
 import MemoryActionsMenu from '@/domains/admin/components/MemoryActionsMenu';
+import { reviewColumns } from '@/domains/admin/components/MemoryReviewTable';
+import { scopeColumns, scopeTypeLabels, type ScopeTableRow } from '@/domains/admin/components/MemoryScopeTable';
 import styles from './MemoryPage.module.css';
 
 const slugifyScopeName = (value: string) => {
@@ -33,62 +37,11 @@ const memoryColumns: DataTableColumn<SemanticMemoryAdminItem>[] = [
   { key: 'source_count', label: 'ИСТОЧНИКИ', width: 110, align: 'right', sortable: true, filter: { kind: 'select', placeholder: 'Любое число', options: [{ value: 'one', label: '1' }, { value: 'multiple', label: '2+' }], getValue: (row) => row.source_count > 1 ? 'multiple' : 'one' }, render: (row) => row.source_count },
 ];
 
-const candidateTypeLabels: Record<string, string> = {
-  term: 'Термин', description: 'Описание', relationship: 'Связь', rule: 'Правило',
-  constraint: 'Ограничение', procedure: 'Процедура', decision: 'Решение',
-};
-
-const candidatePayloadContent = (row: ShadowMemoryCandidate): Record<string, unknown> => {
-  if (row.content && Object.keys(row.content).length) return row.content;
-  try {
-    const parsed: unknown = JSON.parse(row.content_text);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-};
-
-const candidateContent = (row: ShadowMemoryCandidate): string => {
-  const payload = candidatePayloadContent(row);
-  const content = Object.keys(payload).length > 0 ? payload : null;
-  if (content) {
-    const primaryKeys = ['summary', 'definition', 'statement', 'decision', 'goal', 'text', 'value'];
-    const entries = Object.entries(content).sort(([left], [right]) => {
-      const leftIndex = primaryKeys.indexOf(left);
-      const rightIndex = primaryKeys.indexOf(right);
-      return (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex);
-    });
-    const values = entries.flatMap(([key, value]) => {
-      if (value === null || value === undefined || value === '') return [];
-      const rendered = Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value);
-      return [primaryKeys.includes(key) && typeof value === 'string' ? rendered : `${key}: ${rendered}`];
-    });
-    if (values.length) return values.slice(0, 3).join(' · ');
-  }
-  if (row.aliases.length) return `Алиасы: ${row.aliases.join(', ')}`;
-  if (row.candidate_type === 'term') return 'Определение не указано';
-  if (row.related_project_keys.length) return `Проекты: ${row.related_project_keys.join(', ')}`;
-  return 'Содержание не извлечено';
-};
-
-const candidateConfidence = (value: number): string => {
-  if (!Number.isFinite(value) || value < 0 || value > 1) return '—';
-  return `${Math.round(value * 100)}%${value >= 1 ? ' · максимум модели' : ''}`;
-};
-
-const reviewColumns: DataTableColumn<ShadowMemoryCandidate>[] = [
-  { key: 'subject', label: 'КАНДИДАТ / ЗНАЧЕНИЕ', sortable: true, sortValue: (row) => row.subject, filter: { kind: 'text', placeholder: 'Кандидат или содержимое', getValue: (row) => `${row.subject} ${candidateContent(row)}` }, render: (row) => <div><strong>{row.subject}</strong><div style={{ color: row.content_valid ? 'var(--muted)' : 'var(--danger)', fontSize: '0.8rem', whiteSpace: 'normal' }}>{candidateContent(row)}</div></div> },
-  { key: 'candidate_type', label: 'ТИП', width: 150, sortable: true, filter: { kind: 'text', placeholder: 'Тип' }, render: (row) => <Badge tone="neutral">{candidateTypeLabels[row.candidate_type] ?? row.candidate_type}</Badge> },
-  { key: 'content_valid', label: 'ФОРМАТ', width: 150, render: (row) => row.content_valid ? <Badge tone="success">корректный</Badge> : <Badge tone="danger" title={row.content_error ?? undefined}>неполный</Badge> },
-  { key: 'scope_candidate', label: 'ОБЛАСТЬ', width: 240, sortable: true, filter: { kind: 'select', placeholder: 'Все области', options: ['global', 'scoped', 'project', 'multi_project', 'unknown'].map((value) => ({ value, label: value })), getValue: (row) => row.scope_candidate || 'unknown' }, render: (row) => <div><Badge tone="info">{row.scope_candidate || 'unknown'}</Badge>{row.scope_keys.length > 0 && <div style={{ fontSize: '0.8rem' }}>Применимость: {row.scope_keys.join(', ')}</div>}{row.mentioned_scope_keys.length > 0 && <div style={{ fontSize: '0.8rem' }}>Упомянуты: {row.mentioned_scope_keys.join(', ')}</div>}{row.unmatched_scope_names.length > 0 && <div style={{ fontSize: '0.8rem' }}>Нет в каталоге: {row.unmatched_scope_names.join(', ')}</div>}</div> },
-  { key: 'evidence_section_ids', label: 'ИСТОЧНИКИ', width: 130, align: 'right', sortable: true, sortValue: (row) => row.evidence_section_ids.length, render: (row) => row.evidence_section_ids.length },
-  { key: 'conflict_ids', label: 'КОНФЛИКТЫ', width: 130, align: 'right', sortable: true, sortValue: (row) => row.conflict_ids.length, filter: { kind: 'select', placeholder: 'Все', options: [{ value: 'yes', label: 'Есть' }, { value: 'no', label: 'Нет' }], getValue: (row) => row.conflict_ids.length ? 'yes' : 'no' }, render: (row) => <Badge tone={row.conflict_ids.length ? 'danger' : 'success'}>{row.conflict_ids.length}</Badge> },
-  { key: 'extraction_confidence', label: 'УВЕРЕННОСТЬ', width: 170, align: 'right', sortable: true, filter: { kind: 'select', placeholder: 'Любая', options: [{ value: 'high', label: '≥ 80%' }, { value: 'medium', label: '50–79%' }, { value: 'low', label: '< 50%' }], getValue: (row) => row.extraction_confidence >= 0.8 ? 'high' : row.extraction_confidence >= 0.5 ? 'medium' : 'low' }, render: (row) => <span title="Самооценка экстрактора, не подтверждение администратора">{candidateConfidence(row.extraction_confidence)}</span> },
-];
-
 export default function MemoryPage() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('glossary');
+  const [searchParams] = useSearchParams();
+  const initialTab = ['glossary', 'memory', 'review', 'scopes'].includes(searchParams.get('tab') ?? '') ? searchParams.get('tab')! : 'glossary';
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [query, setQuery] = useState('');
   const [memoryScopeType, setMemoryScopeType] = useState('');
   const [memoryScopeId, setMemoryScopeId] = useState('');
@@ -97,8 +50,8 @@ export default function MemoryPage() {
   const [confirmGlossaryAction, setConfirmGlossaryAction] = useState<'delete' | 'deactivate' | 'activate' | null>(null);
   const [selectedMemoryIds, setSelectedMemoryIds] = useState<Set<string | number>>(new Set());
   const [confirmMemoryDeactivate, setConfirmMemoryDeactivate] = useState(false);
-  const [reviewPage, setReviewPage] = useState(0);
-  const [reviewType, setReviewType] = useState('');
+  const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string | number>>(new Set());
+  const [bulkReviewRejectIds, setBulkReviewRejectIds] = useState<string[] | null>(null);
   const [scopeProposalEditor, setScopeProposalEditor] = useState<MemoryScopeProposalAdminItem | null>(null);
   const [scopeEditor, setScopeEditor] = useState<MemoryScopeAdminItem | 'new' | null>(null);
   const [scopeToDelete, setScopeToDelete] = useState<MemoryScopeAdminItem | null>(null);
@@ -109,7 +62,7 @@ export default function MemoryPage() {
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
   const { data: memoryScopes, isLoading: scopesLoading, isError: scopesError } = useQuery({
-    queryKey: ['admin', 'memory', 'scopes'], queryFn: () => adminApi.getMemoryScopes(), enabled: activeTab === 'scopes' || activeTab === 'review' || activeTab === 'memory',
+    queryKey: qk.admin.memory.scopes(), queryFn: () => adminApi.getMemoryScopes(), enabled: activeTab === 'scopes' || activeTab === 'review' || activeTab === 'memory',
   });
   const saveScope = useMutation({
     mutationFn: () => {
@@ -133,15 +86,30 @@ export default function MemoryPage() {
     enabled: activeTab === 'memory',
   });
   const { data: review, isLoading: reviewLoading, isError: reviewError } = useQuery({
-    queryKey: ['admin', 'memory', 'staging-review', reviewType, reviewPage],
-    queryFn: () => adminApi.getShadowMemoryCandidates('pending', { candidate_type: reviewType || undefined, limit: 101, offset: reviewPage * 100 }),
+    queryKey: qk.admin.memory.review(),
+    queryFn: async () => {
+      const rows: ShadowMemoryCandidate[] = [];
+      for (let offset = 0; ; offset += 200) {
+        const batch = await adminApi.getShadowMemoryCandidates('pending', { limit: 200, offset });
+        rows.push(...batch);
+        if (batch.length < 200) return rows;
+      }
+    },
     enabled: activeTab === 'review',
   });
   const { data: scopeProposals, isLoading: scopeProposalsLoading, isError: scopeProposalsError } = useQuery({
-    queryKey: ['admin', 'memory', 'scope-proposals'],
-    queryFn: () => adminApi.getMemoryScopeProposals('pending'),
-    enabled: activeTab === 'review',
+    queryKey: qk.admin.memory.scopeProposals(),
+    queryFn: async () => {
+      const rows: MemoryScopeProposalAdminItem[] = [];
+      for (let offset = 0; ; offset += 200) {
+        const batch = await adminApi.getMemoryScopeProposals('pending', { limit: 200, offset });
+        rows.push(...batch);
+        if (batch.length < 200) return rows;
+      }
+    },
+    enabled: activeTab === 'scopes',
   });
+  const selectedReviewCandidates = (review ?? []).filter((row) => selectedReviewIds.has(row.id));
   const retryableSnapshots = useQuery({
     queryKey: ['admin', 'memory', 'retryable-snapshots'],
     queryFn: () => adminApi.getRetryableShadowSnapshots(),
@@ -151,7 +119,8 @@ export default function MemoryPage() {
     mutationFn: ({ row, action, body, reason }: { row: ShadowMemoryCandidate; action: 'approve' | 'reject'; body?: MemoryApproval; reason?: string }) => action === 'approve'
       ? adminApi.approveShadowMemoryCandidate(row.id, body ?? {})
       : adminApi.rejectShadowMemoryCandidate(row.id, reason ?? ''),
-    onSuccess: () => {
+    onSuccess: (_result, { row }) => {
+      setSelectedReviewIds((current) => new Set([...current].filter((id) => id !== row.id)));
       queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'glossary'] });
       queryClient.invalidateQueries({ queryKey: ['collections', 'glossary', 'overview'] });
@@ -163,6 +132,14 @@ export default function MemoryPage() {
       : adminApi.rejectMemoryScopeProposal(row.id, reason ?? ''),
     onSuccess: () => { setScopeProposalEditor(null); queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] }); },
     onError: (error: Error) => showError(error.message || 'Не удалось обработать предложение скоупа'),
+  });
+  const saveCandidateTags = useMutation({
+    mutationFn: ({ id, tags }: { id: string; tags: MemoryCandidateTags }) => adminApi.updateShadowCandidateTags(id, tags),
+    onSuccess: (row) => {
+      setReviewEditor(row);
+      queryClient.invalidateQueries({ queryKey: qk.admin.memory.review() });
+      showSuccess('Применимость и связи сохранены');
+    },
   });
   const reextract = useMutation({
     mutationFn: (snapshotId: string) => adminApi.reextractShadowMemorySnapshot(snapshotId),
@@ -214,23 +191,20 @@ export default function MemoryPage() {
     setScopeForm({ scope_type: row.scope_type, key: row.key, name: row.name, aliases: row.aliases.join(', '), is_all: row.is_all });
     setScopeEditor(row);
   };
-  const scopeColumns: DataTableColumn<MemoryScopeAdminItem>[] = [
-    { key: 'scope_type', label: 'ТИП', width: 130, sortable: true, render: (row) => <Badge tone="info">{row.scope_type}</Badge> },
-    { key: 'key', label: 'КЛЮЧ', sortable: true, filter: { kind: 'text', placeholder: 'Ключ' }, render: (row) => <code>{row.key}</code> },
-    { key: 'name', label: 'НАЗВАНИЕ', sortable: true, filter: { kind: 'text', placeholder: 'Название' }, render: (row) => <div><strong>{row.name}</strong>{row.is_all && <div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>Все {row.scope_type === 'team' ? 'подразделения' : row.scope_type === 'project' ? 'проекты' : 'продукты'}</div>}</div> },
-    { key: 'aliases', label: 'АЛИАСЫ', render: (row) => row.aliases.join(', ') || '—' },
-    { key: 'lifecycle_status', label: 'СТАТУС', width: 140, render: (row) => <Badge tone={row.lifecycle_status === 'active' ? 'success' : 'warn'}>{row.lifecycle_status === 'active' ? 'активен' : `удалится через ${row.retention_days} дн.`}</Badge> },
-    { key: 'actions', label: '', width: 80, render: (row) => <MemoryActionsMenu label="⋯" ariaLabel={`Действия со скоупом ${row.name}`}
-      items={row.lifecycle_status === 'active' ? [
-        { label: 'Изменить', onClick: () => openScopeEditor(row) },
-        { label: 'Удалить', variant: 'danger', onClick: () => { setScopeLifecycleAction('delete'); setScopeToDelete(row); } },
-      ] : [{ label: 'Восстановить', onClick: () => { setScopeLifecycleAction('restore'); setScopeToDelete(row); } }]} /> },
+  const scopeRows: ScopeTableRow[] = [
+    ...(memoryScopes ?? []).map((scope): ScopeTableRow => ({ kind: 'published', id: `scope:${scope.id}`, scope_type: scope.scope_type, key: scope.key, name: scope.name, aliases: scope.aliases, status: scope.lifecycle_status, scope })),
+    ...(scopeProposals ?? []).map((proposal): ScopeTableRow => ({ kind: 'proposal', id: `proposal:${proposal.id}`, scope_type: proposal.scope_type, key: proposal.proposed_key, name: proposal.name, aliases: proposal.aliases, status: proposal.status, proposal })),
   ];
+  const openScopeRow = (row: ScopeTableRow) => {
+    if (row.kind === 'proposal') setScopeProposalEditor(row.proposal);
+    else if (row.scope.lifecycle_status === 'active') openScopeEditor(row.scope);
+  };
 
   return (
     <>
     <EntityPageV2
       title="Мемори"
+      defaultTab={initialTab}
       mode="view"
       breadcrumbs={[{ label: 'Мемори' }]}
       onTabChange={(tab) => { setActiveTab(tab); setQuery(''); }}
@@ -266,39 +240,24 @@ export default function MemoryPage() {
         </div>}
       </Tab>
       <Tab title="На проверке" id="review" layout="full">
-        <div className={styles.filterBar}>
-          <label className={styles.scopeField}>Тип кандидата
-            <Select value={reviewType} options={[{ value: '', label: 'Все типы' }, ...['term', 'description', 'relationship', 'rule', 'constraint', 'procedure', 'decision'].map((value) => ({ value, label: value }))]} onChange={(value) => { setReviewType(value); setReviewPage(0); }} />
-          </label>
-        </div>
+        {review?.some((row) => row.document_access_scope && row.document_access_scope !== 'global') && <p className={styles.reviewHint}>Термины общего глоссария извлекаются только из документов с глобальным доступом. Документы с доступом к коллекции дают кандидаты памяти, но не термины общего глоссария.</p>}
         {reviewError ? <p role="alert">Не удалось загрузить очередь проверки.</p> : <DataTable
-          key={`${reviewPage}:${reviewType}`} columns={reviewColumns} data={(review ?? []).slice(0, 100)} keyField="id"
+          columns={reviewColumns} data={review ?? []} keyField="id"
+          className={styles.reviewTable} selectable selectedKeys={selectedReviewIds} onSelectionChange={setSelectedReviewIds}
+          bulkActions={<MemoryActionsMenu items={[{
+            label: 'Отклонить выбранные', variant: 'danger', disabled: !selectedReviewCandidates.length,
+            onClick: () => setBulkReviewRejectIds(selectedReviewCandidates.map((row) => row.id)),
+          }]} />}
           loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20}
           onRowClick={setReviewEditor} />}
-        {(reviewPage > 0 || (review?.length ?? 0) > 100) && <div className={styles.pager}>
-          <Button size="sm" variant="outline" disabled={reviewPage === 0} onClick={() => setReviewPage(reviewPage - 1)}>Назад</Button>
-          <span>Страница {reviewPage + 1}</span>
-          <Button size="sm" variant="outline" disabled={(review?.length ?? 0) <= 100} onClick={() => setReviewPage(reviewPage + 1)}>Далее</Button>
-        </div>}
-        <h3>Предложенные скоупы</h3>
-        {scopeProposalsError ? <p role="alert">Не удалось загрузить предложения скоупов.</p> : <DataTable
-          columns={[
-            { key: 'scope_type', label: 'ТИП', width: 120, render: (row: MemoryScopeProposalAdminItem) => <Badge tone="info">{row.scope_type}</Badge> },
-            { key: 'name', label: 'НАЗВАНИЕ', render: (row: MemoryScopeProposalAdminItem) => <div><strong>{row.name}</strong><div style={{ color: 'var(--muted)' }}>{row.proposed_key}</div></div> },
-            { key: 'term_name', label: 'ТЕРМИН', render: (row: MemoryScopeProposalAdminItem) => row.term_name || '—' },
-            { key: 'status', label: 'СТАТУС', render: (row: MemoryScopeProposalAdminItem) => <Badge tone={row.status === 'needs_review' ? 'warn' : 'neutral'}>{row.status}</Badge> },
-          ] as DataTableColumn<MemoryScopeProposalAdminItem>[]}
-          data={scopeProposals ?? []} keyField="id" loading={scopeProposalsLoading}
-          emptyText="Предложений скоупов на проверке нет" paginated pageSize={20}
-          onRowClick={setScopeProposalEditor} />}
       </Tab>
       <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'team', key: '', name: '', aliases: '', is_all: false }); setScopeEditor('new'); }}>Создать скоуп</Button>]}>
-        {scopesError ? <p role="alert">Не удалось загрузить скоупы памяти.</p> : <DataTable columns={scopeColumns} data={memoryScopes ?? []} keyField="id" loading={scopesLoading} emptyText="Скоупов пока нет" paginated pageSize={20} onRowClick={(row) => { if (row.lifecycle_status === 'active') openScopeEditor(row); }} />}
+        {scopesError || scopeProposalsError ? <p role="alert">Не удалось загрузить скоупы памяти и предложения.</p> : <DataTable columns={scopeColumns({ onReview: setScopeProposalEditor, onEdit: openScopeEditor, onLifecycle: (scope, action) => { setScopeLifecycleAction(action); setScopeToDelete(scope); } })} data={scopeRows} keyField="id" loading={scopesLoading || scopeProposalsLoading} emptyText="Скоупов пока нет" paginated pageSize={20} onRowClick={openScopeRow} />}
       </Tab>
     </EntityPageV2>
     <Modal open={Boolean(scopeEditor)} title={scopeEditor === 'new' ? 'Новый скоуп памяти' : 'Изменить скоуп памяти'} onClose={() => setScopeEditor(null)}>
       <div style={{ display: 'grid', gap: 12 }}>
-        <label className={styles.scopeField}>Тип<Select options={[{ value: 'product', label: 'product' }, { value: 'project', label: 'project' }, { value: 'team', label: 'team' }]} value={scopeForm.scope_type} disabled={scopeEditor !== 'new'} onChange={(value) => { const nextType = value as MemoryScopeAdminItem['scope_type']; setScopeForm({ ...scopeForm, scope_type: nextType, key: scopeForm.is_all ? `${nextType}.all` : `${nextType}.${slugifyScopeName(scopeForm.name)}` }); }} /></label>
+        <label className={styles.scopeField}>Тип<Select options={Object.entries(scopeTypeLabels).map(([value, label]) => ({ value, label }))} value={scopeForm.scope_type} disabled={scopeEditor !== 'new'} onChange={(value) => { const nextType = value as MemoryScopeAdminItem['scope_type']; setScopeForm({ ...scopeForm, scope_type: nextType, key: scopeForm.is_all ? `${nextType}.all` : `${nextType}.${slugifyScopeName(scopeForm.name)}` }); }} /></label>
         {scopeEditor !== 'new' && <small style={{ color: 'var(--muted)' }}>Тип и ключ фиксируют идентичность скоупа; здесь можно изменить название и алиасы.</small>}
         <label className={styles.scopeField}>Название<Input value={scopeForm.name} onChange={(event) => setScopeForm({ ...scopeForm, name: event.target.value, key: scopeForm.is_all ? scopeForm.key : `${scopeForm.scope_type}.${slugifyScopeName(event.target.value)}` })} /></label>
         <label className={styles.scopeField}>Алиасы<Input value={scopeForm.aliases} placeholder="архитекторы, архитектурная команда" onChange={(event) => setScopeForm({ ...scopeForm, aliases: event.target.value })} /></label>
@@ -320,10 +279,19 @@ export default function MemoryPage() {
         <Button disabled={reextract.isPending} onClick={() => reextract.mutate(row.snapshot_id)}>Повторить извлечение</Button>
       </div>)}
     </div>}
-    {reviewEditor && <MemoryReviewDialog key={reviewEditor.id} candidate={reviewEditor} pending={decision.isPending}
+    {reviewEditor && <MemoryReviewDialog key={reviewEditor.id} candidate={reviewEditor} scopes={memoryScopes ?? []} pending={decision.isPending || saveCandidateTags.isPending}
+      onSaveTags={(tags) => saveCandidateTags.mutateAsync({ id: reviewEditor.id, tags })}
       onClose={() => setReviewEditor(null)}
       onApprove={async (body) => { await decision.mutateAsync({ row: reviewEditor, action: 'approve', body }); setReviewEditor(null); }}
       onReject={async (reason) => { await decision.mutateAsync({ row: reviewEditor, action: 'reject', reason }); setReviewEditor(null); }} />}
+    {bulkReviewRejectIds && <MemoryBulkRejectDialog ids={bulkReviewRejectIds} onClose={() => setBulkReviewRejectIds(null)}
+      onRejected={(ids) => {
+        setSelectedReviewIds((current) => new Set([...current].filter((id) => !ids.includes(String(id)))));
+        if (ids.length) {
+          showSuccess(`Отклонено кандидатов: ${ids.length}`);
+          queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] });
+        }
+      }} />}
     {scopeProposalEditor && <MemoryScopeProposalDialog key={scopeProposalEditor.id} proposal={scopeProposalEditor}
       pending={scopeDecision.isPending} onClose={() => setScopeProposalEditor(null)}
       onApprove={async (reason) => { await scopeDecision.mutateAsync({ row: scopeProposalEditor, action: 'approve', reason }); }}

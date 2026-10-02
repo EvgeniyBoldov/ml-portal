@@ -513,6 +513,23 @@ class StructuredLLMCall:
                     role, attempt + 1, exc,
                 )
                 await emit_protocol_retry(reason="schema_validation")
+                if attempt < max_retries:
+                    # A provider's JSON mode only guarantees syntactically valid
+                    # JSON; semantic/Pydantic validation can still fail. Feed
+                    # the concrete validation error back on the next attempt so
+                    # the model can repair its proposal instead of repeating
+                    # the same invalid shape until retries are exhausted.
+                    messages.append({"role": "assistant", "content": raw_response})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Your previous JSON response failed schema validation:\n"
+                            f"{last_error}\n"
+                            "Correct the response to satisfy the supplied schema and all runtime rules. "
+                            "Return the complete corrected JSON object only. Preserve valid information, "
+                            "and do not claim actions or results that have not occurred."
+                        ),
+                    })
                 await wait_before_retry()
                 continue
 
@@ -874,7 +891,8 @@ class StructuredLLMCall:
                     "Не выдавай facts за текущее состояние внешней системы. "
                     "memory_recall содержит relevant_knowledge, правила и процедуры и используется только как долговременный контекст. "
                     "Для поиска области или alias используй planner tool memory.lookup, который возвращает только identities. "
-                    "Для неизвестной аббревиатуры или long memory планер может вызвать только объявленный planner tool memory.search; "
+                    "Для неизвестной аббревиатуры, long memory или подтверждённого user/tenant fact, отсутствующего в стартовом срезе, "
+                    "планер может вызвать объявленный planner tool memory.search. Для фактов используй scopes=user/tenant и при необходимости fact_subject; "
                     "не создавай для этого агентскую задачу. Если rag_required=true, "
                     "до terminal=synthesis обязательно запланируй и получи успешный collection.document.search. "
                     "Если tool_required=true, не представляй memory как текущее состояние системы: запланируй доступный read-only tool "
@@ -898,6 +916,7 @@ class StructuredLLMCall:
                     "только когда агент явно supports_dynamic_contracts."
                 )
             if role_type == SystemLLMRoleType.TURN_PREFLIGHT.value:
+                parts.append("Если нужного подтверждённого факта пользователя/отдела нет в facts_context, можно выбрать route=recall с memory_request.scopes=['user','tenant']; query задаёт поиск, fact_subject — точный subject. Отсутствие факта в стартовом срезе не означает отсутствие в памяти. Факты из поиска содержат scope и владельца; конфликт значений требует уточнения, а не проверки документным RAG.")
                 parts.append(
                     "# MEMORY SCOPE RESOLUTION\n"
                     "Всегда заполняй scope_selection для любого route. Выбирай keys только из "

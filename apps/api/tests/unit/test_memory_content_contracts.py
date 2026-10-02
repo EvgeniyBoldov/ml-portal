@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.runtime.memory.content_contracts import normalize_memory_content
+from app.runtime.memory.content_contracts import content_contract_error, normalize_memory_content
 
 
 def _procedure() -> dict:
@@ -25,6 +25,19 @@ def test_procedure_contract_assigns_order_and_keeps_full_rollback() -> None:
         "order": 1, "instruction": "Apply VLAN", "expected_result": "VLAN applied", "confirmation_required": True,
     }]
     assert content["rollback"]["steps"] == ["Restore backup"]
+
+
+def test_persisted_procedure_remains_valid_for_review_and_publication() -> None:
+    content = normalize_memory_content("procedure", _procedure())
+    assert normalize_memory_content("procedure", content) == content
+    assert content_contract_error("procedure", content) is None
+
+
+def test_review_error_names_all_missing_and_misplaced_fields() -> None:
+    error = content_contract_error("rule", {"definition": "Approval is required"})
+    assert error is not None
+    assert all(field in error for field in ("statement", "effect", "definition"))
+    assert "обязательное поле отсутствует" in error
 
 
 @pytest.mark.parametrize("content", [

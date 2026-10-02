@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, and_, or_, case, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import Fact, FactScope, FactSource, FactStatus
@@ -99,6 +99,38 @@ class FactStore:
         stmt = stmt.order_by(Fact.observed_at.desc()).limit(limit)
         result = await self._session.execute(stmt)
         return [_orm_to_dto(r) for r in result.scalars().all()]
+
+    async def search(self, *, query: str, user_id: UUID | None, tenant_id: UUID | None,
+                     scopes: Sequence[FactScope], subject: str | None = None, limit: int = 12) -> List[FactDTO]:
+        """Rank confirmed owned facts in SQL before limiting; never scan another owner."""
+        import re
+        owners = []
+        if FactScope.USER in scopes and user_id:
+            owners.append(and_(Fact.scope == "user", Fact.owner_type == "user", Fact.owner_id == user_id))
+        if FactScope.TENANT in scopes and tenant_id:
+            owners.append(and_(Fact.scope == "tenant", Fact.owner_type == "tenant", Fact.owner_id == tenant_id))
+        tokens = list(dict.fromkeys(re.findall(r"[\wа-яА-ЯёЁ]{2,}", query.casefold())))[:12]
+        if not owners or not tokens and not subject:
+            return []
+        matches = [or_(Fact.subject.ilike(f"%{token}%"), Fact.value.ilike(f"%{token}%")) for token in tokens]
+        score = sum((case((match, 1), else_=0) for match in matches), 0)
+        stmt = select(Fact).where(or_(*owners), Fact.status == FactStatus.CONFIRMED.value,
+                                  Fact.superseded_by.is_(None))
+        if subject:
+            stmt = stmt.where(func.lower(Fact.subject) == subject.strip().casefold())
+        else:
+            stmt = stmt.where(or_(*matches))
+        selected_limit = max(1, min(limit, 24))
+        stmt = stmt.order_by(score.desc() if matches else Fact.confidence.desc(), Fact.observed_at.desc(), Fact.id)
+        pools = []
+        for owner in owners:
+            rows = await self._session.execute(stmt.where(owner).limit(selected_limit))
+            pools.append([_orm_to_dto(row) for row in rows.scalars().all()])
+        anchors = [pool[0] for pool in pools if pool]
+        from app.runtime.memory.fact_selection import LexicalFactRanker
+        ranked = LexicalFactRanker().rank(query=query, facts=[fact for pool in pools for fact in pool])
+        selected = [*anchors, *(entry.fact for entry in ranked if entry.fact not in anchors)]
+        return selected[:selected_limit]
 
     async def list_user_visible(
         self,

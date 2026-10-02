@@ -6,12 +6,13 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.memory import MemoryRelation
+from app.models.memory import MemoryRelation, FactScope
+from app.runtime.memory.read_policy import allowed_source_collections
+from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.recall import MemoryRecallService
 from app.runtime.memory.semantic_index import MemorySemanticIndex
 from app.runtime.memory.scope_precedence import apply_scope_precedence as _apply_project_precedence
 from app.services.glossary_service import GlossaryService, ambiguous_glossary_aliases, matching_glossary_terms
-from app.services.project_catalog_service import ProjectCatalogService
 from app.services.memory_scope_catalog import list_memory_scopes, resolve_memory_scopes
 
 
@@ -36,10 +37,10 @@ class MemorySearchService:
         entity_ids: list[str] = (),
         direction: str | None = None,
         limit: int = 8,
+        fact_subject: str | None = None,
     ) -> dict[str, Any]:
-        projects = await ProjectCatalogService(self._session).list_projects()
         confirmed_glossary = await GlossaryService(self._session).list_confirmed_terms()
-        enabled_scopes = {str(scope).strip().lower() for scope in scopes if str(scope).strip()} or {"glossary", "project", "product", "team", "global"}
+        enabled_scopes = {str(scope).strip().lower() for scope in scopes if str(scope).strip()} or {"glossary", "project", "product", "team", "global", "user", "tenant"}
         glossary_terms = matching_glossary_terms(query, confirmed_glossary, limit=12) if "glossary" in enabled_scopes else []
         glossary_uncertainties = [f"ambiguous_glossary_alias:{form}" for form in
                                   ambiguous_glossary_aliases(query, glossary_terms)]
@@ -79,37 +80,37 @@ class MemorySearchService:
                 return _empty_result(direction=direction, entity_ids=entity_ids, kinds=kinds,
                                      uncertainties=["scope_widening_denied"])
         try:
-            await resolve_memory_scopes(self._session, sorted(effective_scope_keys))
+            resolved_scopes = await resolve_memory_scopes(self._session, sorted(effective_scope_keys))
         except ValueError:
             unknown = sorted(effective_scope_keys - {
                 row.key for row in await list_memory_scopes(self._session)
             })
             return _empty_result(direction=direction, entity_ids=entity_ids, kinds=kinds,
                                  uncertainties=[f"unknown_scope_key:{key}" for key in unknown] or ["invalid_scope_key"])
-        known_project_keys = {str(item.get("key") or "").strip().lower() for item in projects}
-        unknown_project_keys = sorted(project_key_set - known_project_keys)
-        if unknown_project_keys:
-            return _empty_result(
-                direction=direction, entity_ids=entity_ids, kinds=kinds,
-                uncertainties=[f"unknown_project_key:{key}" for key in unknown_project_keys],
-            )
-        selected = [item for item in projects if str(item.get("key") or "").strip().lower() in project_key_set]
-        project_ids = [item["id"] for item in selected]
-        # Reuse the read-side ACL/applicability implementation; no selector LLM
-        # participates in this operation.
+        # MemoryScope is authoritative; legacy Project IDs are optional.
+        selected = [{"id": row.project_id, "key": row.key.removeprefix("project."), "name": row.name}
+                    for row in resolved_scopes if row.scope_type == "project" and not row.is_all]
+        project_ids = [item["id"] for item in selected if item["id"] is not None]
         recall = MemoryRecallService(session=self._session, preparer=None)  # type: ignore[arg-type]
-        semantic_ids = await MemorySemanticIndex(self._session).search_ids(query, limit=48)
-        lexical_ids = await recall._lexical_ids(query, limit=48)
+        allowed_kinds = {str(kind).strip() for kind in kinds if str(kind).strip()} or _kinds_for_direction(direction)
+        collection_ids = await allowed_source_collections(self._session, user_id=user_id, tenant_id=tenant_id)
+        read_args = {"project_ids": project_ids, "tenant_id": tenant_id, "user_id": user_id,
+                     "context_scope_keys": sorted(effective_scope_keys), "collection_ids": collection_ids}
+        eligible_ids = await recall.eligible_item_ids(**read_args, kinds=allowed_kinds, categories=enabled_scopes)
+        semantic_ids = await MemorySemanticIndex(self._session).search_ids(query, limit=48, eligible_ids=eligible_ids)
+        lexical_ids = await recall._lexical_ids(query, limit=48, eligible_ids=eligible_ids, **read_args)
+        term_related_ids = await recall._term_linked_item_ids(
+            [UUID(str(term["id"])) for term in glossary_terms], eligible_ids=eligible_ids, **read_args)
         normalized_entity_ids = [str(item).strip() for item in entity_ids if str(item).strip()]
         entity_related_ids = await recall._visible_relation_item_ids(
             [MemoryRelation.target_id.in_(normalized_entity_ids)] if normalized_entity_ids else [],
-            tenant_id=tenant_id,
+            eligible_ids=eligible_ids, **read_args,
         )
         items = await recall._accessible_semantic_items(
             project_ids=project_ids,
-            semantic_ids=list(dict.fromkeys([*semantic_ids, *lexical_ids, *entity_related_ids])),
+            semantic_ids=list(dict.fromkeys([*term_related_ids, *semantic_ids, *lexical_ids, *entity_related_ids])),
             tenant_id=tenant_id,
-            context_scope_keys=sorted(effective_scope_keys),
+            context_scope_keys=sorted(effective_scope_keys), user_id=user_id, collection_ids=collection_ids,
         )
         if normalized_entity_ids:
             entity_item_id_set = set(entity_related_ids)
@@ -120,7 +121,7 @@ class MemorySearchService:
         if project_key_set:
             project_id_set = set(project_ids)
             items = [item for item in items if item.get("project_id") in project_id_set or item.get("project_id") is None]
-        project_keys_by_id = {str(project["id"]): f"project.{project['key']}" for project in selected}
+        project_keys_by_id = {str(project["id"]): f"project.{project['key']}" for project in selected if project["id"] is not None}
         for item in items:
             bound_projects = set(str(value) for value in (item.get("applicability") or {}).get("project_ids") or [])
             if item.get("project_id") is not None:
@@ -128,9 +129,6 @@ class MemorySearchService:
             legacy_keys = [project_keys_by_id[value] for value in sorted(bound_projects) if value in project_keys_by_id]
             if legacy_keys and not any(key.startswith("project.") for key in item.get("scope_keys") or []):
                 item["scope_keys"] = [*(item.get("scope_keys") or []), *legacy_keys]
-        allowed_kinds = {str(kind).strip() for kind in kinds if str(kind).strip()}
-        if not allowed_kinds:
-            allowed_kinds = _kinds_for_direction(direction)
         if allowed_kinds:
             items = [item for item in items if str(item.get("kind")) in allowed_kinds]
         items = [item for item in items if _scope_categories(item).intersection(enabled_scopes)]
@@ -146,20 +144,31 @@ class MemorySearchService:
             }
             for item in items[:max(1, min(int(limit), 12))]
         ]
+        fact_scopes = [FactScope(value) for value in ("user", "tenant") if value in enabled_scopes]
+        facts = await FactStore(self._session).search(query=query, user_id=user_id, tenant_id=tenant_id,
+            scopes=fact_scopes, subject=fact_subject, limit=max(1, min(int(limit), 12))) if fact_scopes and (not allowed_kinds or "fact" in allowed_kinds) else []
+        fact_values = [{"id": str(fact.id), "scope": fact.scope.value, "owner_type": fact.owner_type,
+            "owner_id": str(fact.owner_id), "kind": fact.kind, "subject": fact.subject,
+            "value": fact.value[:2000], "truncated": len(fact.value) > 2000, "confidence": fact.confidence,
+            "observed_at": fact.observed_at.isoformat(), "source_ref": fact.source_ref} for fact in facts]
+        fact_subjects = {fact.subject for fact in facts}
+        fact_uncertainties = [f"fact_conflict:{subject}" for subject in sorted(fact_subjects)
+            if len({" ".join(fact.value.casefold().split()) for fact in facts if fact.subject == subject}) > 1]
         return {
+            "facts": fact_values,
             "items": values,
             "projects": [{"key": item["key"], "name": item["name"]} for item in selected],
             "glossary": glossary_definitions,
-            "count": len(values),
+            "count": len(values) + len(fact_values),
             "search_scope": {
                 "direction": str(direction or "").strip() or None,
                 "entity_ids": normalized_entity_ids,
                 "kinds": sorted(allowed_kinds), "scope_keys": sorted(effective_scope_keys),
                 "scope_mode": scope_mode,
             },
-            "uncertainties": [*precedence_uncertainties, *glossary_uncertainties],
-            "memory_context": _memory_context(values, selected, [], glossary_definitions,
-                                              [*precedence_uncertainties, *glossary_uncertainties]),
+            "uncertainties": [*precedence_uncertainties, *glossary_uncertainties, *fact_uncertainties],
+            "memory_context": _memory_context(values, selected, fact_values, glossary_definitions,
+                                              [*precedence_uncertainties, *glossary_uncertainties, *fact_uncertainties]),
         }
 
 
@@ -184,7 +193,7 @@ def _scope_categories(item: dict[str, Any]) -> set[str]:
 
 def _empty_result(*, direction: str | None, entity_ids: list[str], kinds: list[str], uncertainties: list[str]) -> dict[str, Any]:
     return {"success": False, "error_code": uncertainties[0].split(":", 1)[0],
-            "uncertainties": uncertainties, "items": [], "projects": [], "glossary": [], "count": 0,
+            "uncertainties": uncertainties, "items": [], "projects": [], "glossary": [], "facts": [], "count": 0,
             "search_scope": {"direction": str(direction or "").strip() or None, "entity_ids": list(entity_ids), "kinds": list(kinds)},
             "memory_context": {"type": "memory_recall", "resolved_terms": [], "resolved_entities": [], "relevant_projects": [], "relevant_knowledge": [], "applicable_rules": [], "applicable_procedures": [], "known_constraints": [], "durable_facts": [], "uncertainties": uncertainties, "source_references": [], "rag_required": False, "tool_required": False}}
 
@@ -197,7 +206,7 @@ def _memory_context(
         return [item for item in items if item.get("kind") == kind]
     refs = [ref for item in [*items, *glossary] for ref in item.get("source_references") or [] if isinstance(ref, dict)]
     uncertain = [item for item in items if item.get("state") != "active"]
-    clarification_reasons = [reason for reason in uncertainties if reason.startswith("ambiguous_glossary_alias:")]
+    clarification_reasons = [reason for reason in uncertainties if reason.startswith(("ambiguous_glossary_alias:", "fact_conflict:"))]
     source_uncertainties = [reason for reason in uncertainties if reason not in clarification_reasons]
     return {
         "type": "memory_recall",

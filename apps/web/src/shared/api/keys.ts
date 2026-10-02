@@ -38,6 +38,13 @@ export const qk = {
   },
   admin: {
     all: () => ['admin'] as const,
+    memory: {
+      scopes: () => ['admin', 'memory', 'scopes'] as const,
+      termCatalog: () => ['admin', 'memory', 'term-catalog'] as const,
+      review: () => ['admin', 'memory', 'staging-review'] as const,
+      candidateEvidence: (id: string) => ['admin', 'memory', 'candidate-evidence', id] as const,
+      scopeProposals: () => ['admin', 'memory', 'scope-proposals'] as const,
+    },
     users: {
       all: () => ['admin', 'users'] as const,
       list: (params?: { page?: number; q?: string; limit?: number }) =>

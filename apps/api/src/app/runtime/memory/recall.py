@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.memory import MemoryClaim, MemoryItem, MemoryRelation
 from app.models.memory_scope import MemoryClaimScope, MemoryScope
 from app.models.rag import RAGDocument
+from app.models.document_memory_staging import MemoryExtractionCandidate
+from app.runtime.memory.read_policy import published_claim, source_access, applicable_claim, live_item, allowed_source_collections
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.dto import FactDTO
 from app.runtime.memory.preparer import MemoryPreparer, PreparedMemoryContext
@@ -93,19 +95,20 @@ class MemoryRecallService:
         glossary = matching_glossary_terms(request_text, all_glossary)
         project_by_id = {str(item["id"]): item for item in all_projects if item.get("id")}
         projects = [item for item in all_projects if item.get("id") in set(project_ids)]
-        semantic_ids = await MemorySemanticIndex(self._session).search_ids(request_text, limit=48)
-        lexical_ids = await self._lexical_ids(request_text, limit=48)
-        related_ids = await self._visible_relation_item_ids(
-            [and_(
-                MemoryRelation.target_type == "project",
-                MemoryRelation.target_id.in_([str(value) for value in project_ids]),
-            )] if project_ids else [],
-            tenant_id=tenant_id,
-        )
-        candidate_ids = list(dict.fromkeys([*semantic_ids, *lexical_ids, *related_ids]))
-        semantic_items = await self._accessible_semantic_items(
-            project_ids=project_ids, semantic_ids=candidate_ids, tenant_id=tenant_id,
-        )
+        scope_keys = [f"project.{item['key']}" for item in projects if item["id"] in project_ids]
+        collection_ids = await allowed_source_collections(self._session, user_id=user_id, tenant_id=tenant_id)
+        read_args = {"project_ids": project_ids, "tenant_id": tenant_id, "user_id": user_id,
+                     "context_scope_keys": scope_keys, "collection_ids": collection_ids}
+        eligible_ids = await self.eligible_item_ids(**read_args)
+        semantic_ids = await MemorySemanticIndex(self._session).search_ids(request_text, limit=48, eligible_ids=eligible_ids)
+        lexical_ids = await self._lexical_ids(request_text, limit=48, eligible_ids=eligible_ids, **read_args)
+        related_ids = await self._visible_relation_item_ids([
+                MemoryRelation.target_type == "project", MemoryRelation.target_id.in_([str(value) for value in project_ids]),
+            ] if project_ids else [], eligible_ids=eligible_ids, **read_args)
+        term_ids = await self._term_linked_item_ids([UUID(str(term["id"])) for term in glossary],
+                                                   eligible_ids=eligible_ids, **read_args)
+        candidate_ids = list(dict.fromkeys([*term_ids, *semantic_ids, *lexical_ids, *related_ids]))
+        semantic_items = await self._accessible_semantic_items(semantic_ids=candidate_ids, **read_args)
         semantic_items, scope_uncertainties = apply_scope_precedence(semantic_items, project_ids)
         project_facts = [{
             "project_id": item["project_id"],
@@ -144,89 +147,100 @@ class MemoryRecallService:
             )
         return self._structure(prepared), prepared
 
-    async def _visible_relation_item_ids(
-        self, clauses: list[Any], *, tenant_id: UUID | None,
-    ) -> list[UUID]:
-        """Use graph edges only when their originating claim is visible.
+    def _eligible_claim_query(self, *, project_ids: list[UUID], tenant_id: UUID | None,
+                              context_scope_keys: list[str], user_id: UUID | None = None,
+                              collection_ids: list[UUID] = ()):
+        return select(MemoryItem, MemoryClaim).join(
+            MemoryClaim, MemoryClaim.memory_item_id == MemoryItem.id,
+        ).join(RAGDocument, RAGDocument.id == MemoryClaim.document_id).where(
+            live_item(), published_claim(),
+            source_access(tenant_id=tenant_id, user_id=user_id, collection_ids=collection_ids),
+            applicable_claim(project_ids=project_ids, scope_keys=context_scope_keys, tenant_id=tenant_id),
+        )
 
-        Relations are derived data.  Filtering the final MemoryItem alone is
-        insufficient: an inaccessible document could otherwise alter which
-        project/entity makes an otherwise visible item retrievable.
-        """
+    async def eligible_item_ids(self, *, project_ids: list[UUID], tenant_id: UUID | None,
+                               context_scope_keys: list[str], user_id: UUID | None = None,
+                               collection_ids: list[UUID] = (), kinds: set[str] = (), categories: set[str] = ()) -> list[UUID]:
+        query = self._eligible_claim_query(project_ids=project_ids, tenant_id=tenant_id,
+            context_scope_keys=context_scope_keys, user_id=user_id, collection_ids=collection_ids)
+        if kinds:
+            query = query.where(MemoryItem.item_type.in_(kinds))
+        if categories:
+            scoped = select(MemoryClaimScope.scope_id).where(MemoryClaimScope.claim_id == MemoryClaim.id).correlate(MemoryClaim)
+            from sqlalchemy import exists
+            category_match = [exists(scoped.join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id).where(
+                MemoryScope.scope_type.in_(set(categories).intersection({"project", "product", "team"})), MemoryScope.lifecycle_status == "active"))]
+            if "global" in categories:
+                category_match.append(and_(~exists(scoped), MemoryItem.project_id.is_(None)))
+            if "project" in categories:
+                category_match.append(MemoryItem.project_id.is_not(None))
+            query = query.where(or_(*category_match))
+        rows = await self._session.execute(query.with_only_columns(MemoryItem.id).distinct())
+        return list(rows.scalars().all())
+
+    async def _visible_relation_item_ids(self, clauses: list[Any], *, tenant_id: UUID | None,
+                                        user_id: UUID | None = None, project_ids: list[UUID] = (),
+                                        context_scope_keys: list[str] = (), collection_ids: list[UUID] = (),
+                                        eligible_ids: list[UUID] | None = None) -> list[UUID]:
         if not clauses:
             return []
-        document_access = RAGDocument.scope == "global"
-        claim_visibility = MemoryClaim.visibility_tenant_id.is_(None)
-        if tenant_id is not None:
-            document_access = or_(document_access, RAGDocument.tenant_id == tenant_id)
-            claim_visibility = or_(claim_visibility, MemoryClaim.visibility_tenant_id == tenant_id)
-        rows = await self._session.execute(
-            select(MemoryRelation.memory_item_id)
-            .join(
-                MemoryClaim,
-                and_(
-                    MemoryClaim.memory_item_id == MemoryRelation.memory_item_id,
-                    MemoryClaim.document_id == MemoryRelation.document_id,
-                ),
-            )
-            .join(RAGDocument, RAGDocument.id == MemoryRelation.document_id)
-            .where(
-                or_(*clauses),
-                MemoryClaim.state == "active",
-                claim_visibility,
-                document_access,
-                RAGDocument.status != "archived",
-            )
-            .limit(96)
-        )
-        return list(dict.fromkeys(rows.scalars().all()))[:48]
+        query = self._eligible_claim_query(project_ids=project_ids, tenant_id=tenant_id,
+            context_scope_keys=context_scope_keys, user_id=user_id, collection_ids=collection_ids).join(
+                MemoryRelation, and_(MemoryRelation.memory_item_id == MemoryItem.id,
+                                     MemoryRelation.document_id == MemoryClaim.document_id),
+            ).where(or_(*clauses))
+        if eligible_ids is not None:
+            query = query.where(MemoryItem.id.in_(eligible_ids))
+        rows = await self._session.execute(query.with_only_columns(MemoryItem.id).distinct().limit(48))
+        return list(rows.scalars().all())
 
-    async def _lexical_ids(self, request_text: str, *, limit: int) -> list[UUID]:
-        """Exact terms/codes complement vector search and survive its outage."""
+    async def _term_linked_item_ids(self, term_ids: list[UUID], *, eligible_ids: list[UUID],
+                                    tenant_id: UUID | None, user_id: UUID | None, project_ids: list[UUID],
+                                    context_scope_keys: list[str], collection_ids: list[UUID]) -> list[UUID]:
+        if not term_ids or not eligible_ids:
+            return []
+        query = self._eligible_claim_query(project_ids=project_ids, tenant_id=tenant_id,
+            context_scope_keys=context_scope_keys, user_id=user_id, collection_ids=collection_ids).join(
+                MemoryExtractionCandidate, MemoryExtractionCandidate.id == MemoryClaim.approved_candidate_id,
+            ).where(MemoryItem.id.in_(eligible_ids), or_(*[
+                MemoryExtractionCandidate.related_entities.contains([{"type": "glossary_term", "id": str(id_)}])
+                for id_ in term_ids
+            ]))
+        rows = await self._session.execute(query.with_only_columns(MemoryItem.id).distinct().limit(48))
+        return list(rows.scalars().all())
+
+    async def _lexical_ids(self, request_text: str, *, limit: int, eligible_ids: list[UUID] | None = None,
+                           tenant_id: UUID | None = None, user_id: UUID | None = None,
+                           project_ids: list[UUID] = (), context_scope_keys: list[str] = (),
+                           collection_ids: list[UUID] = ()) -> list[UUID]:
         tokens = _query_tokens(request_text)
-        if not tokens:
+        if not tokens or eligible_ids == []:
             return []
         clauses = []
         for token in tokens[:8]:
             pattern = f"%{token}%"
-            clauses.extend((MemoryItem.subject.ilike(pattern), MemoryItem.content_text.ilike(pattern)))
-        rows = await self._session.execute(
-            select(MemoryItem.id).where(
-                MemoryItem.state.in_(("active", "uncertain")), or_(*clauses),
-            ).order_by(MemoryItem.last_verified_at.desc()).limit(limit)
-        )
+            clauses.extend((MemoryItem.subject.ilike(pattern), MemoryClaim.content_text.ilike(pattern)))
+        query = self._eligible_claim_query(project_ids=project_ids, tenant_id=tenant_id,
+            context_scope_keys=context_scope_keys, user_id=user_id, collection_ids=collection_ids).where(or_(*clauses))
+        if eligible_ids is not None:
+            query = query.where(MemoryItem.id.in_(eligible_ids))
+        # Ranking uses visible claim wording; inaccessible claims cannot affect it.
+        from sqlalchemy import func
+        rows = await self._session.execute(query.with_only_columns(MemoryItem.id).group_by(MemoryItem.id)
+            .order_by(func.max(MemoryClaim.updated_at).desc(), MemoryItem.id).limit(limit))
         return list(rows.scalars().all())
 
-    async def _accessible_semantic_items(
-        self, *, project_ids: list[UUID], semantic_ids: list[UUID], tenant_id: UUID | None,
-        context_scope_keys: list[str] | tuple[str, ...] = (),
-    ) -> list[dict[str, Any]]:
+    async def _accessible_semantic_items(self, *, project_ids: list[UUID], semantic_ids: list[UUID],
+                                        tenant_id: UUID | None, context_scope_keys: list[str] = (),
+                                        user_id: UUID | None = None, collection_ids: list[UUID] | None = None) -> list[dict[str, Any]]:
         if not project_ids and not semantic_ids:
             return []
-        document_access = RAGDocument.scope == "global"
-        if tenant_id is not None:
-            document_access = or_(document_access, RAGDocument.tenant_id == tenant_id)
+        if collection_ids is None:
+            collection_ids = await allowed_source_collections(self._session, user_id=user_id, tenant_id=tenant_id)
+        query = self._eligible_claim_query(project_ids=project_ids, tenant_id=tenant_id,
+            context_scope_keys=context_scope_keys, user_id=user_id, collection_ids=collection_ids)
         candidate_filter = MemoryItem.id.in_(semantic_ids) if semantic_ids else MemoryItem.project_id.in_(project_ids)
-        claim_visibility = MemoryClaim.visibility_tenant_id.is_(None)
-        if tenant_id is not None:
-            claim_visibility = or_(claim_visibility, MemoryClaim.visibility_tenant_id == tenant_id)
-        rows = await self._session.execute(
-            select(MemoryItem, MemoryClaim)
-            .join(MemoryClaim, MemoryClaim.memory_item_id == MemoryItem.id)
-            .join(RAGDocument, RAGDocument.id == MemoryClaim.document_id)
-            .where(
-                candidate_filter,
-                MemoryItem.state.in_(("active", "uncertain")),
-                MemoryItem.item_type != "term",
-                MemoryItem.lifecycle_status == "active",
-                MemoryClaim.state == "active",
-                MemoryClaim.lifecycle_status == "active",
-                claim_visibility,
-                document_access,
-                RAGDocument.status != "archived",
-            )
-            .limit(2400)
-        )
+        rows = await self._session.execute(query.where(candidate_filter))
         # An item is an identity. Its text must be resolved from claims whose
         # document is visible to this tenant; using the globally consolidated
         # winner here can disclose a claim from another department.

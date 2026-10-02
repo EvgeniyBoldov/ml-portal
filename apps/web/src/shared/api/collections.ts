@@ -312,7 +312,6 @@ export interface UploadDocumentRequest {
   auto_ingest?: boolean;
   memory_enabled?: boolean;
   project_keys?: string[];
-  memory_scope_keys?: string[];
 }
 
 export interface UploadDocumentResponse {
@@ -714,7 +713,6 @@ export const collectionsApi = {
     if (data.auto_ingest !== undefined) formData.append('auto_ingest', String(data.auto_ingest));
     if (data.memory_enabled !== undefined) formData.append('memory_enabled', String(data.memory_enabled));
     if (data.project_keys?.length) formData.append('project_keys', JSON.stringify(data.project_keys));
-    if (data.memory_scope_keys?.length) formData.append('memory_scope_keys', JSON.stringify(data.memory_scope_keys));
 
     return apiRequest<UploadDocumentResponse>(
       `/collections/${collectionId}/upload-document`,

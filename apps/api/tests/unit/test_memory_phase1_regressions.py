@@ -91,7 +91,6 @@ async def test_published_term_reuse_and_pending_term_dependency(status, expected
     ({"project_keys": ["a"], "scope_keys": ["project.all"]}, "conflicting_project_scope"),
 ])
 async def test_invalid_scope_stops_before_recall(monkeypatch, params, error):
-    monkeypatch.setattr(search, "ProjectCatalogService", lambda _: NS(list_projects=AsyncMock(return_value=[])))
     monkeypatch.setattr(search, "GlossaryService", lambda _: NS(list_confirmed_terms=AsyncMock(return_value=[])))
     recall = Mock()
     monkeypatch.setattr(search, "MemoryRecallService", recall)
