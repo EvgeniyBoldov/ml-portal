@@ -493,8 +493,8 @@ export interface SemanticMemoryAdminDetail extends SemanticMemoryAdminItem {
   related_project_keys: string[];
   applicability: Record<string, unknown>;
   visibility: Record<string, unknown>;
-  sources: Array<{ document_id: string; canonical_checksum: string; section_id: string; label: string | null; start_offset: number | null; end_offset: number | null }>;
-  claims: Array<{ id: string; document_id: string; canonical_checksum: string; scope: string; item_type: string; project_id: string | null; scope_keys: string[]; normalized_subject: string; confidence: number; state: string; evidence_section_ids: string[]; content: Record<string, unknown>; applicability: Record<string, unknown>; visibility_tenant_id: string | null; updated_at: string }>;
+  sources: Array<{ document_id: string; document_title: string | null; canonical_checksum: string; section_id: string; label: string | null; start_offset: number | null; end_offset: number | null }>;
+  claims: Array<{ id: string; approved_candidate_id: string | null; document_id: string; canonical_checksum: string; scope: string; item_type: string; project_id: string | null; scope_keys: string[]; normalized_subject: string; confidence: number; state: string; evidence_section_ids: string[]; content: Record<string, unknown>; applicability: Record<string, unknown>; visibility_tenant_id: string | null; updated_at: string }>;
   relations: Array<{ relation_type: string; target_type: string; target_id: string }>;
   evaluations: Array<{ tool_call_id: string; outcome: string; reason: string; evidence_refs: string[]; created_at: string }>;
 }
@@ -640,6 +640,9 @@ export const adminApi = {
   },
   async getShadowCandidateEvidence(id: string): Promise<ShadowCandidateEvidence> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/evidence`);
+  },
+  async getShadowMemoryCandidate(id: string): Promise<ShadowMemoryCandidate> {
+    return apiRequest(`/admin/memory/staging/candidates/${id}`);
   },
   async rejectShadowMemoryCandidate(id: string, reason: string): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });

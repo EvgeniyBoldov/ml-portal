@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import exists, func, or_, select
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import (
@@ -173,25 +174,27 @@ class SemanticMemoryAdminService:
 
 
 def _approved_item():
-    return exists(select(MemoryClaim.id).where(
-        MemoryClaim.memory_item_id == MemoryItem.id, published_claim(),
+    approved_claim = aliased(MemoryClaim)
+    return exists(select(approved_claim.id).where(
+        approved_claim.memory_item_id == MemoryItem.id, published_claim(approved_claim),
     ))
 
 
 def _scope_filters(scope_type, scope_id):
+    scoped_claim = aliased(MemoryClaim)
     if scope_type == "global":
         yield ~exists(select(MemoryClaimScope.scope_id).join(
-            MemoryClaim, MemoryClaim.id == MemoryClaimScope.claim_id,
-        ).where(MemoryClaim.memory_item_id == MemoryItem.id,
-                published_claim(),
-                MemoryClaim.lifecycle_status == "active"))
+            scoped_claim, scoped_claim.id == MemoryClaimScope.claim_id,
+        ).where(scoped_claim.memory_item_id == MemoryItem.id,
+                published_claim(scoped_claim),
+                scoped_claim.lifecycle_status == "active"))
     elif scope_type or scope_id:
         stmt = select(MemoryClaimScope.scope_id).join(
-            MemoryClaim, MemoryClaim.id == MemoryClaimScope.claim_id,
+            scoped_claim, scoped_claim.id == MemoryClaimScope.claim_id,
         ).join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id).where(
-            MemoryClaim.memory_item_id == MemoryItem.id,
-            published_claim(),
-            MemoryClaim.lifecycle_status == "active",
+            scoped_claim.memory_item_id == MemoryItem.id,
+            published_claim(scoped_claim),
+            scoped_claim.lifecycle_status == "active",
             MemoryScope.lifecycle_status == "active",
         )
         if scope_type:

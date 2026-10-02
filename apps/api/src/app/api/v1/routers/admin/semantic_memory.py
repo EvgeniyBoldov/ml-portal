@@ -85,6 +85,7 @@ class SemanticMemoryItemResponse(BaseModel):
 
 class SemanticMemorySourceResponse(BaseModel):
     document_id: UUID
+    document_title: str | None = None
     canonical_checksum: str
     section_id: str
     label: str | None
@@ -94,6 +95,7 @@ class SemanticMemorySourceResponse(BaseModel):
 
 class SemanticMemoryClaimResponse(BaseModel):
     id: UUID
+    approved_candidate_id: UUID | None = None
     document_id: UUID
     canonical_checksum: str
     scope: str
@@ -111,6 +113,7 @@ class SemanticMemoryClaimResponse(BaseModel):
 
 
 class SemanticMemoryDetailResponse(SemanticMemoryItemResponse):
+    related_entities: list[dict[str, Any]] = Field(default_factory=list)
     sources: list[SemanticMemorySourceResponse]
     claims: list[SemanticMemoryClaimResponse]
     relations: list[dict[str, str]]
@@ -625,6 +628,18 @@ async def _shadow_candidate_response(
         ))
 
 
+@router.get("/staging/candidates/{candidate_id}", response_model=ShadowCandidateResponse)
+async def get_shadow_candidate(
+    candidate_id: UUID, db: AsyncSession = Depends(db_session), _: UserCtx = Depends(require_admin),
+):
+    row = await db.get(MemoryExtractionCandidate, candidate_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    snapshot = await db.get(DocumentMemorySnapshot, row.snapshot_id)
+    source = await db.get(RAGDocument, snapshot.document_id) if snapshot else None
+    return await _shadow_candidate_response(db, row, (source.title or source.filename, source.scope) if source else (None, None))
+
+
 @router.patch("/staging/candidates/{candidate_id}/tags", response_model=ShadowCandidateResponse)
 async def update_shadow_candidate_tags(
     candidate_id: UUID, request: ShadowCandidateTagsRequest,
@@ -871,15 +886,34 @@ async def get_semantic_memory_item(
     for claim_id, key in scope_rows:
         claim_scope_keys.setdefault(claim_id, []).append(key)
     base["scope_keys"] = sorted({key for keys in claim_scope_keys.values() for key in keys})
+    candidate_ids = [claim.approved_candidate_id for claim in detail.claims if claim.approved_candidate_id]
+    candidates = (await db.execute(select(MemoryExtractionCandidate).where(
+        MemoryExtractionCandidate.id.in_(candidate_ids),
+    ))).scalars().all() if candidate_ids else []
+    related_entities = []
+    seen_entities = set()
+    for candidate in candidates:
+        for entity in candidate.related_entities or []:
+            signature = json.dumps(entity, sort_keys=True)
+            if signature not in seen_entities:
+                related_entities.append(entity)
+                seen_entities.add(signature)
+    document_ids = {source.document_id for source in detail.sources}
+    document_ids.update(claim.document_id for claim in detail.claims)
+    documents = (await db.execute(select(RAGDocument).where(
+        RAGDocument.id.in_(document_ids),
+    ))).scalars().all() if document_ids else []
+    document_titles = {document.id: document.title or document.filename for document in documents}
     return SemanticMemoryDetailResponse(
         **base,
+        related_entities=related_entities,
         sources=[SemanticMemorySourceResponse(
-            document_id=item.document_id, canonical_checksum=item.canonical_checksum,
+            document_id=item.document_id, document_title=document_titles.get(item.document_id), canonical_checksum=item.canonical_checksum,
             section_id=item.section_id, label=item.label,
             start_offset=item.start_offset, end_offset=item.end_offset,
         ) for item in detail.sources],
         claims=[SemanticMemoryClaimResponse(
-            id=item.id, document_id=item.document_id, canonical_checksum=item.canonical_checksum,
+            id=item.id, approved_candidate_id=item.approved_candidate_id, document_id=item.document_id, canonical_checksum=item.canonical_checksum,
             scope="scoped" if item.scope_signature != "legacy" else item.scope,
             item_type=item.item_type, project_id=item.project_id,
             scope_keys=claim_scope_keys.get(item.id, []),

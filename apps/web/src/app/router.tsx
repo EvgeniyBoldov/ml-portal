@@ -115,6 +115,7 @@ const router = createBrowserRouter([
       { path: 'agent-runs/:id', element: withSuspense(<AgentRunPage />) },
       { path: 'collections', element: withSuspense(<CollectionListPage />) },
       { path: 'memory', element: withSuspense(<MemoryPage />) },
+      { path: 'memory/review/:candidateId', element: withSuspense(<MemoryItemPage />) },
       { path: 'memory/:itemId', element: withSuspense(<MemoryItemPage />) },
       { path: 'collections/new', element: withSuspense(<CollectionPage />) },
       { path: 'collections/:slug', element: withSuspense(<CollectionPage />) },

@@ -2,10 +2,9 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Checkbox, ConfirmDialog, DataTable, EntityPageV2, Input, Modal, Select, Tab, LifecycleDeleteDialog, type DataTableColumn } from '@/shared/ui';
-import { adminApi, type AdminGlossaryTerm, type MemoryCandidateTags, type MemoryScopeAdminItem, type MemoryScopeProposalAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
+import { adminApi, type AdminGlossaryTerm, type MemoryScopeAdminItem, type MemoryScopeProposalAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-import MemoryReviewDialog, { type MemoryApproval } from '@/domains/admin/components/MemoryReviewDialog';
 import MemoryBulkRejectDialog from '@/domains/admin/components/MemoryBulkRejectDialog';
 import MemoryScopeProposalDialog from '@/domains/admin/components/MemoryScopeProposalDialog';
 import MemoryActionsMenu from '@/domains/admin/components/MemoryActionsMenu';
@@ -56,7 +55,6 @@ export default function MemoryPage() {
   const [scopeEditor, setScopeEditor] = useState<MemoryScopeAdminItem | 'new' | null>(null);
   const [scopeToDelete, setScopeToDelete] = useState<MemoryScopeAdminItem | null>(null);
   const [scopeLifecycleAction, setScopeLifecycleAction] = useState<'delete' | 'restore'>('delete');
-  const [reviewEditor, setReviewEditor] = useState<ShadowMemoryCandidate | null>(null);
   const [scopeForm, setScopeForm] = useState({ scope_type: 'team' as MemoryScopeAdminItem['scope_type'], key: '', name: '', aliases: '', is_all: false });
   const queryClient = useQueryClient();
   const showError = useErrorToast();
@@ -115,31 +113,12 @@ export default function MemoryPage() {
     queryFn: () => adminApi.getRetryableShadowSnapshots(),
     enabled: activeTab === 'review',
   });
-  const decision = useMutation({
-    mutationFn: ({ row, action, body, reason }: { row: ShadowMemoryCandidate; action: 'approve' | 'reject'; body?: MemoryApproval; reason?: string }) => action === 'approve'
-      ? adminApi.approveShadowMemoryCandidate(row.id, body ?? {})
-      : adminApi.rejectShadowMemoryCandidate(row.id, reason ?? ''),
-    onSuccess: (_result, { row }) => {
-      setSelectedReviewIds((current) => new Set([...current].filter((id) => id !== row.id)));
-      queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'glossary'] });
-      queryClient.invalidateQueries({ queryKey: ['collections', 'glossary', 'overview'] });
-    },
-  });
   const scopeDecision = useMutation({
     mutationFn: ({ row, action, reason }: { row: MemoryScopeProposalAdminItem; action: 'approve' | 'reject'; reason?: string }) => action === 'approve'
       ? adminApi.approveMemoryScopeProposal(row.id, reason)
       : adminApi.rejectMemoryScopeProposal(row.id, reason ?? ''),
     onSuccess: () => { setScopeProposalEditor(null); queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] }); },
     onError: (error: Error) => showError(error.message || 'Не удалось обработать предложение скоупа'),
-  });
-  const saveCandidateTags = useMutation({
-    mutationFn: ({ id, tags }: { id: string; tags: MemoryCandidateTags }) => adminApi.updateShadowCandidateTags(id, tags),
-    onSuccess: (row) => {
-      setReviewEditor(row);
-      queryClient.invalidateQueries({ queryKey: qk.admin.memory.review() });
-      showSuccess('Применимость и связи сохранены');
-    },
   });
   const reextract = useMutation({
     mutationFn: (snapshotId: string) => adminApi.reextractShadowMemorySnapshot(snapshotId),
@@ -249,7 +228,7 @@ export default function MemoryPage() {
             onClick: () => setBulkReviewRejectIds(selectedReviewCandidates.map((row) => row.id)),
           }]} />}
           loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20}
-          onRowClick={setReviewEditor} />}
+          onRowClick={(row) => navigate(`/admin/memory/review/${row.id}`)} />}
       </Tab>
       <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'team', key: '', name: '', aliases: '', is_all: false }); setScopeEditor('new'); }}>Создать скоуп</Button>]}>
         {scopesError || scopeProposalsError ? <p role="alert">Не удалось загрузить скоупы памяти и предложения.</p> : <DataTable columns={scopeColumns({ onReview: setScopeProposalEditor, onEdit: openScopeEditor, onLifecycle: (scope, action) => { setScopeLifecycleAction(action); setScopeToDelete(scope); } })} data={scopeRows} keyField="id" loading={scopesLoading || scopeProposalsLoading} emptyText="Скоупов пока нет" paginated pageSize={20} onRowClick={openScopeRow} />}
@@ -279,11 +258,6 @@ export default function MemoryPage() {
         <Button disabled={reextract.isPending} onClick={() => reextract.mutate(row.snapshot_id)}>Повторить извлечение</Button>
       </div>)}
     </div>}
-    {reviewEditor && <MemoryReviewDialog key={reviewEditor.id} candidate={reviewEditor} scopes={memoryScopes ?? []} pending={decision.isPending || saveCandidateTags.isPending}
-      onSaveTags={(tags) => saveCandidateTags.mutateAsync({ id: reviewEditor.id, tags })}
-      onClose={() => setReviewEditor(null)}
-      onApprove={async (body) => { await decision.mutateAsync({ row: reviewEditor, action: 'approve', body }); setReviewEditor(null); }}
-      onReject={async (reason) => { await decision.mutateAsync({ row: reviewEditor, action: 'reject', reason }); setReviewEditor(null); }} />}
     {bulkReviewRejectIds && <MemoryBulkRejectDialog ids={bulkReviewRejectIds} onClose={() => setBulkReviewRejectIds(null)}
       onRejected={(ids) => {
         setSelectedReviewIds((current) => new Set([...current].filter((id) => !ids.includes(String(id)))));

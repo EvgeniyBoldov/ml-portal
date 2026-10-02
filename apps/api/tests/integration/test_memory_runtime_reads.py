@@ -42,6 +42,26 @@ async def publish(session, *, scope_type='project', term_only=False):
 
 
 @pytest.mark.asyncio
+async def test_memory_card_preserves_candidate_links_and_source_identity(tag_pg):
+    from app.api.v1.routers.admin.semantic_memory import get_shadow_candidate, get_semantic_memory_item
+    from app.services.semantic_memory_admin_service import SemanticMemoryAdminService
+    async with AsyncSession(tag_pg, expire_on_commit=False) as session:
+        candidate, scope, claim = await publish(session)
+        draft = await get_shadow_candidate(candidate.id, db=session, _=None)
+        card = await get_semantic_memory_item(claim.memory_item_id, db=session, _=None)
+        assert draft.document_title == 'Synthetic review'
+        assert draft.scope_keys == [scope.key]
+        assert card.scope_keys == draft.scope_keys
+        assert card.related_entities == draft.related_entities
+        assert str(card.related_entities[0]['id']) == str(draft.glossary_term_ids[0])
+        assert card.claims[0].approved_candidate_id == candidate.id
+        assert card.sources[0].document_title == draft.document_title
+        page = await SemanticMemoryAdminService(session).list_items(scope_id=scope.id)
+        assert page.total == 1
+        assert page.rows[0].item.id == card.id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('scope_type', ['project', 'team', 'product'])
 async def test_term_alias_finds_linked_rule_in_typed_scope_without_legacy_project(tag_pg, monkeypatch, scope_type):
     monkeypatch.setattr(MemorySemanticIndex, 'search_ids', AsyncMock(return_value=[]))

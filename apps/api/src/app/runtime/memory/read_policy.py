@@ -19,26 +19,26 @@ from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership
 
 
-def published_claim() -> ColumnElement[bool]:
+def published_claim(claim: Any = MemoryClaim) -> ColumnElement[bool]:
     """Only an approved current extraction may supply a live claim."""
     newer = aliased(DocumentMemorySnapshot)
-    return and_(MemoryClaim.state == "active", MemoryClaim.lifecycle_status == "active", exists(
+    return and_(claim.state == "active", claim.lifecycle_status == "active", exists(
         select(MemoryExtractionCandidate.id).join(
             DocumentMemorySnapshot, DocumentMemorySnapshot.id == MemoryExtractionCandidate.snapshot_id,
         ).join(RAGDocument, RAGDocument.id == DocumentMemorySnapshot.document_id).where(
-            MemoryExtractionCandidate.id == MemoryClaim.approved_candidate_id,
+            MemoryExtractionCandidate.id == claim.approved_candidate_id,
             MemoryExtractionCandidate.resolution_status == "resolved",
             RAGDocument.status != "archived",
             MemoryExtractionCandidate.candidate_type != "term",
-            MemoryExtractionCandidate.candidate_type == MemoryClaim.item_type,
-            DocumentMemorySnapshot.document_id == MemoryClaim.document_id,
-            DocumentMemorySnapshot.canonical_checksum == MemoryClaim.canonical_checksum,
+            MemoryExtractionCandidate.candidate_type == claim.item_type,
+            DocumentMemorySnapshot.document_id == claim.document_id,
+            DocumentMemorySnapshot.canonical_checksum == claim.canonical_checksum,
             DocumentMemorySnapshot.status.notin_(("superseded", "failed", "rejected")),
             or_(MemoryExtractionCandidate.attempt_id == DocumentMemorySnapshot.active_attempt_id,
                 and_(MemoryExtractionCandidate.attempt_id.is_(None), DocumentMemorySnapshot.active_attempt_id.is_(None))),
             ~exists(select(newer.id).where(newer.document_id == DocumentMemorySnapshot.document_id,
                                            newer.created_at > DocumentMemorySnapshot.created_at)),
-        ).correlate(MemoryClaim),
+        ).correlate(claim),
     ))
 
 
