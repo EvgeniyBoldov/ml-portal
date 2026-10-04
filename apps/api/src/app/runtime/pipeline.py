@@ -51,6 +51,7 @@ from app.runtime.memory.project_context import ProjectContextResolver
 from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdentity, ScopeSelection, merge_selection
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.search import MemorySearchService
+from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.memory.turn_recall import recall_with_stable_scope
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
 from app.services.agent_service import AgentService
@@ -69,7 +70,7 @@ RUNTIME_MEMORY_INLINE = False
 logger = get_logger(__name__)
 
 
-async def _base_scope_context(session, *, chat_context: dict[str, Any], project_defaults: list[str]) -> EffectiveScopeContext:
+async def _base_scope_context(session, *, chat_context: dict[str, Any], project_defaults: list[str], facts: list[Any] = ()) -> EffectiveScopeContext:
     # Read the active catalog once and discard stale chat identities. Project
     # defaults are added only when focus has not selected a project scope.
     from app.services.memory_scope_catalog import list_memory_scopes
@@ -80,13 +81,24 @@ async def _base_scope_context(session, *, chat_context: dict[str, Any], project_
     chat_keys = [key for key in dict.fromkeys([
         *(str(key).casefold() for key in focus.get("scope_keys", []) if str(key).strip()),
         *(f"project.{str(key).casefold()}" for key in focus.get("project_keys", []) if str(key).strip()),
-    ]) if origins.get(key) != "user_project_default"]
-    keys = [key for key in chat_keys if key in by_key]
-    if not focus.get("suppress_project_default") and not any(key.startswith("project.") for key in keys):
-        keys.extend(f"project.{key.casefold()}" for key in project_defaults if f"project.{key.casefold()}" in by_key)
+        *(f"team.{str(key).casefold()}" for key in focus.get("team_keys", []) if str(key).strip()),
+    ]) if origins.get(key) not in {"user_project_default", "user_default", "tenant_default"}]
+    keys = [key for key in chat_keys if key in by_key and not getattr(by_key[key], "is_all", False)]
+    default_origins = {}
+    for branch in ("team", "project"):
+        if focus.get(f"suppress_{branch}_default") or any(key.startswith(f"{branch}.") for key in keys):
+            continue
+        defaults, origin = scope_fact_defaults(facts, branch)
+        if origin == "none" and branch == "project":
+            defaults, origin = project_defaults, "user_project_default"
+        for value in defaults:
+            key = value if value.startswith(f"{branch}.") else f"{branch}.{value}"
+            if key in by_key and not getattr(by_key[key], "is_all", False):
+                keys.append(key)
+                default_origins[key] = origin
     selected = [ScopeIdentity(id=str(by_key[key].id), key=key, type=by_key[key].scope_type,
                               name=by_key[key].name,
-                              source=("chat_focus" if key in chat_keys else "user_project_default"))
+                              source=("chat_focus" if key in chat_keys else default_origins.get(key, "user_project_default")))
                 for key in dict.fromkeys(keys)]
     return EffectiveScopeContext(revision=int(focus.get("scope_revision") or 0), selected=selected,
                                  mentioned=[ScopeIdentity(id=str(by_key[key].id), key=key,
@@ -126,13 +138,16 @@ def _project_context_payload(context: EffectiveScopeContext, base: dict[str, Any
     scope_source = "turn" if any(item.source == "turn" for item in context.selected) else \
                    "chat_context" if any(item.source == "chat_focus" for item in context.selected) else \
                    "user_default" if context.selected else "none"
-    return {**base, "effective_scope_keys": context.keys,
+    return {**base, "execution_context": memory_execution_context(context.keys, revision=context.revision),
+            "effective_scope_keys": context.keys,
+            "effective_team_keys": [item.key.removeprefix("team.") for item in context.selected if item.type == "team"],
             "effective_project_keys": project_keys, "explicit_project_keys": focus_projects,
             "explicit_scope_keys": [item.key for item in selected_turn],
             "scope_origins": origins, "scope_revision": context.revision,
             "scope_context": context.model_payload(), "scope_ceiling_keys": context.ceiling_keys,
             "mentioned_scope_keys": [item.key for item in context.mentioned],
             "scope_selection_explicit": context.mode == "replace" or any(item.source == "turn" for item in context.selected),
+            "suppress_team_default": context.explicit_clear or base.get("suppress_team_default", False) or (context.mode == "replace" and not any(item.type == "team" for item in context.selected)),
             "suppress_project_default": context.explicit_clear or base.get("suppress_project_default", False)
                                         or (context.mode == "replace" and not project_keys),
             "source": "explicit" if scope_source == "turn" else scope_source,
@@ -417,16 +432,18 @@ class RuntimePipeline:
         )
         base_scope_context = await _base_scope_context(
             self._session, chat_context=chat_context,
-            project_defaults=list(project_context.default_project_keys),
+            project_defaults=list(project_context.default_project_keys), facts=list(turn_mem.durable_snapshot.entries),
         )
         turn_mem.project_context = {**_project_context_payload(base_scope_context, project_context.as_dict()),
                                     "explicit_scope_keys": [],
-                                    "suppress_project_default": bool(scope_payload.get("suppress_project_default"))}
+                                    "suppress_project_default": bool(scope_payload.get("suppress_project_default")),
+                                    "suppress_team_default": bool(scope_payload.get("suppress_team_default"))}
         # The typed context is visible to planner/task construction and is
         # also the authoritative default for agent memory.search calls.
         turn_mem.planner_memory_context.append({"type": "project_context", **turn_mem.project_context})
         turn_mem.planner_memory_context.append({"type": "chat_context", **chat_context})
         ctx.extra["project_context"] = turn_mem.project_context
+        ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
 
         # Initialize RuntimeTurnState as the single source of truth
         # For resume, use the original run_id; otherwise generate new
@@ -624,6 +641,7 @@ class RuntimePipeline:
             scope_context=effective_scope_context.model_payload(),
         ), phase=OrchestrationPhase.PREFLIGHT)
         ctx.extra["project_context"] = turn_mem.project_context
+        ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
         for index, item in enumerate(turn_mem.planner_memory_context):
             if isinstance(item, dict) and item.get("type") == "project_context":
                 turn_mem.planner_memory_context[index] = {**item, **turn_mem.project_context}
@@ -647,7 +665,8 @@ class RuntimePipeline:
                 async def search_scoped_memory(scope):
                     return await MemorySearchService(self._session).search(
                         query=memory_request.query, tenant_id=tenant_id, user_id=user_id,
-                        context_scope_keys=scope.keys, scope_ceiling_keys=scope.ceiling_keys,
+                        context_scope_keys=scope.keys, enforce_context=True,
+                        team_keys=memory_request.team_keys, project_keys=memory_request.project_keys,
                         kinds=memory_request.kinds, scopes=memory_request.scopes,
                         entity_ids=memory_request.entity_ids, direction=memory_request.direction,
                         limit=memory_request.limit, fact_subject=memory_request.fact_subject,
@@ -681,6 +700,7 @@ class RuntimePipeline:
                 if recall_context.get("memory_context"):
                     turn_mem.planner_memory_context.append(recall_context["memory_context"])
                 ctx.extra["project_context"] = turn_mem.project_context
+                ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
                 for index, item in enumerate(turn_mem.planner_memory_context):
                     if isinstance(item, dict) and item.get("type") == "project_context":
                         turn_mem.planner_memory_context[index] = {**item, **turn_mem.project_context}
@@ -1818,3 +1838,17 @@ class RuntimePipeline:
         }
         logger.info("Runtime RBAC planner agent filter: %s", audit_payload)
         return filtered, audit_payload
+
+
+def scope_fact_defaults(facts: list[Any], branch: str) -> tuple[list[str], str]:
+    """Resolve user before tenant defaults independently for each branch."""
+    for owner in ("user", "tenant"):
+        for fact in facts:
+            scope = getattr(fact, "scope", "")
+            scope = getattr(scope, "value", scope)
+            if scope != owner or fact.subject not in {f"{owner}.{branch}_scope", f"user.{branch}_scope"}:
+                continue
+            values = (fact.metadata or {}).get(f"{branch}_keys")
+            if isinstance(values, list):
+                return list(dict.fromkeys(str(value).strip().casefold() for value in values if str(value).strip())), f"{owner}_default"
+    return [], "none"

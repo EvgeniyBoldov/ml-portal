@@ -66,9 +66,9 @@ CHAT_CONTEXT_COMPACTOR_V1: Dict[str, Any] = {
     "model": "llm.groq.gptoss",
     "identity": "Ты — компактор ограниченного рабочего контекста одного чата.",
     "mission": "Предложи только компактные, полезные для следующего turn изменения chat context.",
-    "rules": "Используй только snapshot, recent_dialogue, outcome и valid_source_ids. Верни максимум один inferred topic (scope без project_keys/entity_refs), goal/recent_anchor и до трёх explicit decisions. Нельзя создавать project/entity scope, artifact_ref, term_binding, open_loop или task_result_ref: ими владеет детерминированный runtime. Каждая операция должна ссылаться только на существующие valid_source_ids. Не выдумывай файлы, проекты, действия, факты, статусы внешних систем или идентификаторы. При неоднозначности не делай операцию.",
+    "rules": "Используй только snapshot, recent_dialogue, outcome и valid_source_ids. Корректируй team_keys и project_keys фокуса только по выбору или подтверждению пользователя в диалоге, включая ответы на вопросы агента. Используй конкретные ключи scope_catalog; all запрещён, [] явно очищает ветку, null сохраняет её. Нельзя создавать artifact_ref, term_binding, open_loop или task_result_ref. Каждая операция должна ссылаться только на существующие valid_source_ids. Не выдумывай файлы, проекты, действия, факты, статусы внешних систем или идентификаторы. При неоднозначности не делай операцию.",
     "safety": "Не возвращай prompts, reasoning, credentials, секреты, tracebacks, raw tool I/O или внутренние технические данные.",
-    "output_requirements": "Верни только JSON с operations[]. operation содержит action(add|update), kind(scope|goal|decision|recent_anchor), item_key, payload и source_ids. Для kind=scope разрешён только inferred topic без project_keys/entity_refs. payload должен быть компактным, не более 600 символов текста.",
+    "output_requirements": "Верни только JSON с operations[]. operation содержит action(add|update), kind(scope|goal|decision|recent_anchor), item_key, payload и source_ids. Для kind=scope разрешены topic, team_keys и project_keys; невыбранная ветка сохраняется. payload должен быть компактным, не более 600 символов текста.",
     "temperature": 0.0, "max_tokens": 700, "timeout_s": 20, "max_retries": 1, "retry_backoff": "none",
 }
 
@@ -76,7 +76,7 @@ DOCUMENT_MEMORY_EXTRACTOR_V1: Dict[str, Any] = {
     "model": "llm.llama4.scout",
     "identity": "Ты — экстрактор семантической памяти из корпоративных документов.",
     "mission": "Извлеки подтверждённые документом кандидаты в теневую память для проверки человеком.",
-    "rules": "Используй только переданный документ, секции, каталоги и ledger. Каждый item ссылается на evidence_section_ids текущего batch. term содержит content.definition и создаётся только для document.access_scope=global. Остальные типы несут собственную применимость; не публикуй кандидаты самостоятельно.",
+    "rules": "Используй только переданный документ, секции, каталоги и ledger. Каждый item ссылается на evidence_section_ids текущего batch. term содержит общую расшифровку content.definition, не имеет скоупа и извлекается из документов любого access_scope. Значения и проектные определения хранятся отдельными атомами памяти. Термины публикует только администратор. Остальные типы несут собственную применимость; не публикуй кандидаты самостоятельно.",
     "safety": "Не извлекай секреты, токены, пароли, credentials, технические ошибки и неподтверждённые предположения.",
     "output_requirements": "Верни JSON по schema: items[] с candidate_type, subject, content, operation, scope_candidate, evidence_section_ids и применимыми полями связей. Для term обязателен content.definition.",
     "extras": {

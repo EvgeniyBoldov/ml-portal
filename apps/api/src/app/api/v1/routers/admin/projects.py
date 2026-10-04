@@ -19,6 +19,7 @@ class ProjectInput(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     aliases: list[str] = Field(default_factory=list)
     description: str | None = None
+    project_type: str | None = Field(default=None, max_length=80)
 
 
 class ProjectResponse(ProjectInput):
@@ -42,13 +43,13 @@ async def create_project(data: ProjectInput, db: AsyncSession = Depends(db_sessi
     exists = await db.execute(select(Project.id).where(Project.key == key))
     if exists.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="Project key already exists")
-    project = Project(key=key, name=data.name.strip(), aliases=[item.strip() for item in data.aliases if item.strip()], description=data.description)
+    project = Project(key=key, name=data.name.strip(), aliases=[item.strip() for item in data.aliases if item.strip()], description=data.description, project_type=data.project_type)
     db.add(project)
     await db.flush()
     scope = (await db.execute(select(MemoryScope).where(MemoryScope.key == f"project.{key}"))).scalar_one_or_none()
     if scope is None:
         db.add(MemoryScope(scope_type="project", key=f"project.{key}", name=project.name,
-                           aliases=list(project.aliases), project_id=project.id))
+                           aliases=list(project.aliases), project_id=project.id, project_type=project.project_type))
     elif scope.scope_type == "project" and scope.project_id is None:
         if scope.lifecycle_status != "active":
             raise HTTPException(status_code=409, detail="Project memory scope is scheduled for deletion")

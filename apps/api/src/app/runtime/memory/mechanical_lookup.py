@@ -75,6 +75,8 @@ class MechanicalLookupService:
                 linked.setdefault(scope_id, []).extend([str(term), *(aliases or [])])
         candidates = []
         for row in scope_rows:
+            if row.is_all:
+                continue
             forms = {row.key, row.key.removeprefix(f"{row.scope_type}."), row.name,
                      *(row.aliases or []), *linked.get(row.id, [])}
             matched = _matches(request_text, {str(value).strip().casefold() for value in forms if str(value).strip()})

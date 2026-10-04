@@ -49,3 +49,28 @@
   font-size: var(--font-size-sm);
   line-height: 1.5;
 }
+
+.focusBranches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+}
+
+.focusBranches div {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 2fr;
+  gap: var(--sp-3);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.focusBranches dt {
+  color: var(--text-secondary);
+}
+
+.focusBranches dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}

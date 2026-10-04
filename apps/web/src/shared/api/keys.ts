@@ -38,7 +38,14 @@ export const qk = {
   },
   admin: {
     all: () => ['admin'] as const,
+    glossary: {
+      all: () => ['admin', 'glossary'] as const,
+      detail: (id: string) => ['admin', 'glossary', id] as const,
+    },
     memory: {
+      all: () => ['admin', 'memory'] as const,
+      candidate: (id: string) => ['admin', 'memory', 'candidate', id] as const,
+      item: (id: string) => ['admin', 'memory', 'item', id] as const,
       scopes: () => ['admin', 'memory', 'scopes'] as const,
       termCatalog: () => ['admin', 'memory', 'term-catalog'] as const,
       review: () => ['admin', 'memory', 'staging-review'] as const,
@@ -175,6 +182,7 @@ export const qk = {
     projectMemoryOverview: (params?: Record<string, unknown>) => ['collections', 'project-memory', 'overview', params] as const,
     projectMemoryProject: (projectKey: string, params?: Record<string, unknown>) =>
       ['collections', 'project-memory', 'project', projectKey, params] as const,
+    glossaryAll: () => ['collections', 'glossary', 'overview'] as const,
     glossaryOverview: (params?: Record<string, unknown>) => ['collections', 'glossary', 'overview', params] as const,
   },
   auth: {

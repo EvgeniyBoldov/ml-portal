@@ -116,6 +116,8 @@ export interface BlockProps {
   onChange?: (key: string, value: any) => void;
   /** Header actions (buttons etc) */
   headerActions?: React.ReactNode;
+  /** Labels or arbitrary components next to the block title */
+  headerLabels?: React.ReactNode;
   /** Compact padding */
   compact?: boolean;
   /** Custom content (used when no fields provided) */
@@ -151,6 +153,7 @@ export function Block({
   editable = false,
   onChange,
   headerActions,
+  headerLabels,
   compact = false,
   children,
   className = '',
@@ -170,6 +173,7 @@ export function Block({
             </div>
           )}
           <h3 className={styles['card-title']}>{title}</h3>
+          {headerLabels && <div className={styles['card-labels']}>{headerLabels}</div>}
           {tooltip && (
             <Tooltip content={tooltip} position="left" maxWidth={320}>
               <div className={styles['card-tooltip-icon']}>

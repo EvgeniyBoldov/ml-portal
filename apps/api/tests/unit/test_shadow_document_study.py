@@ -29,7 +29,11 @@ def test_shadow_study_prompt_requires_configuration_and_document_evidence() -> N
     operator_prompt = document_memory_prompt({"document_memory_study_prompt": "операторский промпт"}, stage="study")
     assert operator_prompt.startswith("операторский промпт")
     assert "scope_catalog" in operator_prompt
-    assert "document.access_scope=global" in operator_prompt
+    assert "документов любого access_scope" in operator_prompt
+    assert "только для document.access_scope=global" not in operator_prompt
+    from app.services.v3_role_defaults import DOCUMENT_MEMORY_EXTRACTOR_V1
+    assert "только для document.access_scope=global" not in DOCUMENT_MEMORY_EXTRACTOR_V1["rules"]
+    assert "документов любого access_scope" in DOCUMENT_MEMORY_EXTRACTOR_V1["rules"]
 
 
 def test_shadow_study_output_rejects_invalid_candidate_shape() -> None:

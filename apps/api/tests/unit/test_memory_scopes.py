@@ -32,13 +32,13 @@ def test_all_scope_is_wildcard_only_for_its_type() -> None:
     assert _claim_scopes_apply(scopes, [uuid4()], {"team.ops"})
     assert not _claim_scopes_apply(scopes, [], {"team.ops"})
     assert not _claim_scopes_apply(scopes, [], set())
-    assert not _claim_scopes_apply([scope("team", "team.all", is_all=True)], [], set())
+    assert _claim_scopes_apply([scope("team", "team.all", is_all=True)], [], set())
     assert _claim_scopes_apply([scope("team", "team.all", is_all=True)], [], {"team.ops"})
 
 
 def test_deprecated_scope_never_broadens_claim_applicability() -> None:
-    scopes = [scope("product", "product.core"), scope("team", "team.ops", lifecycle_status="deprecated")]
-    assert not _claim_scopes_apply(scopes, [], {"product.core"})
+    scopes = [scope("project", "project.core"), scope("team", "team.ops", lifecycle_status="deprecated")]
+    assert not _claim_scopes_apply(scopes, [], {"project.core"})
     assert not _claim_scopes_apply([scope("team", "team.ops", lifecycle_status="deprecated")], [], set())
     alternatives = [scope("team", "team.ops", lifecycle_status="deprecated"), scope("team", "team.arch")]
     assert _claim_scopes_apply(alternatives, [], {"team.arch"})
@@ -49,11 +49,11 @@ def test_divergent_typed_scopes_do_not_select_an_arbitrary_winner() -> None:
         {"id": uuid4(), "kind": "rule", "subject": "deploy", "content_text": "A",
          "project_id": None, "scope_keys": ["team.ops"]},
         {"id": uuid4(), "kind": "rule", "subject": "deploy", "content_text": "B",
-         "project_id": None, "scope_keys": ["product.core"]},
+         "project_id": None, "scope_keys": ["team.arch"]},
     ]
     selected, uncertainties = _apply_project_precedence(items, [])
     assert selected == items
-    assert uncertainties == ["project_memory_divergence:rule:deploy"]
+    assert uncertainties == []
 
 
 def test_scope_signature_preserves_distinct_applicability_identities() -> None:

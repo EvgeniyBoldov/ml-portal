@@ -106,7 +106,11 @@ export function ChatContextPanel({ chatId }: { chatId: string }) {
               </section>
               <section className={styles.section}>
                 <h3>Фокус</h3>
-                <p className={styles.value}>{textFrom(context.focus, ['topic', 'project_keys', 'entity_refs']) ?? 'Не задан'}</p>
+                <dl className={styles.focusBranches}>
+                  <div><dt>Команды · кому</dt><dd>{textFrom(context.focus, ['team_keys']) ?? 'Без выбора конкретной команды'}</dd></div>
+                  <div><dt>Проекты · где</dt><dd>{textFrom(context.focus, ['project_keys']) ?? 'Вне проектов'}</dd></div>
+                </dl>
+                {textFrom(context.focus, ['topic']) && <p className={styles.value}>{textFrom(context.focus, ['topic'])}</p>}
               </section>
               <ContextList title="Термины" items={context.term_bindings} fields={['term', 'aliases']} emptyText="Термины не закреплены." />
               <ContextList title="Файлы" items={context.artifacts} fields={['file_name', 'role']} emptyText="Файлы не закреплены." />

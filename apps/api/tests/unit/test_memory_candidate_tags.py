@@ -32,7 +32,7 @@ async def test_confirm_existing_scope_fixes_unknown_and_preserves_source_visibil
     row.visibility_tenant_id = uuid4()
     visibility = row.visibility_tenant_id
     await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[scope.id],
-                                    company_wide=False, glossary_term_ids=[], reason='Правило для команды')
+                                    glossary_term_ids=[], reason='Правило для команды')
     assert row.scope_candidate == 'scoped'
     assert not row.unresolved_scope_references
     assert row.visibility_tenant_id == visibility
@@ -42,12 +42,11 @@ async def test_confirm_existing_scope_fixes_unknown_and_preserves_source_visibil
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('company_wide,expected', [(False, 'unknown'), (True, 'global')])
-async def test_empty_selection_and_company_wide_are_distinct(company_wide, expected):
+async def test_empty_scope_selection_is_non_project_knowledge():
     service, row, _, _ = review()
     await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[],
-                                    company_wide=company_wide, glossary_term_ids=[], reason='Выбор проверяющего')
-    assert row.scope_candidate == expected
+                                    glossary_term_ids=[], reason='Выбор проверяющего')
+    assert row.scope_candidate == 'global'
 
 
 @pytest.mark.asyncio
@@ -55,23 +54,18 @@ async def test_term_links_are_saved_independently_from_applicability():
     term = NS(id=uuid4(), canonical_term='Изменение')
     service, row, _, db = review(terms=[term])
     row.related_entities = [{'type': 'system', 'name': 'Network'}]
-    await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[], company_wide=False,
-                                    glossary_term_ids=[term.id], reason='Связано с изменением')
+    await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[], glossary_term_ids=[term.id], reason='Связано с изменением')
     assert row.scope_candidate == 'global'
     assert row.related_entities == [{'type': 'system', 'name': 'Network'},
                                     {'type': 'glossary_term', 'id': str(term.id), 'name': 'Изменение'}]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('change,error', [
-    ({'company_wide': True, 'scope_ids': [uuid4()]}, 'не совмещается'),
-])
-async def test_invalid_selections_are_rejected_before_mutation(change, error):
+async def test_term_cannot_receive_scope_links():
     service, row, _, db = review()
-    kwargs = dict(candidate_id=row.id, actor_id=None, scope_ids=[], company_wide=False,
-                  glossary_term_ids=[], reason='Обоснование')
-    kwargs.update(change)
-    with pytest.raises(ValueError, match=error):
+    row.candidate_type = 'term'
+    kwargs = dict(candidate_id=row.id, actor_id=None, scope_ids=[uuid4()], glossary_term_ids=[], reason='Обоснование')
+    with pytest.raises(ValueError, match='общему глоссарию'):
         await service.update_review_tags(**kwargs)
     assert not db.add.called
     service._confirm_scope_bindings.assert_not_awaited()
@@ -83,8 +77,7 @@ async def test_closed_candidates_cannot_be_retagged(state):
     service, row, _, _ = review()
     row.resolution_status = state
     with pytest.raises(ValueError, match='на проверке'):
-        await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[], company_wide=True,
-                                        glossary_term_ids=[], reason='Обоснование')
+        await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[], glossary_term_ids=[], reason='Обоснование')
 
 
 @pytest.mark.asyncio
@@ -92,8 +85,7 @@ async def test_old_attempt_cannot_be_retagged():
     service, row, snapshot, _ = review()
     snapshot.active_attempt_id = uuid4()
     with pytest.raises(ValueError, match='предыдущей попытке'):
-        await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[], company_wide=True,
-                                        glossary_term_ids=[], reason='Обоснование')
+        await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[], glossary_term_ids=[], reason='Обоснование')
 
 
 @pytest.mark.asyncio
@@ -102,8 +94,7 @@ async def test_unknown_term_id_does_not_clear_required_scope_blocker():
     db.scalars.side_effect = None
     db.scalars.return_value = NS(all=lambda: [])
     with pytest.raises(ValueError, match='опубликованные термины'):
-        await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[], company_wide=True,
-                                        glossary_term_ids=[uuid4()], reason='Обоснование')
+        await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[], glossary_term_ids=[uuid4()], reason='Обоснование')
     assert row.unresolved_scope_references
     service._confirm_scope_bindings.assert_not_awaited()
 
@@ -114,7 +105,7 @@ async def test_redundant_all_scope_of_same_type_is_rejected():
     service, row, _, _ = review(scopes=scopes)
     with pytest.raises(ValueError, match='того же типа'):
         await service.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[scope.id for scope in scopes],
-                                        company_wide=False, glossary_term_ids=[], reason='Обоснование')
+                                        glossary_term_ids=[], reason='Обоснование')
 
 
 @pytest.mark.asyncio

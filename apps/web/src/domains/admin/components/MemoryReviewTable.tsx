@@ -1,53 +1,26 @@
 import { Badge, type DataTableColumn } from '@/shared/ui';
 import type { ShadowMemoryCandidate } from '@/shared/api/admin';
-import { contentFieldLabels } from './MemoryContentView';
+import { contentFieldLabels, memoryContentPreview } from './MemoryContentView';
 import styles from './MemoryReviewTable.module.css';
 
-export const scopeLabels: Record<string, string> = { global: 'Вся компания', scoped: 'Выбранные области', project: 'Проект', multi_project: 'Несколько проектов', unknown: 'Не определена', glossary: 'Общий глоссарий' };
-export const readinessLabels = { ready: 'Готов к утверждению', content: 'Ошибка содержания', conflict: 'Есть конфликт', dependencies: 'Ожидает зависимостей', scope: 'Нет связей' };
+export const scopeLabels: Record<string, string> = { global: 'Вне проектов, без адресата', scoped: 'Выбранные области', project: 'Проект', multi_project: 'Несколько проектов', unknown: 'Не определена', glossary: 'Общий глоссарий' };
+export const readinessLabels = { ready: 'Готов к утверждению', content: 'Ошибка содержания', conflict: 'Есть конфликт', dependencies: 'Ожидает зависимостей' };
 export const candidateBlockers = (row: ShadowMemoryCandidate): string[] => [...new Set([
   ...(!row.content_valid ? [(row.content_error || 'Содержание не прошло проверку.').replace(/\b[a-z_]+\b/g, (field) => contentFieldLabels[field] ?? field)] : []),
   ...row.approval_blockers,
   ...(row.conflict_ids.length ? ['Сначала разрешите конфликт кандидата.'] : []),
 ])];
-export const candidateReadiness = (row: ShadowMemoryCandidate): keyof typeof readinessLabels => !row.content_valid ? 'content' : row.conflict_ids.length ? 'conflict' : row.candidate_type !== 'term' && !row.scope_ids.length && !(row.glossary_term_ids ?? []).length ? 'scope' : row.approval_blockers.length ? 'dependencies' : 'ready';
+export const candidateReadiness = (row: ShadowMemoryCandidate): keyof typeof readinessLabels => !row.content_valid ? 'content' : row.conflict_ids.length ? 'conflict' : row.approval_blockers.length ? 'dependencies' : 'ready';
 
 export const candidateTypeLabels: Record<string, string> = {
   term: 'Термин', description: 'Описание', relationship: 'Связь', rule: 'Правило',
   constraint: 'Ограничение', procedure: 'Процедура', decision: 'Решение',
 };
 
-const candidatePayloadContent = (row: ShadowMemoryCandidate): Record<string, unknown> => {
-  if (row.content && Object.keys(row.content).length) return row.content;
-  try {
-    const parsed: unknown = JSON.parse(row.content_text);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-};
-
 const candidateContent = (row: ShadowMemoryCandidate): string => {
-  const payload = candidatePayloadContent(row);
-  const content = Object.keys(payload).length > 0 ? payload : null;
-  if (content) {
-    const primaryKeys = ['summary', 'definition', 'statement', 'decision', 'goal', 'text', 'value'];
-    const entries = Object.entries(content).sort(([left], [right]) => {
-      const leftIndex = primaryKeys.indexOf(left);
-      const rightIndex = primaryKeys.indexOf(right);
-      return (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex);
-    });
-    const values = entries.flatMap(([key, value]) => {
-      if (value === null || value === undefined || value === '') return [];
-      const rendered = Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value);
-      return [primaryKeys.includes(key) && typeof value === 'string' ? rendered : `${contentFieldLabels[key] ?? key}: ${rendered}`];
-    });
-    if (values.length) return values.slice(0, 3).join(' · ');
-  }
-  if (row.aliases.length) return `Алиасы: ${row.aliases.join(', ')}`;
-  if (row.candidate_type === 'term') return 'Определение не указано';
-  if (row.related_project_keys.length) return `Проекты: ${row.related_project_keys.join(', ')}`;
-  return 'Содержание не извлечено';
+  if (row.candidate_type === 'term') return typeof row.content.definition === 'string' ? row.content.definition : 'Определение не указано';
+  const preview = memoryContentPreview(row.candidate_type, row.content).split('\n').slice(0, 4).join(' · ');
+  return preview.length > 300 ? `${preview.slice(0, 299)}…` : preview || 'Содержание не извлечено';
 };
 
 const candidateConfidence = (value: number): string => {
@@ -60,7 +33,7 @@ export const reviewColumns: DataTableColumn<ShadowMemoryCandidate>[] = [
   { key: 'content', label: 'ЗНАЧЕНИЕ', width: '28%', filter: { kind: 'text', placeholder: 'Содержание', getValue: candidateContent }, className: styles.value, render: (row) => <div className={styles.preview}>{candidateContent(row)}</div> },
   { key: 'candidate_type', label: 'ТИП', width: '10%', sortable: true, filter: { kind: 'select', placeholder: 'Все типы', options: Object.entries(candidateTypeLabels).map(([value, label]) => ({ value, label })) }, render: (row) => <Badge tone="neutral">{candidateTypeLabels[row.candidate_type] ?? row.candidate_type}</Badge> },
   { key: 'readiness', label: 'УТВЕРЖДЕНИЕ', width: '16%',
-    filter: { kind: 'select', placeholder: 'Все кандидаты', options: [{ value: 'ready', label: 'Готов к утверждению' }, { value: 'content', label: 'Ошибка содержания' }, { value: 'conflict', label: 'Есть конфликт' }, { value: 'dependencies', label: 'Ожидает зависимостей' }, { value: 'scope', label: 'Нет связей' }], getValue: candidateReadiness },
+    filter: { kind: 'select', placeholder: 'Все кандидаты', options: [{ value: 'ready', label: 'Готов к утверждению' }, { value: 'content', label: 'Ошибка содержания' }, { value: 'conflict', label: 'Есть конфликт' }, { value: 'dependencies', label: 'Ожидает зависимостей' }], getValue: candidateReadiness },
     render: (row) => <Badge tone={candidateReadiness(row) === 'ready' ? 'success' : 'warn'}>{readinessLabels[candidateReadiness(row)]}</Badge> },
   { key: 'scope_candidate', label: 'ОБЛАСТЬ', width: '12%', sortable: true, filter: { kind: 'select', placeholder: 'Все области', options: Object.entries(scopeLabels).map(([value, label]) => ({ value, label })), getValue: (row) => row.candidate_type === 'term' ? 'glossary' : row.scope_candidate || 'unknown' }, render: (row) => <div><Badge tone="info">{row.candidate_type === 'term' ? 'Общий глоссарий' : scopeLabels[row.scope_candidate || 'unknown'] ?? row.scope_candidate}</Badge>{row.scope_keys.length > 0 && <div className={styles.preview}>Применимость: {row.scope_keys.join(', ')}</div>}{row.scope_proposals.filter((scope) => scope.role === 'applies_to' && scope.status !== 'approved').map((scope) => <div key={scope.id} className={styles.preview}>Предложено: {scope.name}</div>)}{row.mentioned_scope_keys.length > 0 && <div className={styles.preview}>Упомянуты: {row.mentioned_scope_keys.join(', ')}</div>}{row.unmatched_scope_names.length > 0 && <div className={styles.preview}>Нет в каталоге: {row.unmatched_scope_names.join(', ')}</div>}</div> },
   { key: 'document_title', label: 'ИСТОЧНИК', width: '12%', sortable: true, filter: { kind: 'text', placeholder: 'Документ' }, render: (row) => <div>{row.document_title || 'Документ'}<div className={styles.preview}>Фрагментов: {row.evidence_section_ids.length}</div></div> },

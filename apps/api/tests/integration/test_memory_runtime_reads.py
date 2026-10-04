@@ -33,8 +33,7 @@ async def publish(session, *, scope_type='project', term_only=False):
     candidate.content = {'statement': 'Create backup', 'effect': 'require'}
     publisher = ShadowMemoryPublicationService(session)
     await publisher.update_review_tags(candidate_id=candidate_id, actor_id=None,
-        scope_ids=[] if term_only else [scope_id], company_wide=False,
-        glossary_term_ids=[term_id], reason='Reviewed')
+        scope_ids=[] if term_only else [scope_id], glossary_term_ids=[term_id], reason='Reviewed')
     await publisher.approve(candidate_id=candidate_id, actor_id=None, reason=None)
     await session.commit()
     claim = await session.scalar(select(MemoryClaim).where(MemoryClaim.approved_candidate_id == candidate_id))
@@ -62,7 +61,7 @@ async def test_memory_card_preserves_candidate_links_and_source_identity(tag_pg)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('scope_type', ['project', 'team', 'product'])
+@pytest.mark.parametrize('scope_type', ['project', 'team'])
 async def test_term_alias_finds_linked_rule_in_typed_scope_without_legacy_project(tag_pg, monkeypatch, scope_type):
     monkeypatch.setattr(MemorySemanticIndex, 'search_ids', AsyncMock(return_value=[]))
     async with AsyncSession(tag_pg, expire_on_commit=False) as session:
@@ -78,6 +77,42 @@ async def test_term_alias_finds_linked_rule_in_typed_scope_without_legacy_projec
         assert result['glossary'][0]['term'] == 'Network'
         other = await MemorySearchService(session).search(query='NET', tenant_id=None, scopes=[scope_type, 'glossary'])
         assert not other['items']
+
+
+@pytest.mark.asyncio
+async def test_execution_context_search_separates_common_concrete_and_non_project_memory(tag_pg, monkeypatch):
+    monkeypatch.setattr(MemorySemanticIndex, 'search_ids', AsyncMock(return_value=[]))
+    async with AsyncSession(tag_pg, expire_on_commit=False) as session:
+        candidate, project, claim = await publish(session)
+        team = MemoryScope(scope_type='team', key='team.ops', name='Operations')
+        common = MemoryScope(scope_type='project', key='project.all', name='Common projects', is_all=True)
+        session.add_all([team, common])
+        await session.flush()
+        subjects = {}
+        for ordinal, bound in [(2, [team.id, common.id]), (3, [team.id])]:
+            row = MemoryExtractionCandidate(snapshot_id=candidate.snapshot_id, attempt_id=candidate.attempt_id,
+                ordinal=ordinal, candidate_type='rule', subject=f'Backup {ordinal}', normalized_subject=f'backup {ordinal}',
+                content={'statement': 'Create backup', 'effect': 'require'}, content_text='Create backup',
+                evidence_section_ids=['s1'], resolution_status='needs_review', scope_candidate='unknown')
+            session.add(row)
+            await session.flush()
+            publisher = ShadowMemoryPublicationService(session)
+            await publisher.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=bound,
+                glossary_term_ids=[], reason='Synthetic review')
+            await publisher.approve(candidate_id=row.id, actor_id=None, reason=None)
+            subjects[ordinal] = row.subject
+        await session.commit()
+        service = MemorySearchService(session)
+        for selected, expected in [(['project.all'], {subjects[2]}),
+                                   ([], {subjects[3]}),
+                                   ([project.key], {candidate.subject, subjects[2]})]:
+            result = await service.search(query='backup', tenant_id=None, project_keys=selected,
+                context_scope_keys=[team.key, project.key], enforce_context=True, kinds=['rule'])
+            assert result.get('success') is not False
+            assert {item['subject'] for item in result['items']} == expected
+        rejected = await service.search(query='backup', tenant_id=None, project_keys=['project.other'],
+            context_scope_keys=[team.key, project.key], enforce_context=True)
+        assert rejected['error_code'] == 'project_not_in_execution_context'
 
 
 @pytest.mark.asyncio
@@ -120,7 +155,7 @@ async def test_wrong_scope_candidates_do_not_displace_lexical_match(tag_pg, monk
             await session.flush()
             pub = ShadowMemoryPublicationService(session)
             await pub.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[other.id],
-                                        company_wide=False, glossary_term_ids=[], reason='Reviewed')
+                                        glossary_term_ids=[], reason='Reviewed')
             await pub.approve(candidate_id=row.id, actor_id=None, reason=None)
         await session.commit()
         result = await MemorySearchService(session).search(query='backup', tenant_id=None, scope_keys=[scope.key], scopes=['project'])

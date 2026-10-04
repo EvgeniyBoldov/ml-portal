@@ -21,7 +21,7 @@ def candidate(kind="rule", scope="global"):
 
 def proposal_item(role="applies_to", kind="rule"):
     return ShadowStudyItem(candidate_type=kind, subject="Example", scope_proposals=[
-        {"scope_type": "product", "name": "Example", "term_subject": "Example", "role": role}])
+        {"scope_type": "team", "name": "Example", "term_subject": "Example", "role": role}])
 
 
 def database(*, scalars=(), scalar=None):
@@ -56,13 +56,13 @@ async def test_missing_term_blocks_only_required_scope(role, blocked):
 @pytest.mark.asyncio
 async def test_ambiguity_keeps_required_blocker_despite_another_valid_proposal():
     row = candidate(scope="scoped")
-    db = database(scalars=[NS(scope_type="product", key="product.a", name="Example", aliases=[]),
-                           NS(scope_type="product", key="product.b", name="Other", aliases=["Example"])])
+    db = database(scalars=[NS(scope_type="team", key="team.a", name="Example", aliases=[]),
+                           NS(scope_type="team", key="team.b", name="Other", aliases=["Example"])])
     await ShadowDocumentStudyService(db)._persist_scope_proposals(
         snapshot=NS(id=uuid4(), visibility_tenant_id=None), item=proposal_item(), candidate=row,
         term_candidate_ids={"example": uuid4()}, section_ids=["s1"])
     assert row.scope_candidate == "unknown"
-    assert row.unresolved_scope_references[0]["alternatives"] == ["product.a", "product.b"]
+    assert row.unresolved_scope_references[0]["alternatives"] == ["team.a", "team.b"]
     assert not db.add.called
 
 
@@ -85,8 +85,7 @@ async def test_published_term_reuse_and_pending_term_dependency(status, expected
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("params,error", [
-    ({"project_keys": ["b"], "scope_ceiling_keys": ["project.a"]}, "scope_widening_denied"),
-    ({"scope_keys": ["team.b"], "scope_ceiling_keys": ["team.a"]}, "scope_widening_denied"),
+    ({"team_keys": ["all"]}, "invalid_query_scope"),
     ({"project_keys": ["b"], "scope_keys": ["project.a"]}, "conflicting_project_scope"),
     ({"project_keys": ["a"], "scope_keys": ["project.all"]}, "conflicting_project_scope"),
 ])
@@ -128,9 +127,9 @@ async def test_lock_refreshes_cached_snapshot_and_attempt():
 
 @pytest.mark.asyncio
 async def test_pending_scope_identity_participates_in_conflict_comparison():
-    db = database(scalars=["product.proposed"])
+    db = database(scalars=["team.proposed"])
     db.execute = AsyncMock(return_value=NS(scalars=lambda: NS(all=lambda: ["team.ops"])))
-    assert await ShadowMemoryReviewService(db)._scope_keys(uuid4()) == {"team.ops", "product.proposed"}
+    assert await ShadowMemoryReviewService(db)._scope_keys(uuid4()) == {"team.ops", "team.proposed"}
 
 
 @pytest.mark.asyncio

@@ -377,6 +377,7 @@ class AgentExecutor:
             task,
             state.goal,
             [item.model_dump(mode="json") for item in (state.attachment_contexts or [])],
+            execution_context=ctx.extra.get("memory_execution_context"),
         )
 
         # 3. Run sub-agent tool loop and forward canonical runtime events.
@@ -814,6 +815,7 @@ class AgentExecutor:
         task: TaskRequest,
         goal: str,
         attachments: Optional[List[Dict[str, Any]]] = None,
+        execution_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Compose sub-agent messages with the immutable task input contract.
 
@@ -857,6 +859,10 @@ class AgentExecutor:
 
         # Build the final user message: inject recall context if present
         parts: List[str] = []
+        from app.runtime.memory.execution_context import memory_execution_context
+        execution = execution_context if execution_context is not None else memory_execution_context(
+            (task.scope_context or {}).get("keys") or [])
+        parts.append("[Execution context — application fact]\n" + json.dumps(execution, ensure_ascii=False))
         if task.scope_context:
             parts.append("[Task scope]\n" + json.dumps(task.scope_context, ensure_ascii=False, default=str))
         if task.inputs:

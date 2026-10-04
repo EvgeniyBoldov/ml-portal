@@ -1,7 +1,8 @@
 """Runtime input builders for planner/synthesizer surfaces."""
 from __future__ import annotations
-
 from typing import Any, Dict, List
+
+from app.runtime.memory.execution_context import memory_execution_context
 
 
 MAX_AGENT_DESCRIPTION_CHARS = 280
@@ -43,6 +44,8 @@ class PlannerInputBuilder:
             "available_artifacts": self._normalize_artifacts(context.available_artifacts),
             "memory_context": context.memory_context,
             "scope_context": context.scope_context,
+            "execution_context": memory_execution_context(context.scope_context.get("keys") or [],
+                revision=int(context.scope_context.get("revision") or 0)),
             "planner_search_results": context.planner_search_results,
             "task_brief": context.task_brief,
             "available_agents": agents,

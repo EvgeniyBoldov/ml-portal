@@ -79,7 +79,7 @@ def test_task_memory_projection_filters_other_applicability():
         {"id": "global"},
     ]}
     [result] = _task_memory_context(request, [recall])
-    assert [item["id"] for item in result["items"]] == ["a", "global"]
+    assert [item["id"] for item in result["items"]] == ["a"]
 
 
 @pytest.mark.asyncio
@@ -107,7 +107,7 @@ async def test_mechanical_lookup_resolves_aliases_to_scope_identity_and_respects
 def test_all_scope_applicability_matches_read_side_semantics():
     item = {"scope_keys": ["project.all", "team.ops"]}
     assert memory_visible_for_scope(item, ["project.a", "team.ops"])
-    assert not memory_visible_for_scope(item, ["project.all", "team.ops"])
+    assert memory_visible_for_scope(item, ["project.all", "team.ops"])
     assert not memory_visible_for_scope(item, ["project.a"])
 
 
@@ -287,7 +287,7 @@ async def test_planner_search_keys_include_filters_and_failures_are_not_persiste
     calls = [
         {"operation": "memory.search", "query": "deploy", "kinds": ["rule"]},
         {"operation": "memory.search", "query": "deploy", "kinds": ["procedure"]},
-        {"operation": "memory.search", "query": "deploy", "scope_keys": ["team.other"]},
+        {"operation": "memory.search", "query": "deploy", "team_keys": ["team.other"]},
     ]
     proposal = {"terminal": "planner", "tasks": [{"task_id": "t", "executor": "worker", "intent": "check", "instructions": "Check"}]}
     steps = [PlannerStep(kind="tool_call", tool_call=call) for call in calls]

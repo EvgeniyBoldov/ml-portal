@@ -1,99 +1,113 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Badge, Button, Checkbox, DataTable, EntityPageV2, Modal, Tab, Textarea, type DataTableColumn } from '@/shared/ui';
+import { Button, DataTable, EntityPageV2, Modal, Tab, Textarea, type DataTableColumn } from '@/shared/ui';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { adminApi, type MemoryCandidateTags, type SemanticMemoryAdminDetail, type ShadowMemoryCandidate } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast } from '@/shared/ui/Toast';
-import MemoryCandidateTagEditor from './MemoryCandidateTagEditor';
+import { memoryLinksFields, otherMemoryLinksFields } from './MemoryLinksFields';
 import MemoryEvidence from './MemoryEvidence';
-import { contentFieldLabels } from './MemoryContentView';
-import { candidateBlockers, candidateTypeLabels, readinessLabels } from './MemoryReviewTable';
+import MemoryApplicabilityValue, { applicabilityLabel } from './MemoryApplicabilityValue';
+import MemoryContentView, { MemoryContentViewToggle, memoryContentPreview } from './MemoryContentView';
+import contentStyles from './MemoryContentView.module.css';
+import { candidateBlockers, candidateTypeLabels } from './MemoryReviewTable';
 import styles from './MemoryReviewDialog.module.css';
 
-type Props = { candidate?: ShadowMemoryCandidate; published?: SemanticMemoryAdminDetail };
+type Props = { candidate?: ShadowMemoryCandidate; published?: SemanticMemoryAdminDetail; initialTab?: string };
 const stateLabels: Record<string, string> = { active: 'Активна', uncertain: 'Есть противоречия', stale: 'Устарела',
   extracted: 'Извлечена', needs_review: 'На проверке', conflict: 'Есть конфликт', resolved: 'Утверждена', rejected: 'Отклонена', superseded: 'Заменена' };
-const contentFields = (content: Record<string, unknown>): FieldConfig[] => Object.entries(content)
-  .filter(([key, value]) => key !== 'steps' && value !== null && value !== '' && !(Array.isArray(value) && !value.length))
-  .map(([key, value]) => ({ key, label: contentFieldLabels[key] ?? key.split('_').join(' '), editable: false,
-    type: Array.isArray(value) ? 'tags' : typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean'
-      : typeof value === 'object' ? 'json' : 'textarea' }));
-
-function ProcedureSteps({ steps }: { steps: unknown }) {
-  if (!Array.isArray(steps) || !steps.length) return <p>Шаги не указаны.</p>;
-  const rows = steps.map((step, index) => {
-    const value = step && typeof step === 'object' ? step as Record<string, unknown> : {};
-    return { id: String(index), order: Number(value.order ?? index + 1), instruction: String(value.instruction ?? ''),
-      expected_result: String(value.expected_result ?? ''), confirmation_required: Boolean(value.confirmation_required) };
-  });
-  const columns: DataTableColumn<typeof rows[number]>[] = [
-    { key: 'order', label: '№', width: 60 },
-    { key: 'instruction', label: 'ИНСТРУКЦИЯ' },
-    { key: 'expected_result', label: 'ОЖИДАЕМЫЙ РЕЗУЛЬТАТ' },
-    { key: 'confirmation_required', label: 'ПОДТВЕРЖДЕНИЕ', width: 150,
-      render: (row) => <Badge tone={row.confirmation_required ? 'warn' : 'neutral'}>{row.confirmation_required ? 'Требуется' : 'Нет'}</Badge> },
-  ];
-  return <DataTable columns={columns} data={rows} keyField="id" />;
-}
-
-export default function MemoryDetail({ candidate, published }: Props) {
+export default function MemoryDetail({ candidate, published, initialTab = 'overview' }: Props) {
   const navigate = useNavigate();
   const showError = useErrorToast();
   const queryClient = useQueryClient();
   const backPath = `/admin/memory?tab=${candidate ? 'review' : 'memory'}`;
-  const [activeTab, setActiveTab] = useState('overview');
-  const [tagDraft, setTagDraft] = useState<MemoryCandidateTags>({ scope_ids: candidate?.scope_ids ?? [],
-    company_wide: false, glossary_term_ids: candidate?.glossary_term_ids ?? [], reason: '' });
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [jsonMode, setJsonMode] = useState(false);
+  const [tagDraft, setTagDraft] = useState<MemoryCandidateTags | null>(null);
+  const [editingLinks, setEditingLinks] = useState(false);
+  const [applicabilityChanged, setApplicabilityChanged] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
-  const [replaceDefinition, setReplaceDefinition] = useState(false);
-  const [replaceReason, setReplaceReason] = useState('');
   const scopes = useQuery({ queryKey: qk.admin.memory.scopes(), queryFn: () => adminApi.getMemoryScopes() });
   const terms = useQuery({ queryKey: qk.admin.memory.termCatalog(), queryFn: () => adminApi.getMemoryTermCatalog() });
-  const glossary = useQuery({ queryKey: ['admin', 'glossary'], queryFn: () => adminApi.getGlossary(), enabled: candidate?.candidate_type === 'term' });
   const canReview = Boolean(candidate && ['extracted', 'needs_review', 'conflict'].includes(candidate.resolution_status));
-  const hasLinks = candidate?.candidate_type === 'term' || tagDraft.scope_ids.length > 0 || tagDraft.glossary_term_ids.length > 0;
-  const blocked = Boolean(candidate && (!candidate.content_valid || candidate.conflict_ids.length));
-  const existingTerm = candidate?.candidate_type === 'term'
-    ? glossary.data?.find((term) => term.normalized_term === candidate.normalized_subject) : undefined;
-  const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
-  const changedDefinition = Boolean(existingTerm && normalize(existingTerm.definition) !== normalize(String(candidate?.content.definition ?? '')));
+  const baseTags: MemoryCandidateTags = {
+    scope_ids: candidate?.scope_ids ?? scopes.data?.filter((scope) => published?.scope_keys.includes(scope.key)).map((scope) => scope.id) ?? [],
+    glossary_term_ids: [...new Set(candidate?.glossary_term_ids ?? (published?.related_entities ?? []).filter((entity) => entity.type === 'glossary_term').map((entity) => String(entity.id)))],
+    reason: '',
+  };
+  const draft = tagDraft ?? baseTags;
+  const isEditingLinks = canReview || editingLinks;
+  const itemId = published?.id ?? candidate?.published_item_id;
+  const blocked = Boolean(candidate && (!candidate.content_valid || candidate.conflict_ids.length
+    || !applicabilityChanged && candidate.approval_blockers.length > 0));
   const decision = useMutation({
     mutationFn: async (action: 'approve' | 'reject') => {
       if (!candidate) throw new Error('Кандидат не найден');
       if (action === 'reject') return adminApi.rejectShadowMemoryCandidate(candidate.id, rejectReason.trim());
-      if (changedDefinition && (!replaceDefinition || !replaceReason.trim())) throw new Error('Подтвердите замену определения и укажите причину.');
-      await adminApi.updateShadowCandidateTags(candidate.id, tagDraft);
-      return adminApi.approveShadowMemoryCandidate(candidate.id, changedDefinition
-        ? { replace_existing_definition: true, reason: replaceReason.trim() } : {});
+      return adminApi.approveShadowMemoryCandidate(candidate.id, { tags: draft });
     },
     onError: (error: Error) => showError(error.message),
-    onSuccess: async () => {
+    onSuccess: async (result, action) => {
+      if (action === 'approve') {
+        queryClient.setQueryData(qk.admin.memory.candidate(result.id), result);
+        setTagDraft(null); setApplicabilityChanged(false);
+      }
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] }),
-        queryClient.invalidateQueries({ queryKey: ['admin', 'glossary'] }),
-        queryClient.invalidateQueries({ queryKey: ['collections', 'glossary', 'overview'] }),
+        queryClient.invalidateQueries({ queryKey: qk.admin.memory.all() }),
+        queryClient.invalidateQueries({ queryKey: qk.admin.glossary.all() }),
+        queryClient.invalidateQueries({ queryKey: qk.collections.glossaryAll() }),
       ]);
-      navigate(backPath);
+      if (action === 'reject') navigate(backPath);
     },
   });
+  const saveLinks = useMutation({
+    mutationFn: () => {
+      if (!itemId) throw new Error('Утверждённый атом не найден');
+      return adminApi.updateSemanticMemoryLinks(itemId, draft);
+    },
+    onError: (error: Error) => showError(error.message),
+    onSuccess: async (result) => {
+      queryClient.setQueryData(qk.admin.memory.item(result.id), result);
+      await queryClient.invalidateQueries({ queryKey: qk.admin.memory.all() });
+      setTagDraft(null); setEditingLinks(false); setApplicabilityChanged(false);
+    },
+  });
+  const handleLinksChange = (value: MemoryCandidateTags) => {
+    if (value.scope_ids.join(',') !== draft.scope_ids.join(',')) setApplicabilityChanged(true);
+    setTagDraft(value);
+  };
+  const linksPending = decision.isPending || saveLinks.isPending || scopes.isLoading || terms.isLoading;
   const content = candidate?.content ?? published?.content ?? {};
-  const fields = useMemo(() => contentFields(content), [content]);
   const subject = candidate?.subject ?? published?.subject ?? 'Память';
   const type = candidate?.candidate_type ?? published?.item_type ?? '';
   const state = candidate?.resolution_status ?? published?.state ?? '';
-  const scopeKeys = candidate ? scopes.data?.filter((scope) => tagDraft.scope_ids.includes(scope.id)).map((scope) => scope.key) ?? []
-    : published?.scope_keys ?? [];
+  const scopeKeys = scopes.data?.filter((scope) => draft.scope_ids.includes(scope.id)).map((scope) => scope.key)
+    ?? candidate?.scope_keys ?? published?.scope_keys ?? [];
   const entities = candidate?.related_entities ?? published?.related_entities ?? [];
-  const termIds = candidate ? tagDraft.glossary_term_ids : entities.filter((entity) => entity.type === 'glossary_term').map((entity) => String(entity.id));
+  const termIds = draft.glossary_term_ids;
   const scopeNames = (type: string) => scopeKeys.filter((key) => key.startsWith(`${type}.`)).map((key) => scopes.data?.find((scope) => scope.key === key)?.name ?? key);
   const termNames = termIds.map((id) => terms.data?.find((term) => term.id === id)?.canonical_term
     ?? String(entities.find((entity) => entity.id === id)?.name ?? id));
-  const information = { subject, type: candidateTypeLabels[type] ?? type,
-    scope: candidate?.candidate_type === 'term' ? 'Общий глоссарий' : (scopeKeys.length || candidate && tagDraft.scope_ids.length) ? 'Выбранные области'
-      : candidate && !hasLinks ? 'Не определена' : 'Вся компания',
+  const applicabilityFields: FieldConfig[] = [
+    { key: 'projects', label: 'Проекты — где действует', type: 'tags', editable: false },
+    { key: 'teams', label: 'Команды — кому действует', type: 'tags', editable: false },
+  ];
+  const applicability = {
+    projects: scopeNames('project').length ? scopeNames('project') : ['Вне проектов'],
+    teams: scopeNames('team').length ? scopeNames('team') : ['Без адресата'],
+  };
+  const additionalApplicability: Record<string, unknown> = { ...published?.applicability,
+    ...('conditions' in content ? { conditions: content.conditions } : {}),
+    ...('applicability_conditions' in content ? { applicability_conditions: content.applicability_conditions } : {}) };
+  const extraApplicabilityFields: FieldConfig[] = Object.entries(additionalApplicability)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '' && !(Array.isArray(value) && !value.length))
+    .map(([key]) => ({ key, label: applicabilityLabel(key), type: 'custom', editable: false,
+      render: (value: unknown) => <MemoryApplicabilityValue value={value} /> }));
+  const information = { subject, type: candidateTypeLabels[type] ?? type, ...applicability, ...additionalApplicability, terms: termNames,
+    relationships: [...entities.filter((entity) => entity.type !== 'glossary_term').map((entity) => String(entity.name ?? entity.type ?? entity.id)),
+      ...(published?.relations.map((relation) => `${relation.relation_type}: ${relation.target_id}`) ?? [])],
     state: stateLabels[state] ?? state, confidence: `${Math.round((candidate?.extraction_confidence ?? published?.confidence ?? 0) * 100)}%`,
     source_count: published?.source_count ?? (candidate ? 1 : 0), claim_count: published?.claim_count ?? 1,
     last_verified_at: published?.last_verified_at, updated_at: published?.updated_at };
@@ -109,25 +123,34 @@ export default function MemoryDetail({ candidate, published }: Props) {
     { key: 'confidence', label: 'УВЕРЕННОСТЬ', render: (row) => `${Math.round(row.confidence * 100)}%` },
     { key: 'updated_at', label: 'ОБНОВЛЕНО', render: (row) => new Date(row.updated_at).toLocaleString('ru-RU') },
   ];
-  const relationColumns: DataTableColumn<SemanticMemoryAdminDetail['relations'][number]>[] = [
-    { key: 'relation_type', label: 'СВЯЗЬ' }, { key: 'target_type', label: 'ТИП' }, { key: 'target_id', label: 'ЦЕЛЬ' },
-  ];
+  const representedProjects = scopes.data?.filter((scope) => draft.scope_ids.includes(scope.id) && scope.project_id)
+    .map((scope) => scope.project_id!) ?? [];
+  const otherLinks = otherMemoryLinksFields(entities.filter((entity) => entity.type !== 'glossary_term'), published?.relations ?? [],
+    new Set([...draft.scope_ids, ...scopeKeys, ...representedProjects, ...termIds]));
+  const linksFields = memoryLinksFields({ scopes: scopes.data ?? [], terms: terms.data ?? [], value: draft,
+    onChange: handleLinksChange, pending: linksPending });
   return <><EntityPageV2 title={subject} mode="view" breadcrumbs={[
     { label: 'Мемори', href: '/admin/memory' }, { label: candidate ? 'На проверке' : 'Утверждённая память', href: backPath }, { label: subject },
-  ]} backPath={backPath} onTabChange={setActiveTab} actionButtons={<>
-    <Button variant="outline" disabled={decision.isPending} onClick={() => navigate(backPath)}>К списку</Button>
+  ]} backPath={backPath} defaultTab={initialTab} onTabChange={setActiveTab} actionButtons={<>
     {canReview && <>
       <Button variant="danger" disabled={decision.isPending} onClick={() => { setRejecting(true); decision.reset(); }}>Отклонить</Button>
-      <Button disabled={decision.isPending || blocked || !hasLinks || scopes.isLoading || terms.isLoading || scopes.isError || terms.isError
-        || candidate?.candidate_type === 'term' && (glossary.isLoading || glossary.isError)}
+      <Button disabled={decision.isPending || blocked || scopes.isLoading || terms.isLoading || scopes.isError || terms.isError}
         onClick={() => { decision.reset(); decision.mutate('approve'); }}>{decision.isPending ? 'Сохраняю…' : 'Утвердить'}</Button>
     </>}
+    {!canReview && itemId && (editingLinks ? <>
+      <Button variant="outline" disabled={saveLinks.isPending} onClick={() => { setTagDraft(null); setEditingLinks(false); setApplicabilityChanged(false); }}>Отмена</Button>
+      <Button disabled={linksPending || scopes.isError || terms.isError} onClick={() => saveLinks.mutate()}>{saveLinks.isPending ? 'Сохраняю…' : 'Сохранить'}</Button>
+    </> : <Button variant="outline" disabled={linksPending || scopes.isError || terms.isError}
+      onClick={() => setEditingLinks(true)}>Редактировать</Button>)}
   </>}>
     <Tab title="Обзор" id="overview" layout="grid">
       <Block title="Основная информация" icon="database" iconVariant="info" width="1/2" fields={[
         { key: 'subject', label: 'Тема', type: 'text', editable: false },
         { key: 'type', label: 'Тип знания', type: 'badge', editable: false },
-        { key: 'scope', label: 'Применимость', type: 'badge', badgeTone: 'info', editable: false },
+        ...applicabilityFields,
+        ...extraApplicabilityFields,
+        { key: 'terms', label: 'Термины', type: 'tags', editable: false },
+        { key: 'relationships', label: 'Связи', type: 'tags', editable: false },
       ]} data={information} />
       <Block title="Состояние и уверенность" icon="activity" iconVariant="success" width="1/2" fields={[
         { key: 'state', label: 'Статус', type: 'badge', badgeTone: canReview ? 'warn' : state === 'active' || state === 'resolved' ? 'success' : 'neutral', editable: false },
@@ -139,48 +162,26 @@ export default function MemoryDetail({ candidate, published }: Props) {
           { key: 'updated_at', label: 'Обновлено', type: 'date' as const, editable: false },
         ] : []),
       ]} data={information} />
-      {candidate && <Block title="Проверка перед утверждением" icon="shield" iconVariant="warning" width="full">
-        <div className={styles.panel}>
-          <Badge tone={blocked || !hasLinks ? 'warn' : 'success'}>{blocked ? readinessLabels[candidate.content_valid ? 'conflict' : 'content']
-            : !hasLinks ? readinessLabels.scope : canReview ? readinessLabels.ready : stateLabels[state] ?? state}</Badge>
-          {blocked && <ul>{candidateBlockers(candidate).map((reason) => <li key={reason}>{reason}</li>)}</ul>}
-          {!hasLinks && <p>Для утверждения выберите хотя бы один проект, команду, продукт или термин на вкладке «Связи и применимость».</p>}
-          {canReview && <p>Сверьте содержание с фрагментами на вкладке «Происхождение». Оценка извлекателя — самооценка модели.</p>}
-        </div>
-      </Block>}
+      <Block title="Содержание памяти" icon="file-text" width="full" headerLabels="Первые 24 строки">
+        <p className={contentStyles.preview}>{memoryContentPreview(type, content) || 'Содержание не извлечено'}</p>
+      </Block>
     </Tab>
     <Tab title="Содержимое" id="content" layout="grid">
-      <Block title="Содержание памяти" icon="file-text" iconVariant="primary" width="full" fields={fields} data={content} />
-      {type === 'procedure' && <Block title="Шаги процедуры" icon="list" iconVariant="info" width="full"><ProcedureSteps steps={content.steps} /></Block>}
-      {candidate?.aliases.length ? <Block title="Алиасы" width="full" fields={[{ key: 'aliases', label: 'Алиасы', type: 'tags', editable: false }]} data={candidate} /> : null}
-      {existingTerm && <Block title="Действующее определение термина" icon="file-text" width="full">
-        <div className={styles.panel}><p>{existingTerm.definition}</p>
-          {changedDefinition && canReview && <>
-            <Checkbox checked={replaceDefinition} onChange={setReplaceDefinition} disabled={decision.isPending} label="Утвердить замену определения" />
-            {replaceDefinition && <label className={styles.field}>Причина замены *<Textarea value={replaceReason} maxLength={2000} disabled={decision.isPending} onChange={(event) => setReplaceReason(event.target.value)} /></label>}
-          </>}
-        </div>
-      </Block>}
-      {glossary.isError && candidate?.candidate_type === 'term' && <p role="alert">Не удалось проверить действующее определение. <Button variant="outline" onClick={() => glossary.refetch()}>Повторить</Button></p>}
+      <Block title="Содержание памяти" icon="file-text" iconVariant="primary" width="full"
+        headerLabels={jsonMode ? 'Каноническое содержание' : 'По разделам'}
+        headerActions={<MemoryContentViewToggle jsonMode={jsonMode} onChange={setJsonMode} />}>
+        <MemoryContentView type={type} content={content} error={candidate?.content_error} jsonMode={jsonMode} />
+      </Block>
     </Tab>
     <Tab title="Связи и применимость" id="relations" layout="grid">
-      <Block title="Области и термины" icon="git-branch" iconVariant="primary" width="full" fields={canReview ? undefined : [
-        { key: 'projects', label: 'Проекты', type: 'tags', editable: false },
-        { key: 'teams', label: 'Команды', type: 'tags', editable: false },
-        { key: 'products', label: 'Продукты', type: 'tags', editable: false },
-        { key: 'terms', label: 'Термины', type: 'tags', editable: false },
-      ]} data={{ projects: scopeNames('project'), teams: scopeNames('team'), products: scopeNames('product'), terms: termNames }}>
-        {candidate && canReview && <MemoryCandidateTagEditor candidate={candidate} scopes={scopes.data ?? []} terms={terms.data ?? []}
-          value={tagDraft} onChange={setTagDraft} pending={decision.isPending || scopes.isLoading || terms.isLoading}
-          onRefreshCatalogs={() => { scopes.refetch(); terms.refetch(); }} />}
+      <Block title="Применимость" icon="filter" iconVariant="info" width="full" fields={extraApplicabilityFields.length ? extraApplicabilityFields : undefined} data={additionalApplicability}>
+        <p>Дополнительные условия применимости не указаны.</p>
       </Block>
+      <Block title="Связи" icon="git-branch" iconVariant="primary" width="full" editable={isEditingLinks}
+        fields={[...linksFields, ...otherLinks.fields]} data={{ ...draft, ...otherLinks.data }}
+        headerLabels={isEditingLinks ? 'Редактирование' : undefined} />
       {(scopes.isError || terms.isError) && <p role="alert">Не удалось загрузить каталоги. <Button variant="outline" onClick={() => { scopes.refetch(); terms.refetch(); }}>Повторить</Button></p>}
-      {published && <Block title="Другие связи" icon="git-branch" width="full"><DataTable columns={relationColumns}
-        data={published.relations.map((row, index) => ({ ...row, id: String(index) }))} keyField="id" emptyText="Других связей нет" /></Block>}
-      {published && <Block title="Ограничения доступа и применимости" icon="shield" iconVariant="warning" width="full" fields={[
-        { key: 'applicability', label: 'Дополнительная применимость', type: 'json', editable: false },
-        { key: 'visibility', label: 'Видимость источника', type: 'json', editable: false },
-      ]} data={published} />}
+      {candidate && candidateBlockers(candidate).length > 0 && !applicabilityChanged && <ul>{candidateBlockers(candidate).map((reason) => <li key={reason}>{reason}</li>)}</ul>}
     </Tab>
     <Tab title="Происхождение" id="provenance" layout="full">
       {published && <>

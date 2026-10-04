@@ -13,23 +13,13 @@ from app.runtime.input_builders import PlannerInputBuilder
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import IterationProposal, PlanRequest
 from app.runtime.memory.search import MemorySearchService
+from app.runtime.memory.search_contract import MemorySearchInput
 from app.runtime.memory.mechanical_lookup import MechanicalLookupService
 from pydantic import BaseModel, Field, model_validator
 
 
-class PlannerMemoryToolCall(BaseModel):
+class PlannerMemoryToolCall(MemorySearchInput):
     operation: Literal["memory.search", "memory.lookup"]
-    query: str = Field(..., min_length=1)
-    project_keys: list[str] = Field(default_factory=list)
-    scope_keys: list[str] = Field(default_factory=list)
-    scope_mode: Literal["inherit", "replace"] = "inherit"
-    kinds: list[str] = Field(default_factory=list)
-    entity_ids: list[str] = Field(default_factory=list)
-    scopes: list[Literal["glossary", "project", "product", "team", "global", "user", "tenant"]] = Field(default_factory=lambda: ["glossary", "project", "product", "team", "global", "user", "tenant"])
-    direction: str | None = None
-    limit: int = Field(default=8, ge=1, le=12)
-    fact_subject: str | None = Field(default=None, max_length=200)
-    model_config = {"extra": "forbid"}
 
 
 class PlannerStep(BaseModel):
@@ -108,7 +98,12 @@ class GraphPlanner:
             "Before proposing an iteration you may return kind=tool_call only for memory.search or memory.lookup. "
             "Use it for glossary, project/company knowledge, or confirmed user/tenant facts absent from the profile; "
             "After zero to three tool results return kind=proposal with the complete IterationProposal. "
-            "Never create a task merely to read memory."
+            "Never create a task merely to read memory. "
+            "execution_context is an application-provided fact about this chat. "
+            "memory.search must use all execution_context.team_keys; omit team_keys to inherit them. "
+            "project_keys may choose a subset of known execution_context projects, [] for outside projects, "
+            "or [project.all] for only common project rules. Omit to use focused projects. "
+            "Never invent scope keys or clear the teams; ask the user to clarify an unknown project."
         )
         tool_results: list[dict[str, Any]] = []
         for _ in range(4):
@@ -150,14 +145,12 @@ class GraphPlanner:
                 effective_keys = list(request.context.scope_context.get("keys") or [])
                 if call.operation == "memory.lookup":
                     data = await MechanicalLookupService(self._session).lookup(query=call.query,
-                                                                               tenant_id=tenant_id,
-                                                                               scope_ceiling_keys=list(request.context.scope_context.get("ceiling_keys") or []))
+                                                                               tenant_id=tenant_id)
                 else:
                     data = await MemorySearchService(self._session).search(
                         query=call.query, tenant_id=tenant_id, user_id=user_id, project_keys=call.project_keys,
-                        context_scope_keys=effective_keys,
-                        scope_keys=call.scope_keys, scope_mode=call.scope_mode,
-                        scope_ceiling_keys=list(request.context.scope_context.get("ceiling_keys") or []),
+                        context_scope_keys=effective_keys, enforce_context=True,
+                        team_keys=call.team_keys,
                         scopes=call.scopes,
                         kinds=call.kinds, entity_ids=call.entity_ids,
                         direction=call.direction, limit=call.limit, fact_subject=call.fact_subject,

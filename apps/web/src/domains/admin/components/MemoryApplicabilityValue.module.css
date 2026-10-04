@@ -1,0 +1,5 @@
+.labels { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.rows { display: grid; gap: var(--sp-2); margin: 0; }
+.rows > div { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: var(--sp-3); }
+.rows dt { color: var(--text-secondary); }
+.rows dd { margin: 0; }

@@ -8,7 +8,7 @@ type Props = {
   value: MemoryCandidateTags; onChange: (draft: MemoryCandidateTags) => void;
   pending: boolean; onRefreshCatalogs: () => void;
 };
-const fields = [{ type: 'project', label: 'Проекты' }, { type: 'team', label: 'Команды' }, { type: 'product', label: 'Продукты' }];
+const fields = [{ type: 'project', label: 'Проекты' }, { type: 'team', label: 'Команды' }];
 
 export default function MemoryCandidateTagEditor({ candidate, scopes, terms, value, onChange, pending, onRefreshCatalogs }: Props) {
   const activeScopes = scopes.filter((scope) => scope.lifecycle_status === 'active');
@@ -19,7 +19,7 @@ export default function MemoryCandidateTagEditor({ candidate, scopes, terms, val
       const scope = activeScopes.find((item) => item.id === id);
       return !addedScope || id === added || !scope || !scope.is_all && !addedScope.is_all;
     });
-    onChange({ ...value, company_wide: false, scope_ids: [
+    onChange({ ...value, scope_ids: [
       ...value.scope_ids.filter((id) => activeScopes.find((scope) => scope.id === id)?.scope_type !== type), ...selected,
     ] });
   };
@@ -31,8 +31,11 @@ export default function MemoryCandidateTagEditor({ candidate, scopes, terms, val
         value={value.scope_ids.filter((id) => options.some((scope) => scope.id === id))}
         disabled={pending} onChange={(ids) => handleScopesChange(type, ids)} />;
     })}
+    {candidate.candidate_type !== 'term' && <>
+      <p className={styles.hint}>Команды — кому действует правило, проекты — где. Пустые проекты означают внепроектную деятельность. «Все проекты» выбирается явно.</p>
+    </>}
     <MemoryTagPicker label="Термины" options={terms.map((term) => ({ value: term.id, label: term.canonical_term, search: `${term.aliases.join(' ')} ${term.definition}` }))}
-      value={value.glossary_term_ids} disabled={pending} onChange={(ids) => onChange({ ...value, company_wide: false, glossary_term_ids: ids })} />
+      value={value.glossary_term_ids} disabled={pending} onChange={(ids) => onChange({ ...value, glossary_term_ids: ids })} />
     <Button size="sm" variant="outline" disabled={pending} onClick={onRefreshCatalogs}>Обновить списки</Button>
   </section>;
 }

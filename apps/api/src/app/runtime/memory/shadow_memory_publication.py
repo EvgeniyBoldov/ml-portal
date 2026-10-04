@@ -40,7 +40,7 @@ class ShadowMemoryPublicationService:
 
     async def update_review_tags(
         self, *, candidate_id: UUID, actor_id: UUID | None,
-        scope_ids: list[UUID], company_wide: bool, glossary_term_ids: list[UUID], reason: str = "",
+        scope_ids: list[UUID], glossary_term_ids: list[UUID], reason: str = "",
     ) -> MemoryExtractionCandidate:
         """Save a reviewer's applicability and term links without publishing."""
         candidate = await self._required_candidate(candidate_id, lock=True)
@@ -52,9 +52,7 @@ class ShadowMemoryPublicationService:
         if snapshot.active_attempt_id and candidate.attempt_id != snapshot.active_attempt_id:
             raise ValueError("Кандидат относится к предыдущей попытке извлечения")
         reason = reason.strip() or "Связи изменены проверяющим"
-        if company_wide and scope_ids:
-            raise ValueError("Вся компания не совмещается с отдельными областями")
-        if candidate.candidate_type == "term" and (company_wide or scope_ids):
+        if candidate.candidate_type == "term" and scope_ids:
             raise ValueError("Определение термина относится к общему глоссарию")
         scopes = await self._scopes_for(candidate, scope_ids, None)
         # Within one type an all-scope already covers every specific value.
@@ -98,7 +96,7 @@ class ShadowMemoryPublicationService:
             binding.status = "superseded"
             binding.rationale = reason.strip()
         candidate.scope_candidate = (None if candidate.candidate_type == "term" else
-                                     "scoped" if scopes else "global" if company_wide or terms else "unknown")
+                                     "scoped" if scopes else "global")
         candidate.unresolved_scope_references = []
         candidate.related_entities = [entity for entity in candidate.related_entities or []
                                       if entity.get("type") != "glossary_term"] + [
@@ -142,14 +140,16 @@ class ShadowMemoryPublicationService:
             candidate.content = content
             candidate.content_text = json.dumps(content, ensure_ascii=False, sort_keys=True)
         is_term = candidate.candidate_type == "term"
+        if is_term and automatic:
+            raise ValueError("Terms require manual administrator approval")
         if not is_term and candidate.unresolved_scope_references:
             raise ValueError("Memory has unresolved required scope references; reject it for re-extraction")
         if replace_existing_definition and (not is_term or automatic or not str(reason or "").strip()):
             raise ValueError("Replacing a glossary definition requires manual approval and a reason")
         if is_term:
             document = await self._session.get(RAGDocument, snapshot.document_id)
-            if document is None or document.scope != "global" or document.status == "archived":
-                raise ValueError("Glossary publication requires a global source document")
+            if document is None or document.status == "archived":
+                raise ValueError("Term approval requires an available source document")
             if snapshot.status in {"superseded", "failed", "rejected"}:
                 raise ValueError("Glossary publication requires a current document snapshot")
             newer_snapshot = await self._session.scalar(select(DocumentMemorySnapshot.id).where(
@@ -178,11 +178,11 @@ class ShadowMemoryPublicationService:
             ).limit(1))
             if known_scope is not None:
                 chosen_scope = "scoped"
-            elif any(entity.get("type") == "glossary_term" and entity.get("id")
-                     for entity in candidate.related_entities or []):
+            elif not automatic:
+                # A manual approval with no selected scopes confirms empty branches.
                 chosen_scope = "global"
         if not is_term and chosen_scope not in {"global", "project", "scoped"}:
-            raise ValueError("Для утверждения выберите хотя бы один проект, команду, продукт или термин")
+            raise ValueError("Не удалось определить применимость извлечённого знания")
         if chosen_scope == "global" and scope_ids:
             raise ValueError("Global applicability cannot include typed memory scopes")
         inferred_project_id = project_id
@@ -216,14 +216,6 @@ class ShadowMemoryPublicationService:
                 raise ValueError("Project has no active memory scope; add it in the scope catalog")
         if chosen_scope == "project" and (len(selected_scopes) != 1 or selected_scopes[0].project_id != project.id):
             raise ValueError("Project applicability must use exactly the selected project scope")
-        if not is_term and not selected_scopes:
-            term_ids = [UUID(entity["id"]) for entity in candidate.related_entities or []
-                        if entity.get("type") == "glossary_term" and entity.get("id")]
-            linked_term = await self._session.scalar(GlossaryService.published_terms_query().where(
-                GlossaryTerm.id.in_(term_ids),
-            ).limit(1)) if term_ids else None
-            if linked_term is None:
-                raise ValueError("Для утверждения выберите хотя бы один проект, команду, продукт или термин")
         visibility = None if is_term or promote_to_company else candidate.visibility_tenant_id
         if not is_term:
             await self._require_scope_proposals_approved(candidate.id)
@@ -304,8 +296,8 @@ class ShadowMemoryPublicationService:
         if proposal.status != "needs_review":
             raise ValueError("Scope proposal is waiting for its glossary term or was rejected")
         term_id = await self._approved_proposal_term_id(proposal)
-        if term_id is None:
-            raise ValueError("Scope proposal requires an approved active glossary term")
+        if term_id is None and (proposal.term_candidate_id or proposal.glossary_term_id):
+            raise ValueError("Scope proposal requires its referenced term to be approved and active")
         existing = await self._session.scalar(select(MemoryScope).where(
             MemoryScope.scope_type == proposal.scope_type,
             MemoryScope.key == proposal.proposed_key,
@@ -313,7 +305,7 @@ class ShadowMemoryPublicationService:
         if existing is not None and existing.lifecycle_status != "active":
             raise ValueError("A matching scope exists but is deprecated; restore it before approving this proposal")
         scope = existing or MemoryScope(
-            scope_type=proposal.scope_type, key=proposal.proposed_key,
+            scope_type=proposal.scope_type, key=proposal.proposed_key, project_type=proposal.project_type,
             name=proposal.name, aliases=list(proposal.aliases or []),
         )
         if existing is None:
@@ -326,16 +318,17 @@ class ShadowMemoryPublicationService:
             await self._session.flush()
         else:
             scope.aliases = list(dict.fromkeys([*(scope.aliases or []), *(proposal.aliases or [])]))
-        term_binding = await self._session.get(MemoryScopeGlossaryTerm, scope.id)
-        if term_binding is not None and term_binding.glossary_term_id != term_id:
-            raise ValueError("Scope key is already linked to a different glossary term")
-        if term_binding is None:
-            duplicate_term_scope = await self._session.scalar(select(MemoryScopeGlossaryTerm.scope_id).where(
-                MemoryScopeGlossaryTerm.glossary_term_id == term_id,
-            ))
-            if duplicate_term_scope is not None and duplicate_term_scope != scope.id:
-                raise ValueError("Glossary term is already linked to a different scope")
-            self._session.add(MemoryScopeGlossaryTerm(scope_id=scope.id, glossary_term_id=term_id))
+        if term_id is not None:
+            term_binding = await self._session.get(MemoryScopeGlossaryTerm, scope.id)
+            if term_binding is not None and term_binding.glossary_term_id != term_id:
+                raise ValueError("Scope key is already linked to a different glossary term")
+            if term_binding is None:
+                duplicate_term_scope = await self._session.scalar(select(MemoryScopeGlossaryTerm.scope_id).where(
+                    MemoryScopeGlossaryTerm.glossary_term_id == term_id,
+                ))
+                if duplicate_term_scope is not None and duplicate_term_scope != scope.id:
+                    raise ValueError("Glossary term is already linked to a different scope")
+                self._session.add(MemoryScopeGlossaryTerm(scope_id=scope.id, glossary_term_id=term_id))
         proposal.memory_scope_id = scope.id
         proposal.status = "approved"
         proposal.rejection_reason = None

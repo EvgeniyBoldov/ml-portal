@@ -335,7 +335,10 @@ def _persisted_metadata(metadata: dict[str, Any]) -> dict[str, Any] | None:
     """Keep routing/conflict metadata, while observations retain provenance."""
     result = {
         key: metadata[key]
-        for key in ("aliases", "compaction_action")
+        for key in ("aliases", "compaction_action", "team_keys", "project_keys")
         if metadata.get(key) not in (None, "", [])
     }
+    for key in ("team_keys", "project_keys"):
+        if isinstance(metadata.get(key), list):
+            result[key] = metadata[key]
     return result or None

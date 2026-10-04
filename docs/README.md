@@ -34,6 +34,7 @@
 - [Entity Builder Pattern](architecture/ENTITY_BUILDER_PATTERN.md)
 
 ## Development Rules
+- [Repository Guidelines](../AGENTS.md) — руководство для участников и coding agents; команды, границы архитектуры и ссылки на правила
 - [Backend Rules](backend/RULES.md)
 - [Backend Patterns](backend/PATTERNS.md)
 - [Tool Developer Guide](backend/TOOL_DEVELOPER_GUIDE.md)

@@ -26,10 +26,20 @@ def test_graph_planner_input_builder_uses_only_iteration_contract():
     assert set(payload) == {
         "goal", "trigger", "execution_ledger", "available_artifacts", "memory_context", "task_brief",
         "available_agents", "iteration_contract",
+        "scope_context", "planner_search_results", "execution_context",
     }
     assert payload["trigger"] == "task_outcome"
     assert payload["execution_ledger"]["tasks"][0]["task_id"] == "inspect"
     assert payload["iteration_contract"]["terminal"] == ["planner", "synthesis"]
+    assert payload["execution_context"]["project_keys"] == ["project.all"]
+
+
+def test_planner_receives_execution_context_as_an_application_fact():
+    payload = PlannerInputBuilder().build_graph_request(_request(scope_context={
+        "keys": ["team.ops", "project.a"], "revision": 3}))
+    assert payload["execution_context"]["team_keys"] == ["team.ops"]
+    assert payload["execution_context"]["project_keys"] == ["project.a", "project.all"]
+    assert payload["execution_context"]["revision"] == 3
 
 
 def test_graph_planner_input_builder_exposes_fresh_retrieval_capability():

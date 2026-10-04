@@ -43,7 +43,7 @@ const GLOSSARY_COLUMNS: DataTableColumn<GlossaryCatalogTerm>[] = [
   {
     key: 'source_document_title',
     label: 'ДОКУМЕНТ',
-    render: (entry) => entry.source_document_title,
+    render: (entry) => entry.source_document_title ?? 'Источник удалён',
   },
 ];
 

@@ -22,7 +22,7 @@ class GlossaryTermResponse(BaseModel):
     definition: str
     aliases: list[str]
     is_active: bool = True
-    approved_candidate_id: UUID
+    approved_candidate_id: UUID | None
     created_at: datetime
     updated_at: datetime
 
@@ -72,7 +72,7 @@ async def activate_glossary_terms(
         .with_only_columns(GlossaryTerm.id).where(GlossaryTerm.id.in_(ids))
     )).scalars().all())
     if set(ids) != eligible_ids:
-        raise HTTPException(status_code=409, detail="A term needs an approved global document definition before activation")
+        raise HTTPException(status_code=409, detail="A term needs administrator approval before activation")
     result = await db.execute(
         update(GlossaryTerm).where(GlossaryTerm.id.in_(ids), GlossaryTerm.is_active.is_(False)).values(is_active=True)
     )
@@ -93,3 +93,15 @@ async def delete_glossary_terms(
     await db.execute(delete(GlossaryTerm).where(GlossaryTerm.id.in_(ids)))
     await db.commit()
     return {"deleted": len(ids)}
+
+
+@router.get("/{term_id}", response_model=GlossaryTermResponse)
+async def get_glossary_term(
+    term_id: UUID,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+) -> GlossaryTerm:
+    term = await db.get(GlossaryTerm, term_id)
+    if term is None:
+        raise HTTPException(status_code=404, detail="Term not found")
+    return term

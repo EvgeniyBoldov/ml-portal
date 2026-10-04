@@ -1,35 +1,35 @@
-"""Resolve overlapping scoped memory before it reaches a model."""
+"""Apply only evidence-backed project overrides; compatible duties accumulate."""
 from __future__ import annotations
-
 from typing import Any
 from uuid import UUID
 
 
 def apply_scope_precedence(items: list[dict[str, Any]], project_ids: list[UUID]) -> tuple[list[dict[str, Any]], list[str]]:
-    by_identity: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    suppressed = {str(value) for item in items for value in item.get("overrides_claim_ids", [])}
+    seen = set()
+    result = []
     for item in items:
-        by_identity.setdefault((str(item.get("kind")), str(item.get("subject")).casefold()), []).append(item)
-    result: list[dict[str, Any]] = []
-    uncertainties: list[str] = []
-    project_set = {str(value) for value in project_ids}
-    for identity, rows in by_identity.items():
-        globals_ = [row for row in rows if row.get("project_id") is None and not row.get("scope_keys")]
-        typed = [row for row in rows if row.get("project_id") is None and row.get("scope_keys")]
-        scoped: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            if row.get("project_id") is not None:
-                scoped.setdefault(str(row["project_id"]), []).append(row)
-        effective = [row for project_id in sorted(project_set)
-                     for row in (scoped.get(project_id) or globals_)] if project_set else rows
-        if project_set:
-            effective.extend(typed)
-        if len({str(row.get("content_text")) for row in effective}) > 1:
-            uncertainties.append(f"project_memory_divergence:{identity[0]}:{identity[1]}")
-        seen = set()
-        for row in effective:
-            key = (str(row.get("selected_claim_id") or row.get("id")),
-                   tuple(sorted(row.get("scope_keys") or [])), str(row.get("content_text")))
-            if key not in seen:
-                result.append(row)
-                seen.add(key)
-    return result, uncertainties
+        if str(item.get("selected_claim_id")) in suppressed:
+            continue
+        key = (str(item.get("selected_claim_id") or item.get("id")), tuple(sorted(item.get("scope_keys") or [])))
+        if key not in seen:
+            result.append(item)
+            seen.add(key)
+    return result, []
+
+
+def scope_sets_overlap(left: set[str], right: set[str]) -> bool:
+    for branch in ("team", "project"):
+        a = {key for key in left if key.startswith(f"{branch}.")}
+        b = {key for key in right if key.startswith(f"{branch}.")}
+        if branch == "project" and bool(a) != bool(b):
+            return False
+        if a and b and not a.intersection(b) and f"{branch}.all" not in a | b:
+            return False
+    return True
+
+
+def has_project_override(left: set[str], right: set[str]) -> bool:
+    def concrete(keys: set[str]) -> bool:
+        return any(key.startswith("project.") and key != "project.all" for key in keys)
+    return ("project.all" in left and concrete(right)) or ("project.all" in right and concrete(left))

@@ -17,6 +17,6 @@ class ProjectCatalogService:
             statement = statement.limit(limit)
         rows = await self._session.execute(statement)
         return [
-            {"id": item.id, "key": item.key, "name": item.name, "aliases": list(item.aliases or [])}
+            {"id": item.id, "key": item.key, "name": item.name, "aliases": list(item.aliases or []), "project_type": item.project_type}
             for item in rows.scalars().all()
         ]

@@ -25,6 +25,8 @@ class ChatContextReducer:
                 normalized_scopes = list(projection.project_context.get("effective_scope_keys", normalized_scopes) or [])
             operations.append(ChatContextOperation(action="update", kind="scope", item_key="current_scope",
                 payload={"project_keys": normalized, "scope_keys": normalized_scopes,
+                         "team_keys": [key.removeprefix("team.") for key in normalized_scopes if key.startswith("team.")],
+                         "suppress_team_default": bool(projection.project_context.get("suppress_team_default")),
                          "suppress_project_default": bool(projection.project_context.get("suppress_project_default")),
                          "scope_origins": dict(projection.project_context.get("scope_origins") or {}),
                          "scope_revision": int(projection.project_context.get("scope_revision") or 0),

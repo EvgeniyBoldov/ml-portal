@@ -58,9 +58,21 @@ class MemoryService:
         self._facts = fact_store
 
     async def read_snapshot(self, *, user_id: Optional[UUID], tenant_id: Optional[UUID], limit: int) -> MemorySnapshot:
-        user = await self._facts.retrieve(scopes=[FactScope.USER], owner_type="user", owner_id=user_id, limit=limit) if user_id else []
-        tenant = await self._facts.retrieve(scopes=[FactScope.TENANT], owner_type="tenant", owner_id=tenant_id, limit=limit) if tenant_id else []
+        user = await self._read_owner_snapshot(FactScope.USER, user_id, limit) if user_id else []
+        tenant = await self._read_owner_snapshot(FactScope.TENANT, tenant_id, limit) if tenant_id else []
         return MemorySnapshot(user_facts=tuple(user), tenant_facts=tuple(tenant))
+
+    async def _read_owner_snapshot(self, scope: FactScope, owner_id: UUID, limit: int) -> list[FactDTO]:
+        # Scope defaults must survive the recent-profile limit, even when old.
+        defaults = []
+        for branch in ("team", "project"):
+            fact = await self._facts.get_active_by_key(scope=scope, subject=f"{scope.value}.{branch}_scope",
+                owner_type=scope.value, owner_id=owner_id)
+            if fact is not None:
+                defaults.append(fact)
+        recent = await self._facts.retrieve(scopes=[scope], owner_type=scope.value, owner_id=owner_id, limit=limit)
+        subjects = {fact.subject for fact in defaults}
+        return [*defaults, *(fact for fact in recent if fact.subject not in subjects)]
 
     async def write_extracted(self, *, facts: Sequence[FactDTO], user_id: Optional[UUID], tenant_id: Optional[UUID]) -> int:
         saved = 0

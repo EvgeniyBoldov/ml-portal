@@ -41,6 +41,7 @@ const OrchestrationPage = lazy(() => import('@/domains/admin/pages/Orchestration
 const PeriodicTasksPage = lazy(() => import('@/domains/admin/pages/PeriodicTasksPage'));
 const CredentialPage = lazy(() => import('@/domains/admin/pages/CredentialPage').then(m => ({ default: m.default })));
 const MemoryPage = lazy(() => import('@/domains/admin/pages/MemoryPage'));
+const MemoryTermPage = lazy(() => import('@/domains/admin/pages/MemoryTermPage'));
 const MemoryItemPage = lazy(() => import('@/domains/admin/pages/MemoryItemPage'));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage'));
 const AgentRunPage = lazy(() => import('@/domains/admin/pages/AgentRunPage'));
@@ -115,6 +116,7 @@ const router = createBrowserRouter([
       { path: 'agent-runs/:id', element: withSuspense(<AgentRunPage />) },
       { path: 'collections', element: withSuspense(<CollectionListPage />) },
       { path: 'memory', element: withSuspense(<MemoryPage />) },
+      { path: 'memory/terms/:termId', element: withSuspense(<MemoryTermPage />) },
       { path: 'memory/review/:candidateId', element: withSuspense(<MemoryItemPage />) },
       { path: 'memory/:itemId', element: withSuspense(<MemoryItemPage />) },
       { path: 'collections/new', element: withSuspense(<CollectionPage />) },

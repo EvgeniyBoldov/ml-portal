@@ -14,6 +14,7 @@ from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import SynthesisBrief
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.effective_scope import ScopeSelection
+from app.runtime.memory.search_contract import MemorySearchInput
 
 
 class TaskBrief(BaseModel):
@@ -35,18 +36,8 @@ class DirectAnswerBrief(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class MemoryRequest(BaseModel):
-    project_keys: list[str] = Field(default_factory=list)
-    scope_keys: list[str] = Field(default_factory=list)
-    scope_mode: Literal["inherit", "replace"] = "inherit"
+class MemoryRequest(MemorySearchInput):
     direction: str = Field(..., min_length=1)
-    kinds: list[str] = Field(default_factory=list)
-    entity_ids: list[str] = Field(default_factory=list)
-    scopes: list[Literal["glossary", "project", "product", "team", "global", "user", "tenant"]] = Field(default_factory=lambda: ["glossary", "project", "product", "team", "global", "user", "tenant"])
-    query: str = Field(..., min_length=1)
-    limit: int = Field(default=8, ge=1, le=12)
-    fact_subject: str | None = Field(default=None, max_length=200)
-    model_config = {"extra": "forbid"}
 
 
 class Clarification(BaseModel):
@@ -94,16 +85,10 @@ class TurnPreflightDecision(BaseModel):
 
 def _canonical_scope_selection(decision: TurnPreflightDecision) -> ScopeSelection:
     selection = decision.scope_selection
-    legacy = decision.memory_request or decision.task_brief
+    legacy = decision.task_brief
     if legacy is None:
         return selection
     legacy_keys = list(legacy.scope_keys)
-    if isinstance(legacy, MemoryRequest):
-        projects = {f"project.{key.strip().casefold()}" for key in legacy.project_keys if key.strip()}
-        typed_projects = {key.strip().casefold() for key in legacy.scope_keys if key.strip().casefold().startswith("project.")}
-        if projects and typed_projects and projects != typed_projects:
-            raise ValueError("conflicting_project_scope")
-        legacy_keys.extend(f"project.{key.strip()}" for key in legacy.project_keys if key.strip())
     legacy_selection = ScopeSelection(keys=legacy_keys, mode=legacy.scope_mode)
     explicit = bool(selection.keys or selection.mentioned_keys or selection.mode == "replace")
     if not explicit:
@@ -171,6 +156,7 @@ class TurnPreflight:
                 "project_context": dict(project_context or {}),
                 "chat_context": dict(chat_context or {}),
                 "recent_dialogue": list(recent_dialogue or []),
+                "scope_policy": "team/project focus is initial context, not a ceiling. Select only concrete catalog keys supported by user choice or confirmation, including replies to agent questions. Mere mentions or unconfirmed questions do not change focus. memory_request selects search arguments independently of focus: retain all context teams; choose known projects, [] for outside-project knowledge or [project.all] for common project rules only. project.all is a search selector, never a concrete focus identity.",
                 "continuation": continuation or {},
                 "recall_context": recall_context,
             },
@@ -198,15 +184,14 @@ class TurnPreflight:
             ))
         keys = selection.keys
         mentions = selection.mentioned_keys
-        if "scope_candidates" in mechanical_lookup:
-            allowed = {item["key"] for item in mechanical_lookup["scope_candidates"] if isinstance(item, dict)}
-            allowed.update((project_context or {}).get("effective_scope_keys") or [])
-            unmatched = sorted(set([*keys, *mentions]) - allowed)
-            if unmatched:
-                return TurnPreflightDecision(route="clarify", clarification=Clarification(
-                    question="Уточните область задачи: выбранный скоуп не сопоставлен с запросом.",
-                    context={"unmatched_scope_keys": unmatched},
-                ))
+        # A confirmation such as "yes" may refer to the agent's question in
+        # recent_dialogue. Current-message alias matches and initial focus are
+        # not a ceiling; validate the resulting identity against the catalog.
+        if set(keys).intersection({"team.all", "project.all"}):
+            return TurnPreflightDecision(route="clarify", clarification=Clarification(
+                question="Укажите конкретную команду или проект: all не используется в фокусе.",
+                context={"scope_error": "all_is_not_a_query_scope"},
+            ))
         if keys or mentions:
             try:
                 await resolve_memory_scopes(self._session, list(dict.fromkeys([*keys, *mentions])))

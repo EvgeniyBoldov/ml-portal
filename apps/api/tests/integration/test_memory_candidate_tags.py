@@ -87,21 +87,21 @@ async def seed(session):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('company_wide', [False, True])
-async def test_manual_applicability_persists_and_publishes_with_term_links(tag_pg, company_wide):
+@pytest.mark.parametrize('outside_projects', [False, True])
+async def test_manual_applicability_persists_and_publishes_with_term_links(tag_pg, outside_projects):
     async with AsyncSession(tag_pg, expire_on_commit=False) as session:
         candidate_id, scope_id, term_id, visibility = await seed(session)
         await ShadowMemoryPublicationService(session).update_review_tags(
-            candidate_id=candidate_id, actor_id=None, scope_ids=[] if company_wide else [scope_id],
-            company_wide=company_wide, glossary_term_ids=[term_id], reason='Confirmed against source',
+            candidate_id=candidate_id, actor_id=None, scope_ids=[] if outside_projects else [scope_id],
+            glossary_term_ids=[term_id], reason='Confirmed against source',
         )
         await session.commit()
     async with AsyncSession(tag_pg, expire_on_commit=False) as session:
         row = await session.get(MemoryExtractionCandidate, candidate_id)
         response = await _shadow_candidate_response(session, row)
         assert response.content_valid and not response.approval_blockers
-        assert response.scope_candidate == ('global' if company_wide else 'scoped')
-        assert response.scope_ids == ([] if company_wide else [scope_id])
+        assert response.scope_candidate == ('global' if outside_projects else 'scoped')
+        assert response.scope_ids == ([] if outside_projects else [scope_id])
         assert response.glossary_term_ids == [term_id]
         assert response.scope_proposals == []
         assert row.visibility_tenant_id == visibility
@@ -118,7 +118,7 @@ async def test_manual_applicability_persists_and_publishes_with_term_links(tag_p
         claim = await session.scalar(select(MemoryClaim).where(MemoryClaim.approved_candidate_id == candidate_id))
         assert claim.visibility_tenant_id == visibility
         ids = (await session.scalars(select(MemoryClaimScope.scope_id).where(MemoryClaimScope.claim_id == claim.id))).all()
-        assert list(ids) == ([] if company_wide else [scope_id])
+        assert list(ids) == ([] if outside_projects else [scope_id])
 
 
 @pytest.mark.asyncio
@@ -127,14 +127,14 @@ async def test_term_only_link_publishes_and_invalid_scope_rolls_back(tag_pg):
         candidate_id, scope_id, term_id, _ = await seed(session)
         with pytest.raises(ValueError, match='Unknown memory scope ID'):
             await ShadowMemoryPublicationService(session).update_review_tags(candidate_id=candidate_id, actor_id=None,
-                scope_ids=[uuid4()], company_wide=False, glossary_term_ids=[], reason='Invalid selection')
+                scope_ids=[uuid4()], glossary_term_ids=[], reason='Invalid selection')
         await session.rollback()
         row = await session.get(MemoryExtractionCandidate, candidate_id)
         assert row.unresolved_scope_references
         assert not (await session.scalars(select(MemoryCandidateDecision).where(
             MemoryCandidateDecision.candidate_id == candidate_id, MemoryCandidateDecision.action == 'edit'))).all()
         await ShadowMemoryPublicationService(session).update_review_tags(candidate_id=candidate_id, actor_id=None,
-            scope_ids=[], company_wide=False, glossary_term_ids=[term_id], reason='Only a term link')
+            scope_ids=[], glossary_term_ids=[term_id], reason='Only a term link')
         await session.commit()
     async with AsyncSession(tag_pg, expire_on_commit=False) as session:
         row = await session.get(MemoryExtractionCandidate, candidate_id)

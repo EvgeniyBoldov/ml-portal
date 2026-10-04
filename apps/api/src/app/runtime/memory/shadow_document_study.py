@@ -50,22 +50,31 @@ class ShadowScreeningOutput(BaseModel):
 
 
 class ShadowScopeProposal(BaseModel):
-    scope_type: Literal["product", "project", "team"]
+    scope_type: Literal["project", "team"]
     name: str = Field(min_length=1, max_length=255)
     aliases: list[str] = Field(default_factory=list, max_length=20)
-    term_subject: str = Field(min_length=1, max_length=200)
+    term_subject: str | None = Field(default=None, min_length=1, max_length=200)
     role: Literal["applies_to", "mentions"] = "applies_to"
     rationale: str = Field(default="", max_length=600)
+    project_type: str | None = Field(default=None, max_length=80)
+
+
+    @model_validator(mode="after")
+    def validate_project_type(self) -> "ShadowScopeProposal":
+        if self.project_type and self.scope_type != "project":
+            raise ValueError("project_type belongs to project scopes only")
+        return self
 
 
 class ShadowStudyItem(BaseModel):
     operation: Literal["new", "extend_existing"] = "new"
     existing_candidate_id: UUID | None = None
     candidate_type: Literal["term", "description", "relationship", "rule", "constraint", "procedure", "decision"]
-    scope_type: Literal["product", "project", "team"] | None = None
+    scope_type: Literal["project", "team"] | None = None
     subject: str = Field(min_length=1, max_length=200)
     content: dict[str, Any] = Field(default_factory=dict)
     scope_candidate: Literal["global", "project", "multi_project", "scoped", "unknown"] = "unknown"
+    team_keys: list[str] = Field(default_factory=list, max_length=20)
     project_keys: list[str] = Field(default_factory=list, max_length=20)
     scope_keys: list[str] = Field(default_factory=list, max_length=20)
     mentioned_scope_keys: list[str] = Field(default_factory=list, max_length=20)
@@ -86,8 +95,22 @@ class ShadowStudyOutput(BaseModel):
         # Validate while the structured call can still ask the model to repair
         # its answer, rather than first discovering missing fields in review.
         for index, item in enumerate(self.items):
-            if item.candidate_type != "term" and item.scope_candidate == "global" and (item.scope_keys or item.project_keys):
-                raise ValueError(f"items[{index}]: global applicability must not include scope_keys or project_keys; choose scoped for scope tags")
+            if item.candidate_type != "term":
+                for branch in ("team", "project"):
+                    raw = getattr(item, f"{branch}_keys")
+                    values = list(dict.fromkeys(value.strip().casefold() for value in raw))
+                    keys = [value if value.startswith(f"{branch}.") else f"{branch}.{value}" for value in values]
+                    if any(not value or ("." in value and not value.startswith(f"{branch}.")) for value in values):
+                        raise ValueError(f"items[{index}]: invalid {branch} selector")
+                    if f"{branch}.all" in keys and len(keys) > 1:
+                        raise ValueError(f"items[{index}]: all cannot be mixed with concrete {branch} selectors")
+                    item.scope_keys = _unique([*item.scope_keys, *keys])
+                    # Persistence uses canonical keys in the existing binding table.
+                    setattr(item, f"{branch}_keys", [key.removeprefix(f"{branch}.") for key in keys])
+                if any(key.partition(".")[0] not in {"team", "project"} for key in item.scope_keys):
+                    raise ValueError(f"items[{index}]: only team and project scopes are supported")
+                if item.scope_keys and item.scope_candidate == "global":
+                    item.scope_candidate = "scoped"
             try:
                 normalize_memory_content(item.candidate_type, item.content)
             except ValueError as exc:
@@ -354,7 +377,6 @@ class ShadowDocumentStudyService:
         snapshot: DocumentMemorySnapshot,
         attempt: DocumentMemoryExtractionAttempt | None = None,
         items: Sequence[ShadowStudyItem],
-        document_scope: str,
         section_ids: set[str],
         projects_by_key: dict[str, Project],
         scopes_by_key: dict[str, MemoryScope] | None = None,
@@ -377,10 +399,7 @@ class ShadowDocumentStudyService:
         }
         for item in ordered_items:
             if item.candidate_type == "term":
-                if document_scope != "global":
-                    counts["rejected"] += 1
-                    continue
-                item = item.model_copy(update={"scope_candidate": "unknown", "project_keys": [],
+                item = item.model_copy(update={"scope_candidate": "unknown", "project_keys": [], "team_keys": [],
                                                "scope_keys": [], "mentioned_scope_keys": [], "unmatched_scope_names": []})
             evidence = list(dict.fromkeys(value for value in item.evidence_section_ids if value in section_ids))
             if not evidence:
@@ -451,7 +470,7 @@ class ShadowDocumentStudyService:
             row = MemoryExtractionCandidate(
                 snapshot_id=snapshot.id, ordinal=next_ordinal, candidate_type=item.candidate_type,
                 attempt_id=attempt.id if attempt else None,
-                visibility_tenant_id=snapshot.visibility_tenant_id,
+                visibility_tenant_id=None if item.candidate_type == "term" else snapshot.visibility_tenant_id,
                 subject=item.subject.strip()[:200], normalized_subject=subject,
                 content=content, content_text=json.dumps(content, ensure_ascii=False, sort_keys=True),
                 evidence_section_ids=evidence, aliases=_unique(item.aliases),
@@ -499,7 +518,7 @@ class ShadowDocumentStudyService:
     ) -> None:
         proposals = list(item.scope_proposals)
         if candidate.candidate_type != "term":
-            for key in _unique([*item.scope_keys, *(f"project.{key}" for key in item.project_keys)]):
+            for key in _unique([*item.scope_keys, *(f"team.{key}" for key in item.team_keys), *(f"project.{key}" for key in item.project_keys)]):
                 known_scope = await self._session.scalar(select(MemoryScope.id).where(
                     MemoryScope.key == key.casefold(), MemoryScope.lifecycle_status == "active",
                 ))
@@ -516,7 +535,7 @@ class ShadowDocumentStudyService:
                 role="applies_to", rationale=item.scope_rationale,
             ))
         for proposal in proposals:
-            term_key = _normalized(proposal.term_subject)
+            term_key = _normalized(proposal.term_subject or "")
             term_candidate_id = term_candidate_ids.get(term_key)
             glossary_term_id = await self._session.scalar(select(GlossaryTerm.id).where(
                 GlossaryTerm.normalized_term == term_key,
@@ -530,7 +549,7 @@ class ShadowDocumentStudyService:
                     term_candidate_id = None
                 else:
                     glossary_term_id = None
-            if term_candidate_id is None and glossary_term_id is None:
+            if proposal.term_subject and term_candidate_id is None and glossary_term_id is None:
                 candidate.unmatched_scope_names = _unique([
                     *(candidate.unmatched_scope_names or []), proposal.name,
                 ])[:8]
@@ -574,7 +593,7 @@ class ShadowDocumentStudyService:
                             snapshot_id=snapshot.id,
                             attempt_id=candidate.attempt_id,
                             visibility_tenant_id=snapshot.visibility_tenant_id,
-                            scope_type=proposal.scope_type,
+                            scope_type=proposal.scope_type, project_type=proposal.project_type,
                             proposed_key=existing_scope.key,
                             normalized_key=normalized_key,
                             name=existing_scope.name,
@@ -585,7 +604,7 @@ class ShadowDocumentStudyService:
                             memory_scope_id=existing_scope.id,
                             evidence_section_ids=section_ids,
                             rationale=proposal.rationale or item.scope_rationale,
-                            status="needs_review" if glossary_term_id else "awaiting_term",
+                            status="needs_review" if glossary_term_id or not proposal.term_subject else "awaiting_term",
                         )
                         self._session.add(proposal_row)
                     continue
@@ -616,7 +635,7 @@ class ShadowDocumentStudyService:
                     snapshot_id=snapshot.id,
                     attempt_id=candidate.attempt_id,
                     visibility_tenant_id=snapshot.visibility_tenant_id,
-                    scope_type=proposal.scope_type,
+                    scope_type=proposal.scope_type, project_type=proposal.project_type,
                     proposed_key=_scope_key(proposal.scope_type, proposal.name),
                     normalized_key=normalized_key,
                     name=proposal.name.strip(),
@@ -626,7 +645,7 @@ class ShadowDocumentStudyService:
                     glossary_term_id=glossary_term_id,
                     evidence_section_ids=section_ids,
                     rationale=proposal.rationale or item.scope_rationale,
-                    status="needs_review" if glossary_term_id else "awaiting_term",
+                    status="needs_review" if glossary_term_id or not proposal.term_subject else "awaiting_term",
                 )
                 self._session.add(proposal_row)
                 await self._session.flush()
@@ -722,7 +741,7 @@ def _scope_proposal(
 ) -> tuple[list[str], list[str], list[str], str]:
     if item.candidate_type == "term":
         return [], [], [], "unknown"
-    raw_applies = _unique([*item.scope_keys, *(f"project.{key}" for key in item.project_keys)])
+    raw_applies = _unique([*item.scope_keys, *(f"team.{key}" for key in item.team_keys), *(f"project.{key}" for key in item.project_keys)])
     raw_mentions = _unique(item.mentioned_scope_keys)
     applies = [key for key in (raw.casefold() for raw in raw_applies) if key in scopes_by_key]
     mentions = [key for key in (raw.casefold() for raw in raw_mentions)
@@ -737,9 +756,10 @@ def _scope_proposal(
         proposed_scope = "unknown"
     elif proposed_scope == "project":
         project_scope_keys = [key for key in applies if scopes_by_key[key].scope_type == "project"]
-        if (missing_applies or len(applies) != 1 or len(project_scope_keys) != 1 or
-                project_scope_keys[0].removeprefix("project.") not in projects_by_key):
+        if missing_applies or not project_scope_keys:
             proposed_scope = "unknown"
+        elif len(applies) != 1 or project_scope_keys[0].removeprefix("project.") not in projects_by_key:
+            proposed_scope = "scoped"
     elif proposed_scope in {"unknown", "multi_project"} and applies and not missing_applies and not item.unmatched_scope_names:
         # Existing catalog tags are an explicit applicability proposal. Missing
         # required references are still recorded by _persist_scope_proposals.

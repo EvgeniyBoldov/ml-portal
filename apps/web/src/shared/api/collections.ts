@@ -171,7 +171,7 @@ export interface ProjectCatalogItem {
 
 export interface MemoryScopeCatalogItem {
   id: string;
-  scope_type: 'product' | 'project' | 'team';
+  scope_type: 'project' | 'team';
   key: string;
   name: string;
   aliases: string[];
@@ -228,8 +228,8 @@ export interface GlossaryCatalogTerm {
   aliases: string[];
   description: string;
   updated_at: string;
-  source_document_id: string;
-  source_document_title: string;
+  source_document_id: string | null;
+  source_document_title: string | null;
   source_section_ids: string[];
 }
 

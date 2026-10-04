@@ -39,6 +39,27 @@ persisted chat messages + current ChatContextSnapshot
 
 The runtime journal is not part of this flow.
 
+### Two-branch execution focus
+
+The chat focus contains independent `team_keys` (recipients) and `project_keys`
+(execution location). Initial defaults resolve per branch as chat > user > tenant.
+The application exposes the current focus as an `execution_context` fact to the
+planner and agent. Search always retains all context teams and permits only known
+projects. Clarified choices update the current turn context before searching. After the turn, the compactor
+updates focus from user choices and confirmed answers, including replies to the
+agent's questions. A mere mention or an unconfirmed question is not a selection.
+
+Compactor `null`/omitted branches preserve the previous selection; `[]` explicitly
+clears a branch and suppresses its defaults. Only active catalog identities are
+accepted. `project.all` is always available as a search selector for common project
+rules only; it never enumerates concrete projects. Omitted projects inherit focus,
+`[]` searches outside projects, and concrete project searches include common rules.
+`team.all` is an atom binding and cannot replace context teams in a query.
+Changes retain source references and use the existing revision/CAS guard.
+The chat context panel displays the team and project branches separately.
+See [Memory](MEMORY.md#две-ветки-применимости-команды-и-проекты) for matching
+semantics, independent project groups, and evidence-backed project precedence.
+
 ## 2. Related contracts
 
 This document extends, but does not replace:
@@ -384,7 +405,7 @@ The initial target set is:
 
 | Kind | Cardinality | Purpose |
 | --- | --- | --- |
-| `scope` | one active item | Current project/topic/entity focus |
+| `scope` | one active item | Current team/project focus and conversational topic |
 | `goal` | one active item initially | Current user objective |
 | `term_binding` | bounded set | Terms and abbreviations actually used in this chat |
 | `artifact_ref` | bounded set | Conversational meaning around a registry artifact |

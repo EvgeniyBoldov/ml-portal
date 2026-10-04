@@ -169,7 +169,7 @@ class MemoryRecallService:
             scoped = select(MemoryClaimScope.scope_id).where(MemoryClaimScope.claim_id == MemoryClaim.id).correlate(MemoryClaim)
             from sqlalchemy import exists
             category_match = [exists(scoped.join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id).where(
-                MemoryScope.scope_type.in_(set(categories).intersection({"project", "product", "team"})), MemoryScope.lifecycle_status == "active"))]
+                MemoryScope.scope_type.in_(set(categories).intersection({"project", "team"})), MemoryScope.lifecycle_status == "active"))]
             if "global" in categories:
                 category_match.append(and_(~exists(scoped), MemoryItem.project_id.is_(None)))
             if "project" in categories:
@@ -266,7 +266,9 @@ class MemoryRecallService:
         for item_id, (item, claims) in by_item.items():
             applicable_claims = [claim for claim in claims if
                 _item_is_applicable(item, project_ids, tenant_id, claim.applicability)
-                and _claim_scopes_apply(claim_scopes.get(claim.id, []), project_ids, trusted_scope_keys)]
+                and _claim_scopes_apply(claim_scopes.get(claim.id, []), project_ids, trusted_scope_keys,
+                    legacy_project_id=getattr(claim, "project_id", None) or item.project_id,
+                    legacy_applicability=claim.applicability)]
             if not applicable_claims:
                 continue
             by_scope: dict[tuple[tuple[str, ...], str], list[MemoryClaim]] = {}
@@ -311,6 +313,7 @@ class MemoryRecallService:
             # evaluate this exact wording, not an arbitrary row returned
             # by a later SQL query.
             "selected_claim_id": str(winner.id),
+            "approved_candidate_id": str(winner.approved_candidate_id) if getattr(winner, "approved_candidate_id", None) else None,
             "rank": rank.get(item.id, len(rank)),
         }
 
@@ -433,28 +436,28 @@ def _item_is_applicable(
 
 
 def _claim_scopes_apply(
-    scopes: list[MemoryScope], project_ids: list[UUID], context_scope_keys: set[str],
+    scopes: list[MemoryScope], project_ids: list[UUID], context_scope_keys: set[str], *, legacy_project_id: UUID | None = None,
+    legacy_applicability: dict[str, Any] | None = None,
 ) -> bool:
-    """OR within a type and AND between types; *.all needs a verified type value."""
-    if not scopes:
-        return True  # Legacy company claims have no typed binding.
-    groups: dict[str, list[MemoryScope]] = {}
-    for scope in scopes:
-        groups.setdefault(scope.scope_type, []).append(scope)
-    projects = set(project_ids)
-    for scope_type, all_scopes in groups.items():
-        group = [scope for scope in all_scopes if getattr(scope, "lifecycle_status", "active") == "active"]
-        if not group:
-            return False
-        if any(scope.is_all for scope in group):
-            if scope_type == "project":
-                if not projects and not any(key.startswith("project.") and key != "project.all" for key in context_scope_keys):
-                    return False
-            elif not any(key.startswith(f"{scope_type}.") and key != f"{scope_type}.all" for key in context_scope_keys):
+    """Use the same branch semantics as SQL and task context projection."""
+    from app.runtime.memory.effective_scope import memory_visible_for_scope
+    keys = set(context_scope_keys)
+    active = [scope for scope in scopes if getattr(scope, "lifecycle_status", "active") == "active"]
+    types = {scope.scope_type for scope in scopes}
+    if any(not any(scope.scope_type == type_ for scope in active) for type_ in types):
+        return False
+    if project_ids:
+        keys.add("project._legacy_selected")
+    if not any(scope.scope_type == "project" for scope in scopes):
+        required = {str(value) for value in (legacy_applicability or {}).get("project_ids", [])}
+        if legacy_project_id is not None:
+            required.add(str(legacy_project_id))
+        if required:
+            if not required.intersection(str(value) for value in project_ids):
                 return False
-            continue
-        if not any(scope.key in context_scope_keys or
-                   (scope.scope_type == "project" and scope.project_id in projects)
-                   for scope in group):
-            return False
-    return True
+            keys = {key for key in keys if not key.startswith("project.")}
+    # Legacy Project IDs can select a typed scope without a key in the caller.
+    for scope in active:
+        if scope.scope_type == "project" and scope.project_id in set(project_ids):
+            keys.add(scope.key)
+    return memory_visible_for_scope({"scope_keys": [scope.key for scope in active]}, keys)

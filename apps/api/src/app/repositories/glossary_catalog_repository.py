@@ -19,8 +19,8 @@ class GlossaryTermRecord:
     aliases: tuple[str, ...]
     description: str
     updated_at: datetime
-    source_document_id: UUID
-    source_document_title: str
+    source_document_id: UUID | None
+    source_document_title: str | None
     source_section_ids: tuple[str, ...]
 
 
@@ -34,9 +34,9 @@ class GlossaryCatalogRepository:
         published_ids = GlossaryService.published_terms_query().with_only_columns(GlossaryTerm.id)
         rows = (await self._session.execute(
             select(GlossaryTerm, MemoryExtractionCandidate, DocumentMemorySnapshot, RAGDocument)
-            .join(MemoryExtractionCandidate, GlossaryTerm.approved_candidate_id == MemoryExtractionCandidate.id)
-            .join(DocumentMemorySnapshot, MemoryExtractionCandidate.snapshot_id == DocumentMemorySnapshot.id)
-            .join(RAGDocument, DocumentMemorySnapshot.document_id == RAGDocument.id)
+            .outerjoin(MemoryExtractionCandidate, GlossaryTerm.approved_candidate_id == MemoryExtractionCandidate.id)
+            .outerjoin(DocumentMemorySnapshot, MemoryExtractionCandidate.snapshot_id == DocumentMemorySnapshot.id)
+            .outerjoin(RAGDocument, DocumentMemorySnapshot.document_id == RAGDocument.id)
             .where(GlossaryTerm.id.in_(published_ids))
             .order_by(GlossaryTerm.canonical_term)
         )).all()
@@ -45,7 +45,7 @@ class GlossaryCatalogRepository:
             aliases=tuple(term.aliases or ()),
             description=term.definition,
             updated_at=term.updated_at,
-            source_document_id=snapshot.document_id,
-            source_document_title=document.title,
-            source_section_ids=tuple(candidate.evidence_section_ids or ()),
+            source_document_id=snapshot.document_id if snapshot else None,
+            source_document_title=document.title if document else None,
+            source_section_ids=tuple(candidate.evidence_section_ids or ()) if candidate else (),
         ) for term, candidate, snapshot, document in rows]

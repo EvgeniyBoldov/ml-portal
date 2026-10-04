@@ -90,17 +90,27 @@ def applicable_claim(*, project_ids: Sequence[UUID], scope_keys: Sequence[str], 
         MemoryClaimScope.claim_id == MemoryClaim.id,
     ).correlate(MemoryClaim)
     predicates = []
-    for scope_type in ("project", "product", "team"):
+    for scope_type in ("project", "team"):
         concrete = [key for key in scope_keys if key.startswith(f"{scope_type}.") and key != f"{scope_type}.all"]
-        match = [MemoryScope.key.in_(concrete)]
-        if concrete or scope_type == "project" and project_ids:
-            match.append(MemoryScope.is_all.is_(True))
+        has_binding = exists(bindings.where(MemoryScope.scope_type == scope_type))
+        match = [MemoryScope.key.in_(concrete), MemoryScope.is_all.is_(True)]
         if scope_type == "project" and project_ids:
             match.append(MemoryScope.project_id.in_(project_ids))
-        predicates.append(or_(~exists(bindings.where(MemoryScope.scope_type == scope_type)), exists(bindings.where(
+        matching = exists(bindings.where(
             MemoryScope.scope_type == scope_type, MemoryScope.lifecycle_status == "active", or_(*match),
-        ))))
-    predicates.append(~exists(bindings.where(MemoryScope.scope_type.notin_(("project", "product", "team")))))
+        ))
+        if scope_type == "team":
+            predicates.append(or_(~has_binding, matching))
+        elif "project.all" in scope_keys and not concrete and not project_ids:
+            predicates.append(exists(bindings.where(MemoryScope.scope_type == "project",
+                MemoryScope.lifecycle_status == "active", MemoryScope.is_all.is_(True))))
+        elif concrete or project_ids:
+            # Legacy project IDs remain actual project bindings, not null.
+            predicates.append(or_(matching, and_(~has_binding, or_(MemoryClaim.project_id.in_(project_ids),
+                *[MemoryClaim.applicability["project_ids"].contains([str(value)]) for value in project_ids]))))
+        else:
+            predicates.append(and_(~has_binding, MemoryClaim.project_id.is_(None)))
+    predicates.append(~exists(bindings.where(MemoryScope.scope_type.notin_(("project", "team")))))
     tenants = [str(tenant_id)] if tenant_id else []
     predicates.extend([
         MemoryClaim.applicability.op("-")(array(["project_ids", "tenant_ids"])) == {},

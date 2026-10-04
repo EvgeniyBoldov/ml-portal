@@ -21,9 +21,11 @@ class _Payload(BaseModel):
 
 
 class ScopePayload(_Payload):
+    team_keys: list[str] = Field(default_factory=list, max_length=30)
+    suppress_team_default: bool = False
     project_keys: list[str] = Field(default_factory=list, max_length=30)
     scope_keys: list[str] = Field(default_factory=list, max_length=60)
-    scope_origins: dict[str, Literal["turn", "chat_focus", "user_project_default"]] = Field(default_factory=dict, max_length=60)
+    scope_origins: dict[str, Literal["turn", "chat_focus", "user_project_default", "user_default", "tenant_default"]] = Field(default_factory=dict, max_length=60)
     scope_revision: int = Field(default=0, ge=0)
     mentioned_scope_keys: list[str] = Field(default_factory=list, max_length=30)
     suppress_project_default: bool = False

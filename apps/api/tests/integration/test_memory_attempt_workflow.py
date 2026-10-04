@@ -177,7 +177,7 @@ async def test_term_scope_memory_cycle_and_second_document_reuses_published_term
                               content={"definition": "Example product"}, evidence_section_ids=["s1"])
         memory = ShadowStudyItem(candidate_type="rule", subject="Deploy", content={"statement": "Deploy daily", "effect": "require"},
             evidence_section_ids=["s1"], scope_proposals=[{"scope_type": "product", "name": "Example", "term_subject": "Example"}])
-        await service.persist_batch(snapshot=snapshot, attempt=attempt, items=[term, memory], document_scope="global",
+        await service.persist_batch(snapshot=snapshot, attempt=attempt, items=[term, memory],
                                     section_ids={"s1"}, projects_by_key={}, scopes_by_key={})
         await service.finalize(snapshot, attempt)
         await session.commit()
@@ -207,7 +207,7 @@ async def test_term_scope_memory_cycle_and_second_document_reuses_published_term
         assert snapshot.status == "approved" and attempt.status == "completed"
         snapshot2, attempt2 = await new_snapshot(session)
         # Propose the same scope independently; shared canonical scope is allowed.
-        await service.persist_batch(snapshot=snapshot2, attempt=attempt2, items=[term], document_scope="global",
+        await service.persist_batch(snapshot=snapshot2, attempt=attempt2, items=[term],
                                     section_ids={"s1"}, projects_by_key={}, scopes_by_key={})
         await session.commit()
         proposals = (await session.scalars(select(MemoryScopeProposal))).all()

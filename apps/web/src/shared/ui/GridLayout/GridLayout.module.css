@@ -52,6 +52,7 @@
   padding: var(--sp-4, 16px) var(--sp-5, 20px);
   border-bottom: 1px solid var(--border-color, #e5e7eb);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .card-icon {
@@ -217,3 +218,6 @@
     padding-top: 0;
   }
 }
+
+.card-labels { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; color: var(--text-secondary); font-size: var(--font-size-sm); }
+.card-actions { flex-wrap: wrap; flex-shrink: 0; }

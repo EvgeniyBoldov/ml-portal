@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, computed_field, field_validator
 
 
-ScopeSource = Literal["turn", "chat_focus", "user_project_default", "task", "none"]
+ScopeSource = Literal["turn", "chat_focus", "user_project_default", "user_default", "tenant_default", "task", "none"]
 
 
 class ScopeIdentity(BaseModel):
@@ -59,6 +59,8 @@ def merge_selection(
     ceiling_keys: list[str] | None = None,
 ) -> EffectiveScopeContext:
     """Inherit unchanged types; replace only types named by selection keys."""
+    if set(selection.keys).intersection({"project.all", "team.all"}):
+        raise ValueError("all_is_not_a_query_scope")
     unknown = set(selection.keys + selection.mentioned_keys) - set(identities)
     if unknown:
         raise ValueError(f"unknown_scope_keys:{','.join(sorted(unknown))}")
@@ -105,20 +107,37 @@ def task_scope(parent: EffectiveScopeContext, selection: ScopeSelection) -> Effe
 
 
 def memory_visible_for_scope(item: dict[str, Any], scope_keys: list[str] | set[str]) -> bool:
-    """OR applicability inside a type, AND across the types on a memory item."""
-    keys = [str(key) for key in item.get("scope_keys") or []]
-    if not keys:
-        return True
+    """Teams describe recipients; projects describe execution location.
+
+    An absent project binding is outside-project knowledge. An absent team
+    binding is unaddressed knowledge. ``all`` is an atom selector, never a
+    request for enumerating scopes.
+    """
+    keys = set(str(key) for key in item.get("scope_keys") or [])
     selected = set(scope_keys)
-    types = {key.partition(".")[0] for key in keys}
-    for scope_type in types:
-        group = [key for key in keys if key.partition(".")[0] == scope_type]
-        if f"{scope_type}.all" in group:
-            if not any(key.startswith(f"{scope_type}.") and key != f"{scope_type}.all" for key in selected):
-                return False
-        elif not selected.intersection(group):
+    if any(key.partition(".")[0] not in {"team", "project"} for key in keys):
+        return False
+    if "team.all" in selected:
+        return False
+    query_projects = {key for key in item.get("query_scope_keys", []) if key.startswith("project.")}
+    if query_projects == {"project.all"}:
+        selected.add("project.all")
+    selected_projects = {key for key in selected if key.startswith("project.")}
+    if query_projects and not query_projects.intersection(selected_projects):
+        return False
+    projects = {key for key in selected if key.startswith("project.") and key != "project.all"}
+    bound_projects = {key for key in keys if key.startswith("project.")}
+    if projects:
+        if not bound_projects.intersection(projects) and "project.all" not in bound_projects:
             return False
-    return True
+    elif "project.all" in selected:
+        if "project.all" not in bound_projects:
+            return False
+    elif bound_projects or item.get("project_id"):
+        return False
+    teams = {key for key in selected if key.startswith("team.")}
+    bound_teams = {key for key in keys if key.startswith("team.")}
+    return not bound_teams or "team.all" in bound_teams or bool(bound_teams.intersection(teams))
 
 
 def project_memory_context(value: dict[str, Any], scope_keys: list[str] | set[str]) -> dict[str, Any]:
@@ -130,6 +149,13 @@ def project_memory_context(value: dict[str, Any], scope_keys: list[str] | set[st
         if isinstance(result.get(key), list):
             result[key] = [item for item in result[key] if isinstance(item, dict)
                            and memory_visible_for_scope(item, selected)]
+    for key in ("groups", "scope_groups"):
+        if isinstance(result.get(key), list):
+            result[key] = [project_memory_context(group, selected) for group in result[key]
+                           if isinstance(group, dict) and (
+                               group.get("project_keys") == ["project.all"]
+                               or not group.get("project_keys") and not any(value.startswith("project.") for value in selected)
+                               or bool(set(group.get("project_keys", [])).intersection(selected)))]
     for key in ("result", "memory_context"):
         if isinstance(result.get(key), dict):
             result[key] = project_memory_context(result[key], selected)

@@ -20,6 +20,7 @@ from app.models.document_memory_staging import (
 from app.models.system_llm_role import SystemLLMRoleType
 from app.models.memory_scope import MemoryCandidateScope, MemoryScope
 from app.runtime.llm.structured import StructuredLLMCall
+from app.runtime.memory.scope_precedence import scope_sets_overlap, has_project_override
 from app.runtime.memory.shadow_study_prompts import document_memory_prompt
 
 
@@ -79,7 +80,7 @@ class ShadowMemoryReviewService:
                     visibility_tenant_id=snapshot.visibility_tenant_id,
                     kind=kind, status=("open" if kind in {"contradiction", "insufficient_evidence"} else "resolved"),
                     rationale=rationale[:2000],
-                    evidence={"candidate": str(candidate.id), "existing_candidate": str(existing.id)},
+                    evidence={"candidate": str(candidate.id), "existing_candidate": str(existing.id), "scope_policy": "two_branch_v1"},
                 )
                 self._session.add(case)
                 await self._session.flush()
@@ -116,10 +117,8 @@ class ShadowMemoryReviewService:
                 and candidate.scope_candidate == existing.scope_candidate
                 and candidate_scopes == existing_scopes):
             return "duplicate", "Exact canonical content in the same proposed scope."
-        if candidate_scopes != existing_scopes:
-            return "scope_override", "Same subject has different proposed applicability; review both scope sets."
-        if {candidate.scope_candidate, existing.scope_candidate} == {"global", "project"}:
-            return "scope_override", "Same subject has global and project-specific candidates; review applicability."
+        if not scope_sets_overlap(candidate_scopes, existing_scopes):
+            return "compatible_extension", "Applicability does not overlap; both statements remain independent."
         try:
             structured = StructuredLLMCall(session=self._session, llm_client=get_llm_client())
             role_config = await structured.role_service.get_role_config(SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR)
@@ -138,7 +137,10 @@ class ShadowMemoryReviewService:
                 trace_parent_entity_id=agent_execution_id,
                 event_sink=event_sink,
             )
-            return result.value.kind, result.value.rationale
+            kind = result.value.kind
+            if kind == "contradiction" and has_project_override(candidate_scopes, existing_scopes):
+                kind = "scope_override"
+            return kind, result.value.rationale
         except Exception:
             # Failure must never silently turn an unknown contradiction into a
             # publishable fact.

@@ -14,7 +14,6 @@ from app.models.mixins.lifecycle import LifecycleMixin
 
 
 class MemoryScopeType(str, Enum):
-    PRODUCT = "product"
     PROJECT = "project"
     TEAM = "team"
 
@@ -31,8 +30,9 @@ class MemoryScope(Base, LifecycleMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     scope_type: Mapped[str] = mapped_column(ENUM(
-        "product", "project", "team", name="memoryscopetype", create_type=False,
+        "project", "team", name="memoryscopetype", create_type=False,
     ), nullable=False)
+    project_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     key: Mapped[str] = mapped_column(String(180), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     aliases: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)

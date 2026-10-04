@@ -138,7 +138,7 @@ class MemoryCandidateProjectBinding(Base):
 
 
 class GlossaryTerm(Base):
-    """A published company definition backed by an approved document candidate."""
+    """An administrator-approved lexical identity without applicability scopes."""
 
     __tablename__ = "glossary_terms"
     __table_args__ = (
@@ -150,8 +150,8 @@ class GlossaryTerm(Base):
     canonical_term: Mapped[str] = mapped_column(String(255), nullable=False)
     normalized_term: Mapped[str] = mapped_column(String(255), nullable=False)
     definition: Mapped[str] = mapped_column(Text, nullable=False)
-    approved_candidate_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="CASCADE"), nullable=False, index=True,
+    approved_candidate_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("memory_extraction_candidates.id", ondelete="SET NULL", name="fk_glossary_terms_approved_candidate"), nullable=True, index=True,
     )
     aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true")
@@ -160,12 +160,12 @@ class GlossaryTerm(Base):
 
 
 class MemoryScopeProposal(Base):
-    """A typed scope awaiting approval, grounded in an approved glossary term."""
+    """A typed scope awaiting approval, grounded in document evidence, optionally linked to a glossary term."""
     __tablename__ = "memory_scope_proposals"
     __table_args__ = (
-        CheckConstraint("scope_type IN ('product', 'project', 'team')", name="ck_memory_scope_proposal_type"),
+        CheckConstraint("scope_type IN ('project', 'team')", name="ck_memory_scope_proposal_type"),
         CheckConstraint("status IN ('awaiting_term', 'needs_review', 'approved', 'rejected', 'superseded')", name="ck_memory_scope_proposal_status"),
-        CheckConstraint("(term_candidate_id IS NULL) <> (glossary_term_id IS NULL)", name="ck_memory_scope_proposal_term_source"),
+        CheckConstraint("term_candidate_id IS NULL OR glossary_term_id IS NULL", name="ck_memory_scope_proposal_term_source"),
         Index("ix_memory_scope_proposals_status", "status", "created_at"),
     )
 
@@ -174,6 +174,7 @@ class MemoryScopeProposal(Base):
     attempt_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("document_memory_extraction_attempts.id", ondelete="CASCADE"), nullable=True, index=True)
     visibility_tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    project_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     proposed_key: Mapped[str] = mapped_column(String(180), nullable=False)
     normalized_key: Mapped[str] = mapped_column(String(180), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -433,7 +433,6 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str,
                 return {"snapshot_id": snapshot_id, "status": "superseded_attempt", "cached": True}
             counts = await service.persist_batch(
                 snapshot=snapshot, attempt=attempt, items=output.items,
-                document_scope=document.scope,
                 section_ids={str(section["id"]) for section in batch}, projects_by_key=projects_by_key,
                 scopes_by_key=scopes_by_key,
             )

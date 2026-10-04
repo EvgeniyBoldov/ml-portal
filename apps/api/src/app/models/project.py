@@ -22,6 +22,7 @@ class Project(Base):
     key: Mapped[str] = mapped_column(String(120), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     aliases: Mapped[List[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    project_type: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

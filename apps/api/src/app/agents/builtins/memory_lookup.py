@@ -30,10 +30,8 @@ class MemoryLookupTool(VersionedTool):
         query = str(args.get("query") or "").strip()
         if not query:
             return ToolResult.fail("query is required")
-        project_context = ctx.extra.get("project_context") or {}
-        ceiling = list(project_context.get("scope_ceiling_keys", project_context.get("effective_scope_keys")) or [])
         async with get_session_factory()() as session:
             result = await MechanicalLookupService(session).lookup(
-                query=query, tenant_id=ctx.tenant_id, scope_ceiling_keys=ceiling,
+                query=query, tenant_id=ctx.tenant_id,
             )
         return ToolResult.ok(result)

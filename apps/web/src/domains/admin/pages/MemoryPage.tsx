@@ -55,7 +55,7 @@ export default function MemoryPage() {
   const [scopeEditor, setScopeEditor] = useState<MemoryScopeAdminItem | 'new' | null>(null);
   const [scopeToDelete, setScopeToDelete] = useState<MemoryScopeAdminItem | null>(null);
   const [scopeLifecycleAction, setScopeLifecycleAction] = useState<'delete' | 'restore'>('delete');
-  const [scopeForm, setScopeForm] = useState({ scope_type: 'team' as MemoryScopeAdminItem['scope_type'], key: '', name: '', aliases: '', is_all: false });
+  const [scopeForm, setScopeForm] = useState({ scope_type: 'team' as MemoryScopeAdminItem['scope_type'], key: '', name: '', aliases: '', is_all: false, project_type: '' });
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
@@ -64,13 +64,13 @@ export default function MemoryPage() {
   });
   const saveScope = useMutation({
     mutationFn: () => {
-      const payload = { ...scopeForm, aliases: scopeForm.aliases.split(',').map((value) => value.trim()).filter(Boolean) };
+      const payload = { ...scopeForm, project_type: scopeForm.scope_type === 'project' && !scopeForm.is_all ? scopeForm.project_type.trim() || null : null, aliases: scopeForm.aliases.split(',').map((value) => value.trim()).filter(Boolean) };
       return scopeEditor === 'new' ? adminApi.createMemoryScope(payload) : adminApi.updateMemoryScope(scopeEditor!.id, payload);
     },
     onSuccess: () => { setScopeEditor(null); queryClient.invalidateQueries({ queryKey: ['admin', 'memory', 'scopes'] }); },
   });
   const { data: glossary, isLoading: glossaryLoading, isError: glossaryError } = useQuery({
-    queryKey: ['admin', 'glossary'],
+    queryKey: qk.admin.glossary.all(),
     queryFn: () => adminApi.getGlossary(),
     enabled: activeTab === 'glossary',
   });
@@ -142,7 +142,7 @@ export default function MemoryPage() {
   const selectedGlossaryEntries = (glossary ?? []).filter((entry) => selectedGlossaryIds.has(entry.id));
   const hasActiveGlossarySelection = selectedGlossaryEntries.some((entry) => entry.is_active);
   const canActivateGlossarySelection = selectedGlossaryEntries.some((entry) => !entry.is_active) &&
-    selectedGlossaryEntries.every((entry) => Boolean(entry.definition.trim() && entry.approved_candidate_id));
+    selectedGlossaryEntries.every((entry) => Boolean(entry.definition.trim()));
   const glossaryAction = useMutation<{ deleted?: number; deactivated?: number; activated?: number }>({
     mutationFn: () => confirmGlossaryAction === 'delete'
       ? adminApi.deleteGlossaryTerms([...selectedGlossaryIds].map(String))
@@ -154,8 +154,8 @@ export default function MemoryPage() {
       setSelectedGlossaryIds(new Set());
       setConfirmGlossaryAction(null);
       showSuccess(confirmGlossaryAction === 'delete' ? `Удалено терминов: ${count}` : confirmGlossaryAction === 'activate' ? `Активировано терминов: ${count}` : `Деактивировано терминов: ${count}`);
-      queryClient.invalidateQueries({ queryKey: ['admin', 'glossary'] });
-      queryClient.invalidateQueries({ queryKey: ['collections', 'glossary', 'overview'] });
+      queryClient.invalidateQueries({ queryKey: qk.admin.glossary.all() });
+      queryClient.invalidateQueries({ queryKey: qk.collections.glossaryAll() });
     },
     onError: (error: Error) => showError(error.message || 'Не удалось изменить выбранные термины'),
   });
@@ -167,7 +167,7 @@ export default function MemoryPage() {
   const activeMemoryScopes = (memoryScopes ?? []).filter((scope) => scope.lifecycle_status === 'active');
   const memoryScopeTypes = [...new Set(activeMemoryScopes.map((scope) => scope.scope_type))].sort();
   const openScopeEditor = (row: MemoryScopeAdminItem) => {
-    setScopeForm({ scope_type: row.scope_type, key: row.key, name: row.name, aliases: row.aliases.join(', '), is_all: row.is_all });
+    setScopeForm({ scope_type: row.scope_type, key: row.key, name: row.name, aliases: row.aliases.join(', '), is_all: row.is_all, project_type: row.project_type ?? '' });
     setScopeEditor(row);
   };
   const scopeRows: ScopeTableRow[] = [
@@ -192,7 +192,7 @@ export default function MemoryPage() {
       <Tab title="Глоссарий" id="glossary" layout="full">
         {glossaryError ? <p role="alert">Не удалось загрузить глоссарий.</p> : <DataTable
           columns={glossaryColumns} data={filteredGlossary} keyField="id" loading={glossaryLoading}
-          emptyText="Термины не найдены" paginated pageSize={20} selectable
+          emptyText="Термины не найдены" paginated pageSize={20} selectable onRowClick={(row) => navigate(`/admin/memory/terms/${row.id}`)}
           selectedKeys={selectedGlossaryIds} onSelectionChange={setSelectedGlossaryIds}
           bulkActions={<div className={styles.selectionActions}>
             <MemoryActionsMenu disabled={glossaryAction.isPending} items={[
@@ -230,7 +230,7 @@ export default function MemoryPage() {
           loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20}
           onRowClick={(row) => navigate(`/admin/memory/review/${row.id}`)} />}
       </Tab>
-      <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'team', key: '', name: '', aliases: '', is_all: false }); setScopeEditor('new'); }}>Создать скоуп</Button>]}>
+      <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'team', key: '', name: '', aliases: '', is_all: false, project_type: '' }); setScopeEditor('new'); }}>Создать скоуп</Button>]}>
         {scopesError || scopeProposalsError ? <p role="alert">Не удалось загрузить скоупы памяти и предложения.</p> : <DataTable columns={scopeColumns({ onReview: setScopeProposalEditor, onEdit: openScopeEditor, onLifecycle: (scope, action) => { setScopeLifecycleAction(action); setScopeToDelete(scope); } })} data={scopeRows} keyField="id" loading={scopesLoading || scopeProposalsLoading} emptyText="Скоупов пока нет" paginated pageSize={20} onRowClick={openScopeRow} />}
       </Tab>
     </EntityPageV2>
@@ -239,6 +239,7 @@ export default function MemoryPage() {
         <label className={styles.scopeField}>Тип<Select options={Object.entries(scopeTypeLabels).map(([value, label]) => ({ value, label }))} value={scopeForm.scope_type} disabled={scopeEditor !== 'new'} onChange={(value) => { const nextType = value as MemoryScopeAdminItem['scope_type']; setScopeForm({ ...scopeForm, scope_type: nextType, key: scopeForm.is_all ? `${nextType}.all` : `${nextType}.${slugifyScopeName(scopeForm.name)}` }); }} /></label>
         {scopeEditor !== 'new' && <small style={{ color: 'var(--muted)' }}>Тип и ключ фиксируют идентичность скоупа; здесь можно изменить название и алиасы.</small>}
         <label className={styles.scopeField}>Название<Input value={scopeForm.name} onChange={(event) => setScopeForm({ ...scopeForm, name: event.target.value, key: scopeForm.is_all ? scopeForm.key : `${scopeForm.scope_type}.${slugifyScopeName(event.target.value)}` })} /></label>
+        {scopeForm.scope_type === 'project' && !scopeForm.is_all && <label className={styles.scopeField}>Тип проекта<Input value={scopeForm.project_type} placeholder="IAAS, SAAS, колокейшен" onChange={(event) => setScopeForm({ ...scopeForm, project_type: event.target.value })} /></label>}
         <label className={styles.scopeField}>Алиасы<Input value={scopeForm.aliases} placeholder="архитекторы, архитектурная команда" onChange={(event) => setScopeForm({ ...scopeForm, aliases: event.target.value })} /></label>
         {scopeEditor === 'new' && <Checkbox checked={scopeForm.is_all} onChange={(checked) => setScopeForm({ ...scopeForm, is_all: checked, key: checked ? `${scopeForm.scope_type}.all` : `${scopeForm.scope_type}.${slugifyScopeName(scopeForm.name)}` })} label="Общий скоуп типа" description={`Для этого типа будет создан ключ ${scopeForm.scope_type}.all.`} />}
         {saveScope.isError && <p role="alert">Не удалось сохранить скоуп. Проверьте уникальность ключа и соответствие типа.</p>}

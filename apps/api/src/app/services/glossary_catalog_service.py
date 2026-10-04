@@ -16,8 +16,8 @@ class GlossaryCatalogTerm:
     aliases: tuple[str, ...]
     description: str
     updated_at: datetime
-    source_document_id: UUID
-    source_document_title: str
+    source_document_id: UUID | None
+    source_document_title: str | None
     source_section_ids: tuple[str, ...]
 
 

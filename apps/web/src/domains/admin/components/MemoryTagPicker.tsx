@@ -3,9 +3,9 @@ import { Input } from '@/shared/ui';
 import styles from './MemoryTagPicker.module.css';
 
 type Option = { value: string; label: string; search?: string };
-type Props = { label: string; options: Option[]; value: string[]; disabled?: boolean; onChange: (values: string[]) => void };
+type Props = { label: string; options: Option[]; value: string[]; disabled?: boolean; hideLabel?: boolean; onChange: (values: string[]) => void };
 
-export default function MemoryTagPicker({ label, options, value, disabled, onChange }: Props) {
+export default function MemoryTagPicker({ label, options, value, disabled, hideLabel = false, onChange }: Props) {
   const id = useId();
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -15,6 +15,7 @@ export default function MemoryTagPicker({ label, options, value, disabled, onCha
   const available = options.filter((option) => !value.includes(option.value) &&
     (!needle || `${option.label} ${option.search ?? ''}`.toLocaleLowerCase().includes(needle)));
   const select = (option: Option) => {
+    if (disabled) return;
     onChange([...value, option.value]);
     setQuery('');
     setActiveIndex(0);
@@ -24,7 +25,7 @@ export default function MemoryTagPicker({ label, options, value, disabled, onCha
     if (open) optionsRef.current?.children[activeIndex]?.scrollIntoView({ block: 'nearest' });
   }, [activeIndex, open]);
   return <div className={styles.picker}>
-    <label htmlFor={id}>{label}</label>
+    {!hideLabel && <label htmlFor={id}>{label}</label>}
     <div className={styles.control} onBlur={(event) => {
       if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
     }}>
@@ -49,7 +50,7 @@ export default function MemoryTagPicker({ label, options, value, disabled, onCha
             else if (event.key === 'Backspace' && !query && value.length) onChange(value.slice(0, -1));
           }} />
       </div>
-      {open && available.length > 0 && <div id={`${id}-listbox`} ref={optionsRef} role="listbox" aria-label={`Варианты: ${label}`} className={styles.options}>
+      {!disabled && open && available.length > 0 && <div id={`${id}-listbox`} ref={optionsRef} role="listbox" aria-label={`Варианты: ${label}`} className={styles.options}>
         {available.map((option, index) => <button id={`${id}-option-${index}`} key={option.value} type="button" role="option"
           aria-selected={index === activeIndex} className={index === activeIndex ? styles.optionActive : styles.option}
           onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveIndex(index)} onClick={() => select(option)}>
