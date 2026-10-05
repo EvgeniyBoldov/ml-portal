@@ -14,6 +14,26 @@ def request():
                        expected_outputs=[{"key": "answer", "description": "Answer", "schema": {"type": ["string", "null"]}}])
 
 
+@pytest.mark.parametrize("text,valid", [
+    ("", False), (" \t\n", False), ("done", True),
+    ("  done  ", True), ("\nfirst line\nsecond line\n", True),
+])
+def test_terminal_string_patterns_support_provider_grammar_and_multiline_text(text, valid):
+    def check_patterns(node):
+        if isinstance(node, dict):
+            if "pattern" in node:
+                pattern = node["pattern"]
+                assert pattern.startswith("^") and pattern.endswith("$")
+                assert Draft202012Validator(node).is_valid(text) is valid
+            for child in node.values():
+                check_patterns(child)
+        elif isinstance(node, list):
+            for child in node:
+                check_patterns(child)
+
+    check_patterns(task_completion_json_schema(request()))
+
+
 @pytest.mark.parametrize("absent", [None, "", "   "])
 def test_envelope_absence_normalizes_to_schema_valid_defaults(absent):
     declaration = parse_task_completion_declaration(json.dumps({

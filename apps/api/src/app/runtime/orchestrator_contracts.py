@@ -665,6 +665,11 @@ def parse_task_completion_declaration(content: str) -> TaskCompletionDeclaration
     return TaskCompletionDeclaration.model_validate(payload)
 
 
+# Anchors are required by schema-to-grammar providers. Explicit character
+# classes also match newlines without DOTALL flags or lookaround support.
+_NONBLANK_STRING_PATTERN = r"^[\s\S]*\S[\s\S]*$"
+
+
 def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
     """Build the sole terminal declaration schema from the compiled contract."""
     def slot_schema(spec: TaskOutputSpec) -> Dict[str, Any]:
@@ -684,7 +689,7 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
         kind = "evidence" if spec.fulfillment == TaskOutputFulfillment.VERIFIED_RECEIPT else "artifact"
         return {
             "type": "object", "additionalProperties": False,
-            "properties": {"kind": {"const": kind}, "refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": "\\S"}}},
+            "properties": {"kind": {"const": kind}, "refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN}}},
             "required": ["kind", "refs"],
         }
 
@@ -694,10 +699,10 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "ref": {"type": "string", "minLength": 1, "pattern": "\\S"},
-            "key": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "ref": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
+            "key": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
             "kind": {"enum": ["data", "artifact", "decision"]},
-            "description": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "description": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
             "schema": {"type": "object"},
             "required": {"type": "boolean"},
             "context": {"type": "object"},
@@ -708,8 +713,8 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "code": {"type": "string", "minLength": 1, "pattern": "\\S"},
-            "message": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "code": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
+            "message": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
             "action": {"enum": [item.value for item in LimitationAction]},
         },
         "required": ["code", "message"],
@@ -719,7 +724,7 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
         "additionalProperties": False,
         "properties": {
             "completion": {"enum": [item.value for item in AgentExecutionCompletion]},
-            "report": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "report": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
             "outputs": {
                 "type": "object", "additionalProperties": False,
                 "properties": output_properties,
@@ -728,10 +733,10 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
             "coverage": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
                 "properties": {
-                    "output_key": {"type": "string", "minLength": 1, "pattern": "\\S"},
+                    "output_key": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
                     "output_path": {"type": ["string", "null"], "default": "", "description": "Omitted/null/blank means the entire output value, including nested arrays."},
-                    "result_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
-                    "query_call_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": "\\S"}},
+                    "result_id": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
+                    "query_call_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN}},
                 },
                 "required": ["output_key", "result_id", "query_call_ids"],
             }},

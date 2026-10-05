@@ -178,6 +178,11 @@ Retry переводит задачу обратно в исполнение т�
 отдельную bounded-проекцию `limitations` с безопасными причинами
 неуспешных ветвей.
 
+Terminal task declarations use a JSON Schema compiled from the task contract.
+Nonblank envelope strings use an anchored pattern that also accepts multiline
+text, so schema-to-grammar providers can enforce the same rule. Local Pydantic
+validation and runtime checks remain authoritative for accepting task results.
+
 ### Memory lifecycle
 
 Memory is not an unconditional pre-planner prompt stage. Mechanical lookup
