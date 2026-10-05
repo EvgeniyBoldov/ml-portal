@@ -179,9 +179,14 @@ Retry переводит задачу обратно в исполнение т�
 неуспешных ветвей.
 
 Terminal task declarations use a JSON Schema compiled from the task contract.
-Nonblank envelope strings use an anchored pattern that also accepts multiline
-text, so schema-to-grammar providers can enforce the same rule. Local Pydantic
-validation and runtime checks remain authoritative for accepting task results.
+The provider projection retains structural output slots but omits regex,
+format and conditional constraints that grammar backends may reject. The full
+schema remains in the prompt; local Pydantic validation and the result reducer
+enforce nonblank strings, completion rules, output values and evidence.
+Terminal corrections retain native tools so missing evidence can be retrieved.
+Corrections are bounded by max_retries (at least one correction), as well as
+the existing LLM-call and wall-time budgets, and each changed prompt receives
+a new LLM-call identity. Transport retries retain the original identity.
 
 ### Memory lifecycle
 

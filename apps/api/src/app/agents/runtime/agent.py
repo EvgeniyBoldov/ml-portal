@@ -422,7 +422,7 @@ class AgentToolRuntime(BaseRuntime):
         pending_llm_call_id: Optional[str] = None
         pending_logical_llm_call_id: Optional[str] = None
         terminal_contract_correction_sent = False
-        terminal_json_correction_sent = False
+        terminal_json_corrections = 0
         require_retrieval = str(ctx.extra.get("task_freshness_policy") or "allow_memory") == "require_retrieval"
 
         def has_fresh_retrieval_receipt() -> bool:
@@ -823,12 +823,10 @@ class AgentToolRuntime(BaseRuntime):
                     ) if terminal_response_format else []
                     if (
                         terminal_response_format
-                        and not terminal_json_correction_sent
+                        and terminal_json_corrections < max(1, policy.max_retries)
                         and terminal_errors
                     ):
-                        terminal_json_correction_sent = True
-                        if not self._has_valid_task_completion_declaration(raw_response):
-                            native_tool_calling = False
+                        terminal_json_corrections += 1
                         llm_messages.append({"role": "assistant", "content": raw_response})
                         llm_messages.append({
                             "role": "user",
@@ -839,8 +837,8 @@ class AgentToolRuntime(BaseRuntime):
                                 "Do not repeat completed external actions to repair JSON or references."
                             ),
                         })
-                        pending_llm_call_id = llm_call_id
-                        pending_logical_llm_call_id = logical_llm_call_id
+                        # A changed prompt is a new decision, not a transport
+                        # retry. Keep native tools available to repair evidence.
                         await run_session.record_event("protocol_retry", {
                             "step": step + 1,
                             "reason": "terminal_json_correction",

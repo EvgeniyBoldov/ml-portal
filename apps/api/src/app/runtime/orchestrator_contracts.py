@@ -670,7 +670,7 @@ def parse_task_completion_declaration(content: str) -> TaskCompletionDeclaration
 _NONBLANK_STRING_PATTERN = r"^[\s\S]*\S[\s\S]*$"
 
 
-def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
+def task_completion_json_schema(request: TaskRequest, *, provider_compatible: bool = False) -> Dict[str, Any]:
     """Build the sole terminal declaration schema from the compiled contract."""
     def slot_schema(spec: TaskOutputSpec) -> Dict[str, Any]:
         if spec.fulfillment == TaskOutputFulfillment.TASK_RESULT:
@@ -763,7 +763,34 @@ def task_completion_json_schema(request: TaskRequest) -> Dict[str, Any]:
             "then": {"required": ["limitation"], "properties": {"needs": {"maxItems": 0}, "limitation": limitation_schema}},
         },
     ]
+    if provider_compatible:
+        # Grammar backends implement only part of JSON Schema. Keep the
+        # structural slots, but enforce regex and conditional semantics in
+        # Pydantic/the reducer, not in a provider-generated sampler grammar.
+        schema.pop("allOf")
+        return _terminal_provider_schema(schema)
     return schema
+
+
+def _terminal_provider_schema(schema: Dict[str, Any] | bool) -> Dict[str, Any] | bool:
+    """Project schema keywords without mistaking property names for keywords."""
+    if isinstance(schema, bool):
+        return schema
+    result = dict(schema)
+    for keyword in ("pattern", "format", "if", "then", "else"):
+        result.pop(keyword, None)
+    for keyword in ("properties", "$defs", "definitions", "patternProperties", "dependentSchemas"):
+        if isinstance(result.get(keyword), dict):
+            result[keyword] = {name: _terminal_provider_schema(child)
+                               for name, child in result[keyword].items()}
+    for keyword in ("items", "additionalProperties", "contains", "not", "propertyNames"):
+        if isinstance(result.get(keyword), dict):
+            result[keyword] = _terminal_provider_schema(result[keyword])
+    for keyword in ("anyOf", "oneOf", "allOf", "prefixItems"):
+        if isinstance(result.get(keyword), list):
+            result[keyword] = [_terminal_provider_schema(child) if isinstance(child, dict) else child
+                               for child in result[keyword]]
+    return result
 
 
 def _normalize_nullable_schema(value: Dict[str, Any]) -> Dict[str, Any]:

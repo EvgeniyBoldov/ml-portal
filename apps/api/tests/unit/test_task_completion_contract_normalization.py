@@ -18,7 +18,7 @@ def request():
     ("", False), (" \t\n", False), ("done", True),
     ("  done  ", True), ("\nfirst line\nsecond line\n", True),
 ])
-def test_terminal_string_patterns_support_provider_grammar_and_multiline_text(text, valid):
+def test_terminal_string_patterns_validate_nonblank_multiline_text(text, valid):
     def check_patterns(node):
         if isinstance(node, dict):
             if "pattern" in node:
@@ -32,6 +32,36 @@ def test_terminal_string_patterns_support_provider_grammar_and_multiline_text(te
                 check_patterns(child)
 
     check_patterns(task_completion_json_schema(request()))
+
+
+def test_provider_projection_preserves_slots_but_local_validation_enforces_semantics():
+    task = request()
+    provider = task_completion_json_schema(task, provider_compatible=True)
+    assert "allOf" not in provider
+    assert "pattern" not in provider["properties"]["report"]
+    invalid = {"completion": "fulfilled", "report": "   ", "outputs": {}, "needs": []}
+    assert Draft202012Validator(provider).is_valid(invalid)
+    assert AgentExecutor._terminal_validation_errors(json.dumps(invalid), task=task, verified={})
+    invalid["report"] = "done"
+    invalid["outputs"] = {"answer": "raw value"}
+    assert not Draft202012Validator(provider).is_valid(invalid)
+    invalid["outputs"]["answer"] = {"kind": "value", "value": None}
+    assert Draft202012Validator(provider).is_valid(invalid)
+    assert AgentExecutor._terminal_validation_errors(json.dumps(invalid), task=task, verified={}) == []
+
+
+def test_provider_projection_keeps_property_names_and_does_not_mutate_task_schema():
+    task = TaskRequest(task_id="task", executor="agent", intent="answer", instructions="Answer",
+                       expected_outputs=[{"key": "answer", "description": "Answer", "schema": {
+                           "type": "object", "properties": {
+                               "pattern": {"type": "string", "pattern": "^a$"},
+                               "then": True,
+                           },
+                       }}])
+    provider = task_completion_json_schema(task, provider_compatible=True)
+    properties = provider["properties"]["outputs"]["properties"]["answer"]["properties"]["value"]["properties"]
+    assert properties == {"pattern": {"type": "string"}, "then": True}
+    assert task.expected_outputs[0].json_schema["properties"]["pattern"]["pattern"] == "^a$"
 
 
 @pytest.mark.parametrize("absent", [None, "", "   "])

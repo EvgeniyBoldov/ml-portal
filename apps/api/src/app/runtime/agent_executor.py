@@ -344,7 +344,7 @@ class AgentExecutor:
             "type": "json_schema",
             "json_schema": {
                 "name": "TaskCompletionDeclaration",
-                "schema": task_completion_json_schema(task),
+                "schema": task_completion_json_schema(task, provider_compatible=True),
                 "strict": True,
             },
         }
