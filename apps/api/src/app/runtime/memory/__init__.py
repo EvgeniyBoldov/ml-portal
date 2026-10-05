@@ -1,19 +1,29 @@
 """Runtime memory subsystem.
 
-Post-M6 this package exposes:
-
-    New (persistent, cross-turn):
-        * dto.py       — FactDTO, SummaryDTO
-        * fact_store.py / summary_store.py — data access
-        * fact_extractor.py / fact_compactor.py — LLM helpers
-        * builder.py / writer.py — read/write orchestration
-        * transport.py — TurnMemory (in-turn, ephemeral)
+Keep package exports lazy so importing a focused submodule (for example prompt
+constants from a migration) does not initialize the full runtime and its
+external-service adapters.
 """
-from app.runtime.memory.dto import FactDTO, SummaryDTO
-from app.runtime.memory.transport import TurnMemory
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
 
 __all__ = [
     "FactDTO",
     "SummaryDTO",
     "TurnMemory",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"FactDTO", "SummaryDTO"}:
+        module = import_module("app.runtime.memory.dto")
+    elif name == "TurnMemory":
+        module = import_module("app.runtime.memory.transport")
+    else:
+        raise AttributeError(name)
+
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
