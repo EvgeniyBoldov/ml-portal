@@ -19,8 +19,8 @@ from app.runtime.memory.search_contract import MemorySearchInput
 
 class TaskBrief(BaseModel):
     goal: str = Field(..., min_length=1)
-    project_hints: list[str] = Field(default_factory=list)
-    scope_keys: list[str] = Field(default_factory=list)
+    project_hints: list[str] = Field(default_factory=list, description="Project names/keys from the user or confirmed facts, including external projects absent from the memory catalog.")
+    scope_keys: list[str] = Field(default_factory=list, description="Concrete team.* or project.* memory catalog keys only. Empty inherits focus; user and tenant are not focus keys.")
     scope_mode: Literal["inherit", "replace"] = "inherit"
     entity_hints: list[str] = Field(default_factory=list)
     direction: str = Field(..., min_length=1)
@@ -42,6 +42,10 @@ class MemoryRequest(MemorySearchInput):
 
 class Clarification(BaseModel):
     question: str = Field(..., min_length=1)
+    direct_answer_reason: Optional[str] = Field(
+        default=None, min_length=1,
+        description="Why the answer after this single choice can be synthesized solely from existing input, without search, verification, tools or actions. Otherwise route to planner.",
+    )
     context: dict[str, Any] = Field(default_factory=dict)
     model_config = {"extra": "forbid"}
 
@@ -177,29 +181,20 @@ class TurnPreflight:
         decision = result.value
         try:
             selection = _canonical_scope_selection(decision)
-        except ValueError as exc:
-            return TurnPreflightDecision(route="clarify", clarification=Clarification(
-                question="Уточните область задачи: указаны противоречащие друг другу наборы скоупов.",
-                context={"scope_error": str(exc)},
-            ))
+        except ValueError:
+            return self._planner_handoff(user_request, decision, reason="Не удалось согласовать выбор области памяти; исходный фокус сохранён.")
         keys = selection.keys
         mentions = selection.mentioned_keys
         # A confirmation such as "yes" may refer to the agent's question in
         # recent_dialogue. Current-message alias matches and initial focus are
         # not a ceiling; validate the resulting identity against the catalog.
         if set(keys).intersection({"team.all", "project.all"}):
-            return TurnPreflightDecision(route="clarify", clarification=Clarification(
-                question="Укажите конкретную команду или проект: all не используется в фокусе.",
-                context={"scope_error": "all_is_not_a_query_scope"},
-            ))
+            return self._planner_handoff(user_request, decision, reason="Общий селектор памяти не задаёт конкретную область задачи; исходный фокус сохранён.")
         if keys or mentions:
             try:
                 await resolve_memory_scopes(self._session, list(dict.fromkeys([*keys, *mentions])))
             except ValueError:
-                return TurnPreflightDecision(route="clarify", clarification=Clarification(
-                    question="Уточните область задачи: выбранный скоуп отсутствует в активном каталоге.",
-                    context={"unknown_scope_keys": list(dict.fromkeys([*keys, *mentions]))},
-                ))
+                return self._planner_handoff(user_request, decision, reason="Выбор области памяти не разрешён по активному каталогу; исходный фокус сохранён. Установи параметры работы по доступным источникам.")
         decision = decision.model_copy(update={"scope_selection": selection})
         # Durable user facts are persisted by MemoryWriter after the final
         # answer. They are not agent tasks: no planner executor is allowed to
@@ -211,7 +206,10 @@ class TurnPreflight:
                 user_request=user_request,
                 memory_candidates=decision.memory_candidates,
             ).model_copy(update={"scope_selection": selection})
-        if decision.route == "synthesis" and self._needs_collection_inventory(user_request):
+        if decision.route == "clarify" and not str(decision.clarification.direct_answer_reason or "").strip():
+            return self._planner_handoff(user_request, decision, reason="Предварительное уточнение: " + decision.clarification.question,
+                                         selection=selection)
+        if decision.route in {"synthesis", "clarify"} and self._needs_collection_inventory(user_request):
             return TurnPreflightDecision(
                 route="planner",
                 task_brief=TaskBrief(
@@ -244,6 +242,25 @@ class TurnPreflight:
                     }),
                 })
         return decision
+
+    @staticmethod
+    def _planner_handoff(
+        user_request: str, decision: TurnPreflightDecision, *, reason: str,
+        selection: ScopeSelection | None = None,
+    ) -> TurnPreflightDecision:
+        """Model scope mistakes are planning context, not questions for the user."""
+        brief = decision.task_brief or TaskBrief(
+            goal=user_request, direction="Разобраться в запросе по доступным источникам и выполнить необходимую работу.",
+            expected_result="Ответ на исходный запрос с проверенными данными или обоснованным адресным уточнением.",
+        )
+        selected = selection or ScopeSelection()
+        return TurnPreflightDecision(
+            route="planner", scope_selection=selected, memory_candidates=decision.memory_candidates,
+            task_brief=brief.model_copy(update={
+                "goal": user_request, "scope_keys": selected.keys, "scope_mode": selected.mode,
+                "constraints": [*brief.constraints, reason],
+            }),
+        )
 
     @staticmethod
     def _self_jira_assignee(

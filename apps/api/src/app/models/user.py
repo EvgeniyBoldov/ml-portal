@@ -20,6 +20,7 @@ class Users(Base, LifecycleMixin):
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)  # NULL for LDAP users
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False, server_default="reader")
+    memory_scope_keys: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list, server_default="{}")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     require_password_change: Mapped[bool | None] = mapped_column(Boolean, nullable=True, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

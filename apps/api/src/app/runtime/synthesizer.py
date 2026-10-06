@@ -150,6 +150,12 @@ class Synthesizer:
         else:
             synth_prompt += f"\n\n{_PLANNED_SYNTHESIS_MODE}"
         synth_prompt = f"{synth_prompt}\n\n# FILE DELIVERY\n{_FILE_DELIVERY_RULE}"
+        synth_prompt += (
+            "\n\n# EXECUTION FOCUS\n"
+            "scope_context и execution_context — подтверждённый приложением текущий фокус команд и проектов. "
+            "Используй его для понимания области ответа. Он не доказывает внешние результаты. "
+            "Пустой фокус допустим; не задавай вопрос о техническом скоупе и не требуй выбрать его для готового ответа."
+        )
 
         if budget_registry is not None:
             synthesis_limits = None

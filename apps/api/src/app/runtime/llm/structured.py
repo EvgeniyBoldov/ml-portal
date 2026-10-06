@@ -920,17 +920,8 @@ class StructuredLLMCall:
                     "только когда агент явно supports_dynamic_contracts."
                 )
             if role_type == SystemLLMRoleType.TURN_PREFLIGHT.value:
-                parts.append("Если нужного подтверждённого факта пользователя/отдела нет в facts_context, можно выбрать route=recall с memory_request.scopes=['user','tenant']; query задаёт поиск, fact_subject — точный subject. Отсутствие факта в стартовом срезе не означает отсутствие в памяти. Факты из поиска содержат scope и владельца; конфликт значений требует уточнения, а не проверки документным RAG.")
-                parts.append(
-                    "# MEMORY SCOPE RESOLUTION\n"
-                    "Всегда заполняй scope_selection для любого route. Выбирай keys только из "
-                    "mechanical_lookup.scope_candidates; matched_forms и scope_ambiguities используй как evidence. "
-                    "Совпадение имени — кандидат; применимость определяй по цели задачи, а простое упоминание "
-                    "записывай в mentioned_keys без переключения выбранной области. inherit заменяет только "
-                    "типы, явно выбранные в этом turn, и сохраняет другие типы chat focus; replace полностью "
-                    "заменяет focus, включая пустой список. Объясняй выбор в rationale. При значимой неоднозначности выбери clarify. "
-                    "Не создавай product/team defaults пользователя или tenant."
-                )
+                from app.services.turn_preflight_prompt import TURN_PREFLIGHT_SCOPE_POLICY_V2
+                parts.append(TURN_PREFLIGHT_SCOPE_POLICY_V2)
             parts.append(
                 "# RUNTIME RESPONSE CONTRACT\n"
                 "Верни строго валидный JSON по следующей схеме (без markdown и пояснений):\n"

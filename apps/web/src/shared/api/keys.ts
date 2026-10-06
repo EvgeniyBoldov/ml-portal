@@ -130,6 +130,7 @@ export const qk = {
   },
   profile: {
     all: () => ['profile'] as const,
+    detail: () => ['profile', 'me'] as const,
     facts: () => ['profile', 'facts'] as const,
     credentials: (level: 'user' | 'tenant') => ['profile', 'credentials', level] as const,
     credentialInstances: () => ['profile', 'credential-instances'] as const,
@@ -167,6 +168,7 @@ export const qk = {
   },
   collections: {
     all: () => ['collections'] as const,
+    memoryScopeCatalog: () => ['collections', 'memory-scope-catalog'] as const,
     appList: (params?: { active_only?: boolean }) =>
       ['collections', 'app-list', params] as const,
     adminList: (params?: { page?: number; size?: number; tenant_id?: string; is_active?: boolean }) =>

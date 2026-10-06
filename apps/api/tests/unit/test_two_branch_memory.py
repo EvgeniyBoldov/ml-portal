@@ -10,8 +10,7 @@ from app.runtime.memory.search import MemorySearchService, normalize_query_keys
 from app.runtime.memory.scope_precedence import apply_scope_precedence, scope_sets_overlap, has_project_override
 from app.runtime.memory.shadow_document_study import ShadowStudyOutput
 from app.services.chat_context_compactor import FocusCompactionPayload, focus_compaction_payload
-from app.runtime.pipeline import _base_scope_context, scope_fact_defaults
-from app.models.memory import FactScope
+from app.services.memory_scope_preferences_service import inherit_scope_context
 
 
 @pytest.mark.parametrize("bound,query,expected", [
@@ -92,19 +91,17 @@ def test_extraction_accepts_atom_all_but_not_product():
             "content": {"statement": "Вести учёт", "effect": "require"}}]})
 
 
-@pytest.mark.asyncio
-async def test_two_axis_defaults_use_user_then_tenant_and_explicit_clear(monkeypatch):
-    from app.services import memory_scope_catalog
+def test_two_axis_defaults_use_user_then_tenant_and_explicit_clear():
     rows = [SimpleNamespace(id=uuid4(), key=key, scope_type=key.split('.')[0], name=key, is_all=False)
             for key in ["team.ops", "team.net", "project.a", "project.b"]]
-    monkeypatch.setattr(memory_scope_catalog, "list_memory_scopes", AsyncMock(return_value=rows))
-    facts = [SimpleNamespace(scope=FactScope.TENANT, subject="tenant.team_scope", metadata={"team_keys": ["ops"]}),
-             SimpleNamespace(scope=FactScope.TENANT, subject="tenant.project_scope", metadata={"project_keys": ["a"]}),
-             SimpleNamespace(scope=FactScope.USER, subject="user.team_scope", metadata={"team_keys": ["net"]})]
-    focus = await _base_scope_context(object(), chat_context={}, project_defaults=[], facts=facts)
+    focus = inherit_scope_context(catalog=rows, chat_context={}, user_keys=["team.net"],
+                                  tenant_keys=["team.ops", "project.a"])
     assert set(focus.keys) == {"team.net", "project.a"}
-    assert scope_fact_defaults(facts, "team") == (["net"], "user_default")
-    focus = await _base_scope_context(object(), chat_context={"focus": {"suppress_project_default": True}}, project_defaults=["b"], facts=facts)
+    assert {item.key: item.source for item in focus.selected} == {
+        "team.net": "user_default", "project.a": "tenant_default",
+    }
+    focus = inherit_scope_context(catalog=rows, chat_context={"focus": {"suppress_project_default": True}},
+                                  user_keys=["team.net"], tenant_keys=["project.b"])
     assert focus.keys == ["team.net"]
 
 

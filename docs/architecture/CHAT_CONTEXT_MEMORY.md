@@ -43,8 +43,15 @@ The runtime journal is not part of this flow.
 
 The chat focus contains independent `team_keys` (recipients) and `project_keys`
 (execution location). Initial defaults resolve per branch as chat > user > tenant.
+User and tenant defaults come exclusively from their explicit `memory_scope_keys`
+profile fields, empty by default (migration `0182`). An empty user branch inherits
+the tenant branch. Defaults are reread each turn and retain their origin; they do
+not freeze as explicit chat selections. Dialogue scope facts no longer set these
+defaults. The inspection panel resolves the same inheritance and displays team
+and project names even before the first completed turn.
 The application exposes the current focus as an `execution_context` fact to the
-planner and agent. Search always retains all context teams and permits only known
+planner, agent and synthesizer in both direct and planned answer paths.
+Search always retains all context teams and permits only known
 projects. Clarified choices update the current turn context before searching. After the turn, the compactor
 updates focus from user choices and confirmed answers, including replies to the
 agent's questions. A mere mention or an unconfirmed question is not a selection.

@@ -70,42 +70,11 @@ RUNTIME_MEMORY_INLINE = False
 logger = get_logger(__name__)
 
 
-async def _base_scope_context(session, *, chat_context: dict[str, Any], project_defaults: list[str], facts: list[Any] = ()) -> EffectiveScopeContext:
-    # Read the active catalog once and discard stale chat identities. Project
-    # defaults are added only when focus has not selected a project scope.
-    from app.services.memory_scope_catalog import list_memory_scopes
-    rows = await list_memory_scopes(session)
-    by_key = {row.key: row for row in rows}
-    focus = chat_context.get("focus") if isinstance(chat_context.get("focus"), dict) else chat_context.get("scope", {})
-    origins = focus.get("scope_origins") or {}
-    chat_keys = [key for key in dict.fromkeys([
-        *(str(key).casefold() for key in focus.get("scope_keys", []) if str(key).strip()),
-        *(f"project.{str(key).casefold()}" for key in focus.get("project_keys", []) if str(key).strip()),
-        *(f"team.{str(key).casefold()}" for key in focus.get("team_keys", []) if str(key).strip()),
-    ]) if origins.get(key) not in {"user_project_default", "user_default", "tenant_default"}]
-    keys = [key for key in chat_keys if key in by_key and not getattr(by_key[key], "is_all", False)]
-    default_origins = {}
-    for branch in ("team", "project"):
-        if focus.get(f"suppress_{branch}_default") or any(key.startswith(f"{branch}.") for key in keys):
-            continue
-        defaults, origin = scope_fact_defaults(facts, branch)
-        if origin == "none" and branch == "project":
-            defaults, origin = project_defaults, "user_project_default"
-        for value in defaults:
-            key = value if value.startswith(f"{branch}.") else f"{branch}.{value}"
-            if key in by_key and not getattr(by_key[key], "is_all", False):
-                keys.append(key)
-                default_origins[key] = origin
-    selected = [ScopeIdentity(id=str(by_key[key].id), key=key, type=by_key[key].scope_type,
-                              name=by_key[key].name,
-                              source=("chat_focus" if key in chat_keys else default_origins.get(key, "user_project_default")))
-                for key in dict.fromkeys(keys)]
-    return EffectiveScopeContext(revision=int(focus.get("scope_revision") or 0), selected=selected,
-                                 mentioned=[ScopeIdentity(id=str(by_key[key].id), key=key,
-                                     type=by_key[key].scope_type, name=by_key[key].name, source="chat_focus")
-                                     for key in focus.get("mentioned_scope_keys", []) if key in by_key],
-                                 mode="inherit", explicit_clear=bool(focus.get("suppress_project_default")) and not selected,
-                                 ceiling_keys=[item.key for item in selected])
+async def _base_scope_context(session, *, chat_context: dict[str, Any], user_id: UUID, tenant_id: UUID) -> EffectiveScopeContext:
+    from app.services.memory_scope_preferences_service import MemoryScopePreferencesService
+    return await MemoryScopePreferencesService(session).resolve_context(
+        user_id=user_id, tenant_id=tenant_id, chat_context=chat_context,
+    )
 
 
 async def _turn_scope_context(session, parent: EffectiveScopeContext, decision: TurnPreflightDecision,
@@ -137,7 +106,8 @@ def _project_context_payload(context: EffectiveScopeContext, base: dict[str, Any
                       if item.type == "project" and item.source in {"turn", "chat_focus"} and item.key != "project.all"]
     scope_source = "turn" if any(item.source == "turn" for item in context.selected) else \
                    "chat_context" if any(item.source == "chat_focus" for item in context.selected) else \
-                   "user_default" if context.selected else "none"
+                   "user_default" if any(item.source in {"user_default", "user_project_default"} for item in context.selected) else \
+                   "tenant_default" if context.selected else "none"
     return {**base, "execution_context": memory_execution_context(context.keys, revision=context.revision),
             "effective_scope_keys": context.keys,
             "effective_team_keys": [item.key.removeprefix("team.") for item in context.selected if item.type == "team"],
@@ -425,16 +395,21 @@ class RuntimePipeline:
             else {"chat_id": chat_id, "sandbox_branch_id": branch_id, "revision": 0}
         )
         scope_payload = chat_context.get("focus") if isinstance(chat_context.get("focus"), dict) else chat_context.get("scope") if isinstance(chat_context.get("scope"), dict) else {}
-        project_context = await ProjectContextResolver(self._session).resolve(
-            request_text=effective_user_query,
-            facts=[] if scope_payload.get("suppress_project_default") else turn_mem.durable_snapshot.entries,
-            chat_project_keys=scope_payload.get("project_keys") or [],
-        )
         base_scope_context = await _base_scope_context(
             self._session, chat_context=chat_context,
-            project_defaults=list(project_context.default_project_keys), facts=list(turn_mem.durable_snapshot.entries),
+            user_id=user_id, tenant_id=tenant_id,
         )
-        turn_mem.project_context = {**_project_context_payload(base_scope_context, project_context.as_dict()),
+        project_context = await ProjectContextResolver(self._session).resolve(
+            request_text=effective_user_query,
+            facts=[],  # Explicit profile preferences are the sole source of defaults.
+            chat_project_keys=[item.key.removeprefix("project.") for item in base_scope_context.selected
+                               if item.type == "project" and item.source == "chat_focus"],
+        )
+        project_payload = {**project_context.as_dict(), "default_project_keys": [
+            item.key.removeprefix("project.") for item in base_scope_context.selected
+            if item.type == "project" and item.source in {"user_default", "tenant_default"}
+        ]}
+        turn_mem.project_context = {**_project_context_payload(base_scope_context, project_payload),
                                     "explicit_scope_keys": [],
                                     "suppress_project_default": bool(scope_payload.get("suppress_project_default")),
                                     "suppress_team_default": bool(scope_payload.get("suppress_team_default"))}
@@ -809,6 +784,8 @@ class RuntimePipeline:
                 "memory_context": recall_context or {},
                 "memory_candidates": turn_mem.preflight_candidates,
                 "chat_context": chat_context,
+                "scope_context": effective_scope_context.model_payload(),
+                "execution_context": turn_mem.project_context["execution_context"],
             }
             async for event in self._assembler.synthesizer.stream(
                 runtime_state=runtime_state, run_id=run_id, synthesis_context=direct_context,
@@ -1838,17 +1815,3 @@ class RuntimePipeline:
         }
         logger.info("Runtime RBAC planner agent filter: %s", audit_payload)
         return filtered, audit_payload
-
-
-def scope_fact_defaults(facts: list[Any], branch: str) -> tuple[list[str], str]:
-    """Resolve user before tenant defaults independently for each branch."""
-    for owner in ("user", "tenant"):
-        for fact in facts:
-            scope = getattr(fact, "scope", "")
-            scope = getattr(scope, "value", scope)
-            if scope != owner or fact.subject not in {f"{owner}.{branch}_scope", f"user.{branch}_scope"}:
-                continue
-            values = (fact.metadata or {}).get(f"{branch}_keys")
-            if isinstance(values, list):
-                return list(dict.fromkeys(str(value).strip().casefold() for value in values if str(value).strip())), f"{owner}_default"
-    return [], "none"

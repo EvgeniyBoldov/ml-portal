@@ -4,7 +4,8 @@ User schemas
 from __future__ import annotations
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.memory_scope_preferences import MemoryScopeKeys
 import uuid
 
 
@@ -33,6 +34,7 @@ class UserBase(BaseModel):
     email: str
     role: UserRole = UserRole.READER
     is_active: bool = True
+    memory_scope_keys: MemoryScopeKeys = Field(default_factory=list)
 
 
 class UserCreate(UserBase):
@@ -47,6 +49,7 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     role: Optional[UserRole] = None
     is_active: Optional[bool] = None
+    memory_scope_keys: MemoryScopeKeys = Field(default_factory=list)
 
 
 class UserResponse(UserBase):

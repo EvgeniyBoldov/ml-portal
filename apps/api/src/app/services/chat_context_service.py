@@ -310,10 +310,21 @@ class ChatContextService:
         """Return a user-safe inspection projection without internal source IDs."""
         snapshot = await self.load_snapshot(chat_id=chat_id, branch_id=branch_id, owner_id=owner_id, tenant_id=tenant_id)
         focus = snapshot.focus.model_dump() if snapshot.focus else {}
+        from app.services.memory_scope_preferences_service import MemoryScopePreferencesService
+        inherited = await MemoryScopePreferencesService(self.session).resolve_context(
+            user_id=uuid.UUID(owner_id), tenant_id=uuid.UUID(tenant_id),
+            chat_context=snapshot.model_dump(mode="json"),
+        )
+        focus.update({
+            "team_keys": [item.key.removeprefix("team.") for item in inherited.selected if item.type == "team"],
+            "project_keys": [item.key.removeprefix("project.") for item in inherited.selected if item.type == "project"],
+            "team_names": [item.name for item in inherited.selected if item.type == "team"],
+            "project_names": [item.name for item in inherited.selected if item.type == "project"],
+        })
         goal = snapshot.active_goal.model_dump() if snapshot.active_goal else {}
         return {
             "revision": snapshot.revision,
-            "focus": {key: focus.get(key) for key in ("project_keys", "topic", "entity_refs") if key in focus},
+            "focus": {key: focus.get(key) for key in ("team_keys", "project_keys", "team_names", "project_names", "topic", "entity_refs") if key in focus},
             "active_goal": {key: goal.get(key) for key in ("text", "status") if key in goal} or None,
             "term_bindings": [{key: item.model_dump().get(key) for key in ("term", "aliases") if key in item.model_dump()} for item in snapshot.term_bindings],
             "artifacts": [{key: item.model_dump().get(key) for key in ("file_name", "content_type", "size_bytes", "role") if key in item.model_dump()} for item in snapshot.artifacts],

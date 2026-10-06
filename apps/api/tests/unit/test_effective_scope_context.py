@@ -206,18 +206,15 @@ async def test_recall_rejects_scope_mismatch_before_routing():
     complete.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_user_project_defaults_are_not_promoted_to_explicit_chat_focus(monkeypatch):
-    from app.runtime.pipeline import _base_scope_context
-    from app.services import memory_scope_catalog
-    rows = [SimpleNamespace(id=uuid4(), key=key, scope_type="project", name=key)
+def test_user_project_defaults_are_not_promoted_to_explicit_chat_focus():
+    from app.services.memory_scope_preferences_service import inherit_scope_context
+    rows = [SimpleNamespace(id=uuid4(), key=key, scope_type="project", name=key, is_all=False)
             for key in ["project.a", "project.b"]]
-    monkeypatch.setattr(memory_scope_catalog, "list_memory_scopes", AsyncMock(return_value=rows))
-    context = await _base_scope_context(object(), chat_context={"focus": {
+    context = inherit_scope_context(catalog=rows, chat_context={"focus": {
         "scope_keys": ["project.a"], "project_keys": ["a"],
-        "scope_origins": {"project.a": "user_project_default"}}}, project_defaults=["b"])
+        "scope_origins": {"project.a": "user_default"}}}, user_keys=["project.b"], tenant_keys=[])
     assert context.keys == ["project.b"]
-    assert context.selected[0].source == "user_project_default"
+    assert context.selected[0].source == "user_default"
 
 
 def test_replacing_focus_with_only_team_scope_suppresses_project_default():

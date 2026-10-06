@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -24,6 +24,25 @@ def service(mock_session, mock_llm_client, messages_repo) -> ChatContextService:
 
 
 class TestChatContextService:
+
+    @pytest.mark.asyncio
+    async def test_inspection_shows_inherited_focus_before_the_first_completed_turn(self, service, monkeypatch):
+        from app.services.chat_context_contracts import ChatContextSnapshot
+        from app.services import memory_scope_preferences_service
+        from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdentity
+
+        chat_id, user_id, tenant_id = str(uuid4()), str(uuid4()), str(uuid4())
+        service.load_snapshot = AsyncMock(return_value=ChatContextSnapshot(chat_id=chat_id, revision=0))
+        resolve = AsyncMock(return_value=EffectiveScopeContext(selected=[
+            ScopeIdentity(key='team.ops', type='team', name='Инфраструктура', source='tenant_default'),
+            ScopeIdentity(key='project.nims', type='project', name='NIMS', source='user_default'),
+        ]))
+        monkeypatch.setattr(memory_scope_preferences_service.MemoryScopePreferencesService, 'resolve_context', resolve)
+        result = await service.inspect_snapshot(chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id)
+        assert result['revision'] == 0
+        assert result['focus'] == {'team_keys': ['ops'], 'project_keys': ['nims'],
+                                   'team_names': ['Инфраструктура'], 'project_names': ['NIMS']}
+        assert resolve.await_args.kwargs['user_id'] == UUID(user_id)
 
     @pytest.mark.asyncio
     async def test_snapshot_requests_bounds_per_kind_not_one_global_limit(self, service: ChatContextService) -> None:

@@ -1,6 +1,6 @@
 
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Boolean, ForeignKey, DateTime, func
+from sqlalchemy import String, Boolean, ForeignKey, DateTime, func, ARRAY
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime
@@ -13,6 +13,7 @@ class Tenants(Base, LifecycleMixin):
     name: Mapped[str] = mapped_column(String, unique=True, index=True)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    memory_scope_keys: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list, server_default="{}")
     is_platform_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # Model-related fields
     embedding_model_alias: Mapped[str | None] = mapped_column(String(100), ForeignKey("models.alias"), nullable=True)

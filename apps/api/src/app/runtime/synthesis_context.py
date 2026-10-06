@@ -7,6 +7,7 @@ from typing import Any, Dict
 from app.runtime.orchestrator_contracts import ResolutionAction, TaskStatus
 from app.runtime.redactor import RuntimeRedactor
 from app.runtime.memory.effective_scope import project_memory_context
+from app.runtime.memory.execution_context import memory_execution_context
 
 
 DEFAULT_SYNTHESIS_CONTEXT_MAX_CHARS = 120_000
@@ -105,6 +106,10 @@ class SynthesisContextBuilder:
                 continue
             memory_context.append(project_memory_context(item, allowed_scope))
         context = {"user_question": plan.get("goal"), "synthesis_brief": self._redact(iteration["synthesis_brief"]), "plan_outline": [{"sequence": item.get("sequence"), "terminal": item.get("terminal")} for item in plan.get("iterations", [])], "resolution_decisions": self._redact([{key: item.get(key) for key in ("task_id", "action", "output_keys", "reason")} for item in resolutions if item.get("action") != ResolutionAction.CONTINUE_WITH_TASKS.value]), "completed_task_reports": reports, "limitations": limitations, "memory_context": self._redact(memory_context), "artifacts": deliverable_artifacts, "sources": self._dedupe(sources, "source_id")}
+        context["scope_context"] = self._redact(plan.get("scope_context") or {})
+        context["execution_context"] = memory_execution_context(
+            sorted(allowed_scope), revision=int((plan.get("scope_context") or {}).get("revision") or 0),
+        )
         return self._compact_to_limit(context)
 
     def _compact_to_limit(self, context: Dict[str, Any]) -> Dict[str, Any]:

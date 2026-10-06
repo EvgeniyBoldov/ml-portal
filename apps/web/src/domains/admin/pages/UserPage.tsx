@@ -8,6 +8,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { MemoryScopePicker } from '@/shared/ui/MemoryScopePicker/MemoryScopePicker';
 import { useUser, useUpdateUser, useCreateUser, useSetUserPassword } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
 import { qk } from '@shared/api/keys';
@@ -208,6 +209,7 @@ export function UserPage() {
     role: 'reader' as User['role'],
     tenant_ids: [] as string[],
     is_active: true,
+    memory_scope_keys: [] as string[],
   });
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -229,6 +231,7 @@ export function UserPage() {
         role: user.role || 'reader',
         tenant_ids: user.tenant_id ? [user.tenant_id] : [],
         is_active: user.is_active,
+        memory_scope_keys: user.memory_scope_keys ?? [],
       });
     }
   }, [user]);
@@ -266,6 +269,7 @@ export function UserPage() {
           role: formData.role,
           tenant_ids: formData.tenant_ids,
           is_active: formData.is_active,
+          memory_scope_keys: formData.memory_scope_keys,
         });
         showSuccess('Пользователь создан');
         navigate('/admin/users');
@@ -276,6 +280,7 @@ export function UserPage() {
             email: formData.email || undefined,
             role: formData.role,
             is_active: formData.is_active,
+            memory_scope_keys: formData.memory_scope_keys,
             tenant_ids: formData.tenant_ids,
           },
         });
@@ -304,6 +309,7 @@ export function UserPage() {
           role: user.role || 'reader',
           tenant_ids: user.tenant_id ? [user.tenant_id] : [],
           is_active: user.is_active,
+          memory_scope_keys: user.memory_scope_keys ?? [],
         });
       }
       setSearchParams({});
@@ -416,6 +422,8 @@ export function UserPage() {
               editable={true}
               onChange={handleFieldChange}
             />
+            <MemoryScopePicker value={formData.memory_scope_keys} onChange={(keys) => handleFieldChange('memory_scope_keys', keys)}
+              description="По умолчанию команды и проекты не выбраны." />
           </Tab>
         </EntityPageV2>
         <SetPasswordModal
@@ -499,6 +507,15 @@ export function UserPage() {
             fields={META_FIELDS}
             data={metaData}
           />
+        </Tab>
+
+        <Tab title="Скоупы" layout="full" id="scopes" actions={buildEntityCrudActions({
+          mode, saving, lifecycleStatus: user?.lifecycle_status,
+          onEdit: handleEdit, onSave: handleSave, onCancel: handleCancel,
+        })}>
+          <MemoryScopePicker value={mode === 'edit' ? formData.memory_scope_keys : user?.memory_scope_keys ?? []}
+            onChange={(keys) => handleFieldChange('memory_scope_keys', keys)} readOnly={mode !== 'edit'} disabled={saving}
+            description="Начальный контекст чатов пользователя. Пустые ветки наследуются из tenant-а." />
         </Tab>
 
         {!isNew && (

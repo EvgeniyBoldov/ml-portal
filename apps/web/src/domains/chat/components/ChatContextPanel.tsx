@@ -107,8 +107,8 @@ export function ChatContextPanel({ chatId }: { chatId: string }) {
               <section className={styles.section}>
                 <h3>Фокус</h3>
                 <dl className={styles.focusBranches}>
-                  <div><dt>Команды · кому</dt><dd>{textFrom(context.focus, ['team_keys']) ?? 'Без выбора конкретной команды'}</dd></div>
-                  <div><dt>Проекты · где</dt><dd>{textFrom(context.focus, ['project_keys']) ?? 'Вне проектов'}</dd></div>
+                  <div><dt>Команды · кому</dt><dd>{textFrom(context.focus, ['team_names', 'team_keys']) ?? 'Без выбора конкретной команды'}</dd></div>
+                  <div><dt>Проекты · где</dt><dd>{textFrom(context.focus, ['project_names', 'project_keys']) ?? 'Общие проектные правила'}</dd></div>
                 </dl>
                 {textFrom(context.focus, ['topic']) && <p className={styles.value}>{textFrom(context.focus, ['topic'])}</p>}
               </section>

@@ -1,0 +1,33 @@
+.panel {
+  padding: var(--sp-5);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.title {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--font-size-lg);
+}
+
+.hint {
+  margin: var(--sp-2) 0;
+  color: var(--text-secondary);
+}
+
+.branches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-4);
+}
+
+.branch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}

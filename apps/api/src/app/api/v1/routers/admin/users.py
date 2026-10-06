@@ -21,6 +21,7 @@ async def _user_response(user, repo: AsyncUsersRepository) -> dict:
         "email": user.email,
         "full_name": getattr(user, "full_name", None),
         "role": user.role,
+        "memory_scope_keys": list(user.memory_scope_keys or []),
         "is_active": getattr(user, "is_active", True),
         "auth_provider": getattr(user, "auth_provider", "local"),
         "tenant_id": str(default_tid) if default_tid else None,
@@ -126,13 +127,15 @@ async def create_user(
         )
     
     try:
-        user = await service.create_user(login, email, password, role, tenant_ids)
+        user = await service.create_user(login, email, password, role, tenant_ids,
+                                         memory_scope_keys=user_data.get("memory_scope_keys", []))
         return {
             "user": {
                 "id": user.id,
                 "login": user.login,
                 "email": user.email,
                 "role": user.role,
+                "memory_scope_keys": list(user.memory_scope_keys or []),
                 "is_active": getattr(user, "is_active", True),
                 "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else "",
                 "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,

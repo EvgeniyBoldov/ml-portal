@@ -2,14 +2,15 @@
 Profile API - User profile and API tokens management
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
 import secrets
 import hashlib
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, db_session, db_uow
 from app.core.db import get_session_factory
 from app.core.security import verify_password, hash_password
 from app.core.security import UserCtx
@@ -21,10 +22,11 @@ from app.models.credential_set import Credential
 from app.models.tool_instance import ToolInstance
 from app.models.tool import Tool
 from app.runtime.memory.fact_store import FactStore
-from app.models.memory import Fact, FactScope, FactSource, FactStatus
-from app.runtime.memory.dto import FactDTO
-from app.runtime.memory.project_context import PROJECT_SCOPE_SUBJECT
-from app.models.project import Project
+from app.models.memory import Fact, FactScope
+from app.schemas.memory_scope_preferences import MemoryScopePreferences
+from app.services.memory_scope_preferences_service import MemoryScopePreferencesService
+from app.repositories.users_repo import AsyncUsersRepository
+from app.repositories.tenants_repo import AsyncTenantsRepository
 from app.runtime.memory.service import MemoryService
 from app.runtime.memory.fact_reconciler import FactReconciler
 from sqlalchemy import select
@@ -40,6 +42,9 @@ class ProfileResponse(BaseModel):
     role: str
     created_at: datetime
     tenants: List[str] = []
+    memory_scope_keys: List[str] = Field(default_factory=list)
+    tenant_memory_scope_keys: List[str] = Field(default_factory=list)
+    effective_memory_scope_keys: List[str] = Field(default_factory=list)
 
 
 class ApiTokenCreate(BaseModel):
@@ -142,9 +147,17 @@ async def get_user_from_db(user_ctx: UserCtx) -> Users:
 
 
 @router.get("/me", response_model=ProfileResponse)
-async def get_profile(current_user: UserCtx = Depends(get_current_user)):
+async def get_profile(current_user: UserCtx = Depends(get_current_user), session: AsyncSession = Depends(db_session)) -> ProfileResponse:
     """Get current user profile"""
-    user = await get_user_from_db(current_user)
+    repo = AsyncUsersRepository(session)
+    user = await repo.get_by_id(current_user.id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    default_tenant_id = await repo.get_default_tenant(user.id)
+    tenant = await AsyncTenantsRepository(session).get_by_id(default_tenant_id) if default_tenant_id else None
+    context = await MemoryScopePreferencesService(session).resolve_context(
+        user_id=user.id, tenant_id=default_tenant_id, chat_context={},
+    )
     return ProfileResponse(
         id=str(user.id),
         login=user.login,
@@ -152,7 +165,22 @@ async def get_profile(current_user: UserCtx = Depends(get_current_user)):
         role=user.role,
         created_at=user.created_at,
         tenants=current_user.tenant_ids or [],
+        memory_scope_keys=list(user.memory_scope_keys or []),
+        tenant_memory_scope_keys=list(tenant.memory_scope_keys or []) if tenant else [],
+        effective_memory_scope_keys=context.keys,
     )
+
+
+@router.put("/memory-scopes", response_model=MemoryScopePreferences)
+async def set_memory_scopes(
+    payload: MemoryScopePreferences, current_user: UserCtx = Depends(get_current_user),
+    session: AsyncSession = Depends(db_uow),
+) -> MemoryScopePreferences:
+    try:
+        keys = await MemoryScopePreferencesService(session).update_user(UUID(current_user.id), payload.memory_scope_keys)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return MemoryScopePreferences(memory_scope_keys=keys)
 
 
 @router.get("/tokens", response_model=List[ApiTokenResponse])
@@ -304,34 +332,29 @@ async def list_user_facts(
     return [*personal, *tenant]
 
 
-@router.get("/project-scope", response_model=ProjectScopeResponse)
-async def get_project_scope(current_user: UserCtx = Depends(get_current_user)):
-    async with get_session_factory()() as session:
-        fact = await FactStore(session).get_active_by_key(
-            scope=FactScope.USER, subject=PROJECT_SCOPE_SUBJECT, owner_type="user", owner_id=UUID(current_user.id),
-        )
-    return ProjectScopeResponse(project_keys=list((fact.metadata or {}).get("project_keys") or []) if fact else [])
+@router.get("/project-scope", response_model=ProjectScopeResponse, deprecated=True)
+async def get_project_scope(current_user: UserCtx = Depends(get_current_user), session: AsyncSession = Depends(db_session)) -> ProjectScopeResponse:
+    user = await AsyncUsersRepository(session).get_by_id(current_user.id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return ProjectScopeResponse(project_keys=[key.removeprefix("project.") for key in user.memory_scope_keys if key.startswith("project.")])
 
 
-@router.put("/project-scope", response_model=ProjectScopeResponse)
-async def set_project_scope(payload: ProjectScopeUpdate, current_user: UserCtx = Depends(get_current_user)):
+@router.put("/project-scope", response_model=ProjectScopeResponse, deprecated=True)
+async def set_project_scope(payload: ProjectScopeUpdate, current_user: UserCtx = Depends(get_current_user), session: AsyncSession = Depends(db_uow)) -> ProjectScopeResponse:
     keys = list(dict.fromkeys(str(key).strip().casefold() for key in payload.project_keys if str(key).strip()))
     if len(keys) > 12:
         raise HTTPException(status_code=422, detail="At most 12 projects may be selected")
-    user_id = UUID(current_user.id)
-    async with get_session_factory()() as session:
-        known = {str(key).casefold() for key in (await session.execute(select(Project.key))).scalars().all()}
-        unknown = sorted(set(keys) - known)
-        if unknown:
-            raise HTTPException(status_code=422, detail={"unknown_project_keys": unknown})
-        value = ", ".join(keys)
-        await FactStore(session).upsert_with_supersede(FactDTO(
-            scope=FactScope.USER, subject=PROJECT_SCOPE_SUBJECT, value=value,
-            source=FactSource.MANUAL, owner_type="user", owner_id=user_id, kind="project_scope",
-            metadata={"project_keys": keys}, status=FactStatus.CONFIRMED, confidence=1.0,
-            support_count=1, user_visible=True,
-        ))
-        await session.commit()
+    user = await AsyncUsersRepository(session).get_by_id(current_user.id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        await MemoryScopePreferencesService(session).update_user(user.id, [
+            *(key for key in user.memory_scope_keys if key.startswith("team.")),
+            *(f"project.{key}" for key in keys),
+        ])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ProjectScopeResponse(project_keys=keys)
 
 

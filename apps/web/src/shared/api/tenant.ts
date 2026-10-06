@@ -5,6 +5,7 @@ import { apiRequest } from './http';
 
 // Types
 export interface Tenant {
+  memory_scope_keys: string[];
   id: string;
   name: string;
   description?: string;
@@ -22,6 +23,7 @@ export interface Tenant {
 }
 
 export interface TenantCreate {
+  memory_scope_keys?: string[];
   name: string;
   description?: string;
   is_active?: boolean;
@@ -31,6 +33,7 @@ export interface TenantCreate {
 }
 
 export interface TenantUpdate {
+  memory_scope_keys?: string[];
   name?: string;
   description?: string;
   is_active?: boolean;

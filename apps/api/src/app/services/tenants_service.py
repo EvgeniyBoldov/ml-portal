@@ -10,6 +10,7 @@ from app.models.model_registry import ModelType, ModelStatus
 from app.core.logging import get_logger
 from app.services.rbac_cleanup_service import RbacCleanupService
 from app.services.tenant_migration_service import TenantMigrationService
+from app.services.memory_scope_preferences_service import MemoryScopePreferencesService
 import uuid
 
 logger = get_logger(__name__)
@@ -56,6 +57,9 @@ class AsyncTenantsService:
         # Validate required fields
         if not tenant_data.get("name"):
             raise ValueError("Tenant name is required")
+        tenant_data["memory_scope_keys"] = await MemoryScopePreferencesService(self.session).validate_keys(
+            tenant_data.get("memory_scope_keys", []),
+        )
         
         # Map extra_embed_model to embedding_model_alias for backward compatibility
         if "extra_embed_model" in tenant_data:
@@ -77,6 +81,8 @@ class AsyncTenantsService:
         if getattr(existing, "lifecycle_status", "active") != "active":
             raise ValueError("deprecated")
         prev_alias = getattr(existing, "embedding_model_alias", None) if existing else None
+        if "memory_scope_keys" in update_data:
+            update_data["memory_scope_keys"] = await MemoryScopePreferencesService(self.session).validate_keys(update_data["memory_scope_keys"])
         default_flag = update_data.pop("is_default", None)
 
         # Map extra_embed_model to embedding_model_alias for backward compatibility
@@ -213,6 +219,7 @@ class AsyncTenantsService:
 
         return {
             "id": str(tenant.id),
+            "memory_scope_keys": list(getattr(tenant, "memory_scope_keys", None) or []),
             "name": tenant.name,
             "description": tenant.description,
             "is_active": tenant.is_active,

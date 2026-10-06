@@ -170,3 +170,59 @@ async def test_empty_mechanical_lookup_cannot_ground_collection_access_answer() 
 def test_collection_concept_question_does_not_require_inventory() -> None:
     assert not TurnPreflight._needs_collection_inventory("Что такое коллекция документов?")
     assert TurnPreflight._needs_collection_inventory("Which collections can I access?")
+
+
+@pytest.mark.asyncio
+async def test_invalid_user_memory_scope_hands_original_request_to_planner(monkeypatch) -> None:
+    from app.runtime import turn_preflight
+
+    preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
+    preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(
+        value=TurnPreflightDecision.model_validate({
+            "route": "planner", "scope_selection": {"keys": ["user"]},
+            "task_brief": {
+                "goal": "покажи задачи в проекте NIMS которые на мне", "project_hints": ["NIMS"],
+                "scope_keys": ["user"], "direction": "Найти мои задачи", "expected_result": "Список задач",
+            },
+        }),
+    ))
+    monkeypatch.setattr(turn_preflight, "resolve_memory_scopes", AsyncMock(side_effect=ValueError("Unknown memory scope: user")))
+    result = await preflight.decide(
+        user_request="покажи задачи в проекте NIMS которые на мне", mechanical_lookup={},
+        project_context={"effective_scope_keys": ["team.ops"]},
+    )
+    assert result.route == "planner"
+    assert result.clarification is None
+    assert result.task_brief.project_hints == ["NIMS"]
+    assert result.task_brief.scope_keys == []
+    assert result.scope_selection.keys == []
+    assert result.scope_selection.mode == "inherit"
+
+
+@pytest.mark.asyncio
+async def test_unjustified_preflight_clarification_is_deferred_to_planner() -> None:
+    preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
+    preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(
+        value=TurnPreflightDecision.model_validate({
+            "route": "clarify", "clarification": {"question": "Какой скоуп?"},
+        }),
+    ))
+    result = await preflight.decide(user_request="Проверь статус проекта NIMS", mechanical_lookup={})
+    assert result.route == "planner"
+    assert result.task_brief.goal == "Проверь статус проекта NIMS"
+    assert "Какой скоуп?" in " ".join(result.task_brief.constraints)
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_clarification_can_remain_in_preflight() -> None:
+    preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
+    preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(
+        value=TurnPreflightDecision.model_validate({
+            "route": "clarify", "clarification": {
+                "question": "Какой из двух текстов сократить?",
+                "direct_answer_reason": "Оба текста уже во входе; после выбора нужно только сократить текст без поиска и действий.",
+            },
+        }),
+    ))
+    result = await preflight.decide(user_request="Сократи этот текст", mechanical_lookup={})
+    assert result.route == "clarify"

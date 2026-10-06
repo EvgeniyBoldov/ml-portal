@@ -7,6 +7,7 @@ from app.repositories.users_repo import AsyncUsersRepository
 from app.core.security import verify_password, hash_password
 from app.services.chats_service import ChatsService
 from app.services.rbac_cleanup_service import RbacCleanupService
+from app.services.memory_scope_preferences_service import MemoryScopePreferencesService
 from sqlalchemy import func, select
 from app.models.user import Users
 
@@ -32,7 +33,7 @@ class AsyncUsersService:
         """Get user by ID"""
         return await self.users_repo.get_by_id(user_id)
 
-    async def create_user(self, login: str, email: str, password: str, role: str = "reader", tenant_ids: List[str] = None):
+    async def create_user(self, login: str, email: str, password: str, role: str = "reader", tenant_ids: List[str] = None, memory_scope_keys: Optional[List[str]] = None):
         """Create a new user"""
         if tenant_ids is None:
             tenant_ids = []
@@ -48,6 +49,7 @@ class AsyncUsersService:
         
         # Hash password using argon2 (same as verify_password)
         password_hash = hash_password(password)
+        selected_scopes = await MemoryScopePreferencesService(self.users_repo.session).validate_keys(memory_scope_keys or [])
         
         # Create user
         user = await self.users_repo.create(
@@ -56,6 +58,7 @@ class AsyncUsersService:
             email=email,
             password_hash=password_hash,
             role=role,
+            memory_scope_keys=selected_scopes,
             is_active=True
         )
         
@@ -79,6 +82,9 @@ class AsyncUsersService:
             raise ValueError("User not found")
         if getattr(user, "lifecycle_status", "active") != "active":
             raise ValueError("deprecated")
+
+        if "memory_scope_keys" in user_data:
+            user.memory_scope_keys = await MemoryScopePreferencesService(self.users_repo.session).validate_keys(user_data["memory_scope_keys"])
         
         # Update fields
         if "email" in user_data:

@@ -6,6 +6,7 @@ import { apiRequest } from './http';
 
 // Types
 export interface User {
+  memory_scope_keys: string[];
   id: string;
   login: string;
   role: 'admin' | 'editor' | 'reader';
@@ -165,6 +166,7 @@ export type FactCompactorRoleUpdate = SystemLLMRoleUpdate;
 export type DocumentMemoryExtractorRoleUpdate = SystemLLMRoleUpdate;
 
 export interface UserCreate {
+  memory_scope_keys?: string[];
   login: string;
   email?: string;
   role: 'admin' | 'editor' | 'reader';
@@ -175,6 +177,7 @@ export interface UserCreate {
 }
 
 export interface UserUpdate {
+  memory_scope_keys?: string[];
   role?: 'admin' | 'editor' | 'reader';
   email?: string;
   is_active?: boolean;
@@ -266,6 +269,7 @@ export interface AuditFilters {
 }
 
 export interface Tenant {
+  memory_scope_keys: string[];
   id: string;
   name: string;
   description?: string;

@@ -5,8 +5,10 @@ from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 import uuid
+from app.schemas.memory_scope_preferences import MemoryScopeKeys
 
 class TenantBase(BaseModel):
+    memory_scope_keys: MemoryScopeKeys = Field(default_factory=list)
     name: str = Field(..., min_length=1, max_length=100, description="Tenant name")
     description: Optional[str] = Field(None, max_length=500, description="Tenant description")
     is_active: bool = Field(True, description="Whether tenant is active")
@@ -21,6 +23,7 @@ class TenantCreate(TenantBase):
     pass
 
 class TenantUpdate(BaseModel):
+    memory_scope_keys: MemoryScopeKeys = Field(default_factory=list)
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     is_active: Optional[bool] = None

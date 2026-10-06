@@ -5,6 +5,8 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@shared/api/http';
+import { qk } from '@/shared/api/keys';
+import { ProfileMemoryScopes } from '../components/ProfileMemoryScopes';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import Select from '@shared/ui/Select';
@@ -22,6 +24,8 @@ interface Profile {
   role: string;
   created_at: string;
   tenants: string[];
+  memory_scope_keys: string[];
+  tenant_memory_scope_keys: string[];
 }
 
 interface ApiToken {
@@ -118,7 +122,7 @@ export default function ProfilePage() {
 
   // Fetch profile
   const { data: profile, isLoading: profileLoading } = useQuery({
-    queryKey: ['profile'],
+    queryKey: qk.profile.detail(),
     queryFn: () => apiRequest<Profile>('/profile/me'),
   });
 
@@ -301,6 +305,10 @@ export default function ProfilePage() {
           </div>
         )}
       </section>
+
+      {profile && <section className={styles.section}>
+        <ProfileMemoryScopes scopeKeys={profile.memory_scope_keys ?? []} tenantScopeKeys={profile.tenant_memory_scope_keys ?? []} />
+      </section>}
 
       </>}
 

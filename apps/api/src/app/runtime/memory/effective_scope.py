@@ -21,7 +21,9 @@ class ScopeIdentity(BaseModel):
 
 
 class ScopeSelection(BaseModel):
-    keys: list[str] = Field(default_factory=list, max_length=60)
+    model_config = {"extra": "forbid"}
+    keys: list[str] = Field(default_factory=list, max_length=60,
+                           description="Concrete catalog identities team.* or project.* selected by the user. Empty inherits current focus. Never user, tenant, global, team.all or project.all.")
     mode: Literal["inherit", "replace"] = "inherit"
     mentioned_keys: list[str] = Field(default_factory=list, max_length=30)
     rationale: str = Field(default="", max_length=600)

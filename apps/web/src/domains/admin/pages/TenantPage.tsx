@@ -20,6 +20,7 @@ import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import type { Tenant, TenantCreate, TenantUpdate } from '@shared/api/tenant';
 import { CredentialsPanel, FactsPanel } from '@/shared/ui';
+import { MemoryScopePicker } from '@/shared/ui/MemoryScopePicker/MemoryScopePicker';
 
 type TenantFormData = Partial<TenantCreate & { is_default?: boolean }>;
 
@@ -97,6 +98,7 @@ export function TenantPage() {
     extra_embed_model: '',
     ocr: false,
     layout: false,
+    memory_scope_keys: [],
   });
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -117,6 +119,7 @@ export function TenantPage() {
         extra_embed_model: tenant.extra_embed_model || '',
         ocr: tenant.ocr || false,
         layout: tenant.layout || false,
+        memory_scope_keys: tenant.memory_scope_keys ?? [],
       });
     }
   }, [tenant]);
@@ -179,6 +182,7 @@ export function TenantPage() {
           extra_embed_model: tenant.extra_embed_model || '',
           ocr: tenant.ocr || false,
           layout: tenant.layout || false,
+          memory_scope_keys: tenant.memory_scope_keys ?? [],
         });
       }
       setSearchParams({});
@@ -280,6 +284,8 @@ export function TenantPage() {
             editable={true}
             onChange={handleFieldChange}
           />
+          <MemoryScopePicker value={formData.memory_scope_keys ?? []} onChange={(keys) => handleFieldChange('memory_scope_keys', keys)}
+            description="Начальный контекст для пользователей tenant-а. По умолчанию команды и проекты не выбраны." />
         </Tab>
       </EntityPageV2>
     );
@@ -349,6 +355,15 @@ export function TenantPage() {
             fields={META_FIELDS}
             data={metaData}
           />
+        </Tab>
+
+        <Tab title="Скоупы" layout="full" id="scopes" actions={buildEntityCrudActions({
+          mode, saving, lifecycleStatus: tenant?.lifecycle_status,
+          onEdit: handleEdit, onSave: handleSave, onCancel: handleCancel,
+        })}>
+          <MemoryScopePicker value={mode === 'edit' ? formData.memory_scope_keys ?? [] : tenant?.memory_scope_keys ?? []}
+            onChange={(keys) => handleFieldChange('memory_scope_keys', keys)} readOnly={mode !== 'edit'} disabled={saving}
+            description="Наследуются пользователями без собственного выбора. По умолчанию команды и проекты не выбраны." />
         </Tab>
 
         {!isNew && (

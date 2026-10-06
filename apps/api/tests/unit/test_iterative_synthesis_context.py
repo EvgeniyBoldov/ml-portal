@@ -3,6 +3,18 @@ from __future__ import annotations
 from app.runtime.synthesis_context import SynthesisContextBuilder
 
 
+def test_synthesis_receives_current_plan_focus_without_a_memory_search():
+    scope = {"keys": ["team.ops", "project.a"], "revision": 2}
+    context = SynthesisContextBuilder().build(plan={
+        "goal": "Найти задачи", "scope_context": scope,
+        "iterations": [{"id": "final", "synthesis_brief": {"user_question": "Задачи", "purpose": "Ответить"}}],
+        "memory_context": [{"type": "project_context", "scope_context": scope}],
+    }, iteration_id="final")
+    assert context["scope_context"] == scope
+    assert context["execution_context"]["team_keys"] == ["team.ops"]
+    assert context["execution_context"]["focused_project_keys"] == ["project.a"]
+
+
 def test_synthesis_uses_accepted_partial_output_and_keeps_unresolved_limitation() -> None:
     context = SynthesisContextBuilder().build(
         plan={

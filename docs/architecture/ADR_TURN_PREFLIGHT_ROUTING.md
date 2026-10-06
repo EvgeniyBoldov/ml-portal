@@ -10,6 +10,23 @@ Accepted — implemented.
 request router and normalizer, not an agent executor and not the existing
 technical `ExecutionPreflight` that prepares an already selected agent.
 
+Direct synthesis requires certainty that the answer can be prepared entirely
+from existing inputs. Possible execution, fresh data, checks, tools, artifact
+creation, or uncertainty that requires investigation route to planner. Missing
+parameters and unresolved external project names are handed to planner with the
+original request; they do not trigger a preliminary scope question. Planner has
+the richer capability/source context and owns execution-related clarification.
+Preflight `clarify` is limited to a future direct answer: its
+`direct_answer_reason` must explain why one user choice is sufficient and no
+retrieval, verification, tool or action will be needed. Without that justification,
+runtime forwards the request and proposed clarification to planner.
+
+The active role prompt is updated by migration `0182`, preserving model and
+call settings. Invalid/conflicting memory focus keys from a model also route to
+planner, retaining the previous focus. `user`/`tenant` identify fact owners and
+never become `team.*`/`project.*` focus identities. An external project name may
+remain in `task_brief.project_hints` without an entry in the memory scope catalog.
+
 ```text
 user message
   -> mechanical glossary/project lookup

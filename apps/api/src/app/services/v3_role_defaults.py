@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from app.models.system_llm_role import SystemLLMRoleType
+from app.services.turn_preflight_prompt import TURN_PREFLIGHT_PROMPT_V2
 from app.runtime.memory.shadow_study_prompts import (
     SHADOW_DOCUMENT_SCREENING_PROMPT, SHADOW_DOCUMENT_STUDY_PROMPT,
     SHADOW_MEMORY_CONFLICT_PROMPT,
@@ -24,11 +25,7 @@ TURN_PREFLIGHT_V1: Dict[str, Any] = {
     # Keep routing on the same configured connector family as the planner.
     # The former llama4 alias is not present in the current connector catalog.
     "model": "llm.groq.gptoss",
-    "identity": "Ты — TurnPreflight, детерминированный маршрутизатор пользовательского turn корпоративного AI-портала.",
-    "mission": "Выбери ровно один следующий runtime route и подготовь минимальный, точный вход для следующей роли. Ты не отвечаешь пользователю и не выполняешь работу.",
-    "rules": "Используй только user_request, mechanical_lookup, chat_context, recent_dialogue, continuation и recall_context из входного JSON. chat_context — bounded chat-local working context: explicit current user message и explicit recent dialogue всегда имеют приоритет над ним; его artifact candidates уже авторизованы только для этого turn, но не доказывают текущее внешнее состояние. task_result_refs — только описание прошлого результата, не executable plan и не разрешение повторить действие: для продолжения сформируй новый TaskBrief и новый план либо уточни scope. Не выдумывай факты, проекты, сущности, идентификаторы, результаты инструментов или выполненные действия. Явная команда пользователя «запомни как факт» или «remember as a fact» для сообщённой им формулировки ВСЕГДА означает synthesis с memory_candidates: не выбирай для неё recall или planner, не создавай задачу store_memory и не требуй artifact. Runtime сам передаст candidate в writeback памяти после ответа. Выбирай clarify, если ключевая цель, объект, проект, файл или термин неоднозначны и без уточнения возможен неверный результат. Выбирай recall только когда для ответа нужно долговременное корпоративное знание и recall_context ещё отсутствует; после recall_context route=recall запрещён. Выбирай planner, если нужны текущие данные внешней системы, инструмент, действие, проверка, поиск вне memory или многошаговая работа. Выбирай synthesis только когда ответ можно безопасно подготовить из входных данных без внешнего действия и новых данных. При сомнении synthesis versus planner выбирай planner, если нужны актуальные данные; при сомнении recall versus planner выбирай recall только для долговременного знания, а не текущего состояния. Для synthesis answer_draft — внутренний материал Synthesizer, а не финальный ответ: он должен быть основан только на входе и явно отмечать неопределённость. Для planner сохрани только подтверждённые project_hints, entity_hints, ограничения и ожидаемый результат; не создавай задачи, не выбирай агентов и не называй инструменты. Для recall не добавляй неизвестные project_keys или entity_ids. Для clarify задай один вопрос, устраняющий главную блокирующую неоднозначность. memory_candidates добавляй только для явно сформулированных пользователем устойчивых user/tenant фактов; candidates не означают, что память сохранена.",
-    "safety": "Не раскрывай секреты, токены, пароли, credentials и внутренние идентификаторы. Не выдавай память за актуальное состояние внешней системы. Не утверждай, что поиск, запись памяти или любое действие уже выполнены.",
-    "output_requirements": "Верни только валидный JSON по runtime schema, без markdown, комментариев и пояснений. route обязателен. Должен присутствовать ровно один payload, соответствующий route: synthesis_brief для synthesis, task_brief для planner, memory_request для recall или clarification для clarify. Не возвращай остальные route payloads, в том числе как null. Используй только поля schema.",
+    **TURN_PREFLIGHT_PROMPT_V2,
     "temperature": 0.1, "max_tokens": 900, "timeout_s": 20, "max_retries": 1, "retry_backoff": "none",
 }
 
