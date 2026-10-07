@@ -265,6 +265,11 @@ class AgentToolRuntime(BaseRuntime):
                     )
             except Exception:
                 logger.exception("Could not load saved tool result catalog for run_id=%s", root_result_run_id)
+        # Runtime contracts are appended after rendering, including sandbox
+        # prompt overrides; agent-version instructions cannot replace them.
+        terminal_contract_prompt = ctx.extra.get("task_completion_prompt")
+        if isinstance(terminal_contract_prompt, str) and terminal_contract_prompt.strip():
+            system_prompt += "\n\n" + terminal_contract_prompt
         run_id_override: Optional[UUID] = None
         raw_run_id_override = ctx.extra.get("lifecycle_agent_execution_id")
         if raw_run_id_override is not None:
@@ -832,9 +837,12 @@ class AgentToolRuntime(BaseRuntime):
                             "role": "user",
                             "content": (
                                 "The task declaration failed validation:\n" + "\n".join(terminal_errors)
-                                + "\nCorrect these fields using the supplied contract and observed tool results. "
-                                "Return one JSON object. Use an available read operation only if evidence is missing. "
-                                "Do not repeat completed external actions to repair JSON or references."
+                                + "\nИсправь именно указанные поля по обязательному runtime-контракту. "
+                                "Верни весь JSON-объект без Markdown. Каждый outputs.<key> — слот "
+                                "с kind и value либо refs; данные результата находятся внутри value. "
+                                "Сохрани ключи expected_outputs и уже полученные данные. "
+                                "Выполни доступную операцию чтения, только если недостаёт доказательств. "
+                                "Не повторяй завершённые внешние действия ради исправления JSON или ссылок."
                             ),
                         })
                         # A changed prompt is a new decision, not a transport

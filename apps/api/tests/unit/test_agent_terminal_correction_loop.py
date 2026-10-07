@@ -11,6 +11,7 @@ from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.events import RuntimeEventType
 from app.runtime.orchestrator_contracts import TaskRequest
+from app.runtime.task_completion_prompt import build_task_completion_prompt
 from app.services.runtime_event_logger import RuntimeLoggingLevel
 
 
@@ -34,15 +35,16 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
         PolicyLimits(max_llm_calls=5, max_retries=2), GenerationParams(model="test"),
         {"native_tool_calling": native}, SimpleNamespace(sources={})))
     runtime.logging_resolver.resolve_logging_level = AsyncMock(return_value=RuntimeLoggingLevel.NONE)
-    runtime.prompt_assembler.assemble = Mock(return_value=SimpleNamespace(system_prompt="Task contract"))
+    runtime.prompt_assembler.assemble = Mock(return_value=SimpleNamespace(system_prompt="Sandbox override: answer in prose"))
     session = SimpleNamespace(run_id=uuid4(), start=AsyncMock(), record_event=AsyncMock(), finish=AsyncMock())
     runtime._create_run_session = Mock(return_value=session)
     monkeypatch.setattr(agent_module, "serialize_published_operations", lambda operations: [])
     monkeypatch.setattr(agent_module, "serialize_published_collections", lambda *args: [])
     monkeypatch.setattr(agent_module, "build_tools_payload", lambda operations: [{"type": "function"}])
     monkeypatch.setattr(agent_module, "parse_native_tool_calls", lambda response: None)
-    deps = SimpleNamespace(sandbox_overrides={}, resolved_operations=[])
+    deps = SimpleNamespace(sandbox_overrides={"prompt": "Sandbox override: answer in prose"}, resolved_operations=[])
     ctx = SimpleNamespace(extra={"task_completion_response_format": {"type": "json_schema"},
+                                 "task_completion_prompt": build_task_completion_prompt(task),
                                  "task_completion_validator": lambda raw: AgentExecutor._terminal_validation_errors(
                                      raw, task=task, verified={})},
                           get_runtime_deps=lambda: deps, set_runtime_deps=lambda value: None, log_intent=AsyncMock())
@@ -61,3 +63,11 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
         assert all(call.kwargs["response_format"] is None for call in calls.await_args_list)
     requests = [event.data for event in events if event.type == RuntimeEventType.LLM_REQUEST]
     assert len({event["llm_call_id"] for event in requests}) == 3
+    for event in requests:
+        system = event["messages"][0]["content"]
+        assert system.startswith("Sandbox override: answer in prose")
+        assert system.count("RUNTIME TASK COMPLETION DECLARATION") == 1
+        assert '"list"' in system
+        assert '"kind": "value"' in system
+    assert any("внутрь value" in message["content"] for event in requests
+               for message in event["messages"] if message["role"] == "user")

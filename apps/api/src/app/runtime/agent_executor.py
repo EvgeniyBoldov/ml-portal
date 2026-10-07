@@ -44,7 +44,7 @@ from app.runtime.orchestrator_contracts import (
     task_completion_json_schema,
 )
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
-from app.runtime.task_value_normalization import TASK_COMPLETION_RULES
+from app.runtime.task_completion_prompt import build_task_completion_prompt, output_slot_example
 from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.error_payloads import build_debug_payload
 from app.agents.runtime.published_capabilities import (
@@ -350,11 +350,6 @@ class AgentExecutor:
         }
         ledger_start = len(state.tool_ledger.entries)
 
-        # Published agent versions may still contain a legacy output-format
-        # instruction.  Add the runtime contract, but make it conditional on
-        # the agent deciding that this is its terminal turn.
-        sub_request.prompt = self._with_terminal_contract_prompt(sub_request.prompt, task)
-
         # Do not spend LLM calls when planner chose CALL_AGENT,
         # but the sub-agent ended up with zero executable operations.
         if not sub_request.resolved_operations and task.freshness_policy.value == "allow_memory":
@@ -397,6 +392,9 @@ class AgentExecutor:
             )
             return self._terminal_validation_errors(raw, task=task, verified=verified)
 
+        # Apply after prompt rendering so version/sandbox overrides cannot
+        # replace the mandatory terminal task contract.
+        ctx.extra["task_completion_prompt"] = build_task_completion_prompt(task)
         ctx.extra["task_completion_validator"] = validate_terminal
 
         try:
@@ -506,6 +504,7 @@ class AgentExecutor:
 
         finally:
             ctx.extra.pop("task_completion_validator", None)
+            ctx.extra.pop("task_completion_prompt", None)
 
         # 4. The terminal response is the sole task contract.  A second LLM
         # commit pass would make a valid response non-authoritative and add an
@@ -960,31 +959,7 @@ class AgentExecutor:
 
     @staticmethod
     def _with_terminal_contract_prompt(prompt: str, task: TaskRequest) -> str:
-        expected = json.dumps(
-            [item.model_dump(mode="json", by_alias=True) for item in task.expected_outputs],
-            ensure_ascii=False,
-        )
-        return "\n\n".join(part for part in [
-            str(prompt or "").strip(),
-            "# RUNTIME TASK COMPLETION DECLARATION\n"
-            "When you decide the task is complete, this contract overrides any conflicting output format and you must return one strict JSON object only. "
-            "Before that, use native tool calls whenever you decide they are needed; tool calls are not terminal declarations. "
-            "The runtime, not the agent, executes tools and owns their evidence and artifacts. "
-            "outputs is a JSON object keyed by expected output key. Each value is exactly one typed slot: "
-            "{kind:'value',value:<schema-validated value>}, {kind:'evidence',refs:[result_ref]}, or "
-            "{kind:'artifact',refs:[artifact_ref]}. For task_result outputs, return a normalized value derived from observed tool data; "
-            "If the task has any clipped stored tool result (inline_complete=false), every non-empty output array requires coverage with result_id and query_call_ids. For SQL-derived arrays, cite the saved SQL result_id and SQL query_call_id. "
-            "evidence/artifact refs are valid only for the corresponding fulfillment. "
-            "Use completion=fulfilled only when required outputs are present; completion=needs only with non-empty needs; completion=unfulfillable only with limitation. "
-            f"Expected outputs (including required/schema): {expected}. "
-            "Your declaration must conform to this JSON Schema: "
-            f"{json.dumps(task_completion_json_schema(task), ensure_ascii=False)}.",
-            TASK_COMPLETION_RULES,
-            "Runtime evidence requirements: " + json.dumps({
-                "freshness_policy": task.freshness_policy.value,
-                "required_retrieval_operations": sorted(TaskAttemptResultReducer._required_retrieval_operations(task)),
-            }, ensure_ascii=False) + ". require_retrieval requires a successful retrieval receipt in this task; required operations must each have an observed successful receipt.",
-        ] if part)
+        return "\n\n".join(part for part in [str(prompt or "").strip(), build_task_completion_prompt(task)] if part)
 
     @staticmethod
     def _terminal_validation_errors(raw: str, *, task: TaskRequest, verified: Dict[str, Any]) -> list[str]:
@@ -993,8 +968,22 @@ class AgentExecutor:
         try:
             declaration = parse_task_completion_declaration(AgentExecutor._unwrap_terminal_json_fence(raw))
         except ValidationError as exc:
-            return [".".join(str(part) for part in error["loc"]) + ": " + error["msg"]
-                    for error in exc.errors(include_input=False)[:10]]
+            errors = []
+            for error in exc.errors(include_input=False)[:10]:
+                loc = error["loc"]
+                path = ".".join(str(part) for part in loc)
+                message = error["msg"]
+                if len(loc) == 2 and loc[0] == "outputs" and error["type"] in {
+                    "union_tag_not_found", "union_tag_invalid", "model_attributes_type",
+                }:
+                    shape = json.dumps(output_slot_example(task, str(loc[1])), ensure_ascii=False)
+                    message += (
+                        f". Исправь слот {path}: ожидаемая форма {shape}. "
+                        "Для kind=value перенеси весь результат внутрь value; не удаляй данные "
+                        "и не переименовывай ключ output. Подставь реальные данные вместо placeholder."
+                    )
+                errors.append(f"{path}: {message}")
+            return errors
         except ValueError as exc:
             return [str(exc)]
         result = TaskAttemptResultReducer().reduce(request=task, declaration=declaration, verified=verified)

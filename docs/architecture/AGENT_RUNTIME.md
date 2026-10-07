@@ -192,6 +192,14 @@ format and conditional constraints that grammar backends may reject. The full
 schema remains in the prompt; local Pydantic validation and the result reducer
 enforce nonblank strings, completion rules, output values and evidence.
 Terminal corrections retain native tools so missing evidence can be retrieved.
+The backend appends a mandatory terminal contract after system prompt
+assembly, including agent-version and sandbox prompt overrides. It describes
+the `kind`/`value` or `kind`/`refs` slots, completion modes, evidence and coverage
+requirements, and includes a structural example using this task's output keys
+and fulfillment modes. The full JSON Schema is still generated from Pydantic;
+agent prompts in Admin do not need to duplicate this contract. Slot validation
+errors include the expected wrapper and instructions to preserve the result
+inside `value`, rather than only a discriminator error.
 Corrections are bounded by max_retries (at least one correction), as well as
 the existing LLM-call and wall-time budgets, and each changed prompt receives
 a new LLM-call identity. Transport retries retain the original identity.
