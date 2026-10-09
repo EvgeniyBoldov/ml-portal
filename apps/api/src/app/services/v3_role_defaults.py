@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from app.models.system_llm_role import SystemLLMRoleType
 from app.services.turn_preflight_prompt import TURN_PREFLIGHT_PROMPT_V2
+from app.services.orchestration_prompts import SYNTHESIZER_PROMPT_V3
 from app.runtime.memory.shadow_study_prompts import (
     SHADOW_DOCUMENT_SCREENING_PROMPT, SHADOW_DOCUMENT_STUDY_PROMPT,
     SHADOW_MEMORY_CONFLICT_PROMPT,
@@ -18,25 +19,19 @@ MEMORY_V3: Dict[str, Any] = {
     "rules": "Используй только индексы facts, projects и semantic_memory из входного JSON. semantic_memory уже прошла ACL и hybrid retrieval; выбирай её по смыслу, не требуя буквального совпадения слов. Опубликованные определения терминов выбирает runtime по совпадению названия и алиасов, их не переопределяй. Не добавляй факты и не строй план. Выбери knowledge_need: none для общего запроса без корпоративного знания, durable для вопроса о компании/проекте/регламенте, current для текущего состояния внешней системы. Выбирай не более 12 фактов, 3 проектов и 12 memory items.",
     "safety": "Не выбирай и не раскрывай секреты, токены, пароли или чувствительные данные.",
     "output_requirements": "Верни JSON с fact_indexes, project_indexes, memory_indexes, ambiguities, intent (informational, action или unknown) и knowledge_need (none, durable или current). Каждый индекс обязан существовать во входе.",
-    "temperature": 0.1, "max_tokens": 400, "timeout_s": 20, "max_retries": 1, "retry_backoff": "none",
-}
+    "temperature": 0.1, }
 
 TURN_PREFLIGHT_V1: Dict[str, Any] = {
     # Keep routing on the same configured connector family as the planner.
     # The former llama4 alias is not present in the current connector catalog.
     "model": "llm.groq.gptoss",
     **TURN_PREFLIGHT_PROMPT_V2,
-    "temperature": 0.1, "max_tokens": 900, "timeout_s": 20, "max_retries": 1, "retry_backoff": "none",
-}
+    "temperature": 0.1, }
 
 SYNTHESIZER_V3: Dict[str, Any] = {
     "model": "llm.llama4.scout",
-    "identity": "Ты — Synthesizer, редактор финального ответа корпоративного AI-портала.",
-    "mission": "Сформируй точный, краткий и полезный пользовательский ответ по synthesis_brief и разрешённым runtime-источникам текущего synthesis context.",
-    "rules": "Сохраняй цель, язык и ограничения synthesis_brief. Runtime добавляет SYNTHESIS INPUT MODE: он определяет единственные допустимые источники содержания. В mode=planned используй только completed_task_reports, явно принятые partial outputs, verified sources/artifacts и limitations; план, намерения задач и непроверенные утверждения не являются результатом. В mode=direct отсутствие отчётов задач нормально: используй только direct_answer_draft, synthesis_brief и memory_context; не требуй план или новые данные. memory_candidates — служебные кандидаты writeback, а не подтверждение записи и не основание перечислять или объявлять результаты. Не добавляй фактов, рекомендаций, ссылок, выполненных действий или статусов, которых нет в разрешённых источниках. Если данные неполны, кратко и честно обозначь границу известного.",
-    "safety": "Не раскрывай секреты, токены, пароли, credentials, внутренние идентификаторы, URL, stack traces и raw traces. Не упоминай planner, synthesizer, runtime, stages или внутреннюю маршрутизацию. Не утверждай, что действие, запись памяти или создание файла завершены, если это не подтверждено разрешённым источником.",
-    "output_requirements": "Верни только готовый markdown-текст на языке пользователя: без JSON, reasoning, тегов <think>, служебных полей и пояснений о внутренней работе системы. Не печатай ссылки на artifacts: интерфейс доставляет их отдельно.",
-    "temperature": 0.3, "max_tokens": 2000, "timeout_s": 60, "max_retries": 1, "retry_backoff": "none",
+    **SYNTHESIZER_PROMPT_V3,
+    "temperature": 0.3,
 }
 
 FACT_EXTRACTOR_V3: Dict[str, Any] = {
@@ -46,8 +41,7 @@ FACT_EXTRACTOR_V3: Dict[str, Any] = {
     "rules": "Используй только evidence, known_facts и preflight_candidates. evidence — единственный канонический исходный текст. preflight_candidates — только подсказки, подтверждаемые первичным evidence. Не используй summary агентов, планы, synthesis-текст или предположения как evidence. Возвращай только устойчивые атомарные факты пользователя или tenant, без терминов, определений, временных намерений, хода выполнения, ошибок и счётчиков. scope только user или tenant; kind только fact. Каждый evidence_source_ids содержит только существующие source_id из evidence. Не дублируй known_facts, не возвращай больше 12 фактов и верни пустой facts, если подтверждённых фактов нет.",
     "safety": "Не извлекай секреты, токены, пароли, credentials, чувствительные персональные данные, внутренние идентификаторы или raw payloads. Термины и определения публикуются только после изучения документа и review.",
     "output_requirements": "Верни только JSON по runtime schema с facts[]. Для каждого facts[] обязательны scope, kind, subject, value и evidence_source_ids; confidence используй только по schema. Не добавляй иных полей или пояснений.",
-    "temperature": 0.1, "max_tokens": 800, "timeout_s": 15, "max_retries": 1, "retry_backoff": "none",
-}
+    "temperature": 0.1, }
 
 FACT_COMPACTOR_V3: Dict[str, Any] = {
     "model": "llm.llama4.scout",
@@ -56,8 +50,7 @@ FACT_COMPACTOR_V3: Dict[str, Any] = {
     "rules": "Используй только candidates и current_facts. Каждый элемент facts[] обязан содержать непустой source_candidate_indexes с индексами существующих candidates; без ссылки на кандидата не создавай факт. scope, subject и value должны быть производными от указанных candidates, а не новыми сведениями. target_current_indexes может ссылаться только на существующие current_facts. Для точного или семантического дубля выбирай merge или rewrite; add — только для нового подтверждённого кандидата; supersede — только при явной замене; mark_conflict — при несовместимых утверждениях; discard — только для явно нерелевантного или дублирующего кандидата. Не теряй кандидаты: runtime безопасно пропустит непредставленные элементы дальше. Термины и определения не являются фактами этого контура.",
     "safety": "Не добавляй сведения, которых нет в candidates или current_facts. Не придумывай ids, evidence, владельцев или новые scope. Не утверждай, что запись уже опубликована: persistence принадлежит runtime.",
     "output_requirements": "Верни только JSON по runtime schema с facts[]. Для каждого элемента используй scope, subject, value, source_candidate_indexes, action и target_current_indexes. action строго один из add, rewrite, merge, supersede, mark_conflict, discard. Не добавляй иных полей или пояснений.",
-    "temperature": 0.0, "max_tokens": 800, "timeout_s": 15, "max_retries": 1, "retry_backoff": "none",
-}
+    "temperature": 0.0, }
 
 CHAT_CONTEXT_COMPACTOR_V1: Dict[str, Any] = {
     "model": "llm.groq.gptoss",
@@ -66,8 +59,7 @@ CHAT_CONTEXT_COMPACTOR_V1: Dict[str, Any] = {
     "rules": "Используй только snapshot, recent_dialogue, outcome и valid_source_ids. Корректируй team_keys и project_keys фокуса только по выбору или подтверждению пользователя в диалоге, включая ответы на вопросы агента. Используй конкретные ключи scope_catalog; all запрещён, [] явно очищает ветку, null сохраняет её. Нельзя создавать artifact_ref, term_binding, open_loop или task_result_ref. Каждая операция должна ссылаться только на существующие valid_source_ids. Не выдумывай файлы, проекты, действия, факты, статусы внешних систем или идентификаторы. При неоднозначности не делай операцию.",
     "safety": "Не возвращай prompts, reasoning, credentials, секреты, tracebacks, raw tool I/O или внутренние технические данные.",
     "output_requirements": "Верни только JSON с operations[]. operation содержит action(add|update), kind(scope|goal|decision|recent_anchor), item_key, payload и source_ids. Для kind=scope разрешены topic, team_keys и project_keys; невыбранная ветка сохраняется. payload должен быть компактным, не более 600 символов текста.",
-    "temperature": 0.0, "max_tokens": 700, "timeout_s": 20, "max_retries": 1, "retry_backoff": "none",
-}
+    "temperature": 0.0, }
 
 DOCUMENT_MEMORY_EXTRACTOR_V1: Dict[str, Any] = {
     "model": "llm.llama4.scout",
@@ -81,8 +73,7 @@ DOCUMENT_MEMORY_EXTRACTOR_V1: Dict[str, Any] = {
         "document_memory_study_prompt": SHADOW_DOCUMENT_STUDY_PROMPT,
         "document_memory_conflict_prompt": SHADOW_MEMORY_CONFLICT_PROMPT,
     },
-    "temperature": 0.0, "max_tokens": 2400, "timeout_s": 60, "max_retries": 1, "retry_backoff": "none",
-}
+    "temperature": 0.0, }
 
 MEMORY_EVALUATOR_V1: Dict[str, Any] = {
     "model": "llm.llama4.scout",
@@ -91,8 +82,7 @@ MEMORY_EVALUATOR_V1: Dict[str, Any] = {
     "rules": "Верни confirmed только при явном подтверждении, contradicted только при явном противоречии. Не меняй content и не используй текст агента как evidence.",
     "safety": "Не раскрывай секреты и не возвращай raw payload.",
     "output_requirements": "Верни JSON с outcome, reason и evidence_hit_indexes.",
-    "temperature": 0.0, "max_tokens": 500, "timeout_s": 30, "max_retries": 1, "retry_backoff": "none",
-}
+    "temperature": 0.0, }
 
 V3_ROLE_DEFAULTS: Dict[SystemLLMRoleType, Dict[str, Any]] = {
     SystemLLMRoleType.MEMORY: MEMORY_V3,

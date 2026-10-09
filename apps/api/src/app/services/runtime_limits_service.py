@@ -12,6 +12,7 @@ from app.models.execution_limit import (
     ActorExecutionLimitScope,
     RuntimeExecutionLimits,
 )
+from app.models.model_registry import Model, ModelType
 
 
 GLOBAL = "global"
@@ -47,9 +48,27 @@ class ResolvedActorLimits:
     sources: Mapping[str, str]
 
 
+@dataclass(frozen=True)
+class ModelCallLimits:
+    request_timeout_s: int = 30
+    max_retries: int = 2
+
+
 class RuntimeLimitsService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def resolve_model(self, selector: Optional[str]) -> ModelCallLimits:
+        query = select(Model).where(Model.type == ModelType.LLM_CHAT, Model.deleted_at.is_(None), Model.enabled.is_(True))
+        if selector:
+            query = query.where((Model.alias == selector) | (Model.provider_model_name == selector))
+        row = (await self.session.execute(query.order_by(Model.default_for_type.desc(), Model.updated_at.desc()).limit(1))).scalar_one_or_none()
+        if row is None:
+            return ModelCallLimits()
+        return ModelCallLimits(
+            request_timeout_s=int(row.request_timeout_s or 30),
+            max_retries=int(row.max_retries if row.max_retries is not None else 2),
+        )
 
     async def resolve_runtime(self, override: Optional[dict] = None) -> RuntimeLimits:
         row = await self._runtime_row()

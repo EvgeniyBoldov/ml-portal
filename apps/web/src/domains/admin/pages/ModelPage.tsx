@@ -156,10 +156,10 @@ const PARAMS_FIELDS: FieldConfig[] = [
     options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
   },
   {
-    key: 'max_tokens',
+    key: 'context_window_tokens',
     type: 'number',
-    label: 'Макс. токенов',
-    placeholder: '512',
+    label: 'Контекстное окно (токены)',
+    placeholder: '16384',
   },
   { key: 'request_timeout_s', type: 'number', label: 'Timeout запроса (сек.)', placeholder: '30' },
   { key: 'max_retries', type: 'number', label: 'Повторы запроса', placeholder: '2' },
@@ -217,7 +217,7 @@ const META_FIELDS: FieldConfig[] = [
 
 export function ModelPage() {
   const [vectorDim, setVectorDim] = useState<string>('');
-  const [maxTokens, setMaxTokens] = useState<string>('');
+  const [contextWindow, setContextWindow] = useState<string>('');
   const [requestTimeout, setRequestTimeout] = useState<string>('');
   const [maxRetries, setMaxRetries] = useState<string>('');
   const [probingInfo, setProbingInfo] = useState(false);
@@ -272,33 +272,21 @@ export function ModelPage() {
       if (!String(data.provider_model_name || '').trim()) return 'Название модели обязательно';
       if (!String(data.model_version || '').trim()) return 'Версия модели обязательна';
       if (!String(data.type || '').trim()) return 'Тип модели обязателен';
-      if (manifestRaw.max_tokens != null && maxTokens) {
-        const limit = Number(manifestRaw.max_tokens);
-        const current = Number(maxTokens);
-        if (Number.isFinite(limit) && Number.isFinite(current) && current > limit) {
-          return `Макс. токенов не должен превышать ${limit}`;
-        }
-      }
+
       return null;
     },
     validateUpdate: (data) => {
       if (!String(data.provider_model_name || '').trim()) return 'Название модели обязательно';
       if (!String(data.model_version || '').trim()) return 'Версия модели обязательна';
       if (!String(data.type || '').trim()) return 'Тип модели обязателен';
-      if (manifestRaw.max_tokens != null && maxTokens) {
-        const limit = Number(manifestRaw.max_tokens);
-        const current = Number(maxTokens);
-        if (Number.isFinite(limit) && Number.isFinite(current) && current > limit) {
-          return `Макс. токенов не должен превышать ${limit}`;
-        }
-      }
+
       return null;
     },
     getInitialFormData: (m) => {
       if (m?.extra_config?.vector_dim) {
         setVectorDim(String(m.extra_config.vector_dim));
       }
-      setMaxTokens(String(m?.max_output_tokens ?? m?.extra_config?.max_tokens ?? ''));
+      setContextWindow(String(m?.context_window_tokens ?? 16384));
       setRequestTimeout(String(m?.request_timeout_s ?? ''));
       setMaxRetries(String(m?.max_retries ?? ''));
       const connectorRaw = m?.connector ?? 'openai_http';
@@ -339,7 +327,7 @@ export function ModelPage() {
         model_version: data.model_version || undefined,
         description: data.description || undefined,
         extra_config: Object.keys(extra_config).length > 0 ? extra_config : undefined,
-        ...(maxTokens ? { max_output_tokens: parseInt(maxTokens, 10) } : {}),
+        ...(contextWindow ? { context_window_tokens: parseInt(contextWindow, 10) } : {}),
         ...(requestTimeout ? { request_timeout_s: parseInt(requestTimeout, 10) } : {}),
         ...(maxRetries ? { max_retries: parseInt(maxRetries, 10) } : {}),
       } as ModelCreate;
@@ -365,7 +353,7 @@ export function ModelPage() {
         default_for_type: data.default_for_type,
         model_version: data.model_version,
         description: data.description,
-        ...(maxTokens ? { max_output_tokens: parseInt(maxTokens, 10) } : {}),
+        ...(contextWindow ? { context_window_tokens: parseInt(contextWindow, 10) } : {}),
         ...(requestTimeout ? { request_timeout_s: parseInt(requestTimeout, 10) } : {}),
         ...(maxRetries ? { max_retries: parseInt(maxRetries, 10) } : {}),
         ...(data.type === 'embedding' ? { extra_config } : {}),
@@ -427,7 +415,7 @@ export function ModelPage() {
     provider_model_name: blockData.provider_model_name,
     model_version: blockData.model_version,
     type: blockData.type,
-    max_tokens: maxTokens,
+    context_window_tokens: contextWindow,
     request_timeout_s: requestTimeout,
     max_retries: maxRetries,
     vector_dim: vectorDim,
@@ -488,11 +476,10 @@ export function ModelPage() {
       return f;
     });
 
-  const hasManifestMaxTokens = manifestRaw.max_tokens != null || !!maxTokens;
   const currentModelType = String(isEditable ? formData.type : (model?.type || viewData.type || ''));
   const paramsFields = PARAMS_FIELDS
     .filter((f) => {
-      if (f.key === 'max_tokens') return hasManifestMaxTokens && currentModelType !== 'reranker';
+      if (f.key === 'context_window_tokens') return currentModelType === 'llm_chat';
       if (f.key === 'vector_dim') return isEmbedding;
       return true;
     })
@@ -503,8 +490,8 @@ export function ModelPage() {
     if (f.key === 'type' && isLocalConnector) {
       return { ...f, editable: false, description: 'Определяется автоматически из metadata модели' };
     }
-    if (f.key === 'max_tokens' && manifestRaw.max_tokens != null) {
-      return { ...f, description: `Лимит по манифесту: ${String(manifestRaw.max_tokens)}` };
+    if (f.key === 'context_window_tokens' && manifestRaw.context_window_tokens != null) {
+      return { ...f, description: `Лимит по манифесту: ${String(manifestRaw.context_window_tokens)}` };
     }
     return f;
   });
@@ -552,9 +539,9 @@ export function ModelPage() {
       const raw = (info.raw || {}) as Record<string, unknown>;
       setManifestRaw(raw);
       const vector = raw.dimensions;
-      const maxTok = raw.max_tokens;
+      const maxTok = raw.context_window_tokens;
       if (typeof vector === 'number' && Number.isFinite(vector)) setVectorDim(String(vector));
-      if (typeof maxTok === 'number' && Number.isFinite(maxTok)) setMaxTokens(String(maxTok));
+      if (typeof maxTok === 'number' && Number.isFinite(maxTok)) setContextWindow(String(maxTok));
       showToast('Проверка выполнена', 'success');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Не удалось выполнить проверку', 'error');
@@ -624,7 +611,7 @@ export function ModelPage() {
             data={paramsData}
             editable
             onChange={(key, value) => {
-              if (key === 'max_tokens') setMaxTokens(String(value ?? ''));
+              if (key === 'context_window_tokens') setContextWindow(String(value ?? ''));
               else if (key === 'request_timeout_s') setRequestTimeout(String(value ?? ''));
               else if (key === 'max_retries') setMaxRetries(String(value ?? ''));
               else if (key === 'vector_dim') setVectorDim(String(value ?? ''));
@@ -728,7 +715,7 @@ export function ModelPage() {
             data={paramsData}
             editable={isEditable}
             onChange={(key, value) => {
-              if (key === 'max_tokens') setMaxTokens(String(value ?? ''));
+              if (key === 'context_window_tokens') setContextWindow(String(value ?? ''));
               else if (key === 'request_timeout_s') setRequestTimeout(String(value ?? ''));
               else if (key === 'max_retries') setMaxRetries(String(value ?? ''));
               else if (key === 'vector_dim') setVectorDim(String(value ?? ''));

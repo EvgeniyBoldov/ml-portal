@@ -11,7 +11,6 @@ class AnalyzeRunRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=1000, description="Analysis prompt")
     model: Optional[str] = Field(None, description="Model to use for analysis")
     temperature: Optional[float] = Field(0.7, ge=0.0, le=2.0, description="Temperature for generation")
-    max_tokens: Optional[int] = Field(1000, ge=1, le=4000, description="Maximum tokens to generate")
 
 class AnalyzeRunResponse(BaseModel):
     """Response schema for analyze run"""

@@ -71,7 +71,6 @@ def build_prompt_operation_description(
     op: "ResolvedOperation",
     *,
     summary: Optional["PublishedOperationSummary"] = None,
-    max_chars: int = 512,
 ) -> str:
     title = _text(getattr(summary, "title", None)) or _text(getattr(op, "name", None)) or _text(getattr(op, "operation_slug", None))
     collection_type = _text(getattr(summary, "collection_type", None))
@@ -82,8 +81,6 @@ def build_prompt_operation_description(
     if getattr(op, "scope", "collection") == "collection":
         type_note = f" ({collection_type})" if collection_type else ""
         parts.append(f"requires collection_slug target{type_note}")
-    # Put execution guidance before the provider's often lengthy description,
-    # so the character budget cannot silently drop the important caveats.
     parts.extend(_build_usage_notes(op))
     if base_description:
         parts.append(base_description)
@@ -93,10 +90,7 @@ def build_prompt_operation_description(
     argument_summary = _build_argument_summary(op)
     if argument_summary:
         parts.append(argument_summary)
-    rendered = " | ".join(part for part in parts if part)
-    if len(rendered) > max_chars:
-        rendered = rendered[:max_chars].rstrip()
-    return rendered
+    return " | ".join(part for part in parts if part)
 
 
 def _build_usage_notes(op: "ResolvedOperation") -> List[str]:

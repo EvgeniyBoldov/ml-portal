@@ -13,7 +13,6 @@ class EntityLimits:
     agent_runs: Optional[int] = None
     llm_calls: Optional[int] = None
     tool_calls: Optional[int] = None
-    tokens_total: Optional[int] = None
     retries: Optional[int] = None
     wall_time_ms: Optional[int] = None
     max_parallel_tasks: Optional[int] = None
@@ -28,7 +27,6 @@ class RunLimits:
     agent_runs: Optional[int] = None
     llm_calls: Optional[int] = None
     tool_calls: Optional[int] = None
-    tokens_total: Optional[int] = None
     retries: Optional[int] = None
     wall_time_ms: Optional[int] = None
     max_parallel_tasks: Optional[int] = None
@@ -40,7 +38,6 @@ class RunLimits:
             agent_runs=self.agent_runs,
             llm_calls=self.llm_calls,
             tool_calls=self.tool_calls,
-            tokens_total=self.tokens_total,
             retries=self.retries,
             wall_time_ms=self.wall_time_ms,
             max_parallel_tasks=self.max_parallel_tasks,

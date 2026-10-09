@@ -13,6 +13,15 @@ from app.runtime.synthesizer import Synthesizer
 from app.runtime.turn_state import RuntimeTurnState
 
 
+@pytest.fixture(autouse=True)
+def model_transport_defaults(monkeypatch):
+    from app.services.runtime_limits_service import ModelCallLimits
+    monkeypatch.setattr(
+        "app.services.runtime_limits_service.RuntimeLimitsService.resolve_model",
+        AsyncMock(return_value=ModelCallLimits()),
+    )
+
+
 class _LLMClientProbe:
     def __init__(self, chunks: list[str]) -> None:
         self.chunks = chunks
@@ -75,10 +84,9 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
             }
         ),
     ), patch(
-        "app.services.model_call_config_service.ModelCallConfigService.resolve",
+        "app.services.runtime_limits_service.RuntimeLimitsService.resolve_model",
         new=AsyncMock(
             return_value=SimpleNamespace(
-                max_output_tokens=None,
                 request_timeout_s=30,
                 max_retries=2,
             )
@@ -93,7 +101,7 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     assert llm.calls, "chat_stream was not called"
     call = llm.calls[0]
     assert call["model"] == "gpt-test"
-    assert call["params"] == {"temperature": 0.15, "max_tokens": 321}
+    assert call["params"] == {"temperature": 0.15}
     assert call["options"].timeout_s == 30
     assert call["messages"][0]["content"].startswith("SYNTH-PROMPT")
     assert "mode=planned" in call["messages"][0]["content"]
@@ -125,8 +133,8 @@ async def test_synthesizer_uses_direct_source_mode_without_task_reports():
         "app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
         new=AsyncMock(return_value={"prompt": "SYNTH-PROMPT", "model": "gpt-test", "temperature": 0.1}),
     ), patch(
-        "app.services.model_call_config_service.ModelCallConfigService.resolve",
-        new=AsyncMock(return_value=SimpleNamespace(max_output_tokens=None, request_timeout_s=30, max_retries=0)),
+        "app.services.runtime_limits_service.RuntimeLimitsService.resolve_model",
+        new=AsyncMock(return_value=SimpleNamespace(request_timeout_s=30, max_retries=0)),
     ):
         _ = [event async for event in synth.stream(
             runtime_state=state, run_id=state.run_id, synthesis_context=context,
@@ -184,8 +192,8 @@ async def test_synthesizer_falls_back_when_db_role_load_fails():
     assert llm.calls, "chat_stream was not called on fallback"
     call = llm.calls[0]
     assert call["model"] is None
-    assert call["params"] == {"temperature": 0.3, "max_tokens": 2000}
-    assert call["options"].timeout_s == 60
+    assert call["params"] == {"temperature": 0.3}
+    assert call["options"].timeout_s == 30
     assert call["messages"][0]["content"]  # fallback prompt is non-empty
     assert events[-2].type.value == "final"
     assert events[-2].data["content"] == "fallback answer"
@@ -224,7 +232,7 @@ async def test_synthesizer_retries_retryable_stream_error_before_fallback():
             new=AsyncMock(return_value={"prompt": "SYNTH-PROMPT", "model": "gpt-test"}),
         ),
         patch(
-            "app.services.model_call_config_service.ModelCallConfigService.resolve",
+            "app.services.runtime_limits_service.RuntimeLimitsService.resolve_model",
             new=AsyncMock(return_value=SimpleNamespace(max_retries=1)),
         ),
         patch("app.runtime.synthesizer.asyncio.sleep", new=AsyncMock()),
@@ -299,7 +307,7 @@ async def test_synthesizer_never_finalizes_or_retries_a_partial_stream() -> None
             new=AsyncMock(return_value={"prompt": "SYNTH-PROMPT", "model": "gpt-test"}),
         ),
         patch(
-            "app.services.model_call_config_service.ModelCallConfigService.resolve",
+            "app.services.runtime_limits_service.RuntimeLimitsService.resolve_model",
             new=AsyncMock(return_value=SimpleNamespace(max_retries=2)),
         ),
     ):

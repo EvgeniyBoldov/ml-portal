@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, AsyncIterator, Mapping, Optional, Protocol
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Protocol
 
 
 class LLMErrorCode(StrEnum):
@@ -15,6 +15,8 @@ class LLMErrorCode(StrEnum):
     MODEL_NOT_FOUND = "llm_model_not_found"
     RATE_LIMITED = "llm_rate_limited"
     REQUEST_TOO_LARGE = "llm_request_too_large"
+    CONTEXT_WINDOW_EXCEEDED = "llm_context_window_exceeded"
+    CALL_LIMIT_EXCEEDED = "llm_call_limit_exceeded"
     INVALID_REQUEST = "llm_invalid_request"
     UPSTREAM = "llm_upstream_error"
     TOOL_CALLING_UNSUPPORTED = "llm_tool_calling_unsupported"
@@ -43,6 +45,7 @@ class LLMCallOptions:
     """Transport-only options, kept separate from provider request params."""
 
     timeout_s: Optional[float] = None
+    on_transport_retry: Optional[Callable[[], Awaitable[None]]] = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,8 @@ class ResolvedLLMConnection:
     connector: Optional[str]
     api_key: Optional[str]
     extra_config: dict[str, Any]
+    context_window_tokens: int = 16_384
+    request_timeout_s: int = 30
 
 
 class LLMConnectionResolver(Protocol):

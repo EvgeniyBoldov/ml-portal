@@ -75,6 +75,13 @@ class GraphPlanner:
         planner_iteration_trace_id: Optional[str] = None,
         **_: Any,
     ) -> IterationProposal:
+        if event_sink:
+            await event_sink(RuntimeEvent.status(
+                "memory_context_used",
+                entity_type="planner_iteration",
+                entity_id=planner_iteration_trace_id,
+                memory_context=request.context.memory_context,
+            ))
         payload = self._input_builder.build_graph_request(request)
         payload["planner_tools"] = [{
             "operation": "memory.search",
@@ -85,25 +92,12 @@ class GraphPlanner:
             ),
         }, {"operation": "memory.lookup", "description": "Find published scope and glossary candidates by name or alias; returns identities only."}]
         role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
-        # Passing a hand-built prompt to StructuredLLMCall bypasses its
-        # non-editable planner runtime contract. Compile the role here first,
-        # then add only the planner-specific tool-loop instructions.
+        # Editable role instructions and the generated protocol use one compiler.
         role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(
             SystemLLMRoleType.PLANNER.value,
         )
         system_prompt = self._llm._compile_role_prompt(
             role_config, role_override if isinstance(role_override, dict) else None, schema=PlannerStep,
-        ) + (
-            "\n\n# PLANNER TOOL LOOP\n"
-            "Before proposing an iteration you may return kind=tool_call only for memory.search or memory.lookup. "
-            "Use it for glossary, project/company knowledge, or confirmed user/tenant facts absent from the profile; "
-            "After zero to three tool results return kind=proposal with the complete IterationProposal. "
-            "Never create a task merely to read memory. "
-            "execution_context is an application-provided fact about this chat. "
-            "memory.search must use all execution_context.team_keys; omit team_keys to inherit them. "
-            "project_keys may choose a subset of known execution_context projects, [] for outside projects, "
-            "or [project.all] for only common project rules. Omit to use focused projects. "
-            "Never invent scope keys or clear the teams; ask the user to clarify an unknown project."
         )
         tool_results: list[dict[str, Any]] = []
         for _ in range(4):

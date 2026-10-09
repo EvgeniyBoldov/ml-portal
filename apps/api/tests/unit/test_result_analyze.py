@@ -77,8 +77,9 @@ def test_sql_result_names_and_generic_dataset_profiles() -> None:
     rows = _dataset_rows([{"key": "OPS-1", "fields": {"state": None}}, {"key": "OPS-2"}])
     schema, sample, schema_complete, sample_complete = _profile_rows(rows)
     assert schema["key"]["present"] == 2
-    assert schema["fields.state"]["types"] == ["null"]
-    assert schema["fields.state"]["missing"] == 1
+    assert schema["fields"]["types"] == ["object"]
+    assert schema["fields"]["missing"] == 1
+    assert "fields.state" not in schema
     assert sample == rows
     assert schema_complete and sample_complete
 
@@ -151,7 +152,8 @@ async def test_sql_query_uses_exact_saved_result_names_and_persists_output(monke
         task_id="task-1", agent_execution_id="agent-1",
     )
 
-    assert f"{source_ref} AS (SELECT ordinal, data" in connection.query
+    assert f"{source_ref} AS (SELECT " in connection.query
+    assert "SELECT ordinal, data" not in connection.query
     assert f"FROM {source_ref}" in connection.query
     assert connection.params["source_id_0"] == source_id
     assert result["sql_ref"] == saved["sql_ref"]
@@ -166,13 +168,13 @@ async def test_sql_query_uses_exact_saved_result_names_and_persists_output(monke
 
 
 def test_sql_provenance_ignores_literals_and_nested_comments():
-    from app.services.tool_result_store import _sql_identifiers
+    from app.services.result_sql_guard import referenced_results
 
     sql = """SELECT 'result_old', $$result_old$$, $tag$result_old$tag$
              FROM "result_new" -- result_old
              /* outer /* result_old */ result_old */
-             JOIN RESULT_OTHER ON true"""
-    tokens = _sql_identifiers(sql)
+             JOIN result_other ON true"""
+    tokens = referenced_results(sql, {"result_new", "result_other"})
     assert "result_old" not in tokens
     assert {"result_new", "result_other"}.issubset(tokens)
 

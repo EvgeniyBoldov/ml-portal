@@ -1,7 +1,8 @@
 import { InspectorExpandableValue, InspectorFieldGroup, InspectorFieldRow, InspectorScalar, InspectorStatus, InspectorTextBlock } from '@/shared/ui/Inspector';
-import type { TraceCall } from '../../traceProjection';
+import { memoryContextFromTool, type TraceCall } from '../../traceProjection';
 import { callDisplayName, type ToolNameMap } from '../../callInspection';
 import { callStatusPresentation, formatCallDuration } from '../../callPresentation';
+import { MemoryContextViewer } from './viewers/MemoryContextViewer';
 import { ExtractionResultViewer } from './viewers/ExtractionResultViewer';
 import { PlanView } from './TraceDataViews';
 import { InspectorStack } from './InspectorPrimitives';
@@ -128,6 +129,8 @@ export function ToolResponse({ call }: { call: TraceCall }) {
   const presentation = call.info;
   const result = call.responseView?.toolResult;
   if (!result) return <InspectorFieldGroup><InspectorFieldRow label="Статус"><InspectorStatus label={presentation.status === 'waiting_retry' ? 'Ожидает повтора' : 'Ожидается'} tone="warn" /></InspectorFieldRow></InspectorFieldGroup>;
+  const memory = memoryContextFromTool(call);
+  if (memory) return <MemoryContextViewer context={memory} />;
   return <InspectorStack><InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={result.success === false ? 'Ошибка' : 'Успешно'} tone={result.success === false ? 'danger' : 'success'} /></InspectorFieldRow>
     <InspectorFieldRow label="Краткий результат"><InspectorScalar value={result.summary} /></InspectorFieldRow>

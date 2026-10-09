@@ -201,6 +201,8 @@ class GraphPlanningStage:
                 planner_kwargs=planner_kwargs,
             ):
                 runtime_event = event.to_runtime_event()
+                if runtime_event.type == RuntimeEventType.ERROR and runtime_event.data.get("error_code") == "llm_context_window_exceeded":
+                    runtime_state.final_error = str(runtime_event.data.get("user_message") or runtime_event.data.get("error"))
                 if runtime_event.type == RuntimeEventType.WAITING_INPUT:
                     pause_question = str(runtime_event.data.get("question") or "").strip() or None
                 elif runtime_event.type == RuntimeEventType.CONFIRMATION_REQUIRED:

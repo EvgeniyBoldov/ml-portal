@@ -7,6 +7,9 @@ FROM ml-portal-base-ml:latest
 USER root
 COPY infra/docker/worker/requirements.txt ./requirements.txt
 RUN python -m pip install --no-cache-dir -r requirements.txt
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken
+RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base'); tiktoken.get_encoding('o200k_base')" \
+    && chmod -R a+rX /opt/tiktoken
 USER appuser
 
 # Copy entire application structure to /app/app/ (unified structure)

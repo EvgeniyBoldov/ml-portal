@@ -104,7 +104,7 @@ def test_prompt_assembler_separates_collection_and_system_sections():
     )
 
     assert "## Доступные коллекции" in collection_prompt
-    assert "если результат пустой" in collection_prompt.lower()
+    assert "при пустом ответе" in collection_prompt.lower()
     assert "правила использования: Для регламентов используй семантический поиск." in collection_prompt
     assert "`collection.document.search`" in collection_prompt
     assert "рекомендуемый порядок" not in collection_prompt
@@ -195,7 +195,7 @@ def test_operation_prompt_renderer_publishes_public_collection_info_schema():
     assert schema["function"]["name"] == "collection.info"
     assert schema["function"]["parameters"]["properties"]["collection_slug"]["type"] == "string"
     assert schema["function"]["parameters"]["required"] == ["collection_slug"]
-    assert "inspect an available collection's fields" in schema["function"]["description"]
+    assert "inspect stored fields and filter hints" in schema["function"]["description"]
 
 
 def test_operation_prompt_renderer_hides_collection_id_for_bound_template_operation():
@@ -317,3 +317,19 @@ def test_prompt_assembler_omits_text_tool_contract_for_native_tool_calling():
 
     assert assembly.operations_prompt == ""
     assert "Список инструментов:" not in assembly.system_prompt
+
+
+def test_operation_descriptions_are_complete_in_native_and_text_schemas():
+    from types import SimpleNamespace
+
+    description = "Operation details. " * 100 + "FINAL_CONSTRAINT"
+    operation = SimpleNamespace(
+        operation="test_operation", operation_slug="test_operation", name="Test",
+        scope="system", description=description, published=None,
+        input_schema={"type": "object", "properties": {}}, result_kind="rows",
+    )
+    native = build_tools_payload([operation])[0]["function"]["description"]
+    rendered = OperationPromptRenderer.render_schema(operation)["function"]["description"]
+    assert description in native
+    assert description in rendered
+    assert native == rendered

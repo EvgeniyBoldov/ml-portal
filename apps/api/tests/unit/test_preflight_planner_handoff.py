@@ -57,11 +57,19 @@ async def test_preflight_receives_confirmed_facts_as_raw_context() -> None:
     ))
 
     facts = [{"scope": "user", "kind": "fact", "subject": "jira project", "value": "ABC", "confidence": 1.0}]
+    event_sink = AsyncMock()
     await preflight.decide(
         user_request="Какие тикеты на моём проекте?", mechanical_lookup={}, facts_context=facts,
+        event_sink=event_sink, trace_parent_entity_id="preflight-1",
     )
 
     assert preflight._llm.invoke.await_args.kwargs["payload"]["facts_context"] == facts
+    snapshot = event_sink.await_args.args[0]
+    assert snapshot.data["stage"] == "memory_context_used"
+    assert snapshot.data["entity_type"] == "orchestrator"
+    assert snapshot.data["entity_id"] == "preflight-1"
+    assert snapshot.data["memory_context"][0] == facts[0]
+
 
 
 @pytest.mark.asyncio

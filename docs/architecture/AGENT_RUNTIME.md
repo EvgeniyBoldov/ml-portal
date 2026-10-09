@@ -174,7 +174,7 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 5. Terminal является свойством iteration, а не task. `planner` создаёт следующую iteration; `synthesis` запрашивает финальную сборку ответа. Run становится `completed` только после успешного synthesis.
 6. Store возвращает typed scheduler decision. Orchestrator только исполняет его: создаёт attempt, вызывает агента, применяет один атомарный result либо вызывает planner/synthesizer.
 7. Planner получает полный структурный ledger всех задач и попыток и выбирает продолжение, принятие partial outputs, исключение части объёма или сообщение ограничения пользователю.
-8. Synthesis получает `SynthesisBrief`, successful reports всех iteration, явно принятые partial outputs, verified artifacts/sources и актуальные user-visible limitations. Сырые agent/tool journal и технические ошибки не передаются.
+8. Synthesis получает `SynthesisBrief`, все не исключённые ответы с их статусами, diagnostics, runtime artifacts/sources и актуальные user-visible limitations. Сырые agent/tool journal и технические ошибки не передаются.
 
 Оркестратор поддерживает явные task-статусы `pending`, `running`,
 `waiting_retry`, `waiting_confirmation`, `needs_dependency`, `blocked`,
@@ -186,20 +186,51 @@ Retry переводит задачу обратно в исполнение т�
 отдельную bounded-проекцию `limitations` с безопасными причинами
 неуспешных ветвей.
 
-Terminal task declarations use a JSON Schema compiled from the task contract.
-The provider projection retains structural output slots but omits regex,
-format and conditional constraints that grammar backends may reject. The full
-schema remains in the prompt; local Pydantic validation and the result reducer
-enforce nonblank strings, completion rules, output values and evidence.
-Terminal corrections retain native tools so missing evidence can be retrieved.
-The backend appends a mandatory terminal contract after system prompt
-assembly, including agent-version and sandbox prompt overrides. It describes
-the `kind`/`value` or `kind`/`refs` slots, completion modes, evidence and coverage
-requirements, and includes a structural example using this task's output keys
-and fulfillment modes. The full JSON Schema is still generated from Pydantic;
-agent prompts in Admin do not need to duplicate this contract. Slot validation
-errors include the expected wrapper and instructions to preserve the result
-inside `value`, rather than only a discriminator error.
+Agent task responses use protocol v2 generated from Pydantic. The agent owns
+`completion` (`fulfilled`, `needs`, `unfulfillable`) and may return `answer`,
+arbitrary `structured_response`, and discovered `needs` in any applicable
+combination. Runtime validates the envelope and need identities, not the
+correctness or completeness of task data. JSON/schema deviations never trigger
+terminal correction, null coercion, coverage proofs, or repeated tool calls.
+
+Planner `response_spec` requests `any`, `text`, `structured`, or `artifact`.
+Its optional `schema`, registered input/output schemas and legacy
+`expected_outputs` are advisory for all LLM agents. Mismatches produce bounded
+warning diagnostics while preserving actual data and agent completion.
+Only a requested mandatory file is enforced: a successful declaration must have
+an undeleted runtime-created attachment from this task's operations. Missing
+files preserve the response and return `required_artifact_missing` to planning.
+Runtime adds attachments/sources; the LLM does not repeat identifiers or slots.
+Tool/API argument validation, ACL, confirmations and scheduler invariants remain strict.
+
+Bindings select a legacy output key or JSON Pointer into the actual persisted
+result, e.g. `/structured_response/devices`, `/answer`, `/attachments`.
+A prior completed producer is allowed without a cross-iteration dependency.
+The consumer receives actual data unchanged even if advisory schemas disagree.
+An absent result path blocks only the consumer with `binding_result_missing`
+and invokes planning; the producer remains completed. Final synthesis receives
+all non-excluded responses with statuses, diagnostics and runtime files,
+including partial results and explanations from unsuccessful tasks.
+
+Protocol and presentation are saved in existing JSON result/compiled-contract
+columns; no database migration is required. Legacy report/value-slot declarations
+and journals are adapted on reading. Oversized agent inputs/dependency results
+are saved in the runtime tool-result store and replaced in LLM context with
+`result_id` and `sql_ref` for `result.analyze`, instead of cutting JSON strings.
+Backend code appends the universal protocol after agent/sandbox prompt assembly;
+planner data requirements cannot alter this envelope. All editable role sections
+(identity, mission, rules, safety, output requirements, examples) come from the
+active database configuration, with explicit sandbox section overrides. A shared
+renderer is used for the database preview, planner and synthesizer; structured
+examples are serialized as JSON. The backend adds iteration mechanics and one
+compact JSON Schema generated from the Pydantic contract. It never replaces the
+operator's planner rules. Planner start snapshots use this same assembled prompt.
+For current external data, the planner assigns a suitable available agent; writing
+planned_work in a synthesis brief does not execute that work. terminal selects
+control after tasks complete. Empty terminal synthesis remains valid for a required
+clarification or an established limitation. In planned synthesis, empty reports do
+not establish missing integration, permissions or empty inventory; final answers
+must not promise automatic continuation.
 Corrections are bounded by max_retries (at least one correction), as well as
 the existing LLM-call and wall-time budgets, and each changed prompt receives
 a new LLM-call identity. Transport retries retain the original identity.
@@ -270,48 +301,90 @@ scopes decide detail from their own logging level.
 
 ## Policy Gates и Execution Limits
 
-Ограничения исполнения теперь задаются через `execution_limits` (а не через platform caps).
-Policy gates остаются отдельным runtime enforcement-слоем.
+Единый `RuntimeLimitsService` разрешает ограничения исполнения и параметры транспорта модели:
 
-| Параметр | Описание |
-|----------|----------|
-| `max_steps` | Максимум итераций loop |
-| `max_tool_calls_total` | Максимум tool calls |
-| `max_wall_time_ms` | Таймаут выполнения |
-| `tool_timeout_ms` | Таймаут одного вызова инструмента |
-| `max_retries` | Повторы при ошибке |
-| `streaming_enabled` | Разрешить стриминг |
-| `citations_required` | Требовать цитаты |
+| Владелец | Параметры | Хранилище |
+|----------|-----------|-----------|
+| Run | время выполнения, параллельные задачи, итерации планирования, исполнения задач | `runtime_execution_limits` |
+| Агент | LLM-вызовы, вызовы инструментов, время выполнения | `actor_execution_limits` |
+| Оркестратор | LLM-вызовы, время выполнения; итерации ограничивает run | `actor_execution_limits` |
+| Модель | контекстное окно, таймаут запроса, число повторов | `models` |
 
-Источник значений лимитов:
-- `platform` scope — базовые лимиты по умолчанию;
-- `orchestrator_role` scope — лимиты системных ролей (`planner`, `synthesizer`, `fact_extractor`, `fact_compactor`);
-- `agent` scope — лимиты конкретного агента.
+Для actor ограничения разрешаются по полям: настройка исполнителя → default его класса → code fallback; sandbox override применяется последним. Токенные бюджеты исполнителей отсутствуют. Токены в trace — статистика использования. Старые `ExecutionLimitsService`, таблица `execution_limits`, `max_tokens_total`, модельный `max_output_tokens` и `max_tokens` системных ролей удалены миграцией `0183`.
 
-`ExecutionLimitsService.resolve` применяет эту иерархию к каждому полю:
-entity scope → `platform/global` → code fallback. Поэтому effective profile не
-может быть пустым даже при неполной или ещё не мигрированной БД. Sandbox
-override применяется последним и не может обнулить значение. Agent execution
-snapshot хранит также источник каждого resolved поля (`entity`, `platform`,
-`sandbox`, `code`).
+### Применимость настроек вкладок оркестрации
 
-`llm_timeout_s` задаёт ожидание одного LLM-вызова. Значение в более узком
-scope замещает platform default; для системных ролей при отсутствии лимита
-используется их role timeout.
+Админка показывает только параметры, читаемые текущими путями исполнения. `null` в actor override означает наследование default класса оркестраторов, а не отсутствие поддержки поля. В режиме просмотра показаны effective limits, в редактировании — собственные nullable значения. Очистка числового поля сохраняет `null`.
 
-LLM transport uses the single OpenAI-compatible SDK adapter for vLLM,
-LiteLLM and compatible providers. Callers resolve the effective entity limit
-before the call and pass it to the adapter as the per-request SDK timeout;
-cached clients do not freeze a role timeout. SDK retries are disabled: runtime
-is the sole owner of semantic retry, budget accounting and `protocol_retry`.
-Provider failures are normalized into safe stable codes (timeout, connection,
-authentication, rate limit, context/request limit, tool/structured-output
-capability and upstream failure) before they reach runtime stages.
+| Вкладка | Редактируемые поля промпта | Настройки в «Параметры» |
+|---------|----------------------------|-------------------------|
+| Планировщик | identity, mission, safety, examples | model, temperature, llm_calls_max, wall_time_ms_max |
+| Маршрутизатор запроса | пять частей промпта, examples | model, temperature |
+| Синтезатор ответа | пять частей промпта, examples | model, temperature, llm_calls_max, wall_time_ms_max |
+| Экстрактор фактов | пять частей промпта, examples | model, temperature, политика отбора фактов в extras |
+| Подбор контекста памяти | пять частей промпта, examples | model, temperature |
+| Нормализатор фактов | пять частей промпта, examples | model, temperature |
+| Изучатель документов | три промпта этапов из extras | model, temperature |
+
+`examples` — рабочий массив примеров с `input`, `output` и необязательным `description`; пустой массив допустим. Общий редактор произвольного `extras` скрыт: runtime читает только политику экстрактора (`max_facts_per_turn`, `max_subject_len`, `max_value_len`, `max_value_words`, `confidence_min`) и три промпта этапов изучателя документов. Остальные роли не читают extras. У изучателя документов общий промпт и examples заменяются промптом конкретного этапа. Planner сохраняет все секции БД и sandbox overrides; rules и output_requirements доступны в редакторе. Runtime добавляет только неизменяемую механику iteration и схему Pydantic. Рекомендуемые редактируемые промпты находятся в services/orchestration_prompts.py; planner применяется явно оператором, не перезаписывается bootstrap при старте.
+
+**Известное расхождение enforcement:** actor budgets подключены у planner и synthesizer в планируемом graph execution. Preflight, memory preparation, document study/review и вызовы fact extractor/compactor не передают BudgetRegistry в StructuredLLMCall. В worker фактов публикуются budget snapshots, но ограничения не проверяются, а обе компоненты получают snapshot facts limits. Поэтому редакторы actor limits экстрактора и нормализатора убраны; добавлять аналогичные поля другим ролям до подключения enforcement нельзя. Direct synthesis до создания graph registry также не получает actor budget. Это отдельный runtime gap; текущая правка интерфейса не меняет исполнение этих путей.
+
+Alias выбранного deployment сохраняется до коннектора: одинаковое provider model name у нескольких записей не должно менять выбранные credentials и окно.
+
+Контекстное окно модели задаётся `context_window_tokens` (default 16384). Непосредственно перед SDK-вызовом `OpenAICompatibleLLM` считает вход: сообщения, результаты инструментов в истории, определения tools и response schema. Для известных моделей применяется их tiktoken encoding, иначе `cl100k_base`. Оценка сериализованного входа округляется вверх с запасом 10%:
+
+```
+reserved_input = ceil(estimated_input × 1.10)
+max_tokens = context_window_tokens − reserved_input
+minimum_output = ceil(context_window_tokens × 0.10)
+```
+
+Если `max_tokens < minimum_output`, запрос не отправляется: `llm_context_window_exceeded`, nonretryable, с сообщением о недостаточном контекстном окне. Это оценка, а не гарантия одинаковой токенизации разных моделей. Вход не обрезается автоматически.
+
+Если провайдер явно сообщает меньший доступный output, коннектор делает один корректирующий вызов, только если доступный output не меньше `minimum_output`. Этот вызов учитывается в LLM-бюджете исполнителя, использует остаток исходного таймаута и для streaming допускается лишь до начала выдачи результата. Повторный отказ по контексту завершает запрос. Ошибки 429 не интерпретируются как ограничение окна; runtime соблюдает `Retry-After`. SDK retries отключены. Таймаут и число повторов системных ролей удалены: используется конфигурация выбранной модели; backoff — exponential.
+
+Пользовательские `max_tokens`/`max_completion_tokens` не управляют распределением окна: коннектор заменяет их своим расчётом. Эти параметры удалены из настроек моделей, ролей, агентов и песочницы. HTTP proxy также не публикует эту настройку.
 
 Policy gates (`require_confirmation_*`, `forbid_*`) применяются в `PolicyEngine` перед выполнением действия.
 `require_backup_before_write` сейчас хранится как конфиг-флаг, но в enforcement-решениях runtime не участвует.
 
 ## Collection resolution
+
+### Agent prompt and native tool surface
+
+Agent collection bindings (`allowed_collection_ids`, or explicit
+`allow_all_collections`) and effective RBAC select the collections before
+operation resolution. Preflight filters operations by their collection target,
+not by a shared provider slug; the same filtered set drives the execution graph,
+prompt cards and native tool declarations.
+
+Shared local providers expose only handlers whose current `domains` include the
+target collection's runtime domain. `collection.info` supports every collection.
+Remote MCP capabilities come from the selected provider's active discovery;
+their names and optional domains are not interpreted as local collection types.
+Native `collection_slug` enums list only executable targets for that operation.
+System tools remain independent of collection bindings and retain RBAC checks.
+
+With native tool calling, collection cards contain purpose, data description,
+full usage rules and operation names. Operation descriptions and argument
+contracts appear once, in `tools`; the redundant system operation card is
+omitted. API collection fields are explicitly labelled catalog metadata, not
+observed response fields. Actual dataset fields come from `result.describe`.
+Policies and operation rules are not truncated by character budgets.
+
+The completion prompt contains one advisory presentation contract, preserving
+distinct expected-data hints without duplicating identical schemas or exposing
+legacy execution fields. Its protocol schema remains derived from Pydantic;
+annotation titles and implementation descriptions are omitted from prompt text.
+Reading saved rows uses `result.read`, schema inspection uses `result.describe`,
+and SQL analysis uses `result.sql` when available.
+
+The current local document provider publishes discovered names directly
+(`collection.doc_search`, `collection.list_documents`, `collection.get_document`).
+The older canonical aliases in the Retrieval Surfaces section below describe
+the previous publication mapping; calls must use the names actually published
+by the selected provider.
 
 Runtime мыслит коллекцией как semantic/data scope, а не как именем
 provider-инстанса. Публичный вызов всегда содержит `collection_slug`; UUID
@@ -554,3 +627,13 @@ context_snapshot: {
 ### Логирование prompt
 - При `logging_level=full` писать полный `system_prompt`
 - При `brief` писать только `system_prompt_hash`
+
+### Temporary dataset access
+
+Successful external tool responses pass through explicit source normalization
+and Result Store. Runtime supplies native `result.describe`, `result.read` and
+`result.load` interfaces; SQL-capable agents receive `result.sql`. Datasets are
+run-scoped, versioned and passed by reference; source continuation appends to the
+same ID. Source completion is separate from model presentation and bounded reads.
+See [Data Workspace](RUNTIME_TOOL_RESULTS.md) for the protocol, migration and
+execution limits. Runtime does not insert Analyzer tasks based on result size.

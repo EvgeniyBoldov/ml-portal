@@ -64,8 +64,6 @@ from .document_memory_staging import (
 from .execution_limit import (
     ActorExecutionLimit,
     ActorExecutionLimitScope,
-    ExecutionLimit,
-    ExecutionLimitScope,
     RuntimeExecutionLimits,
 )
 from .periodic_task import PeriodicTask
@@ -170,8 +168,6 @@ __all__ = [
     "MemoryCandidateDecision",
     "MemoryScopeProposal",
     "MemoryCandidateScopeProposal",
-    "ExecutionLimit",
-    "ExecutionLimitScope",
     "ActorExecutionLimit",
     "ActorExecutionLimitScope",
     "RuntimeExecutionLimits",

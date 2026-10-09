@@ -207,10 +207,6 @@ async def get_sandbox_catalog(
             "output_requirements": role.output_requirements,
             "model": role.model,
             "temperature": role.temperature,
-            "max_tokens": role.max_tokens,
-            "timeout_s": role.timeout_s,
-            "max_retries": role.max_retries,
-            "retry_backoff": role.retry_backoff,
         }
 
     limits_service = RuntimeLimitsService(db)

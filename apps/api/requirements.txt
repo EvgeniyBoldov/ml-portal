@@ -28,3 +28,9 @@ pypdf>=5.0.0
 markdown>=3.7.0
 jsonschema>=4.23.0
 prometheus-client>=0.21.0
+
+# Outbound LLM context estimation
+tiktoken>=0.8.0,<1
+
+# Parse workspace SQL before binding virtual datasets
+sqlglot>=26,<30

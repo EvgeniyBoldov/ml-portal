@@ -289,7 +289,7 @@ export type TraceMemoryContextItem =
   | { type: 'fact'; scope: string; subject: string; value: string }
   | { type: 'project'; projectId?: string; key: string; name: string; matchedAliases: string[] }
   | { type: 'glossary'; scope: string; term: string; description: string; aliases: string[] }
-  | { type: 'knowledge'; scope: string; kind: string; subject: string; value: string; confidence?: number; sourceReferences: unknown[] };
+  | { type: 'knowledge'; scope: string; kind: string; subject: string; value: string; confidence?: number; sourceReferences: unknown[]; raw?: Record<string, unknown> };
 
 export interface TraceStage {
   entity: TraceEntity;
@@ -518,15 +518,15 @@ export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[
       ? target.stage.plan ? [tab('plan', 'План')] : [tab('result', 'Результат')]
       : target.executor.kind === 'preflight' ? [tab('result', 'Маршрут')]
       : target.executor.kind === 'synthesizer' ? (hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])
-        : target.executor.kind === 'memory_selector' ? [tab('task', 'Задача'), ...(target.executor.memoryContext ? [tab('memory', 'Память')] : [])]
+        : target.executor.kind === 'memory_selector' ? [tab('task', 'Задача')]
           : target.executor.kind === 'fact_extractor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Кандидаты')] : [])]
               : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Решения')] : []), ...(target.executor.memoryResult?.decisions.some((item) => item.outcome === 'published') ? [tab('published', 'Опубликовано')] : [])]
               : [tab('task', 'Задача'), ...(hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])];
-    return [tab('info', 'Инфо'), ...primary, ...executorSnapshotTabs(target.executor)];
+    return [tab('info', 'Инфо'), ...primary, ...(target.executor.memoryContext ? [tab('memory', 'Память')] : []), ...executorSnapshotTabs(target.executor)];
   }
   if (target.kind === 'error') return [tab('info', 'Инфо'), tab('error', 'Ошибка'), tab('raw', 'RAW')];
   const hasError = callHasError(target.call);
-  return [tab('info', 'Инфо'), tab('request', 'Запрос'), ...(hasError ? [tab('error', 'Ошибка')] : target.call.responseView ? [tab('response', 'Ответ')] : []), tab('raw', 'RAW')];
+  return [tab('info', 'Инфо'), tab('request', 'Запрос'), ...(memoryContextFromTool(target.call) ? [tab('memory', 'Память')] : []), ...(hasError ? [tab('error', 'Ошибка')] : target.call.responseView ? [tab('response', 'Ответ')] : []), tab('raw', 'RAW')];
 }
 
 export function withTraceInspectorTabs(target: TraceInspectionTarget): TraceInspectionTarget {
@@ -618,24 +618,59 @@ function memoryComponentResult(events: RuntimeJournalEvent[]): TraceMemoryCompon
   };
 }
 
-function memoryContextFor(events: RuntimeJournalEvent[]): TraceMemoryContext | undefined {
+const memoryOperations = new Set(['memory.search', 'memory.lookup']);
+
+export function memoryContextFromTool(call: TraceCall): TraceMemoryContext | undefined {
+  if (!memoryOperations.has(call.requestView.toolName ?? '') || call.responseView?.toolResult?.success === false) return undefined;
+  const data = asRecord(call.responseView?.toolResult?.data);
+  return data ? memoryContextFromPayload({ memory_context: data, search_scope: data.search_scope }) : undefined;
+}
+
+function memoryContextFor(events: RuntimeJournalEvent[], calls: TraceCall[] = []): TraceMemoryContext | undefined {
   const payload = [...events].reverse().find((event) => (
-    event.event_type === 'status' && event.payload.stage === 'memory_context_prepared'
+    event.event_type === 'status' && ['memory_context_prepared', 'memory_context_used'].includes(asString(event.payload.stage))
   ))?.payload;
-  if (!payload) return undefined;
+  const recalled = calls.flatMap((call) => memoryContextFromTool(call) ?? []);
+  if (!payload && !recalled.length) return undefined;
+  const base = memoryContextFromPayload(payload ?? { memory_context: [] });
+  const context = [...base.context, ...recalled.flatMap((item) => item.context)];
+  const unique = context.filter((item, index) => context.findIndex((other) => JSON.stringify(other) === JSON.stringify(item)) === index);
+  return {
+    ...base, context: unique,
+    selectedFacts: Math.max(base.selectedFacts, unique.filter((item) => item.type === 'fact').length),
+    selectedProjects: Math.max(base.selectedProjects, unique.filter((item) => item.type === 'project').length),
+    selectedGlossary: Math.max(base.selectedGlossary, unique.filter((item) => item.type === 'glossary').length),
+    selectedMemoryItems: Math.max(base.selectedMemoryItems, unique.filter((item) => item.type === 'knowledge').length),
+    ambiguities: [...new Set([...base.ambiguities, ...recalled.flatMap((item) => item.ambiguities)])],
+    sourceCheckReasons: [...new Set([...base.sourceCheckReasons, ...recalled.flatMap((item) => item.sourceCheckReasons)])],
+  };
+}
+
+/** Project the recorded executor input and canonical memory operation results. */
+export function memoryContextFromPayload(payload: Record<string, unknown>): TraceMemoryContext {
   const rawContext = payload.memory_context;
-  const rawRecord = asRecord(rawContext);
-  const arrayField = (key: string): unknown[] => Array.isArray(rawRecord?.[key]) ? rawRecord[key] as unknown[] : [];
-  const contextItems = Array.isArray(rawContext)
-    ? rawContext
-    : [
-        ...arrayField('durable_facts').map((item) => ({ ...(asRecord(item) ?? {}), type: 'fact' })),
-        ...arrayField('relevant_projects').map((item) => ({ ...(asRecord(item) ?? {}), type: 'project' })),
-        ...arrayField('resolved_terms').map((item) => ({ ...(asRecord(item) ?? {}), type: 'glossary' })),
-        ...['relevant_knowledge', 'applicable_rules', 'applicable_procedures', 'known_constraints'].flatMap((key) => (
-          arrayField(key).map((item) => ({ ...(asRecord(item) ?? {}), type: 'knowledge' }))
-        )),
-      ];
+  const collect = (value: unknown): Record<string, unknown>[] => {
+    if (Array.isArray(value)) return value.flatMap(collect);
+    const record = asRecord(value);
+    if (!record) return [];
+    if (record.result || record.memory_context) return collect(record.result ?? record.memory_context);
+    const field = (key: string, type: string) => Array.isArray(record[key])
+      ? (record[key] as unknown[]).flatMap((item) => asRecord(item) ? [{ ...asRecord(item), type }] : []) : [];
+    if (record.type === 'fact' || (!record.type && record.scope && record.subject && record.value !== undefined)) return [{ ...record, type: 'fact' }];
+    if (['project', 'glossary', 'knowledge', 'company_knowledge', 'project_knowledge'].includes(asString(record.type))) return [record];
+    return [
+      ...field('durable_facts', 'fact'), ...field('facts', 'fact'),
+      ...field('relevant_projects', 'project'), ...field('projects', 'project'),
+      ...field('resolved_terms', 'glossary'), ...field('glossary', 'glossary'),
+      ...['relevant_knowledge', 'applicable_rules', 'applicable_procedures', 'known_constraints', 'items'].flatMap((key) => field(key, 'knowledge')),
+    ];
+  };
+  const metadata = (value: unknown, key: string): string[] => {
+    if (Array.isArray(value)) return value.flatMap((item) => metadata(item, key));
+    const record = asRecord(value);
+    return record ? [...stringArray(record[key]), ...metadata(record.result ?? record.memory_context, key)] : [];
+  };
+  const contextItems = collect(rawContext);
   const context = contextItems.flatMap((item): TraceMemoryContextItem[] => {
     const record = asRecord(item);
     const type = asString(record?.type);
@@ -652,26 +687,26 @@ function memoryContextFor(events: RuntimeJournalEvent[]): TraceMemoryContext | u
     }
     if (type === 'glossary') {
       const term = asString(record?.term);
-      const description = asString(record?.description);
-      return term && description ? [{ type: 'glossary', scope: asString(record?.scope) || 'global', term, description, aliases: stringArray(record?.aliases) }] : [];
+      const description = asString(record?.description) || asString(record?.definition);
+      return term ? [{ type: 'glossary', scope: asString(record?.scope) || 'global', term, description, aliases: stringArray(record?.aliases) }] : [];
     }
-    if (type === 'knowledge') {
+    if (['knowledge', 'company_knowledge', 'project_knowledge'].includes(type)) {
       const subject = asString(record?.subject);
       const content = record?.content;
       const value = asString(record?.value) || (content ? JSON.stringify(content) : '');
-      return subject && value ? [{ type: 'knowledge', scope: asString(record?.scope) || 'unknown', kind: asString(record?.kind) || 'knowledge', subject, value, confidence: asNumber(record?.confidence), sourceReferences: Array.isArray(record?.source_references) ? record.source_references : [] }] : [];
+      return subject && value ? [{ type: 'knowledge', scope: asString(record?.scope) || 'unknown', kind: asString(record?.kind) || 'knowledge', subject, value, confidence: asNumber(record?.confidence), sourceReferences: Array.isArray(record?.source_references) ? record.source_references : [], raw: record ?? undefined }] : [];
     }
     return [];
   });
   return {
     fallback: payload.fallback === true,
-    selectedFacts: asNumber(payload.selected_facts) ?? 0,
-    selectedProjects: asNumber(payload.selected_projects) ?? 0,
-    selectedGlossary: asNumber(payload.selected_glossary) ?? 0,
-    selectedMemoryItems: asNumber(payload.selected_memory_items) ?? 0,
+    selectedFacts: asNumber(payload.selected_facts) ?? context.filter((item) => item.type === 'fact').length,
+    selectedProjects: asNumber(payload.selected_projects) ?? context.filter((item) => item.type === 'project').length,
+    selectedGlossary: asNumber(payload.selected_glossary) ?? context.filter((item) => item.type === 'glossary').length,
+    selectedMemoryItems: asNumber(payload.selected_memory_items) ?? context.filter((item) => item.type === 'knowledge').length,
     context,
-    ambiguities: stringArray(payload.ambiguities ?? asRecord(rawContext)?.uncertainties),
-    sourceCheckReasons: stringArray(payload.source_check_reasons ?? asRecord(rawContext)?.rag_reasons),
+    ambiguities: [...new Set([...stringArray(payload.ambiguities), ...metadata(rawContext, 'uncertainties'), ...metadata(rawContext, 'ambiguities')])],
+    sourceCheckReasons: [...new Set([...stringArray(payload.source_check_reasons), ...metadata(rawContext, 'rag_reasons')])],
     searchScope: asRecord(payload.search_scope) ?? undefined,
   };
 }
@@ -1351,7 +1386,7 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     info: executorInfoFor(result, calls, metrics.elapsedMs, limits),
     metrics,
     memoryResult: memoryComponentResult(executorEvents),
-    memoryContext: memoryContextFor(executorEvents),
+    memoryContext: memoryContextFor(executorEvents, calls),
     preflight: preflightFor(state, entity),
     prompt: promptFor(executorEvents, calls),
     access: accessFor(latestPayload(executorEvents, 'rbac_snapshot')?.rbac) ?? preflightFor(state, entity)?.access,
@@ -1392,6 +1427,7 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     result,
     info: executorInfoFor(result, calls, metrics.elapsedMs, limits),
     metrics,
+    memoryContext: memoryContextFor(eventsFor(state, entity), calls),
     prompt: promptFor(eventsFor(state, entity), calls),
     limits,
   };
@@ -1458,6 +1494,7 @@ function plannerExecutorFor(state: SandboxTraceState, iteration: TraceEntity): T
     result,
     info: executorInfoFor(result, calls, metrics.elapsedMs),
     metrics,
+    memoryContext: memoryContextFor(eventsFor(state, iteration), calls),
     prompt: promptFor(eventsFor(state, iteration), calls),
     access: accessFor(latestPayload(eventsFor(state, iteration), 'rbac_snapshot')?.rbac)
       ?? accessFor(orchestratorSnapshot?.rbac),
@@ -1774,6 +1811,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
                 task: 'Разбор запроса и выбор маршрута', executorType: 'ОРКЕСТРАТОР', executorName: 'Предварительная маршрутизация',
                 executorSlug: 'turn_preflight', kind: 'preflight', calls, result, route: routeFor(calls),
                 info: executorInfoFor(result, calls, metrics.elapsedMs), metrics,
+                memoryContext: memoryContextFor(eventsFor(state, entity), calls),
                 prompt: promptFor(eventsFor(state, entity), calls),
               } satisfies TraceExecutorRun];
             })()

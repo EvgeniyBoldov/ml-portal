@@ -12,7 +12,7 @@ from app.runtime.llm.streaming import RoleStreamingCall, StreamError
 from app.runtime.events import RuntimeEventType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
 from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
-from app.services.model_call_config_service import ModelCallConfig
+from app.services.runtime_limits_service import ModelCallLimits
 
 
 class _Result(BaseModel):
@@ -28,16 +28,18 @@ def test_structured_prompt_generates_contract_for_non_synthesizer_roles():
         {
             "role_type": SystemLLMRoleType.PLANNER.value,
             "identity": "planner",
-            "output_requirements": "СТАРЫЙ КОНТРАКТ ИЗ БД",
+            "rules": "Правила выбора задач из БД",
+            "output_requirements": "Требования к ответу из БД",
         },
         None,
         schema=_Result,
     )
 
-    assert "СТАРЫЙ КОНТРАКТ ИЗ БД" in prompt
-    assert "Планер не формирует пользовательский ответ" in prompt
-    assert "Если execution_ledger.needs пуст, bindings ОБЯЗАН быть пустым массивом" in prompt
-    assert "consumer_input_key нельзя заранее указывать в inputs" in prompt
+    assert "Правила выбора задач из БД" in prompt
+    assert "Требования к ответу из БД" in prompt
+    assert "PLANNER RUNTIME CONTRACT v2" in prompt
+    assert "Binding закрывает существующий need" in prompt
+    assert "заранее заданный bound key" in prompt
     assert "Верни строго валидный JSON" in prompt
     assert '"value"' in prompt
 
@@ -86,7 +88,7 @@ def test_structured_parser_drops_empty_list_placeholders_only():
 def test_structured_retry_delay_uses_backoff_and_provider_hint():
     assert StructuredLLMCall._retry_delay_ms(attempt=0, retry_after_ms=None) == 500
     assert StructuredLLMCall._retry_delay_ms(attempt=2, retry_after_ms=3_000) == 3_000
-    assert StructuredLLMCall._retry_delay_ms(attempt=0, retry_after_ms=60_000) == 30_000
+    assert StructuredLLMCall._retry_delay_ms(attempt=0, retry_after_ms=60_000) == 60_000
 
 
 @pytest.mark.asyncio
@@ -97,8 +99,8 @@ async def test_structured_call_preserves_upstream_exception_and_traceback():
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "llama-3.1", "max_retries": 0, "timeout_s": 1}
     )
-    call.model_call_config_service.resolve = AsyncMock(
-        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=0)
+    call.limits_service.resolve_model = AsyncMock(
+        return_value=ModelCallLimits(request_timeout_s=1, max_retries=0)
     )
 
     with pytest.raises(StructuredCallError) as raised:
@@ -125,8 +127,8 @@ async def test_structured_call_emits_safe_protocol_retry_for_invalid_schema():
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "llama-3.1", "max_retries": 1, "timeout_s": 1}
     )
-    call.model_call_config_service.resolve = AsyncMock(
-        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=1)
+    call.limits_service.resolve_model = AsyncMock(
+        return_value=ModelCallLimits(request_timeout_s=1, max_retries=1)
     )
     events = []
 
@@ -173,8 +175,8 @@ async def test_structured_call_preserves_normalized_error_code_in_trace():
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "qwen", "max_retries": 1, "timeout_s": 20}
     )
-    call.model_call_config_service.resolve = AsyncMock(
-        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=20, max_retries=0)
+    call.limits_service.resolve_model = AsyncMock(
+        return_value=ModelCallLimits(request_timeout_s=20, max_retries=1)
     )
     events = []
 
@@ -218,8 +220,8 @@ async def test_structured_call_retries_json_validation_rejection_with_json_objec
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "gpt-oss", "max_retries": 1, "timeout_s": 1}
     )
-    call.model_call_config_service.resolve = AsyncMock(
-        return_value=ModelCallConfig(max_output_tokens=900, request_timeout_s=1, max_retries=1)
+    call.limits_service.resolve_model = AsyncMock(
+        return_value=ModelCallLimits(request_timeout_s=1, max_retries=1)
     )
 
     result = await call.invoke(
@@ -242,8 +244,8 @@ async def test_structured_planner_uses_resolved_retry_limit():
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "qwen", "max_retries": 0, "timeout_s": 1}
     )
-    call.model_call_config_service.resolve = AsyncMock(
-        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=1)
+    call.limits_service.resolve_model = AsyncMock(
+        return_value=ModelCallLimits(request_timeout_s=1, max_retries=1)
     )
 
     with pytest.raises(StructuredCallError):
@@ -253,9 +255,8 @@ async def test_structured_planner_uses_resolved_retry_limit():
             schema=_Result,
         )
 
-    # An explicit role-level retry limit takes precedence over the resolver
-    # fallback value.
-    assert client.chat.await_count == 1
+    # Retry policy belongs to the model; stale role fields have no effect.
+    assert client.chat.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -266,8 +267,8 @@ async def test_structured_call_can_select_registry_default_model():
     call.role_service.get_role_config = AsyncMock(
         return_value={"model": "role-specific-model", "max_retries": 0, "timeout_s": 1}
     )
-    call.model_call_config_service.resolve = AsyncMock(
-        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=0)
+    call.limits_service.resolve_model = AsyncMock(
+        return_value=ModelCallLimits(request_timeout_s=1, max_retries=0)
     )
 
     result = await call.invoke(
@@ -289,8 +290,8 @@ async def test_streaming_error_preserves_exception_type_and_traceback():
     client = AsyncMock()
     client.chat_stream = lambda *args, **kwargs: _failed_stream()
     call = RoleStreamingCall(session=AsyncMock(), llm_client=client)
-    call._model_call_config_service.resolve = AsyncMock(
-        return_value=ModelCallConfig(max_output_tokens=None, request_timeout_s=1, max_retries=0)
+    call._limits_service.resolve_model = AsyncMock(
+        return_value=ModelCallLimits(request_timeout_s=1, max_retries=0)
     )
 
     events = [

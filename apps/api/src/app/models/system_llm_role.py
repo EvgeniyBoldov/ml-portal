@@ -100,25 +100,6 @@ class SystemLLMRole(Base):
         Float, nullable=True, comment="Temperature for LLM calls"
     )
     
-    max_tokens: Mapped[Optional[int]] = mapped_column(
-        Integer, nullable=True, comment="Maximum tokens for LLM response"
-    )
-    
-    timeout_s: Mapped[Optional[int]] = mapped_column(
-        Integer, nullable=True, comment="Timeout in seconds"
-    )
-    
-    max_retries: Mapped[Optional[int]] = mapped_column(
-        Integer, nullable=True, comment="Maximum retry attempts"
-    )
-    
-    retry_backoff: Mapped[Optional[str]] = mapped_column(
-        String(10),
-        CheckConstraint("retry_backoff IN ('none', 'linear', 'exp')", name="check_retry_backoff_type"),
-        nullable=True,
-        comment="Retry backoff strategy: none | linear | exp"
-    )
-    
     # === Status ===
     is_active: Mapped[Optional[bool]] = mapped_column(
         Boolean, nullable=True, default=True,
@@ -142,34 +123,9 @@ class SystemLLMRole(Base):
     @property
     def compiled_prompt(self) -> str:
         """Compile prompt parts into a single system prompt."""
-        parts = []
-        
-        if self.identity:
-            parts.append(f"# IDENTITY\n{self.identity}")
-        
-        if self.mission:
-            parts.append(f"# MISSION\n{self.mission}")
-            
-        if self.rules:
-            parts.append(f"# RULES\n{self.rules}")
-            
-        if self.safety:
-            parts.append(f"# SAFETY\n{self.safety}")
-            
-        if self.output_requirements:
-            parts.append(f"# OUTPUT REQUIREMENTS\n{self.output_requirements}")
-        
-        # Add examples if present
-        if self.examples:
-            parts.append(f"# EXAMPLES")
-            for i, example in enumerate(self.examples, 1):
-                parts.append(f"## Example {i}")
-                if example.get("description"):
-                    parts.append(f"Description: {example['description']}")
-                if example.get("input"):
-                    parts.append(f"Input: {example['input']}")
-                if example.get("output"):
-                    parts.append(f"Output: {example['output']}")
-                parts.append("")  # Empty line between examples
-        
-        return "\n\n".join(parts) if parts else "You are a helpful assistant."
+        from app.services.system_role_prompt import ROLE_PROMPT_SECTIONS, compile_system_role_prompt
+
+        return compile_system_role_prompt({
+            **{field: getattr(self, field) for field, _ in ROLE_PROMPT_SECTIONS},
+            "examples": self.examples,
+        })

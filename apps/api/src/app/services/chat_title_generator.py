@@ -41,7 +41,6 @@ class ChatTitleGenerator:
     async def generate(self, *, user_message: str, assistant_message: str) -> Optional[str]:
         settings = get_settings()
         params: dict[str, object] = {
-            "max_tokens": settings.CHAT_TITLE_MAX_TOKENS,
             "temperature": 0,
         }
         if settings.CHAT_TITLE_REASONING_EFFORT:

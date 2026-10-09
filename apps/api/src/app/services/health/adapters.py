@@ -178,7 +178,7 @@ class LLMHealthAdapter(HealthCheckAdapter):
         self._llm_client = llm_client
     
     async def probe(self, target: Model) -> HealthProbeResult:
-        """Probe LLM model with minimal request (max_tokens=1)."""
+        """Probe LLM model with a short health-check prompt."""
         start_time = time.time()
         
         try:
@@ -188,7 +188,7 @@ class LLMHealthAdapter(HealthCheckAdapter):
             response = await self._llm_client.chat(
                 self._test_messages,
                 model=str(target.alias),
-                params={"max_tokens": 1},
+                params={},
             )
             latency_ms = int((time.time() - start_time) * 1000)
             if response:

@@ -98,7 +98,7 @@ class CollectionDocumentListTool(VersionedTool):
     description: ClassVar[str] = (
         "List all files in a document collection with their names and metadata. "
         "Use to enumerate available files (e.g. find a template by name). "
-        "For content search use collection.document.search. "
+        "For content search use collection.doc_search. "
         "Returns an artifact_id for each document that can be passed to file.read."
     )
 

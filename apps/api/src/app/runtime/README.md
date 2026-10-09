@@ -21,7 +21,7 @@
 - `orchestrator_contracts.py`: planner/orchestrator/task/result contracts.
 - `plan_store.py`: transactional iteration state, dependencies, terminal claims and attempts.
 - `turn_state.py`: current-turn memory/context DTO; it is not the persisted plan.
-- `synthesis_context.py`: complete, redacted reports and accepted partial outputs selected by explicit planner resolutions.
+- `synthesis_context.py`: redacted agent responses, statuses, diagnostics and runtime attachments; only explicitly excluded tasks are omitted.
 - `synthesizer.py`: final answer synthesis at the terminal iteration.
 
 Task lifecycle is runtime-owned. `ready` is derived from dependencies;
@@ -29,7 +29,7 @@ retryable failures remain `waiting_retry` until `next_retry_at`, failed
 dependencies propagate to `blocked`, and an unsuccessful task always routes
 the completed iteration back to planner. Synthesis runs only when the current
 iteration completed successfully; it receives successful reports, explicitly
-accepted partial outputs and current user-visible limitations. A synthesis
+all non-excluded responses and current user-visible limitations. A synthesis
 provider/context failure is a terminal plan failure after the synthesizer's
 own retry policy is exhausted; it is not presented to the planner as a fake
 task result or a mutable rewrite of the terminal iteration.
@@ -49,14 +49,17 @@ confirmed active user and tenant facts, then combines it with bounded tool,
 agent-result, attachment and collection sections. It does not load the
 conversation summary into the active component registry.
 
-`MemoryPreparer` selects existing fact/project indexes for planner context. It
-is optional and fail-open: an LLM/provider failure produces an empty fallback,
-not invented memory or a failed user turn.
+Durable project memory is read on demand through ACL-aware `MemorySearchService`
+and the canonical `memory.search` operation available to planner and agents.
+TurnPreflight starts with mechanical identity lookup and may request a bounded
+recall followed by a second routing decision. `MemoryPreparer`/`MemoryRecall`
+remain separate legacy helpers; they are not the mandatory active root route.
+Document memory is extracted during ingestion and published through review.
 
-Project memory is disclosed through the mandatory pre-planner Memory Recall
-context. It resolves glossary aliases, projects, procedures and evidence
-references before an agent starts; agents do not receive memory read or write
-tools. Durable project memory is extracted from documents during ingestion.
+Each runtime reader records its own actual input as a canonical
+`status(stage=memory_context_used)` snapshot. Sandbox inspectors combine that
+snapshot with successful memory tool results owned by that reader; memory
+writeback candidates remain a separate projection.
 
 Terminal writeback is owned by `MemoryWriter` and normally runs in the Celery
 `finalize_memory` task after the answer. The writer pipeline is
@@ -175,3 +178,13 @@ CI gates:
 - Persist both `original_query` and `rewritten_query` in runtime trace.
 - Implement remote `collection.info` runtime enrichment for `sql` / `api` collections:
   return provider-aware field/value profiling, remote freshness signals, and safe distinct/top-value hints without relying on local table profiling.
+
+### Agent response protocol v2
+
+`response_spec` requests presentation (`any`, `text`, `structured`, `artifact`)
+with an advisory schema. Agent completion and actual JSON data are preserved;
+only envelope/needs invariants and required runtime-created files are enforced.
+Data schema deviations are warnings, including registered data contracts.
+Bindings accept actual result JSON Pointers and prior completed producers;
+missing paths replan only the consumer. See `docs/architecture/AGENT_RUNTIME.md`
+and `RUNTIME_TOOL_RESULTS.md` for compatibility and persistence behavior.

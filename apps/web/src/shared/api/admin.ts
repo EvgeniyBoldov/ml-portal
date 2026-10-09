@@ -110,10 +110,6 @@ export interface SystemLLMRole {
   extras?: Record<string, unknown> | null;
   model?: string | null;
   temperature?: number | null;
-  max_tokens?: number | null;
-  timeout_s?: number | null;
-  max_retries?: number | null;
-  retry_backoff?: RetryBackoffType | null;
   response_contract?: ResponseContract | null;
   is_active?: boolean | null;
   created_at: string;
@@ -131,10 +127,6 @@ export interface SystemLLMRoleCreate {
   extras?: Record<string, unknown> | null;
   model?: string | null;
   temperature?: number | null;
-  max_tokens?: number | null;
-  timeout_s?: number | null;
-  max_retries?: number | null;
-  retry_backoff?: RetryBackoffType | null;
   is_active?: boolean | null;
 }
 
@@ -148,10 +140,6 @@ export interface SystemLLMRoleUpdate {
   extras?: Record<string, unknown> | null;
   model?: string | null;
   temperature?: number | null;
-  max_tokens?: number | null;
-  timeout_s?: number | null;
-  max_retries?: number | null;
-  retry_backoff?: RetryBackoffType | null;
   is_active?: boolean | null;
 }
 
@@ -325,7 +313,7 @@ export interface Model {
   instance_id?: string | null;
   instance_name?: string | null;
   extra_config?: Record<string, any> | null;
-  max_output_tokens?: number | null;
+  context_window_tokens: number;
   request_timeout_s?: number | null;
   max_retries?: number | null;
   status: ModelStatus;
@@ -353,9 +341,9 @@ export interface ModelCreate {
   base_url?: string;
   instance_id?: string;
   extra_config?: Record<string, any>;
-  max_output_tokens?: number;
-  request_timeout_s?: number;
-  max_retries?: number;
+  context_window_tokens?: number;
+  request_timeout_s?: number | null;
+  max_retries?: number | null;
   status?: ModelStatus;
   enabled?: boolean;
   default_for_type?: boolean;
@@ -371,9 +359,9 @@ export interface ModelUpdate {
   base_url?: string;
   instance_id?: string;
   extra_config?: Record<string, any>;
-  max_output_tokens?: number;
-  request_timeout_s?: number;
-  max_retries?: number;
+  context_window_tokens?: number;
+  request_timeout_s?: number | null;
+  max_retries?: number | null;
   status?: ModelStatus;
   enabled?: boolean;
   default_for_type?: boolean;

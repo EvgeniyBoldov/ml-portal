@@ -246,6 +246,17 @@ class CollectionToolResolver:
         tool: DiscoveredTool | VirtualDiscoveredTool,
         context: CollectionToolResolutionContext,
     ) -> bool:
-        # The collection/provider relationship already scopes provider tools.
-        # Do not reclassify them by domains or provider-specific raw names.
-        return bool(str(getattr(tool, "slug", "") or "").strip())
+        slug = str(getattr(tool, "slug", "") or "").strip()
+        if not slug or context.bound_collection is None:
+            return False
+        if slug == "collection.info":
+            return True
+        # Remote tools are scoped by their selected MCP provider. Their names
+        # and optional domains do not define platform collection types.
+        if getattr(tool, "source", None) == "mcp":
+            return context.provider_kind == "mcp"
+        # Shared local providers can contain handlers for several collection
+        # types. Prefer current handler metadata over stale discovery domains.
+        handler = ToolRegistry.get(slug)
+        domains = list(getattr(handler if handler is not None else tool, "domains", None) or [])
+        return context.runtime_domain in domains

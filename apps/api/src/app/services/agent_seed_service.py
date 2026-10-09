@@ -41,10 +41,6 @@ SEED_AGENTS = [
                 "Используй только memory_recall как границу долговременной памяти; проверяемые сведения из документов ищи через collection.document.search."
             ),
             "output_format": "Краткий ответ с проверяемыми выводами и источниками; не показывай внутренние ID вызовов инструментов.",
-            "timeout_s": 120,
-            "max_steps": 10,
-            "max_retries": 2,
-            "max_tokens": 4096,
             "temperature": 0.1,
             "risk_level": "low",
             "short_info": "Поиск знаний проекта и асинхронная маркировка доказанных правил",
@@ -102,10 +98,6 @@ SEED_AGENTS = [
                 "- **Источники** — список документов, из которых взята информация\n"
                 "- Используй markdown: заголовки, списки, цитаты (>)"
             ),
-            "timeout_s": 120,
-            "max_steps": 8,
-            "max_retries": 2,
-            "max_tokens": 4096,
             "temperature": 0.2,
             "risk_level": "low",
             "short_info": "Поиск по корпоративной базе знаний: регламенты, политики, инструкции",
@@ -167,10 +159,6 @@ SEED_AGENTS = [
                 "- **Сводка** — краткие выводы по найденным данным\n"
                 "- Используй markdown: таблицы, списки, bold для ключевых полей"
             ),
-            "timeout_s": 120,
-            "max_steps": 10,
-            "max_retries": 2,
-            "max_tokens": 4096,
             "temperature": 0.15,
             "risk_level": "low",
             "short_info": "Анализ структурированных данных: тикеты, инциденты, статистика",
@@ -228,10 +216,6 @@ SEED_AGENTS = [
                 "Use bullet points for single object details. "
                 "Bold key fields (name, status, IP)."
             ),
-            "timeout_s": 120,
-            "max_steps": 10,
-            "max_retries": 2,
-            "max_tokens": 4096,
             "temperature": 0.1,
             "risk_level": "low",
             "short_info": "Queries NetBox for network infrastructure: devices, IPs, sites, racks",
@@ -293,10 +277,6 @@ SEED_AGENTS = [
                 "- **Риски**: выявленные риски и рекомендации\n"
                 "- **Условия** (если APPROVED WITH CONDITIONS): что нужно выполнить"
             ),
-            "timeout_s": 180,
-            "max_steps": 12,
-            "max_retries": 2,
-            "max_tokens": 4096,
             "temperature": 0.15,
             "risk_level": "medium",
             "requires_confirmation_for_write": True,

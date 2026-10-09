@@ -8,20 +8,36 @@ from typing import Any, AsyncIterator, Dict, Optional, Protocol
 from uuid import UUID
 
 from app.runtime.events import RuntimeEvent, RuntimeEventType
+from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
 from app.runtime.entity_ids import (
     agent_execution_id, iteration_checkpoint_id, planner_iteration_id,
     runtime_attempt_id, runtime_task_id, step_id,
 )
 from app.runtime.orchestrator_contracts import (
-    AgentTaskContract, TaskContractMode, TaskExecutionReceipt, IterationProposal, PlanRequest, PlannerContext,
+    AgentTaskContract, TaskContractRef, TaskContractMode, TaskExecutionReceipt, IterationProposal, PlanRequest, PlannerContext,
     SchedulerActionKind, TaskAttemptFailure, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
-    FreshnessPolicy, TaskOutputFulfillment, TaskOutputSpec, TerminalKind,
+    FreshnessPolicy, ResponseSpec, TaskOutputFulfillment, TaskOutputSpec, TerminalKind,
 )
 from app.runtime.plan_store import PlanValidationError
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
 from app.runtime.memory.tool_ledger import canonical_operation_name, document_search_evidence_document_ids
 from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, project_memory_context, task_scope
+
+
+def _context_failure_event(exc: BaseException) -> Optional[RuntimeEvent]:
+    """Preserve a connector's actionable context failure through planning."""
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, LLMProviderError) and current.code == LLMErrorCode.CONTEXT_WINDOW_EXCEEDED:
+            return RuntimeEvent.error(
+                current.safe_message, recoverable=False, retryable=False,
+                error_code=current.code.value, user_message=current.safe_message, source="llm",
+            )
+        current = getattr(current, "original_exception", None) or current.__cause__
+    return None
 
 
 def _task_memory_context(task: TaskRequest, planner_memory_context: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -182,6 +198,8 @@ class OrchestratorEvent(dict):
                 instructions=self.get("instructions"),
                 inputs=self.get("inputs"),
                 expected_outputs=self.get("expected_outputs"),
+                response_spec=self.get("response_spec"),
+                protocol_version=self.get("protocol_version"),
                 depends_on=self.get("depends_on"),
                 depends_on_task_entity_ids=self.get("depends_on_task_entity_ids"),
                 freshness_policy=self.get("freshness_policy"),
@@ -235,6 +253,7 @@ class OrchestratorEvent(dict):
                 step_id=self.get("step_id"),
                 reason_code=self.get("reason_code"),
                 output_states=self.get("output_states"),
+                diagnostics=self.get("diagnostics"),
             )
         if event_name in {"task_blocked", "task_paused", "task_resumed", "task_failed"}:
             lifecycle_type = {
@@ -458,10 +477,10 @@ class GraphOrchestrator:
             evidence = {key: verified.get(key) for key in ("receipts", "evidence", "artifacts", "sources", "fresh_retrieval") if key in verified}
             tasks.append({"task_id": task_id, "iteration_id": task.get("iteration_id"), "intent": task.get("intent"),
                           "executor": task.get("executor"), "instructions": task.get("instructions"), "inputs": task.get("inputs", {}),
-                          "expected_outputs": task.get("expected_outputs", []), "freshness_policy": task.get("freshness_policy"),
+                          "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "expected_outputs": task.get("expected_outputs", []), "freshness_policy": task.get("freshness_policy"),
                           "scope_context": task.get("scope_context", {}),
                           "status": task.get("status"), "depends_on": task.get("depends_on", []), "attempts": task.get("attempts", 0),
-                          "result": {"description": result.get("description"), "reason_code": result.get("reason_code"), "outputs": result.get("outputs", {}), "limitation": result.get("limitation"), "evidence": evidence}})
+                          "result": {"completion": result.get("completion"), "needs": result.get("needs", []), "answer": result.get("answer", result.get("description")), "structured_response": result.get("structured_response", result.get("outputs")), "diagnostics": result.get("diagnostics", []), "attachments": result.get("attachments", verified.get("artifacts", [])), "sources": result.get("sources", verified.get("sources", [])), "description": result.get("description"), "reason_code": result.get("reason_code"), "outputs": result.get("outputs", {}), "limitation": result.get("limitation"), "evidence": evidence}})
         return {"plan_status": snapshot.get("status"), "iterations": snapshot.get("iterations", []), "tasks": tasks,
                 "needs": snapshot.get("needs", []), "bindings": snapshot.get("bindings", []),
                 "resolutions": snapshot.get("resolutions", [])}
@@ -515,22 +534,18 @@ class GraphOrchestrator:
             contract = next((item for item in contracts if item.contract_id == task.contract.contract_id), None)
             if contract is None:
                 raise PlanValidationError(f"agent {task.executor} does not publish contract {task.contract.contract_id}")
-            try:
-                import jsonschema
-                jsonschema.Draft202012Validator(contract.input_schema).validate(task.inputs)
-            except Exception as exc:
-                raise PlanValidationError(f"task inputs do not satisfy contract {contract.contract_id}: {exc}") from exc
             compiled_tasks.append(task.model_copy(update={
                 "expected_outputs": contract.expected_outputs,
+                "response_spec": contract.response_spec if task.response_spec == ResponseSpec() else task.response_spec,
                 "freshness_policy": FreshnessPolicy.REQUIRE_RETRIEVAL
                 if requires_retrieval else task.freshness_policy,
-                "contract": {
-                    "mode": TaskContractMode.REGISTERED,
-                    "contract_id": contract.contract_id,
-                    "version": contract.version,
-                    "contract_hash": contract.fingerprint(),
-                    "input_schema": contract.input_schema,
-                },
+                "contract": TaskContractRef(
+                    mode=TaskContractMode.REGISTERED,
+                    contract_id=contract.contract_id,
+                    version=contract.version,
+                    contract_hash=contract.fingerprint(),
+                    input_schema=contract.input_schema,
+                ),
             }))
         proposal = proposal.model_copy(update={"tasks": compiled_tasks})
         prior_tasks = {str(item.get("task_id")): item for item in ledger.get("tasks", [])}
@@ -583,7 +598,6 @@ class GraphOrchestrator:
             non_retryable_contract_failure = prior_result.get("reason_code") in {
                 "agent_task_completion_invalid",
                 "agent_task_completion_missing",
-                "output_contract_invalid",
             }
             if not non_retryable_contract_failure:
                 continue
@@ -592,7 +606,8 @@ class GraphOrchestrator:
                 if replacement is None:
                     continue
                 same_contract = (
-                    replacement.executor == prior.get("executor")
+                    replacement.response_spec.model_dump(mode="json", by_alias=True) == (prior.get("response_spec") or {"mode": "any", "description": "", "schema": {}})
+                    and replacement.executor == prior.get("executor")
                     and replacement.inputs == (prior.get("inputs") or {})
                     and [item.model_dump(mode="json", by_alias=True) for item in replacement.expected_outputs]
                     == [TaskOutputSpec.model_validate(item).model_dump(mode="json", by_alias=True)
@@ -627,21 +642,13 @@ class GraphOrchestrator:
             need = need_items.get((binding.need_task_id, binding.need_ref))
             if need is None:
                 raise PlanValidationError("binding targets an unknown discovered need")
-            producer, consumer = proposed.get(binding.producer_task_id), proposed.get(binding.consumer_task_id)
+            producer, consumer = proposed.get(binding.producer_task_id) or prior_tasks.get(binding.producer_task_id), proposed.get(binding.consumer_task_id)
             if producer is None or consumer is None:
                 raise PlanValidationError("binding producer and consumer must belong to the new iteration")
-            if binding.producer_task_id not in consumer.depends_on:
+            if binding.producer_task_id in proposed and binding.producer_task_id not in consumer.depends_on:
                 raise PlanValidationError("binding consumer must depend on producer")
-            output_spec = next((item for item in producer.expected_outputs if item.key == binding.output_key), None)
-            if output_spec is None or not output_spec.required or output_spec.fulfillment != TaskOutputFulfillment.TASK_RESULT:
-                raise PlanValidationError("binding output is not declared by producer")
-            need_schema = need.get("schema") if isinstance(need.get("schema"), dict) else {}
-            if need_schema:
-                try:
-                    import jsonschema
-                    jsonschema.Draft202012Validator.check_schema(need_schema)
-                except Exception as exc:
-                    raise PlanValidationError(f"binding need schema is invalid: {exc}") from exc
+            if isinstance(producer, dict) and producer.get("status") != "completed":
+                raise PlanValidationError("prior binding producer must be completed")
             resolution = resolution_map.get(binding.need_task_id)
             if resolution is None or resolution.action.value != "continue_with_tasks":
                 raise PlanValidationError("binding need task must be continued with replacement tasks")
@@ -650,16 +657,6 @@ class GraphOrchestrator:
             target = (binding.consumer_task_id, binding.consumer_input_key)
             if target in bound_inputs or binding.consumer_input_key in consumer.inputs:
                 raise PlanValidationError("binding writes a duplicate consumer input")
-            # ``task.inputs`` was validated before runtime injects bindings.
-            # Reject an impossible target early; the concrete merged value is
-            # validated again by PlanStore at the handoff boundary.
-            if consumer.contract.mode == TaskContractMode.REGISTERED:
-                input_schema = consumer.contract.input_schema or {}
-                properties = input_schema.get("properties") if isinstance(input_schema, dict) else None
-                additional = input_schema.get("additionalProperties", True) if isinstance(input_schema, dict) else True
-                if isinstance(properties, dict) and binding.consumer_input_key not in properties and additional is False:
-                    raise PlanValidationError("binding writes an input forbidden by the consumer contract")
-            bound_inputs.add(target)
         return proposal
 
     async def _invoke_planner(self, *, plan_id: UUID, goal: str, trigger: str,
@@ -680,20 +677,6 @@ class GraphOrchestrator:
                                  request.context.scope_context)
         if request.context.planner_search_results:
             await self.store.update_memory_context(plan_id, request.context.planner_search_results)
-        if (
-            proposal.terminal == TerminalKind.SYNTHESIS
-            and _recall_requires_rag(request.context.memory_context)
-            and not _has_successful_rag_evidence(
-                planner_kwargs.get("runtime_state"), request.context.memory_context,
-            )
-        ):
-            raise PlanValidationError("memory recall requires successful collection.document.search before synthesis")
-        if (
-            proposal.terminal == TerminalKind.SYNTHESIS
-            and _recall_requires_tool(request.context.memory_context)
-            and not _has_successful_runtime_observation(planner_kwargs.get("runtime_state"))
-        ):
-            raise PlanValidationError("memory recall requires a successful runtime observation before synthesis")
         if proposal.synthesis_brief is not None and not _same_user_question(proposal.synthesis_brief.user_question, goal):
             raise PlanValidationError("synthesis brief user_question must equal the immutable plan goal")
         await self.store.apply_iteration(plan_id, proposal, iteration_id=iteration_entity_id)
@@ -761,6 +744,9 @@ class GraphOrchestrator:
                     iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1,
                     status="failed", failure_code=failure_code,
                 ))
+                context_failure = _context_failure_event(exc)
+                if context_failure is not None:
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=context_failure)
                 await fail("initial_planning_failed", exc)
                 yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="initial_planning_failed")
                 return
@@ -865,6 +851,9 @@ class GraphOrchestrator:
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
                         iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=next_iteration_number, status="failed",
                     ))
+                    context_failure = _context_failure_event(exc)
+                    if context_failure is not None:
+                        yield OrchestratorEvent(type="_runtime_event", runtime_event=context_failure)
                     await fail("planner_checkpoint_failed", exc)
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="planner_checkpoint_failed")
                     return
@@ -1034,7 +1023,7 @@ class GraphOrchestrator:
                     yield OrchestratorEvent(
                         type={"completed": "task_completed", "needs_dependency": "task_needs_dependency", "unfulfillable": "task_unfulfillable"}[result.outcome.value],
                         plan_id=str(plan_id), task_id=task_id, attempt=attempt, outcome=result.outcome.value,
-                        reason_code=result.reason_code,
+                        reason_code=result.reason_code, diagnostics=result.diagnostics,
                         output_states={key: {name: state[name] for name in ("status", "reason", "errors", "normalized_from") if name in state}
                                        for key, state in result.output_states.items()},
                         **trace_links,

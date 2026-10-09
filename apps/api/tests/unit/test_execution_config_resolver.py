@@ -33,7 +33,7 @@ async def test_resolve_model_alias_falls_back_to_platform_default(monkeypatch):
         "llm.bad",
         default_alias="llm.good",
     )
-    assert resolved == "meta-llama/llama-4-scout-17b-16e-instruct"
+    assert resolved == "llm.good"
 
 
 @pytest.mark.asyncio
@@ -53,11 +53,18 @@ async def test_resolve_model_alias_keeps_resolved_provider_name(monkeypatch):
 def test_agent_generation_uses_explicit_adapter_defaults(monkeypatch):
     monkeypatch.setattr(
         "app.agents.execution_config_resolver.get_settings",
-        lambda: SimpleNamespace(LLM_TIMEOUT=75, LLM_DEFAULT_MAX_TOKENS=2048),
+        lambda: SimpleNamespace(LLM_TIMEOUT=75),
     )
     generation = GenerationParams()
 
     ExecutionConfigResolver._apply_adapter_defaults(generation)
 
     assert generation.timeout_s == 75
-    assert generation.max_tokens == 2048
+    assert not hasattr(generation, "max_tokens")
+
+
+@pytest.mark.asyncio
+async def test_selected_deployment_alias_survives_until_connector(monkeypatch):
+    monkeypatch.setattr("app.services.model_resolver.ModelResolver", _FakeModelResolver)
+    resolved = await ExecutionConfigResolver._resolve_model_alias(AsyncMock(), "llm.good")
+    assert resolved == "llm.good"

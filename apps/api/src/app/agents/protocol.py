@@ -197,14 +197,6 @@ def build_tools_prompt(
     )
     list_heading = _prompt_label(labels, "operation_list_heading", "Список инструментов:")
 
-    rules_max_chars = _prompt_budget(budgets, "operations_rules_max_chars")
-    if (
-        rules_max_chars is not None
-        and isinstance(mandatory_rules_text, str)
-        and len(mandatory_rules_text) > rules_max_chars
-    ):
-        mandatory_rules_text = mandatory_rules_text[:rules_max_chars].rstrip()
-
     rules_block = (
         mandatory_rules_text.strip()
         if isinstance(mandatory_rules_text, str) and mandatory_rules_text.strip()
@@ -280,7 +272,7 @@ _UNSUPPORTED_SCHEMA_KEYS = frozenset(
 
 
 def _sanitize_tool_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: v for k, v in schema.items() if k not in _UNSUPPORTED_SCHEMA_KEYS}
+    return {k: v for k, v in schema.items() if k not in _UNSUPPORTED_SCHEMA_KEYS and k != "x-runtime"}
 
 
 def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str, Any]]:
@@ -289,6 +281,8 @@ def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str,
     tools: List[Dict[str, Any]] = []
     seen_names: set[str] = set()
     for op in operations:
+        if getattr(op, "scope", None) == "collection" and not getattr(op, "collection_slug", None):
+            continue
         name = str(getattr(op, "operation", "") or op.operation_slug).strip()
         if not name or name in seen_names:
             continue
@@ -297,6 +291,19 @@ def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str,
         schema = _sanitize_tool_schema(raw)
         schema.setdefault("type", "object")
         schema.setdefault("properties", {})
+        if getattr(op, "scope", None) == "collection":
+            targets = sorted({
+                str(getattr(candidate, "collection_slug", "") or "").strip()
+                for candidate in operations
+                if getattr(candidate, "scope", None) == "collection"
+                and str(getattr(candidate, "operation", "") or candidate.operation_slug).strip() == name
+                and getattr(candidate, "collection_slug", None)
+            })
+            if not targets:
+                continue
+            schema["properties"]["collection_slug"] = {
+                **schema["properties"].get("collection_slug", {}), "type": "string", "enum": targets,
+            }
         tools.append(
             {
                 "type": "function",
@@ -305,7 +312,6 @@ def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str,
                     "description": build_prompt_operation_description(
                         op,
                         summary=getattr(op, "published", None),
-                        max_chars=512,
                     ),
                     "parameters": schema,
                 },

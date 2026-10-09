@@ -129,12 +129,12 @@ class ExecutionConfigResolver:
                     resolved_model = getattr(agent, "model", None)
                 if resolved_model is None:
                     resolved_model = config.get("executor_model")
-                await self._apply_model_call_config(session, gen, resolved_model, policy)
                 gen.model = await self._resolve_model_alias(
                     session,
                     resolved_model,
                     default_alias=base_settings.get("executor_model"),
                 )
+                await self._apply_model_call_config(session, gen, gen.model, policy)
         else:
             gen.model = model
 
@@ -146,14 +146,12 @@ class ExecutionConfigResolver:
         ctx: ToolContext,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
     ) -> GenerationParams:
         from app.services.orchestration_service import OrchestrationSettingsProvider
 
         gen = GenerationParams(
             model=model,
             temperature=temperature if temperature is not None else 0.7,
-            max_tokens=max_tokens,
         )
         self._apply_adapter_defaults(gen)
 
@@ -180,26 +178,19 @@ class ExecutionConfigResolver:
                     gen.model = config.get("executor_model")
                 if temperature is None:
                     gen.temperature = config.get("executor_temperature", 0.7)
-                await self._apply_model_call_config(session, gen, gen.model, None)
                 gen.model = await self._resolve_model_alias(
                     session,
                     gen.model,
                     default_alias=base_settings.get("executor_model"),
                 )
+                await self._apply_model_call_config(session, gen, gen.model, None)
 
         return gen
 
     @staticmethod
     def _apply_adapter_defaults(gen: GenerationParams) -> None:
-        """Make the SDK fallback explicit at the agent/runtime boundary.
-
-        Scoped ``execution_limits`` remain authoritative.  When none exists,
-        an agent must still pass the configured connector defaults instead of
-        silently relying on the OpenAI SDK client's hidden transport values.
-        """
+        """Use a transport timeout fallback before model settings are resolved."""
         settings = get_settings()
-        if gen.max_tokens is None:
-            gen.max_tokens = max(1, int(settings.LLM_DEFAULT_MAX_TOKENS))
         if gen.timeout_s is None:
             gen.timeout_s = max(1, int(settings.LLM_TIMEOUT))
 
@@ -227,8 +218,10 @@ class ExecutionConfigResolver:
                     alias,
                     default_alias,
                 )
-                return fallback
-        return resolved
+                return default_alias
+        # Keep deployment identity until the connector resolves credentials
+        # and context. Multiple aliases can share a provider model name.
+        return alias if alias else resolved
 
     @staticmethod
     async def _apply_model_call_config(
@@ -238,21 +231,7 @@ class ExecutionConfigResolver:
         policy: Optional[PolicyLimits],
     ) -> None:
         """Apply typed LLM deployment settings before the alias is resolved."""
-        if not alias:
-            return
-        from sqlalchemy import select
-        from app.models.model_registry import Model
-
-        row = (await session.execute(
-            select(Model).where((Model.alias == alias) | (Model.provider_model_name == alias), Model.deleted_at.is_(None)).limit(1)
-        )).scalar_one_or_none()
-        if row is None:
-            return
-        legacy = dict(row.extra_config or {})
-        max_output = row.max_output_tokens or legacy.get("max_tokens")
-        if max_output is not None:
-            gen.max_tokens = int(max_output)
-        if row.request_timeout_s is not None:
-            gen.timeout_s = int(row.request_timeout_s)
-        if policy is not None and row.max_retries is not None:
-            policy.max_retries = int(row.max_retries)
+        limits = await RuntimeLimitsService(session).resolve_model(alias)
+        gen.timeout_s = limits.request_timeout_s
+        if policy is not None:
+            policy.max_retries = limits.max_retries

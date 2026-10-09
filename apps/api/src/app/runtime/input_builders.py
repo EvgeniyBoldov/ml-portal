@@ -28,9 +28,10 @@ class PlannerInputBuilder:
                         "contract_id": contract.get("contract_id"),
                         "version": contract.get("version"),
                         "description": contract.get("description"),
-                        # A registered contract is usable by the planner only
-                        # when it can construct its typed input object.
+                        # Published data schemas guide LLMs without rejecting their inputs.
                         "input_schema": contract.get("input_schema"),
+                        "response_spec": contract.get("response_spec"),
+                        "output_hints": contract.get("expected_outputs", []),
                     }
                     for contract in item.get("task_contracts") or [] if isinstance(contract, dict)
                 ],
@@ -50,6 +51,10 @@ class PlannerInputBuilder:
             "task_brief": context.task_brief,
             "available_agents": agents,
             "iteration_contract": {
+                "protocol_version": 2,
+                "data_schemas_are_advisory": True,
+                "only_required_artifacts_are_enforced": True,
+                "bindings_allow_prior_completed_producers": True,
                 "tasks_are_agents_only": True,
                 "terminal": ["planner", "synthesis"],
                 "synthesis_requires_brief": True,

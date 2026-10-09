@@ -50,7 +50,7 @@ class TemplateSchemaBuilder:
                     {"role": "system", "content": SYS_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
-                params={"temperature": 0.2, "max_tokens": 2000},
+                params={"temperature": 0.2},
             )
             content = resp.get("content", "{}")
             data = content if isinstance(content, dict) else json.loads(content)

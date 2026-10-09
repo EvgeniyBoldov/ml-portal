@@ -7,7 +7,7 @@ New architecture:
 - Easy swap to local providers later
 """
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Boolean, Text, DateTime, Integer, func, JSON, Enum as SQLEnum, ForeignKey
+from sqlalchemy import String, Boolean, Text, DateTime, Integer, func, JSON, Enum as SQLEnum, ForeignKey, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 import enum
@@ -56,7 +56,10 @@ class Model(Base):
         - embed.default: OpenAI text-embedding-3-large
     """
     __tablename__ = "models"
-    __table_args__ = {'extend_existing': True}
+    __table_args__ = (
+        CheckConstraint("context_window_tokens > 0", name="ck_models_context_window_positive"),
+        {'extend_existing': True},
+    )
     
     # Identity
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -84,7 +87,7 @@ class Model(Base):
     # LLM invocation policy.  These are deliberately typed instead of being
     # hidden in provider-specific JSON: every LLM caller resolves them from
     # the selected model deployment.
-    max_output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    context_window_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=16_384, server_default="16384")
     request_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     

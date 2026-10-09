@@ -204,7 +204,7 @@ def serialize_model(model: Model) -> Dict[str, Any]:
         "provider": model.provider,
         "connector": _resolve_connector(model),
         "provider_model_name": model.provider_model_name,
-        "max_output_tokens": model.max_output_tokens,
+        "context_window_tokens": model.context_window_tokens,
         "request_timeout_s": model.request_timeout_s,
         "max_retries": model.max_retries,
         "base_url": _resolve_base_url(model),
@@ -421,9 +421,11 @@ async def verify_model(
                 extra["vector_dim"] = int(manifest.get("dimensions"))
             except Exception:
                 pass
-        if manifest.get("max_tokens") is not None:
+        if manifest.get("context_window_tokens") is not None:
             try:
-                extra["max_tokens"] = int(manifest.get("max_tokens"))
+                context_window = int(manifest["context_window_tokens"])
+                if context_window > 0:
+                    update_data["context_window_tokens"] = context_window
             except Exception:
                 pass
         extra["manifest"] = manifest

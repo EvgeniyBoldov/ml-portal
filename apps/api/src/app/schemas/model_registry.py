@@ -58,7 +58,7 @@ class ModelBase(BaseModel):
     base_url: Optional[str] = Field(None, max_length=500, description="Direct endpoint URL for local or standalone model connectors")
     instance_id: Optional[str] = Field(None, description="FK to tool_instances (provider connection)")
     extra_config: Optional[Dict[str, Any]] = Field(None, description="Provider-specific config (JSON)")
-    max_output_tokens: Optional[int] = Field(None, ge=1)
+    context_window_tokens: int = Field(16_384, ge=1)
     request_timeout_s: Optional[int] = Field(None, ge=1)
     max_retries: Optional[int] = Field(None, ge=0)
     status: ModelStatusEnum = Field(default=ModelStatusEnum.AVAILABLE, description="Availability status")
@@ -92,7 +92,7 @@ class ModelUpdate(BaseModel):
     provider_model_name: Optional[str] = Field(None, min_length=1, max_length=255)
     instance_id: Optional[str] = Field(None, description="FK to tool_instances")
     extra_config: Optional[Dict[str, Any]] = None
-    max_output_tokens: Optional[int] = Field(None, ge=1)
+    context_window_tokens: Optional[int] = Field(None, ge=1)
     request_timeout_s: Optional[int] = Field(None, ge=1)
     max_retries: Optional[int] = Field(None, ge=0)
     status: Optional[ModelStatusEnum] = None
@@ -102,6 +102,13 @@ class ModelUpdate(BaseModel):
     description: Optional[str] = None
     connector: Optional[ModelConnectorEnum] = None
     base_url: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("context_window_tokens")
+    @classmethod
+    def context_window_cannot_be_null(cls, value: Optional[int]) -> int:
+        if value is None:
+            raise ValueError("context_window_tokens cannot be null")
+        return value
 
     model_config = ConfigDict(use_enum_values=True, protected_namespaces=())
 

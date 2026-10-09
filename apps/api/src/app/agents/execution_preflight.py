@@ -527,18 +527,17 @@ class ExecutionPreflight:
         }
         logger.debug("Runtime RBAC agent collection filter: %s", audit_payload)
 
-        if len(filtered_instances) == before_count:
-            return None, audit_payload
-
         operation_result.resolved_data_instances = filtered_instances
         allowed_instance_slugs = {inst.slug for inst in filtered_instances}
+        allowed_collection_slugs = {inst.collection_slug for inst in filtered_instances if inst.collection_slug}
+        before_operations = list(operation_result.resolved_operations or [])
         allowed_op_slugs = {
             op.operation_slug
             for op in operation_result.resolved_operations
             if (
-                op.data_instance_slug is None
-                or op.data_instance_slug == "system"
-                or op.data_instance_slug in allowed_instance_slugs
+                op.scope == "system"
+                or (op.collection_slug in allowed_collection_slugs if op.collection_slug
+                    else op.data_instance_slug in allowed_instance_slugs)
             )
         }
         operation_result.resolved_operations = [
@@ -546,6 +545,8 @@ class ExecutionPreflight:
             if op.operation_slug in allowed_op_slugs
         ]
         operation_result.execution_graph.filter_by_operation_slugs(allowed_op_slugs)
+        if len(filtered_instances) == before_count and len(operation_result.resolved_operations) == len(before_operations):
+            return None, audit_payload
         return (
             f"Collection access filter: {before_count} → {len(filtered_instances)} instances "
             f"(capability={'set' if capability_ids is not None else 'any'}, "

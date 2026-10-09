@@ -155,7 +155,7 @@ class ModelHealthChecker:
             response = await get_llm_client().chat(
                 [{"role": "user", "content": "Hi"}],
                 model=model.alias or model.provider_model_name,
-                params={"max_tokens": 1},
+                params={},
                 options=LLMCallOptions(timeout_s=self.timeout),
             )
             return True, {"model": response.get("model"), "usage": response.get("usage", {})}

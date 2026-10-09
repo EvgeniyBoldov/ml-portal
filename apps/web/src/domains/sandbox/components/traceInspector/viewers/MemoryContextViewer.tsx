@@ -1,27 +1,114 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorScalar, InspectorStatus, InspectorTextBlock } from '@/shared/ui/Inspector';
-import type { TraceMemoryContext, TraceMemoryContextItem } from '../../../traceProjection';
-import { InspectorEmptyState, InspectorSection, InspectorStack } from '../InspectorPrimitives';
+import { InspectorStatus, InspectorTextBlock } from '@/shared/ui/Inspector';
+import type {
+  TraceMemoryContext,
+  TraceMemoryContextItem,
+} from '@/domains/sandbox/traceProjection';
+import {
+  InspectorEmptyState,
+  InspectorSection,
+  InspectorStack,
+} from '../InspectorPrimitives';
+import { MemoryItemsTable } from './MemoryItemsTable';
 
-function Item({ item }: { item: TraceMemoryContextItem }) {
-  if (item.type === 'fact') return <InspectorFieldGroup><InspectorFieldRow label="Тип"><InspectorScalar value="Факт" /></InspectorFieldRow><InspectorFieldRow label="Область"><InspectorScalar value={item.scope} /></InspectorFieldRow><InspectorFieldRow label="Свойство"><InspectorScalar value={item.subject} /></InspectorFieldRow><InspectorFieldRow label="Значение"><InspectorScalar value={item.value} /></InspectorFieldRow></InspectorFieldGroup>;
-  if (item.type === 'project') return <InspectorFieldGroup><InspectorFieldRow label="Тип"><InspectorScalar value="Проект" /></InspectorFieldRow><InspectorFieldRow label="Ключ"><InspectorScalar value={item.key} /></InspectorFieldRow><InspectorFieldRow label="Название"><InspectorScalar value={item.name} /></InspectorFieldRow>{item.matchedAliases.length ? <InspectorFieldRow label="Совпавшие алиасы"><InspectorTextBlock text={item.matchedAliases.join(', ')} /></InspectorFieldRow> : null}</InspectorFieldGroup>;
-  if (item.type === 'knowledge') return <InspectorFieldGroup><InspectorFieldRow label="Тип"><InspectorScalar value={item.kind} /></InspectorFieldRow><InspectorFieldRow label="Область"><InspectorScalar value={item.scope} /></InspectorFieldRow><InspectorFieldRow label="Свойство"><InspectorScalar value={item.subject} /></InspectorFieldRow><InspectorFieldRow label="Значение"><InspectorTextBlock text={item.value} /></InspectorFieldRow>{item.confidence !== undefined ? <InspectorFieldRow label="Уверенность"><InspectorScalar value={item.confidence} /></InspectorFieldRow> : null}{item.sourceReferences.length ? <InspectorFieldRow label="Источники"><InspectorScalar value={item.sourceReferences.length} /></InspectorFieldRow> : null}</InspectorFieldGroup>;
-  return <InspectorFieldGroup><InspectorFieldRow label="Тип"><InspectorScalar value="Термин" /></InspectorFieldRow><InspectorFieldRow label="Область"><InspectorScalar value={item.scope} /></InspectorFieldRow><InspectorFieldRow label="Термин"><InspectorScalar value={item.term} /></InspectorFieldRow><InspectorFieldRow label="Описание"><InspectorTextBlock text={item.description} /></InspectorFieldRow>{item.aliases.length ? <InspectorFieldRow label="Алиасы"><InspectorTextBlock text={item.aliases.join(', ')} /></InspectorFieldRow> : null}</InspectorFieldGroup>;
-}
+import styles from './MemoryContextViewer.module.css';
 
-export function MemoryContextViewer({ context }: { context?: TraceMemoryContext }) {
-  if (!context) return <InspectorEmptyState message="Подготовленный memory context не записан в журнал." />;
-  return <InspectorStack>
-    <InspectorFieldGroup>
-      <InspectorFieldRow label="Статус"><InspectorStatus label={context.fallback ? 'Fallback без памяти' : 'Подготовлен'} tone={context.fallback ? 'warn' : 'success'} /></InspectorFieldRow>
-      <InspectorFieldRow label="Выбрано фактов"><InspectorScalar value={context.selectedFacts} /></InspectorFieldRow>
-      <InspectorFieldRow label="Выбрано проектов"><InspectorScalar value={context.selectedProjects} /></InspectorFieldRow>
-      <InspectorFieldRow label="Выбрано терминов"><InspectorScalar value={context.selectedGlossary} /></InspectorFieldRow>
-      <InspectorFieldRow label="Выбрано знаний"><InspectorScalar value={context.selectedMemoryItems} /></InspectorFieldRow>
-    </InspectorFieldGroup>
-    {context.context.length ? <InspectorSection title="Контекст"> <InspectorStack>{context.context.map((item, index) => <Item key={`${item.type}:${index}`} item={item} />)}</InspectorStack></InspectorSection> : null}
-    {context.ambiguities.length ? <InspectorSection title="Неоднозначности"><InspectorTextBlock text={context.ambiguities.join('\n')} /></InspectorSection> : null}
-    {context.sourceCheckReasons.length ? <InspectorSection title="Требуется проверка источника"><InspectorTextBlock text={context.sourceCheckReasons.join('\n')} /></InspectorSection> : null}
-    {context.searchScope ? <InspectorSection title="Область поиска"><InspectorTextBlock text={JSON.stringify(context.searchScope, null, 2)} /></InspectorSection> : null}
-  </InspectorStack>;
+export function MemoryContextViewer({
+  context,
+}: {
+  context?: TraceMemoryContext;
+}) {
+  if (!context)
+    return (
+      <InspectorEmptyState message="Контекст памяти не записан в журнал." />
+    );
+  const groups: {
+    title: string;
+    items: TraceMemoryContextItem[];
+    showScope?: boolean;
+  }[] = [
+    {
+      title: 'Факты пользователя',
+      items: context.context.filter(
+        item => item.type === 'fact' && item.scope === 'user'
+      ),
+    },
+    {
+      title: 'Факты тенанта',
+      items: context.context.filter(
+        item => item.type === 'fact' && item.scope === 'tenant'
+      ),
+    },
+    {
+      title: 'Глоссарий',
+      items: context.context.filter(item => item.type === 'glossary'),
+    },
+    {
+      title: 'Долговременная память',
+      items: context.context.filter(item => item.type === 'knowledge'),
+    },
+    {
+      title: 'Проекты',
+      items: context.context.filter(item => item.type === 'project'),
+    },
+    {
+      title: 'Другие факты контекста',
+      items: context.context.filter(
+        item => item.type === 'fact' && !['user', 'tenant'].includes(item.scope)
+      ),
+      showScope: true,
+    },
+  ];
+  const counts: [string, number][] = [
+    ['Факты', context.selectedFacts],
+    ['Проекты', context.selectedProjects],
+    ['Термины', context.selectedGlossary],
+    ['Знания', context.selectedMemoryItems],
+  ];
+  return (
+    <InspectorStack>
+      <div className={styles.summary}>
+        <InspectorStatus
+          label={context.fallback ? 'Fallback без памяти' : 'Подготовлен'}
+          tone={context.fallback ? 'warn' : 'success'}
+        />
+        {counts
+          .filter(([, count]) => count > 0)
+          .map(([label, count]) => (
+            <span key={label} className={styles.count}>
+              {label}: <strong>{count}</strong>
+            </span>
+          ))}
+      </div>
+      {groups
+        .filter(group => group.items.length > 0)
+        .map(group => (
+          <InspectorSection
+            key={group.title}
+            title={`${group.title} · ${group.items.length}`}
+          >
+            <MemoryItemsTable items={group.items} showScope={group.showScope} />
+          </InspectorSection>
+        ))}
+      {!context.context.length ? (
+        <InspectorEmptyState message="Память не использовалась." />
+      ) : null}
+      {context.ambiguities.length ? (
+        <InspectorSection title="Неоднозначности">
+          <InspectorTextBlock text={context.ambiguities.join('\n')} />
+        </InspectorSection>
+      ) : null}
+      {context.sourceCheckReasons.length ? (
+        <InspectorSection title="Требуется проверка источника">
+          <InspectorTextBlock text={context.sourceCheckReasons.join('\n')} />
+        </InspectorSection>
+      ) : null}
+      {context.searchScope ? (
+        <InspectorSection title="Область поиска">
+          <InspectorTextBlock
+            text={JSON.stringify(context.searchScope, null, 2)}
+          />
+        </InspectorSection>
+      ) : null}
+    </InspectorStack>
+  );
 }

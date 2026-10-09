@@ -29,10 +29,11 @@ from app.core.http.clients import LLMClientProtocol
 from app.adapters.interfaces.llm import LLMCallOptions, LLMErrorCode, LLMProviderError
 from app.core.logging import get_logger
 from app.models.system_llm_role import SystemLLMRoleType
-from app.runtime.llm.limits import estimate_tokens
+from app.runtime.llm.usage import estimate_tokens
 from app.runtime.events import RuntimeEvent, RuntimeEventType
-from app.services.model_call_config_service import ModelCallConfigService
+from app.services.runtime_limits_service import RuntimeLimitsService
 from app.services.system_llm_role_service import SystemLLMRoleService
+from app.services.system_role_prompt import compile_system_role_prompt
 
 logger = get_logger(__name__)
 
@@ -86,15 +87,6 @@ _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTALL | 
 _JSON_OBJECT = re.compile(r"(\{.*\}|\[.*\])", re.DOTALL)
 
 
-_ROLE_PROMPT_SECTIONS = [
-    ("identity", "IDENTITY"),
-    ("mission", "MISSION"),
-    ("rules", "RULES"),
-    ("safety", "SAFETY"),
-    ("output_requirements", "OUTPUT REQUIREMENTS"),
-]
-
-
 class StructuredLLMCall:
     """Thin, reusable wrapper over LLM chat for structured (JSON) outputs."""
 
@@ -107,7 +99,7 @@ class StructuredLLMCall:
         self.session = session
         self.llm_client = llm_client
         self.role_service = SystemLLMRoleService(session)
-        self.model_call_config_service = ModelCallConfigService(session)
+        self.limits_service = RuntimeLimitsService(session)
         # Trace logging deferred: v3 pipeline will use a dedicated RuntimeTrace
         # service (see TODO in runtime/__init__.py). For now traces are skipped
         # and trace_id is returned as None.
@@ -174,19 +166,14 @@ class StructuredLLMCall:
             {"role": "user", "content": user_message},
         ]
 
-        model_call_config = await self.model_call_config_service.resolve(model)
+        model_call_config = await self.limits_service.resolve_model(model)
         configured_timeout_s = model_call_config.request_timeout_s
-        timeout_s = int(role_config.get("timeout_s") or configured_timeout_s)
-        max_retries = int(role_config.get("max_retries") if role_config.get("max_retries") is not None else model_call_config.max_retries)
-        retry_backoff = str(role_config.get("retry_backoff") or "exp")
-        max_tokens = role_config.get("max_tokens")
-        if max_tokens is None:
-            max_tokens = model_call_config.max_output_tokens
+        timeout_s = configured_timeout_s
+        max_retries = model_call_config.max_retries
+        retry_backoff = "exp"
         params: Dict[str, Any] = {}
         if temperature is not None:
             params["temperature"] = temperature
-        if max_tokens is not None:
-            params["max_tokens"] = max_tokens
         role_key = str(role.value).strip().lower()
         input_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_message)
         # The adapter owns the actual SDK request timeout. Keeping the limit
@@ -226,14 +213,13 @@ class StructuredLLMCall:
         ).encode("utf-8"))
         logger.info(
             "Structured LLM effective limits role=%s model=%s configured_timeout_s=%s "
-            "effective_timeout_s=%s max_retries=%s max_tokens=%s input_tokens_estimate=%s "
+            "effective_timeout_s=%s max_retries=%s input_tokens_estimate=%s "
             "request_bytes=%s response_schema_bytes=%s",
             role_key,
             model,
             configured_timeout_s,
             timeout_s,
             max_retries,
-            params.get("max_tokens"),
             input_tokens,
             request_bytes,
             response_schema_bytes,
@@ -289,13 +275,12 @@ class StructuredLLMCall:
 
             logger.info(
                 "Structured LLM attempt started role=%s model=%s attempt=%s/%s "
-                "timeout_s=%s max_tokens=%s llm_call_id=%s",
+                "timeout_s=%s llm_call_id=%s",
                 role_key,
                 model,
                 attempt + 1,
                 max_retries + 1,
                 timeout_s,
-                params.get("max_tokens"),
                 llm_call_id,
             )
 
@@ -346,16 +331,19 @@ class StructuredLLMCall:
                     purpose="planning_decision" if role_key == "planner" else role_key,
                     model=model,
                     temperature=temperature,
-                    max_tokens=params.get("max_tokens"),
                     input_tokens_estimate=input_tokens,
                     request_bytes=attempt_request_bytes,
                     response_schema_bytes=attempt_response_schema_bytes,
                     messages=messages,
                 ))
             try:
+                async def on_transport_retry() -> None:
+                    if budget_registry is not None and budget_entity_id:
+                        budget_registry.consume(budget_entity_id, "llm_calls", 1, reason="context_correction")
+                        budget_registry.consume(budget_entity_id, "retries", 1, reason="context_correction")
                 response = await asyncio.wait_for(
                     self.llm_client.chat(messages, model=model, params=params or None,
-                                         options=LLMCallOptions(timeout_s=timeout_s)),
+                                         options=LLMCallOptions(timeout_s=timeout_s, on_transport_retry=on_transport_retry)),
                     timeout=timeout_s,
                 )
             except asyncio.CancelledError:
@@ -628,21 +616,15 @@ class StructuredLLMCall:
 
     @staticmethod
     def _shrink_request_for_provider_limit(params: Dict[str, Any]) -> bool:
-        """Prepare one bounded adaptive retry after an HTTP 413.
+        """Remove the optional schema envelope after a provider payload error.
 
-        ``max_tokens`` is a ceiling, so lowering it after a provider rejects
-        the whole request does not change the requested semantics.  The first
-        retry also removes the optional JSON Schema transport envelope; the
-        local Pydantic validator still enforces the same contract.
+        The local Pydantic validator still enforces the same response contract.
+        Output allocation remains exclusively in the connector.
         """
         changed = False
         response_format = params.get("response_format")
         if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
             params["response_format"] = {"type": "json_object"}
-            changed = True
-        current = params.get("max_tokens")
-        if isinstance(current, int) and current > 256:
-            params["max_tokens"] = max(256, current // 2)
             changed = True
         return changed
 
@@ -835,7 +817,7 @@ class StructuredLLMCall:
             base_ms = min(10_000, 500 * (2 ** max(0, attempt)))
         if retry_after_ms is None:
             return base_ms
-        return min(30_000, max(base_ms, max(0, retry_after_ms)))
+        return max(base_ms, max(0, retry_after_ms))
 
     @staticmethod
     def _compile_role_prompt(
@@ -851,97 +833,21 @@ class StructuredLLMCall:
         operator-authored output requirements; structured roles additionally receive
         the non-editable runtime schema that the parser enforces.
         """
-        parts: list[str] = []
+        parts = [compile_system_role_prompt(role_config, role_override)]
         role_type = str(role_config.get("role_type") or "").strip().lower()
-        for field, heading in _ROLE_PROMPT_SECTIONS:
-            base = role_config.get(field)
-            override_val = role_override.get(field) if isinstance(role_override, dict) else None
-            val = override_val if override_val is not None else base
-            if val:
-                parts.append(f"# {heading}\n{val}")
 
         if role_type != SystemLLMRoleType.SYNTHESIZER.value and schema is not None:
             generated_schema = StructuredLLMCall._compact_response_schema(schema.model_json_schema())
             if role_type == SystemLLMRoleType.PLANNER.value:
-                parts.append(
-                    "# PLANNER RUNTIME CONTRACT\n"
-                    "Планер не формирует пользовательский ответ и возвращает полную неизменяемую iteration proposal. "
-                    "Задачи iteration всегда агентские. terminal=planner возвращает управление планеру; "
-                    "terminal=synthesis завершает run и требует synthesis_brief. "
-                    "Если в iteration есть неуспешная задача, runtime вызовет planner независимо от terminal. "
-                    "Рабочие задачи используют executor только из available_agents.\n"
-                    "Планер НИКОГДА не создаёт поле needs и не объявляет новые зависимости-данные. "
-                    "needs создаёт только исполнитель задачи после фактической попытки работы. "
-                    "Если во входе есть pending needs, закрывай их только явным binding. "
-                    "Если execution_ledger.needs пуст, bindings ОБЯЗАН быть пустым массивом: "
-                    "на первой итерации нельзя придумывать needs или bindings. "
-                    "Binding допустим только для существующего pending need, с resolution.action=continue_with_tasks; "
-                    "его consumer обязан зависеть от producer, а consumer_input_key нельзя заранее указывать в inputs. "
-                    "Для передачи результата между задачами используй depends_on и binding без placeholder-строк "
-                    "в inputs (например, не передавай jira_tasks=\"jira_tasks\"). "
-                    "Неполные результаты и неуспешные задачи должны получить явное resolution в следующем решении планера.\n"
-                    "Для terminal=synthesis не используй continue_with_tasks: в такой proposal нет replacement-задач. "
-                    "В synthesis_brief.user_question дословно скопируй исходный goal из входа, включая язык и формулировку; "
-                    "не пересказывай его и не меняй пунктуацию. Это исходный вопрос пользователя, а не краткое описание задачи. "
-                    "Не повторяй уже сохранённые resolutions. Для каждой текущей незавершённой задачи выбери ровно одно "
-                    "действие; continue_with_tasks допустим только если все replacement_task_ids присутствуют в tasks этой proposal.\n"
-                    "После agent_task_completion_invalid, agent_task_completion_missing или output_contract_invalid "
-                    "запрещён повтор с теми же executor, inputs и expected_outputs: смена task_id и instructions "
-                    "не исправляет контракт. Выбери действительно иной контракт/путь либо report_unresolved "
-                    "и terminal=synthesis с честным ограничением.\n"
-                    "memory_context содержит два безопасных вида данных: confirmed user/tenant facts и runtime facts (элементы с scope, subject, value), "
-                    "и результаты memory_recall. Facts — это устойчивые пользовательские/тенантные defaults: используй их для "
-                    "разрешения «мой/наш», project_hints и параметров задач; runtime fact current_date задаёт сегодняшнюю дату. "
-                    "Не выдавай facts за текущее состояние внешней системы. "
-                    "memory_recall содержит relevant_knowledge, правила и процедуры и используется только как долговременный контекст. "
-                    "Для поиска области или alias используй planner tool memory.lookup, который возвращает только identities. "
-                    "Для неизвестной аббревиатуры, long memory или подтверждённого user/tenant fact, отсутствующего в стартовом срезе, "
-                    "планер может вызвать объявленный planner tool memory.search. Для фактов используй scopes=user/tenant и при необходимости fact_subject; "
-                    "не создавай для этого агентскую задачу. Если rag_required=true, "
-                    "до terminal=synthesis обязательно запланируй и получи успешный collection.document.search. "
-                    "Если tool_required=true, не представляй memory как текущее состояние системы: запланируй доступный read-only tool "
-                    "или явно укажи невозможность получить runtime observation. "
-                    "Если проект для знания нужен, но ключ отсутствует или контекст неоднозначен, заверши iteration "
-                    "terminal=planner и создай задачу получения недостающих данных. Когда вызываешь executor=knowledge, передай точный project_key "
-                    "в task.inputs.\n"
-                    "Если задача должна создать скачиваемый файл (например, заполнение шаблона или file.generate), "
-                    "объяви соответствующий expected_output с fulfillment=artifact. Artifact подтверждается только "
-                    "успешной runtime-операцией, а не текстом агента. Для fulfillment=verified_receipt обязательно "
-                    "перечисли допустимые canonical operation names в receipt_operations; чужой успешный receipt не засчитывается. "
-                    "Для списка, таблицы, текста или структурированных данных, которые пользователь просит получить из внешней системы, "
-                    "используй fulfillment=task_result с конкретной JSON Schema: агент вернёт нормализованное значение из tool result. "
-                    "Не используй verified_receipt как замену данных списка. verified_receipt оставь только для задачи, где пользователю нужен "
-                    "именно факт выполнения/получения доказательства, и указывай только реально опубликованное canonical operation name, "
-                    "а не семантический intent вроде search_jira_tickets. "
-                    "Если available_agents публикует task_contracts, выбери contract.mode=registered и contract.contract_id; "
-                    "не передавай expected_outputs — runtime зафиксирует опубликованную схему. Для task scope_keys "
-                    "выбирай только subset effective scope_context.ceiling_keys и указывай scope_reason; scope_mode=replace "
-                    "используй только когда задача должна целиком заменить область. Dynamic contract используй "
-                    "только когда агент явно supports_dynamic_contracts."
-                )
+                from app.runtime.planner.prompt_contract import PLANNER_RUNTIME_CONTRACT
+                parts.append(PLANNER_RUNTIME_CONTRACT)
             if role_type == SystemLLMRoleType.TURN_PREFLIGHT.value:
                 from app.services.turn_preflight_prompt import TURN_PREFLIGHT_SCOPE_POLICY_V2
                 parts.append(TURN_PREFLIGHT_SCOPE_POLICY_V2)
             parts.append(
                 "# RUNTIME RESPONSE CONTRACT\n"
                 "Верни строго валидный JSON по следующей схеме (без markdown и пояснений):\n"
-                f"{json.dumps(generated_schema, ensure_ascii=False, indent=2)}"
+                f"{json.dumps(generated_schema, ensure_ascii=False, separators=(',', ':'))}"
             )
 
-        examples = role_config.get("examples")
-        override_examples = role_override.get("examples") if isinstance(role_override, dict) else None
-        effective_examples = override_examples if override_examples is not None else examples
-        if effective_examples:
-            parts.append("# EXAMPLES")
-            for i, example in enumerate(effective_examples, 1):
-                parts.append(f"## Example {i}")
-                if isinstance(example, dict):
-                    if example.get("description"):
-                        parts.append(f"Description: {example['description']}")
-                    if example.get("input"):
-                        parts.append(f"Input: {example['input']}")
-                    if example.get("output"):
-                        parts.append(f"Output: {example['output']}")
-                parts.append("")
-
-        return "\n\n".join(parts) if parts else (role_config.get("prompt") or "You are a helpful assistant.")
+        return "\n\n".join(parts)

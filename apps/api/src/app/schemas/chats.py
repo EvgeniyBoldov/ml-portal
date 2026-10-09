@@ -45,7 +45,6 @@ class ChatTurnRequest(BaseModel):
     rag_params: Optional[Dict[str, Any]] = Field(None)
     messages: Optional[List[ChatMessage]] = Field(None)
     temperature: Optional[float] = Field(None)
-    max_tokens: Optional[int] = Field(None)
     idempotency_key: Optional[str] = Field(None)
 
 

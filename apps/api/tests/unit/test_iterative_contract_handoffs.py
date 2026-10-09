@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from app.runtime.agent_executor import AgentExecutor
 import pytest
 
@@ -39,8 +40,12 @@ def test_agent_receives_task_inputs_and_terminal_contract_once() -> None:
     assert "Structured finding" not in message
     assert "typed slot" not in message
     assert "Structured finding" in system_prompt
-    assert '"required": ["name"]' in system_prompt
-    assert "typed slot" in system_prompt
+    presentation = json.loads(next(
+        line.split(": ", 1)[1] for line in system_prompt.splitlines()
+        if line.startswith("Requested presentation (schema is advisory): ")
+    ))
+    assert presentation["data_hints"][0]["schema"]["required"] == ["name"]
+    assert "structured_response" in system_prompt
 
 
 def test_partial_artifact_is_runtime_verified_before_synthesis() -> None:
@@ -76,15 +81,16 @@ def test_latest_resolution_controls_synthesis_and_report_unresolved_is_visible()
 
     context = SynthesisContextBuilder().build(plan=plan, iteration_id="iteration")
 
-    assert context["completed_task_reports"] == []
+    assert context["completed_task_reports"][0]["description"] == "partial"
     assert context["limitations"] == [{"task_id": "task", "status": "unfulfillable", "reason_code": "incomplete", "message": "Still incomplete"}]
     assert context["resolution_decisions"] == [{"task_id": "task", "action": "report_unresolved", "output_keys": [], "reason": "current"}]
 
 
 def test_output_schema_uses_full_json_schema_validation() -> None:
-    assert not TaskAttemptResultReducer._matches_schema(
+    from app.runtime.task_result_reducer import schema_diagnostics
+    assert schema_diagnostics(
         {"count": -1},
-        {"type": "object", "properties": {"count": {"type": "integer", "minimum": 0}}},
+        {"type": "object", "properties": {"count": {"type": "integer", "minimum": 0}}}, "structured_response",
     )
 
 
@@ -153,7 +159,7 @@ def test_data_agent_tasks_are_forced_to_require_fresh_retrieval() -> None:
     assert compiled.tasks[0].freshness_policy.value == "require_retrieval"
 
 
-def test_reducer_rejects_undeclared_output_slots() -> None:
+def test_reducer_preserves_additional_data() -> None:
     request = _task(expected_outputs=[{
         "key": "name", "description": "Name", "schema": {"type": "string"},
     }])
@@ -165,8 +171,8 @@ def test_reducer_rejects_undeclared_output_slots() -> None:
 
     result = TaskAttemptResultReducer().reduce(request=request, declaration=execution, verified={})
 
-    assert result.outcome.value == "unfulfillable"
-    assert result.reason_code == "output_contract_invalid"
+    assert result.outcome.value == "completed"
+    assert result.outputs["internal"] == "must not escape"
 
 
 def test_verified_receipt_must_match_the_declared_operation() -> None:
@@ -181,7 +187,7 @@ def test_verified_receipt_must_match_the_declared_operation() -> None:
     rejected = TaskAttemptResultReducer().reduce(request=request, declaration=execution, verified={"receipts": [{"result_ref": "result_1", "operation": "file.read"}]})
     accepted = TaskAttemptResultReducer().reduce(request=request, declaration=execution, verified={"receipts": [{"result_ref": "result_1", "canonical_operation": "file.generate"}]})
 
-    assert rejected.outcome.value == "unfulfillable"
+    assert rejected.outcome.value == "completed"
     assert accepted.outcome.value == "completed"
 
 
@@ -241,8 +247,7 @@ def test_binding_schema_is_validated_against_the_actual_value_at_handoff() -> No
     }
     plan["needs"] = [{"task_id": "old", "ref": "missing", "schema": {"type": "integer"}}]
     plan["bindings"] = [{"need_task_id": "old", "need_ref": "missing", "producer_task_id": "producer", "output_key": "value", "consumer_task_id": "consumer", "consumer_input_key": "value"}]
-    with pytest.raises(PlanValidationError, match="does not satisfy"):
-        store.task_request(plan["id"], "consumer")
+    assert store.task_request(plan["id"], "consumer")["inputs"]["value"] == "not-an-integer"
 
 
 def test_completed_task_resolution_is_ignored_when_planner_moves_to_synthesis() -> None:

@@ -27,7 +27,8 @@ from app.runtime.input_builders import SynthesizerInputBuilder
 from app.runtime.llm.streaming import RoleStreamingCall, StreamDelta, StreamError, StreamTurn
 from app.runtime.turn_state import RuntimeTurnState
 from app.services.system_llm_role_service import SystemLLMRoleService
-from app.services.model_call_config_service import ModelCallConfigService
+from app.services.runtime_limits_service import RuntimeLimitsService
+from app.services.system_role_prompt import compile_system_role_prompt
 
 logger = get_logger(__name__)
 
@@ -37,7 +38,7 @@ logger = get_logger(__name__)
 _FALLBACK_SYSTEM_PROMPT = (
     "Ты — редактор финального ответа корпоративного AI-портала. "
     "Ответь на вопрос и в направлении, заданных synthesis brief, используя "
-    "только runtime-owned reports. Не добавляй новые факты."
+    "источники текущего SYNTHESIS INPUT MODE. Не добавляй новые факты."
 )
 _FILE_DELIVERY_RULE = (
     "Сгенерированные файлы доставляются интерфейсом отдельными вложениями. "
@@ -49,8 +50,12 @@ _FILE_DELIVERY_RULE = (
 _PLANNED_SYNTHESIS_MODE = (
     "# SYNTHESIS INPUT MODE\n"
     "mode=planned. Источником содержания являются только completed_task_reports, "
-    "явно принятые partial outputs, verified sources/artifacts и limitations. "
-    "Не используй plan_outline, намерения задач или непроверенные утверждения как выполненный результат."
+    "результаты и пояснения всех задач с их статусами, runtime sources/artifacts и limitations. Не выдавай неуспешную работу за выполненную. "
+    "synthesis_brief и plan_outline задают цель и форму ответа, а не доказывают выполнение. "
+    "Не используй намерения задач или непроверенные утверждения как выполненный результат. "
+    "Если подтверждённых данных нет, сообщи, что они не получены; причину называй только из diagnostics/limitations. "
+    "Не выводи из пустых отчётов отсутствие интеграции или прав. "
+    "Не обещай последующее получение данных или выполнение задач."
 )
 _DIRECT_SYNTHESIS_MODE = (
     "# SYNTHESIS INPUT MODE\n"
@@ -60,42 +65,8 @@ _DIRECT_SYNTHESIS_MODE = (
     "если это не подтверждено в direct_answer_draft."
 )
 
-_ROLE_PROMPT_SECTIONS = [
-    ("identity", "IDENTITY"),
-    ("mission", "MISSION"),
-    ("rules", "RULES"),
-    ("safety", "SAFETY"),
-    ("output_requirements", "OUTPUT REQUIREMENTS"),
-]
-
-
 def _compile_role_prompt(role_config: Dict[str, object], role_override: Optional[Dict[str, object]]) -> str:
-    """Recompile system prompt from role config parts + optional sandbox overrides."""
-    parts: list[str] = []
-    for field, heading in _ROLE_PROMPT_SECTIONS:
-        base = role_config.get(field)
-        override_val = role_override.get(field) if isinstance(role_override, dict) else None
-        val = override_val if override_val is not None else base
-        if val:
-            parts.append(f"# {heading}\n{val}")
-
-    examples = role_config.get("examples")
-    override_examples = role_override.get("examples") if isinstance(role_override, dict) else None
-    effective_examples = override_examples if override_examples is not None else examples
-    if effective_examples:
-        parts.append("# EXAMPLES")
-        for i, example in enumerate(effective_examples, 1):
-            parts.append(f"## Example {i}")
-            if isinstance(example, dict):
-                if example.get("description"):
-                    parts.append(f"Description: {example['description']}")
-                if example.get("input"):
-                    parts.append(f"Input: {example['input']}")
-                if example.get("output"):
-                    parts.append(f"Output: {example['output']}")
-            parts.append("")
-
-    return "\n\n".join(parts) if parts else (role_config.get("prompt") or _FALLBACK_SYSTEM_PROMPT)
+    return compile_system_role_prompt(role_config, role_override, fallback=_FALLBACK_SYSTEM_PROMPT)
 
 
 class Synthesizer:
@@ -202,6 +173,12 @@ class Synthesizer:
                 },
             ),
         )
+        yield RuntimeEvent.status(
+            "memory_context_used",
+            entity_type="synthesis_run", entity_id=synthesis_run_id,
+            parent_entity_type="run", parent_entity_id=str(run_id),
+            memory_context=synthesis_context.get("memory_context") or [],
+        )
         sources = list(synthesis_context.get("sources") or [])
         attachments = self._attachments_from_context(synthesis_context)
 
@@ -226,16 +203,12 @@ class Synthesizer:
         )
         full = ""
         try:
-            model_call_config = await ModelCallConfigService(self.session).resolve(effective_model)
-            max_retries = int(
-                role_cfg.get("max_retries")
-                if role_cfg.get("max_retries") is not None
-                else model_call_config.max_retries
-            )
+            model_call_config = await RuntimeLimitsService(self.session).resolve_model(effective_model)
+            max_retries = model_call_config.max_retries
         except Exception as exc:  # noqa: BLE001
             # A role prompt can be served from a fallback even while the model
             # registry is temporarily unavailable. Keep the same safe default
-            # used by ModelCallConfigService in that degraded mode.
+            # used by RuntimeLimitsService in that degraded mode.
             logger.warning("Failed to resolve synthesizer model retry policy: %s", exc)
             max_retries = 2
         # One synthesis request may retry internally, but the frontend must
@@ -298,7 +271,7 @@ class Synthesizer:
                         retry_delay_ms = self._retry_delay_ms(
                             attempt=attempt,
                             retry_after_ms=stream_event.retry_after_ms,
-                            strategy=str(role_cfg.get("retry_backoff") or "exp"),
+                            strategy="exp",
                         )
                         yield RuntimeEvent(
                             RuntimeEventType.PROTOCOL_RETRY,
@@ -520,10 +493,6 @@ class Synthesizer:
                 "prompt": _FALLBACK_SYSTEM_PROMPT,
                 "model": None,
                 "temperature": 0.3,
-                "max_tokens": 2000,
-                "timeout_s": 60,
-                "max_retries": 1,
-                "retry_backoff": "none",
             }
 
 
@@ -543,4 +512,4 @@ class Synthesizer:
             base_ms = min(10_000, 500 * (2 ** max(0, attempt)))
         if retry_after_ms is None:
             return base_ms
-        return min(30_000, max(base_ms, max(0, retry_after_ms)))
+        return max(base_ms, max(0, retry_after_ms))

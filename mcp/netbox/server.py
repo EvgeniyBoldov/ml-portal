@@ -357,7 +357,7 @@ async def mcp_root(
                     "tools": [
                         {
                             "name": "netbox_get_device",
-                            "description": "Look up a device by exact name. Returns the matching device record; interfaces are separate dcim.interface objects and require netbox_get_objects. A zero count means no exact match.",
+                            "description": "Get a device by its exact name.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -373,7 +373,7 @@ async def mcp_root(
                         },
                         {
                             "name": "netbox_search_devices",
-                            "description": "Search NetBox devices by name pattern or keyword. Returns list of matching devices with site, rack, role, status, primary IP. Use for partial name search or when listing devices in a location.",
+                            "description": "Search device names and descriptions by non-empty text.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -391,7 +391,7 @@ async def mcp_root(
                         },
                         {
                             "name": "netbox_list_sites",
-                            "description": "List a page of sites (datacenters/offices). Returns site records and NetBox count/next fields; does not calculate device counts. Use site slugs from results when filtering other objects.",
+                            "description": "List a page of sites with count and next-page metadata.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -407,15 +407,7 @@ async def mcp_root(
                         },
                         {
                             "name": "netbox_get_objects",
-                            "description": (
-                                "Query one NetBox object type using its API list filters. "
-                                "Use ipam.prefix with filters.prefix for an exact CIDR, or ipam.ipaddress with filters.address for an exact IP. "
-                                "For interfaces use dcim.interface and filter by device. "
-                                "Supported standard types: dcim.device/site/rack/interface/cable/devicerole/manufacturer/devicetype; "
-                                "ipam.ipaddress/prefix/vlan/vrf; virtualization.virtualmachine/vminterface. "
-                                "Plugin types use their published names. Filters depend on object type; an HTTP error is not an empty result. "
-                                "Follow count/next and use offset for additional pages."
-                            ),
+                            "description": "List a page of one NetBox object type, optionally filtered. Nested attributes remain in the records.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -434,15 +426,11 @@ async def mcp_root(
                         },
                         {
                             "name": "netbox_search_objects",
-                            "description": (
-                                "Search up to five object types with each endpoint's q filter. Defaults to device, rack, site, IP address and prefix. "
-                                "Returns results and per-type errors; an omitted or failed type must not be treated as an empty match. "
-                                "For exact CIDR/IP or relationship queries use netbox_get_objects with type-specific filters."
-                            ),
+                            "description": "Search up to five NetBox object types by non-empty text. Returns matching records and per-type errors.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "q": {"type": "string", "description": "Search query string"},
+                                    "q": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Non-empty text matched inside the selected object types"},
                                     "object_types": {
                                         "type": "array",
                                         "items": {"type": "string"},

@@ -14,8 +14,8 @@ from app.adapters.interfaces.llm import LLMCallOptions, LLMProviderError
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.budgets import BudgetRegistry
 from app.runtime.error_payloads import build_debug_payload
-from app.runtime.llm.limits import estimate_tokens
-from app.services.model_call_config_service import ModelCallConfigService
+from app.runtime.llm.usage import estimate_tokens
+from app.services.runtime_limits_service import RuntimeLimitsService
 from app.services.system_llm_role_service import SystemLLMRoleService
 
 
@@ -66,7 +66,7 @@ class RoleStreamingCall:
     ) -> None:
         self._llm_client = llm_client
         self._role_service = SystemLLMRoleService(session)
-        self._model_call_config_service = ModelCallConfigService(session)
+        self._limits_service = RuntimeLimitsService(session)
 
     async def invoke_stream(
         self,
@@ -83,29 +83,15 @@ class RoleStreamingCall:
     ) -> AsyncIterator[StreamEvent]:
         role_cfg = role_config or await self._role_service.get_role_config(role)
         model = model_override if model_override is not None else role_cfg.get("model")
-        model_call_config = await self._model_call_config_service.resolve(model)
-        timeout_s = int(role_cfg.get("timeout_s") or model_call_config.request_timeout_s)
+        model_call_config = await self._limits_service.resolve_model(model)
+        timeout_s = model_call_config.request_timeout_s
         params: Dict[str, Any] = {}
         if role_cfg.get("temperature") is not None:
             params["temperature"] = role_cfg["temperature"]
-        configured_max_tokens = role_cfg.get("max_tokens")
-        if configured_max_tokens is None:
-            configured_max_tokens = model_call_config.max_output_tokens
-        if configured_max_tokens is not None:
-            configured_max_tokens = int(configured_max_tokens)
-        if configured_max_tokens is not None:
-            params["max_tokens"] = configured_max_tokens
         if isinstance(params_override, dict):
             params.update(params_override)
 
         input_tokens = estimate_tokens(str(messages))
-        requested_output_tokens = int(params["max_tokens"]) if params.get("max_tokens") is not None else None
-        if configured_max_tokens is not None:
-            params["max_tokens"] = min(
-                requested_output_tokens or configured_max_tokens,
-                configured_max_tokens,
-            )
-
         if budget_registry is not None and budget_entity_id:
             budget_registry.consume(budget_entity_id, "llm_calls", 1, reason="llm_call")
             budget_registry.consume(budget_entity_id, "tokens_in", input_tokens, reason="llm_input")
@@ -115,9 +101,13 @@ class RoleStreamingCall:
         stream_error: Optional[Exception] = None
         stream_traceback: Optional[str] = None
         try:
+            async def on_transport_retry() -> None:
+                if budget_registry is not None and budget_entity_id:
+                    budget_registry.consume(budget_entity_id, "llm_calls", 1, reason="context_correction")
+                    budget_registry.consume(budget_entity_id, "retries", 1, reason="context_correction")
             stream_iter = self._llm_client.chat_stream(
                 messages, model=model, params=params or None,
-                options=LLMCallOptions(timeout_s=timeout_s),
+                options=LLMCallOptions(timeout_s=timeout_s, on_transport_retry=on_transport_retry),
             )
             async with asyncio.timeout(timeout_s):
                 async for chunk in _collect_stream(stream_iter):

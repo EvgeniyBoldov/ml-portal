@@ -142,6 +142,10 @@ class OperationExecutionFacade:
                 },
             ), []
 
+        from app.agents.runtime.result_workspace_tools import WORKSPACE_TOOLS, execute_workspace
+        if operation_call.tool_name in WORKSPACE_TOOLS:
+            return await execute_workspace(operation_call, ctx, self, operations, timeout_s), []
+
         reused = self._reuse_policy.maybe_reuse(
             operation_slug=operation_call.tool_name,
             arguments=operation_call.arguments,
@@ -696,14 +700,32 @@ class OperationExecutionFacade:
         import json as _json
 
         if result.success:
+            if result.metadata.get("workspace_view") and not stored_result:
+                output = dict(result.data) if isinstance(result.data, dict) else {"value": result.data}
+                from app.core.config import get_settings
+                budget = min(MAX_TOOL_CONTEXT_CHARS, get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3)
+                schema = output.get("observed_schema")
+                if isinstance(schema, dict):
+                    output["observed_schema"] = dict(list(schema.items())[:30])
+                    output["schema_complete"] = output.get("schema_complete", True) and len(schema) <= 30
+                while len(_json.dumps(output, ensure_ascii=False, default=str).encode()) > budget and output.get("observed_schema"):
+                    output["observed_schema"].pop(next(reversed(output["observed_schema"])))
+                    output["schema_complete"] = False
+                while len(_json.dumps(output, ensure_ascii=False, default=str).encode()) > budget and output.get("sql_columns"):
+                    output["sql_columns"].pop(next(reversed(output["sql_columns"])))
+                    output["schema_returned_columns"] = len(output["sql_columns"])
+                    output["schema_page_complete"] = False
+                    output["next_schema_offset"] = (output.get("schema_offset", 0) + len(output["sql_columns"])) if output["sql_columns"] else None
+                    output["schema_entry_too_large"] = not bool(output["sql_columns"])
+                if len(_json.dumps(output, ensure_ascii=False, default=str).encode()) > budget:
+                    output.pop("sample", None)
+                    output["sample_complete"] = False
+                return _json.dumps(output, ensure_ascii=False, default=str)
             if stored_result:
-                visible_schema = stored_result.get("observed_schema")
-                if isinstance(visible_schema, dict):
-                    visible_schema = dict(list(visible_schema.items())[:30])
                 descriptor = {
                     "_runtime_result": {
                         key: stored_result.get(key) for key in (
-                            "result_id", "payload_type", "payload_chars",
+                            "result_id", "call_id", "payload_type", "payload_chars",
                             "sql_ref", "row_count",
                             "schema_complete", "sample_complete", "inline_complete",
                             "source_total", "source_complete",
@@ -711,12 +733,6 @@ class OperationExecutionFacade:
                     },
                     "evidence_call_id": evidence_call_id,
                 }
-                if visible_schema is not None:
-                    descriptor["_runtime_result"]["observed_schema"] = visible_schema
-                    if isinstance(stored_result.get("observed_schema"), dict) and len(stored_result["observed_schema"]) > 30:
-                        descriptor["_runtime_result"]["schema_complete"] = False
-                if "sample" in stored_result:
-                    descriptor["_runtime_result"]["sample"] = stored_result.get("sample")
                 if "query_sql" in stored_result and stored_result.get("query_sql"):
                     descriptor["_runtime_result"]["query_sql"] = str(stored_result["query_sql"])[:1200]
                     descriptor["_runtime_result"]["query_sql_complete"] = len(str(stored_result["query_sql"])) <= 1200
@@ -724,20 +740,42 @@ class OperationExecutionFacade:
                     source_ids = list(stored_result["source_result_ids"])
                     descriptor["_runtime_result"]["source_result_ids"] = source_ids[:20]
                     descriptor["_runtime_result"]["source_ids_truncated"] = len(source_ids) > 20
-                metadata_budget = 1100 if stored_result.get("inline_complete") else MAX_TOOL_CONTEXT_CHARS - 200
+                from app.core.config import get_settings
+                metadata_budget = min(MAX_TOOL_CONTEXT_CHARS - 200,
+                                      get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3)
                 runtime_meta = descriptor["_runtime_result"]
-                while (len(_json.dumps(descriptor, ensure_ascii=False, default=str)) > metadata_budget
-                       and isinstance(runtime_meta.get("observed_schema"), dict)
-                       and runtime_meta["observed_schema"]):
-                    runtime_meta["observed_schema"].pop(next(reversed(runtime_meta["observed_schema"])))
-                    runtime_meta["schema_complete"] = False
-                if len(_json.dumps(descriptor, ensure_ascii=False, default=str)) > metadata_budget:
+                runtime_meta["delivery"] = "inline" if stored_result.get("inline_complete") else "stored"
+                runtime_meta["revision"] = stored_result.get("revision", 1)
+                from app.services.result_sql_projection import schema_page
+                meta = stored_result.get("dataset_meta") or {}
+                runtime_meta["has_more"] = meta.get("has_next")
+                if meta.get("errors"):
+                    runtime_meta["source_errors"] = meta["errors"][:3]
+                if meta.get("searched_types"):
+                    runtime_meta["searched_types"] = meta["searched_types"]
+                runtime_meta["source_state"] = "exhausted" if meta.get("complete") is True else ("more_available" if meta.get("has_next") else "unknown")
+                runtime_meta["hint"] = (
+                    "Loaded records saved. sql_columns are source fields, without added storage columns. "
+                    "Use result.read(result_id, fields=[column]) to inspect nested JSON values. "
+                    "In SQL, a JSONB field is queried as column->>'key'; use observed keys, not guessed paths. "
+                    "result.describe returns more columns via next_schema_offset or query. "
+                    "result.load fetches additional source pages; source_complete describes coverage.")
+                if not stored_result.get("sql_available", True):
+                    runtime_meta["hint"] = "Full data saved. Use result.read for records and result.describe for fields. result.load fetches source pages. Request analysis through needs if computation is required."
+                runtime_meta["sql_example"] = f"SELECT * FROM {stored_result['sql_ref']} LIMIT 5" if stored_result.get("sql_ref") and stored_result.get("sql_available", True) else None
+                if len(_json.dumps(descriptor, ensure_ascii=False, default=str).encode()) > metadata_budget:
                     runtime_meta.pop("query_sql", None)
                     runtime_meta.pop("query_sql_complete", None)
-                if len(_json.dumps(descriptor, ensure_ascii=False, default=str)) > metadata_budget:
+                if len(_json.dumps(descriptor, ensure_ascii=False, default=str).encode()) > metadata_budget:
                     runtime_meta.pop("sample", None)
+                runtime_meta.update(schema_page(stored_result.get("observed_schema") or {}, limit=15,
+                    budget=max(32, metadata_budget - len(_json.dumps(descriptor, ensure_ascii=False, default=str).encode()) - 400)))
+                if not stored_result.get("inline_complete") and stored_result.get("sample"):
+                    candidate = {**runtime_meta, "sample": stored_result["sample"]}
+                    if len(_json.dumps(candidate, ensure_ascii=False, default=str).encode()) < metadata_budget:
+                        runtime_meta["sample"] = stored_result["sample"]
                 if stored_result.get("inline_complete"):
-                    raw_output = result.data or {}
+                    raw_output = result.data
                     if isinstance(raw_output, dict):
                         raw_output = dict(raw_output)
                         raw_output["_runtime_result"] = descriptor["_runtime_result"]
@@ -748,8 +786,14 @@ class OperationExecutionFacade:
                                       "evidence_call_id": evidence_call_id}
                 else:
                     raw_output = descriptor
-                return _json.dumps(raw_output, ensure_ascii=False, default=str)
-            raw_output = result.data or {}
+                rendered = _json.dumps(raw_output, ensure_ascii=False, default=str)
+                if len(rendered.encode()) > get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3:
+                    descriptor["_runtime_result"]["delivery"] = "stored"
+                    descriptor["_runtime_result"]["inline_complete"] = False
+                    descriptor["_runtime_result"]["hint"] = "Full data saved; use result.read or result.sql to access it. result.load fetches source pages."
+                    rendered = _json.dumps(descriptor, ensure_ascii=False, default=str)
+                return rendered
+            raw_output = result.data
             canonical_operation = OperationExecutionFacade._canonical_operation_name(operation_slug)
             if isinstance(raw_output, dict):
                 # This ID is projected only into the follow-up LLM context as

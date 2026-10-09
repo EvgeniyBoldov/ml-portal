@@ -34,34 +34,15 @@ def test_terminal_string_patterns_validate_nonblank_multiline_text(text, valid):
     check_patterns(task_completion_json_schema(request()))
 
 
-def test_provider_projection_preserves_slots_but_local_validation_enforces_semantics():
+def test_provider_projection_contains_only_protocol_not_requested_data_schema():
     task = request()
     provider = task_completion_json_schema(task, provider_compatible=True)
-    assert "allOf" not in provider
-    assert "pattern" not in provider["properties"]["report"]
-    invalid = {"completion": "fulfilled", "report": "   ", "outputs": {}, "needs": []}
-    assert Draft202012Validator(provider).is_valid(invalid)
-    assert AgentExecutor._terminal_validation_errors(json.dumps(invalid), task=task, verified={})
-    invalid["report"] = "done"
-    invalid["outputs"] = {"answer": "raw value"}
-    assert not Draft202012Validator(provider).is_valid(invalid)
-    invalid["outputs"]["answer"] = {"kind": "value", "value": None}
-    assert Draft202012Validator(provider).is_valid(invalid)
-    assert AgentExecutor._terminal_validation_errors(json.dumps(invalid), task=task, verified={}) == []
-
-
-def test_provider_projection_keeps_property_names_and_does_not_mutate_task_schema():
-    task = TaskRequest(task_id="task", executor="agent", intent="answer", instructions="Answer",
-                       expected_outputs=[{"key": "answer", "description": "Answer", "schema": {
-                           "type": "object", "properties": {
-                               "pattern": {"type": "string", "pattern": "^a$"},
-                               "then": True,
-                           },
-                       }}])
-    provider = task_completion_json_schema(task, provider_compatible=True)
-    properties = provider["properties"]["outputs"]["properties"]["answer"]["properties"]["value"]["properties"]
-    assert properties == {"pattern": {"type": "string"}, "then": True}
-    assert task.expected_outputs[0].json_schema["properties"]["pattern"]["pattern"] == "^a$"
+    assert "outputs" not in provider["properties"]
+    assert "structured_response" in provider["properties"]
+    payload = {"completion": "fulfilled", "structured_response": {"answer": None}}
+    Draft202012Validator(provider).validate(payload)
+    assert AgentExecutor._terminal_validation_errors(json.dumps(payload), task=task, verified={}) == []
+    assert task.expected_outputs[0].json_schema == {"type": ["string", "null"]}
 
 
 @pytest.mark.parametrize("absent", [None, "", "   "])
@@ -97,9 +78,7 @@ def test_completion_rules_match_provider_schema(completion):
 
 
 @pytest.mark.parametrize("payload", [
-    {"completion": "fulfilled", "report": "   "},
     {"completion": "fulfilled", "report": "done", "unknown": None},
-    {"completion": "unfulfillable", "report": "blocked", "limitation": ""},
     {"completion": "needs", "report": "needs", "needs": None},
     {"completion": "fulfilled", "report": "done", "outputs": {"answer": {"kind": "value"}}},
 ])
@@ -108,9 +87,9 @@ def test_absence_does_not_hide_required_fields_or_unknown_fields(payload):
         parse_task_completion_declaration(json.dumps(payload))
 
 
-def test_task_validation_feedback_identifies_missing_required_output():
+def test_missing_advisory_output_needs_no_protocol_repair():
     errors = AgentExecutor._terminal_validation_errors('{"completion":"fulfilled","report":"done"}', task=request(), verified={})
-    assert errors == ["required_output_missing: The task result did not fulfill required outputs: answer"]
+    assert errors == []
 
 
 def test_duplicate_output_keys_are_rejected_before_execution():
@@ -120,7 +99,7 @@ def test_duplicate_output_keys_are_rejected_before_execution():
         TaskRequest.model_validate(task)
 
 
-def test_validation_feedback_can_be_repaired_using_existing_sql_receipt():
+def test_legacy_coverage_does_not_require_terminal_protocol_repair():
     task = TaskRequest(task_id="counts", executor="agent", intent="answer", instructions="Answer",
                        expected_outputs=[{"key": "counts", "description": "Counts", "schema": {"type": "array"}}])
     payload = {"completion": "fulfilled", "report": "done", "outputs": {"counts": {"kind": "value", "value": [{"type": "a", "count": 1}]}},
@@ -130,7 +109,7 @@ def test_validation_feedback_can_be_repaired_using_existing_sql_receipt():
                                  "mode": "sql", "result_id": "query-result", "query_result_stored": True,
                                  "query_complete": True, "source_result_ids": ["source"], "source_complete": True,
                              }}]}
-    assert AgentExecutor._terminal_validation_errors(json.dumps(payload), task=task, verified=verified) == ["outputs.counts: stored_result_array_coverage_unverified"]
+    assert AgentExecutor._terminal_validation_errors(json.dumps(payload), task=task, verified=verified) == []
     payload["coverage"][0]["query_call_ids"] = ["observed-query"]
     assert AgentExecutor._terminal_validation_errors(json.dumps(payload), task=task, verified=verified) == []
 

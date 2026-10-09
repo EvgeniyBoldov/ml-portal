@@ -46,7 +46,7 @@ class TemplateDescriptionBuilder:
                     {"role": "system", "content": DESCRIPTION_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
-                params={"temperature": 0.3, "max_tokens": 500},
+                params={"temperature": 0.3},
             )
             return resp.get("content", "").strip()
         except Exception as e:

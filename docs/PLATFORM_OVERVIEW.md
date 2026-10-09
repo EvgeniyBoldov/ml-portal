@@ -160,7 +160,9 @@ ML Portal — мульти-тенантная AI-платформа для ко�
 1. LLM инициирует `tool_call`.
 2. Runtime валидирует доступность инструмента и права.
 3. Выполняется handler с ToolContext (tenant_id, user_id, chat_id, scopes).
-4. Результат возвращается в runtime loop и влияет на финальный ответ.
+4. Ответ API/MCP нормализуется адаптером в `{value: [], meta: …}` и сохраняется как временный ResultSet в Data Workspace.
+5. Агент получает descriptor и ограниченное представление данных. `result.read` читает сохранённое, `result.load` догружает страницы источника в тот же набор; SQL-анализ создаёт новый набор с lineage.
+6. Между задачами передаются ссылки на наборы. Полноту работы оценивает агент; данные не становятся Long Memory. Подробности — [Runtime Tool Results](architecture/RUNTIME_TOOL_RESULTS.md).
 
 ## 5.4 Pause / Resume flow
 

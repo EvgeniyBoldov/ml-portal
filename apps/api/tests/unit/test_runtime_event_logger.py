@@ -240,3 +240,15 @@ def test_agent_completion_progress_uses_bounded_summary() -> None:
     assert progress is not None
     assert progress["kind"] == "agent_end"
     assert len(progress["description"]) <= 240
+
+
+def test_memory_snapshot_uses_normal_redaction_and_brief_hashing() -> None:
+    payload = {"stage": "memory_context_used", "memory_context": [
+        {"scope": "user", "subject": "credentials", "value": {"api_key": "private"}},
+    ]}
+    full = _logger(RuntimeLoggingLevel.FULL)._payload(payload)
+    assert full["memory_context"][0]["value"]["api_key"] == "***"
+    brief = _logger(RuntimeLoggingLevel.BRIEF)._payload(payload)
+    assert "memory_context" not in brief
+    assert brief["memory_context_length"] > 0
+    assert len(brief["memory_context_hash"]) == 64

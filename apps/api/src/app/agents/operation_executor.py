@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -70,7 +71,13 @@ class DirectOperationExecutor:
                 arguments=merged_args,
                 target=target,
             )
-            return await self._execute_unified_call(call, ctx)
+            handler = self._tool_registry.get_handler(call.name)
+            if not handler:
+                return ToolResult.fail(f"Local handler '{call.name}' not found")
+            try:
+                return await handler.execute(ctx, call.arguments)
+            except Exception as exc:
+                return ToolResult.fail(str(exc))
 
         if target.provider_type == "mcp":
             try:
@@ -119,7 +126,7 @@ class DirectOperationExecutor:
         if result.success:
             return {
                 "isError": False,
-                "structuredContent": result.data or {},
+                "structuredContent": result.data,
             }
         return {
             "isError": True,
@@ -211,11 +218,16 @@ class DirectOperationExecutor:
             return ToolResult.fail(message)
 
         structured = payload.get("structuredContent")
-        if isinstance(structured, dict):
+        if "structuredContent" in payload:
             return ToolResult.ok(structured)
 
         content = payload.get("content") or []
         text = _extract_mcp_text_content(content)
+        if len(content) == 1 and content[0].get("type") == "text":
+            try:
+                return ToolResult.ok(json.loads(text))
+            except (ValueError, TypeError):
+                pass
         return ToolResult.ok({"content": text, "raw": payload})
 
     @staticmethod

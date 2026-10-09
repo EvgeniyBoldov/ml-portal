@@ -107,8 +107,9 @@ class ResultAnalyzeTool(VersionedTool):
     name: ClassVar[str] = "Analyze Tool Result"
     description: ClassVar[str] = (
         "Query saved tool results with PostgreSQL SQL. Each saved result is available as a table named "
-        "result_<uuid_without_hyphens>, with ordinal and data JSONB columns. Use the saved-result catalog "
-        "for identifiers and observed JSON structure. SQL results are saved and can be queried again."
+        "result_<uuid_without_hyphens>, exposing only the source's top-level fields. Use result.describe "
+        "for exact sql_columns and result.read to inspect nested JSONB values. No storage columns are added. "
+        "SQL results are saved and can be queried again."
     )
 
     @tool_version(version="1.0.0", input_schema=_INPUT_SCHEMA_V1, output_schema=_OUTPUT_SCHEMA_V1,
@@ -137,7 +138,7 @@ class ResultAnalyzeTool(VersionedTool):
                   description=(
                       "Run one PostgreSQL SELECT query over saved tool results. Use the exact "
                       "result_<uuid_without_hyphens> table identifiers in the run result catalog; "
-                      "read arbitrary nested values from data JSONB. Every query result is stored "
+                      "use the top-level sql_columns from result.describe, with JSON operators for nested fields. Every query result is stored "
                       "and returned with its own sql_ref for later queries."
                   ))
     async def v2_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:

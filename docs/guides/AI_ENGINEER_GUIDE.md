@@ -113,3 +113,16 @@
 - Документация обновлена синхронно с кодом.
 
 Если поведение нельзя объяснить по логам и данным — значит система еще не готова к масштабу. И это не философия, а эксплуатация.
+
+## Temporary Data Workspace
+
+API/MCP results are normalized by explicit source adapters to `{value: [], meta: …}`
+and saved before model presentation. Agents receive dataset references and bounded
+views. `result.describe` reports fields and revisions; `result.read` reads saved
+records; `result.load` resumes the same source query with normal permission and
+credential checks. Agents with resolved SQL analysis capability also receive
+`result.sql`; query output becomes a new dataset with input revision lineage.
+Large results never require copying the full dataset into an LLM response.
+Source pagination and reading pagination are independent. New source adapters
+must declare record extraction and continuation rather than rely on guessed JSON
+paths. See [Runtime Tool Results](../architecture/RUNTIME_TOOL_RESULTS.md).

@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     TOOL_RESULTS_INLINE_CONTEXT_CHARS: int = Field(default=2500, ge=256, le=16000)
     TOOL_RESULTS_QUERY_CONTEXT_CHARS: int = Field(default=3000, ge=256, le=12000)
     TOOL_RESULTS_SQL_TIMEOUT_SECONDS: int = Field(default=10, ge=1, le=60)
+    TOOL_RESULTS_CONTEXT_TOKENS: int = Field(default=1200, ge=128, le=8192)
+    TOOL_RESULTS_SQL_MAX_ROWS: int = Field(default=100000, ge=1, le=1000000)
+    TOOL_RESULTS_READ_MAX_ROWS: int = Field(default=100, ge=1, le=1000)
+    TOOL_RESULTS_LOAD_MAX_PAGES: int = Field(default=20, ge=1, le=100)
+    TOOL_RESULTS_LOAD_TIMEOUT_SECONDS: int = Field(default=30, ge=1, le=120)
 
     # Redis
     REDIS_URL: str = Field(default="redis://localhost:6379/0")
@@ -69,15 +74,10 @@ class Settings(BaseSettings):
 
     # LLM runtime connection is resolved from model registry + connector credentials.
     LLM_TIMEOUT: int = Field(default=30, description="Request timeout in seconds")
-    LLM_DEFAULT_MAX_TOKENS: int = Field(
-        default=1000,
-        description="Default completion-token cap when an agent has no scoped LLM output limit",
-    )
     CHAT_TITLE_MODEL: str | None = Field(
         default=None,
         description="Optional dedicated model alias for background chat-title generation.",
     )
-    CHAT_TITLE_MAX_TOKENS: int = Field(default=128, ge=16, le=512)
     CHAT_TITLE_REASONING_EFFORT: str | None = Field(default="low")
     CHAT_CONTEXT_TERM_BINDING_TTL_DAYS: int = Field(default=90, ge=1)
     CHAT_CONTEXT_TASK_RESULT_TTL_DAYS: int = Field(default=30, ge=1)

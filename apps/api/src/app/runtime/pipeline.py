@@ -494,7 +494,15 @@ class RuntimePipeline:
         role_service = SystemLLMRoleService(self._session)
         try:
             planner_role_config = await role_service.get_role_config(SystemLLMRoleType.PLANNER)
-            planner_prompt = planner_role_config.get("prompt", "")
+            from app.runtime.llm.structured import StructuredLLMCall
+            from app.runtime.planner.graph_planner import PlannerStep
+
+            planner_override = ((request.sandbox_overrides or {}).get("role_overrides") or {}).get("planner")
+            planner_prompt = StructuredLLMCall._compile_role_prompt(
+                planner_role_config,
+                planner_override if isinstance(planner_override, dict) else None,
+                schema=PlannerStep,
+            )
             planner_model = planner_role_config.get("model")
         except Exception:
             planner_prompt = ""
@@ -579,22 +587,29 @@ class RuntimePipeline:
                 ),
                 phase=OrchestrationPhase.PREFLIGHT,
             )
-            yield await emitter.emit(
-                RuntimeEvent.error(
-                    "Turn preflight is unavailable",
-                    recoverable=True,
-                    error_code="turn_preflight_unavailable",
-                    retryable=True,
-                    user_message=(
-                        "Не удалось определить маршрут запроса. Планировщик не запускался; "
-                        "повторите запрос позже."
+            from app.runtime.orchestrator import _context_failure_event
+            context_failure = _context_failure_event(exc)
+            if context_failure is not None:
+                runtime_state.final_error = str(context_failure.data.get("user_message"))
+                context_failure.data.update(parent_entity_type="orchestrator", parent_entity_id=preflight_id)
+                yield await emitter.emit(context_failure, phase=OrchestrationPhase.PREFLIGHT)
+            else:
+                yield await emitter.emit(
+                    RuntimeEvent.error(
+                        "Turn preflight is unavailable",
+                        recoverable=True,
+                        error_code="turn_preflight_unavailable",
+                        retryable=True,
+                        user_message=(
+                            "Не удалось определить маршрут запроса. Планировщик не запускался; "
+                            "повторите запрос позже."
+                        ),
+                        source="turn_preflight",
+                        parent_entity_type="orchestrator",
+                        parent_entity_id=preflight_id,
                     ),
-                    source="turn_preflight",
-                    parent_entity_type="orchestrator",
-                    parent_entity_id=preflight_id,
-                ),
-                phase=OrchestrationPhase.PREFLIGHT,
-            )
+                    phase=OrchestrationPhase.PREFLIGHT,
+                )
             yield await emitter.emit(
                 RuntimeEvent.stop(
                     reason=PipelineStopReason.FAILED.value,
@@ -1166,7 +1181,6 @@ class RuntimePipeline:
                 ("per_tool_timeout_ms", "per_tool_timeout_ms"),
                 ("max_steps_without_success", "max_steps_without_success"),
                 ("loop_threshold", "loop_threshold"),
-                ("max_tokens_total", "max_tokens_total"),
             ):
                 value = budget_override.get(src_key)
                 if isinstance(value, int):

@@ -11,7 +11,7 @@ import asyncio
 import json
 import re
 import uuid
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
 from app.core.http.clients import LLMClientProtocol
 from app.adapters.interfaces.llm import LLMCallOptions
@@ -37,22 +37,20 @@ class LLMAdapter:
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         timeout_s: Optional[int] = None,
+        on_transport_retry: Optional[Callable[[], Awaitable[None]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Non-streaming LLM call. Returns plain text response."""
         try:
             params: Dict[str, Any] = {"temperature": temperature}
-            if max_tokens:
-                params["max_tokens"] = max_tokens
             if tools:
                 params["tools"] = tools
             if response_format:
                 params["response_format"] = response_format
             request = self._client.chat(messages=messages, model=model, params=params,
-                                        options=LLMCallOptions(timeout_s=timeout_s))
+                                        options=LLMCallOptions(timeout_s=timeout_s, on_transport_retry=on_transport_retry))
             response = await asyncio.wait_for(request, timeout=timeout_s) if timeout_s else await request
         except Exception as e:
             classified = classify_provider_error(e)
@@ -68,10 +66,10 @@ class LLMAdapter:
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         force_tool_choice: bool = False,
         timeout_s: Optional[int] = None,
+        on_transport_retry: Optional[Callable[[], Awaitable[None]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Non-streaming LLM call. Returns raw response dict for native tool_calls parsing.
@@ -81,8 +79,6 @@ class LLMAdapter:
         skipped a required tool call on the previous iteration.
         """
         params: Dict[str, Any] = {"temperature": temperature}
-        if max_tokens:
-            params["max_tokens"] = max_tokens
         if tools:
             params["tools"] = tools
             params["tool_choice"] = "required" if force_tool_choice else "auto"
@@ -90,7 +86,7 @@ class LLMAdapter:
             params["response_format"] = response_format
         try:
             request = self._client.chat(messages=messages, model=model, params=params,
-                                        options=LLMCallOptions(timeout_s=timeout_s))
+                                        options=LLMCallOptions(timeout_s=timeout_s, on_transport_retry=on_transport_retry))
             return await asyncio.wait_for(request, timeout=timeout_s) if timeout_s else await request
         except Exception as e:
             classified = classify_provider_error(e)
@@ -104,16 +100,14 @@ class LLMAdapter:
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
         timeout_s: Optional[int] = None,
+        on_transport_retry: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> AsyncGenerator[str, None]:
         """Streaming LLM call. Yields normalized text chunks."""
         params: Dict[str, Any] = {"temperature": temperature}
-        if max_tokens:
-            params["max_tokens"] = max_tokens
 
         stream = self._client.chat_stream(messages=messages, model=model, params=params,
-                                          options=LLMCallOptions(timeout_s=timeout_s))
+                                          options=LLMCallOptions(timeout_s=timeout_s, on_transport_retry=on_transport_retry))
         if timeout_s:
             async with asyncio.timeout(timeout_s):
                 async for chunk in stream:

@@ -154,6 +154,8 @@ async def test_connection_resolver_strips_model_selector(monkeypatch: pytest.Mon
         instance_id=None,
         connector="litellm_http",
         extra_config={},
+        context_window_tokens=16384,
+        request_timeout_s=30,
     )
 
     session = SimpleNamespace(

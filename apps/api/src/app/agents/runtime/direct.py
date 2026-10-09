@@ -21,6 +21,7 @@ from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.core.logging import get_logger
 from app.runtime.error_payloads import build_debug_payload
+from app.runtime.llm.usage import estimate_tokens
 
 if TYPE_CHECKING:
     from app.agents.context import ToolContext
@@ -41,13 +42,12 @@ class DirectRuntime(BaseRuntime):
         enable_logging: bool = True,
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         agent = exec_request.agent
 
         # Resolve generation params via config
         gen = await self.config_resolver.resolve_direct(
-            exec_request, ctx, model=model, temperature=temperature, max_tokens=max_tokens,
+            exec_request, ctx, model=model, temperature=temperature,
         )
 
         # Resolve system prompt through the shared prompt builder so sandbox
@@ -75,7 +75,6 @@ class DirectRuntime(BaseRuntime):
             meta={
                 "model": gen.model,
                 "temperature": gen.temperature,
-                "max_tokens": gen.max_tokens,
             },
         ) or {}
         run_session = self._create_run_session(
@@ -103,11 +102,10 @@ class DirectRuntime(BaseRuntime):
 
         logger.info(
             f"Direct path: agent={agent.slug}, model={gen.model}, "
-            f"messages={len(llm_messages)}, max_tokens={gen.max_tokens}",
+            f"messages={len(llm_messages)}",
         )
 
         llm_call_id = str(uuid4())
-        effective_max_tokens = gen.max_tokens
 
         full_content = ""
         llm_start = time.time()
@@ -116,7 +114,6 @@ class DirectRuntime(BaseRuntime):
                 messages=llm_messages,
                 model=gen.model,
                 temperature=gen.temperature,
-                max_tokens=effective_max_tokens,
                 timeout_s=gen.timeout_s,
             ):
                 full_content += chunk
@@ -131,7 +128,6 @@ class DirectRuntime(BaseRuntime):
                 "step": 1,
                 "model": gen.model,
                 "temperature": gen.temperature,
-                "max_tokens": effective_max_tokens,
                 "messages": llm_messages,
                 "content": full_content,
                 "response_length": len(full_content),
@@ -152,7 +148,6 @@ class DirectRuntime(BaseRuntime):
                 step=1,
                 model=gen.model,
                 temperature=gen.temperature,
-                max_tokens=effective_max_tokens,
                 messages=llm_messages,
                 content=full_content,
                 response_length=len(full_content),

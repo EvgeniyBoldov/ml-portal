@@ -66,4 +66,6 @@ class RegistryLLMConnectionResolver:
                 model_alias=str(model.alias), provider_model_name=str(model.provider_model_name or model.alias).strip(),
                 base_url=str(base_url), connector=getattr(model, "connector", None), api_key=api_key,
                 extra_config=dict(model.extra_config or {}),
+                context_window_tokens=model.context_window_tokens,
+                request_timeout_s=int(model.request_timeout_s or 30),
             )

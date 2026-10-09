@@ -462,7 +462,7 @@ class RuntimeEventLogger:
         redacted = self._redactor.redact(safe_payload)
         if self.context.level is RuntimeLoggingLevel.FULL:
             return redacted
-        heavy = {"messages", "prompt", "system_prompt", "content", "arguments", "input", "output", "result", "raw_response"}
+        heavy = {"messages", "prompt", "system_prompt", "content", "arguments", "input", "output", "result", "raw_response", "memory_context"}
         result: dict[str, Any] = {}
         for key, value in redacted.items():
             if key in heavy:

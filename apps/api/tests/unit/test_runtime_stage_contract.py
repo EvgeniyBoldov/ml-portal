@@ -28,19 +28,11 @@ def test_synthesis_requires_brief_and_tasks_cannot_be_checkpoints() -> None:
 
 
 @pytest.mark.parametrize("field_name", ["raw_content", "raw_data", "raw_payload"])
-def test_output_contract_rejects_raw_transport_fields(field_name: str) -> None:
-    with pytest.raises(ValueError, match="raw tool payload"):
-        _task = PlannedTask(
-            task_id="work",
-            executor="research",
-            intent="work",
-            instructions="work",
-            expected_outputs=[{
-                "key": "answer",
-                "description": "Answer",
-                "schema": {"type": "object", "properties": {field_name: {"type": "string"}}},
-            }],
-        )
+def test_advisory_schema_does_not_reserve_data_field_names(field_name: str) -> None:
+    task = PlannedTask(task_id="work", executor="research", intent="work", instructions="work",
+                       expected_outputs=[{"key": "answer", "description": "Answer",
+                                          "schema": {"type": "object", "properties": {field_name: {"type": "string"}}}}])
+    assert field_name in task.expected_outputs[0].json_schema["properties"]
 
 
 def test_failed_synthesis_iteration_deterministically_returns_to_planner() -> None:
@@ -57,7 +49,6 @@ def test_failed_synthesis_iteration_deterministically_returns_to_planner() -> No
 @pytest.mark.parametrize("reason_code", [
     "agent_task_completion_invalid",
     "agent_task_completion_missing",
-    "output_contract_invalid",
 ])
 def test_non_retryable_contract_failure_cannot_be_replayed_identically(reason_code: str) -> None:
     proposal = IterationProposal(

@@ -1,6 +1,6 @@
 import { InspectorFieldGroup, InspectorFieldRow, InspectorHeader, InspectorPanel, InspectorScalar, InspectorStatus, InspectorTabs } from '@/shared/ui/Inspector';
 import type { SandboxTraceState } from '../../traceState';
-import type { TraceInspectionTarget } from '../../traceProjection';
+import { memoryContextFromTool, type TraceInspectionTarget } from '../../traceProjection';
 import { PlanView, TextValue } from './TraceDataViews';
 import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponseView } from './CallViews';
 import { ExecutorResultView, MemoryExtractionResultView, StageResultView, StepResultView } from './ResultViews';
@@ -57,6 +57,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'task' && target.kind === 'step' && selectedTask) return <PlanTaskCard task={selectedTask} variant="compact" />;
     if (tab === 'facts' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} mode={target.executor.kind === 'fact_extractor' ? 'candidates' : 'decisions'} />;
     if (tab === 'published' && target.kind === 'executor') return <FactsViewer result={target.executor.memoryResult} mode="published" />;
+    if (tab === 'memory' && target.kind === 'call') return <MemoryContextViewer context={memoryContextFromTool(target.call)} />;
     if (tab === 'memory' && target.kind === 'executor') return <MemoryContextViewer context={target.executor.memoryContext} />;
     if (tab === 'result' && target.kind === 'stage' && target.stage.executorRuns.length === 1 && isDocumentMemoryExecutor(target.stage.executorRuns[0].executorSlug)) return <MemoryExtractionResultView result={target.stage.executorRuns[0].result} />;
     if (tab === 'result' && target.kind === 'stage') return <StageResultView stage={target.stage} />;

@@ -56,25 +56,25 @@ def _safe_failure_limitation(code: str) -> Dict[str, Any]:
 
 
 def _binding_value(value: Any, schema: Optional[Dict[str, Any]] = None) -> Any:
-    """Validate a concrete bound value against the consumer's discovered need."""
-    if schema:
-        try:
-            import jsonschema
-            jsonschema.Draft202012Validator(schema).validate(value)
-        except Exception as exc:
-            raise PlanValidationError(f"bound output does not satisfy consumer need schema: {exc}") from exc
+    """Pass actual data unchanged; the consumer owns interpreting its schema."""
     return value
 
 
-def _required_outputs_fulfilled(expected_outputs: list[Dict[str, Any]], result: TaskResult) -> list[str]:
-    """Use reducer-owned output states instead of inferring from JSON values."""
-    states = result.output_states or {}
-    return [
-        str(item["key"])
-        for item in expected_outputs
-        if item.get("required", True)
-        and str((states.get(str(item["key"])) or {}).get("status") or "") != "fulfilled"
-    ]
+def _result_value(result: Dict[str, Any], selector: str) -> Any:
+    if not selector.startswith("/"):
+        values = result.get("outputs") or {}
+        if selector not in values:
+            raise PlanValidationError("binding_result_missing: requested output is absent")
+        return values[selector]
+    value: Any = result
+    try:
+        for token in selector.split("/")[1:]:
+            key = token.replace("~1", "/").replace("~0", "~")
+            value = value[int(key)] if isinstance(value, list) and key.isdigit() else value[key]
+        return value
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise PlanValidationError("binding_result_missing: requested result path is absent") from exc
+
 
 
 def validate_iteration(proposal: IterationProposal) -> None:
@@ -136,13 +136,13 @@ def validate_iteration_semantics(proposal: IterationProposal, snapshot: Dict[str
     for binding in proposal.bindings:
         if (binding.need_task_id, binding.need_ref) not in needs:
             raise PlanValidationError("binding targets an unknown discovered need")
-        producer, consumer = current.get(binding.producer_task_id), current.get(binding.consumer_task_id)
+        producer, consumer = current.get(binding.producer_task_id) or prior.get(binding.producer_task_id), current.get(binding.consumer_task_id)
         if producer is None or consumer is None:
             raise PlanValidationError("binding producer and consumer must belong to the iteration")
-        if binding.producer_task_id not in consumer.depends_on:
+        if binding.producer_task_id in current and binding.producer_task_id not in consumer.depends_on:
             raise PlanValidationError("binding consumer must depend on producer")
-        if not any(item.key == binding.output_key for item in producer.expected_outputs):
-            raise PlanValidationError("binding output is not declared by producer")
+        if isinstance(producer, dict) and producer.get("status") != "completed":
+            raise PlanValidationError("prior binding producer must be completed")
         if resolutions.get(binding.need_task_id) is None or binding.consumer_task_id not in resolutions[binding.need_task_id].replacement_task_ids:
             raise PlanValidationError("binding consumer is not an approved replacement")
         target = (binding.consumer_task_id, binding.consumer_input_key)
@@ -152,17 +152,7 @@ def validate_iteration_semantics(proposal: IterationProposal, snapshot: Dict[str
 
 
 def _validate_compiled_inputs(task: Dict[str, Any], inputs: Dict[str, Any]) -> None:
-    contract = task.get("contract") if isinstance(task.get("contract"), dict) else {}
-    if str(contract.get("mode") or "") != "registered":
-        return
-    schema = contract.get("input_schema")
-    if not isinstance(schema, dict):
-        raise PlanValidationError("registered task is missing compiled input schema")
-    try:
-        import jsonschema
-        jsonschema.Draft202012Validator(schema).validate(inputs)
-    except Exception as exc:
-        raise PlanValidationError(f"bound inputs do not satisfy consumer contract: {exc}") from exc
+    return
 
 
 def _is_terminal(status: str) -> bool:
@@ -225,6 +215,17 @@ class _MemoryStateMachine:
                     continue
                 task["status"] = TaskStatus.PENDING.value
                 task["next_retry_at"] = None
+        for binding in plan.get("bindings", []):
+            consumer = tasks.get(binding["consumer_task_id"])
+            producer = plan["tasks"].get(binding["producer_task_id"])
+            if not consumer or consumer["status"] != "pending" or not producer or producer["status"] != "completed":
+                continue
+            try:
+                _result_value(producer.get("result") or {}, binding["output_key"])
+            except PlanValidationError as exc:
+                consumer["status"] = "blocked"
+                consumer["result"] = {"outcome": "unfulfillable", "description": str(exc),
+                                      "reason_code": "binding_result_missing", "outputs": {}}
         _block_dependents(tasks)
         waiting = [task for task in tasks.values() if task["status"] == TaskStatus.WAITING_CONFIRMATION.value]
         if waiting:
@@ -375,13 +376,10 @@ class InMemoryPlanStore:
         if task["status"] != TaskStatus.RUNNING.value:
             raise PlanValidationError("task is not running")
         if result.outcome == TaskOutcome.COMPLETED:
-            missing = _required_outputs_fulfilled(task["expected_outputs"], result)
-            if missing:
-                raise PlanValidationError(f"task is missing required outputs: {missing}")
             task["status"] = TaskStatus.COMPLETED.value
         elif result.outcome == TaskOutcome.NEEDS_DEPENDENCY:
             task["status"] = TaskStatus.NEEDS_DEPENDENCY.value
-            plan["needs"].extend({**need.model_dump(mode="json"), "task_id": task_id} for need in result.needs)
+            plan["needs"].extend({**need.model_dump(mode="json", by_alias=True), "task_id": task_id} for need in result.needs)
         else:
             task["status"] = TaskStatus.UNFULFILLABLE.value
         task["result"] = result.model_dump(mode="json")
@@ -415,17 +413,14 @@ class InMemoryPlanStore:
         for binding in plan["bindings"]:
             if binding["consumer_task_id"] == task_id:
                 source = plan["tasks"][binding["producer_task_id"]]["result"] or {}
-                source_outputs = source.get("outputs") or {}
-                if binding["output_key"] not in source_outputs:
-                    raise PlanValidationError("ready bound task has no producer output")
-                value = source_outputs[binding["output_key"]]
+                value = _result_value(source, binding["output_key"])
                 need = next((item for item in plan["needs"] if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
         _validate_compiled_inputs(task, inputs)
         dependencies = {dep: plan["tasks"][dep]["result"] for dep in task["depends_on"]}
         return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"],
                 "inputs": inputs, "dependency_outputs": dependencies,
-                "expected_outputs": task["expected_outputs"], "contract": task.get("contract", {}), "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {})}
+                "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {})}
 
     def pause_confirmation(self, plan_id: str, task_id: str, payload: Dict[str, Any]) -> None:
         plan = self.get(plan_id)
@@ -612,7 +607,7 @@ class SqlPlanStore:
             row = RuntimePlanTask(plan_id=plan_id, iteration_id=iteration.id, task_id=task.task_id, planned_order=order,
                                   executor=task.executor, intent=task.intent, instructions=task.instructions, inputs=task.inputs,
                                   expected_outputs=[item.model_dump(mode="json", by_alias=True) for item in task.expected_outputs],
-                                  compiled_contract=task.contract.model_dump(mode="json"),
+                                  compiled_contract={**task.contract.model_dump(mode="json"), "response_spec": task.response_spec.model_dump(mode="json", by_alias=True), "protocol_version": 2},
                                   scope_context=dict(getattr(task, "scope_context", {}) or {}),
                                   freshness_policy=task.freshness_policy.value)
             self._session.add(row)
@@ -719,14 +714,11 @@ class SqlPlanStore:
         for binding in snapshot.get("bindings", []):
             if binding["consumer_task_id"] == task_id:
                 source = snapshot["tasks"][binding["producer_task_id"]].get("result") or {}
-                source_outputs = source.get("outputs") or {}
-                if binding["output_key"] not in source_outputs:
-                    raise PlanValidationError("ready bound task has no producer output")
-                value = source_outputs[binding["output_key"]]
+                value = _result_value(source, binding["output_key"])
                 need = next((item for item in snapshot.get("needs", []) if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
         _validate_compiled_inputs(task, inputs)
-        return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": {dep: snapshot["tasks"][dep]["result"] for dep in task["depends_on"]}, "expected_outputs": task["expected_outputs"], "contract": task.get("contract", {}), "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {})}
+        return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": {dep: snapshot["tasks"][dep]["result"] for dep in task["depends_on"]}, "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {})}
 
     async def pause_confirmation(self, plan_id: UUID, task_id: str, payload: Dict[str, Any]) -> None:
         plan = await self._plan(plan_id, lock=True)
@@ -773,9 +765,6 @@ class SqlPlanStore:
         if row is None or row.status != TaskStatus.RUNNING.value:
             raise PlanValidationError("task is not running")
         if result.outcome == TaskOutcome.COMPLETED:
-            missing = _required_outputs_fulfilled(row.expected_outputs, result)
-            if missing:
-                raise PlanValidationError(f"task is missing required fulfilled outputs: {sorted(missing)}")
             row.status = TaskStatus.COMPLETED.value
         elif result.outcome == TaskOutcome.NEEDS_DEPENDENCY:
             row.status = TaskStatus.NEEDS_DEPENDENCY.value

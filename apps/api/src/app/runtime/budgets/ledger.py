@@ -66,7 +66,6 @@ class EntityLedger:
                 "agent_runs": self.limits.agent_runs,
                 "llm_calls": self.limits.llm_calls,
                 "tool_calls": self.limits.tool_calls,
-                "tokens_total": self.limits.tokens_total,
                 "retries": self.limits.retries,
                 "wall_time_ms": self.limits.wall_time_ms,
             }

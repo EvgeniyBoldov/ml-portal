@@ -106,12 +106,12 @@ def test_terminal_declaration_rejects_duplicate_need_refs() -> None:
         )
 
 
-def test_terminal_declaration_rejects_invalid_need_schema() -> None:
-    with pytest.raises(ValueError, match="need schema is invalid"):
-        parse_task_completion_declaration(
-            '{"completion":"needs","report":"Need input","outputs":{},"needs":['
-            '{"ref":"target","key":"target","kind":"data","description":"Target","schema":{"type":"not-a-json-schema-type"},"required":true,"context":{}}]}'
-        )
+def test_terminal_declaration_preserves_advisory_need_schema() -> None:
+    declaration = parse_task_completion_declaration(
+        '{"completion":"needs","answer":"Need input","needs":['
+        '{"ref":"target","key":"target","description":"Target","schema":{"type":"not-a-json-schema-type"}}]}'
+    )
+    assert declaration.needs[0].json_schema == {"type": "not-a-json-schema-type"}
 
 
 def test_runtime_fallback_is_a_valid_unfulfillable_terminal_declaration() -> None:

@@ -103,7 +103,7 @@ async def test_load_discovered_tools_adds_builtin_collection_info_for_bound_loca
         connector_type="mcp",
         placement="local",
     )
-    local_tool = SimpleNamespace(source="local", slug="collection.search")
+    local_tool = SimpleNamespace(source="local", slug="collection.search", domains=["collection.table"])
     resolver._load_local_tools_for_provider = AsyncMock(return_value=[local_tool])
     resolver._load_provider_tools = AsyncMock(return_value=[])
     monkeypatch.setattr(
@@ -217,6 +217,7 @@ async def test_load_system_tools_skips_stale_non_system_template_handlers(monkey
         "app.services.collection_tool_resolver.ToolRegistry.get",
         lambda slug: SimpleNamespace(domains=["collection.template"]) if slug == "collection.template.fill" else SimpleNamespace(domains=["system"]),
     )
+    monkeypatch.setattr("app.services.collection_tool_resolver.ToolRegistry.list_all", lambda: [])
 
     tools = await resolver._load_system_tools()  # noqa: SLF001
 

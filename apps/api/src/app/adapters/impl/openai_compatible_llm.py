@@ -17,6 +17,7 @@ from app.core.http.tls import outbound_http_verify
 from app.services.model_connector_profiles import build_model_auth_headers
 from app.adapters.interfaces.llm import LLMCallOptions, LLMConnectionResolver, LLMErrorCode, LLMProviderError
 from app.services.llm_connection_resolver import RegistryLLMConnectionResolver
+from app.adapters.impl.llm_context import allocate_context, context_exhausted
 
 logger = get_logger(__name__)
 
@@ -128,7 +129,6 @@ class OpenAICompatibleLLM:
                 "model": normalized_model,
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": int(getattr(self.settings, "LLM_DEFAULT_MAX_TOKENS", 1000) or 1000),
             }
             
             # Override with custom params if provided
@@ -144,6 +144,8 @@ class OpenAICompatibleLLM:
             )
 
             connection = await self._connection_resolver.resolve(request_params.get("model"))
+            if options is None or options.timeout_s is None:
+                effective_timeout_s = connection.request_timeout_s
             connector = str(connection.connector or "openai_compatible")
             request_params["model"] = connection.provider_model_name
             request_model = connection.provider_model_name
@@ -155,9 +157,8 @@ class OpenAICompatibleLLM:
             )
 
             # Make the request
-            response = await client.chat.completions.create(
-                **request_params,
-                timeout=effective_timeout_s,
+            response = await self._create_completion(
+                client, request_params, connection.context_window_tokens, effective_timeout_s, options,
             )
             
             # Extract the response
@@ -250,7 +251,6 @@ class OpenAICompatibleLLM:
                 "model": normalized_model,
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": int(getattr(self.settings, "LLM_DEFAULT_MAX_TOKENS", 1000) or 1000),
                 "stream": True,
             }
             
@@ -262,6 +262,8 @@ class OpenAICompatibleLLM:
             logger.info(f"Sending streaming chat request: provider={self.provider}, model={request_params['model']}")
 
             connection = await self._connection_resolver.resolve(request_params.get("model"))
+            if options is None or options.timeout_s is None:
+                effective_timeout_s = connection.request_timeout_s
             connector = str(connection.connector or "openai_compatible")
             request_params["model"] = connection.provider_model_name
             request_model = connection.provider_model_name
@@ -273,9 +275,8 @@ class OpenAICompatibleLLM:
             )
 
             # Make the streaming request
-            stream = await client.chat.completions.create(
-                **request_params,
-                timeout=effective_timeout_s,
+            stream = await self._create_completion(
+                client, request_params, connection.context_window_tokens, effective_timeout_s, options,
             )
             
             async for chunk in stream:
@@ -310,6 +311,82 @@ class OpenAICompatibleLLM:
             )
             raise normalized from e
 
+    async def _create_completion(
+        self, client: AsyncOpenAI, request: dict[str, Any], context_window: int, timeout_s: float,
+        options: Optional[LLMCallOptions] = None,
+    ) -> Any:
+        # Output allocation belongs exclusively to this boundary. Callers
+        # cannot override it through either provider parameter spelling.
+        request.pop("max_tokens", None)
+        request.pop("max_completion_tokens", None)
+        allocation = allocate_context(request, context_window)
+        request["max_tokens"] = allocation.max_output_tokens
+        logger.info(
+            "LLM context allocation model=%s context_window=%s input_estimate=%s "
+            "input_reserved=%s minimum_output=%s max_tokens=%s",
+            request.get("model"), allocation.context_window, allocation.estimated_input_tokens,
+            allocation.reserved_input_tokens, allocation.minimum_output_tokens, request["max_tokens"],
+        )
+        started = time.monotonic()
+        try:
+            return await client.chat.completions.create(**request, timeout=timeout_s)
+        except Exception as exc:
+            available = self._available_output_tokens(exc)
+            if available is None:
+                if self._is_context_error(exc):
+                    raise context_exhausted() from exc
+                raise
+            if available < allocation.minimum_output_tokens or available >= request["max_tokens"]:
+                raise context_exhausted() from exc
+            remaining_timeout = timeout_s - (time.monotonic() - started)
+            if remaining_timeout <= 0:
+                raise asyncio.TimeoutError("LLM context correction deadline exceeded") from exc
+            request["max_tokens"] = available
+            logger.info("LLM context correction model=%s max_tokens=%s", request.get("model"), available)
+            if options is not None and options.on_transport_retry is not None:
+                await options.on_transport_retry()
+            # Only one corrective request, before any streaming output starts.
+            try:
+                return await client.chat.completions.create(**request, timeout=remaining_timeout)
+            except Exception as corrected_exc:
+                if self._available_output_tokens(corrected_exc) is not None or self._is_context_error(corrected_exc):
+                    raise context_exhausted() from corrected_exc
+                raise
+
+    @staticmethod
+    def _is_context_error(exc: Exception) -> bool:
+        if OpenAICompatibleLLM._normalize_error(exc).code == LLMErrorCode.RATE_LIMITED:
+            return False
+        text = f"{exc} {getattr(exc, 'body', '')} {getattr(getattr(exc, 'response', None), 'text', '')}".lower()
+        return any(marker in text for marker in ("context_length_exceeded", "maximum context length", "context window"))
+
+    @staticmethod
+    def _available_output_tokens(exc: Exception) -> Optional[int]:
+        """Accept explicit output bounds only; never interpret a 429 as context."""
+        if OpenAICompatibleLLM._normalize_error(exc).code == LLMErrorCode.RATE_LIMITED:
+            return None
+        body = getattr(exc, "body", None)
+        detail = body.get("error", body) if isinstance(body, dict) else {}
+        if isinstance(detail, dict):
+            value = detail.get("available_output_tokens")
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        response = getattr(exc, "response", None)
+        text = f"{exc} {json.dumps(body, default=str)} {getattr(response, 'text', '')}".lower()
+        # vLLM / OpenAI-compatible messages provide context and exact input.
+        context = re.search(r"(?:maximum context length|context window)(?:\s+is|\s+of|\s*[:=])?\s*(\d+)", text)
+        input_count = re.search(r"(?:request has|messages resulted in|input tokens\s*[:=]|prompt tokens\s*[:=])\s*(\d+)", text)
+        if context and input_count:
+            return int(context[1]) - int(input_count[1])
+        for pattern in (
+            r"(?:max_tokens|max_completion_tokens)[^\n]{0,100}?(?:less than or equal to|at most|<=)\s*(\d+)",
+            r"(?:available|remaining)\s+(?:output|completion)\s+tokens\s*[:=]\s*(\d+)",
+        ):
+            match = re.search(pattern, text)
+            if match:
+                return int(match[1])
+        return None
+
     def _take_timeout(self, params: Optional[dict], *, options: Optional[LLMCallOptions] = None) -> float:
         """Resolve adapter timeout without leaking transport data to providers."""
         if options and options.timeout_s is not None:
@@ -321,6 +398,8 @@ class OpenAICompatibleLLM:
 
     @staticmethod
     def _normalize_error(exc: Exception) -> LLMProviderError:
+        if isinstance(exc, LLMProviderError):
+            return exc
         status_code = getattr(exc, "status_code", None)
         response = getattr(exc, "response", None)
         if not isinstance(status_code, int):
@@ -490,7 +569,7 @@ class OpenAICompatibleLLM:
         try:
             # Simple health check with minimal request
             test_messages = [{"role": "user", "content": "test"}]
-            response = await self.chat(test_messages, params={"max_tokens": 5})
+            response = await self.chat(test_messages)
             
             return {
                 "status": "healthy",

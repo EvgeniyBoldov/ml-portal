@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { projectTraceRun, projectTraceStages, resolveTraceInspectionTarget, stepFor } from './traceProjection';
+import { memoryContextFromPayload, memoryContextFromTool, projectTraceRun, projectTraceStages, resolveTraceInspectionTarget, stepFor } from './traceProjection';
 import { replayRuntimeJournal, type RuntimeJournalEvent } from './traceState';
 
 const event = (sequence: number, eventType: string, payload: Record<string, unknown>): RuntimeJournalEvent => ({
@@ -534,5 +534,41 @@ describe('projectTraceRun', () => {
       finalContent: 'one two', status: 'error', error: 'Недоступно',
       pause: { kind: 'input', question: 'Уточните запрос' }, limits: { rows: [{ key: 'llm_calls', used: 1, label: 'Вызовы LLM' }] },
     });
+  });
+});
+
+
+describe('executor memory snapshots', () => {
+  it('keeps identity-only lookup terms without inventing definitions', () => {
+    const memory = memoryContextFromPayload({ memory_context: { glossary: [{ term: 'SLO', aliases: ['target'] }] } });
+    expect(memory.context).toEqual([{ type: 'glossary', scope: 'global', term: 'SLO', description: '', aliases: ['target'] }]);
+  });
+
+  it('renders real glossary definitions and preserves knowledge provenance', () => {
+    const memory = memoryContextFromPayload({ memory_context: [{ type: 'memory_recall',
+      resolved_terms: [{ term: 'SLO', definition: 'Service level objective', aliases: ['target'] }],
+      durable_facts: [{ scope: 'tenant', subject: 'region', value: 'msk' }],
+      applicable_rules: [{ id: 'rule-1', subject: 'deploy', kind: 'rule', content: { approval: true }, scope_keys: ['team.ops'], source_references: [{ document_id: 'doc-1' }] }],
+    }] });
+    expect(memory.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'glossary', description: 'Service level objective' }),
+      expect.objectContaining({ type: 'knowledge', raw: expect.objectContaining({ id: 'rule-1', scope_keys: ['team.ops'] }) }),
+    ]));
+    expect(memory.selectedFacts).toBe(1);
+    expect(memory.selectedMemoryItems).toBe(1);
+  });
+
+  it('attaches scoped inputs and successful memory reads to their owning planner only', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'planner', role: 'planner' }),
+      event(2, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1', parent_entity_type: 'orchestrator', parent_entity_id: 'planner', iteration: 1 }),
+      event(3, 'status', { entity_type: 'planner_iteration', entity_id: 'iteration-1', stage: 'memory_context_used', memory_context: [{ scope: 'user', subject: 'language', value: 'ru' }] }),
+      event(4, 'tool_call', { entity_type: 'tool_call', entity_id: 'read-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', tool: 'memory.search', call_id: 'read-1' }),
+      event(5, 'tool_result', { entity_type: 'tool_call', entity_id: 'read-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', tool: 'memory.search', call_id: 'read-1', success: true, data: { memory_context: { durable_facts: [{ scope: 'tenant', subject: 'region', value: 'msk' }] } } }),
+    ]);
+    const planner = projectTraceStages(state)[0].executorRuns[0];
+    expect(planner.memoryContext?.context).toHaveLength(2);
+    expect(resolveTraceInspectionTarget(state, planner.inspectorKey)?.tabs.map((tab) => tab.id)).toContain('memory');
+    expect(memoryContextFromTool(planner.calls[0])?.context).toEqual([{ type: 'fact', scope: 'tenant', subject: 'region', value: 'msk' }]);
   });
 });

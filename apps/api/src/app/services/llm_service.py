@@ -54,7 +54,7 @@ class LLMService:
                         "content": prompt
                     }
                 ],
-                params={"temperature": 0.3, "max_tokens": 2000},
+                params={"temperature": 0.3},
             )
             
             # Распарсить JSON
@@ -131,7 +131,7 @@ class LLMService:
                         "content": prompt
                     }
                 ],
-                params={"temperature": 0.5, "max_tokens": 500},
+                params={"temperature": 0.5},
             )
             
             content = str(response.get("content") or "").strip()

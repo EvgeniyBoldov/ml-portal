@@ -280,3 +280,27 @@ Do not create a per-pipeline sequence, envelope stamper, observation writer or
 direct `RuntimeExecutionEvent` writer. Every semantic event goes through the
 root `RuntimeEventLogger` or immutable scoped logger; only it may assign identity, sequence,
 redaction and tail publication.
+
+### Memory read snapshots
+
+Runtime readers emit canonical `status` events with `stage=memory_context_used`:
+TurnPreflight owns its orchestrator snapshot, the planner owns its
+`planner_iteration` snapshot, the agent owns its `agent_execution` snapshot,
+and synthesis owns its `synthesis_run` snapshot. `memory_context` is the actual
+input passed to that reader, including task scope projection or synthesis
+context bounding already applied by runtime. These events use the existing
+journal/logger, admission levels, redaction, sequence and replay contracts.
+Full logging retains the redacted payload; lower levels never expose its body.
+
+Sandbox executor inspectors combine their own input snapshot and successful
+`memory.search`/`memory.lookup` results from their own calls. They never inherit
+an unrestricted run snapshot or another executor's read results. The Memory tab
+separates user facts, tenant facts, glossary and long-term document knowledge;
+projects and runtime facts have separate context sections. Facts and terms use compact shared tables with one record per row.
+Document knowledge shows subject, content and kind in a table; its detail
+viewer retains the complete JSON with provenance. Empty groups and zero summary
+counters are hidden. Long values are bounded in rows and can be opened in the
+shared read-only viewer. Memory tool response and Memory tabs reuse the same viewer.
+An empty recorded snapshot is distinguished from an absent historical snapshot.
+This is context made available to an executor, not proof that every item caused
+a claim in its final answer. Candidate writeback remains separate.

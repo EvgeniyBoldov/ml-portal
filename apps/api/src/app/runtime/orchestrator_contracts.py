@@ -177,13 +177,8 @@ class DiscoveredNeed(BaseModel):
         """
         if not isinstance(value, dict) and not is_absent(value):
             raise ValueError("need schema must be a JSON Schema object")
-        schema = _normalize_nullable_schema(value if isinstance(value, dict) else {})
-        try:
-            import jsonschema
-            jsonschema.Draft202012Validator.check_schema(schema)
-        except Exception as exc:
-            raise ValueError(f"need schema is invalid: {exc}") from exc
-        return schema
+        return _normalize_nullable_schema(value) if isinstance(value, dict) else {}
+
 
 
 class TaskOutputSpec(BaseModel):
@@ -193,7 +188,7 @@ class TaskOutputSpec(BaseModel):
     required: bool = True
     fulfillment: TaskOutputFulfillment = TaskOutputFulfillment.TASK_RESULT
     receipt_operations: List[str] = Field(default_factory=list)
-    require_complete_source: bool = Field(default=False, description="Require runtime-confirmed complete source data for coverage claims; otherwise claims prove access to observed data only.")
+    require_complete_source: bool = Field(default=False, description="Legacy advisory completeness hint; not an acceptance condition.")
     model_config = {"extra": "forbid", "populate_by_name": True, "str_strip_whitespace": True}
 
     @model_validator(mode="before")
@@ -213,48 +208,8 @@ class TaskOutputSpec(BaseModel):
         """Accept JSON Schema only; normalize the legacy OpenAPI nullable form."""
         if not isinstance(value, dict) and not is_absent(value):
             raise ValueError("output schema must be a JSON Schema object")
-        schema = _normalize_nullable_schema(value if isinstance(value, dict) else {})
-        try:
-            import jsonschema
-            jsonschema.Draft202012Validator.check_schema(schema)
-        except Exception as exc:
-            raise ValueError(f"output schema is invalid: {exc}") from exc
-        return schema
+        return _normalize_nullable_schema(value) if isinstance(value, dict) else {}
 
-    @model_validator(mode="after")
-    def validate_fulfillment(self) -> "TaskOutputSpec":
-        try:
-            import jsonschema
-            jsonschema.Draft202012Validator.check_schema(self.json_schema)
-        except Exception as exc:
-            raise ValueError(f"output schema is invalid: {exc}") from exc
-        if self._contains_forbidden_transport_field(self.json_schema):
-            raise ValueError("output schema must not request raw tool payload fields")
-        if any(not item or item != item.strip() for item in self.receipt_operations):
-            raise ValueError("receipt_operations must contain non-empty canonical names")
-        if len(self.receipt_operations) != len(set(self.receipt_operations)):
-            raise ValueError("receipt_operations must be unique")
-        if self.fulfillment == TaskOutputFulfillment.VERIFIED_RECEIPT and not self.receipt_operations:
-            raise ValueError("verified_receipt output requires receipt_operations")
-        if self.fulfillment != TaskOutputFulfillment.VERIFIED_RECEIPT and self.receipt_operations:
-            raise ValueError("receipt_operations are allowed only for verified_receipt outputs")
-        if self.require_complete_source and self.fulfillment != TaskOutputFulfillment.TASK_RESULT:
-            raise ValueError("require_complete_source is allowed only for task_result outputs")
-        return self
-
-    @staticmethod
-    def _contains_forbidden_transport_field(value: Any) -> bool:
-        if isinstance(value, dict):
-            properties = value.get("properties")
-            if isinstance(properties, dict) and any(
-                field_name in properties
-                for field_name in ("raw_content", "raw_data", "raw_payload")
-            ):
-                return True
-            return any(TaskOutputSpec._contains_forbidden_transport_field(item) for item in value.values())
-        if isinstance(value, list):
-            return any(TaskOutputSpec._contains_forbidden_transport_field(item) for item in value)
-        return False
 
 
 class TaskContractRef(BaseModel):
@@ -263,9 +218,8 @@ class TaskContractRef(BaseModel):
     contract_id: Optional[str] = None
     version: Optional[int] = Field(default=None, ge=1)
     contract_hash: Optional[str] = None
-    # Persist the compiled input boundary.  An agent version is deliberately
-    # not pinned, but a task must remain validated against the contract that
-    # the planner was allowed to select.
+    # Preserve published input guidance with the immutable task.
+    # These data schemas guide LLMs and never reject actual inputs.
     input_schema: Optional[Dict[str, Any]] = None
     model_config = {"extra": "forbid"}
 
@@ -278,22 +232,26 @@ class TaskContractRef(BaseModel):
         return self
 
 
+class ResponseSpec(BaseModel):
+    """Requested presentation; only file delivery is mandatory."""
+    mode: Literal["any", "text", "structured", "artifact"] = "any"
+    description: str = ""
+    json_schema: Dict[str, Any] = Field(default_factory=dict, alias="schema")
+    model_config = {"extra": "forbid", "populate_by_name": True}
+
+
 class AgentTaskContract(BaseModel):
     """Published, versioned task contract advertised by an agent version."""
     contract_id: str = Field(..., min_length=1)
     version: int = Field(..., ge=1)
     description: str = Field(..., min_length=1)
     input_schema: Dict[str, Any] = Field(default_factory=dict)
+    response_spec: ResponseSpec = Field(default_factory=ResponseSpec)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_contract(self) -> "AgentTaskContract":
-        try:
-            import jsonschema
-            jsonschema.Draft202012Validator.check_schema(self.input_schema)
-        except Exception as exc:
-            raise ValueError(f"input schema is invalid: {exc}") from exc
         keys = [item.key for item in self.expected_outputs]
         if len(keys) != len(set(keys)):
             raise ValueError("task contract contains duplicate output keys")
@@ -304,6 +262,8 @@ class AgentTaskContract(BaseModel):
         return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+
+
 class PlannedTask(BaseModel):
     """An immutable agent task. Planner and synthesis are not graph nodes."""
     task_id: str = Field(..., min_length=1)
@@ -311,6 +271,8 @@ class PlannedTask(BaseModel):
     intent: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
+    protocol_version: Literal[2] = 2
+    response_spec: ResponseSpec = Field(default_factory=ResponseSpec)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
     contract: TaskContractRef = Field(default_factory=TaskContractRef)
     depends_on: List[str] = Field(default_factory=list)
@@ -480,6 +442,8 @@ class TaskRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
     dependency_outputs: Dict[str, Any] = Field(default_factory=dict)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
+    protocol_version: Literal[2] = 2
+    response_spec: ResponseSpec = Field(default_factory=ResponseSpec)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
     contract: TaskContractRef = Field(default_factory=TaskContractRef)
     freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
@@ -564,49 +528,49 @@ class OutputCoverageClaim(BaseModel):
 
 
 class TaskCompletionDeclaration(BaseModel):
-    """Agent-authored claim. Runtime alone verifies it and computes TaskResult."""
+    """Agent-owned completion with a deterministic legacy journal adapter."""
     completion_claim: AgentExecutionCompletion = Field(..., alias="completion")
-    report: str = Field(..., min_length=1)
-    outputs: Dict[str, OutputSlot] = Field(default_factory=dict)
+    answer: Optional[str] = None
+    structured_response: Any = None
     needs: List[DiscoveredNeed] = Field(default_factory=list)
-    coverage: List[OutputCoverageClaim] = Field(default_factory=list)
-    limitation: Optional[UserLimitation] = None
-    model_config = {"extra": "forbid", "populate_by_name": True, "str_strip_whitespace": True}
+    outputs: Dict[str, OutputSlot] = Field(default_factory=dict, exclude=True)
+    coverage: List[OutputCoverageClaim] = Field(default_factory=list, exclude=True)
+    limitation: Optional[UserLimitation] = Field(default=None, exclude=True)
+    model_config = {"extra": "forbid", "populate_by_name": True}
 
-    @field_validator("completion_claim", mode="before")
-    @classmethod
-    def normalize_completion(cls, value: Any) -> Any:
-        return value.strip() if isinstance(value, str) else value
+    @property
+    def report(self) -> str:
+        return self.answer or self.completion_claim.value
 
     @model_validator(mode="before")
     @classmethod
-    def normalize_optional_fields(cls, value: Any) -> Any:
+    def adapt_legacy(cls, value: Any) -> Any:
         if not isinstance(value, dict):
             return value
         value = dict(value)
-        for key, default in (("outputs", {}), ("needs", []), ("coverage", []), ("limitation", None)):
+        report = value.pop("report", None)
+        if report is not None and "answer" not in value:
+            value["answer"] = report
+        if "structured_response" not in value and isinstance(value.get("outputs"), dict):
+            value["structured_response"] = {
+                key: slot.get("value") for key, slot in value["outputs"].items()
+                if isinstance(slot, dict) and slot.get("kind") == "value"
+            }
+        if "limitation" in value and is_absent(value["limitation"]):
+            value["limitation"] = None
+        for key in ("needs", "outputs", "coverage"):
             if key in value and is_absent(value[key]):
-                value[key] = default
+                value[key] = {} if key == "outputs" else []
         return value
 
     @model_validator(mode="after")
     def validate_completion(self) -> "TaskCompletionDeclaration":
-        need_refs = [need.ref for need in self.needs]
-        if len(need_refs) != len(set(need_refs)):
+        if len({need.ref for need in self.needs}) != len(self.needs):
             raise ValueError("needs must contain unique refs")
         if self.completion_claim == AgentExecutionCompletion.NEEDS and not self.needs:
             raise ValueError("needs completion requires at least one need")
-        if self.completion_claim == AgentExecutionCompletion.FULFILLED and self.needs:
-            raise ValueError("fulfilled completion cannot contain unresolved needs")
         if self.completion_claim != AgentExecutionCompletion.NEEDS and self.needs:
             raise ValueError("only needs completion may contain unresolved needs")
-        if self.completion_claim == AgentExecutionCompletion.UNFULFILLABLE and self.limitation is None:
-            raise ValueError("unfulfillable completion requires a limitation")
-        if self.completion_claim != AgentExecutionCompletion.UNFULFILLABLE and self.limitation is not None:
-            raise ValueError("only unfulfillable completion may contain a limitation")
-        paths = [(claim.output_key, claim.output_path) for claim in self.coverage]
-        if len(paths) != len(set(paths)):
-            raise ValueError("coverage must contain unique output_key/output_path pairs")
         return self
 
 
@@ -620,6 +584,13 @@ class TaskExecutionReceipt(BaseModel):
 class TaskResult(BaseModel):
     outcome: TaskOutcome
     description: str = Field(..., min_length=1)
+    protocol_version: Literal[2] = 2
+    completion: Optional[AgentExecutionCompletion] = None
+    answer: Optional[str] = None
+    structured_response: Any = None
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
+    sources: List[Dict[str, Any]] = Field(default_factory=list)
+    diagnostics: List[Dict[str, Any]] = Field(default_factory=list)
     outputs: Dict[str, Any] = Field(default_factory=dict)
     output_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     needs: List[DiscoveredNeed] = Field(default_factory=list)
@@ -671,105 +642,13 @@ _NONBLANK_STRING_PATTERN = r"^[\s\S]*\S[\s\S]*$"
 
 
 def task_completion_json_schema(request: TaskRequest, *, provider_compatible: bool = False) -> Dict[str, Any]:
-    """Build the sole terminal declaration schema from the compiled contract."""
-    def slot_schema(spec: TaskOutputSpec) -> Dict[str, Any]:
-        if spec.fulfillment == TaskOutputFulfillment.TASK_RESULT:
-            value_schema = dict(spec.json_schema)
-            if value_schema and "$id" not in value_schema:
-                # Keep local fragments relative to the value schema when it
-                # is embedded in the terminal envelope. Each output owns its
-                # definitions rather than resolving against the envelope.
-                identity = hashlib.sha256(json.dumps([request.task_id, spec.key]).encode()).hexdigest()
-                value_schema["$id"] = f"urn:ml-portal:task-output:{identity}"
-            return {
-                "type": "object", "additionalProperties": False,
-                "properties": {"kind": {"const": "value"}, "value": value_schema},
-                "required": ["kind", "value"],
-            }
-        kind = "evidence" if spec.fulfillment == TaskOutputFulfillment.VERIFIED_RECEIPT else "artifact"
-        return {
-            "type": "object", "additionalProperties": False,
-            "properties": {"kind": {"const": kind}, "refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN}}},
-            "required": ["kind", "refs"],
-        }
-
-    output_properties = {item.key: slot_schema(item) for item in request.expected_outputs}
-    required_outputs = [item.key for item in request.expected_outputs if item.required]
-    need_schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "ref": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
-            "key": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
-            "kind": {"enum": ["data", "artifact", "decision"]},
-            "description": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
-            "schema": {"type": "object"},
-            "required": {"type": "boolean"},
-            "context": {"type": "object"},
-        },
-        "required": ["ref", "key", "description"],
-    }
-    limitation_schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "code": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
-            "message": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
-            "action": {"enum": [item.value for item in LimitationAction]},
-        },
-        "required": ["code", "message"],
-    }
-    schema: Dict[str, Any] = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "completion": {"enum": [item.value for item in AgentExecutionCompletion]},
-            "report": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
-            "outputs": {
-                "type": "object", "additionalProperties": False,
-                "properties": output_properties,
-            },
-            "needs": {"type": "array", "items": need_schema},
-            "coverage": {"type": "array", "items": {
-                "type": "object", "additionalProperties": False,
-                "properties": {
-                    "output_key": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
-                    "output_path": {"type": ["string", "null"], "default": "", "description": "Omitted/null/blank means the entire output value, including nested arrays."},
-                    "result_id": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN},
-                    "query_call_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": _NONBLANK_STRING_PATTERN}},
-                },
-                "required": ["output_key", "result_id", "query_call_ids"],
-            }},
-            "limitation": {"anyOf": [limitation_schema, {"type": "null"}]},
-        },
-        "required": ["completion", "report", "outputs", "needs"],
-    }
-    schema["allOf"] = [
-        {
-            "if": {"properties": {"completion": {"const": AgentExecutionCompletion.FULFILLED.value}}, "required": ["completion"]},
-            "then": {
-                "properties": {
-                    "outputs": {"required": required_outputs}, "needs": {"maxItems": 0},
-                    "limitation": {"type": "null"},
-                },
-            },
-        },
-        {
-            "if": {"properties": {"completion": {"const": AgentExecutionCompletion.NEEDS.value}}, "required": ["completion"]},
-            "then": {"required": ["needs"], "properties": {"needs": {"minItems": 1}, "limitation": {"type": "null"}}},
-        },
-        {
-            "if": {"properties": {"completion": {"const": AgentExecutionCompletion.UNFULFILLABLE.value}}, "required": ["completion"]},
-            "then": {"required": ["limitation"], "properties": {"needs": {"maxItems": 0}, "limitation": limitation_schema}},
-        },
-    ]
-    if provider_compatible:
-        # Grammar backends implement only part of JSON Schema. Keep the
-        # structural slots, but enforce regex and conditional semantics in
-        # Pydantic/the reducer, not in a provider-generated sampler grammar.
-        schema.pop("allOf")
-        return _terminal_provider_schema(schema)
-    return schema
+    """Pydantic envelope independent of requested data schemas."""
+    schema = TaskCompletionDeclaration.model_json_schema(by_alias=True)
+    for key in ("outputs", "coverage", "limitation"):
+        schema["properties"].pop(key, None)
+    schema["$defs"] = {key: val for key, val in schema.get("$defs", {}).items()
+                       if key in {"AgentExecutionCompletion", "DiscoveredNeed"}}
+    return _terminal_provider_schema(schema) if provider_compatible else schema
 
 
 def _terminal_provider_schema(schema: Dict[str, Any] | bool) -> Dict[str, Any] | bool:

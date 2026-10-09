@@ -75,6 +75,37 @@ def _execution_graph(operations: list[ResolvedOperation]) -> RuntimeExecutionGra
     return RuntimeExecutionGraph(bindings=bindings)
 
 
+def test_collection_filter_does_not_leak_bindings_through_shared_provider_slug():
+    allowed = _resolved_instance(slug="shared", collection_id="allowed-id", collection_slug="allowed")
+    denied = _resolved_instance(slug="shared", collection_id="denied-id", collection_slug="denied")
+    operations = []
+    for slug in ("allowed", "denied", "orphan"):
+        op = _resolved_operation(instance_slug="shared")
+        op.collection_slug = slug
+        op.operation_slug = f"collection.{slug}.search"
+        operations.append(op)
+    result = SimpleNamespace(resolved_data_instances=[allowed, denied], resolved_operations=operations,
+        effective_permissions=None, execution_graph=_execution_graph(operations))
+    ExecutionPreflight(session=SimpleNamespace())._apply_collection_filter(
+        operation_result=result, agent=SimpleNamespace(allow_all_collections=False,
+            allowed_collection_ids=["allowed-id"]), agent_slug="agent", default_collection_allow=True)
+    assert [op.collection_slug for op in result.resolved_operations] == ["allowed"]
+    assert set(result.execution_graph.bindings) == {"collection.allowed.search"}
+
+
+def test_collection_filter_removes_orphan_operations_even_when_instances_unchanged():
+    allowed = _resolved_instance(slug="shared", collection_id="allowed-id", collection_slug="allowed")
+    op = _resolved_operation(instance_slug="shared")
+    op.collection_slug = "unbound"
+    result = SimpleNamespace(resolved_data_instances=[allowed], resolved_operations=[op],
+        effective_permissions=None, execution_graph=_execution_graph([op]))
+    ExecutionPreflight(session=SimpleNamespace())._apply_collection_filter(
+        operation_result=result, agent=SimpleNamespace(allow_all_collections=True),
+        agent_slug="agent", default_collection_allow=True)
+    assert result.resolved_operations == []
+    assert not result.execution_graph.bindings
+
+
 def _build_preflight(
     *,
     allowed_collection_ids,

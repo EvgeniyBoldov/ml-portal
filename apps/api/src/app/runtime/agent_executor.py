@@ -43,8 +43,9 @@ from app.runtime.orchestrator_contracts import (
     parse_task_completion_declaration,
     task_completion_json_schema,
 )
-from app.runtime.task_result_reducer import TaskAttemptResultReducer
 from app.runtime.task_completion_prompt import build_task_completion_prompt, output_slot_example
+from app.runtime.redactor import RuntimeRedactor
+from app.services.tool_result_store import ToolResultStore
 from app.runtime.context_snapshot import compact_snapshot
 from app.runtime.error_payloads import build_debug_payload
 from app.agents.runtime.published_capabilities import (
@@ -320,6 +321,12 @@ class AgentExecutor:
             ),
         )
 
+        yield RuntimeEvent.status(
+            "memory_context_used",
+            entity_type="agent_execution", entity_id=lifecycle_agent_execution_id,
+            memory_context=task.memory_context,
+        )
+
         # Inject execution deps before any tool-runtime call.
         deps = ctx.get_runtime_deps()
         deps.operation_executor = deps.operation_executor or self._operation_executor
@@ -350,26 +357,12 @@ class AgentExecutor:
         }
         ledger_start = len(state.tool_ledger.entries)
 
-        # Do not spend LLM calls when planner chose CALL_AGENT,
-        # but the sub-agent ended up with zero executable operations.
-        if not sub_request.resolved_operations and task.freshness_policy.value == "allow_memory":
-            # No operations is not an execution error for a reasoning task.
-            # The normal model path below can still return a bounded answer.
-            pass
-        elif not sub_request.resolved_operations:
-            msg = "sub_agent_no_operations"
-            ctx.extra["agent_execution_result"] = TaskCompletionDeclaration(
-                completion="unfulfillable",
-                report=msg,
-                limitation={"code": msg, "message": "The selected agent has no compatible operation.", "action": "none"},
-            )
-            yield RuntimeEvent.status(msg, agent=agent_slug)
-            return
+        context_task = await self._prepare_task_context(task, ctx, lifecycle_agent_execution_id)
 
         # 2. Compose the sub-agent's LLM messages. Goal + explicit agent_input.
         sub_messages = self._build_sub_messages(
             messages,
-            task,
+            context_task,
             state.goal,
             [item.model_dump(mode="json") for item in (state.attachment_contexts or [])],
             execution_context=ctx.extra.get("memory_execution_context"),
@@ -456,6 +449,8 @@ class AgentExecutor:
                                 state.mark_artifact_deleted(str(item.get("artifact_id") or ""))
                         elif isinstance(result_payload, dict):
                             state.mark_artifact_deleted(str(result_payload.get("artifact_id") or ""))
+                    artifacts = [item for item in artifacts
+                                 if str(item.get("artifact_id") or "") not in state.deleted_artifact_ids]
                     if self._creates_downloadable_artifact(operation_name) and bool(runtime_event.data.get("success")):
                         artifacts.extend(
                             item for item in runtime_event.data.get("artifact_refs") or []
@@ -809,6 +804,26 @@ class AgentExecutor:
         ]
 
     @staticmethod
+    async def _prepare_task_context(task: TaskRequest, ctx: ToolContext, execution_id: str | None) -> TaskRequest:
+        updates = {}
+        root_id = str(ctx.extra.get("runtime_root_run_id") or "")
+        for field in ("inputs", "dependency_outputs"):
+            value = getattr(task, field)
+            if root_id and len(json.dumps(value, ensure_ascii=False, default=str)) > 8000:
+                saved = await ToolResultStore().save(
+                    run_id=root_id, call_id=f"context:{task.task_id}:{execution_id}:{field}",
+                    operation="runtime.task.context", tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+                    task_id=task.task_id, agent_execution_id=execution_id,
+                    payload=RuntimeRedactor().redact(value),
+                )
+                updates[field] = {"saved_context": {
+                    "result_id": saved["result_id"], "sql_ref": saved["sql_ref"],
+                    "inline_complete": False,
+                    "instruction": "Read full task context with result.analyze SQL.",
+                }}
+        return task.model_copy(update=updates) if updates else task
+
+    @staticmethod
     def _build_sub_messages(
         outer_messages: List[Dict[str, Any]],
         task: TaskRequest,
@@ -864,8 +879,10 @@ class AgentExecutor:
         parts.append("[Execution context — application fact]\n" + json.dumps(execution, ensure_ascii=False))
         if task.scope_context:
             parts.append("[Task scope]\n" + json.dumps(task.scope_context, ensure_ascii=False, default=str))
+        if task.contract.input_schema:
+            parts.append("[Input schema — advisory; actual input takes precedence]\n" + json.dumps(task.contract.input_schema, ensure_ascii=False, default=str))
         if task.inputs:
-            parts.append("[Task inputs]\n" + json.dumps(task.inputs, ensure_ascii=False, default=str)[:8000])
+            parts.append("[Task inputs]\n" + json.dumps(task.inputs, ensure_ascii=False, default=str))
         if parts:
             parts.append(f"[Task]\n{query}")
             final_query = "\n\n".join(parts)
@@ -874,8 +891,7 @@ class AgentExecutor:
 
         if task.dependency_outputs:
             dependency_lines = ["[Dependency outputs]"]
-            remaining = 8000
-            for task_id, output in list(task.dependency_outputs.items())[:8]:
+            for task_id, output in task.dependency_outputs.items():
                 if not isinstance(output, dict):
                     continue
                 projection = {
@@ -883,6 +899,10 @@ class AgentExecutor:
                     "status": output.get("status"),
                     "description": str(output.get("description") or "")[:1200],
                     "outputs": output.get("outputs") or {},
+                    "answer": output.get("answer"),
+                    "structured_response": output.get("structured_response"),
+                    "diagnostics": output.get("diagnostics", []),
+                    "saved_context": output if task_id == "saved_context" else None,
                     "receipts": list((output.get("verified") or {}).get("receipts") or [])[:8],
                     "evidence": (output.get("verified") or {}).get("evidence") or {},
                     "artifacts": list((output.get("verified") or {}).get("artifacts") or [])[:8],
@@ -892,11 +912,7 @@ class AgentExecutor:
                 except (TypeError, ValueError):
                     rendered = str(projection).strip()
                 if rendered:
-                    rendered = rendered[: min(4000, remaining)]
                     dependency_lines.append(f"- {task_id}: {rendered}")
-                    remaining -= len(rendered)
-                    if remaining <= 0:
-                        break
             if len(dependency_lines) > 1:
                 final_query = "\n\n".join(["\n".join(dependency_lines), final_query])
 
@@ -986,16 +1002,7 @@ class AgentExecutor:
             return errors
         except ValueError as exc:
             return [str(exc)]
-        result = TaskAttemptResultReducer().reduce(request=task, declaration=declaration, verified=verified)
-        errors = []
-        for key, state in result.output_states.items():
-            if state.get("status") == "invalid":
-                errors.append(f"outputs.{key}: {state['reason']}")
-                for error in state.get("errors", []):
-                    errors.append(f"outputs.{key}.value{error['path']}: {error['message']}")
-        if result.reason_code and not errors:
-            errors.append(f"{result.reason_code}: {result.limitation.message}")
-        return errors[:20]
+        return []
 
     @staticmethod
     def _parse_structured_response(raw: str) -> Dict[str, Any]:

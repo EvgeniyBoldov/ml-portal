@@ -146,6 +146,12 @@ class TurnPreflight:
     ) -> TurnPreflightDecision:
         if self._is_glossary_write_request(user_request):
             return self._glossary_document_decision(user_request=user_request)
+        if event_sink:
+            await event_sink(RuntimeEvent.status(
+                "memory_context_used",
+                entity_type="orchestrator", entity_id=trace_parent_entity_id,
+                memory_context=[*(facts_context or []), mechanical_lookup, recall_context or {}],
+            ))
         result = await self._llm.invoke(
             role=SystemLLMRoleType.TURN_PREFLIGHT,
             payload={

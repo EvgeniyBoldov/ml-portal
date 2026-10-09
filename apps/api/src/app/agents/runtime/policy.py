@@ -1,6 +1,6 @@
 """
 PolicyLimits — execution constraints from policy_data and limit_data.
-GenerationParams — LLM generation parameters (model, temperature, max_tokens).
+GenerationParams — LLM generation parameters (model, temperature).
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ class GenerationParams:
 
     model: Optional[str] = None
     temperature: float = 0.7
-    max_tokens: Optional[int] = None
     timeout_s: Optional[int] = None
 
 

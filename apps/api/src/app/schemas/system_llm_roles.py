@@ -30,10 +30,6 @@ class SystemLLMRoleBase(BaseModel):
     # === Execution Configuration ===
     model: Optional[str] = Field(None, description="Model alias for this role")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature for LLM calls")
-    max_tokens: Optional[int] = Field(None, ge=1, description="Maximum LLM output tokens")
-    timeout_s: Optional[int] = Field(None, ge=1, description="LLM request timeout in seconds")
-    max_retries: Optional[int] = Field(None, ge=0, description="Maximum retry attempts")
-    retry_backoff: Optional[Literal["none", "linear", "exp"]] = Field(None, description="Retry backoff strategy")
     
     # === Status ===
     is_active: Optional[bool] = Field(True, description="Whether this role configuration is active")
@@ -96,10 +92,6 @@ class SystemLLMRoleUpdate(BaseModel):
     
     model: Optional[str] = Field(None, description="Model alias for this role")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature for LLM calls")
-    max_tokens: Optional[int] = Field(None, ge=1, description="Maximum LLM output tokens")
-    timeout_s: Optional[int] = Field(None, ge=1, description="LLM request timeout in seconds")
-    max_retries: Optional[int] = Field(None, ge=0, description="Maximum retry attempts")
-    retry_backoff: Optional[Literal["none", "linear", "exp"]] = Field(None, description="Retry backoff strategy")
     
     is_active: Optional[bool] = Field(None, description="Whether this role configuration is active")
 

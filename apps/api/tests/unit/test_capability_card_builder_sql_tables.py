@@ -35,7 +35,7 @@ def test_collections_card_includes_remote_tables_preview():
     card = builder._build_collections_card([item], [operation])  # noqa: SLF001
 
     assert "таблицы:" in card
-    assert "если результат пустой" in card.lower()
+    assert "при пустом ответе" in card.lower()
     assert "правила использования: Сначала inspect, потом search" in card
     assert "рекомендуемый порядок" not in card
     assert "`collection.sql.search_objects`" in card
@@ -173,3 +173,17 @@ def test_similar_collections_keep_distinct_semantics_and_fields():
     assert "### `tickets`\n- название: Tickets" in card
     assert "Search by site" in card and "Physical site" in card
     assert "Search by assignee" in card and "Ticket owner" in card
+
+
+def test_collection_usage_rules_are_not_truncated():
+    rules = "Usage instruction. " * 100 + "FINAL_COLLECTION_RULE"
+    collection = SimpleNamespace(
+        collection_slug="netbox", slug="netbox", name="NetBox", collection_type="api",
+        domain="collection.api", usage_purpose="Inventory", data_description="Devices",
+        usage_rules=rules, remote_tables=[], schema_fields=[],
+    )
+    operation = SimpleNamespace(scope="collection", collection_slug="netbox",
+        operation="netbox_get_objects", operation_slug="netbox_get_objects", name="List",
+        description="List objects", published=None, input_schema={}, result_kind="rows", source="mcp")
+    card = CapabilityCardBuilder()._build_collections_card([collection], [operation])
+    assert rules in card

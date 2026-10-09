@@ -37,7 +37,6 @@ class ChatCompletionRequest(BaseModel):
     model: Optional[str] = None
     messages: List[ChatMessage]
     temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
     stream: Optional[bool] = False
     top_p: Optional[float] = None
     frequency_penalty: Optional[float] = None
@@ -94,8 +93,6 @@ async def chat_completions(
     kwargs: Dict[str, Any] = {}
     if request_body.temperature is not None:
         kwargs["temperature"] = request_body.temperature
-    if request_body.max_tokens is not None:
-        kwargs["max_tokens"] = request_body.max_tokens
     if request_body.top_p is not None:
         kwargs["top_p"] = request_body.top_p
     

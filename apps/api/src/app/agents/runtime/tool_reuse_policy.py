@@ -40,4 +40,9 @@ class ToolCallReusePolicy:
             reused=True,
             reused_from_call_id=reused.call_id,
         )
+        if reused.stored_result_id:
+            result.metadata["stored_result"] = {
+                **(reused.result_data if isinstance(reused.result_data, dict) else {}),
+                "result_id": reused.stored_result_id, "inline_complete": False,
+            }
         return result, [dict(source) for source in (reused.sources or []) if isinstance(source, dict)]

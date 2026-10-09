@@ -112,7 +112,7 @@ interface FieldsSection {
 
 const AGENT_SECTIONS: Array<{ title: string; keys: string[] }> = [
   { title: 'Prompt', keys: ['identity', 'mission', 'scope', 'rules', 'tool_use_rules', 'output_format', 'examples'] },
-  { title: 'Execution', keys: ['model', 'timeout_s', 'max_steps', 'max_retries', 'max_tokens', 'temperature'] },
+  { title: 'Execution', keys: ['model', 'temperature'] },
   { title: 'Safety', keys: ['requires_confirmation_for_write', 'risk_level', 'never_do', 'allowed_ops'] },
   { title: 'Tags', keys: ['tags', 'bindings'] },
 ];

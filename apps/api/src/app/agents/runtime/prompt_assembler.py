@@ -26,11 +26,9 @@ class PromptAssembly:
 
 
 class OperationPromptRenderer:
-    MAX_DESCRIPTION_CHARS = 320
-
     @staticmethod
     def render_schema(op: "ResolvedOperation") -> Dict[str, Any]:
-        description = build_prompt_operation_description(op, summary=getattr(op, "published", None), max_chars=OperationPromptRenderer.MAX_DESCRIPTION_CHARS)
+        description = build_prompt_operation_description(op, summary=getattr(op, "published", None))
         return {
             "type": "function",
             "function": {
@@ -51,7 +49,7 @@ class OperationPromptRenderer:
             "type": "function",
             "function": {
                 "name": "collection.info",
-                "description": description[: OperationPromptRenderer.MAX_DESCRIPTION_CHARS].rstrip(),
+                "description": description,
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -90,6 +88,7 @@ class PromptAssembler:
         )
         prompt_labels = self._resolve_prompt_labels(platform_config=platform_config, sandbox_overrides=sandbox_overrides)
         prompt_budgets = self._resolve_prompt_budgets(platform_config=platform_config, sandbox_overrides=sandbox_overrides)
+        native_tool_calling = bool(isinstance(platform_config, dict) and platform_config.get("native_tool_calling", False))
         base_prompt = self.agent_renderer.render_base_prompt(
             exec_request,
             system_prompt_override=system_prompt_override,
@@ -107,12 +106,13 @@ class PromptAssembler:
             resolved_operations=resolved_operations,
             prompt_labels=prompt_labels,
             prompt_budgets=prompt_budgets,
+            include_operation_contracts=not native_tool_calling,
         )
         system_operations_prompt = self.assemble_system_operations_prompt(
             resolved_operations=resolved_operations,
             prompt_labels=prompt_labels,
             prompt_budgets=prompt_budgets,
-        )
+        ) if not native_tool_calling else ""
         constraints_prompt = self.assemble_constraints_prompt(
             exec_request=exec_request,
             policy_limits=resolved_policy_limits,
@@ -132,10 +132,6 @@ class PromptAssembler:
         # not mirror that same contract in the system prompt: it is redundant
         # and needlessly consumes the context window. The textual contract is
         # retained for providers using the plaintext tool-call protocol.
-        native_tool_calling = bool(
-            isinstance(platform_config, dict)
-            and platform_config.get("native_tool_calling", False)
-        )
         operations_prompt = (
             build_tools_prompt(
                 operation_schemas,
@@ -173,6 +169,7 @@ class PromptAssembler:
         resolved_operations: Optional[Sequence["ResolvedOperation"]] = None,
         prompt_labels: Optional[Dict[str, Any]] = None,
         prompt_budgets: Optional[Dict[str, Any]] = None,
+        include_operation_contracts: bool = True,
     ) -> str:
         if not resolved_data_instances or resolved_operations is None:
             return ""
@@ -181,6 +178,7 @@ class PromptAssembler:
             resolved_operations=resolved_operations,
             prompt_labels=prompt_labels,
             prompt_budgets=prompt_budgets,
+            include_operation_contracts=include_operation_contracts,
         )
         return bundle.collections_card
 
@@ -228,9 +226,6 @@ class PromptAssembler:
             policies_text = _text(platform_config.get("policies_text"))
             normalized = policies_text.strip()
             if normalized and normalized not in {"# Политики платформы", "Политики платформы"}:
-                max_policy_chars = self._budget(budgets, "policies_text_max_chars", 1200)
-                if len(normalized) > max_policy_chars:
-                    normalized = normalized[:max_policy_chars].rstrip()
                 platform_lines.append(f"- {self._label(labels, 'policies_label', 'Политики')}: {normalized}")
         if platform_lines:
             blocks.append(f"{self._label(labels, 'platform_constraints_title', 'Ограничения платформы')}\n" + "\n".join(platform_lines))

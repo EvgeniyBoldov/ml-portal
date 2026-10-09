@@ -41,6 +41,7 @@ class CapabilityCardBuilder:
         resolved_operations: Sequence["ResolvedOperation"],
         prompt_labels: Optional[dict] = None,
         prompt_budgets: Optional[dict] = None,
+        include_operation_contracts: bool = True,
     ) -> CapabilityCardBundle:
         labels = prompt_labels if isinstance(prompt_labels, dict) else {}
         budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
@@ -50,12 +51,13 @@ class CapabilityCardBuilder:
                 resolved_operations,
                 labels=labels,
                 budgets=budgets,
+                include_operation_contracts=include_operation_contracts,
             ),
             system_operations_card=self._build_system_operations_card(
                 resolved_operations,
                 labels=labels,
                 budgets=budgets,
-            ),
+            ) if include_operation_contracts else "",
         )
 
     def _build_collections_card(
@@ -65,6 +67,7 @@ class CapabilityCardBuilder:
         *,
         labels: Optional[dict] = None,
         budgets: Optional[dict] = None,
+        include_operation_contracts: bool = True,
     ) -> str:
         if not items:
             return ""
@@ -121,7 +124,9 @@ class CapabilityCardBuilder:
             schema_fields = getattr(item, "schema_fields", None) or []
             max_fields = self._budget(budgets, "max_fields_in_card", MAX_FIELDS_IN_CARD)
             if schema_fields:
-                lines.append("- поля:")
+                lines.append("- метаданные каталога (не поля ответа API):" if collection_type == "api" else "- поля:")
+                if collection_type == "api":
+                    lines.append("  Поля полученных записей и SQL-типы проверяй через `result.describe`.")
                 for field in schema_fields[:max_fields]:
                     name = self._text(field.get("name"))
                     if not name:
@@ -144,6 +149,9 @@ class CapabilityCardBuilder:
                 if self._text(getattr(operation, "collection_slug", None)) == slug
             ]
             if operation_names:
+                if not include_operation_contracts:
+                    lines.append("- операции: " + ", ".join(f"`{name}`" for name in operation_names))
+                    continue
                 lines.append("- операции:")
                 for operation in collection_operations[:MAX_OPERATIONS_IN_CARD]:
                     operation_summary = operation.published or build_published_operation_summary(
