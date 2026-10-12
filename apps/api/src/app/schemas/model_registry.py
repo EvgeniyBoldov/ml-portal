@@ -64,6 +64,7 @@ class ModelBase(BaseModel):
     status: ModelStatusEnum = Field(default=ModelStatusEnum.AVAILABLE, description="Availability status")
     enabled: bool = Field(default=True, description="Is model enabled")
     is_system: bool = Field(default=False, description="System model (cannot be deleted)")
+    use_for_long_memory: bool = False
     default_for_type: bool = Field(default=False, description="Default model for this type")
     model_version: Optional[str] = Field(None, max_length=50, description="Model version (for tracking changes)")
     description: Optional[str] = Field(None, description="Model description")
@@ -97,6 +98,7 @@ class ModelUpdate(BaseModel):
     max_retries: Optional[int] = Field(None, ge=0)
     status: Optional[ModelStatusEnum] = None
     enabled: Optional[bool] = None
+    use_for_long_memory: Optional[bool] = None
     default_for_type: Optional[bool] = None
     model_version: Optional[str] = Field(None, max_length=50)
     description: Optional[str] = None

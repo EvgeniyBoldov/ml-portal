@@ -214,6 +214,8 @@ class AgentExecutor:
             "event_sink": ctx.extra.get("runtime_event_logger"),
             "trace_parent_id": lifecycle_agent_execution_id,
         }
+        if ctx.extra.get("shadow_execution"):
+            prepare_kwargs["enable_operations"] = False
         session_factory = ctx.get_runtime_deps().session_factory
         if session_factory is None:
             return await asyncio.wait_for(
@@ -688,7 +690,8 @@ class AgentExecutor:
             terminal_status, terminal_outcome = "failed", "failed"
             raise
         finally:
-            if logger is not root_logger and logger is not None and lifecycle_agent_execution_id:
+            if (logger is not root_logger and logger is not None and lifecycle_agent_execution_id
+                    and not ctx.extra.get("shadow_execution")):
                 parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
                 parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None
                 await logger.emit(RuntimeEvent.agent_end(
@@ -816,6 +819,8 @@ class AgentExecutor:
 
     @staticmethod
     async def _prepare_task_context(task: TaskRequest, ctx: ToolContext, execution_id: str | None) -> TaskRequest:
+        if ctx.extra.get("shadow_execution"):
+            return task
         updates = {}
         root_id = str(ctx.extra.get("runtime_root_run_id") or "")
         for field in ("inputs", "dependency_outputs"):

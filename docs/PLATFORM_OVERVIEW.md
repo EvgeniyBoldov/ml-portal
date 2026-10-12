@@ -191,6 +191,12 @@ ML Portal — мульти-тенантная AI-платформа для ко�
 - воспроизводимость поведения,
 - контролируемый rollout изменений.
 
+Тип агента: `regular` (по умолчанию) или `shadow`. Shadow выполняется напрямую
+через `POST /api/v1/agents/shadow/invoke` от пользователя Bearer access token
+с существующим RBAC; не входит в каталог планера. В первой версии выполняет
+LLM-задачу без инструментов, чата и памяти, возвращает JSON `agent/result`
+и использует текущий журнал запусков. Подробности — [Agent Runtime](architecture/AGENT_RUNTIME.md#shadow-api-invocation).
+
 ### 6.2 Tool и Tool Instance данные
 
 Хранится:

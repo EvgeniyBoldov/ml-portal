@@ -10,6 +10,7 @@ from app.api.deps import db_session, get_current_user, get_llm_client
 from app.core.http.clients import LLMClientProtocol
 from app.core.security import UserCtx
 from app.models.model_registry import Model, ModelType
+from app.models.agent import AgentType
 
 router = APIRouter()
 
@@ -59,6 +60,7 @@ async def list_chat_agents(
                 "description": agent.description,
             }
             for agent in agents
+            if agent.agent_type == AgentType.REGULAR.value
         ]
     }
 

@@ -71,6 +71,7 @@ async def list_agents(
         AgentListItem(
             id=a.id,
             slug=a.slug,
+            agent_type=a.agent_type,
             name=a.name,
             description=a.description,
             tags=a.tags,
@@ -111,6 +112,7 @@ async def create_agent(
         allow_all_collections=data.allow_all_collections,
         allowed_collection_ids=data.allowed_collection_ids,
         provides_keys=data.provides_keys,
+        agent_type=data.agent_type,
     )
     await db.commit()
     return result
@@ -147,6 +149,7 @@ async def update_agent(
         allow_all_collections=data.allow_all_collections,
         allowed_collection_ids=data.allowed_collection_ids,
         provides_keys=data.provides_keys,
+        agent_type=data.agent_type,
     )
     await db.commit()
     return result

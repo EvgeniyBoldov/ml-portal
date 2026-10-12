@@ -38,6 +38,7 @@ class TestModelService:
         model.provider = "openai"
         model.model_version = "gpt-3.5-turbo"
         model.default_for_type = False
+        model.use_for_long_memory = False
         model.is_system = False
         model.deleted_at = None
         model.health_status = HealthStatus.HEALTHY

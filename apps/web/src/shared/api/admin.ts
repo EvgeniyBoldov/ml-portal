@@ -319,6 +319,7 @@ export interface Model {
   status: ModelStatus;
   enabled: boolean;
   is_system: boolean;
+  use_for_long_memory: boolean;
   default_for_type: boolean;
   model_version?: string | null;
   description?: string | null;
@@ -346,6 +347,7 @@ export interface ModelCreate {
   max_retries?: number | null;
   status?: ModelStatus;
   enabled?: boolean;
+  use_for_long_memory?: boolean;
   default_for_type?: boolean;
   model_version?: string;
   description?: string;
@@ -364,6 +366,7 @@ export interface ModelUpdate {
   max_retries?: number | null;
   status?: ModelStatus;
   enabled?: boolean;
+  use_for_long_memory?: boolean;
   default_for_type?: boolean;
   model_version?: string;
   description?: string;

@@ -1236,7 +1236,7 @@ function executorResultFor(
           && event.parent_entity_type === 'synthesis_run'
           && event.parent_entity_id === entity.id)
         .sort((left, right) => right.sequence - left.sequence)[0]
-    : undefined;
+    : [...executorEvents].reverse().find(event => event.event_type === 'final');
   const error = state.eventIdsBySequence
     .map((id) => state.eventsById[id])
     .find((event) => event?.event_type === 'error' && (
@@ -1249,8 +1249,17 @@ function executorResultFor(
   const memoryOutput = executorSlug === 'document_memory_extractor'
     ? documentMemoryResult(executorEvents)
     : undefined;
-  const resultPayload = isSynthesizer && Object.keys(finalPayload).length ? finalPayload : endPayload;
-  const output = memoryOutput ?? resultOutputFrom(resultPayload);
+  const resultPayload = isSynthesizer && Object.keys(finalPayload).length
+    ? finalPayload : { ...finalPayload, ...endPayload };
+  // FINAL is the runtime's accepted completion, unlike an intermediate LLM response.
+  const parsedFinal = !isSynthesizer ? asRecord(parseCallContent(finalPayload.content).data) : undefined;
+  const declaration = parsedFinal && ['fulfilled', 'needs', 'unfulfillable'].includes(asString(parsedFinal.completion))
+    ? parsedFinal : undefined;
+  let output = memoryOutput ?? resultOutputFrom(resultPayload);
+  if (memoryOutput === undefined && declaration) {
+    output = declaration.structured_response !== undefined && declaration.structured_response !== null
+      ? declaration.structured_response : declaration.answer ?? declaration.structured_response;
+  }
   const toolCalls = calls.filter((call) => call.kind === 'tool');
   const succeeded = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === true).length;
   const failed = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === false).length;
@@ -1261,11 +1270,12 @@ function executorResultFor(
     status,
     statusLabel: traceResultStatusLabel(status),
     output: output === undefined ? undefined : sanitizeDisplay(parseCallContent(output).data ?? output),
-    message: resultMessageFrom(errorPayload) ?? resultMessageFrom(resultPayload),
+    message: resultMessageFrom(errorPayload) ?? resultMessageFrom(resultPayload)
+      ?? (asString(declaration?.answer) || undefined),
     completionKind: asString(endPayload.completion_kind) || undefined,
     sufficientForPhase: typeof endPayload.sufficient_for_phase === 'boolean' ? endPayload.sufficient_for_phase : undefined,
     missingInputs: endPayload.missing_inputs,
-    needs: endPayload.needs,
+    needs: endPayload.needs ?? (Array.isArray(declaration?.needs) && declaration.needs.length ? declaration.needs : undefined),
     artifacts: endPayload.artifacts ?? endPayload.attachments ?? resultPayload.attachments ?? resultPayload.artifacts,
     sources: resultPayload.sources,
     operations: { total: toolCalls.length, succeeded, failed },
@@ -1432,7 +1442,7 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
     prompt: promptFor(eventsFor(state, entity), calls),
     limits,
   };
-  executor.taskPresentation = taskPresentationForExecutor(executor);
+  executor.taskPresentation = taskPresentationForExecutor(state, executor);
   return executor;
 }
 
@@ -1576,27 +1586,37 @@ function checkpointExecutorFor(state: SandboxTraceState, checkpoint: TraceEntity
   return executor;
 }
 
-function taskPresentationForExecutor(executor: TraceExecutorRun, plan?: PlanViewModel): PlanTaskViewModel {
+function taskPresentationForExecutor(state: SandboxTraceState, executor: TraceExecutorRun, plan?: PlanViewModel): PlanTaskViewModel {
   const payload = executor.start.payload;
-  const taskId = asString(payload.task_id);
+  const contextEvent = [...eventsFor(state, executor.entity)].reverse().find(
+    event => event.event_type === 'status' && event.payload.stage === 'agent_context_snapshot',
+  );
+  const snapshot = asRecord(contextEvent?.payload.context_snapshot);
+  const taskContext = asRecord(snapshot?.inputs);
+  const taskId = asString(payload.task_id) || asString(taskContext?.task_id);
+  const inputs = payload.task_inputs ?? taskContext?.inputs;
+  const instructions = asString(payload.instructions) || asString(taskContext?.instructions);
+  const intent = asString(payload.intent) || asString(taskContext?.intent);
   const planned = taskId ? plan?.tasks.find((task) => task.taskId === taskId) : undefined;
   if (planned) {
     return {
       ...planned,
       title: executor.task || planned.title,
-      objective: asString(payload.task_objective) || planned.objective,
+      objective: asString(payload.task_objective) || planned.objective || asString(taskContext?.goal),
       executor: planned.executor ?? executor.executorSlug,
       status: planned.status ?? taskStatusLabel(executor.entity.status),
-      inputs: payload.task_inputs ?? planned.inputs,
-      instructions: asString(payload.instructions) || planned.instructions,
+      inputs: inputs ?? planned.inputs,
+      instructions: instructions || planned.instructions,
+      intent: intent || planned.intent,
     };
   }
   return projectPlanTask({
     task_id: taskId || undefined,
     title: executor.task,
-    objective: payload.task_objective,
-    instructions: payload.instructions,
-    inputs: payload.task_inputs,
+    objective: payload.task_objective ?? taskContext?.goal,
+    instructions,
+    intent,
+    inputs,
     executor: executor.executorSlug,
     status: taskStatusLabel(executor.entity.status),
   }, taskId || executor.entity.id);
@@ -1618,14 +1638,16 @@ function taskPresentationForStep(
       objective: objective ?? planned.objective,
       executor: planned.executor ?? executor?.executorSlug,
       status: planned.status ?? taskStatusLabel(executor?.entity.status),
-      inputs: payload.inputs ?? payload.task_inputs ?? planned.inputs,
+      inputs: payload.inputs ?? payload.task_inputs ?? executor?.taskPresentation?.inputs ?? planned.inputs,
     };
   }
   return projectPlanTask({
     task_id: taskId || undefined,
     title,
     objective,
-    inputs: payload.inputs ?? payload.task_inputs,
+    inputs: payload.inputs ?? payload.task_inputs ?? executor?.taskPresentation?.inputs,
+    instructions: executor?.taskPresentation?.instructions,
+    intent: executor?.taskPresentation?.intent,
     executor: executor?.executorSlug,
     status: taskStatusLabel(executor?.entity.status),
   }, taskId || executor?.entity.id || 'step-task');
@@ -1683,7 +1705,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         || asString(start.payload.task_title)
         || asString(start.payload.goal)
         || 'Выполнение задачи';
-      for (const executor of executorRuns) executor.taskPresentation = taskPresentationForExecutor(executor, plan);
+      for (const executor of executorRuns) executor.taskPresentation = taskPresentationForExecutor(state, executor, plan);
       const stage: TraceStage = {
         entity,
         start,
@@ -1852,7 +1874,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
             : executor.executorSlug === 'fact_compactor' ? 'Компактация фактов'
               : 'Подготовка memory context',
           objective: executor.task,
-          taskPresentation: taskPresentationForExecutor(executor),
+          taskPresentation: taskPresentationForExecutor(state, executor),
           executorRuns: [executor],
           metrics: executor.metrics,
         }));
@@ -1998,7 +2020,17 @@ export function traceElapsedMs(state: SandboxTraceState, now: number): number | 
   const events = state.eventIdsBySequence.map((id) => state.eventsById[id]).filter(Boolean);
   if (events.length === 0) return undefined;
   const start = new Date(events[0].occurred_at).getTime();
-  const terminal = [...events].reverse().find((event) => event.event_type === 'run_end');
+  let terminal = [...events].reverse().find((event) => event.event_type === 'run_end');
+  // Agent-run endpoints return the closed agent subgraph without root run events.
+  // A sandbox run continues after an agent ends, so only use this fallback when
+  // the journal has no run_start and every observed agent execution has ended.
+  if (!terminal && !events.some(event => event.event_type === 'run_start')) {
+    const starts = events.filter(event => event.event_type === 'agent_start');
+    const ends = events.filter(event => event.event_type === 'agent_end');
+    if (starts.length && starts.every(startEvent => ends.some(endEvent => endEvent.entity_id === startEvent.entity_id))) {
+      terminal = ends.at(-1);
+    }
+  }
   const finish = terminal ? new Date(terminal.occurred_at).getTime() : now;
   return finish > start ? finish - start : undefined;
 }

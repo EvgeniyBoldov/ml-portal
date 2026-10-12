@@ -215,6 +215,7 @@ def serialize_model(model: Model) -> Dict[str, Any]:
         "enabled": model.enabled,
         "is_system": model.is_system,
         "default_for_type": model.default_for_type,
+        "use_for_long_memory": model.use_for_long_memory,
         "model_version": model.model_version,
         "description": model.description,
         "last_health_check_at": model.last_health_check_at,

@@ -27,12 +27,12 @@ class HippoRAGService:
     async def _models(self) -> dict[str, Any]:
         llm = await RegistryLLMConnectionResolver().resolve(None)
         model = await self.session.scalar(select(Model).where(
-            Model.type == ModelType.EMBEDDING, Model.default_for_type.is_(True),
+            Model.type == ModelType.EMBEDDING, Model.use_for_long_memory.is_(True),
             Model.enabled.is_(True), Model.status == ModelStatus.AVAILABLE,
             Model.deleted_at.is_(None),
         ).order_by(Model.created_at.asc()).limit(1))
         if model is None:
-            raise ValueError("System default embedding model is not configured")
+            raise ValueError("LongMemory embedding model is not configured or unavailable")
         await EmbeddingModelConfigService.ensure_registered(self.session, model.alias)
         adapter = EmbeddingServiceFactory.get_service(model.alias)
         info = await asyncio.to_thread(adapter.get_model_info)
@@ -44,7 +44,10 @@ class HippoRAGService:
             "dimensions": info.dimensions, "embedding_tokens": info.max_tokens,
             "embedding_version": info.version, "context_tokens": llm.context_window_tokens,
         }
-        return {"llm_alias": llm.model_alias, "embedding_alias": model.alias,
+        fingerprint = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+        extraction_identity = fingerprint({key: value for key, value in identity.items() if key.startswith("llm") or key == "context_tokens"})
+        embedding_identity = fingerprint({key: value for key, value in identity.items() if key.startswith("embedding") or key == "dimensions"})
+        return {"extraction_identity": extraction_identity, "embedding_identity": embedding_identity, "llm_alias": llm.model_alias, "embedding_alias": model.alias,
                 "dimensions": info.dimensions, "embedding_tokens": info.max_tokens,
                 "context_tokens": llm.context_window_tokens or 16384,
                 "qwen": "qwen" in llm.provider_model_name.casefold(),
@@ -87,6 +90,9 @@ class HippoRAGService:
 
     async def index_documents(self, documents: list[dict[str, Any]]) -> dict[str, Any]:
         return await self._call("corpus/index", {"documents": documents})
+
+    async def reindex_embeddings(self) -> dict[str, Any]:
+        return await self._call("corpus/reindex", {})
 
     async def search_documents(self, query: str, *, limit: int = 8) -> dict[str, Any]:
         """Read the shared native graph; no legacy claims or source ACL queries."""

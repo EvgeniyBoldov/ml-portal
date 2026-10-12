@@ -113,6 +113,8 @@ class PortalTests(unittest.TestCase):
         first = portal.Document(id="claim1", content="Same", metadata={"memory_item_id": "item1"})
         second = portal.Document(id="claim2", content="Same", metadata={"memory_item_id": "item2"})
         hippo = Mock()
+        hippo._openie_info = [{"idx": portal.compute_mdhash_id("Same", prefix="chunk-"),
+            "passage": "Same", "extracted_entities": [], "extracted_triples": []}]
         hippo.retrieve.return_value = [Mock(graph_seeds=[], docs=[], doc_scores=[], doc_metadata=[])]
         with tempfile.TemporaryDirectory() as root, patch.object(portal, "DATA", Path(root)), patch.object(portal, "ENGINES", {}), patch.object(portal, "HippoRAG", return_value=hippo):
             # Native HippoRAG creates this directory at construction.
@@ -131,6 +133,49 @@ class PortalTests(unittest.TestCase):
                 portal.retrieve(body)
                 self.assertEqual(hippo.llm_model.models.token.get_secret_value(), "request-two")
                 self.assertEqual(hippo.index.call_count, 1)
+
+    def test_reembedding_reuses_passages_and_facts_without_llm_or_split(self):
+        first = models().model_copy(update={"embedding_identity": "b" * 64, "extraction_identity": "c" * 64})
+        body = portal.ExtractRequest(models=first, documents=[portal.Document(id="doc", content="Router requires backup.")])
+        key = portal.compute_mdhash_id(body.documents[0].content, prefix="chunk-")
+        ner = {key: portal.NerRawOutput(chunk_id=key, response="", unique_entities=["Router", "backup"], metadata={})}
+        triples = {key: portal.TripleRawOutput(chunk_id=key, response="", triples=[["Router", "requires", "backup"]], metadata={})}
+        def embed(settings, operation, payload):
+            self.assertEqual(operation, "embed", "Reindex must never call the LLM")
+            return {"vectors": [[1.0] + [0.0] * (settings.dimensions - 1) for text in payload["texts"]]}
+        with tempfile.TemporaryDirectory() as root, patch.object(portal, "DATA", Path(root)), patch.object(portal, "ENGINES", {}), patch.object(portal, "callback", side_effect=embed):
+            with patch.object(portal.PortalOpenIE, "batch_openie", return_value=(ner, triples)):
+                original, _ = portal.graph(body)
+            snapshot = portal.snapshot_path(body.documents[0]).read_text()
+            body.models = first.model_copy(update={"embedding_identity": "d" * 64, "identity": "e" * 64,
+                                                  "embedding_alias": "new.encoder", "dimensions": 3})
+            with patch("common.split_document", side_effect=AssertionError("must not split")), patch.object(portal.PortalOpenIE, "batch_openie", side_effect=AssertionError("must not extract")):
+                rebuilt, _ = portal.graph(body, embedding_only=True)
+            self.assertEqual(original._openie_info, rebuilt._openie_info)
+            self.assertEqual(portal.snapshot_path(body.documents[0]).read_text(), snapshot)
+            self.assertEqual(rebuilt.embedding_model.embedding_dim, 3)
+            original.close()
+            rebuilt.close()
+            portal.ENGINES.clear()
+            with patch("common.split_document", side_effect=AssertionError("restart must not split")), patch.object(portal, "callback", side_effect=AssertionError("restart must not call models")):
+                restored, _ = portal.graph(body, allow_build=False, embedding_only=True)
+            self.assertEqual(restored._openie_info, original._openie_info)
+            restored.close()
+
+    def test_search_does_not_build_missing_encoder_index(self):
+        body = portal.ExtractRequest(models=models(), documents=[portal.Document(id="doc", content="Source")])
+        with tempfile.TemporaryDirectory() as root, patch.object(portal, "DATA", Path(root)), patch.object(portal, "ENGINES", {}), patch.object(portal, "HippoRAG") as constructor:
+            with self.assertRaises(portal.HTTPException) as error:
+                portal.graph(body, allow_build=False)
+            self.assertEqual(error.exception.status_code, 409)
+            constructor.assert_not_called()
+
+    def test_embedding_only_missing_snapshot_cannot_call_llm(self):
+        body = portal.ExtractRequest(models=models(), documents=[portal.Document(id="doc", content="Source")])
+        with tempfile.TemporaryDirectory() as root, patch.object(portal, "DATA", Path(root)), patch.object(portal, "ENGINES", {}), patch.object(portal, "callback") as callback:
+            with self.assertRaisesRegex(ValueError, "Saved extraction is missing"):
+                portal.graph(body, embedding_only=True)
+            callback.assert_not_called()
 
 
 if __name__ == "__main__":

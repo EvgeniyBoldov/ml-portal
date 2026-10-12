@@ -27,6 +27,52 @@ runtime добавляет идентификаторы и транзакцио�
 - sub-agent operation loop,
 - canonical event journal and pause handling.
 
+## Shadow API invocation
+
+`Agent.agent_type` is `regular` (default, including existing agents) or `shadow`.
+The type belongs to the container and is editable in the agent admin form.
+Both types retain the existing version/publish lifecycle, prompt builder, model,
+limits and observation settings. Shadow agents are excluded from both routable
+catalogs and explicit planner selection; the chat selector also excludes them.
+
+`POST /api/v1/agents/shadow/invoke` requires a user Bearer **access** token.
+Request: `{"agent":"agent_slug","data":{}}`.
+Successful response: `{"agent":"agent_slug","result":{}}` (application/json).
+Both envelopes reject extra fields and require JSON objects for data/result;
+their nested contents are arbitrary JSON values, with non-finite numbers rejected.
+This validates the machine API envelope, not an agent-specific business schema.
+The response agent slug is set by the server from the resolved agent.
+
+The route resolves the user's current active default tenant membership from the
+existing membership resolver. The user's identity/scopes and existing effective
+agent RBAC apply to the entire execution; identities cannot be overridden in the
+body. There is no separate shadow permission system.
+
+`ShadowAgentService -> AgentExecutor.execute_attempt -> ExecutionPreflight -> AgentToolRuntime`
+reuses the canonical execution path. The adapter creates one run and one task
+context in memory, pins the published version and consumes the event stream.
+It creates no chat, turn, persisted plan or planner iteration, and invokes no
+TurnPreflight, planner, synthesizer or memory read/write pipeline. Inputs stay
+inline, including inputs over the normal 8000-character workspace threshold;
+normal model context limits still apply. Preflight checks RBAC/configuration but
+skips all operation discovery (including system tools and memory tools).
+Versions requiring fresh retrieval are incompatible with this LLM-only mode.
+
+The agent uses the existing completion protocol internally. The adapter accepts
+only `fulfilled` without needs and a JSON-object `structured_response`, projects
+that object to `result`, and validates it before completing the run. Runtime
+limits, provider error handling and bounded protocol retries remain in effect;
+a correct response normally requires one LLM call. No additional agents resolve
+needs in this flow. Invalid results and execution failures return HTTP 502;
+wrong agent type/incompatible version returns 409, RBAC denial 403, absent agent
+or published version 404, and invalid request envelope 422. Errors use the
+platform's existing JSON error envelope.
+
+Events use the existing canonical journal with `origin=shadow`, real run and
+agent execution UUIDs, correlation id, user/tenant identity and nullable chat id.
+The agent's logging level applies; agent/run completion occurs after output
+validation. Shadow executions appear in the existing admin agent-run inspector.
+
 ## Архитектурное правило
 
 - MCP принимается как **стандарт tool contract**

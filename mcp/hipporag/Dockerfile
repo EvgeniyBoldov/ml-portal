@@ -12,7 +12,8 @@ ENV HF_HOME=/tmp/huggingface
 COPY mcp/hipporag/server.py /worker/server.py
 COPY mcp/hipporag/common.py /worker/common.py
 COPY mcp/hipporag/portal.py /worker/portal.py
-RUN python -c "from hipporag import HippoRAG; import server"
+COPY mcp/hipporag/worker.py /worker/worker.py
+RUN python -c "from hipporag import HippoRAG; import worker"
 RUN mkdir -p /data && chown appuser:appuser /data
 USER appuser
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["uvicorn", "worker:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

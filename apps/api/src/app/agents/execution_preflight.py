@@ -33,7 +33,7 @@ from app.agents.contracts import (
     ResolvedDataInstance,
     ResolvedOperation,
 )
-from app.agents.operation_router import OperationRouter
+from app.agents.operation_router import OperationRouter, OperationResolveResult
 from app.agents.preflight_policy import apply_operation_policy_filter
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.runtime_graph import RuntimeExecutionGraph
@@ -136,6 +136,7 @@ class ExecutionPreflight:
         effective_permissions_override: Optional[EffectivePermissions] = None,
         event_sink: Optional[Any] = None,
         trace_parent_id: Optional[str] = None,
+        enable_operations: bool = True,
     ) -> ExecutionRequest:
         """Prepare ExecutionRequest for an already selected agent.
 
@@ -146,6 +147,7 @@ class ExecutionPreflight:
             request_text: Текст запроса (для логирования).
             allow_partial: Разрешить partial execution.
             agent_version_id: Override версии (sandbox).
+            enable_operations: False skips all collection/system operation discovery.
 
         Returns:
             ExecutionRequest, готовый к передаче в runtime.
@@ -242,14 +244,16 @@ class ExecutionPreflight:
                 "preflight_stage_started",
                 extra={"agent_slug": agent_slug, "stage": "operation_resolution"},
             )
-            operation_result = await self._resolve_operations(
-                user_id=user_id,
-                tenant_id=tenant_id,
-                agent_slug=agent_slug,
-                agent=agent_result.agent,
-                effective_permissions_override=effective_permissions,
-                default_collection_allow=default_collection_allow,
-            )
+            operation_result = OperationResolveResult(effective_permissions=effective_permissions)
+            if enable_operations:
+                operation_result = await self._resolve_operations(
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    agent_slug=agent_slug,
+                    agent=agent_result.agent,
+                    effective_permissions_override=effective_permissions,
+                    default_collection_allow=default_collection_allow,
+                )
             logger.debug(
                 "preflight_stage_completed",
                 extra={

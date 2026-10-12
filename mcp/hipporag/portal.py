@@ -7,7 +7,7 @@ import json
 import sqlite3
 from typing import Annotated, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from hipporag import HippoRAG
@@ -87,6 +87,8 @@ class Models(BaseModel):
     dimensions: int = Field(ge=1)
     embedding_tokens: int = Field(ge=32)
     context_tokens: int = Field(ge=2048)
+    extraction_identity: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    embedding_identity: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     identity: str = Field(pattern=r"^[a-f0-9]{64}$")
     callback_url: str
     token: SecretStr
@@ -137,7 +139,7 @@ class GatewayLLM(BaseLLM):
             payload["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": schema_model.__name__, "schema": schema_model.model_json_schema()}}
         key = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-        root = DATA / "portal-llm-cache" / self.models.identity
+        root = DATA / "portal-llm-cache" / (self.models.extraction_identity or self.models.identity)
         root.mkdir(parents=True, exist_ok=True)
         path = root / f"{key}.json"
         if path.exists():
@@ -171,7 +173,7 @@ class GatewayEmbedding(BaseEmbeddingModel):
             texts = [texts]
         if not texts:
             return np.empty((0, self.embedding_dim), dtype=np.float32)
-        root = DATA / "portal-vector-cache" / self.models.identity
+        root = DATA / "portal-vector-cache" / (self.models.embedding_identity or self.models.identity)
         root.mkdir(parents=True, exist_ok=True)
         paths = [root / (hashlib.sha256(text.encode()).hexdigest() + ".npy") for text in texts]
         missing = list(dict.fromkeys(text for text, path in zip(texts, paths) if not path.exists()))
@@ -216,7 +218,7 @@ def config(models: Models) -> BaseConfig:
 
 
 def chunks(body: ExtractRequest, llm: GatewayLLM):
-    from server import split_document
+    from common import split_document
     # OpenIE needs passage context. The encoder independently segments long
     # passages in GatewayEmbedding; its window must not fragment extraction.
     return [chunk for document in body.documents for chunk in split_document(document, llm)]
@@ -243,34 +245,144 @@ def warm(body: ExtractRequest) -> dict:
     return {"backend": "hipporag", "warmed": len(body.documents)}
 
 
-def graph(body: ExtractRequest) -> tuple[HippoRAG, str]:
+def extraction_revision(document: Document) -> str:
+    serialized = json.dumps(document.model_dump(), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256((GRAPH_PROFILE + str(CHUNK_TOKENS) + serialized).encode()).hexdigest()
+
+
+def snapshot_path(document: Document):
+    return DATA / "portal-extractions" / (extraction_revision(document) + ".json")
+
+
+def save_snapshot(document: Document, passages: list[dict], rows: list[dict]) -> None:
+    path = snapshot_path(document)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"passages": passages, "rows": rows}, ensure_ascii=False))
+    temporary.replace(path)
+
+
+def import_saved_extraction(document: Document) -> bool:
+    """Adopt an existing complete native index without splitting or calling LLM."""
+    roots = sorted((DATA / "portal-indexes").glob("*/ready"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for ready in roots:
+        for state in ready.parent.glob("*/openie_state.json"):
+            metadata_path = state.parent / "chunk_metadata.json"
+            if not metadata_path.exists():
+                continue
+            extracted = json.loads(state.read_text())
+            if not str(extracted.get("provenance", {}).get("identity", {}).get("explicit_identity", "")).startswith(GRAPH_PROFILE + ":"):
+                continue
+            metadata = json.loads(metadata_path.read_text())
+            rows, passages = [], []
+            for row in extracted["docs"]:
+                for ref in metadata.get(row["idx"], {}).get("source_refs", []):
+                    if ref.get("document_id") != document.id:
+                        continue
+                    start, end = ref.get("start"), ref.get("end")
+                    if not isinstance(start, int) or not isinstance(end, int) or document.content[start:end] != row["passage"]:
+                        continue
+                    if any(ref.get(key) != value for key, value in document.metadata.items()):
+                        continue
+                    passages.append({"content": row["passage"], "source_id": f"{document.id}:{start}:{end}", "metadata": ref})
+                    rows.append(row)
+            passages.sort(key=lambda p: p["metadata"]["start"])
+            position = 0
+            for passage in passages:
+                if passage["metadata"]["start"] != position:
+                    break
+                position = passage["metadata"]["end"]
+            if passages and position == len(document.content):
+                save_snapshot(document, passages, rows)
+                return True
+    return False
+
+
+def prepared_passages(body: ExtractRequest, llm: GatewayLLM, *, embedding_only: bool) -> tuple[list[Chunk], dict[str, dict]]:
+    from common import split_document
+    passages: dict[str, Chunk] = {}
+    saved_rows: dict[str, dict] = {}
+    for document in body.documents:
+        path = snapshot_path(document)
+        if not path.exists():
+            import_saved_extraction(document)
+        if path.exists():
+            saved = json.loads(path.read_text())
+            parts = [Chunk(**part) for part in saved["passages"]]
+            saved_rows.update({row["idx"]: row for row in saved["rows"]})
+        elif embedding_only:
+            raise ValueError(f"Saved extraction is missing for document {document.id}; embedding-only rebuild cannot extract it")
+        else:
+            parts = split_document(document, llm)
+        for part in parts:
+            ref = dict(part.metadata)
+            if part.content not in passages:
+                passages[part.content] = Chunk(content=part.content, source_id=part.source_id,
+                                               metadata={**ref, "source_refs": []})
+            passages[part.content].metadata["source_refs"].append(ref)
+    return list(passages.values()), saved_rows
+
+
+class ReusableOpenIE(PortalOpenIE):
+    def __init__(self, llm: GatewayLLM, rows: dict[str, dict], *, embedding_only: bool):
+        super().__init__(llm, max_workers=1, ner_max_tokens=768, triple_max_tokens=1536)
+        self.rows, self.embedding_only = rows, embedding_only
+
+    def batch_openie(self, inputs):
+        missing = {key: value for key, value in inputs.items() if key not in self.rows}
+        if missing and self.embedding_only:
+            raise ValueError("Embedding-only rebuild cannot call OpenIE")
+        ner, triples = super().batch_openie(missing) if missing else ({}, {})
+        for key in inputs.keys() & self.rows.keys():
+            row = self.rows[key]
+            ner[key] = NerRawOutput(chunk_id=key, response="", unique_entities=row["extracted_entities"], metadata={"reused": True})
+            triples[key] = TripleRawOutput(chunk_id=key, response="", triples=row["extracted_triples"], metadata={"reused": True})
+        return ner, triples
+
+
+def save_extraction(body: ExtractRequest, passages: list[Chunk], rows: list[dict]) -> None:
+    by_id = {row["idx"]: row for row in rows}
+    for document in body.documents:
+        parts, extracted = [], []
+        for passage in passages:
+            for ref in passage.metadata["source_refs"]:
+                if ref["document_id"] == document.id:
+                    parts.append({"content": passage.content, "source_id": f"{document.id}:{ref['start']}:{ref['end']}", "metadata": ref})
+                    extracted.append(by_id[compute_mdhash_id(passage.content, prefix="chunk-")])
+        parts.sort(key=lambda p: p["metadata"]["start"])
+        save_snapshot(document, parts, extracted)
+
+
+def graph(body: ExtractRequest, *, embedding_only: bool = False, allow_build: bool = True) -> tuple[HippoRAG, str]:
     # Graph identity includes every document revision and the selected models.
     serialized = json.dumps([document.model_dump() for document in sorted(body.documents, key=lambda d: d.id)],
                             sort_keys=True, ensure_ascii=False)
-    identity = hashlib.sha256((GRAPH_PROFILE + str(CHUNK_TOKENS) + body.models.identity + serialized).encode()).hexdigest()
+    identity = hashlib.sha256((GRAPH_PROFILE + str(CHUNK_TOKENS) + (body.models.embedding_identity or body.models.identity) + serialized).encode()).hexdigest()
     llm = GatewayLLM(config(body.models), body.models)
     hippo = ENGINES.get(identity)
     if hippo is None:
         root = DATA / "portal-indexes" / identity
+        if not allow_build and not (root / "ready").exists():
+            raise HTTPException(status_code=409, detail="LongMemory embedding index is being rebuilt; retry later")
+        passages, saved_rows = prepared_passages(body, llm, embedding_only=embedding_only)
         settings = config(body.models)
+        settings.llm_name = "portal-extraction"
         settings.force_index_from_scratch = not (root / "ready").exists()
         hippo = HippoRAG(global_config=settings, save_dir=str(root),
                         extraction_llm=llm, qa_llm=llm,
                         embedding_model=GatewayEmbedding(config(body.models), body.models),
-                        index_identity=f"{GRAPH_PROFILE}:{body.models.identity}")
-        hippo.openie = PortalOpenIE(llm, max_workers=1, ner_max_tokens=768, triple_max_tokens=1536)
-        passages: dict[str, Chunk] = {}
-        for chunk in chunks(body, llm):
-            ref = dict(chunk.metadata)
-            if chunk.content not in passages:
-                passages[chunk.content] = Chunk(content=chunk.content, source_id=chunk.source_id,
-                    metadata={**ref, "source_refs": []})
-            passages[chunk.content].metadata["source_refs"].append(ref)
-        hippo.index(list(passages.values()))
+                        index_identity=f"{GRAPH_PROFILE}:{body.models.embedding_identity or body.models.identity}")
+        hippo.openie = ReusableOpenIE(llm, saved_rows, embedding_only=embedding_only)
+        try:
+            hippo.index(passages)
+            save_extraction(body, passages, hippo._openie_info)
+        except Exception:
+            hippo.close()
+            raise
         (root / "ready").write_text(identity)
         # Bound resident graphs; derived indexes remain on the worker volume.
         if len(ENGINES) >= 8:
-            ENGINES.pop(next(iter(ENGINES)))
+            ENGINES.pop(next(iter(ENGINES))).close()
         ENGINES[identity] = hippo
     # Capabilities expire after each request; cached engines must use this one.
     hippo.llm_model.models = body.models
@@ -278,8 +390,8 @@ def graph(body: ExtractRequest) -> tuple[HippoRAG, str]:
     return hippo, identity
 
 
-def retrieve(body: RetrieveRequest) -> dict:
-    hippo, identity = graph(body)
+def retrieve(body: RetrieveRequest, *, allow_build: bool = True) -> dict:
+    hippo, identity = graph(body, allow_build=allow_build)
     result = hippo.retrieve([body.query], num_to_retrieve=body.top_k)[0]
     return {"backend": "hipporag", "index": identity, "graph_seeded": bool(result.graph_seeds),
             "hits": [{"text": text, "score": float(score), "metadata": metadata}
@@ -334,7 +446,7 @@ def search_corpus(body: CorpusSearchRequest) -> dict:
         documents = corpus_documents(connection)
     if not documents:
         return {"backend": "hipporag", "hits": [], "document_count": 0}
-    result = retrieve(RetrieveRequest(models=body.models, documents=documents, query=body.query, top_k=body.top_k))
+    result = retrieve(RetrieveRequest(models=body.models, documents=documents, query=body.query, top_k=body.top_k), allow_build=False)
     return {**result, "document_count": len(documents)}
 
 
@@ -345,4 +457,34 @@ async def index_corpus_route(body: ExtractRequest):
 
 @router.post("/corpus/search")
 async def search_corpus_route(body: CorpusSearchRequest):
+    if REINDEXING:
+        raise HTTPException(status_code=409, detail="LongMemory embedding index is being rebuilt; retry later")
     return await asyncio.get_running_loop().run_in_executor(POOL, search_corpus, body)
+
+
+class CorpusReindexRequest(BaseModel):
+    models: Models
+
+
+REINDEXING = False
+
+
+def reindex_corpus(body: CorpusReindexRequest) -> dict:
+    with corpus_connection() as connection:
+        documents = corpus_documents(connection)
+    if not documents:
+        return {"backend": "hipporag", "document_count": 0}
+    _, identity = graph(ExtractRequest(models=body.models, documents=documents), embedding_only=True)
+    return {"backend": "hipporag", "document_count": len(documents), "index": identity, "extraction_reused": True}
+
+
+@router.post("/corpus/reindex")
+async def reindex_corpus_route(body: CorpusReindexRequest):
+    global REINDEXING
+    if REINDEXING:
+        raise HTTPException(status_code=409, detail="LongMemory reindex already running")
+    REINDEXING = True
+    try:
+        return await asyncio.get_running_loop().run_in_executor(POOL, reindex_corpus, body)
+    finally:
+        REINDEXING = False

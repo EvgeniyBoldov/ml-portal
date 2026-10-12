@@ -168,6 +168,15 @@ const AGENT_LIMIT_FIELDS: FieldConfig[] = [
 
 const INFO_FIELDS: FieldConfig[] = [
   {
+    key: 'agent_type',
+    type: 'select',
+    label: 'Тип агента',
+    options: [
+      { value: 'regular', label: 'Обычный' },
+      { value: 'shadow', label: 'Shadow' },
+    ],
+  },
+  {
     key: 'name',
     type: 'text',
     label: 'Название',
@@ -296,19 +305,23 @@ export function AgentPage() {
   const primaryVersion = agent?.versions?.find((v: AgentVersionInfo) => v.status === 'published') || agent?.versions?.[0];
 
   // ─── Derived data for blocks ───
-  const infoData = mode === 'edit' || mode === 'create'
-    ? {
-        ...formData,
-        status: agent?.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active',
-      }
-    : {
-        slug: agent?.slug || '',
-        name: agent?.name || '',
-        status: agent?.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active',
-        description: agent?.description || '',
-        tags: agent?.tags || [],
-        provides_keys: agent?.provides_keys || [],
-      };
+  const infoData =
+    mode === 'edit' || mode === 'create'
+      ? {
+          ...formData,
+          status:
+            agent?.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active',
+        }
+      : {
+          agent_type: agent?.agent_type ?? 'regular',
+          slug: agent?.slug || '',
+          name: agent?.name || '',
+          status:
+            agent?.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active',
+          description: agent?.description || '',
+          tags: agent?.tags || [],
+          provides_keys: agent?.provides_keys || [],
+        };
 
   const execData = mode === 'edit' || mode === 'create' ? formData : {
     model: agent?.model || '',

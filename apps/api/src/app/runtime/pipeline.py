@@ -1777,6 +1777,14 @@ class RuntimePipeline:
         # Validate explicit slug: keep pinning behavior, but only if there is
         # a published version for this tenant context.
         if explicit_slug:
+            from app.models.agent import AgentType
+            from app.core.exceptions import AgentUnavailableError
+            selected_agent = await AgentService(self._session).get_agent_by_slug(explicit_slug)
+            if selected_agent.agent_type == AgentType.SHADOW.value:
+                raise AgentUnavailableError(
+                    "Shadow agents can only be invoked through the shadow API",
+                    reason_code="shadow_agent_not_routable",
+                )
             try:
                 await AgentService(self._session).resolve_published_version(
                     agent_slug=explicit_slug,

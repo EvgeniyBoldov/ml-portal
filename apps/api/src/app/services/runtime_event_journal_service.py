@@ -73,7 +73,7 @@ class RuntimeEventJournalService:
             select(RuntimeExecutionEvent)
             .where(
                 RuntimeExecutionEvent.entity_type == "agent_execution",
-                RuntimeExecutionEvent.origin == "chat",
+                RuntimeExecutionEvent.origin.in_(["chat", "shadow"]),
             )
             .order_by(RuntimeExecutionEvent.occurred_at.desc())
         )

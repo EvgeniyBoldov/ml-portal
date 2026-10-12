@@ -5,21 +5,12 @@ services:
       dockerfile: mcp/hipporag/Dockerfile
     restart: unless-stopped
     environment:
-      HIPPO_LLM_BASE_URL: ${HIPPO_LLM_BASE_URL:-http://172.18.34.210:8081}
-      HIPPO_LLM_MODEL: ${HIPPO_LLM_MODEL:-Qwen/Qwen3-8B-GGUF:Q4_K_M}
-      HIPPO_EMBED_BASE_URL: http://emb:8001
-      HIPPO_CONTEXT_TOKENS: ${HIPPO_CONTEXT_TOKENS:-16384}
-      HIPPO_REQUEST_TOKENS: ${HIPPO_REQUEST_TOKENS:-16384}
       HIPPO_CHUNK_TOKENS: ${HIPPO_CHUNK_TOKENS:-480}
-      HIPPO_OUTPUT_TOKENS: ${HIPPO_OUTPUT_TOKENS:-4096}
       HIPPO_DATA_DIR: /data
     ports:
       - "127.0.0.1:${HIPPO_PORT:-8015}:8080"
     volumes:
       - hipporag_data:/data
-    depends_on:
-      emb:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
       interval: 15s

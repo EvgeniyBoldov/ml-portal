@@ -58,6 +58,7 @@ export function useAgentDetail(id: string) {
       detail: (id) => qk.agents.detail(id) as QueryKey,
     },
     getInitialFormData: (entity) => ({
+      agent_type: entity?.agent_type ?? 'regular',
       slug: entity?.slug ?? '',
       name: entity?.name ?? '',
       status: entity?.lifecycle_status === 'deprecated' ? 'Deprecated' : 'Active',

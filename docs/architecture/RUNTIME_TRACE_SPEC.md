@@ -270,6 +270,28 @@ these records after the writeback checkpoint commits. Document semantic
 extraction remains a RAG/admin diagnostic and is never a Sandbox writeback
 child.
 
+### Agent task inspection and duration
+
+The shared Sandbox/admin trace projection reads task metadata from the plan and
+`agent_start`. Missing task fields are also resolved from the latest owned
+`status(stage=agent_context_snapshot).context_snapshot.inputs`: `inputs` contains
+the actual task data, alongside `task_id`, `intent`, `instructions`, and `goal`.
+Both the executor task tab and its containing step show the saved input object,
+including an explicitly empty object. Standalone shadow runs need no persisted
+plan or extra journal event to display their input. The journal remains unchanged.
+
+The result projection reads the owned `final` event when `agent_end` contains
+only lifecycle metadata. A protocol-v2 completion is displayed through its
+`structured_response` (or text `answer`), preserving empty objects/lists, false,
+zero and null. Raw intermediate `llm_response` events are not final results.
+Lifecycle errors remain authoritative even if the model claimed success.
+This applies to both Sandbox and admin executor/step result tabs.
+
+Run duration ends at `run_end`. Admin agent-run endpoints return only the closed
+agent subgraph, excluding root run events; for such journals with no `run_start`,
+duration ends at the last `agent_end` when all observed agent executions have
+ended. An ongoing Sandbox run retains its live clock even after an agent ends.
+
 ## Prohibited
 
 Do not add a second trace builder, compatibility mapper, or a second event

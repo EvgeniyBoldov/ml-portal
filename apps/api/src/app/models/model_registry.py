@@ -7,7 +7,7 @@ New architecture:
 - Easy swap to local providers later
 """
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Boolean, Text, DateTime, Integer, func, JSON, Enum as SQLEnum, ForeignKey, CheckConstraint
+from sqlalchemy import String, Boolean, Text, DateTime, Integer, func, JSON, Enum as SQLEnum, ForeignKey, CheckConstraint, Index, text
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 import enum
@@ -58,6 +58,9 @@ class Model(Base):
     __tablename__ = "models"
     __table_args__ = (
         CheckConstraint("context_window_tokens > 0", name="ck_models_context_window_positive"),
+        CheckConstraint("NOT use_for_long_memory OR (type = 'EMBEDDING' AND deleted_at IS NULL)", name="ck_models_long_memory_embedding"),
+        Index("uq_models_long_memory_embedding", "use_for_long_memory", unique=True,
+              postgresql_where=text("use_for_long_memory"), sqlite_where=text("use_for_long_memory")),
         {'extend_existing': True},
     )
     
@@ -101,6 +104,8 @@ class Model(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="Is model enabled")
     default_for_type: Mapped[bool] = mapped_column(Boolean, default=False, comment="Default model for this type")
     
+    use_for_long_memory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+
     # Health
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     health_status: Mapped[HealthStatus | None] = mapped_column(

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
+from app.models.agent import AgentType
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 class AgentCreate(BaseModel):
     slug: str = Field(..., description="Unique identifier")
+    agent_type: AgentType = AgentType.REGULAR
     name: str = Field(..., description="Display name")
     description: Optional[str] = None
     tags: Optional[List[str]] = Field(default=None, description="Agent tags for catalog filtering")
@@ -31,6 +33,7 @@ class AgentCreate(BaseModel):
 
 
 class AgentUpdate(BaseModel):
+    agent_type: Optional[AgentType] = None
     name: Optional[str] = None
     description: Optional[str] = None
     tags: Optional[List[str]] = None
@@ -47,6 +50,7 @@ class AgentUpdate(BaseModel):
 class AgentResponse(BaseModel):
     id: UUID
     slug: str
+    agent_type: AgentType = AgentType.REGULAR
     name: str
     description: Optional[str] = None
     tags: Optional[List[str]] = None
@@ -72,6 +76,7 @@ class AgentListItem(BaseModel):
     """Short schema for GET /agents list."""
     id: UUID
     slug: str
+    agent_type: AgentType = AgentType.REGULAR
     name: str
     description: Optional[str] = None
     tags: Optional[List[str]] = None

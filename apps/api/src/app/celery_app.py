@@ -50,6 +50,11 @@ celery_app = app
 def build_default_beat_schedule() -> dict:
     """Return canonical periodic task schedule for the platform."""
     return {
+        "long-memory-embedding-reindex": {
+            "task": "app.workers.tasks_hipporag_document.reconcile_long_memory_reindex",
+            "schedule": 30.0,
+            "options": {"queue": "memory"},
+        },
         # New health monitoring tasks
         "mcp-connectors-health-check": {
             "task": "app.workers.tasks_health.probe_mcp_connectors",
@@ -283,6 +288,12 @@ app.conf.update(
 
 if settings.BEAT == 1:
     app.conf.beat_schedule = build_default_beat_schedule()
+else:
+    # LongMemory switches require durable queue recovery even on test stands
+    # with general periodic maintenance disabled.
+    app.conf.beat_schedule = {
+        "long-memory-embedding-reindex": build_default_beat_schedule()["long-memory-embedding-reindex"]
+    }
 
 # Инициализация задач эмбеддингов
 # Временно отключено из-за зависимости от torch

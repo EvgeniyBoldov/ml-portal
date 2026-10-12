@@ -12,12 +12,17 @@ from typing import Optional, List
 
 import enum
 
-from sqlalchemy import String, DateTime, Text, ForeignKey, Boolean, Float
+from sqlalchemy import String, DateTime, Text, ForeignKey, Boolean, Float, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 from app.models.mixins.lifecycle import LifecycleMixin
+
+
+class AgentType(str, enum.Enum):
+    REGULAR = "regular"
+    SHADOW = "shadow"
 
 
 class LoggingLevel(str, enum.Enum):
@@ -37,6 +42,9 @@ class Agent(Base, LifecycleMixin):
     Routing metadata is stored in AgentVersion.
     """
     __tablename__ = "agents"
+    __table_args__ = (
+        CheckConstraint("agent_type IN ('regular', 'shadow')", name="ck_agents_agent_type"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -46,6 +54,10 @@ class Agent(Base, LifecycleMixin):
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    agent_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=AgentType.REGULAR.value, server_default="regular",
+    )
 
     # ── Catalog metadata ───────────────────────────────────────────────────
     tags: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String), nullable=True)

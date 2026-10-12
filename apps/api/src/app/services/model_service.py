@@ -8,11 +8,30 @@ from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update as sa_update, delete as sa_delete
+from sqlalchemy import select, update as sa_update, delete as sa_delete, event
+from sqlalchemy.orm import Session
 from app.models.model_registry import Model, ModelType, ModelStatus, HealthStatus
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+@event.listens_for(Session, "after_commit")
+def _dispatch_long_memory_reindex(session: Session) -> None:
+    if session.in_nested_transaction() or not session.info.pop("long_memory_reindex", False):
+        return
+    try:
+        from app.workers.tasks_hipporag_document import reconcile_long_memory_reindex
+        reconcile_long_memory_reindex.delay()
+    except Exception:
+        # The durable request is committed; Beat retries dispatch after outages.
+        logger.exception("Failed to dispatch LongMemory reindex; request remains queued")
+
+
+@event.listens_for(Session, "after_rollback")
+def _discard_long_memory_dispatch(session: Session) -> None:
+    if not session.in_nested_transaction():
+        session.info.pop("long_memory_reindex", None)
 
 
 class ModelService:
@@ -83,6 +102,11 @@ class ModelService:
             Created model
         """
         data = self._normalize_payload(data)
+        long_memory_changed = bool(data.get("use_for_long_memory"))
+        if long_memory_changed:
+            self._validate_long_memory_encoder(data)
+            from app.repositories.long_memory_config_repository import LongMemoryConfigRepository
+            await LongMemoryConfigRepository(self.session).select_encoder()
         
         # Check if alias already exists
         existing = await self.get_by_alias(data.get("alias"))
@@ -109,7 +133,10 @@ class ModelService:
         model = Model(**data)
         self.session.add(model)
         await self.session.flush()
-        
+        if long_memory_changed:
+            await LongMemoryConfigRepository(self.session).request_reindex(model.id)
+            self.session.info["long_memory_reindex"] = True
+
         logger.info(f"Created model: {model.alias} (type={model.type}, provider={model.provider})")
         if model.type == ModelType.EMBEDDING:
             # New embedding model can impact status semantics globally.
@@ -182,6 +209,11 @@ class ModelService:
         if not model:
             return None
         old_default_for_type = bool(model.default_for_type)
+        old_long_memory = bool(model.use_for_long_memory)
+        encoder_config_changed = old_long_memory and any(
+            key in data and data[key] != getattr(model, key, None)
+            for key in ("provider_model_name", "base_url", "instance_id", "extra_config", "model_version")
+        )
         
         data = self._normalize_payload({
             "type": model.type,
@@ -192,6 +224,14 @@ class ModelService:
             "extra_config": data.get("extra_config", model.extra_config),
             **data,
         })
+        if old_long_memory and data.get("use_for_long_memory") is False:
+            raise ValueError("Select another embedding model for LongMemory before removing the current encoder")
+        if old_long_memory or data.get("use_for_long_memory"):
+            self._validate_long_memory_encoder({"enabled": model.enabled, "status": model.status, **data})
+        long_memory_changed = bool(data.get("use_for_long_memory")) and not old_long_memory
+        if long_memory_changed:
+            from app.repositories.long_memory_config_repository import LongMemoryConfigRepository
+            await LongMemoryConfigRepository(self.session).select_encoder()
         
         # If setting default_for_type=True, unset previous default
         if data.get("default_for_type") and not model.default_for_type:
@@ -216,6 +256,10 @@ class ModelService:
         
         model.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
+        if long_memory_changed or encoder_config_changed:
+            from app.repositories.long_memory_config_repository import LongMemoryConfigRepository
+            await LongMemoryConfigRepository(self.session).request_reindex(model.id)
+            self.session.info["long_memory_reindex"] = True
         
         # Invalidate ModelResolver cache for this alias
         from app.services.model_resolver import ModelResolver
@@ -247,6 +291,8 @@ class ModelService:
         
         if model.is_system:
             raise ValueError(f"Cannot delete system model: {model.alias}")
+        if model.use_for_long_memory:
+            raise ValueError("Select another LongMemory encoder before deleting this model")
         
         model.deleted_at = datetime.now(timezone.utc)
         model.enabled = False
@@ -322,3 +368,10 @@ class ModelService:
             .values(default_for_type=False)
         )
         await self.session.flush()
+
+    @staticmethod
+    def _validate_long_memory_encoder(data: Dict[str, Any]) -> None:
+        if data.get("type") not in (ModelType.EMBEDDING, "embedding"):
+            raise ValueError("Only embedding models can be used for LongMemory")
+        if not data.get("enabled", True) or data.get("status", ModelStatus.AVAILABLE) not in (ModelStatus.AVAILABLE, "available"):
+            raise ValueError("The LongMemory encoder must be enabled and available")

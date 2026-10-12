@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from celery import Task
-from sqlalchemy import update
+from sqlalchemy import update, text
 
 from app.adapters.s3_client import s3_manager
 from app.celery_app import app as celery_app
@@ -58,4 +58,34 @@ def index_hipporag_document(self: Task, index_results: Any, tenant_id: str,
                         source_id, self.request.id, result.get("document_count"))
             return {"source_id": source_id, "status": "indexed", **result}
 
+    return asyncio.run(execute())
+
+
+@celery_app.task(queue="memory", acks_late=True, reject_on_worker_lost=True)
+def reconcile_long_memory_reindex() -> dict[str, Any]:
+    """Consume committed selection requests; crashes leave requests retryable."""
+    async def execute() -> dict[str, Any]:
+        async with get_worker_session() as session:
+            # Hold one queue row transactionally, even while the worker builds.
+            row = (await session.execute(text("""SELECT id, model_id FROM long_memory_reindex_requests
+                WHERE status IN ('pending', 'failed') AND attempts < 3
+                ORDER BY created_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED"""))).mappings().first()
+            if row is None:
+                return {"status": "idle"}
+            selected = await session.scalar(text("SELECT id FROM models WHERE use_for_long_memory IS TRUE"))
+            if selected != row["model_id"]:
+                status, error = "superseded", None
+            else:
+                try:
+                    result = await HippoRAGService(session).reindex_embeddings()
+                    status, error = "completed", None
+                    logger.info("LongMemory embeddings rebuilt model_id=%s result=%s", selected, result)
+                except Exception as exc:
+                    status, error = "failed", str(exc)[:2000]
+                    logger.exception("LongMemory reindex failed model_id=%s", selected)
+            await session.execute(text("""UPDATE long_memory_reindex_requests SET status=:status,
+                attempts=attempts+1, error=:error, updated_at=now() WHERE id=:id"""),
+                {"status": status, "error": error, "id": row["id"]})
+            await session.commit()
+            return {"status": status, "request_id": str(row["id"])}
     return asyncio.run(execute())

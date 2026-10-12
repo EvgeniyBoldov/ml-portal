@@ -28,7 +28,10 @@ from app.api.mcp import router as mcp_router
 from app.api.v1.routers.sandbox import router as sandbox_router
 from app.api.v1.routers.monitoring import router as monitoring_router
 
+from app.api.v1.routers.shadow_agents import router as shadow_agents_router
+
 api_v1 = APIRouter()
+api_v1.include_router(shadow_agents_router)
 
 # Health endpoints - always available
 api_v1.include_router(health_router.router, tags=["health"])

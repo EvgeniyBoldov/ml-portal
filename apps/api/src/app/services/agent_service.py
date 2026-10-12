@@ -25,7 +25,7 @@ from app.core.exceptions import (
     AgentVersionNotEditableError,
     AppError as AgentError,
 )
-from app.models.agent import Agent
+from app.models.agent import Agent, AgentType
 from app.models.agent_version import AgentVersion, AgentVersionStatus
 from app.models.tool_instance import ToolInstance
 from app.services.rbac_service import RbacService
@@ -69,6 +69,7 @@ class AgentService:
         allow_all_collections: bool = False,
         allowed_collection_ids: Optional[List[UUID]] = None,
         provides_keys: Optional[List[str]] = None,
+        agent_type: AgentType = AgentType.REGULAR,
     ) -> Agent:
         existing = await self.agent_repo.get_by_slug(slug)
         if existing:
@@ -76,6 +77,7 @@ class AgentService:
 
         agent = Agent(
             slug=slug,
+            agent_type=agent_type or AgentType.REGULAR,
             name=name,
             description=description,
             tags=tags,
@@ -167,6 +169,7 @@ class AgentService:
             "model": agent.model,
             "temperature": agent.temperature,
             "requires_confirmation_for_write": agent.requires_confirmation_for_write,
+            "agent_type": agent.agent_type,
             "risk_level": agent.risk_level,
             "allow_all_collections": agent.allow_all_collections,
             "allowed_collection_ids": agent.allowed_collection_ids,
@@ -193,9 +196,12 @@ class AgentService:
         allow_all_collections: Optional[bool] = None,
         allowed_collection_ids: Optional[List[UUID]] = None,
         provides_keys: Optional[List[str]] = None,
+        agent_type: Optional[AgentType] = None,
     ) -> Agent:
         agent = await self.get_agent(agent_id)
         update_data = {}
+        if agent_type is not None:
+            update_data["agent_type"] = agent_type
         if name is not None:
             update_data['name'] = name
         if description is not None:
@@ -434,6 +440,7 @@ class AgentService:
             .join(AgentVersion, Agent.id == AgentVersion.agent_id)
             .where(AgentVersion.status == AgentVersionStatus.PUBLISHED.value)
             .where(Agent.lifecycle_status != "deprecated")
+            .where(Agent.agent_type == AgentType.REGULAR.value)
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().unique().all())
@@ -449,6 +456,7 @@ class AgentService:
             .join(AgentVersion, Agent.id == AgentVersion.agent_id)
             .where(AgentVersion.status == AgentVersionStatus.PUBLISHED.value)
             .where(Agent.lifecycle_status != "deprecated")
+            .where(Agent.agent_type == AgentType.REGULAR.value)
         )
         result = await self.session.execute(stmt)
         rows = result.all()

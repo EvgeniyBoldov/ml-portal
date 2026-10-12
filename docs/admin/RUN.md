@@ -24,6 +24,12 @@ docker compose logs --tail=200 emb
 docker compose logs --tail=200 rerank
 ```
 
+Dev nginx resolves both API and frontend through Docker DNS (`127.0.0.11`,
+30-second cache). Recreating either container may change its address; the proxy
+refreshes that address automatically. After editing nginx configuration, run
+`docker compose exec -T nginx nginx -t`, then
+`docker compose exec -T nginx nginx -s reload`.
+
 ## 3. Основные адреса (dev)
 
 - API: `http://localhost:8000`

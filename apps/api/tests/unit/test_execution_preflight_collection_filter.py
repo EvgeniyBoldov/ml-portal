@@ -397,3 +397,27 @@ async def test_preflight_logs_agent_rbac_before_operation_resolution_fails():
     assert len(rbac_events) == 1
     assert rbac_events[0].data["entity_id"] == agent_execution_id
     assert rbac_events[0].data["rbac"]["agent_access"]["allowed"] is True
+
+
+@pytest.mark.asyncio
+async def test_llm_only_preflight_skips_discovery_but_checks_agent_rbac():
+    preflight = _build_preflight(
+        allowed_collection_ids=None, allow_all_collections=True,
+        rbac_allow_fn=lambda _slug: True, instances=[],
+    )
+    request = await preflight.prepare(
+        agent_slug="agent-a", user_id=uuid4(), tenant_id=uuid4(),
+        include_routable_agents=False, enable_operations=False,
+    )
+    preflight.operation_router.resolve.assert_not_awaited()
+    preflight.runtime_rbac_resolver.is_agent_allowed.assert_called_once()
+    assert request.resolved_operations == []
+    assert request.resolved_data_instances == []
+
+    preflight.runtime_rbac_resolver.is_agent_allowed.return_value = False
+    with pytest.raises(AgentUnavailableError):
+        await preflight.prepare(
+            agent_slug="agent-a", user_id=uuid4(), tenant_id=uuid4(),
+            include_routable_agents=False, enable_operations=False,
+        )
+    preflight.operation_router.resolve.assert_not_awaited()

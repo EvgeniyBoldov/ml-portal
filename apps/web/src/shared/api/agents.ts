@@ -7,7 +7,10 @@ import { apiRequest } from './http';
 // TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
+export type AgentType = 'regular' | 'shadow';
+
 export interface Agent {
+  agent_type?: AgentType;
   id: string;
   slug: string;
   name: string;
@@ -84,6 +87,7 @@ export interface AgentVersion {
 }
 
 export interface AgentCreate {
+  agent_type?: AgentType;
   slug: string;
   name: string;
   description?: string;
@@ -99,6 +103,7 @@ export interface AgentCreate {
 }
 
 export interface AgentUpdate {
+  agent_type?: AgentType;
   name?: string;
   description?: string;
   model?: string | null;

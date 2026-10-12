@@ -304,6 +304,7 @@ export function ModelPage() {
         status: m?.status ?? 'available',
         enabled: m?.enabled ?? true,
         default_for_type: m?.default_for_type ?? false,
+        use_for_long_memory: m?.use_for_long_memory ?? false,
         model_version: m?.model_version ?? '',
         description: m?.description ?? '',
         extra_config: m?.extra_config ?? {},
@@ -321,6 +322,7 @@ export function ModelPage() {
       }
       return {
         ...data,
+        use_for_long_memory: data.type === 'embedding' ? data.use_for_long_memory : false,
         connector: resolvedConnector,
         base_url: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? (data.base_url || undefined) : undefined,
         instance_id: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? undefined : (data.instance_id || undefined),
@@ -351,6 +353,7 @@ export function ModelPage() {
         status: data.status,
         enabled: data.enabled,
         default_for_type: data.default_for_type,
+        use_for_long_memory: data.type === 'embedding' ? data.use_for_long_memory : false,
         model_version: data.model_version,
         description: data.description,
         ...(contextWindow ? { context_window_tokens: parseInt(contextWindow, 10) } : {}),
@@ -365,6 +368,51 @@ export function ModelPage() {
       delete: 'Модель удалена',
     },
   });
+
+  const [showLongMemoryConfirm, setShowLongMemoryConfirm] = useState(false);
+  const [longMemoryConfirmAction, setLongMemoryConfirmAction] = useState<'select' | 'save'>('select');
+  const handleInfoChange = (key: string, value: unknown) => {
+    if (key === 'use_for_long_memory' && value === true) {
+      setLongMemoryConfirmAction('select');
+      setShowLongMemoryConfirm(true);
+      return;
+    }
+    if (key === 'use_for_long_memory' && model?.use_for_long_memory && value === false) {
+      showToast('Выберите другую embedding-модель для LongMemory', 'info');
+      return;
+    }
+    handleFieldChange(key, value);
+  };
+  const handleSaveWithLongMemoryConfirm = () => {
+    const encoderChanged = model?.use_for_long_memory && (
+      formData.provider_model_name !== model.provider_model_name ||
+      formData.model_version !== (model.model_version ?? '') ||
+      formData.base_url !== (model.base_url ?? '') ||
+      vectorDim !== String(model.extra_config?.vector_dim ?? '')
+    );
+    if (encoderChanged) {
+      setLongMemoryConfirmAction('save');
+      setShowLongMemoryConfirm(true);
+      return;
+    }
+    void handleSave();
+  };
+  const longMemoryConfirmation = (
+    <ConfirmDialog
+      open={showLongMemoryConfirm}
+      title="Сменить модель LongMemory?"
+      message="После сохранения начнётся длительная переиндексация всей LongMemory. Поиск будет временно недоступен. Сохранённые чанки и факты будут использованы повторно, без LLM-извлечения."
+      confirmLabel="Продолжить"
+      cancelLabel="Отмена"
+      variant="warning"
+      onConfirm={() => {
+        setShowLongMemoryConfirm(false);
+        if (longMemoryConfirmAction === 'save') void handleSave();
+        else handleFieldChange('use_for_long_memory', true);
+      }}
+      onCancel={() => setShowLongMemoryConfirm(false)}
+    />
+  );
 
   // ─── Коннекторы для select ───
   const { data: instances = [] } = useQuery({
@@ -403,6 +451,7 @@ export function ModelPage() {
     model_version: model?.model_version ?? '',
     status: model?.status ?? 'available',
     default_for_type: model?.default_for_type ?? false,
+    use_for_long_memory: model?.use_for_long_memory ?? false,
     id: model?.id ?? '',
     instance_name: model?.instance_name ?? '—',
     is_system: model?.is_system ? 'Да' : 'Нет',
@@ -426,6 +475,10 @@ export function ModelPage() {
     dimensions: String(manifestRaw.dimensions ?? '—'),
   };
   const isEmbedding = (isEditable ? formData.type : model?.type) === 'embedding';
+  const longMemoryFields: FieldConfig[] = isEmbedding ? [{
+    key: 'use_for_long_memory', type: 'boolean', label: 'Использовать для LongMemory',
+    description: 'Отдельный энкодер памяти. Смена запускает фоновую переиндексацию.',
+  }] : [];
   const migrationModelOptions = (embeddingModelsData?.items || [])
     .filter((m) => m.id !== model?.id)
     .map((m) => ({ value: m.id, label: `${m.name} (${m.alias})` }));
@@ -563,6 +616,7 @@ export function ModelPage() {
   // ─── Create mode ───
   if (isNew) {
     return (
+      <>
       <EntityPageV2
         title="Новая модель"
         mode="create"
@@ -577,7 +631,7 @@ export function ModelPage() {
           { label: 'Новая модель' },
         ]}
         backPath="/admin/platform"
-        onSave={handleSave}
+        onSave={handleSaveWithLongMemoryConfirm}
         onCancel={handleCancel}
       >
         <Tab title="Создание" layout="grid">
@@ -586,10 +640,10 @@ export function ModelPage() {
             icon="cpu"
             iconVariant="info"
             width="1/2"
-            fields={INFO_FIELDS_CREATE}
+            fields={[...INFO_FIELDS_CREATE, ...longMemoryFields]}
             data={formData}
             editable
-            onChange={handleFieldChange}
+            onChange={handleInfoChange}
           />
           <Block
             title="Подключение"
@@ -600,7 +654,7 @@ export function ModelPage() {
             fields={connectorFieldsWithOptions}
             data={formData}
             editable
-            onChange={handleFieldChange}
+            onChange={handleInfoChange}
           />
           <Block
             title="Параметры модели"
@@ -628,6 +682,8 @@ export function ModelPage() {
           />
         </Tab>
       </EntityPageV2>
+      {longMemoryConfirmation}
+      </>
     );
   }
 
@@ -658,7 +714,7 @@ export function ModelPage() {
           { label: model?.name || 'Модель' },
         ]}
         onEdit={handleEdit}
-        onSave={handleSave}
+        onSave={handleSaveWithLongMemoryConfirm}
         onCancel={handleCancel}
         onDelete={!model?.is_system ? handleDelete : undefined}
         showDelete={!model?.is_system}
@@ -672,7 +728,7 @@ export function ModelPage() {
             saving,
             tone: 'default',
             onEdit: handleEdit,
-            onSave: handleSave,
+            onSave: handleSaveWithLongMemoryConfirm,
             onCancel: handleCancel,
             onDelete: !model?.is_system ? handleDelete : undefined,
             showDeleteInView: !model?.is_system,
@@ -683,10 +739,10 @@ export function ModelPage() {
             icon="cpu"
             iconVariant="info"
             width="1/2"
-            fields={INFO_FIELDS_VIEW}
+            fields={[...INFO_FIELDS_VIEW, ...longMemoryFields]}
             data={blockData}
             editable={isEditable}
-            onChange={handleFieldChange}
+            onChange={handleInfoChange}
             headerActions={
               healthBadge && healthBadge !== 'unknown' ? (
                 <Badge tone={healthBadge === 'healthy' ? 'success' : healthBadge === 'degraded' ? 'warn' : 'danger'}>
@@ -704,7 +760,7 @@ export function ModelPage() {
             fields={connectorFieldsWithOptions}
             data={blockData}
             editable={isEditable}
-            onChange={handleFieldChange}
+            onChange={handleInfoChange}
           />
           <Block
             title="Параметры модели"
@@ -824,6 +880,7 @@ export function ModelPage() {
         )}
       </EntityPageV2>
 
+      {longMemoryConfirmation}
       <ConfirmDialog
         open={showDeleteConfirm}
         title="Удалить модель?"
