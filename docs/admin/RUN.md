@@ -42,6 +42,17 @@ compose. Индексы живут в отдельном volume, экспери�
 приложения; экспериментальный API остаётся отдельным. Команды и ограничения описаны в
 [руководстве HippoRAG worker](../../mcp/hipporag/README.md).
 
+Production templates include the `hipporag` service and `hipporag_data` volume;
+`docker-compose.build.yml` publishes its release image and the deployment script
+starts it with application services. Transfer the production-template changes
+to the actual `docker-compose.prod.yml` in the production GitLab checkout and
+the `HIPPO_*` block from `env.example` to the root-owned production env file.
+The deployment controller reads that env file for Compose interpolation as well
+as container environments. Native memory uses registry-default models via API
+callbacks, so production does not need the dev Qwen IP in worker settings.
+Keep `hipporag_data` across deployments and include it in backups; the volume
+stores the corpus, graph and extraction caches. See [Environment Setup](ENV.md).
+
 Локальные модели для русских документов: `emb-bge` обслуживает `BAAI/bge-m3`
 (1024 измерения, 8192 токена), `rerank-bge` — `BAAI/bge-reranker-v2-m3`
 (пары query/document ограничены 1024 токенами для CPU). Модели лежат в

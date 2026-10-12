@@ -26,6 +26,28 @@ x-worker-image: &worker-image ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/
 
 services:
 
+  # Persistent shared document-memory graph. Models are resolved by the API
+  # registry and accessed through short-lived capability-authenticated callbacks.
+  hipporag:
+    image: ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/hipporag:${APP_IMAGE_TAG:?APP_IMAGE_TAG is required}
+    <<: *restart
+    environment:
+      HIPPO_DATA_DIR: /data
+      HIPPO_CHUNK_TOKENS: ${HIPPO_CHUNK_TOKENS:-480}
+      HF_HUB_OFFLINE: "1"
+      TOKENIZERS_PARALLELISM: "false"
+    volumes:
+      - hipporag_data:/data
+    expose:
+      - "8080"
+    stop_grace_period: 120s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
   # ===========================================================================
   # DATABASE SERVICES
   # ===========================================================================
@@ -132,6 +154,10 @@ services:
     environment:
       - PYTHONPATH=/app
       - MODELS_ROOT=/app/models_llm
+      - MEMORY_SEARCH_BACKEND=${MEMORY_SEARCH_BACKEND:-hipporag}
+      - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
+      - HIPPO_CALLBACK_URL=${HIPPO_CALLBACK_URL:-http://api:8000/api/v1/internal/hipporag}
+      - HIPPO_TIMEOUT_SECONDS=${HIPPO_TIMEOUT_SECONDS:-1800}
       - TOOL_RESULTS_DB_URL=${TOOL_RESULTS_DB_URL:?TOOL_RESULTS_DB_URL is required}
     depends_on:
       postgres:
@@ -286,6 +312,10 @@ services:
     env_file: ${PROD_ENV_FILE:?PROD_ENV_FILE is required}
     environment:
       - PYTHONPATH=/app
+      - MEMORY_SEARCH_BACKEND=${MEMORY_SEARCH_BACKEND:-hipporag}
+      - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
+      - HIPPO_CALLBACK_URL=${HIPPO_CALLBACK_URL:-http://api:8000/api/v1/internal/hipporag}
+      - HIPPO_TIMEOUT_SECONDS=${HIPPO_TIMEOUT_SECONDS:-1800}
       - TOOL_RESULTS_DB_URL=${TOOL_RESULTS_DB_URL:?TOOL_RESULTS_DB_URL is required}
     depends_on:
       postgres:
@@ -306,6 +336,10 @@ services:
     env_file: ${PROD_ENV_FILE:?PROD_ENV_FILE is required}
     environment:
       - PYTHONPATH=/app
+      - MEMORY_SEARCH_BACKEND=${MEMORY_SEARCH_BACKEND:-hipporag}
+      - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
+      - HIPPO_CALLBACK_URL=${HIPPO_CALLBACK_URL:-http://api:8000/api/v1/internal/hipporag}
+      - HIPPO_TIMEOUT_SECONDS=${HIPPO_TIMEOUT_SECONDS:-1800}
       - TOOL_RESULTS_DB_URL=${TOOL_RESULTS_DB_URL:?TOOL_RESULTS_DB_URL is required}
     depends_on:
       postgres:
@@ -407,6 +441,7 @@ services:
 # =============================================================================
 
 volumes:
+  hipporag_data:
   postgres_data:
   postgres_tool_results_data:
   postgres_remote_data:

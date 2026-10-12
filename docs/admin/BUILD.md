@@ -28,6 +28,12 @@ make release
 [`docker-compose.build.yml`](../../docker-compose.build.yml); adding a service
 with both `build:` and a fully-qualified `image:` needs no Makefile change.
 
+The build compose also publishes `/hipporag:${APP_IMAGE_TAG}` from
+`mcp/hipporag/Dockerfile`, using the same immutable `BASE_IMAGE` as API/worker.
+HippoRAG dependencies and its pinned upstream revision are installed during the
+workstation build; production runs the prebuilt image without downloading models
+or packages. The deployment application-service list includes `hipporag`.
+
 The release manifest records two independent versions:
 
 - `APP_IMAGE_TAG` changes for every release.

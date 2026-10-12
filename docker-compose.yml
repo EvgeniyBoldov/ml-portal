@@ -12,6 +12,7 @@ services:
       HIPPO_REQUEST_TOKENS: ${HIPPO_REQUEST_TOKENS:-16384}
       HIPPO_CHUNK_TOKENS: ${HIPPO_CHUNK_TOKENS:-480}
       HIPPO_OUTPUT_TOKENS: ${HIPPO_OUTPUT_TOKENS:-4096}
+      HIPPO_DATA_DIR: /data
     ports:
       - "127.0.0.1:${HIPPO_PORT:-8015}:8080"
     volumes:
@@ -158,8 +159,9 @@ services:
       - PYTHONPATH=/app
       - MODELS_ROOT=/app/models_llm
       - MEMORY_SEARCH_BACKEND=${MEMORY_SEARCH_BACKEND:-hipporag}
-      - HIPPO_WORKER_URL=http://hipporag:8080
-      - HIPPO_CALLBACK_URL=http://api:8000/api/v1/internal/hipporag
+      - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
+      - HIPPO_CALLBACK_URL=${HIPPO_CALLBACK_URL:-http://api:8000/api/v1/internal/hipporag}
+      - HIPPO_TIMEOUT_SECONDS=${HIPPO_TIMEOUT_SECONDS:-1800}
       - TOOL_RESULTS_DB_URL=postgresql+asyncpg://${TOOL_RESULTS_POSTGRES_USER:-tool_results}:${TOOL_RESULTS_POSTGRES_PASSWORD:-tool_results_password}@postgres-tool-results:5432/${TOOL_RESULTS_POSTGRES_DB:-tool_results}
     depends_on:
       postgres:
@@ -421,8 +423,9 @@ services:
     environment:
       - PYTHONPATH=/app
       - MEMORY_SEARCH_BACKEND=${MEMORY_SEARCH_BACKEND:-hipporag}
-      - HIPPO_WORKER_URL=http://hipporag:8080
-      - HIPPO_CALLBACK_URL=http://api:8000/api/v1/internal/hipporag
+      - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
+      - HIPPO_CALLBACK_URL=${HIPPO_CALLBACK_URL:-http://api:8000/api/v1/internal/hipporag}
+      - HIPPO_TIMEOUT_SECONDS=${HIPPO_TIMEOUT_SECONDS:-1800}
     working_dir: /app
     depends_on:
       postgres:

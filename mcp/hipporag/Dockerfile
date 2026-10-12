@@ -1,4 +1,5 @@
-FROM ml-portal-base-ml:latest
+ARG BASE_IMAGE=ml-portal-base-ml:latest
+FROM ${BASE_IMAGE}
 USER root
 WORKDIR /worker
 RUN python -m venv --system-site-packages /opt/hippo

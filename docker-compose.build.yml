@@ -23,6 +23,14 @@
 
 services:
 
+  hipporag:
+    build:
+      context: .
+      dockerfile: mcp/hipporag/Dockerfile
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-ml-portal-base-ml:latest}
+    image: ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/hipporag:${APP_IMAGE_TAG:?APP_IMAGE_TAG is required}
+
   # ---------------------------------------------------------------------------
   # BACKEND API
   # ---------------------------------------------------------------------------

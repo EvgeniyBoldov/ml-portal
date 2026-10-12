@@ -93,6 +93,27 @@ make env
 - `CB_EMB_OPEN_TIMEOUT_SECONDS` — open interval circuit-breaker embedding.
 - `CB_EMB_HALF_OPEN_MAX_CALLS` — half-open calls embedding.
 
+## HippoRAG document memory
+
+- `MEMORY_SEARCH_BACKEND=hipporag` — document-memory backend for API and workers.
+- `HIPPO_WORKER_URL=http://hipporag:8080` — internal graph worker endpoint.
+- `HIPPO_CALLBACK_URL=http://api:8000/api/v1/internal/hipporag` — API callback URL,
+  reachable from the HippoRAG container.
+- `HIPPO_TIMEOUT_SECONDS=1800` — worker request timeout and capability lifetime
+  basis; indexing can take longer than interactive search.
+- `HIPPO_CHUNK_TOKENS=480` — conservative UTF-8 byte limit used by graph chunking.
+
+Production keeps `/data` in the named volume `hipporag_data` (SQLite corpus,
+graphs, embeddings and extraction cache). There is one graph worker process;
+the volume is not intended to be shared by multiple worker replicas.
+Native document memory uses the system-default LLM and embedding model from the
+application registry through capability-authenticated API callbacks. Configure
+the available models and their defaults in the application; these variables do
+not create model registry entries. `HIPPO_LLM_BASE_URL`, `HIPPO_LLM_MODEL` and
+`HIPPO_EMBED_BASE_URL` belong to the standalone/experimental worker endpoints,
+not to the production `/portal/corpus/*` flow. No LLM credentials are passed to
+the worker container.
+
 ## Embeddings
 - `EMB_BASE_URL` — base URL embedding-сервиса для API.
 - `EMB_MODEL_ALIAS` — алиас embedding модели.

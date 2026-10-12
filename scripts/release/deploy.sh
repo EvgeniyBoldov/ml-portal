@@ -10,7 +10,7 @@ source "${script_dir}/common.sh"
 
 readonly APPLICATION_SERVICES=(
   api frontend netbox-mcp-custom dbhub-mcp atlassian-jira-mcp ml-inference-mcp
-  emb rerank worker beat flower nginx
+  emb rerank hipporag worker beat flower nginx
 )
 readonly STATEFUL_SERVICES=(postgres postgres-tool-results postgres-remote redis qdrant minio)
 
