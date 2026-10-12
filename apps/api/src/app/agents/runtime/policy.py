@@ -24,7 +24,7 @@ class PolicyLimits:
     max_llm_calls: int = 20
     max_tool_calls_total: int = 50
     max_wall_time_ms: int = 600_000
-    tool_timeout_ms: int = 60_000
+    tool_timeout_ms: Optional[int] = None
     max_retries: int = 3
     streaming_enabled: bool = True
     citations_required: bool = False
@@ -58,7 +58,7 @@ class PolicyLimits:
                 "max_wall_time_ms", execution.get("max_wall_time_ms", 300_000),
             ),
             tool_timeout_ms=lim.get(
-                "tool_timeout_ms", execution.get("tool_timeout_ms", 30_000),
+                "tool_timeout_ms", execution.get("tool_timeout_ms"),
             ),
             max_retries=lim.get("max_retries", retry.get("max_retries", 3)),
             streaming_enabled=execution.get("streaming_enabled", True),

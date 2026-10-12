@@ -1308,6 +1308,8 @@ class AgentToolRuntime(BaseRuntime):
         redacted_result_data = None
         root_run_id = str(ctx.extra.get("runtime_root_run_id") or "").strip()
         stored_result = result.metadata.get("stored_result")
+        if result.success and result.delivery == "direct":
+            result.data = RuntimeRedactor().redact(result.data)
         if result.success and result.metadata.get("reused") and stored_result:
             from app.services.result_workspace import ResultWorkspace
             try:
@@ -1319,7 +1321,7 @@ class AgentToolRuntime(BaseRuntime):
             except Exception:
                 result = ToolResult.fail("Saved result is no longer accessible; run a fresh source query.")
                 stored_result = None
-        if result.success and not result.metadata.get("workspace_view") and not stored_result and operation_call.tool_name != "result.analyze":
+        if result.success and result.delivery != "direct" and not result.metadata.get("workspace_view") and not stored_result and operation_call.tool_name != "result.analyze":
             try:
                 if not root_run_id:
                     raise RuntimeError("root runtime run id is unavailable")
@@ -1420,7 +1422,7 @@ class AgentToolRuntime(BaseRuntime):
         )
         sse_data = safe_result_projection if result.success else result.error
         sse_truncated = False
-        if result.success and isinstance(sse_data, dict):
+        if result.success and result.delivery != "direct" and isinstance(sse_data, dict):
             try:
                 raw_str = json.dumps(sse_data, ensure_ascii=False, default=str)
             except Exception:
@@ -1454,6 +1456,7 @@ class AgentToolRuntime(BaseRuntime):
             result_id=event_result_id,
             result_inline_complete=event_inline_complete,
             result_source_complete=event_source_complete,
+            result_delivery=result.delivery,
             envelope=envelope.to_metadata(),
             truncated=sse_truncated if sse_truncated else None,
         )
@@ -1476,6 +1479,7 @@ class AgentToolRuntime(BaseRuntime):
             "error_code": raw_error_code,
             "retryable": result.metadata.get("retryable"),
             "result_envelope": envelope.to_metadata(),
+            "result_delivery": result.delivery,
             "sources": list(sources or []),
             "agent_slug": agent_slug,
             "agent_execution_id": agent_execution_id,

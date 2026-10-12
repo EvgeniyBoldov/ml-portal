@@ -14,6 +14,7 @@ from app.runtime.envelope import PhasedEvent
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.entity_ids import runtime_task_id
 from app.runtime.orchestrator import GraphOrchestrator
+from app.runtime.partial_answer import stream_partial_answer
 from app.runtime.plan_store import SqlPlanStore
 from app.runtime.turn_state import RuntimeTurnState
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
@@ -203,6 +204,12 @@ class GraphPlanningStage:
                 runtime_event = event.to_runtime_event()
                 if runtime_event.type == RuntimeEventType.ERROR and runtime_event.data.get("error_code") == "llm_context_window_exceeded":
                     runtime_state.final_error = str(runtime_event.data.get("user_message") or runtime_event.data.get("error"))
+                if runtime_event.type == RuntimeEventType.ERROR:
+                    # The stage still owns a finalization attempt. Do not close
+                    # the user stream on an intermediate execution error.
+                    runtime_event = RuntimeEvent.status("execution_interrupted",
+                        error_code=runtime_event.data.get("error_code"),
+                        parent_entity_type="run", parent_entity_id=str(runtime_state.run_id))
                 if runtime_event.type == RuntimeEventType.WAITING_INPUT:
                     pause_question = str(runtime_event.data.get("question") or "").strip() or None
                 elif runtime_event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
@@ -230,8 +237,27 @@ class GraphPlanningStage:
         except asyncio.CancelledError:
             await self._store.cancel_plan(plan.id, reason="orchestrator_cancelled")
             raise
+        except Exception as exc:
+            await self._store.mark_failed(plan.id, "runtime_execution_failed", str(exc))
         snapshot = await self._store.snapshot(plan.id)
         status = str(snapshot["status"])
+        if status == "failed":
+            failure = snapshot.get("last_failure") or {}
+            async for event in stream_partial_answer(
+                synthesizer=self._orchestrator.synthesizer, plan=snapshot,
+                runtime_state=runtime_state,
+                failure_code=f"{failure.get('code') or 'runtime_execution_failed'} {failure.get('message') or ''}",
+                planner_kwargs={**planner_kwargs, "logging_level": self._orchestrator.logging_level},
+            ):
+                yield PhasedEvent(event, OrchestrationPhase.SYNTHESIS)
+            # Execution remains failed in the plan audit. The user-facing turn
+            # completes with the partial answer, without resurrecting the plan.
+            if runtime_state.final_answer:
+                self.outcome = GraphPlanningOutcome(
+                    kind=GraphPlanningOutcomeKind.COMPLETED,
+                    stop_reason=PipelineStopReason.COMPLETED,
+                )
+                return
         if status == "completed":
             self.outcome = GraphPlanningOutcome(
                 kind=GraphPlanningOutcomeKind.COMPLETED,

@@ -894,6 +894,10 @@ class GraphOrchestrator:
                         iteration_id=str(iteration.id if hasattr(iteration, "id") else iteration["id"]),
                         deleted_artifact_ids=list(getattr(runtime_state, "deleted_artifact_ids", []) or []),
                     )
+                    context["limitations"].extend(
+                        {"message": item["message"]}
+                        for item in getattr(runtime_state, "execution_limitations", []) if item.get("message")
+                    )
                 except (TypeError, ValueError, SynthesisContextError) as exc:
                     await fail("synthesis_context_invalid", exc)
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesis_context_invalid")

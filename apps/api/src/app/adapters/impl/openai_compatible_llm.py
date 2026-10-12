@@ -321,6 +321,10 @@ class OpenAICompatibleLLM:
         request.pop("max_completion_tokens", None)
         allocation = allocate_context(request, context_window)
         request["max_tokens"] = allocation.max_output_tokens
+        if options is not None and options.output_token_cap is not None:
+            if options.output_token_cap < 1:
+                raise ValueError("output_token_cap must be positive")
+            request["max_tokens"] = min(request["max_tokens"], options.output_token_cap)
         logger.info(
             "LLM context allocation model=%s context_window=%s input_estimate=%s "
             "input_reserved=%s minimum_output=%s max_tokens=%s",

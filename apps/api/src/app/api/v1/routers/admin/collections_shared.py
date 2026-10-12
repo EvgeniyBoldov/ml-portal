@@ -9,7 +9,7 @@ from app.services.collection_service import CollectionService
 
 async def build_collection_response(service: CollectionService, collection) -> CollectionResponse:
     if str(getattr(collection, "collection_type", "") or "") == "template":
-        await service.ensure_contract_fields_present(collection)
+        await service.ensure_contract_fields_present(collection, ensure_vector_infra=False)
     current_version_payload = None
     if collection.current_version:
         current_version_payload = CollectionVersionResponse(

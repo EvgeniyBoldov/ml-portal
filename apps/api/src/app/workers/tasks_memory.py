@@ -43,9 +43,10 @@ from app.runtime.memory.evidence_feedback import (
 
 @shared_task(name="app.workers.tasks_memory.reextract_stale_document_memory", queue="maintenance.default")
 def reextract_stale_document_memory(batch_size: int = 20) -> Dict[str, Any]:
+    return {"status": "disabled", "reason": "native_hipporag_document_corpus"}
     """Gradually refresh document memory withdrawn by a content contract change."""
     async def _reextract() -> Dict[str, Any]:
-        from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
+        from app.workers.tasks_shadow_document_memory import hipporag_study_rag_document
 
         jobs: list[tuple[str, dict[str, str]]] = []
         async with get_worker_session() as session:
@@ -80,7 +81,7 @@ def reextract_stale_document_memory(batch_size: int = 20) -> Dict[str, Any]:
                 }))
             await session.commit()
         for tenant_id, job in jobs:
-            shadow_study_rag_document.delay(job, tenant_id)
+            hipporag_study_rag_document.delay(job, tenant_id)
         return {"queued": len(jobs)}
 
     return asyncio.run(_reextract())
@@ -88,10 +89,15 @@ def reextract_stale_document_memory(batch_size: int = 20) -> Dict[str, Any]:
 
 @shared_task(name="app.workers.tasks_memory.index_memory_items", queue="memory")
 def index_memory_items(memory_item_ids: List[str]) -> Dict[str, Any]:
+    return {"status": "disabled", "reason": "native_hipporag_document_corpus"}
     """Build/update the rebuildable company semantic index."""
     async def _index() -> Dict[str, Any]:
         async with get_worker_session() as session:
             ids = [UUID(str(value)) for value in memory_item_ids[:200]]
+            from app.core.config import get_settings
+            if get_settings().MEMORY_SEARCH_BACKEND == "hipporag":
+                from app.services.hipporag_service import HippoRAGService
+                return {"indexed": await HippoRAGService(session).index_items(ids), "backend": "hipporag"}
             rows = list((await session.execute(select(MemoryItem).where(MemoryItem.id.in_(ids)))).scalars().all())
             from app.runtime.memory.semantic_index import MemorySemanticIndex
             indexed = await MemorySemanticIndex(session).index_items(rows)
@@ -101,6 +107,10 @@ def index_memory_items(memory_item_ids: List[str]) -> Dict[str, Any]:
 
 @shared_task(name="app.workers.tasks_memory.remove_memory_items", queue="memory")
 def remove_memory_items(memory_item_ids: List[str]) -> Dict[str, Any]:
+    from app.core.config import get_settings
+    if get_settings().MEMORY_SEARCH_BACKEND == "hipporag":
+        # Every read graph is keyed by the live authorized claim contents.
+        return {"removed": 0, "backend": "hipporag", "invalidated_by_read_policy": True}
     async def _remove() -> Dict[str, Any]:
         async with get_worker_session() as session:
             ids = [UUID(str(value)) for value in memory_item_ids[:500]]
@@ -112,8 +122,13 @@ def remove_memory_items(memory_item_ids: List[str]) -> Dict[str, Any]:
 
 @shared_task(name="app.workers.tasks_memory.rebuild_memory_index", queue="memory")
 def rebuild_memory_index() -> Dict[str, Any]:
+    return {"status": "disabled", "reason": "native_hipporag_document_corpus"}
     async def _rebuild() -> Dict[str, Any]:
         async with get_worker_session() as session:
+            from app.core.config import get_settings
+            if get_settings().MEMORY_SEARCH_BACKEND == "hipporag":
+                from app.services.hipporag_service import HippoRAGService
+                return {"indexed": await HippoRAGService(session).index_items(), "backend": "hipporag"}
             from app.runtime.memory.semantic_index import MemorySemanticIndex
             return {"indexed": await MemorySemanticIndex(session).rebuild()}
     return asyncio.run(_rebuild())
@@ -121,8 +136,14 @@ def rebuild_memory_index() -> Dict[str, Any]:
 
 @shared_task(name="app.workers.tasks_memory.reconcile_memory_index", queue="maintenance.default")
 def reconcile_memory_index() -> Dict[str, Any]:
+    return {"status": "disabled", "reason": "native_hipporag_document_corpus"}
     """Converge the derived Qdrant index to PostgreSQL after lost queue work."""
     async def _reconcile() -> Dict[str, Any]:
+        from app.core.config import get_settings
+        if get_settings().MEMORY_SEARCH_BACKEND == "hipporag":
+            async with get_worker_session() as session:
+                from app.services.hipporag_service import HippoRAGService
+                return {"indexed": await HippoRAGService(session).index_items(), "removed": 0, "backend": "hipporag"}
         from app.runtime.memory.semantic_index import MemorySemanticIndex
 
         indexed = removed = 0
@@ -231,9 +252,9 @@ def reconcile_collection_memory_policy(collection_id: str) -> Dict[str, Any]:
         if active_ids:
             index_memory_items.delay([str(item_id) for item_id in active_ids])
         if enabled_jobs:
-            from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
+            from app.workers.tasks_shadow_document_memory import hipporag_study_rag_document
             for tenant_id, job in enabled_jobs:
-                shadow_study_rag_document.delay(job, tenant_id)
+                hipporag_study_rag_document.delay(job, tenant_id)
         return {"processed": len(enabled_jobs) + len(stale_ids) + len(active_ids), "enabled": len(enabled_jobs)}
 
     return asyncio.run(_reconcile())
@@ -366,9 +387,9 @@ def evaluate_memory_rag_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
                     (str(row.tenant_id), {"source_id": str(row.id), "canonical_key": row.s3_key_processed})
                     for row in rows if row.s3_key_processed and row.tenant_id
                 ]
-            from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
+            from app.workers.tasks_shadow_document_memory import hipporag_study_rag_document
             for document_tenant_id, job in jobs:
-                shadow_study_rag_document.delay(job, document_tenant_id)
+                hipporag_study_rag_document.delay(job, document_tenant_id)
         return {"evaluated": evaluated, "reextract_documents": len(reextract_document_ids)}
 
     return asyncio.run(_evaluate())

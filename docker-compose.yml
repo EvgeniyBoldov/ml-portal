@@ -1,4 +1,44 @@
 services:
+  hipporag:
+    build:
+      context: .
+      dockerfile: mcp/hipporag/Dockerfile
+    restart: unless-stopped
+    environment:
+      HIPPO_LLM_BASE_URL: ${HIPPO_LLM_BASE_URL:-http://172.18.34.210:8081}
+      HIPPO_LLM_MODEL: ${HIPPO_LLM_MODEL:-Qwen/Qwen3-8B-GGUF:Q4_K_M}
+      HIPPO_EMBED_BASE_URL: http://emb:8001
+      HIPPO_CONTEXT_TOKENS: ${HIPPO_CONTEXT_TOKENS:-16384}
+      HIPPO_REQUEST_TOKENS: ${HIPPO_REQUEST_TOKENS:-16384}
+      HIPPO_CHUNK_TOKENS: ${HIPPO_CHUNK_TOKENS:-480}
+      HIPPO_OUTPUT_TOKENS: ${HIPPO_OUTPUT_TOKENS:-4096}
+    ports:
+      - "127.0.0.1:${HIPPO_PORT:-8015}:8080"
+    volumes:
+      - hipporag_data:/data
+    depends_on:
+      emb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  memory-experiment:
+    build:
+      context: .
+      dockerfile: infra/docker/memory-experiment/Dockerfile
+    restart: unless-stopped
+    environment:
+      HIPPO_URL: http://hipporag:8080
+    volumes:
+      - ./.long-memory-experiment:/experiment
+    depends_on:
+      hipporag:
+        condition: service_healthy
+
   # =============================================================================
   # DATABASE SERVICES
   # =============================================================================
@@ -117,6 +157,9 @@ services:
     environment:
       - PYTHONPATH=/app
       - MODELS_ROOT=/app/models_llm
+      - MEMORY_SEARCH_BACKEND=${MEMORY_SEARCH_BACKEND:-hipporag}
+      - HIPPO_WORKER_URL=http://hipporag:8080
+      - HIPPO_CALLBACK_URL=http://api:8000/api/v1/internal/hipporag
       - TOOL_RESULTS_DB_URL=postgresql+asyncpg://${TOOL_RESULTS_POSTGRES_USER:-tool_results}:${TOOL_RESULTS_POSTGRES_PASSWORD:-tool_results_password}@postgres-tool-results:5432/${TOOL_RESULTS_POSTGRES_DB:-tool_results}
     depends_on:
       postgres:
@@ -252,7 +295,7 @@ services:
   # API resolves the correct instance by EMB_BASE_URL stored in the models table.
   # =============================================================================
 
-  # Primary embedding model: all-MiniLM-L6-v2 (384 dims) — fast, general purpose
+  # Optional compact embedding model; the registry default is served by emb-bge.
   emb:
     build:
       context: .
@@ -272,6 +315,30 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  emb-bge:
+    build:
+      context: .
+      dockerfile: infra/docker/emb/Dockerfile
+    environment:
+      - EMB_MODEL_ALIAS=bge-m3
+      - EMB_MODEL_PATH=/models_llm/BAAI--bge-m3
+      - EMB_MODEL_DIMENSIONS=1024
+      - EMB_MODEL_MAX_TOKENS=8192
+      - EMB_BATCH_SIZE=4
+      - EMB_MAX_WAIT_MS=15
+      - EMB_MODEL_PARALLELISM=1
+      - OMP_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
+    volumes:
+      - ./models_llm:/models_llm:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   # ---------------------------------------------------------------------------
   # Example: second embedding instance for a larger model (e1024 dims).
@@ -319,6 +386,26 @@ services:
       retries: 3
       start_period: 60s
 
+  rerank-bge:
+    build:
+      context: .
+      dockerfile: infra/docker/rerank/Dockerfile
+    environment:
+      - RERANK_MODEL_ALIAS=bge-reranker-v2-m3
+      - RERANK_MODEL_PATH=/models_llm/BAAI--bge-reranker-v2-m3
+      - RERANK_MODEL_MAX_TOKENS=1024
+      - RERANK_BATCH_SIZE=4
+      - OMP_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
+    volumes:
+      - ./models_llm:/models_llm:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
   # =============================================================================
   # CELERY WORKER
   # =============================================================================
@@ -333,6 +420,9 @@ services:
     env_file: .env
     environment:
       - PYTHONPATH=/app
+      - MEMORY_SEARCH_BACKEND=${MEMORY_SEARCH_BACKEND:-hipporag}
+      - HIPPO_WORKER_URL=http://hipporag:8080
+      - HIPPO_CALLBACK_URL=http://api:8000/api/v1/internal/hipporag
     working_dir: /app
     depends_on:
       postgres:
@@ -410,6 +500,7 @@ services:
       retries: 3
 
 volumes:
+  hipporag_data:
   postgres_data:
   postgres_tool_results_data:
   postgres_remote_data:

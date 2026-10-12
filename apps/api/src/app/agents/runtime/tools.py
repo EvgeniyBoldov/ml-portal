@@ -692,14 +692,22 @@ class OperationExecutionFacade:
     ) -> str:
         """Format a bounded, action-oriented tool result for the next LLM turn.
 
-        Full operation payloads live in the dedicated result store. Inline
+        Dataset operation payloads live in the dedicated result store. Inline
         output is preserved only when complete; otherwise the model gets a
         pointer and must call result.analyze instead of receiving a clipped,
-        misleading prefix.
+        misleading prefix. Explicit direct results preserve their complete
+        domain payload and bypass dataset presentation limits.
         """
         import json as _json
 
         if result.success:
+            if result.delivery == "direct":
+                # Domain tools bound their own payloads. Preserve complete JSON
+                # rather than applying dataset/pointer or character truncation.
+                output = dict(result.data) if isinstance(result.data, dict) else {"value": result.data}
+                if evidence_call_id:
+                    output["evidence_call_id"] = evidence_call_id
+                return _json.dumps(output, ensure_ascii=False, default=str)
             if result.metadata.get("workspace_view") and not stored_result:
                 output = dict(result.data) if isinstance(result.data, dict) else {"value": result.data}
                 from app.core.config import get_settings

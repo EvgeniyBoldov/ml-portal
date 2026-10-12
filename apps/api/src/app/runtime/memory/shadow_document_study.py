@@ -235,6 +235,33 @@ class ShadowDocumentStudyService:
             snapshot.active_attempt_id = attempt.id
         return attempt
 
+    async def restart_attempt(self, snapshot: DocumentMemorySnapshot) -> DocumentMemoryExtractionAttempt:
+        """A manual extraction starts a new review cycle, with the usual publication gate."""
+        old = await self.ensure_active_attempt(snapshot)
+        old.status = "superseded"
+        await self._session.execute(update(MemoryExtractionCandidate).where(
+            MemoryExtractionCandidate.attempt_id == old.id,
+            MemoryExtractionCandidate.resolution_status.in_(("extracted", "needs_review", "conflict")),
+        ).values(resolution_status="stale"))
+        await self._session.execute(update(MemoryScopeProposal).where(
+            MemoryScopeProposal.attempt_id == old.id,
+            MemoryScopeProposal.status.in_(("awaiting_term", "needs_review")),
+        ).values(status="superseded"))
+        number = await self._session.scalar(select(func.max(DocumentMemoryExtractionAttempt.attempt_number)).where(
+            DocumentMemoryExtractionAttempt.snapshot_id == snapshot.id,
+        )) or 0
+        attempt = DocumentMemoryExtractionAttempt(snapshot_id=snapshot.id, attempt_number=number + 1)
+        self._session.add(attempt)
+        await self._session.flush()
+        snapshot.active_attempt_id = attempt.id
+        snapshot.trace_run_id = attempt.trace_run_id
+        snapshot.status = "queued"
+        snapshot.metrics = {key: value for key, value in dict(snapshot.metrics or {}).items()
+                            if key not in {"next_section", "stop_reason", "error_type", "failed_cursor",
+                                           "last_batch", "candidates", "ready_at", "screening", "manual_request_id"}}
+        snapshot.metrics = {**snapshot.metrics, "next_section": 0}
+        return attempt
+
     async def lock_active_attempt(self, snapshot_id: UUID) -> tuple[DocumentMemorySnapshot, DocumentMemoryExtractionAttempt]:
         # Serialize mutations of a document attempt, including provider failure
         # paths. Refresh the identity map before reading the guard fields.
@@ -714,10 +741,11 @@ class ShadowDocumentStudyService:
         candidates = list((await self._session.execute(select(MemoryExtractionCandidate).where(
             MemoryExtractionCandidate.snapshot_id == snapshot.id,
             MemoryExtractionCandidate.attempt_id == attempt.id if attempt else MemoryExtractionCandidate.attempt_id.is_(None),
-            MemoryExtractionCandidate.resolution_status == "extracted",
+            MemoryExtractionCandidate.resolution_status.in_(("extracted", "needs_review", "conflict")),
         ))).scalars().all())
         for candidate in candidates:
-            candidate.resolution_status = "needs_review"
+            if candidate.resolution_status == "extracted":
+                candidate.resolution_status = "needs_review"
         snapshot.status = "conflict_checking"
         snapshot.metrics = {**dict(snapshot.metrics or {}), "candidates": len(candidates), "ready_at": datetime.now(timezone.utc).isoformat()}
         return {"candidates": len(candidates)}

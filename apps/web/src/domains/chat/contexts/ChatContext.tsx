@@ -1,11 +1,18 @@
-import React, { createContext, useContext, useState, useCallback, useRef, ReactNode, useMemo } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useRef,
+  ReactNode,
+  useMemo,
+} from 'react';
 import { useChats } from '@shared/api/hooks/useChats';
-import { useQueryClient } from '@tanstack/react-query';
-import type { Chat, ChatMessage } from '@shared/api/types';
-import { qk } from '@/shared/api/keys';
-import { consumeSse } from '@/shared/api/sse';
+import type { Chat } from '@shared/api/types';
 import type { ChatPausedRun } from '@/shared/api/chats';
-import type { ActiveChatRun, ChatAttachmentRef, ChatMessageMeta, ChatRagSource, ChatRuntimeProgress, ChatTimelineMessage } from '../types';
+import type { ActiveChatRun, ChatTimelineMessage } from '../types';
+import { toRenderableMessage } from '../chatMessages';
+import { useChatStreaming } from '../hooks/useChatStreaming';
 
 type Message = ChatTimelineMessage;
 
@@ -36,7 +43,10 @@ interface ResumePausedState {
 interface ChatState {
   chatsOrder: string[];
   chatsById: Record<string, Chat>;
-  messagesByChat: Record<string, { items: Message[]; loading: boolean; loaded?: boolean }>;
+  messagesByChat: Record<
+    string,
+    { items: Message[]; loading: boolean; loaded?: boolean }
+  >;
   error: string | null;
   isLoading: boolean;
   activeRun: ActiveChatRun | null;
@@ -71,145 +81,113 @@ interface ChatActions {
     action: 'confirm' | 'cancel' | 'input',
     input: string,
     onChunk: (chunk: string) => void,
-    onError: (error: string) => void,
+    onError: (error: string) => void
   ) => Promise<boolean>;
 }
 
 const ChatActionsContext = createContext<ChatActions | null>(null);
-const ChatMessagesStateContext = createContext<
-  Pick<
-    ChatState,
-    | "messagesByChat"
-    | "activeRun"
-    | "pendingConfirmations"
-    | "pendingInput"
-    | "pausedRunId"
-    | "isStreaming"
-    | "isLoading"
-  > | null
->(null);
-const ChatCatalogStateContext = createContext<
-  Pick<ChatState, "chatsOrder" | "chatsById" | "messagesByChat"> | null
->(null);
-
-function toAttachments(value: unknown): ChatAttachmentRef[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const raw = item as Record<string, unknown>;
-    const artifactId = typeof raw.artifact_id === 'string' ? raw.artifact_id : '';
-    const fileName = typeof raw.file_name === 'string' ? raw.file_name : '';
-    if (!artifactId || !fileName) return [];
-    return [{
-      artifactId,
-      fileName,
-      downloadUrl: typeof raw.download_url === 'string' ? raw.download_url : undefined,
-      contentType: typeof raw.content_type === 'string' ? raw.content_type : undefined,
-      sizeBytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : undefined,
-    }];
-  });
-}
-
-function toRagSources(value: unknown): ChatRagSource[] {
-  return Array.isArray(value) ? value.filter((item): item is ChatRagSource => !!item && typeof item === 'object') : [];
-}
-
-function toMessageMeta(value: unknown): ChatMessageMeta | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const raw = value as Record<string, unknown>;
-  const meta: ChatMessageMeta = {
-    attachments: toAttachments(raw.attachments),
-    ragSources: toRagSources(raw.rag_sources),
-    runtimeRunId: typeof raw.runtime_run_id === 'string' ? raw.runtime_run_id : undefined,
-  };
-  return meta.attachments?.length || meta.ragSources?.length || meta.runtimeRunId ? meta : undefined;
-}
-
-function toRenderableMessage(message: ChatMessage): Message | null {
-  if (message.role !== 'user' && message.role !== 'assistant') {
-    return null;
-  }
-  return {
-    id: message.id,
-    role: message.role,
-    content: typeof message.content === 'string' ? message.content : String(message.content ?? ''),
-    createdAt: message.created_at ?? new Date().toISOString(),
-    meta: toMessageMeta(message.meta),
-  };
-}
-
-function toRuntimeProgress(value: unknown): ChatRuntimeProgress | null {
-  if (!value || typeof value !== 'object') return null;
-  const raw = value as Record<string, unknown>;
-  const description = typeof raw.description === 'string' ? raw.description.trim() : '';
-  if (!description) return null;
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    runId: typeof raw.run_id === 'string' ? raw.run_id : '',
-    phase: typeof raw.phase === 'string' ? raw.phase : '',
-    kind: typeof raw.kind === 'string' ? raw.kind : '',
-    description,
-    status: typeof raw.status === 'string' ? raw.status : undefined,
-    createdAt: new Date().toISOString(),
-  };
-}
-
-function appendRuntimeProgress(current: ChatRuntimeProgress[], progress: ChatRuntimeProgress) {
-  return current.at(-1)?.description === progress.description ? current : [...current, progress].slice(-10);
-}
+const ChatMessagesStateContext = createContext<Pick<
+  ChatState,
+  | 'messagesByChat'
+  | 'activeRun'
+  | 'pendingConfirmations'
+  | 'pendingInput'
+  | 'pausedRunId'
+  | 'isStreaming'
+  | 'isLoading'
+> | null>(null);
+const ChatCatalogStateContext = createContext<Pick<
+  ChatState,
+  'chatsOrder' | 'chatsById' | 'messagesByChat'
+> | null>(null);
 
 export function ChatProvider({ children }: { children: ReactNode }) {
-  const [messagesByChat, setMessagesByChat] = useState<Record<string, { items: Message[]; loading: boolean; loaded?: boolean }>>({});
+  const [messagesByChat, setMessagesByChat] = useState<
+    Record<string, { items: Message[]; loading: boolean; loaded?: boolean }>
+  >({});
   const [activeRun, setActiveRun] = useState<ActiveChatRun | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [pendingConfirmations, setPendingConfirmations] = useState<PendingConfirmation[]>([]);
-  const [pendingConfirmationTokens, setPendingConfirmationTokens] = useState<string[]>([]);
+  const [pendingConfirmations, setPendingConfirmations] = useState<
+    PendingConfirmation[]
+  >([]);
+  const [, setPendingConfirmationTokens] = useState<string[]>([]);
   const [pendingInput, setPendingInput] = useState<PendingInput | null>(null);
-  const [stopReason, setStopReason] = useState<string | null>(null);
+  const [, setStopReason] = useState<string | null>(null);
   const [pausedRunId, setPausedRunId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const pauseLookupVersionRef = useRef(0);
+  const historyVersionsRef = useRef<Record<string, number>>({});
+  const historyRequestsRef = useRef<Record<string, number>>({});
+  const invalidateHistory = useCallback((chatId: string) => {
+    historyVersionsRef.current[chatId] =
+      (historyVersionsRef.current[chatId] || 0) + 1;
+  }, []);
 
   const { data: chats } = useChats();
-  const queryClient = useQueryClient();
   const chatItems = chats?.items ?? [];
-  const chatsOrder = chatItems.map((chat) => chat.id);
+  const chatsOrder = chatItems.map(chat => chat.id);
   const chatsById = chatItems.reduce<Record<string, Chat>>((acc, chat) => {
     acc[chat.id] = chat;
     return acc;
   }, {});
 
   const loadMessages = useCallback(async (chatId: string) => {
+    const streamVersion = historyVersionsRef.current[chatId] || 0;
+    const requestVersion = (historyRequestsRef.current[chatId] || 0) + 1;
+    historyRequestsRef.current[chatId] = requestVersion;
     setIsLoading(true);
     setError(null);
     try {
       const chatsApi = await import('@shared/api/chats');
       const resp = await chatsApi.listMessages(chatId, 100);
+      if (historyRequestsRef.current[chatId] !== requestVersion) return;
       const items = Array.isArray(resp?.items)
         ? resp.items
-            .map((item) => toRenderableMessage(item))
+            .map(item => toRenderableMessage(item))
             .filter((item): item is Message => item !== null)
         : [];
-      setMessagesByChat(prev => ({
-        ...prev,
-        [chatId]: { items, loading: false, loaded: true }
-      }));
+      setMessagesByChat(prev => {
+        // Restore older history while retaining messages received since this
+        // request started. A later canonical reload replaces optimistic rows.
+        const hasNewStream =
+          (historyVersionsRef.current[chatId] || 0) !== streamVersion;
+        const merged = hasNewStream
+          ? [
+              ...new Map(
+                [...items, ...(prev[chatId]?.items || [])].map(item => [
+                  item.id,
+                  item,
+                ])
+              ).values(),
+            ]
+          : items;
+        return {
+          ...prev,
+          [chatId]: { items: merged, loading: false, loaded: true },
+        };
+      });
     } catch (err: unknown) {
+      if (historyRequestsRef.current[chatId] !== requestVersion) return;
       setMessagesByChat(prev => ({
         ...prev,
-        [chatId]: { items: [], loading: false, loaded: true }
+        [chatId]: {
+          ...prev[chatId],
+          items: prev[chatId]?.items || [],
+          loading: false,
+          loaded: true,
+        },
       }));
-      setError(err instanceof Error ? err.message : 'Ошибка загрузки сообщений');
+      setError(
+        err instanceof Error ? err.message : 'Ошибка загрузки сообщений'
+      );
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  const setCurrentChat = useCallback((_chatId: string) => {}, []);
-
   const clearPausedInteraction = useCallback(() => {
+    pauseLookupVersionRef.current += 1;
     setPendingConfirmations([]);
     setPendingConfirmationTokens([]);
     setPendingInput(null);
@@ -222,24 +200,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setActiveRun(null);
   }, [clearPausedInteraction]);
 
-  const abortStream = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setIsStreaming(false);
-  }, []);
-
   const applyPausedState = useCallback((resumeState: ResumePausedState) => {
     const reason = (resumeState.reason || '').trim() || 'paused';
     const question = (resumeState.question || '').trim();
     const message = (resumeState.message || '').trim();
     const runId = (resumeState.runId || '').trim();
     const action = resumeState.action || {};
-    const actionQuestion = typeof action.question === 'string' ? action.question.trim() : '';
-    const actionMessage = typeof action.message === 'string' ? action.message.trim() : '';
-    const actionSummary = typeof action.summary === 'string' ? action.summary.trim() : '';
-    const interactionQuestion = question || message || actionQuestion || actionMessage || actionSummary;
+    const actionQuestion =
+      typeof action.question === 'string' ? action.question.trim() : '';
+    const actionMessage =
+      typeof action.message === 'string' ? action.message.trim() : '';
+    const actionSummary =
+      typeof action.summary === 'string' ? action.summary.trim() : '';
+    const interactionQuestion =
+      question || message || actionQuestion || actionMessage || actionSummary;
 
     // The public pause contract admits only explicit HITL states. Be
     // defensive for historical/buggy streams: a terminal failure must never
@@ -256,18 +230,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setPausedRunId(runId || null);
 
     if (reason === 'waiting_confirmation') {
-      setPendingConfirmations([{
-        operationFingerprint: String(action.operation_fingerprint || ''),
-        toolSlug: String(action.tool_slug || ''),
-        operation: String(action.operation || ''),
-        riskLevel: String(action.risk_level || 'write'),
-        argsPreview: String(action.args_preview || ''),
-        question: interactionQuestion || 'Подтвердите действие',
-        summary: actionSummary || message || actionMessage || '',
-        runId: runId || null,
-      }]);
+      setPendingConfirmations([
+        {
+          operationFingerprint: String(action.operation_fingerprint || ''),
+          toolSlug: String(action.tool_slug || ''),
+          operation: String(action.operation || ''),
+          riskLevel: String(action.risk_level || 'write'),
+          argsPreview: String(action.args_preview || ''),
+          question: interactionQuestion || 'Подтвердите действие',
+          summary: actionSummary || message || actionMessage || '',
+          runId: runId || null,
+        },
+      ]);
       setPendingInput(null);
-      setActiveRun((current) => current ? { ...current, runId: runId || current.runId, status: 'waiting_confirmation' } : current);
+      setActiveRun(current =>
+        current
+          ? {
+              ...current,
+              runId: runId || current.runId,
+              status: 'waiting_confirmation',
+            }
+          : current
+      );
       return;
     }
 
@@ -276,513 +260,60 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       question: interactionQuestion || undefined,
       reason,
     });
-    setActiveRun((current) => current ? { ...current, runId: runId || current.runId, status: 'waiting_input' } : current);
+    setActiveRun(current =>
+      current
+        ? { ...current, runId: runId || current.runId, status: 'waiting_input' }
+        : current
+    );
   }, []);
 
-  const loadPausedRun = useCallback(async (chatId: string) => {
-    const lookupVersion = ++pauseLookupVersionRef.current;
-    try {
-      const { getPausedRun } = await import('@shared/api/chats');
-      const response = await getPausedRun(chatId);
-      if (lookupVersion !== pauseLookupVersionRef.current) return;
-      const pause: ChatPausedRun | null | undefined = response?.pause;
-      if (!pause) {
-        clearPausedInteraction();
-        return;
-      }
-      applyPausedState({
-        runId: pause.run_id,
-        reason: pause.reason,
-        question: typeof pause.context?.question === 'string' ? pause.context.question : undefined,
-        message: typeof pause.context?.message === 'string' ? pause.context.message : undefined,
-        action: pause.action,
-      });
-    } catch (err) {
-      // A paused run is supplementary UI state. Message history remains usable
-      // if it expires between the page load and this lookup.
-      console.warn('Failed to restore paused chat run', err);
-    }
-  }, [applyPausedState, clearPausedInteraction]);
-
-  const sendMessageStream = useCallback(async (
-    chatId: string,
-    message: string,
-    useRag: boolean,
-    onChunk: (chunk: string) => void,
-    onError: (error: string) => void,
-    agentSlug?: string,
-    artifactIds?: string[],
-    attachmentMeta?: unknown[],
-    confirmationTokens?: string[]
-  ) => {
-    try {
-      setError(null);
-      setPendingConfirmations([]);
-      setPendingInput(null);
-      setStopReason(null);
-      setPausedRunId(null);
-      setActiveRun(null);
-      if (confirmationTokens?.length) {
-        setPendingConfirmationTokens((prev) => {
-          const merged = [...prev, ...confirmationTokens];
-          return Array.from(new Set(merged.filter(Boolean)));
-        });
-      }
-
-      // 1. Optimistically add user message to local state
-      const tempUserId = `temp-user-${Date.now()}`;
-      const userMessage: Message = {
-        id: tempUserId,
-        role: 'user',
-        content: message,
-        createdAt: new Date().toISOString(),
-        isOptimistic: true,
-        meta: attachmentMeta?.length ? { attachments: toAttachments(attachmentMeta) } : undefined,
-      };
-
-      setMessagesByChat(prev => {
-        const current = prev[chatId] || { items: [], loading: false, loaded: true };
-        return {
-          ...prev,
-          [chatId]: {
-            ...current,
-            items: [...current.items, userMessage]
-          }
-        };
-      });
-
-      // 2. Create empty assistant message placeholder
-      const tempAssistantId = `temp-assistant-${Date.now()}`;
-      const assistantMessage: Message = {
-        id: tempAssistantId,
-        role: 'assistant',
-        content: '',
-        createdAt: new Date().toISOString(),
-        isOptimistic: true
-      };
-
-      setMessagesByChat(prev => {
-        const current = prev[chatId] || { items: [], loading: false, loaded: true };
-        return {
-          ...prev,
-          [chatId]: {
-            ...current,
-            items: [...current.items, assistantMessage]
-          }
-        };
-      });
-
-      setActiveRun({
-        userMessageId: tempUserId,
-        assistantMessageId: tempAssistantId,
-        progress: [],
-        status: 'running',
-      });
-
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-      setIsStreaming(true);
-
-      const { fetchStreamWithAuth } = await import('@shared/api/streamAuth');
-      const response = await fetchStreamWithAuth(`/chats/${chatId}/messages`, {
-        signal: controller.signal,
-        body: {
-          content: message,
-          use_rag: useRag,
-          agent_slug: agentSlug,
-          execution_mode: 'normal',
-          artifact_ids: artifactIds ?? [],
-          confirmation_tokens: confirmationTokens ?? [],
-        },
-      });
-
-      if (!response.ok || !response.body) {
-        // Try to extract backend error details
-        let reason = 'Ошибка отправки сообщения';
-        try {
-          const text = await response.text();
-          try {
-            const j = JSON.parse(text);
-            reason = (j && (j.detail || j.error)) || reason;
-          } catch {
-            reason = text || reason;
-          }
-        } catch {}
-        throw new Error(reason);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      let buffer = '';
-      let assistantContent = '';
-      let pendingRenderedContent = '';
-      let flushTimer: ReturnType<typeof setTimeout> | null = null;
-      let realUserId: string | null = null;
-      let realAssistantId: string | null = null;
-      let paused = false;
-
-      const flushAssistantContent = () => {
-        setMessagesByChat(prev => {
-          const current = prev[chatId];
-          if (!current) return prev;
-          return {
-            ...prev,
-            [chatId]: {
-              ...current,
-              items: current.items.map(m =>
-                m.id === tempAssistantId ? { ...m, content: pendingRenderedContent } : m
-              )
-            }
-          };
-        });
-      };
-
-      const scheduleFlush = () => {
-        if (flushTimer) return;
-        flushTimer = setTimeout(() => {
-          flushTimer = null;
-          flushAssistantContent();
-        }, 40);
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        let sepIdx;
-        while ((sepIdx = buffer.indexOf('\n\n')) !== -1) {
-          const rawEvent = buffer.slice(0, sepIdx);
-          buffer = buffer.slice(sepIdx + 2);
-
-          const lines = rawEvent.split('\n');
-          const eventLine = lines.find(l => l.startsWith('event:')) || '';
-          const dataLines = lines.filter(l => l.startsWith('data:'));
-
-          const eventType = eventLine.replace('event:', '').trim();
-          // Join multiple data: lines with a newline per SSE spec, preserving whitespace
-          const data = dataLines
-            .map(dl => {
-              let val = dl.slice(5);
-              if (val.startsWith(' ')) val = val.slice(1);
-              return val;
-            })
-            .join('\n');
-
-          if (data === '[DONE]') {
-            buffer = '';
-            break;
-          }
-
-          if (eventType === 'user_message') {
-            try {
-              const parsed = JSON.parse(data);
-              realUserId = parsed.message_id;
-              const userCreatedAt = parsed.created_at;
-              setActiveRun((current) => current?.userMessageId === tempUserId ? { ...current, userMessageId: realUserId! } : current);
-              // Update temp user message with real ID and created_at from backend
-              setMessagesByChat(prev => {
-                const current = prev[chatId];
-                if (!current) return prev;
-                return {
-                  ...prev,
-                  [chatId]: {
-                    ...current,
-                    items: current.items.map(m =>
-                      m.id === tempUserId ? { 
-                        ...m, 
-                        id: realUserId!, 
-                        createdAt: userCreatedAt || m.createdAt,
-                        isOptimistic: false 
-                      } : m
-                    )
-                  }
-                };
-              });
-            } catch (e) {
-              console.error('Failed to parse user_message event', e);
-            }
-          }
-          // Runtime progress is the only safe execution detail exposed to chat.
-          else if (eventType === 'status') {
-            try {
-              const parsed = JSON.parse(data) as { stage?: unknown; progress?: Record<string, unknown> };
-              if (parsed.stage !== 'runtime_progress' || !parsed.progress) continue;
-              const progress = toRuntimeProgress(parsed.progress);
-              if (progress) {
-                setActiveRun((current) => current ? {
-                  ...current,
-                  runId: progress.runId || current.runId,
-                  progress: appendRuntimeProgress(current.progress, progress),
-                } : current);
-              }
-            } catch {
-              // Ignore malformed status frames.
-            }
-          }
-          // Handle delta events
-          else if (eventType === 'delta') {
-            assistantContent += data;
-            pendingRenderedContent = assistantContent;
-            scheduleFlush();
-            onChunk(assistantContent);
-          }
-          // Handle final event
-          else if (eventType === 'final') {
-            try {
-              const parsed = JSON.parse(data);
-              realAssistantId = typeof parsed.message_id === 'string' ? parsed.message_id : realAssistantId;
-              const assistantCreatedAt = parsed.created_at;
-              // Update sources if present in final event
-              const finalSources = parsed.sources;
-              const finalAttachments = Array.isArray(parsed.attachments) ? parsed.attachments : undefined;
-              // Update temp assistant message with real ID, created_at and sources
-              if (flushTimer) {
-                clearTimeout(flushTimer);
-                flushTimer = null;
-              }
-              // A non-streaming provider legitimately emits only FINAL. Do
-              // not discard its content merely because no delta was seen.
-              const finalContent = typeof parsed.content === 'string' ? parsed.content : assistantContent;
-              assistantContent = finalContent || assistantContent;
-              pendingRenderedContent = assistantContent;
-              flushAssistantContent();
-              setActiveRun((current) => current?.assistantMessageId === tempAssistantId
-                ? { ...current, assistantMessageId: realAssistantId || current.assistantMessageId }
-                : current);
-              setMessagesByChat(prev => {
-                const current = prev[chatId];
-                if (!current) return prev;
-                return {
-                  ...prev,
-                  [chatId]: {
-                    ...current,
-                    items: current.items.map(m =>
-                      m.id === tempAssistantId ? { 
-                        ...m, 
-                        id: realAssistantId || m.id,
-                        createdAt: assistantCreatedAt || m.createdAt,
-                        isOptimistic: false,
-                        meta: {
-                          ragSources: toRagSources(finalSources),
-                          attachments: toAttachments(finalAttachments),
-                        }
-                      } : m
-                    )
-                  }
-                };
-              });
-              // Title generation is intentionally a separate, non-blocking
-              // metadata request. It starts only after the first completed
-              // response and never extends this chat run's SSE lifecycle.
-              void import('@shared/api/chats').then(({ generateChatTitle }) =>
-                generateChatTitle(chatId).then((result) => {
-                  if (!result.generated || !result.title) return;
-                  queryClient.setQueriesData(
-                    { queryKey: qk.chats.all() },
-                    (oldData: unknown) => {
-                      if (!oldData || typeof oldData !== 'object') return oldData;
-                      const typed = oldData as { items?: Array<Record<string, unknown>> };
-                      if (!Array.isArray(typed.items)) return oldData;
-                      return {
-                        ...typed,
-                        items: typed.items.map((chat) =>
-                          chat.id === chatId ? { ...chat, name: result.title } : chat
-                        ),
-                      };
-                    },
-                  );
-                }).catch(() => undefined),
-              );
-            } catch (e) {
-              console.error('Failed to parse final event', e);
-            }
-          }
-          else if (eventType === 'cached') {
-            // Idempotent retries do not replay a delta stream. Reload the
-            // persisted pair so the optimistic blank assistant card cannot
-            // replace an already completed answer.
-            void loadMessages(chatId);
-            setActiveRun(null);
-          }
-          // `pause` is the only public pause event in the current contract.
-          else if (eventType === 'pause') {
-            try {
-              const parsed = JSON.parse(data) as Record<string, unknown>;
-              const context = parsed.context && typeof parsed.context === 'object'
-                ? parsed.context as Record<string, unknown>
-                : {};
-              applyPausedState({
-                runId: typeof parsed.run_id === 'string' ? parsed.run_id : null,
-                reason: typeof parsed.reason === 'string' ? parsed.reason : 'paused',
-                question: typeof context.question === 'string' ? context.question : undefined,
-                message: typeof context.message === 'string' ? context.message : undefined,
-                action: parsed.action && typeof parsed.action === 'object' ? parsed.action as Record<string, unknown> : {},
-              });
-              paused = true;
-            } catch {
-              onError('Некорректное событие паузы');
-            }
-          }
-          // Handle error events
-          else if (eventType === 'error') {
-            try {
-              const parsed = JSON.parse(data);
-              const errorMessage = String(parsed?.error || data || 'Ошибка');
-              const errorCode = String(parsed?.code || '').trim();
-              // Error must unblock the chat input.
-              setPendingConfirmations([]);
-              setPendingInput(null);
-              setStopReason(null);
-              setPausedRunId(null);
-              if (errorCode) {
-                onError(`${errorCode}: ${errorMessage}`);
-              } else {
-                onError(errorMessage);
-              }
-            } catch {
-              setPendingConfirmations([]);
-              setPendingInput(null);
-              setStopReason(null);
-              setPausedRunId(null);
-              onError(data);
-            }
-          }
-        }
-      }
-
-      // Progress is live-only. Keep it while this run is paused so the
-      // assistant card remains the stable place for the user interaction.
-      if (!paused) setActiveRun(null);
-      setPendingConfirmationTokens([]);
-      if (flushTimer) {
-        clearTimeout(flushTimer);
-      }
-      
-    } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        // User stopped generation — not an error
-        setActiveRun(null);
-        setPendingConfirmations([]);
-        setPendingInput(null);
-      } else {
-        const errorMsg = err instanceof Error ? err.message : 'Ошибка отправки сообщения';
-        setError(errorMsg);
-        onError(errorMsg);
-        setPendingConfirmations([]);
-        setPendingInput(null);
-        setStopReason(null);
-        setPausedRunId(null);
-        setActiveRun(null);
-      }
-    } finally {
-      setIsStreaming(false);
-      abortControllerRef.current = null;
-    }
-  }, [applyPausedState, loadMessages, queryClient]);
-
-  const resumeStream = useCallback(async (
-    runId: string,
-    action: 'confirm' | 'cancel' | 'input',
-    input: string,
-    onChunk: (chunk: string) => void,
-    onError: (error: string) => void,
-  ) => {
-    if (!runId) {
-      onError('Run ID is required');
-      return false;
-    }
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    setError(null);
-    setIsStreaming(true);
-    setActiveRun((current) => current ? { ...current, runId, status: 'running' } : current);
-    let pausedAgain = false;
-    let completed = false;
-
-    try {
-      const { resumeRunStream } = await import('@shared/api/chats');
-      const response = await resumeRunStream(runId, action, input || '', controller.signal);
-
-      if (!response.ok || !response.body) {
-        let reason = 'Ошибка возобновления';
-        try {
-          const text = await response.text();
-          try {
-            const j = JSON.parse(text);
-            reason = (j && (j.detail || j.error)) || reason;
-          } catch {
-            reason = text || reason;
-          }
-        } catch {}
-        throw new Error(reason);
-      }
-
-      // The server has atomically moved the turn out of paused state before
-      // opening this stream. Remove the old interaction immediately instead
-      // of waiting for its terminal SSE frame; a new pause will re-apply it.
-      pauseLookupVersionRef.current += 1;
-      clearPausedInteraction();
-
-      await consumeSse(response, ({ event, data }) => {
-        if (data === '[DONE]' || event === 'done') {
-          if (!pausedAgain) clearPendingState();
+  const loadPausedRun = useCallback(
+    async (chatId: string) => {
+      const lookupVersion = ++pauseLookupVersionRef.current;
+      try {
+        const { getPausedRun } = await import('@shared/api/chats');
+        const response = await getPausedRun(chatId);
+        if (lookupVersion !== pauseLookupVersionRef.current) return;
+        const pause: ChatPausedRun | null | undefined = response?.pause;
+        if (!pause) {
+          clearPausedInteraction();
           return;
         }
-        if (event === 'delta') {
-          onChunk(data);
-          return;
-        }
-        if (event === 'final') {
-          completed = true;
-          return;
-        }
-        if (event === 'status') {
-          const payload = JSON.parse(data) as { stage?: unknown; progress?: unknown };
-          if (payload.stage !== 'runtime_progress') return;
-          const progress = toRuntimeProgress(payload.progress);
-          if (!progress) return;
-          setActiveRun((current) => current ? {
-            ...current,
-            runId: progress.runId || current.runId,
-            progress: appendRuntimeProgress(current.progress, progress),
-          } : current);
-          return;
-        }
-        if (event === 'error') {
-          const payload = JSON.parse(data) as { error?: unknown };
-          throw new Error(typeof payload.error === 'string' ? payload.error : 'Ошибка возобновления');
-        }
-        if (event !== 'pause') return;
-        const payload = JSON.parse(data) as Record<string, unknown>;
-        const context = payload.context && typeof payload.context === 'object' ? payload.context as Record<string, unknown> : {};
         applyPausedState({
-          runId: typeof payload.run_id === 'string' ? payload.run_id : null,
-          reason: typeof payload.reason === 'string' ? payload.reason : 'paused',
-          question: typeof context.question === 'string' ? context.question : undefined,
-          message: typeof context.message === 'string' ? context.message : undefined,
-          action: payload.action && typeof payload.action === 'object' ? payload.action as Record<string, unknown> : {},
+          runId: pause.run_id,
+          reason: pause.reason,
+          question:
+            typeof pause.context?.question === 'string'
+              ? pause.context.question
+              : undefined,
+          message:
+            typeof pause.context?.message === 'string'
+              ? pause.context.message
+              : undefined,
+          action: pause.action,
         });
-        pausedAgain = true;
-      });
-      return completed || pausedAgain || action === 'cancel';
-    } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        setActiveRun(null);
-      } else {
-        const errorMsg = err instanceof Error ? err.message : 'Ошибка возобновления';
-        setError(errorMsg);
-        onError(errorMsg);
+      } catch (err) {
+        // A paused run is supplementary UI state. Message history remains usable
+        // if it expires between the page load and this lookup.
+        console.warn('Failed to restore paused chat run', err);
       }
-      return false;
-    } finally {
-      setIsStreaming(false);
-      abortControllerRef.current = null;
-    }
-  }, [applyPausedState, clearPausedInteraction, clearPendingState]);
+    },
+    [applyPausedState, clearPausedInteraction]
+  );
+
+  const { abortStream, setCurrentChat, sendMessageStream, resumeStream } =
+    useChatStreaming({
+      activeRun,
+      setActiveRun,
+      setMessagesByChat,
+      setIsStreaming,
+      setError,
+      clearPendingState,
+      clearPausedInteraction,
+      applyPausedState,
+      loadMessages,
+      invalidateHistory,
+    });
 
   const actionsValue = useMemo<ChatActions>(
     () => ({
@@ -795,7 +326,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sendMessageStream,
       resumeStream,
     }),
-    [loadMessages, setCurrentChat, clearPendingState, applyPausedState, loadPausedRun, abortStream, sendMessageStream, resumeStream]
+    [
+      loadMessages,
+      setCurrentChat,
+      clearPendingState,
+      applyPausedState,
+      loadPausedRun,
+      abortStream,
+      sendMessageStream,
+      resumeStream,
+    ]
   );
   const messagesStateValue = useMemo(
     () => ({

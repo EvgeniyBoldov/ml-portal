@@ -572,3 +572,36 @@ describe('executor memory snapshots', () => {
     expect(memoryContextFromTool(planner.calls[0])?.context).toEqual([{ type: 'fact', scope: 'tenant', subject: 'region', value: 'msk' }]);
   });
 });
+
+describe('HippoRAG memory inspection', () => {
+  it('shows native passages in tool response and secretary memory without a duplicate tool memory tab', () => {
+    const items = [{ kind: 'document_passage', subject: 'Регламент', text: 'Перед работами согласовать окно.', score: 0.9,
+      source_references: [{ document_id: 'doc-1', filename: 'reglament.md' }] }];
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'secretary-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'secretary' }),
+      event(4, 'status', { entity_type: 'agent_execution', entity_id: 'secretary-1', stage: 'memory_context_used', memory_context: [{ scope: 'user', subject: 'language', value: 'ru' }] }),
+      event(5, 'tool_call', { entity_type: 'tool_call', entity_id: 'memory-call', parent_entity_type: 'agent_execution', parent_entity_id: 'secretary-1', tool: 'memory.search', call_id: 'memory-call' }),
+      event(6, 'tool_result', { entity_type: 'tool_call', entity_id: 'memory-call', parent_entity_type: 'agent_execution', parent_entity_id: 'secretary-1', tool: 'memory.search', success: true,
+        data: { backend: 'hipporag', items, count: 1, memory_context: { type: 'memory_recall', relevant_knowledge: items } } }),
+    ]);
+    const secretary = projectTraceStages(state)[0].steps[0].executorRuns[0];
+    expect(secretary.memoryContext?.selectedFacts).toBe(1);
+    expect(secretary.memoryContext?.selectedMemoryItems).toBe(1);
+    expect(secretary.memoryContext?.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'knowledge', value: items[0].text, sourceReferences: [expect.objectContaining({ filename: 'reglament.md' })] }),
+    ]));
+    const call = secretary.calls[0];
+    expect(memoryContextFromTool(call)?.selectedMemoryItems).toBe(1);
+    const target = resolveTraceInspectionTarget(state, call.entity.key);
+    expect(target?.tabs.map(tab => tab.id)).toContain('response');
+    expect(target?.tabs.map(tab => tab.id)).not.toContain('memory');
+  });
+
+  it('uses native source metadata when a passage has no subject', () => {
+    const memory = memoryContextFromPayload({ memory_context: { items: [{ text: 'Сделать резервную копию',
+      metadata: { filename: 'backup.md', source_refs: [{ document_id: 'doc-2' }] } }] } });
+    expect(memory.context[0]).toMatchObject({ type: 'knowledge', subject: 'backup.md', value: 'Сделать резервную копию', sourceReferences: [{ document_id: 'doc-2' }] });
+  });
+});

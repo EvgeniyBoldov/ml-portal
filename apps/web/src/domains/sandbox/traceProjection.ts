@@ -526,7 +526,7 @@ export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[
   }
   if (target.kind === 'error') return [tab('info', 'Инфо'), tab('error', 'Ошибка'), tab('raw', 'RAW')];
   const hasError = callHasError(target.call);
-  return [tab('info', 'Инфо'), tab('request', 'Запрос'), ...(memoryContextFromTool(target.call) ? [tab('memory', 'Память')] : []), ...(hasError ? [tab('error', 'Ошибка')] : target.call.responseView ? [tab('response', 'Ответ')] : []), tab('raw', 'RAW')];
+  return [tab('info', 'Инфо'), tab('request', 'Запрос'), ...(target.call.requestView.toolName !== 'memory.search' && memoryContextFromTool(target.call) ? [tab('memory', 'Память')] : []), ...(hasError ? [tab('error', 'Ошибка')] : target.call.responseView ? [tab('response', 'Ответ')] : []), tab('raw', 'RAW')];
 }
 
 export function withTraceInspectorTabs(target: TraceInspectionTarget): TraceInspectionTarget {
@@ -691,10 +691,11 @@ export function memoryContextFromPayload(payload: Record<string, unknown>): Trac
       return term ? [{ type: 'glossary', scope: asString(record?.scope) || 'global', term, description, aliases: stringArray(record?.aliases) }] : [];
     }
     if (['knowledge', 'company_knowledge', 'project_knowledge'].includes(type)) {
-      const subject = asString(record?.subject);
+      const source = asRecord(record?.metadata);
+      const subject = asString(record?.subject) || asString(source?.document_title) || asString(source?.filename);
       const content = record?.content;
-      const value = asString(record?.value) || (content ? JSON.stringify(content) : '');
-      return subject && value ? [{ type: 'knowledge', scope: asString(record?.scope) || 'unknown', kind: asString(record?.kind) || 'knowledge', subject, value, confidence: asNumber(record?.confidence), sourceReferences: Array.isArray(record?.source_references) ? record.source_references : [], raw: record ?? undefined }] : [];
+      const value = asString(record?.text) || asString(record?.value) || (content ? JSON.stringify(content) : '');
+      return subject && value ? [{ type: 'knowledge', scope: asString(record?.scope) || 'unknown', kind: asString(record?.kind) || 'knowledge', subject, value, confidence: asNumber(record?.confidence), sourceReferences: Array.isArray(record?.source_references) ? record.source_references : Array.isArray(source?.source_refs) ? source.source_refs : [], raw: record ?? undefined }] : [];
     }
     return [];
   });

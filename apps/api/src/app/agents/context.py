@@ -6,7 +6,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from datetime import datetime, timezone
 import uuid
 
@@ -219,11 +219,12 @@ class ToolResult:
     data: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    delivery: Literal["stored", "direct"] = "stored"
     
     @classmethod
-    def ok(cls, data: Dict[str, Any], **metadata) -> ToolResult:
+    def ok(cls, data: Dict[str, Any], *, delivery: Literal["stored", "direct"] = "stored", **metadata) -> ToolResult:
         """Успешный результат"""
-        return cls(success=True, data=data, metadata=metadata)
+        return cls(success=True, data=data, metadata=metadata, delivery=delivery)
     
     @classmethod
     def fail(cls, error: str, **metadata) -> ToolResult:

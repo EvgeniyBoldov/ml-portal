@@ -480,6 +480,7 @@ class RuntimeEvent:
         result_id: Optional[str] = None,
         result_inline_complete: Optional[bool] = None,
         result_source_complete: Optional[bool] = None,
+        result_delivery: Optional[str] = None,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {
             "entity_type": "tool_call",
@@ -538,6 +539,8 @@ class RuntimeEvent:
             payload["result_inline_complete"] = bool(result_inline_complete)
         if result_source_complete is not None:
             payload["result_source_complete"] = bool(result_source_complete)
+        if result_delivery is not None:
+            payload["result_delivery"] = result_delivery
         return cls(RuntimeEventType.TOOL_RESULT, payload)
 
     @classmethod

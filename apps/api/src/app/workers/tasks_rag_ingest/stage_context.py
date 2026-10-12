@@ -221,13 +221,13 @@ class IngestStageContext:
                     shadow = (await self.session.execute(
                         select(RAGIngestStageOutbox).where(
                             RAGIngestStageOutbox.run_id == self.run_id,
-                            RAGIngestStageOutbox.stage_key == "shadow",
+                            RAGIngestStageOutbox.stage_key == "hipporag",
                         )
                     )).scalar_one_or_none()
                     if shadow is None:
                         shadow = RAGIngestStageOutbox(
                             run_id=self.run_id,
-                            stage_key="shadow",
+                            stage_key="hipporag",
                             payload={"source_id": str(self.source_id)},
                             status="pending",
                         )

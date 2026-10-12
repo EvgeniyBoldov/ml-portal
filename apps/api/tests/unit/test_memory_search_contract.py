@@ -1,4 +1,13 @@
 from app.runtime.memory.search import _kinds_for_direction, _memory_context
+from app.runtime.memory.search_contract import MemorySearchInput
+from pydantic import ValidationError
+import pytest
+
+
+def test_memory_kinds_cannot_silently_filter_by_scope_names() -> None:
+    with pytest.raises(ValidationError):
+        MemorySearchInput(query="сети передачи данных", kinds=["project", "glossary"])
+    assert MemorySearchInput(query="сети", scopes=["project", "glossary"]).kinds == []
 
 
 def test_direction_narrows_memory_kinds_when_caller_did_not_supply_kinds() -> None:

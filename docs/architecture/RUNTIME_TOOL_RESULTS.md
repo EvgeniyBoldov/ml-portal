@@ -1,11 +1,20 @@
 # Runtime tool results and Data Workspace
 
 Tool results are temporary run-scoped datasets, not long-term Memory or prompt
-text. Successful payloads are redacted and always persisted in the dedicated
+text. Successful dataset payloads are redacted and persisted in the dedicated
 `postgres-tool-results` database, including empty and single-record responses.
 An opaque UUID `result_id`, deterministically derived from the run and initial
 tool call ID, identifies a dataset. Source pages append to that identity; SQL
 output creates a new dataset. The original call ID remains explicit metadata.
+
+`ToolResult.delivery` explicitly selects `stored` (the default) or `direct`.
+API collection/MCP datasets retain the default storage and normalization path.
+`memory.search`, `collection.doc_search` and `collection.list_documents` return `direct`: runtime redacts
+their payload and passes complete JSON to the model, trace and SSE without
+Result Store persistence, dataset descriptors, `result_id` or preview truncation.
+These tools bound their response through their own `limit` arguments; model
+context limits still apply. Successful direct calls retain `evidence_call_id`
+in the model message. The turn ledger preserves the delivery mode on reuse.
 
 ## Source protocol and normalization
 
@@ -147,7 +156,7 @@ metadata rather than losing it in an MCP transport round trip. Duplicate-call
 reuse retains the stored dataset reference and refreshes its descriptor instead
 of treating the descriptor as another source payload.
 
-Traces/SSE previews and model messages are separate projections. Traces contain
+For stored datasets, traces/SSE previews and model messages are separate projections. Traces contain
 metadata, revisions and references. The complete payload remains in the store.
 
 ## Agent response protocol v2

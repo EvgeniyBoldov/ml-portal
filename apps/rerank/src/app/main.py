@@ -1,12 +1,14 @@
 """
 Rerank Service - FastAPI service for CrossEncoder operations
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from sentence_transformers import CrossEncoder
 import os
 import json
 import logging
+import asyncio
+import time
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -19,6 +21,9 @@ MODEL_PATH = os.getenv("RERANK_MODEL_PATH", "/models_llm/cross-encoder--ms-marco
 MODEL_ALIAS = os.getenv("RERANK_MODEL_ALIAS", "cross-encoder-ms-marco-MiniLM-L-6-v2")
 MODEL_VERSION = os.getenv("RERANK_MODEL_VERSION", "1.0")
 MODEL_MAX_TOKENS = int(os.getenv("RERANK_MODEL_MAX_TOKENS", "512"))
+MODEL_BATCH_SIZE = max(1, int(os.getenv("RERANK_BATCH_SIZE", "4")))
+REQUEST_TIMEOUT_SECONDS = max(1, float(os.getenv("RERANK_REQUEST_TIMEOUT_SECONDS", "120")))
+inference_gate = asyncio.Semaphore(1)
 
 model = None
 manifest_data: Dict[str, Any] = {}
@@ -78,7 +83,7 @@ async def load_model():
             logger.warning(f"Model path {MODEL_PATH} does not exist. Reranker will not work.")
             return
             
-        model = CrossEncoder(MODEL_PATH)
+        model = CrossEncoder(MODEL_PATH, max_length=MODEL_MAX_TOKENS)
         hf_metadata = _load_hf_metadata(MODEL_PATH)
         manifest_path = os.path.join(MODEL_PATH, "manifest.json")
         if os.path.exists(manifest_path):
@@ -117,7 +122,7 @@ class ModelInfo(BaseModel):
     important_params: Dict[str, Any]
 
 @app.post("/rerank", response_model=RerankResponse)
-async def rerank(request: RerankRequest):
+async def rerank(request: RerankRequest, http_request: Request):
     if not model:
         raise HTTPException(status_code=503, detail="Model not loaded or not found")
     
@@ -125,8 +130,39 @@ async def rerank(request: RerankRequest):
         return {"results": []}
 
     try:
+        try:
+            timeout = max(0.001, float(http_request.headers.get("X-Request-Timeout-Seconds", REQUEST_TIMEOUT_SECONDS)))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid request timeout")
+        deadline = time.monotonic() + timeout
         pairs = [[request.query, doc] for doc in request.documents]
-        scores = model.predict(pairs)
+        # Similar lengths share a batch, reducing padding without dropping
+        # candidates. Original indices are restored before ranking the scores.
+        order = sorted(range(len(pairs)), key=lambda index: len(request.documents[index]))
+        scores = [0.0] * len(pairs)
+        async def check_request():
+            if await http_request.is_disconnected():
+                raise HTTPException(status_code=499, detail="Client disconnected")
+            if time.monotonic() >= deadline:
+                raise HTTPException(status_code=504, detail="Rerank request timed out")
+        # Serialize model inference while leaving the event loop responsive.
+        # Cancellation/deadlines are checked between bounded CPU batches.
+        await check_request()
+        try:
+            await asyncio.wait_for(inference_gate.acquire(), timeout=timeout)
+        except TimeoutError:
+            raise HTTPException(status_code=504, detail="Rerank queue timed out")
+        try:
+            for start in range(0, len(order), MODEL_BATCH_SIZE):
+                await check_request()
+                indices = order[start:start + MODEL_BATCH_SIZE]
+                batch_scores = await asyncio.to_thread(model.predict,
+                    [pairs[index] for index in indices], batch_size=MODEL_BATCH_SIZE, show_progress_bar=False)
+                await check_request()
+                for index, score in zip(indices, batch_scores):
+                    scores[index] = float(score)
+        finally:
+            inference_gate.release()
         
         # Combine with indices
         results = []
@@ -144,6 +180,8 @@ async def rerank(request: RerankRequest):
         results = results[:request.top_k]
         
         return {"results": results}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Prediction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -160,7 +198,7 @@ async def list_models():
             name=str(hf_metadata.get("name") or manifest_data.get("model") or MODEL_ALIAS),
             alias=MODEL_ALIAS,
             dimensions=0,
-            max_tokens=int(hf_metadata.get("max_tokens") or MODEL_MAX_TOKENS),
+            max_tokens=min(int(hf_metadata.get("max_tokens") or MODEL_MAX_TOKENS), MODEL_MAX_TOKENS),
             version=str(hf_metadata.get("version") or manifest_data.get("version") or MODEL_VERSION),
             modality=str(hf_metadata.get("modality") or manifest_data.get("modality") or "rerank"),
             description=str(manifest_data.get("description") or f"Reranker model {MODEL_ALIAS}"),

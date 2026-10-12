@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import styles from './Chat.module.css';
 import { useParams } from 'react-router-dom';
-import { useChatActions, useChatMessagesState } from '@/domains/chat/contexts/ChatContext';
+import {
+  useChatActions,
+  useChatMessagesState,
+} from '@/domains/chat/contexts/ChatContext';
 import { ChatComposer } from '@/domains/chat/components/ChatComposer';
 import { ChatContextPanel } from '@/domains/chat/components/ChatContextPanel';
 import { UserMessage } from '@/domains/chat/components/UserMessage';
@@ -12,7 +15,15 @@ import { Icon } from '@/shared/ui/Icon';
 export default function Chat() {
   const { chatId } = useParams();
   const state = useChatMessagesState();
-  const { loadMessages, loadPausedRun, setCurrentChat, clearPendingState, sendMessageStream, abortStream, resumeStream } = useChatActions();
+  const {
+    loadMessages,
+    loadPausedRun,
+    setCurrentChat,
+    clearPendingState,
+    sendMessageStream,
+    abortStream,
+    resumeStream,
+  } = useChatActions();
   const historyRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = React.useState(false);
   const [streamError, setStreamError] = React.useState<string | null>(null);
@@ -28,12 +39,15 @@ export default function Chat() {
   );
   const messages = current?.items || [];
 
-  const scrollToBottom = (force: boolean = false) => {
-    if (historyRef.current) {
-      if (!force && !isNearBottom) return;
-      historyRef.current.scrollTop = historyRef.current.scrollHeight;
-    }
-  };
+  const scrollToBottom = React.useCallback(
+    (force: boolean = false) => {
+      if (historyRef.current) {
+        if (!force && !isNearBottom) return;
+        historyRef.current.scrollTop = historyRef.current.scrollHeight;
+      }
+    },
+    [isNearBottom]
+  );
 
   useEffect(() => {
     const nextCount = messages.length;
@@ -47,13 +61,14 @@ export default function Chat() {
       }
     }
     prevMessageCountRef.current = nextCount;
-  }, [messages.length, isNearBottom]);
+  }, [messages.length, isNearBottom, scrollToBottom]);
 
   useEffect(() => {
     const container = historyRef.current;
     if (!container) return;
     const onScroll = () => {
-      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
       const near = distanceFromBottom <= 80;
       setIsNearBottom(near);
       if (near) setHasUnread(false);
@@ -70,12 +85,13 @@ export default function Chat() {
     setClarifyInput('');
     setCurrentChat(chatId);
     void loadPausedRun(chatId);
-    if (!current?.loaded) {
-      loadMessages(chatId).catch(console.error);
-    }
     setBusy(false);
     setStreamError(null);
-  }, [chatId, current?.loaded, clearPendingState, setCurrentChat, loadMessages, loadPausedRun]);
+  }, [chatId, clearPendingState, setCurrentChat, loadPausedRun]);
+
+  useEffect(() => {
+    if (chatId && !current?.loaded) void loadMessages(chatId);
+  }, [chatId, current?.loaded, loadMessages]);
 
   // Handle send with agent support
   const handleSend = async (
@@ -93,10 +109,10 @@ export default function Chat() {
       if (options.attachments?.length) {
         const { uploadChatAttachment } = await import('@shared/api/chats');
         const uploaded = await Promise.all(
-          options.attachments.map((file) => uploadChatAttachment(chatId, file))
+          options.attachments.map(file => uploadChatAttachment(chatId, file))
         );
-        artifactIds = uploaded.map((item) => item.artifact_id);
-        attachmentMeta = uploaded.map((item) => ({
+        artifactIds = uploaded.map(item => item.artifact_id);
+        attachmentMeta = uploaded.map(item => ({
           artifact_id: item.artifact_id,
           file_name: item.file_name,
           file_ext: item.file_ext,
@@ -121,7 +137,11 @@ export default function Chat() {
       );
     } catch (e: unknown) {
       console.error(e);
-      setStreamError(_friendlyError(e instanceof Error ? e.message : 'Ошибка при отправке сообщения'));
+      setStreamError(
+        _friendlyError(
+          e instanceof Error ? e.message : 'Ошибка при отправке сообщения'
+        )
+      );
     } finally {
       setBusy(false);
     }
@@ -131,7 +151,9 @@ export default function Chat() {
     if (!clarifyInput.trim() || clarifyBusy) return;
     const runId = String(state.pausedRunId || '').trim();
     if (!runId) {
-      setStreamError('Сессия ожидания уже завершена или устарела. Отправьте сообщение заново.');
+      setStreamError(
+        'Сессия ожидания уже завершена или устарела. Отправьте сообщение заново.'
+      );
       return;
     }
     setClarifyBusy(true);
@@ -143,7 +165,7 @@ export default function Chat() {
         'input',
         userInput,
         () => {},
-        (err: string) => setStreamError(_friendlyError(err)),
+        (err: string) => setStreamError(_friendlyError(err))
       );
       if (resumed) {
         setClarifyInput('');
@@ -160,7 +182,9 @@ export default function Chat() {
   };
 
   const handleInteractionCancel = async () => {
-    const runId = String(state.pausedRunId || pendingConfirmation?.runId || '').trim();
+    const runId = String(
+      state.pausedRunId || pendingConfirmation?.runId || ''
+    ).trim();
     if (!runId || clarifyBusy) return;
     setClarifyBusy(true);
     setStreamError(null);
@@ -170,7 +194,7 @@ export default function Chat() {
         'cancel',
         '',
         () => {},
-        (err: string) => setStreamError(_friendlyError(err)),
+        (err: string) => setStreamError(_friendlyError(err))
       );
       if (cancelled) {
         setClarifyInput('');
@@ -188,7 +212,10 @@ export default function Chat() {
     if (raw.includes('Paused run not found'))
       return 'Сессия ожидания уже завершена или устарела. Отправьте сообщение заново.';
     if (raw.includes('Missing tools') || raw.includes('no instance'))
-      return `⚠️ Инструменты недоступны: ${raw.replace(/Missing tools:/gi, '').replace(/Agent unavailable:/gi, '').trim()}`;
+      return `⚠️ Инструменты недоступны: ${raw
+        .replace(/Missing tools:/gi, '')
+        .replace(/Agent unavailable:/gi, '')
+        .trim()}`;
     if (raw.includes('Missing credentials'))
       return `🔑 Нет доступа к инструменту: требуются учётные данные`;
     if (raw.includes('unavailable'))
@@ -206,9 +233,12 @@ export default function Chat() {
           <div className={styles.emptyIcon}>
             <Icon name="sparkles" size={48} />
           </div>
-          <h2 className={styles.emptyTitle}>Добро пожаловать в ML Portal Chat</h2>
+          <h2 className={styles.emptyTitle}>
+            Добро пожаловать в ML Portal Chat
+          </h2>
           <p className={styles.emptyDescription}>
-            Выберите существующий чат слева или создайте новый, чтобы начать общение с AI-ассистентом.
+            Выберите существующий чат слева или создайте новый, чтобы начать
+            общение с AI-ассистентом.
           </p>
           <div className={styles.emptyFeatures}>
             <div className={styles.feature}>
@@ -251,14 +281,22 @@ export default function Chat() {
             <p>Начните диалог, отправив сообщение</p>
           </div>
         ) : (
-          messages.map((message) => (
+          messages.map(message => (
             <React.Fragment key={message.id}>
-              {message.role === 'user' ? <UserMessage message={message} /> : null}
+              {message.role === 'user' ? (
+                <UserMessage message={message} />
+              ) : null}
               {message.role === 'assistant' && (
                 <AssistantMessage
                   message={message}
-                  isStreaming={Boolean(state.isStreaming && message.isOptimistic)}
-                  run={activeRun?.assistantMessageId === message.id ? activeRun : undefined}
+                  isStreaming={Boolean(
+                    state.isStreaming && message.isOptimistic
+                  )}
+                  run={
+                    activeRun?.assistantMessageId === message.id
+                      ? activeRun
+                      : undefined
+                  }
                 />
               )}
             </React.Fragment>
@@ -293,10 +331,14 @@ export default function Chat() {
           <ConfirmationPrompt
             item={pendingConfirmation}
             disabled={clarifyBusy}
-            onCancel={() => { void handleInteractionCancel(); }}
+            onCancel={() => {
+              void handleInteractionCancel();
+            }}
             onConfirm={async () => {
               if (clarifyBusy) return;
-              const runId = String(pendingConfirmation.runId || state.pausedRunId || '').trim();
+              const runId = String(
+                pendingConfirmation.runId || state.pausedRunId || ''
+              ).trim();
               if (!runId) {
                 setStreamError('Сессия ожидания уже завершена или устарела.');
                 return;
@@ -304,7 +346,13 @@ export default function Chat() {
               setClarifyBusy(true);
               setStreamError(null);
               try {
-                const resumed = await resumeStream(runId, 'confirm', '', () => {}, (err: string) => setStreamError(_friendlyError(err)));
+                const resumed = await resumeStream(
+                  runId,
+                  'confirm',
+                  '',
+                  () => {},
+                  (err: string) => setStreamError(_friendlyError(err))
+                );
                 if (resumed && chatId) await loadMessages(chatId);
               } finally {
                 setClarifyBusy(false);
@@ -315,15 +363,19 @@ export default function Chat() {
           <div className={styles.clarifyBox}>
             <div className={styles.clarifyHeader}>
               <Icon name="help-circle" size={16} />
-              <h3>{state.pendingInput?.question || state.pendingInput?.reason || 'Уточните, пожалуйста, запрос'}</h3>
+              <h3>
+                {state.pendingInput?.question ||
+                  state.pendingInput?.reason ||
+                  'Уточните, пожалуйста, запрос'}
+              </h3>
             </div>
             <div className={styles.clarifyRow}>
               <textarea
                 className={styles.clarifyInput}
                 placeholder="Введите уточнение для продолжения..."
                 value={clarifyInput}
-                onChange={(e) => setClarifyInput(e.target.value)}
-                onKeyDown={(e) => {
+                onChange={e => setClarifyInput(e.target.value)}
+                onKeyDown={e => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     void handleClarifySubmit();
@@ -332,25 +384,35 @@ export default function Chat() {
                 rows={2}
                 disabled={clarifyBusy}
               />
-              <button className={`${styles.confirmBtn} ${styles.confirmBtnApprove}`} onClick={handleClarifySubmit} disabled={!clarifyInput.trim() || clarifyBusy}>
+              <button
+                className={`${styles.confirmBtn} ${styles.confirmBtnApprove}`}
+                onClick={handleClarifySubmit}
+                disabled={!clarifyInput.trim() || clarifyBusy}
+              >
                 {clarifyBusy ? 'Отправка...' : 'Ответить'}
               </button>
-              <button className={styles.confirmBtn} onClick={() => { void handleInteractionCancel(); }} disabled={clarifyBusy}>
+              <button
+                className={styles.confirmBtn}
+                onClick={() => {
+                  void handleInteractionCancel();
+                }}
+                disabled={clarifyBusy}
+              >
                 Отменить
               </button>
             </div>
           </div>
         ) : (
-        <ChatComposer
-          onSend={handleSend}
-          disabled={busy && !state.isStreaming}
-          isStreaming={state.isStreaming}
-          onStop={() => {
-            abortStream();
-            setBusy(false);
-          }}
-          placeholder="Напишите сообщение..."
-        />
+          <ChatComposer
+            onSend={handleSend}
+            disabled={busy && !state.isStreaming}
+            isStreaming={state.isStreaming}
+            onStop={() => {
+              abortStream();
+              setBusy(false);
+            }}
+            placeholder="Напишите сообщение..."
+          />
         )}
       </div>
     </div>

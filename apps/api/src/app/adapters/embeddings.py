@@ -231,13 +231,15 @@ class LocalEmbeddingServiceProvider(EmbeddingInterface):
         if self._model_info:
             return self._model_info
             
+        max_tokens = 512
         try:
             with httpx.Client(timeout=5.0) as client:
-                response = client.get(f"{self._base_url}/info")
+                response = client.get(f"{self._base_url}/description")
                 if response.status_code == 200:
                     data = response.json()
                     self._dimensions = data.get("dimensions", self._dimensions)
                     self._version = data.get("version", self._version)
+                    max_tokens = int(data.get("max_tokens") or max_tokens)
         except Exception as e:
             logger.warning(f"Could not fetch model info from {self._base_url}: {e}")
         
@@ -245,7 +247,7 @@ class LocalEmbeddingServiceProvider(EmbeddingInterface):
             alias=self._model_alias,
             version=self._version,
             dimensions=self._dimensions,
-            max_tokens=512,
+            max_tokens=max_tokens,
             description=f"Local embedding service {self._provider_model_name}"
         )
         return self._model_info

@@ -81,6 +81,34 @@ async def test_pages_share_identity_read_sql_and_access(workspace_pg):
 
 
 @pytest.mark.asyncio
+async def test_inventory_prompt_sql_counts_devices_instead_of_unique_models(workspace_pg):
+    from app.services.inventory_sql_prompt import DEVICE_MODEL_COUNTS_SQL
+
+    workspace, scope, _ = workspace_pg
+    items = [
+        {"id": 1, "device_type": {"model": "A"}},
+        {"id": 2, "device_type": {"model": "A"}},
+        {"id": 3, "device_type": {"model": "A"}},
+        {"id": 4, "device_type": {"model": "B"}},
+        {"id": 5, "device_type": None},
+        {"id": 6, "device_type": {"model": ""}},
+    ]
+    saved, _ = await save(workspace, scope, items=items, total=6, next_page=False)
+    result = await ToolResultStore().execute_sql(
+        sql=DEVICE_MODEL_COUNTS_SQL.format(sql_ref=saved["sql_ref"]),
+        call_id="model-counts", task_id="task", agent_execution_id="agent", **scope,
+    )
+    assert result["rows"] == [
+        {"device_type": "A", "device_count": 3},
+        {"device_type": "Тип не указан", "device_count": 2},
+        {"device_type": "B", "device_count": 1},
+    ]
+    assert sum(row["device_count"] for row in result["rows"]) == saved["row_count"] == 6
+    assert result["row_count"] == 3  # groups, not devices
+    assert result["source_complete"] is True
+
+
+@pytest.mark.asyncio
 async def test_zero_and_50000_items_are_stored_uniformly(workspace_pg):
     workspace, scope, engine = workspace_pg
     empty, _ = await save(workspace, scope, items=[], total=0, next_page=False)

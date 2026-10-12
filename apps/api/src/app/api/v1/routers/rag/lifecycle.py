@@ -140,8 +140,8 @@ async def unarchive_rag_document(
         # reviewable candidates and never revives legacy published claims.
         await session.commit()
         if document.s3_key_processed and document.tenant_id:
-            from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
-            shadow_study_rag_document.delay({"source_id": str(document.id)}, str(document.tenant_id))
+            from app.workers.tasks_shadow_document_memory import hipporag_study_rag_document
+            hipporag_study_rag_document.delay({"source_id": str(document.id)}, str(document.tenant_id))
         
         await event_publisher.publish_document_archived(
             doc_id=doc_uuid,

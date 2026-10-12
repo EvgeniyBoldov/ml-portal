@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     ENV: str = Field(default="local")
     DEBUG: bool = Field(default=True)
 
+    MEMORY_SEARCH_BACKEND: str = Field(default="hipporag", pattern="^(hipporag|legacy)$")
+    HIPPO_WORKER_URL: str = Field(default="http://hipporag:8080")
+    HIPPO_CALLBACK_URL: str = Field(default="http://api:8000/api/v1/internal/hipporag")
+    HIPPO_TIMEOUT_SECONDS: int = Field(default=1800, ge=30, le=3600)
+
     # Database
     DATABASE_URL: str = Field(default="postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal")
     ASYNC_DB_URL: str = Field(default="postgresql+asyncpg://ml_portal:ml_portal_password@postgres:5432/ml_portal")
@@ -93,7 +98,7 @@ class Settings(BaseSettings):
     EMB_OFFLINE: bool = Field(default=True, description="Disallow network downloads for embedding models")
     EMB_CACHE_DIR: str = Field(default="/tmp/sentence_transformers")
     
-    # Reranker (local service, not in models table)
+    # Reranker transport fallback; the selected registry model takes precedence.
     RERANK_SERVICE_URL: str = Field(default="http://rerank:8002", description="Reranker service URL")
     RERANK_MODEL: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2", description="Reranker model name")
     RERANK_ENABLED: bool = Field(default=True, description="Enable reranker service")
@@ -108,6 +113,7 @@ class Settings(BaseSettings):
     
     # HTTP
     HTTP_TIMEOUT_SECONDS: int = Field(default=30)
+    RUNTIME_FINALIZATION_TIMEOUT_SECONDS: int = Field(default=60, ge=1, le=300)
     HTTP_MAX_RETRIES: int = Field(default=2)
     TIMEOUT_SECONDS: int = Field(default=30)
     PREFLIGHT_TIMEOUT_SECONDS: int = Field(

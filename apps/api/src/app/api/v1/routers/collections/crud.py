@@ -28,7 +28,7 @@ async def _build_collection_response(
     collection,
 ) -> CollectionResponse:
     if str(getattr(collection, "collection_type", "") or "") == "template":
-        await service.ensure_contract_fields_present(collection)
+        await service.ensure_contract_fields_present(collection, ensure_vector_infra=False)
     snapshot = await service.sync_collection_status(collection, persist=False)
     effective_total_rows = await service.get_effective_total_rows(collection)
     return CollectionResponse(

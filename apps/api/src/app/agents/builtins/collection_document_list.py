@@ -284,6 +284,7 @@ class CollectionDocumentListTool(VersionedTool):
                     total=total,
                 )
 
+                await session.commit()
                 return ToolResult.ok(
                     data={
                         "documents": documents,
@@ -291,6 +292,7 @@ class CollectionDocumentListTool(VersionedTool):
                         "collection": collection.slug,
                     },
                     message=f"Found {len(documents)} file(s) in collection '{collection.slug}' (total {total}).",
+                    delivery="direct",
                     logs=log.entries_dict(),
                 )
         except Exception as exc:

@@ -1,10 +1,26 @@
 from uuid import uuid4
 from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
 
 from types import SimpleNamespace
+
+
+@pytest.mark.asyncio
+async def test_finalize_retry_keeps_candidate_count_and_conflicts() -> None:
+    candidates = [SimpleNamespace(resolution_status=status) for status in ("extracted", "needs_review", "conflict")]
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = candidates
+    session = SimpleNamespace(execute=AsyncMock(return_value=result))
+    service = ShadowDocumentStudyService(session)
+    snapshot = SimpleNamespace(id=uuid4(), metrics={}, status="studying")
+    attempt = SimpleNamespace(id=uuid4())
+    assert await service.finalize(snapshot, attempt) == {"candidates": 3}
+    assert await service.finalize(snapshot, attempt) == {"candidates": 3}
+    assert candidates[-1].resolution_status == "conflict"
+    assert snapshot.metrics["candidates"] == 3
 
 from app.runtime.memory.shadow_document_study import (
     ShadowDocumentStudyAgent, ShadowDocumentStudyService, ShadowScreeningOutput,

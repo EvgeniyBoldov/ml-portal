@@ -1,0 +1,18 @@
+# Torch/numpy/scipy come from the shared ML base; no application dependencies.
+fastapi==0.115.12
+uvicorn==0.34.2
+pydantic==2.11.5
+httpx==0.28.1
+transformers==4.45.2
+huggingface-hub==0.36.0
+openai==1.93.0
+litellm==1.73.1
+python_igraph==0.11.8
+networkx==3.4.2
+tenacity==8.5.0
+tiktoken==0.7.0
+pandas==2.2.3
+pyarrow==19.0.1
+boto3==1.38.27
+nest_asyncio==1.6.0
+einops==0.8.1

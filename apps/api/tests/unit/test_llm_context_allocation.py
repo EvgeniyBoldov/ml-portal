@@ -54,6 +54,17 @@ async def test_connector_owns_output_allocation(stream):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cap", [768, 100000])
+async def test_trusted_transport_cap_only_reduces_allocated_output(cap):
+    client, create = connector_client()
+    payload = request(max_tokens=1)
+    allocated = allocate_context(payload, 16384).max_output_tokens
+    await OpenAICompatibleLLM._create_completion(object.__new__(OpenAICompatibleLLM), client,
+        payload, 16384, 30, LLMCallOptions(output_token_cap=cap))
+    assert create.call_args.kwargs["max_tokens"] == min(cap, allocated)
+
+
+@pytest.mark.asyncio
 async def test_corrective_request_debits_budget_once():
     client, create = connector_client([provider_error(2048), "corrected"])
     debit = AsyncMock()

@@ -20,7 +20,6 @@ from app.runtime.memory.read_policy import published_claim, source_access, appli
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.dto import FactDTO
 from app.runtime.memory.preparer import MemoryPreparer, PreparedMemoryContext
-from app.runtime.memory.semantic_index import MemorySemanticIndex
 from app.runtime.memory.scope_precedence import apply_scope_precedence
 from app.services.glossary_service import GlossaryService, ambiguous_glossary_aliases, matching_glossary_terms
 from app.services.project_catalog_service import ProjectCatalogService
@@ -100,14 +99,14 @@ class MemoryRecallService:
         read_args = {"project_ids": project_ids, "tenant_id": tenant_id, "user_id": user_id,
                      "context_scope_keys": scope_keys, "collection_ids": collection_ids}
         eligible_ids = await self.eligible_item_ids(**read_args)
-        semantic_ids = await MemorySemanticIndex(self._session).search_ids(request_text, limit=48, eligible_ids=eligible_ids)
-        lexical_ids = await self._lexical_ids(request_text, limit=48, eligible_ids=eligible_ids, **read_args)
+        from app.runtime.memory.retrieval import retrieve_memory_ids
+        semantic_ids = await retrieve_memory_ids(self, request_text, eligible_ids=eligible_ids, read_args=read_args)
         related_ids = await self._visible_relation_item_ids([
                 MemoryRelation.target_type == "project", MemoryRelation.target_id.in_([str(value) for value in project_ids]),
             ] if project_ids else [], eligible_ids=eligible_ids, **read_args)
         term_ids = await self._term_linked_item_ids([UUID(str(term["id"])) for term in glossary],
                                                    eligible_ids=eligible_ids, **read_args)
-        candidate_ids = list(dict.fromkeys([*term_ids, *semantic_ids, *lexical_ids, *related_ids]))
+        candidate_ids = list(dict.fromkeys([*semantic_ids, *term_ids, *related_ids]))
         semantic_items = await self._accessible_semantic_items(semantic_ids=candidate_ids, **read_args)
         semantic_items, scope_uncertainties = apply_scope_precedence(semantic_items, project_ids)
         project_facts = [{

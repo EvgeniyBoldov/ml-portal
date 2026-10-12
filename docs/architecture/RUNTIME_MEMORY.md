@@ -1,5 +1,10 @@
 # Runtime Memory
 
+Документная память извлекается и ищется напрямую в общем постоянном корпусе
+HippoRAG. `memory.search` принимает query/limit и не читает старые опубликованные
+claims, glossary или dialog facts; ACL источников и team/project фильтров в этом
+инструменте нет. Остальные runtime snapshots и FactStore остаются отдельными.
+
 Этот документ описывает memory-контекст, доступный во время выполнения
 одного запроса. Полная карта persistence-контуров — в [Memory](MEMORY.md),
 контекст одного чата — в [Chat Context Memory](CHAT_CONTEXT_MEMORY.md).
@@ -20,11 +25,10 @@ chat context или durable memory.
 
 ## Semantic recall
 
-Документные знания хранятся отдельно как source-backed `MemoryItem` и
-`MemoryClaim`. Каноническая runtime operation — `memory.search`; она возвращает
-bounded ACL-aware recall с терминами, подходящими знаниями, состояниями,
-неопределённостью и источниками. В prompts не передаются ORM rows, ключи
-хранилища или полный дамп памяти.
+Документные знания текущего контура хранятся в native корпусе и графе HippoRAG.
+Каноническая runtime operation — `memory.search`; она возвращает найденные passages,
+score и ссылки на исходные документы. Старые MemoryItem/MemoryClaim сохранены для
+истории и не являются источником этого инструмента.
 
 Глоссарий предоставляет единый каталог утверждённых терминов без скоупов.
 Общая расшифровка идентифицирует термин; значения и проектные определения

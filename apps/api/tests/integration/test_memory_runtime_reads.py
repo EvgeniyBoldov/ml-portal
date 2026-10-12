@@ -23,6 +23,14 @@ from app.runtime.memory.read_policy import source_access
 pytestmark = pytest.mark.skipif(os.getenv('MEMORY_WORKFLOW_PG') != '1', reason='requires opt-in PostgreSQL')
 
 
+@pytest.fixture(autouse=True)
+def legacy_retrieval_for_existing_lexical_regressions(monkeypatch):
+    # This suite covers the retained SQL/Qdrant implementation. The HippoRAG
+    # boundary is exercised independently with the same authoritative policy.
+    from app.runtime.memory import retrieval
+    monkeypatch.setattr(retrieval, 'get_settings', lambda: NS(MEMORY_SEARCH_BACKEND='legacy'))
+
+
 async def publish(session, *, scope_type='project', term_only=False):
     candidate_id, scope_id, term_id, _ = await seed(session)
     scope = await session.get(MemoryScope, scope_id)
@@ -202,6 +210,59 @@ async def test_collection_source_requires_permission_and_can_be_shared_across_te
         rows = await recall._accessible_semantic_items(project_ids=[], semantic_ids=[claim.memory_item_id], tenant_id=uuid4(),
                                                        context_scope_keys=[scope.key], collection_ids=[collection])
         assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_hipporag_corpus_is_filtered_before_native_graph_work(tag_pg, monkeypatch):
+    from app.runtime.memory import retrieval
+    monkeypatch.setattr(retrieval, 'get_settings', lambda: NS(MEMORY_SEARCH_BACKEND='hipporag'))
+    graph_search = AsyncMock(return_value=[])
+    monkeypatch.setattr(retrieval, 'HippoRAGService', lambda _: NS(search_ids=graph_search))
+    async with AsyncSession(tag_pg, expire_on_commit=False) as session:
+        _, scope, claim = await publish(session)
+        doc = await session.get(RAGDocument, claim.document_id)
+        doc.scope, doc.tenant_id = 'collection', uuid4()
+        claim.visibility_tenant_id = doc.tenant_id
+        await session.commit()
+        recall = MemoryRecallService(session=session, preparer=None)
+        args = dict(project_ids=[], tenant_id=doc.tenant_id, user_id=uuid4(),
+                    context_scope_keys=[scope.key], collection_ids=[])
+        eligible = await recall.eligible_item_ids(**args)
+        assert await retrieval.retrieve_memory_ids(recall, 'backup', eligible_ids=eligible, read_args=args) == []
+        graph_search.assert_not_awaited()
+        from app.models.rag_ingest import DocumentCollectionMembership
+        collection = uuid4()
+        session.add(DocumentCollectionMembership(tenant_id=doc.tenant_id, source_id=doc.id, collection_id=collection))
+        await session.commit()
+        args['collection_ids'] = [collection]
+        eligible = await recall.eligible_item_ids(**args)
+        await retrieval.retrieve_memory_ids(recall, 'backup', eligible_ids=eligible, read_args=args)
+        items = graph_search.await_args.kwargs['items']
+        assert [item['selected_claim_id'] for item in items] == [str(claim.id)]
+        graph_search.reset_mock()
+        args['context_scope_keys'] = ['project.other']
+        eligible = await recall.eligible_item_ids(**args)
+        await retrieval.retrieve_memory_ids(recall, 'backup', eligible_ids=eligible, read_args=args)
+        graph_search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_manual_legacy_attempt_requires_new_publication(tag_pg):
+    from app.runtime.memory.shadow_document_study import ShadowDocumentStudyService
+    from app.models.document_memory_staging import DocumentMemoryExtractionAttempt
+    async with AsyncSession(tag_pg, expire_on_commit=False) as session:
+        candidate, scope, claim = await publish(session)
+        snapshot = await session.get(DocumentMemorySnapshot, candidate.snapshot_id)
+        old_id = snapshot.active_attempt_id
+        service = ShadowDocumentStudyService(session)
+        attempt = await service.restart_attempt(snapshot)
+        await session.commit()
+        assert attempt.id != old_id
+        assert snapshot.status == 'queued'
+        assert (await session.get(DocumentMemoryExtractionAttempt, old_id)).status == 'superseded'
+        recall = MemoryRecallService(session=session, preparer=None)
+        assert await recall._accessible_semantic_items(project_ids=[], semantic_ids=[claim.memory_item_id],
+            tenant_id=None, context_scope_keys=[scope.key], collection_ids=[]) == []
 
 
 @pytest.mark.asyncio

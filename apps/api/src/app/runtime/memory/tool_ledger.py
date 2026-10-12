@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -70,6 +70,7 @@ class ToolLedgerEntry(BaseModel):
     stored_result_id: Optional[str] = None
     result_inline_complete: Optional[bool] = None
     result_source_complete: Optional[bool] = None
+    result_delivery: Literal["stored", "direct"] = "stored"
     sources: List[Dict[str, Any]] = Field(default_factory=list)
     called_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: Optional[datetime] = None
@@ -122,6 +123,7 @@ class ToolLedger(BaseModel):
         result_id: Optional[str] = None,
         result_inline_complete: Optional[bool] = None,
         result_source_complete: Optional[bool] = None,
+        result_delivery: Literal["stored", "direct"] = "stored",
     ) -> None:
         target = None
         for entry in reversed(self.entries):
@@ -141,6 +143,7 @@ class ToolLedger(BaseModel):
         target.stored_result_id = result_id
         target.result_inline_complete = result_inline_complete
         target.result_source_complete = result_source_complete
+        target.result_delivery = result_delivery
         target.sources = [dict(source) for source in (sources or []) if isinstance(source, dict)]
         target.finished_at = datetime.now(timezone.utc)
 

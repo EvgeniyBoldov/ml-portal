@@ -5,7 +5,7 @@ All planner/stage ports consume this state directly.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, field_validator
@@ -38,6 +38,7 @@ class RuntimeTurnState(BaseModel):
     execution_mode: ExecutionMode = ExecutionMode.NORMAL
 
     goal: str = ""
+    execution_limitations: List[Dict[str, str]] = Field(default_factory=list)
     current_user_query: str = ""
     attachment_contexts: List[AttachmentContext] = Field(default_factory=list)
     continuation: Dict[str, Any] = Field(default_factory=dict)
@@ -169,6 +170,7 @@ class RuntimeTurnState(BaseModel):
         result_id: Optional[str] = None,
         result_inline_complete: Optional[bool] = None,
         result_source_complete: Optional[bool] = None,
+        result_delivery: Literal["stored", "direct"] = "stored",
     ) -> None:
         self.tool_ledger.register_result(
             call_id=call_id,
@@ -178,6 +180,7 @@ class RuntimeTurnState(BaseModel):
             result_id=result_id,
             result_inline_complete=result_inline_complete,
             result_source_complete=result_source_complete,
+            result_delivery=result_delivery,
         )
 
     def consume_task_tool_call(self, task_id: str) -> None:

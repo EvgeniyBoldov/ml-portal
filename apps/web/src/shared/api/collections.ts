@@ -1021,6 +1021,10 @@ export const collectionsApi = {
   },
 
   // Document status & ingest (scoped to collection, not RAG)
+  extractLegacyDocumentMemory: async (collectionId: string, docId: string): Promise<{ status: string; task_id: string }> => {
+    return apiRequest(`/collections/${collectionId}/docs/${docId}/memory/legacy-extract`, { method: 'POST' });
+  },
+
   getDocStatusGraph: async (collectionId: string, docId: string) => {
     return apiRequest(`/collections/${collectionId}/docs/${docId}/status-graph`);
   },

@@ -37,6 +37,7 @@ class ToolCallReusePolicy:
 
         result = ToolResult.ok(
             reused.result_data,
+            delivery=reused.result_delivery,
             reused=True,
             reused_from_call_id=reused.call_id,
         )

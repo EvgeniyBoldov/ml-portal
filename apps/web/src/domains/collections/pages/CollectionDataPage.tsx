@@ -474,6 +474,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [sortDir, setSortDir] = useState<DocSortDir>('desc');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [statusModalDocId, setStatusModalDocId] = useState<string | null>(null);
+  const [extractingMemoryIds, setExtractingMemoryIds] = useState<Set<string>>(new Set());
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadMetaFields, setUploadMetaFields] = useState<Record<string, string>>({});
@@ -572,6 +573,9 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       };
       return collectionsApi.listDocuments(collectionId, params);
     },
+    refetchInterval: query => query.state.data?.items.some(doc =>
+      ['queued', 'screening', 'studying', 'conflict_checking'].includes(doc.memory?.extraction_status ?? '')
+    ) ? 5000 : false,
     enabled: !!collectionId,
   });
 
@@ -819,6 +823,23 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   };
 
   // Single doc actions
+  const handleLegacyMemoryExtraction = async (doc: CollectionDocument) => {
+    setExtractingMemoryIds(ids => new Set(ids).add(doc.id));
+    try {
+      await collectionsApi.extractLegacyDocumentMemory(collectionId, doc.id);
+      showToast('Прежнее извлечение запущено. Новую память нужно подтвердить.', 'success');
+      invalidateDocs();
+    } catch {
+      showToast('Не удалось запустить извлечение памяти', 'error');
+    } finally {
+      setExtractingMemoryIds(ids => {
+        const next = new Set(ids);
+        next.delete(doc.id);
+        return next;
+      });
+    }
+  };
+
   const handleDelete = async (doc: CollectionDocument) => {
     if (!confirm(`Удалить "${doc.name}"? Данные будут удалены из MinIO и БД.`)) return;
     try {
@@ -1058,6 +1079,16 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                     <td className={styles.muted}>{formatDate(doc.created_at)}</td>
                     <td>
                       <div className={styles.actions}>
+                        <button
+                          className={styles.actionBtn}
+                          onClick={() => handleLegacyMemoryExtraction(doc)}
+                          disabled={isProc || doc.agg_status === 'archived' || extractingMemoryIds.has(doc.id)
+                            || ['queued', 'screening', 'studying', 'conflict_checking'].includes(doc.memory?.extraction_status ?? '')}
+                          title="Прежнее извлечение памяти: новая попытка потребует повторного подтверждения"
+                          aria-label="Запустить прежнее извлечение памяти"
+                        >
+                          <Icon name="sparkles" size={16} />
+                        </button>
                         {isProc ? (
                           <button className={styles.actionBtn} onClick={() => handleCancel(doc)} title="Отменить обработку">
                             <Icon name="x" size={16} />

@@ -300,12 +300,22 @@ class AgentExecutor:
             )
             return
 
+        missing = sub_request.missing_requirements
+        if missing and missing.credentials:
+            limitation = {"code": "missing_credentials",
+                          "message": "Часть данных недоступна: отсутствуют учётные данные для источника."}
+            if limitation not in runtime_state.execution_limitations:
+                runtime_state.execution_limitations.append(limitation)
         if sub_request.mode == ExecutionMode.UNAVAILABLE:
             msg = "sub_agent_unavailable"
+            unavailable = ({"code": "missing_credentials",
+                            "message": "Часть данных недоступна: отсутствуют учётные данные для источника.", "action": "none"}
+                           if missing and missing.credentials else
+                           {"code": msg, "message": "The selected agent is unavailable.", "action": "none"})
             ctx.extra["agent_execution_result"] = TaskCompletionDeclaration(
                 completion="unfulfillable",
                 report=msg,
-                limitation={"code": msg, "message": "The selected agent is unavailable.", "action": "none"},
+                limitation=unavailable,
             )
             yield RuntimeEvent.status(msg, agent=agent_slug)
             return
@@ -422,6 +432,7 @@ class AgentExecutor:
                         result_id=runtime_event.data.get("result_id"),
                         result_inline_complete=runtime_event.data.get("result_inline_complete"),
                         result_source_complete=runtime_event.data.get("result_source_complete"),
+                        result_delivery=runtime_event.data.get("result_delivery", "stored"),
                         sources=[
                             dict(source)
                             for source in (runtime_event.data.get("sources") or [])

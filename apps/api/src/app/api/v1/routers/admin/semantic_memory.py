@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
@@ -744,7 +744,8 @@ async def reextract_shadow_snapshot(snapshot_id: UUID, db: AsyncSession = Depend
     await db.flush()
     snapshot.active_attempt_id = attempt.id
     snapshot.status = "studying"
-    snapshot.metrics = {**dict(snapshot.metrics or {}), "next_section": 0, "reextract_attempt": int(max_number) + 1}
+    snapshot.metrics = {**dict(snapshot.metrics or {}), "next_section": 0, "reextract_attempt": int(max_number) + 1,
+                        "manual_request_id": str(uuid4())}
     source_tenant_id = await db.scalar(select(Source.tenant_id).where(Source.source_id == snapshot.document_id))
     if source_tenant_id is None:
         await db.rollback()
@@ -975,5 +976,5 @@ async def reextract_document_memory(
         raise HTTPException(status_code=409, detail="Document has no tenant execution context")
     await db.commit()
     from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
-    shadow_study_rag_document.delay({"source_id": str(document.id)}, str(tenant_id))
+    shadow_study_rag_document.delay({"source_id": str(document.id)}, str(tenant_id), str(uuid4()))
     return {"document_id": str(document_id), "status": "queued"}

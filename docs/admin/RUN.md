@@ -34,6 +34,38 @@ docker compose logs --tail=200 rerank
 - MinIO Console: `http://localhost:9001`
 - Qdrant: `http://localhost:6333`
 - Flower: `http://localhost:5555`
+- HippoRAG worker (локальный HTTP): `http://localhost:8015/docs`
+
+Постоянные dev-сервисы `hipporag` и `memory-experiment` запускаются из основного
+compose. Индексы живут в отдельном volume, экспериментальные документы и SQLite —
+в игнорируемой `.long-memory-experiment`. HippoRAG подключён к документной памяти
+приложения; экспериментальный API остаётся отдельным. Команды и ограничения описаны в
+[руководстве HippoRAG worker](../../mcp/hipporag/README.md).
+
+Локальные модели для русских документов: `emb-bge` обслуживает `BAAI/bge-m3`
+(1024 измерения, 8192 токена), `rerank-bge` — `BAAI/bge-reranker-v2-m3`
+(пары query/document ограничены 1024 токенами для CPU). Модели лежат в
+`models_llm/BAAI--bge-m3` и `models_llm/BAAI--bge-reranker-v2-m3`.
+
+Document search uses the selected reranker model's `request_timeout_s` from the
+registry. An unset per-tool timeout is bounded by the remaining agent wall-time,
+not a fixed 30-second default. CPU reranking is serialized outside the event
+loop in batches (`RERANK_BATCH_SIZE`, default 4), grouped by document length.
+Health checks remain responsive; disconnected/expired requests stop between
+batches, after any already-running CPU batch finishes. Queue wait counts toward
+the forwarded request deadline. Changing the service code requires rebuilding
+and recreating `rerank` / `rerank-bge` containers.
+
+`collection.doc_search` returns complete results directly to the agent, as does
+`collection.list_documents`. Both commit newly registered chat file references
+before returning `artifact_id`, so a later `file.read` can resolve them.
+После запуска сервисов команда
+`docker compose exec -T api python - --reindex < scripts/configure_local_bge.py`
+проверяет реальный inference, назначает модели дефолтными в реестре и запускает
+переиндексацию документов. При изменении размерности скрипт переключает физический
+индекс документной коллекции, сохраняя старый. Для переиндексации нужны существующие
+артефакты chunks; сама смена дефолта не восстанавливает отсутствующие файлы в S3.
+Без `--reindex` команда меняет только дефолты. MiniLM-сервисы сохранены.
 
 ## 4. Миграции
 

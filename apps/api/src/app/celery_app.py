@@ -38,6 +38,7 @@ app = Celery(
         "app.workers.tasks_memory",
         # Shadow document study tasks
         "app.workers.tasks_shadow_document_memory",
+        "app.workers.tasks_hipporag_document",
     ],
     autodiscover_tasks=False,  # Отключаем автообнаружение задач
 )
@@ -234,6 +235,7 @@ app.conf.task_routes = {
     "app.workers.tasks_memory.reextract_stale_document_memory": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_memory.reconcile_collection_memory_policy": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_shadow_document_memory.shadow_study_rag_document": {"queue": "memory", "priority": 1},
+    "app.workers.tasks_shadow_document_memory.hipporag_study_rag_document": {"queue": "memory", "priority": 1},
     "app.workers.tasks_shadow_document_memory.study_shadow_document_sections": {"queue": "memory", "priority": 1},
     "app.workers.tasks_shadow_document_memory.finalize_shadow_document_study": {"queue": "memory", "priority": 1},
     "app.workers.tasks_shadow_document_memory.reconcile_shadow_memory_conflicts": {"queue": "maintenance.default", "priority": 1},

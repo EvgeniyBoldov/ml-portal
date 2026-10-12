@@ -37,6 +37,7 @@ def _resolve_rerank_base_url(
             extra_base_url = model.extra_config.get("base_url")
             if extra_base_url:
                 return str(extra_base_url)
+        return None
     if fallback_url:
         return fallback_url
     return None
@@ -52,7 +53,7 @@ def _build_rerank_candidate_urls(
         candidates.append(primary)
         if "://reranker:" in primary:
             candidates.append(primary.replace("://reranker:", "://rerank:"))
-    if fallback_url:
+    if model is None and fallback_url:
         candidates.append(fallback_url)
 
     deduped: List[str] = []
@@ -67,8 +68,8 @@ async def _resolve_active_rerank_model(session: AsyncSession) -> Optional[ModelR
     model = await repo.get_global_by_type(ModelType.RERANKER)
     if not model:
         return None
-    if not model.enabled or model.status != ModelStatus.AVAILABLE:
-        return None
+    if model.deleted_at is not None or not model.enabled or model.status != ModelStatus.AVAILABLE:
+        raise RerankClientError("The selected rerank model is unavailable")
     return model
 
 
@@ -97,7 +98,10 @@ async def rerank_scores(
         "documents": list(documents),
         "top_k": capped_top_k,
     }
-    timeout_seconds = max(5, int(settings.HTTP_TIMEOUT_SECONDS))
+    timeout_seconds = max(1, int(model.request_timeout_s or settings.HTTP_TIMEOUT_SECONDS)
+                          if model is not None else int(settings.HTTP_TIMEOUT_SECONDS))
+    logger.info("Rerank request model=%s timeout_s=%s documents=%s", model.alias if model else "environment",
+                timeout_seconds, len(documents))
 
     payload_data = None
     errors: List[str] = []
@@ -105,7 +109,8 @@ async def rerank_scores(
         for base_url in base_urls:
             url = f"{base_url.rstrip('/')}/rerank"
             try:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload,
+                    headers={"X-Request-Timeout-Seconds": str(timeout_seconds)})
             except Exception as exc:
                 errors.append(f"{url} -> connection error: {exc}")
                 continue

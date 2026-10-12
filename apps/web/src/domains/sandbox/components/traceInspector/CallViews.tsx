@@ -3,9 +3,10 @@ import { memoryContextFromTool, type TraceCall } from '../../traceProjection';
 import { callDisplayName, type ToolNameMap } from '../../callInspection';
 import { callStatusPresentation, formatCallDuration } from '../../callPresentation';
 import { MemoryContextViewer } from './viewers/MemoryContextViewer';
+import { MemoryItemsTable } from './viewers/MemoryItemsTable';
 import { ExtractionResultViewer } from './viewers/ExtractionResultViewer';
 import { PlanView } from './TraceDataViews';
-import { InspectorStack } from './InspectorPrimitives';
+import { InspectorEmptyState, InspectorSection, InspectorStack } from './InspectorPrimitives';
 import styles from './CallViews.module.css';
 
 export function LlmTokenUsage({ input, output, total }: { input?: number; output?: number; total?: number }) {
@@ -130,6 +131,12 @@ export function ToolResponse({ call }: { call: TraceCall }) {
   const result = call.responseView?.toolResult;
   if (!result) return <InspectorFieldGroup><InspectorFieldRow label="Статус"><InspectorStatus label={presentation.status === 'waiting_retry' ? 'Ожидает повтора' : 'Ожидается'} tone="warn" /></InspectorFieldRow></InspectorFieldGroup>;
   const memory = memoryContextFromTool(call);
+  if (memory && call.requestView.toolName === 'memory.search') return <InspectorStack>
+    <InspectorFieldGroup><InspectorFieldRow label="Статус"><InspectorStatus label="Успешно" tone="success" /></InspectorFieldRow></InspectorFieldGroup>
+    <InspectorSection title={`Найденные факты · ${memory.context.length}`}>
+      {memory.context.length ? <MemoryItemsTable items={memory.context} /> : <InspectorEmptyState message="По этому запросу ничего не найдено." />}
+    </InspectorSection>
+  </InspectorStack>;
   if (memory) return <MemoryContextViewer context={memory} />;
   return <InspectorStack><InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={result.success === false ? 'Ошибка' : 'Успешно'} tone={result.success === false ? 'danger' : 'success'} /></InspectorFieldRow>

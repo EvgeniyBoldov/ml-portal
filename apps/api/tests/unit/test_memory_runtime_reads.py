@@ -83,6 +83,7 @@ async def test_approval_dispatches_index_after_commit_and_queue_failure_keeps_pu
         assert ids == {item}
         return False
     monkeypatch.setattr(api, 'dispatch_memory_index', dispatch)
+    monkeypatch.setattr(api, '_shadow_candidate_response', AsyncMock(return_value=candidate))
     db = NS(commit=commit, rollback=AsyncMock())
     response = await api.approve_shadow_candidate(candidate.id, api.ShadowCandidateDecisionRequest(), db, NS(id=str(uuid4())))
     assert response.resolution_status == 'resolved'

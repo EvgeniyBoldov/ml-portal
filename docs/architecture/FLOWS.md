@@ -29,6 +29,9 @@ Operational note:
 - if the collection is vector-enabled, vectorization happens after the initial table ingest,
 - the collection should become ready for vector search only when vector artifacts exist,
 - revectorization is a separate repeatable process, not a side effect of the first load.
+- Listing collections and building collection responses do not provision Qdrant indexes.
+  Template field alignment on these read paths uses `ensure_vector_infra=False`,
+  so changing the default encoder cannot break listing due to an old index dimension.
 - if the effective embedding model changes, runtime marks table rows as pending and performs full revectorization before continuing with fresh vectors.
 
 ## 2. Tool Publication Flow

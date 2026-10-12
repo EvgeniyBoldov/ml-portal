@@ -13,6 +13,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from celery import Task
 from sqlalchemy import and_, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.s3_client import s3_manager
 from app.celery_app import app as celery_app
@@ -45,6 +46,15 @@ def _source_id(index_results: Any) -> str:
         if isinstance(row, dict) and row.get("source_id"):
             return str(row["source_id"])
     return ""
+
+
+def _study_agent(session: AsyncSession, snapshot: DocumentMemorySnapshot) -> ShadowDocumentStudyAgent:
+    # Pre-existing attempts have no backend marker and resume with the old
+    # extractor. New automatic attempts explicitly carry hipporag.
+    if (snapshot.metrics or {}).get("extraction_backend", "legacy") == "hipporag":
+        from app.runtime.memory.hipporag_document_study import HippoRAGDocumentStudyAgent
+        return HippoRAGDocumentStudyAgent(session=session, llm_client=get_llm_client())
+    return ShadowDocumentStudyAgent(session=session, llm_client=get_llm_client())
 
 
 def _trace_entity_id(snapshot_id: UUID, stage: str, *, cursor: int | None = None, kind: str, attempt_id: UUID | None = None) -> str:
@@ -208,6 +218,7 @@ def _attempt_message_matches(attempt, attempt_id: str | None, *, expected_cursor
 
 
 async def dispatch_pending_shadow_studies(session) -> int:
+    return 0
     """Attempt rows are durable dispatch intents; delivery may repeat safely."""
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
     rows = (await session.execute(select(DocumentMemoryExtractionAttempt, Source.tenant_id).join(
@@ -220,6 +231,12 @@ async def dispatch_pending_shadow_studies(session) -> int:
     ).limit(100))).all()
     dispatched = 0
     for attempt, source_tenant_id in rows:
+        snapshot = await session.get(DocumentMemorySnapshot, attempt.snapshot_id)
+        if snapshot and _legacy_automatic_attempt(snapshot):
+            snapshot.status = "failed"
+            attempt.status = "failed"
+            snapshot.metrics = {**dict(snapshot.metrics or {}), "stop_reason": "legacy_automatic_extraction_disabled"}
+            continue
         try:
             study_shadow_document_sections.delay(str(attempt.snapshot_id), str(source_tenant_id),
                                                  str(attempt.id), attempt.next_section)
@@ -230,12 +247,37 @@ async def dispatch_pending_shadow_studies(session) -> int:
     return dispatched
 
 
+def _legacy_automatic_attempt(snapshot: DocumentMemorySnapshot) -> bool:
+    metrics = snapshot.metrics or {}
+    return (get_settings().MEMORY_SEARCH_BACKEND == "hipporag"
+            and metrics.get("extraction_backend", "legacy") == "legacy"
+            and not metrics.get("manual_request_id"))
+
+
 @celery_app.task(
     queue="memory", bind=True, acks_late=True, reject_on_worker_lost=True,
     autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3},
 )
-def shadow_study_rag_document(self: Task, index_results: Any, tenant_id: str) -> dict[str, Any]:
-    """Create a snapshot and run screening after every successful RAG index group."""
+def shadow_study_rag_document(self: Task, index_results: Any, tenant_id: str, manual_request_id: str | None = None) -> dict[str, Any]:
+    return {"status": "disabled", "reason": "native_hipporag_replaces_shadow_memory"}
+    """Legacy extractor: explicitly requested manual document action only."""
+    if not manual_request_id:
+        return {"status": "disabled", "reason": "legacy_extraction_requires_manual_action"}
+    return _study_document(self, index_results, tenant_id, backend="legacy", manual_request_id=manual_request_id)
+
+
+@celery_app.task(
+    queue="memory", bind=True, acks_late=True, reject_on_worker_lost=True,
+    autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3},
+)
+def hipporag_study_rag_document(self: Task, index_results: Any, tenant_id: str,
+                               manual_request_id: str | None = None) -> dict[str, Any]:
+    from app.workers.tasks_hipporag_document import index_hipporag_document
+    return index_hipporag_document.run(index_results, tenant_id, manual_request_id)
+
+
+def _study_document(self: Task, index_results: Any, tenant_id: str, *, backend: str,
+                    manual_request_id: str | None = None) -> dict[str, Any]:
     source_id = _source_id(index_results)
     if not source_id:
         raise ValueError("RAG index result does not contain source_id")
@@ -246,12 +288,34 @@ def shadow_study_rag_document(self: Task, index_results: Any, tenant_id: str) ->
             document, _source, canonical, sections, checksum = await _document_context(
                 session, source_id=source_uuid, tenant_id=tenant_uuid,
             )
+            if not manual_request_id:
+                from sqlalchemy import func
+                from app.models.collection import Collection
+                from app.models.rag_ingest import DocumentCollectionMembership
+                memory_policy = dict((_source.meta or {}).get("memory") or {})
+                if memory_policy.get("policy") == "explicit":
+                    enabled = bool(memory_policy.get("enabled"))
+                else:
+                    enabled = bool(await session.scalar(select(func.count(DocumentCollectionMembership.id)).join(
+                        Collection, Collection.id == DocumentCollectionMembership.collection_id,
+                    ).where(DocumentCollectionMembership.source_id == source_uuid,
+                            Collection.memory_enabled.is_(True))))
+                if not enabled or document.status == "archived":
+                    return {"document_id": source_id, "status": "disabled"}
             service = ShadowDocumentStudyService(session)
             snapshot = await service.get_or_create_snapshot(
                 document_id=source_uuid, checksum=checksum,
                 visibility_tenant_id=None if document.scope == "global" else tenant_uuid,
             )
             snapshot, attempt = await service.lock_active_attempt(snapshot.id)
+            if manual_request_id and (snapshot.metrics or {}).get("manual_request_id") != manual_request_id:
+                if snapshot.status in {"screening", "studying", "conflict_checking"}:
+                    return {"snapshot_id": str(snapshot.id), "status": snapshot.status, "busy": True}
+                attempt = await service.restart_attempt(snapshot)
+                snapshot.metrics = {**dict(snapshot.metrics or {}), "manual_request_id": manual_request_id}
+            if snapshot.status == "queued":
+                snapshot.metrics = {**dict(snapshot.metrics or {}), "extraction_backend": backend,
+                                    "shadow_study": backend == "legacy"}
             snapshot.trace_run_id = attempt.trace_run_id
             logger = _trace_logger(session=session, snapshot=snapshot, tenant_id=tenant_uuid)
             await _start_trace(session=session, logger=logger, snapshot=snapshot, tenant_id=tenant_uuid)
@@ -276,7 +340,7 @@ def shadow_study_rag_document(self: Task, index_results: Any, tenant_id: str) ->
                 "section_count": len(sections),
             }
             try:
-                screening = await ShadowDocumentStudyAgent(session=session, llm_client=get_llm_client()).screen(
+                screening = await _study_agent(session, snapshot).screen(
                     document=document_payload, sample_sections=sections[:2], tenant_id=tenant_uuid,
                     agent_execution_id=execution_id,
                     event_sink=lambda event: logger.emit(event, phase=OrchestrationPhase.AGENT),
@@ -331,6 +395,7 @@ def shadow_study_rag_document(self: Task, index_results: Any, tenant_id: str) ->
     autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3},
 )
 def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str, attempt_id: str | None = None, expected_cursor: int = 0) -> dict[str, Any]:
+    return {"status": "disabled", "reason": "native_hipporag_replaces_shadow_memory"}
     """Read one bounded canonical section batch and enqueue the next batch."""
 
     async def execute() -> dict[str, Any]:
@@ -339,6 +404,12 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str,
             snapshot, attempt = await ShadowDocumentStudyService(session).lock_active_attempt(snapshot_uuid)
             if not _attempt_message_matches(attempt, attempt_id, expected_cursor=expected_cursor):
                 return {"snapshot_id": snapshot_id, "status": "superseded_attempt", "cached": True}
+            if _legacy_automatic_attempt(snapshot):
+                snapshot.status = "failed"
+                attempt.status = "failed"
+                snapshot.metrics = {**dict(snapshot.metrics or {}), "stop_reason": "legacy_automatic_extraction_disabled"}
+                await session.commit()
+                return {"snapshot_id": snapshot_id, "status": "disabled"}
             snapshot.trace_run_id = attempt.trace_run_id
             logger = _trace_logger(session=session, snapshot=snapshot, tenant_id=tenant_uuid)
             await _start_trace(session=session, logger=logger, snapshot=snapshot, tenant_id=tenant_uuid)
@@ -392,7 +463,7 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str,
             projects_by_key, projects = await service.project_catalog()
             scopes_by_key, scopes = await service.scope_catalog()
             try:
-                output = await ShadowDocumentStudyAgent(session=session, llm_client=get_llm_client()).study(
+                output = await _study_agent(session, snapshot).study(
                     document={
                         "id": str(document.id), "title": document.title, "filename": document.filename,
                         "access_scope": document.scope,
@@ -416,14 +487,15 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str,
                     logger=logger, snapshot=snapshot, stage="study_sections", cursor=cursor,
                     execution_id=execution_id, status="failed", error_type=type(exc).__name__,
                 )
-                # A provider outage after one or more successful batches must
-                # not strand those candidates in `extracted` forever. Expose
-                # the partial snapshot for review once retries are exhausted.
+                # Retain partial candidates for diagnostics. A failed study
+                # must never be finalized and represented as approved.
                 if self.request.retries >= 3:
-                    service = ShadowDocumentStudyService(session)
-                    await service.finalize(snapshot, attempt)
-                    await session.commit()
-                    finalize_shadow_document_study.delay(snapshot_id, tenant_id, str(attempt.id))
+                    snapshot.status = "failed"
+                    attempt.status = "failed"
+                    snapshot.metrics = {**dict(snapshot.metrics or {}),
+                        "stop_reason": "section_extraction_failed", "failed_cursor": cursor,
+                        "error_type": type(exc).__name__}
+                    await _end_trace(logger=logger, snapshot=snapshot, status="failed")
                 await session.commit()
                 raise
             active_snapshot = await session.scalar(select(DocumentMemorySnapshot).where(
@@ -463,6 +535,7 @@ def study_shadow_document_sections(self: Task, snapshot_id: str, tenant_id: str,
     autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3},
 )
 def finalize_shadow_document_study(self: Task, snapshot_id: str, tenant_id: str, attempt_id: str | None = None) -> dict[str, Any]:
+    return {"status": "disabled", "reason": "native_hipporag_replaces_shadow_memory"}
     """Move complete extracted candidates into the administrator review queue."""
 
     async def execute() -> dict[str, Any]:
@@ -536,6 +609,7 @@ def finalize_shadow_document_study(self: Task, snapshot_id: str, tenant_id: str,
 
 @celery_app.task(queue="maintenance.default", bind=True, acks_late=True, reject_on_worker_lost=True)
 def reconcile_shadow_memory_conflicts(self: Task) -> dict[str, int]:
+    return {"status": "disabled", "reason": "native_hipporag_replaces_shadow_memory"}
     """Retry bounded review for staged snapshots left awaiting a decision.
 
     New snapshots are checked immediately; this task is a safety net for

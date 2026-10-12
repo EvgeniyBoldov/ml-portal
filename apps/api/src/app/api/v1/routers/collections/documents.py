@@ -32,6 +32,34 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+@router.post("/{collection_id}/docs/{doc_id}/memory/legacy-extract", status_code=202)
+async def extract_legacy_document_memory(
+    collection_id: uuid.UUID, doc_id: uuid.UUID,
+    session: AsyncSession = Depends(db_uow), user: UserCtx = Depends(get_current_user),
+):
+    from app.models.rag import RAGDocument
+    from app.models.rag_ingest import Source
+    from app.runtime.memory.read_policy import allowed_source_collections
+    from app.workers.tasks_hipporag_document import index_hipporag_document
+
+    collection = await _resolve_collection(collection_id, session, user)
+    allowed = await allowed_source_collections(session, user_id=uuid.UUID(str(user.id)), tenant_id=collection.tenant_id)
+    if collection_id not in allowed:
+        raise HTTPException(403, "Collection access denied")
+    membership = await _resolve_document_membership(session, collection.tenant_id, collection_id, doc_id)
+    if not membership.in_collection:
+        raise HTTPException(404, "Document not found in collection")
+    document = await session.get(RAGDocument, doc_id)
+    if document is None or document.status == "archived" or not document.s3_key_processed:
+        raise HTTPException(409, "Canonical document is unavailable")
+    request_id = str(uuid.uuid4())
+    source = await session.get(Source, doc_id)
+    if source is None:
+        raise HTTPException(409, "Document source is unavailable")
+    task = index_hipporag_document.delay({"source_id": str(doc_id)}, str(source.tenant_id), request_id)
+    return {"document_id": str(doc_id), "status": "queued", "backend": "hipporag", "task_id": task.id}
+
+
 async def _cleanup_document_vectors(collection, session: AsyncSession, doc_id: uuid.UUID) -> None:
     if not collection.qdrant_collection_name:
         return
@@ -219,6 +247,7 @@ async def list_collection_documents(
         rows = (await session.execute(base_q.offset(offset).limit(size))).all()
 
         items = []
+        from app.models.document_memory_staging import DocumentMemorySnapshot
         for doc, source_meta in rows:
             meta = normalize_document_source_meta(source_meta)
             document_meta = meta.get("document", {})
@@ -236,6 +265,10 @@ async def list_collection_documents(
                 RAGStatus.node_type == "memory",
                 RAGStatus.node_key == "extract",
             ))).scalar_one_or_none()
+            memory_snapshot = await session.scalar(select(DocumentMemorySnapshot).where(
+                DocumentMemorySnapshot.document_id == doc.id,
+                DocumentMemorySnapshot.status != "superseded",
+            ).order_by(DocumentMemorySnapshot.updated_at.desc()).limit(1))
 
             agg_status = doc.agg_status
             if not agg_status:
@@ -282,8 +315,8 @@ async def list_collection_documents(
                     "effective_enabled": effective_memory_enabled,
                     "project_keys": list(memory_meta.get("project_keys") or []),
                     "scope_keys": list(memory_meta.get("scope_keys") or []),
-                    "extraction_status": memory_status.status if memory_status is not None else "not_queued",
-                    "extraction_metrics": dict(memory_status.metrics_json or {}) if memory_status is not None else {},
+                    "extraction_status": memory_snapshot.status if memory_snapshot else memory_status.status if memory_status is not None else "not_queued",
+                    "extraction_metrics": dict(memory_snapshot.metrics or {}) if memory_snapshot else dict(memory_status.metrics_json or {}) if memory_status is not None else {},
                 },
                 "artifacts": {
                     kind: artifact for kind, artifact in artifacts.items() if artifact.get("key")

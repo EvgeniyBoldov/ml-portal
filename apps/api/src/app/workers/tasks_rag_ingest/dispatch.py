@@ -84,7 +84,7 @@ async def _dispatch_stage(outbox_id: str) -> str | None:
             return None
         command, run = row
         if command.status == "dispatched" or (
-            run.status not in {"queued", "running"} and not (command.stage_key == "shadow" and run.status == "completed")
+            run.status not in {"queued", "running"} and not (command.stage_key in {"shadow", "hipporag"} and run.status == "completed")
         ):
             return command.celery_task_id
 
@@ -116,10 +116,10 @@ async def _dispatch_stage(outbox_id: str) -> str | None:
         elif stage.startswith("index."):
             task_fn = index_model
             task_args = [payload, str(run.tenant_id), str(run.id), run.generation]
-        elif stage == "shadow":
-            from app.workers.tasks_shadow_document_memory import shadow_study_rag_document
-            task_fn = shadow_study_rag_document
-            task_args = [[payload], str(run.tenant_id)]
+        elif stage in {"shadow", "hipporag"}:
+            from app.workers.tasks_hipporag_document import index_hipporag_document
+            task_fn = index_hipporag_document
+            task_args = [[payload], str(run.tenant_id), None, str(run.id)]
         else:
             raise ValueError(f"Unsupported RAG ingest stage command: {stage}")
         task_id = str(uuid4())
@@ -130,7 +130,7 @@ async def _dispatch_stage(outbox_id: str) -> str | None:
         # Persist the task id while it is queued, so stop/retry controls can
         # operate before the worker starts the task. The stage itself will
         # publish processing/completed/failed events with metrics.
-        if stage != "shadow":
+        if stage not in {"shadow", "hipporag"}:
             manager = RAGStatusManager(session, AsyncRepositoryFactory(session, run.tenant_id))
             node_type, node_key = manager._split_stage_name(stage)
             node = await manager.status_repo.get_node(run.doc_id, node_type, node_key)

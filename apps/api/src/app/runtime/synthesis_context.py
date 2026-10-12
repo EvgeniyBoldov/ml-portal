@@ -22,6 +22,19 @@ class SynthesisContextBuilder:
         self._max_chars = max(1, int(max_chars))
         self._redactor = RuntimeRedactor()
 
+    def build_partial(self, *, plan: Dict[str, Any], message: str,
+                      deleted_artifact_ids: list[str] | None = None) -> Dict[str, Any]:
+        """Build a final evidence package without applying a new plan iteration."""
+        iteration_id = "runtime-finalization"
+        projected = {**plan, "iterations": [*list(plan.get("iterations") or []), {
+            "id": iteration_id, "synthesis_brief": {"user_question": plan.get("goal"),
+                "purpose": "Give the supported partial answer", "answer_requirements": message},
+        }]}
+        context = self.build(plan=projected, iteration_id=iteration_id,
+                             deleted_artifact_ids=deleted_artifact_ids)
+        context["plan_outline"] = context["plan_outline"][:-1]
+        return context
+
     def build(
         self, *, plan: Dict[str, Any], iteration_id: str,
         deleted_artifact_ids: list[str] | None = None,

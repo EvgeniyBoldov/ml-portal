@@ -113,6 +113,19 @@ class ExecutionPreflight:
 `ExecutionPreflight` выполняется только для уже выбранного агентного task. Он
 не является `TurnPreflight` и не выбирает маршрут пользовательского turn.
 
+### Секретарь знаний
+
+Агент `secretary` хранится в БД с опубликованной версией; startup seed его не создаёт.
+Он собирает проектный и корпоративный контекст через `memory.search`, проверяет
+утверждения поиском по документным коллекциям и передаёт профильному агенту
+подтверждённые сведения, источники, противоречия и пробелы. Версия агента
+требует свежего извлечения (`requires_fresh_retrieval`).
+
+Документные коллекции привязаны к секретарю через `allowed_collection_ids`.
+Новые коллекции добавляются в привязки агента явно. `ExecutionPreflight` фильтрует
+эти коллекции согласно effective permissions пользователя и доступным операциям.
+`memory.search` выполняет собственную фильтрацию по ACL источников и scope памяти.
+
 ### TurnPreflight
 
 Root-level системная роль перед planner. После дешёвого code-only lookup
@@ -185,6 +198,25 @@ Retry переводит задачу обратно в исполнение т�
 после достижения конечного статуса всеми агентными задачами и получает
 отдельную bounded-проекцию `limitations` с безопасными причинами
 неуспешных ветвей.
+
+Если выполнение плана завершается ошибкой (включая падение planner и исчерпание
+лимитов), planning stage вызывает синтезатор для частичного ответа. Контекст
+включает подтверждённые результаты задач и доступные результаты `memory.search`;
+для этого не создаётся новая итерация и не запускаются новые инструменты.
+Неуспешный план и его техническая причина остаются в диагностике, а пользовательский
+turn завершается `FINAL` с частичным ответом. Синтезатор получает безопасные
+ограничения по времени, лимитам, доступу или учётным данным, без внутренней
+ошибки planner. Для иных сбоев используется нейтральное описание незавершённой
+обработки; runtime не выдаёт их за исчерпание лимитов.
+
+Runtime добавляет безопасные уведомления в `FINAL`, если модель их пропустила;
+уведомления об отсутствии учётных данных сохраняются и при отказе синтезатора.
+
+Финализация имеет отдельный резерв: один LLM-вызов и
+`RUNTIME_FINALIZATION_TIMEOUT_SECONDS` (по умолчанию 60 секунд). Исчерпание
+основного бюджета не блокирует этот резерв. Если синтезатор также не смог
+завершить ответ, runtime возвращает безопасное короткое сообщение. Отмена
+пользователем и ожидание подтверждения/уточнения не запускают финализацию.
 
 Agent task responses use protocol v2 generated from Pydantic. The agent owns
 `completion` (`fulfilled`, `needs`, `unfulfillable`) and may return `answer`,
@@ -345,6 +377,16 @@ minimum_output = ceil(context_window_tokens × 0.10)
 Если провайдер явно сообщает меньший доступный output, коннектор делает один корректирующий вызов, только если доступный output не меньше `minimum_output`. Этот вызов учитывается в LLM-бюджете исполнителя, использует остаток исходного таймаута и для streaming допускается лишь до начала выдачи результата. Повторный отказ по контексту завершает запрос. Ошибки 429 не интерпретируются как ограничение окна; runtime соблюдает `Retry-After`. SDK retries отключены. Таймаут и число повторов системных ролей удалены: используется конфигурация выбранной модели; backoff — exponential.
 
 Пользовательские `max_tokens`/`max_completion_tokens` не управляют распределением окна: коннектор заменяет их своим расчётом. Эти параметры удалены из настроек моделей, ролей, агентов и песочницы. HTTP proxy также не публикует эту настройку.
+
+Внутренний HippoRAG model gateway передаёт `LLMCallOptions.output_token_cap`
+для ограниченных этапов NER/извлечения связей. Это доверенный transport option:
+он может только уменьшить рассчитанный output, не увеличить его или обойти
+проверку входного контекста. Пользовательские параметры по-прежнему игнорируются.
+
+Автоматическое изучение документов теперь использует native HippoRAG OpenIE и
+типизированную проекцию по каноническим моделям memory content. Эта цепочка выбирает
+системную дефолтную LLM и использует температуру 0; три редактируемых промпта
+прежнего изучателя документов продолжают действовать при ручном legacy-запуске.
 
 Policy gates (`require_confirmation_*`, `forbid_*`) применяются в `PolicyEngine` перед выполнением действия.
 `require_backup_before_write` сейчас хранится как конфиг-флаг, но в enforcement-решениях runtime не участвует.
@@ -630,10 +672,22 @@ context_snapshot: {
 
 ### Temporary dataset access
 
-Successful external tool responses pass through explicit source normalization
+Successful external dataset tool responses pass through explicit source normalization
 and Result Store. Runtime supplies native `result.describe`, `result.read` and
 `result.load` interfaces; SQL-capable agents receive `result.sql`. Datasets are
 run-scoped, versioned and passed by reference; source continuation appends to the
 same ID. Source completion is separate from model presentation and bounded reads.
 See [Data Workspace](RUNTIME_TOOL_RESULTS.md) for the protocol, migration and
 execution limits. Runtime does not insert Analyzer tasks based on result size.
+`ToolResult.delivery="direct"` opts a domain response out of dataset storage:
+`memory.search`, `collection.doc_search` and `collection.list_documents` deliver redacted, complete JSON
+directly to the model and trace/SSE. API collection responses keep the default
+`stored` delivery. Direct delivery also survives duplicate-call reuse.
+
+Tool calls without an explicit per-tool timeout use the remaining agent wall-time
+budget; there is no hidden 30-second default. Explicit policy/limit timeouts are
+still enforced and capped by the remaining budget. Rerank HTTP calls honor the
+selected model's `request_timeout_s`; `HTTP_TIMEOUT_SECONDS` is used only when
+that field is unset. A selected registry model cannot fall back to a different
+environment model. The request timeout is forwarded to the rerank worker, whose
+deadline includes queue time and inference.

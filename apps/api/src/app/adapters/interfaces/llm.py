@@ -45,6 +45,7 @@ class LLMCallOptions:
     """Transport-only options, kept separate from provider request params."""
 
     timeout_s: Optional[float] = None
+    output_token_cap: Optional[int] = None
     on_transport_retry: Optional[Callable[[], Awaitable[None]]] = None
 
 

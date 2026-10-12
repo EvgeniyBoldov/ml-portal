@@ -23,6 +23,7 @@ from app.api.v1.routers.collections import router as collections_router
 from app.api.v1.routers.admin import router as admin_router
 from app.api.v1.routers.files import router as files_router
 from app.api.v1.routers.internal_mcp_credentials import router as internal_mcp_credentials_router
+from app.api.v1.routers.internal_hipporag import router as internal_hipporag_router
 from app.api.mcp import router as mcp_router
 from app.api.v1.routers.sandbox import router as sandbox_router
 from app.api.v1.routers.monitoring import router as monitoring_router
@@ -55,6 +56,7 @@ api_v1.include_router(files_router)
 
 # Internal MCP credential broker resolve endpoint
 api_v1.include_router(internal_mcp_credentials_router)
+api_v1.include_router(internal_hipporag_router)
 
 # Admin endpoints (users, tenants, models, prompts, tools, agents, audit-logs)
 api_v1.include_router(admin_router)

@@ -234,6 +234,7 @@ class CollectionDocSearchTool(VersionedTool):
                             "applied_filters": filters or {},
                         },
                         message="Collection exists but has not been indexed yet.",
+                        delivery="direct",
                         logs=log.entries_dict(),
                     )
 
@@ -278,6 +279,7 @@ class CollectionDocSearchTool(VersionedTool):
                     log.info("No results found")
                     return ToolResult.ok(
                         data={"hits": [], "total": 0, "collection": collection.slug, "applied_filters": filters or {}},
+                        delivery="direct",
                         logs=log.entries_dict(),
                     )
 
@@ -399,6 +401,8 @@ class CollectionDocSearchTool(VersionedTool):
                     top_score=round(sorted_hits[0]["score"], 3) if sorted_hits else 0,
                 )
 
+                # Artifact references must outlive this tool-owned session.
+                await session.commit()
                 return ToolResult.ok(
                     data={
                         "hits": hits,
@@ -407,6 +411,7 @@ class CollectionDocSearchTool(VersionedTool):
                         "applied_filters": filters or {},
                     },
                     sources=sources,
+                    delivery="direct",
                     logs=log.entries_dict(),
                 )
 

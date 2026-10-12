@@ -13,7 +13,6 @@ from app.models.memory import FactScope, MemoryClaim, MemoryRelation
 from app.runtime.memory.read_policy import allowed_source_collections
 from app.runtime.memory.fact_store import FactStore
 from app.runtime.memory.recall import MemoryRecallService
-from app.runtime.memory.semantic_index import MemorySemanticIndex
 from app.runtime.memory.scope_precedence import apply_scope_precedence as _apply_project_precedence
 from app.services.glossary_service import GlossaryService, ambiguous_glossary_aliases, matching_glossary_terms
 from app.services.memory_scope_catalog import list_memory_scopes, resolve_memory_scopes
@@ -137,8 +136,9 @@ class MemorySearchService:
         read_args = {"project_ids": project_ids, "tenant_id": tenant_id, "user_id": user_id,
                      "context_scope_keys": sorted(effective_scope_keys), "collection_ids": collection_ids}
         eligible_ids = await recall.eligible_item_ids(**read_args, kinds=allowed_kinds, categories=enabled_scopes)
-        semantic_ids = await MemorySemanticIndex(self._session).search_ids(query, limit=48, eligible_ids=eligible_ids)
-        lexical_ids = await recall._lexical_ids(query, limit=48, eligible_ids=eligible_ids, **read_args)
+        publication_uncertainties = [] if eligible_ids else ["no_published_memory_in_search_scope"]
+        from app.runtime.memory.retrieval import retrieve_memory_ids
+        semantic_ids = await retrieve_memory_ids(recall, query, eligible_ids=eligible_ids, read_args=read_args)
         term_related_ids = await recall._term_linked_item_ids(
             [UUID(str(term["id"])) for term in glossary_terms], eligible_ids=eligible_ids, **read_args)
         normalized_entity_ids = [str(item).strip() for item in entity_ids if str(item).strip()]
@@ -146,7 +146,7 @@ class MemorySearchService:
             [MemoryRelation.target_id.in_(normalized_entity_ids)] if normalized_entity_ids else [],
             eligible_ids=eligible_ids, **read_args,
         )
-        selected_ids = list(dict.fromkeys([*term_related_ids, *semantic_ids, *lexical_ids, *entity_related_ids]))
+        selected_ids = list(dict.fromkeys([*semantic_ids, *term_related_ids, *entity_related_ids]))
         selected_ids.extend(await self._conflict_related_item_ids(selected_ids, eligible_ids))
         items = await recall._accessible_semantic_items(
             project_ids=project_ids,
@@ -213,9 +213,9 @@ class MemorySearchService:
                 "team_keys": sorted(key for key in effective_scope_keys if key.startswith("team.")),
                 "project_keys": sorted(key for key in effective_scope_keys if key.startswith("project.")),
             },
-            "uncertainties": [*precedence_uncertainties, *glossary_uncertainties, *fact_uncertainties],
+            "uncertainties": [*publication_uncertainties, *precedence_uncertainties, *glossary_uncertainties, *fact_uncertainties],
             "memory_context": _memory_context(values, selected, fact_values, glossary_definitions,
-                                              [*precedence_uncertainties, *glossary_uncertainties, *fact_uncertainties]),
+                                              [*publication_uncertainties, *precedence_uncertainties, *glossary_uncertainties, *fact_uncertainties]),
         }
 
     async def _conflict_related_item_ids(self, selected_ids: list[UUID], eligible_ids: list[UUID]) -> list[UUID]:

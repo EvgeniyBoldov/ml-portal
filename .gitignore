@@ -181,6 +181,7 @@ cython_debug/
 # Local development
 *.local
 review/
+.long-memory-experiment/
 
 # Archive files
 *.tar

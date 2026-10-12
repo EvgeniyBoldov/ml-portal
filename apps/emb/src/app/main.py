@@ -234,6 +234,9 @@ class EmbeddingEngine:
             model_source = self.config.path or self.config.alias
             logger.info(f"Loading model: {model_source}")
             self.model = SentenceTransformer(model_source)
+            # The sentence encoder can have a smaller limit than the
+            # underlying transformer (MiniLM: 256 versus 512).
+            self.config.max_tokens = int(self.model.max_seq_length)
             logger.info(f"Model loaded successfully from {model_source}")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")

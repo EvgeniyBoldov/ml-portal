@@ -127,6 +127,9 @@ Each tool item should indicate publication state:
 The right panel should show the selected effective tool release or draft candidate, including the publish toggle and semantic/runtime-safe fields.
 
 Run inspector contract:
+- `memory.search` shows retrieved document passages in its response tab and has
+  no separate memory tab. Native HippoRAG passage `text` and source references
+  also populate the owning executor's long-term memory group alongside facts.
 - inspector selects an entity and compact semantic tabs; reusable domain Viewers
   render prepared plan, request, response, result, limits and access models;
 - the projection exposes presentation entities `stage`, `step`, `executor`,
