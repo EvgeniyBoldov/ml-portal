@@ -199,7 +199,7 @@ async def list_models():
             alias=MODEL_ALIAS,
             dimensions=0,
             max_tokens=min(int(hf_metadata.get("max_tokens") or MODEL_MAX_TOKENS), MODEL_MAX_TOKENS),
-            version=str(hf_metadata.get("version") or manifest_data.get("version") or MODEL_VERSION),
+            version=str(manifest_data.get("version") or MODEL_VERSION),
             modality=str(hf_metadata.get("modality") or manifest_data.get("modality") or "rerank"),
             description=str(manifest_data.get("description") or f"Reranker model {MODEL_ALIAS}"),
             important_params=hf_metadata.get("important_params") or {},

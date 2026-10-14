@@ -200,7 +200,7 @@ def _needs_revectorization_for_models(vector_config: Any, model_aliases: list[st
 
     current = get_vector_config_model_aliases(vector_config)
     target = [str(alias or "").strip() for alias in model_aliases if str(alias or "").strip()]
-    return current != target
+    return set(current) != set(target)
 
 
 @celery_app.task(
@@ -228,14 +228,10 @@ def vectorize_collection_rows(
     """
 
     async def _execute() -> Dict[str, Any]:
-        from app.adapters.embeddings import EmbeddingServiceFactory
-        from app.services.embedding_model_config_service import EmbeddingModelConfigService
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.services.collection_service import CollectionService
         from app.services.collection.vector_lifecycle import (
             CollectionVectorLifecycleService,
-            build_model_scoped_qdrant_collections,
-            get_vector_config_model_aliases,
         )
         from app.workers.session_factory import get_worker_session
 
@@ -284,10 +280,37 @@ def vectorize_collection_rows(
                     logger.info(f"Collection {collection_id} has no vector text fields")
                     return {"status": "skipped", "message": "no_vector_fields"}
 
+                selected_row_ids = row_ids
+                # Resolve all encoder identities before selecting rows. A changed
+                # default/encoder also reindexes collections with no pending rows.
+                from app.services.vector_index_service import VectorIndexService
+                vector_lifecycle = CollectionVectorLifecycleService(session)
+                target_model_aliases = await vector_lifecycle.resolve_target_vector_models(uuid.UUID(tenant_id))
+                if not target_model_aliases:
+                    return {"status": "error", "message": "no_embedding_models"}
+                targets = await VectorIndexService(session).resolve_many(qdrant_name, target_model_aliases)
+                fingerprints = {target.model_alias: target.fingerprint for target in targets}
+                if _needs_revectorization_for_models(vector_config, target_model_aliases) or (vector_config or {}).get("index_fingerprints") != fingerprints:
+                    # Preserve previous physical indexes until the replacement is ready.
+                    await session.execute(sa_text(f"UPDATE {table_name} SET _vector_status='pending', _vector_chunk_count=0, _vector_error=NULL"))
+                    next_config = dict(vector_config or {})
+                    next_config.update(embed_model_aliases=list(target_model_aliases), index_fingerprints=fingerprints)
+                    collection.vector_config = next_config
+                    vector_config = next_config
+                    collection.vectorized_rows = collection.total_chunks = collection.failed_rows = 0
+                    await session.flush()
+                    selected_row_ids = None
+                embedding_services = {}
+                scoped_collections = [(target.model_alias, target.collection_name) for target in targets]
+                vector_store = QdrantVectorStore()
+                for target in targets:
+                    embedding_services[target.model_alias] = target.embedding_service
+                    await vector_store.ensure_collection(target.collection_name, target.dimensions)
+
                 # 3. Select pending rows
-                if row_ids:
-                    placeholders = ", ".join([f":rid_{i}" for i in range(len(row_ids))])
-                    params: Dict[str, Any] = {f"rid_{i}": rid for i, rid in enumerate(row_ids)}
+                if selected_row_ids:
+                    placeholders = ", ".join([f":rid_{i}" for i in range(len(selected_row_ids))])
+                    params: Dict[str, Any] = {f"rid_{i}": rid for i, rid in enumerate(selected_row_ids)}
                     where = f"id::text IN ({placeholders}) AND _vector_status = 'pending'"
                 else:
                     params = {}
@@ -303,74 +326,6 @@ def vectorize_collection_rows(
 
                 if not pending_rows:
                     return {"status": "ok", "vectorized": 0, "message": "no_pending_rows"}
-
-                # 4. Resolve effective embedding target models for tenant
-                vector_lifecycle = CollectionVectorLifecycleService(session)
-                target_model_aliases = await vector_lifecycle.resolve_target_vector_models(
-                    uuid.UUID(tenant_id)
-                )
-                if not target_model_aliases:
-                    logger.error("No embedding target models available for tenant %s", tenant_id)
-                    return {"status": "error", "message": "no_embedding_models"}
-
-                current_model_aliases = get_vector_config_model_aliases(vector_config)
-                if _needs_revectorization_for_models(vector_config, target_model_aliases):
-                    logger.info(
-                        "collection_vectorization_models_changed_revectorize",
-                        extra={
-                            "collection_id": collection_id,
-                            "previous_model_aliases": current_model_aliases,
-                            "new_model_aliases": target_model_aliases,
-                        },
-                    )
-                    await vector_lifecycle.cleanup_model_scoped_qdrant_collections(
-                        qdrant_name,
-                        model_aliases=list(
-                            dict.fromkeys(current_model_aliases + target_model_aliases)
-                        ),
-                    )
-                    await session.execute(
-                        sa_text(
-                            f"UPDATE {table_name} "
-                            f"SET _vector_status = 'pending', _vector_chunk_count = 0, _vector_error = NULL"
-                        )
-                    )
-                    await session.execute(
-                        sa_text(
-                            "UPDATE collections SET "
-                            "vectorized_rows = 0, total_chunks = 0, failed_rows = 0 "
-                            "WHERE id = :cid"
-                        ),
-                        {"cid": collection_id},
-                    )
-                    next_vector_config = (
-                        dict(vector_config)
-                        if isinstance(vector_config, dict)
-                        else {}
-                    )
-                    next_vector_config["embed_model_aliases"] = list(target_model_aliases)
-                    next_vector_config["embed_model_alias"] = str(target_model_aliases[0])
-                    await session.execute(
-                        sa_text(
-                            "UPDATE collections SET vector_config = CAST(:vconf AS JSONB) "
-                            "WHERE id = :cid"
-                        ),
-                        {"vconf": json.dumps(next_vector_config), "cid": collection_id},
-                    )
-                    vector_config = next_vector_config
-
-                embedding_services: dict[str, Any] = {}
-                scoped_collections = build_model_scoped_qdrant_collections(
-                    qdrant_name,
-                    target_model_aliases,
-                )
-                vector_store = QdrantVectorStore()
-                for model_alias, scoped_collection_name in scoped_collections:
-                    await EmbeddingModelConfigService.ensure_registered(session, model_alias)
-                    embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-                    embedding_services[model_alias] = embedding_service
-                    model_info = embedding_service.get_model_info()
-                    await vector_store.ensure_collection(scoped_collection_name, model_info.dimensions)
 
                 # 5. Process rows
                 vectorized = 0
@@ -430,12 +385,13 @@ def vectorize_collection_rows(
                                 {"row_id": rid},
                             )
 
+                            from app.services.bounded_embeddings import embed_texts_bounded
                             embedding_service = embedding_services[model_alias]
                             for fname, chunks in field_chunks.items():
                                 if not chunks:
                                     continue
                                 vectors = await asyncio.to_thread(
-                                    embedding_service.embed_texts, chunks
+                                    embed_texts_bounded, embedding_service, chunks
                                 )
                                 for chunk_idx, chunk_text in enumerate(chunks):
                                     point_id = _build_point_id(collection_id, rid, fname, chunk_idx)
@@ -447,6 +403,8 @@ def vectorize_collection_rows(
                                         "chunk_idx": chunk_idx,
                                         "text": chunk_text[:2000],
                                         "embed_model_alias": model_alias,
+                                        "embedding_fingerprint": fingerprints[model_alias],
+                                        "version": next(target.version for target in targets if target.model_alias == model_alias),
                                         "tenant_id": tenant_id,
                                         "collection_id": collection_id,
                                     })

@@ -110,8 +110,13 @@ def cleanup_document_artifacts(self: Task, tenant_id: str, source_id: str) -> Di
                 vector_store = QdrantVectorStore()
                 client = await vector_store.get_client()
                 target_collections = {f"{tenant_id}__{model_alias}" for model_alias in used_models}
+                import hashlib
+                base = collection_qdrant_name or f"{tenant_id}__documents"
+                prefix = "vi_" + hashlib.sha256(base.encode()).hexdigest()[:16] + "_"
+                target_collections.update(await vector_store.collection_names(prefix))
                 if collection_qdrant_name:
                     target_collections.add(collection_qdrant_name)
+                    target_collections.update(f"{collection_qdrant_name}__{alias}" for alias in used_models)
 
                 for collection_name in target_collections:
                     try:

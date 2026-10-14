@@ -62,8 +62,10 @@ async def main(reindex: bool) -> None:
             payload = {"name": served, "type": kind, "provider": "local",
                        "provider_model_name": served, "base_url": url,
                        "default_for_type": True, "enabled": True, "status": "available",
-                       "extra_config": {"vector_dim": info["dimensions"],
-                                        "max_tokens": info["max_tokens"], "version": info["version"]}}
+                       "embedding_dimensions": info["dimensions"] if kind == ModelType.EMBEDDING else None,
+                       "max_input_tokens": info["max_tokens"], "model_version": info["version"],
+                       "vector_normalized": info.get("normalized") if kind == ModelType.EMBEDDING else None,
+                       "extra_config": {"manifest": info}}
             existing = await service.get_by_alias(alias)
             if existing:
                 await service.update_model(existing.id, payload)

@@ -42,7 +42,7 @@ class HippoRAGService:
             "embedding": model.alias, "embedding_provider_model": model.provider_model_name,
             "embedding_url": model.base_url, "embedding_revision": (model.extra_config or {}).get("revision"),
             "dimensions": info.dimensions, "embedding_tokens": info.max_tokens,
-            "embedding_version": info.version, "context_tokens": llm.context_window_tokens,
+            "embedding_version": model.model_version or info.version, "embedding_normalized": getattr(model, "vector_normalized", None), "context_tokens": llm.context_window_tokens,
         }
         fingerprint = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
         extraction_identity = fingerprint({key: value for key, value in identity.items() if key.startswith("llm") or key == "context_tokens"})

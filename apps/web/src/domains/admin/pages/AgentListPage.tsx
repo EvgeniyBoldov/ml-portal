@@ -1,16 +1,27 @@
 /**
  * AgentListPage - Список агентов (контейнеры)
  */
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAgentList } from '@/shared/api/hooks';
 import { type Agent } from '@/shared/api/agents';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
-import { DataTable, type DataTableColumn, Button, Input, LifecycleStatusBadge } from '@/shared/ui';
+import {
+  DataTable,
+  type DataTableColumn,
+  Button,
+  Input,
+  LifecycleStatusBadge,
+  Badge,
+} from '@/shared/ui';
 
 export function AgentListPage() {
-  const navigate = useNavigate();
-  const { filtered: filteredAgents, isLoading, search, setSearch, goToCreate, goToDetail } = useAgentList(true);
+  const {
+    filtered: filteredAgents,
+    isLoading,
+    search,
+    setSearch,
+    goToCreate,
+    goToDetail,
+  } = useAgentList(true);
 
   const columns: DataTableColumn<Agent>[] = [
     {
@@ -20,13 +31,37 @@ export function AgentListPage() {
       filter: {
         kind: 'text',
         placeholder: 'Slug или имя',
-        getValue: (agent) => `${agent.slug ?? ''} ${agent.name ?? ''}`,
+        getValue: agent => `${agent.slug ?? ''} ${agent.name ?? ''}`,
       },
-      render: (agent) => (
+      render: agent => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           <span style={{ fontWeight: 500 }}>{agent.slug}</span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{agent.name}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+            {agent.name}
+          </span>
         </div>
+      ),
+    },
+    {
+      key: 'agent_type',
+      label: 'ТИП',
+      width: 120,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все типы',
+        options: [
+          { value: 'regular', label: 'Обычный' },
+          { value: 'shadow', label: 'Шедоу' },
+        ],
+        getValue: agent => agent.agent_type ?? 'regular',
+      },
+      render: agent => (
+        <Badge
+          tone={agent.agent_type === 'shadow' ? 'info' : 'neutral'}
+          size="small"
+        >
+          {agent.agent_type === 'shadow' ? 'Шедоу' : 'Обычный'}
+        </Badge>
       ),
     },
     {
@@ -40,9 +75,9 @@ export function AgentListPage() {
           { value: 'active', label: 'Active' },
           { value: 'deprecated', label: 'Deprecated' },
         ],
-        getValue: (agent) => agent.lifecycle_status ?? 'active',
+        getValue: agent => agent.lifecycle_status ?? 'active',
       },
-      render: (agent) => (
+      render: agent => (
         <LifecycleStatusBadge
           lifecycleStatus={agent.lifecycle_status}
           deprecatedAt={agent.deprecated_at}
@@ -61,9 +96,13 @@ export function AgentListPage() {
           { value: 'has_version', label: 'Есть основная версия' },
           { value: 'no_version', label: 'Нет основной версии' },
         ],
-        getValue: (agent) => (agent.current_version_number != null ? 'has_version' : 'no_version'),
+        getValue: agent =>
+          agent.current_version_number != null ? 'has_version' : 'no_version',
       },
-      render: (agent) => agent.current_version_number != null ? `v${agent.current_version_number}` : '—',
+      render: agent =>
+        agent.current_version_number != null
+          ? `v${agent.current_version_number}`
+          : '—',
     },
     {
       key: 'description',
@@ -71,9 +110,9 @@ export function AgentListPage() {
       filter: {
         kind: 'text',
         placeholder: 'Описание',
-        getValue: (agent) => agent.description ?? '',
+        getValue: agent => agent.description ?? '',
       },
-      render: (agent) => (
+      render: agent => (
         <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>
           {agent.description || '—'}
         </span>
@@ -88,9 +127,9 @@ export function AgentListPage() {
         kind: 'date-range',
         fromPlaceholder: 'От',
         toPlaceholder: 'До',
-        getValue: (agent) => agent.created_at,
+        getValue: agent => agent.created_at,
       },
-      render: (agent) => (
+      render: agent => (
         <span style={{ color: 'var(--text-secondary)' }}>
           {new Date(agent.created_at).toLocaleDateString('ru-RU')}
         </span>
@@ -102,21 +141,19 @@ export function AgentListPage() {
     <EntityPageV2
       title="Агенты"
       mode="view"
-      breadcrumbs={[
-        { label: 'Агенты' },
-      ]}
+      breadcrumbs={[{ label: 'Агенты' }]}
       headerActions={
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Input
             placeholder="Поиск агентов..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={e => setSearch(e.target.value)}
           />
         </div>
       }
     >
-      <Tab 
-        title="Список" 
+      <Tab
+        title="Список"
         layout="full"
         actions={[
           <Button key="create" onClick={goToCreate}>

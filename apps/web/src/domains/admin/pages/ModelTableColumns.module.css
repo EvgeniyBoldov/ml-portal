@@ -1,0 +1,14 @@
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.primary-label {
+  font-weight: 500;
+}
+
+.secondary-label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}

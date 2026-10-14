@@ -126,13 +126,10 @@ class CollectionTextSearchTool(VersionedTool):
             apply_rerank_to_items,
             rerank_scores,
         )
-        from app.adapters.embeddings import EmbeddingServiceFactory
-        from app.services.embedding_model_config_service import EmbeddingModelConfigService
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.core.db import get_session_factory
         from app.services.collection.vector_lifecycle import (
             CollectionVectorLifecycleService,
-            build_model_scoped_qdrant_collections,
         )
         from app.services.collection_service import CollectionService
 
@@ -232,22 +229,27 @@ class CollectionTextSearchTool(VersionedTool):
                 # 4. Search across all model-scoped Qdrant collections
                 results: list[dict[str, Any]] = []
                 existing_collections = 0
-                for model_alias, scoped_collection_name in build_model_scoped_qdrant_collections(
-                    collection.qdrant_collection_name,
-                    target_models,
-                ):
-                    exists = await vector_store.collection_exists(scoped_collection_name)
-                    if not exists:
-                        continue
+                from app.services.vector_index_service import VectorIndexService
+                indexes = VectorIndexService(session)
+                search_targets = []
+                for target in await indexes.resolve_many(collection.qdrant_collection_name, target_models):
+                    for name, compatibility_filter in await indexes.search_targets(collection.qdrant_collection_name, target, vector_store):
+                        search_targets.append((target, name, compatibility_filter))
+                query_vectors: dict[str, list[float]] = {}
+                for target, scoped_collection_name, compatibility_filter in search_targets:
+                    model_alias = target.model_alias
                     existing_collections += 1
-                    await EmbeddingModelConfigService.ensure_registered(session, model_alias)
-                    embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-                    query_embedding = await asyncio.to_thread(embedding_service.embed_texts, [query])
+                    from app.services.bounded_embeddings import embed_texts_bounded
+                    embedding_service = target.embedding_service
+                    if target.fingerprint not in query_vectors:
+                        vectors = await asyncio.to_thread(embed_texts_bounded, embedding_service, [query])
+                        query_vectors[target.fingerprint] = vectors[0]
+                    query_embedding = [query_vectors[target.fingerprint]]
                     model_results = await vector_store.search(
                         collection=scoped_collection_name,
                         query=query_embedding[0],
                         top_k=limit * 2,
-                        filter=search_filter,
+                        filter=indexes.merge_filters(search_filter, compatibility_filter),
                     )
                     for hit in model_results:
                         payload = hit.setdefault("payload", {})
@@ -304,6 +306,8 @@ class CollectionTextSearchTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
+                from app.services.vector_rank_fusion import fuse_vector_hits
+                results = fuse_vector_hits(results)
                 # 5. Group by row_id, keep record-level summary
                 rows_map: Dict[str, Dict[str, Any]] = {}
                 for hit in results:

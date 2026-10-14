@@ -58,6 +58,8 @@ class Model(Base):
     __tablename__ = "models"
     __table_args__ = (
         CheckConstraint("context_window_tokens > 0", name="ck_models_context_window_positive"),
+        CheckConstraint("embedding_dimensions IS NULL OR embedding_dimensions > 0", name="ck_models_embedding_dimensions_positive"),
+        CheckConstraint("max_input_tokens IS NULL OR max_input_tokens > 0", name="ck_models_max_input_tokens_positive"),
         CheckConstraint("NOT use_for_long_memory OR (type = 'EMBEDDING' AND deleted_at IS NULL)", name="ck_models_long_memory_embedding"),
         Index("uq_models_long_memory_embedding", "use_for_long_memory", unique=True,
               postgresql_where=text("use_for_long_memory"), sqlite_where=text("use_for_long_memory")),
@@ -94,6 +96,12 @@ class Model(Base):
     request_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
+    # Encoder/reranker capabilities; provider manifests remain diagnostics only.
+    embedding_dimensions: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_input_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    vector_normalized: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    capabilities_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Status
     status: Mapped[ModelStatus] = mapped_column(
         SQLEnum(ModelStatus, name="model_status", create_type=True),

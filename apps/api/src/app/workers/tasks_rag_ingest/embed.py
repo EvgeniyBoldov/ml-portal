@@ -10,8 +10,6 @@ from celery import Task
 
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
-from app.adapters.embeddings import EmbeddingServiceFactory
-from app.services.embedding_model_config_service import EmbeddingModelConfigService
 from app.repositories.rag_ingest_repos import AsyncSourceRepository, AsyncEmbStatusRepository
 from app.storage.paths import get_embeddings_path, calculate_text_checksum
 from app.services.document_artifacts import get_document_artifact_key, normalize_document_source_meta
@@ -62,30 +60,24 @@ def embed_chunks_model(
             if not source:
                 raise ValueError(f"Source {source_id} not found")
 
-            await EmbeddingModelConfigService.ensure_registered(ctx.session, model_alias)
-            embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-            model_info = embedding_service.get_model_info()
+            from app.services.vector_index_service import VectorIndexService
+            target = await VectorIndexService(ctx.session).resolve("embedding", model_alias)
+            embedding_service = target.embedding_service
+            model_info = await asyncio.to_thread(embedding_service.get_model_info)
 
-            # 2. Check idempotency
-            cached = await ctx.check_idempotency(model_alias=model_alias, s3_key_field="embeddings_key")
-            if cached and cached.get("model_version") == model_info.version:
-                logger.info(f"Embedding cached for {source_id}:{model_alias}")
-                await ctx.set_completed(metrics={"status": "already_processed", "cached": True})
-                await ctx.session.commit()
-                return EmbedResult(
-                    source_id=source_id,
-                    model_alias=model_alias,
-                    embeddings_key=cached["embeddings_key"],
-                    count=cached.get("count", 0),
-                )
-
-            # 3. Read Chunks
-            resolved_chunks_key = chunks_key
-            if not resolved_chunks_key:
-                normalized_meta = normalize_document_source_meta(source.meta)
-                resolved_chunks_key = get_document_artifact_key(normalized_meta, "chunks")
+            normalized_meta = normalize_document_source_meta(source.meta)
+            resolved_chunks_key = chunks_key or get_document_artifact_key(normalized_meta, "chunks")
             if not resolved_chunks_key:
                 raise ValueError(f"No chunks_key provided for source {source_id}")
+            # Cached vectors must match both the encoder and canonical input.
+            cached = await ctx.check_idempotency(model_alias=model_alias, s3_key_field="embeddings_key")
+            if (cached and cached.get("embedding_fingerprint") == target.fingerprint
+                    and cached.get("chunks_key") == resolved_chunks_key):
+                await ctx.set_completed(metrics={"status": "already_processed", "cached": True,
+                    "embedding_fingerprint": target.fingerprint, "model_version": target.version})
+                await ctx.session.commit()
+                return EmbedResult(source_id=source_id, model_alias=model_alias,
+                    embeddings_key=cached["embeddings_key"], count=cached.get("count", 0))
 
             chunks_content = await ctx.s3_get(resolved_chunks_key)
             chunks = [json.loads(line) for line in chunks_content.decode("utf-8").splitlines() if line.strip()]
@@ -97,7 +89,7 @@ def embed_chunks_model(
             # part of both the artifact fingerprint and the cache record.
             max_tokens = int(getattr(model_info, "max_tokens", 0) or 0)
             if max_tokens <= 0:
-                max_tokens = 512
+                raise ValueError(f"Embedding token limit is unknown for {model_alias}")
 
             await emb_status_repo.create_or_update(
                 source_id=ctx.source_id,
@@ -111,28 +103,19 @@ def embed_chunks_model(
             batch_size = 32
             embeddings_data = []
             processed_count = 0
-            truncated_chunks = 0
 
             for i in range(0, len(chunks), batch_size):
                 batch_chunks = chunks[i : i + batch_size]
-                batch_texts = []
-                for chunk in batch_chunks:
-                    raw_text = str(chunk.get("text", "") or "")
-                    # Chunking is configured in whitespace-token units. Do
-                    # not treat a model token limit as a character limit: that
-                    # silently discarded most non-ASCII content.
-                    tokens = raw_text.split()
-                    if len(tokens) > max_tokens:
-                        truncated_chunks += 1
-                        raw_text = " ".join(tokens[:max_tokens])
-                    batch_texts.append(raw_text)
-
-                batch_vectors = await asyncio.to_thread(embedding_service.embed_texts, batch_texts)
+                batch_texts = [str(chunk.get("text", "") or "") for chunk in batch_chunks]
+                from app.services.bounded_embeddings import embed_texts_bounded
+                batch_vectors = await asyncio.to_thread(embed_texts_bounded, embedding_service, batch_texts)
 
                 for chunk, vector in zip(batch_chunks, batch_vectors):
                     embeddings_data.append({
                         "chunk_id": chunk["chunk_id"],
                         "vector": vector,
+                        "embedding_fingerprint": target.fingerprint,
+                        "chunks_key": resolved_chunks_key,
                         "index": chunk.get("index", 0),
                     })
 
@@ -156,7 +139,7 @@ def embed_chunks_model(
             # 6. Save Embeddings to S3 (JSONL)
             embeddings_jsonl = "\n".join(json.dumps(e, ensure_ascii=False) for e in embeddings_data)
             embeddings_checksum = calculate_text_checksum(
-                f"{resolved_chunks_key}:{model_alias}:{model_info.version}:{len(embeddings_data)}"
+                f"{resolved_chunks_key}:{model_alias}:{target.fingerprint}:{len(embeddings_data)}"
             )
 
             embeddings_key = get_embeddings_path(
@@ -175,6 +158,7 @@ def embed_chunks_model(
             embedding_artifacts = dict(normalized_meta.get("embedding_artifacts") or {})
             embedding_artifacts[model_alias] = {
                 "key": embeddings_key,
+                "embedding_fingerprint": target.fingerprint,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             normalized_meta["embedding_artifacts"] = embedding_artifacts
@@ -188,7 +172,7 @@ def embed_chunks_model(
                 "model_version": model_info.version,
                 "dimensions": model_info.dimensions,
                 "max_tokens": max_tokens,
-                "truncated_chunks": truncated_chunks,
+                "embedding_fingerprint": target.fingerprint,
                 "duration_sec": duration,
                 "vectors_per_sec": round(len(embeddings_data) / duration, 1) if duration > 0 else 0,
             })
@@ -208,7 +192,7 @@ def embed_chunks_model(
             await ctx.session.flush()
 
             await ctx.save_idempotency(
-                {"status": "completed", "embeddings_key": embeddings_key, "count": len(embeddings_data), "model_version": model_info.version},
+                {"status": "completed", "embeddings_key": embeddings_key, "count": len(embeddings_data), "model_version": model_info.version, "embedding_fingerprint": target.fingerprint, "chunks_key": resolved_chunks_key},
                 model_alias=model_alias,
             )
             await ctx.session.commit()

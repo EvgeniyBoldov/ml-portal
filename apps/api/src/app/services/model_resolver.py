@@ -51,6 +51,15 @@ class ModelResolver:
         if not alias:
             return None
 
+        # Keep administrative disable effective even when the alias mapping is
+        # cached in another worker, or another enabled record shares its provider.
+        enabled_result = await self.session.execute(
+            select(Model.enabled).where(Model.alias == alias)
+        )
+        if enabled_result.scalar_one_or_none() is False:
+            _cache.pop(alias, None)
+            raise ValueError("Selected LLM model is disabled")
+
         # 1. Check in-memory cache
         cached = _cache.get(alias)
         if cached:

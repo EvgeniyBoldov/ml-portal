@@ -19,11 +19,9 @@ async def test_provision_qdrant_collection_uses_configured_model_dimensions(monk
         "resolve_target_vector_models",
         AsyncMock(return_value=["emb-default"]),
     )
-    monkeypatch.setattr(
-        service.vector,
-        "resolve_embedding_dimensions",
-        AsyncMock(return_value=1024),
-    )
+    from app.services.vector_index_service import VectorIndexService, VectorIndexTarget
+    monkeypatch.setattr(VectorIndexService, "resolve_many", AsyncMock(return_value=[
+        VectorIndexTarget("emb-default", "vi_test_identity", 1024, "identity", "v1")]))
 
     ensure_collection = AsyncMock()
 
@@ -35,7 +33,7 @@ async def test_provision_qdrant_collection_uses_configured_model_dimensions(monk
 
     await service._provision_qdrant_collection(uuid4(), "coll_test_vector")
 
-    ensure_collection.assert_awaited_once_with("coll_test_vector", 1024)
+    ensure_collection.assert_awaited_once_with("vi_test_identity", 1024)
 
 
 @pytest.mark.asyncio

@@ -109,7 +109,6 @@ async def register_embedding_models(session_factory: async_sessionmaker[AsyncSes
     """Load enabled embedding models from DB into EmbeddingServiceFactory."""
     try:
         from app.models.model_registry import Model, ModelType
-        from app.adapters.embeddings import EmbeddingServiceFactory, ModelConfig
         from sqlalchemy import select
 
         async with session_factory() as session:
@@ -121,45 +120,8 @@ async def register_embedding_models(session_factory: async_sessionmaker[AsyncSes
             models = result.scalars().all()
 
             for model in models:
-                base_url = model.base_url or ""
-                if not base_url and model.instance:
-                    base_url = model.instance.url or ""
-                if not base_url and model.extra_config and model.extra_config.get("base_url"):
-                    base_url = model.extra_config["base_url"]
-
-                api_key = None
-                if model.instance_id:
-                    try:
-                        from app.services.credential_service import CredentialService
-
-                        decrypted = await CredentialService(session).resolve_credentials(
-                            instance_id=model.instance_id,
-                            strategy="PLATFORM_FIRST",
-                        )
-                        if decrypted:
-                            if decrypted.auth_type in {"api_key", "litellm_api_key"}:
-                                api_key = decrypted.payload.get("api_key")
-                            elif decrypted.auth_type == "token":
-                                api_key = decrypted.payload.get("token")
-                    except Exception as exc:
-                        logger.warning(f"Failed to resolve credentials for {model.alias}: {exc}")
-
-                dimensions = None
-                if model.extra_config and "vector_dim" in model.extra_config:
-                    dimensions = model.extra_config["vector_dim"]
-
-                EmbeddingServiceFactory.register_model(
-                    ModelConfig(
-                        alias=model.alias,
-                        provider=model.provider or "",
-                        provider_model_name=model.provider_model_name,
-                        base_url=base_url,
-                        api_key=api_key,
-                        dimensions=dimensions,
-                        extra_config=model.extra_config,
-                        connector=getattr(model, "connector", None) or "",
-                    )
-                )
+                from app.services.embedding_model_config_service import EmbeddingModelConfigService
+                await EmbeddingModelConfigService.ensure_registered(session, model.alias)
                 logger.info(f"Registered embedding model: {model.alias}")
 
             logger.info(f"Registered {len(models)} embedding models")

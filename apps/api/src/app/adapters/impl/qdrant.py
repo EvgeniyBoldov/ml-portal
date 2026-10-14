@@ -59,27 +59,29 @@ class QdrantVectorStore:
                 )
                 return
 
-            info = await self._client.get_collection(collection_name=name)
-            vectors_cfg = getattr(getattr(info, "config", None), "params", None)
-            vectors = getattr(vectors_cfg, "vectors", None) if vectors_cfg is not None else None
-            actual_dim = None
-            if hasattr(vectors, "size"):
-                actual_dim = int(vectors.size)
-            elif isinstance(vectors, dict):
-                # named vectors case: use first declared vector size
-                for _, cfg in vectors.items():
-                    size = getattr(cfg, "size", None)
-                    if size is not None:
-                        actual_dim = int(size)
-                        break
+            actual_dim = await self.vector_dimension(name)
             if actual_dim is not None and actual_dim != int(dim):
                 raise ValueError(
                     f"Qdrant collection '{name}' has vector dim {actual_dim}, expected {dim}"
                 )
         except Exception as e:
-            # If collection already exists, that's fine
             if "already exists" not in str(e).lower():
                 raise
+            # A concurrent create must still satisfy this writer's dimension.
+            actual_dim = await self.vector_dimension(name)
+            if actual_dim != int(dim):
+                raise ValueError(f"Qdrant collection '{name}' has vector dim {actual_dim}, expected {dim}") from e
+
+    async def vector_dimension(self, name: str) -> int | None:
+        info = await self._client.get_collection(collection_name=name)
+        vectors = info.config.params.vectors
+        if hasattr(vectors, "size"):
+            return int(vectors.size)
+        raise ValueError(f"Named-vector collection '{name}' is not a portal single-encoder index")
+
+    async def collection_names(self, prefix: str = "") -> list[str]:
+        collections = await self._client.get_collections()
+        return [item.name for item in collections.collections if item.name.startswith(prefix)]
 
     async def get_client(self) -> AsyncQdrantClient:
         """Expose underlying async client for advanced operations."""
@@ -129,6 +131,11 @@ class QdrantVectorStore:
                 return []
             raise
 
+    async def count_by_filter(self, collection: str, filter: Mapping[str, Any]) -> int:
+        response = await self._client.count(collection_name=collection,
+            count_filter=_dict_to_filter(filter), exact=True)
+        return int(response.count)
+
     async def delete_by_filter(self, collection: str, filter: Mapping[str, Any] | qm.Filter) -> None:
         query_filter = _dict_to_filter(filter) if not isinstance(filter, qm.Filter) else filter
         if query_filter is None:
@@ -146,8 +153,10 @@ class QdrantVectorStore:
         try:
             await self._client.get_collection(collection_name=name)
             return True
-        except Exception:
-            return False
+        except Exception as exc:
+            if _is_not_found_error(exc):
+                return False
+            raise
 
     async def alias_target(self, alias: str) -> str | None:
         aliases = await self._client.get_aliases()

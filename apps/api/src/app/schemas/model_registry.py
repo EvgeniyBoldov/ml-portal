@@ -2,7 +2,7 @@
 Model Registry Pydantic schemas
 
 New architecture schemas for Model table.
-Only LLM and Embedding models stored in database.
+Typed contracts for registered models and provider metadata discovery.
 """
 from __future__ import annotations
 from typing import List, Optional, Dict, Any
@@ -58,6 +58,9 @@ class ModelBase(BaseModel):
     base_url: Optional[str] = Field(None, max_length=500, description="Direct endpoint URL for local or standalone model connectors")
     instance_id: Optional[str] = Field(None, description="FK to tool_instances (provider connection)")
     extra_config: Optional[Dict[str, Any]] = Field(None, description="Provider-specific config (JSON)")
+    embedding_dimensions: Optional[int] = Field(None, ge=1)
+    max_input_tokens: Optional[int] = Field(None, ge=1)
+    vector_normalized: Optional[bool] = None
     context_window_tokens: int = Field(16_384, ge=1)
     request_timeout_s: Optional[int] = Field(None, ge=1)
     max_retries: Optional[int] = Field(None, ge=0)
@@ -93,6 +96,9 @@ class ModelUpdate(BaseModel):
     provider_model_name: Optional[str] = Field(None, min_length=1, max_length=255)
     instance_id: Optional[str] = Field(None, description="FK to tool_instances")
     extra_config: Optional[Dict[str, Any]] = None
+    embedding_dimensions: Optional[int] = Field(None, ge=1)
+    max_input_tokens: Optional[int] = Field(None, ge=1)
+    vector_normalized: Optional[bool] = None
     context_window_tokens: Optional[int] = Field(None, ge=1)
     request_timeout_s: Optional[int] = Field(None, ge=1)
     max_retries: Optional[int] = Field(None, ge=0)
@@ -119,6 +125,7 @@ class Model(ModelBase):
     """Schema for model response"""
     id: str
     instance_name: Optional[str] = Field(None, description="Instance name (from joined relation)")
+    capabilities_checked_at: Optional[datetime] = None
     last_health_check_at: Optional[datetime] = None
     health_status: Optional[HealthStatusEnum] = None
     health_error: Optional[str] = None
@@ -162,3 +169,22 @@ ModelRegistryBase = ModelBase
 ModelRegistryCreate = ModelCreate
 ModelRegistryUpdate = ModelUpdate
 ModelRegistryListResponse = ModelListResponse
+
+
+class ModelProbeRequest(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+    base_url: Optional[str] = None
+    connector: Optional[ModelConnectorEnum] = None
+    instance_id: Optional[str] = None
+    provider_model_name: Optional[str] = None
+    extra_config: Optional[Dict[str, Any]] = None
+
+
+class ModelProbeResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    provider_model_name: str = ""
+    model_version: str = ""
+    model_type: Optional[str] = None
+    health_status: str = "unknown"
+    raw: Dict[str, Any] = Field(default_factory=dict)
+    warning: Optional[str] = None

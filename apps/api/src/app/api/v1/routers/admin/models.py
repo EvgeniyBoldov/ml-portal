@@ -1,20 +1,18 @@
 """Models API endpoints (New Architecture)
 
-CRUD operations for LLM and Embedding models.
+CRUD operations for LLM, embedding and reranker models.
 No file system scanning - models are added manually.
 """
 from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, Tuple
-import httpx
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_uow, get_current_user, require_admin
-from app.core.http.tls import outbound_http_verify
 from app.core.security import UserCtx
 from app.services.model_service import ModelService
 from app.models.model_registry import Model, HealthStatus
@@ -22,6 +20,7 @@ from app.repositories.tool_instance_repository import ToolInstanceRepository
 from app.schemas.model_registry import (
     Model as ModelSchema,
     ModelCreate,
+    ModelProbeRequest, ModelProbeResponse,
     ModelUpdate,
     ModelListResponse,
     ModelTypeEnum,
@@ -31,157 +30,15 @@ from app.schemas.model_registry import (
 )
 from app.core.logging import get_logger
 from app.services.credential_service import CredentialService, CredentialError
-from app.services.model_connector_profiles import build_model_auth_headers, get_healthcheck_paths
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["models"])
 
 
-def _map_modality_to_model_type(modality: str | None) -> Optional[str]:
-    raw = str(modality or "").strip().lower()
-    if not raw:
-        return None
-    if "embed" in raw or raw == "text":
-        return "embedding"
-    if "rerank" in raw:
-        return "reranker"
-    if "chat" in raw or "llm" in raw or "text" in raw:
-        return "llm_chat"
-    return None
-
-
-async def _resolve_model_api_key(model: Model, session: AsyncSession) -> Optional[str]:
-    if model.instance_id:
-        try:
-            decrypted = await CredentialService(session).resolve_credentials(
-                instance_id=model.instance_id,
-                strategy="PLATFORM_FIRST",
-            )
-            if decrypted:
-                payload = decrypted.payload or {}
-                if decrypted.auth_type in {"api_key", "litellm_api_key"}:
-                    return payload.get("api_key")
-                if decrypted.auth_type == "token":
-                    return payload.get("token")
-                if decrypted.auth_type == "basic":
-                    return payload.get("password")
-        except CredentialError as exc:
-            logger.warning("Failed to resolve model credentials for %s: %s", model.alias, exc)
-
-    return None
-
-
-async def _probe_manifest(
-    base_url: str,
-    *,
-    connector: str | None = None,
-    api_key: str | None = None,
-    extra_config: Dict[str, Any] | None = None,
-) -> Tuple[Dict[str, Any], str]:
-    normalized = base_url.rstrip("/")
-    health_status = "unavailable"
-    health_payload: Dict[str, Any] = {}
-    headers = build_model_auth_headers(connector, api_key, extra_config=extra_config)
-    async with httpx.AsyncClient(timeout=8.0, verify=outbound_http_verify()) as client:
-        for path in get_healthcheck_paths(connector, extra_config=extra_config):
-            try:
-                health = await client.get(f"{normalized}/{path.lstrip('/')}", headers=headers)
-                if health.status_code == 200:
-                    health_status = "healthy"
-                    if health.headers.get("content-type", "").startswith("application/json"):
-                        health_payload = health.json()
-                    break
-            except Exception:
-                continue
-
-        first: Dict[str, Any] | None = None
-        try:
-            desc_resp = await client.get(f"{normalized}/description", headers=headers)
-            if desc_resp.status_code == 200:
-                desc_data = desc_resp.json()
-                if isinstance(desc_data, dict):
-                    first = desc_data
-        except Exception:
-            first = None
-
-        if first is None:
-            model_paths = ["/models"]
-            if str(connector or "").strip().lower() == "litellm_http":
-                model_paths = ["/v1/models", "/models"]
-
-            resp = None
-            last_error: str | None = None
-            for path in model_paths:
-                try:
-                    candidate = await client.get(f"{normalized}/{path.lstrip('/')}", headers=headers)
-                except Exception as exc:
-                    last_error = str(exc)
-                    continue
-                if candidate.status_code < 400:
-                    resp = candidate
-                    break
-                if candidate.status_code == 401:
-                    raise ValueError("Authentication failed while probing model manifest")
-                if candidate.status_code == 403:
-                    raise ValueError("Access forbidden while probing model manifest")
-                try:
-                    body = candidate.json()
-                    if isinstance(body, dict):
-                        error = body.get("error")
-                        if isinstance(error, dict):
-                            last_error = str(error.get("message") or error.get("code") or candidate.text[:200])
-                        else:
-                            last_error = str(error or body.get("message") or candidate.text[:200])
-                    else:
-                        last_error = candidate.text[:200]
-                except Exception:
-                    last_error = candidate.text[:200]
-            if resp is None:
-                raise ValueError(last_error or "models_manifest_unreachable")
-            resp.raise_for_status()
-            data = resp.json()
-            if not isinstance(data, list) or not data:
-                if isinstance(data, dict) and isinstance(data.get("data"), list) and data["data"]:
-                    first = data["data"][0] or {}
-                else:
-                    raise ValueError("models_manifest_empty")
-            else:
-                first = data[0] or {}
-            if not isinstance(first, dict):
-                raise ValueError("models_manifest_invalid")
-        first["_health"] = health_payload
-        return first, health_status
-
-
-def _resolve_connector(model: Model) -> str:
-    connector = getattr(model, "connector", None)
-    if connector:
-        return connector
-
-    provider = (model.provider or "").lower()
-    model_type = model.type.value if hasattr(model.type, "value") else str(model.type)
-    if provider == "local" and model_type == "embedding":
-        return "local_emb_http"
-    if provider == "local" and model_type == "reranker":
-        return "local_rerank_http"
-    if provider == "local" and model_type == "llm_chat":
-        return "local_llm_http"
-    if provider == "litellm":
-        return "litellm_http"
-    if provider == "azure":
-        return "azure_openai_http"
-    return "openai_http"
-
-
-def _resolve_base_url(model: Model) -> Optional[str]:
-    if getattr(model, "base_url", None):
-        return model.base_url
-    state = inspect(model)
-    if "instance" not in state.unloaded and model.instance is not None and getattr(model.instance, "url", None):
-        return model.instance.url
-    if model.extra_config and model.extra_config.get("base_url"):
-        return model.extra_config.get("base_url")
-    return None
+from app.services.model_metadata_service import (
+    _map_modality_to_model_type, _resolve_model_api_key, _probe_manifest,
+    _resolve_connector, _resolve_base_url, ModelMetadataService, discovered_characteristics,
+)
 
 
 def serialize_model(model: Model) -> Dict[str, Any]:
@@ -204,6 +61,10 @@ def serialize_model(model: Model) -> Dict[str, Any]:
         "provider": model.provider,
         "connector": _resolve_connector(model),
         "provider_model_name": model.provider_model_name,
+        "embedding_dimensions": model.embedding_dimensions,
+        "max_input_tokens": model.max_input_tokens,
+        "vector_normalized": model.vector_normalized,
+        "capabilities_checked_at": model.capabilities_checked_at,
         "context_window_tokens": model.context_window_tokens,
         "request_timeout_s": model.request_timeout_s,
         "max_retries": model.max_retries,
@@ -316,13 +177,14 @@ async def _load_embedding_usage_rows(session: AsyncSession, model_alias: str) ->
     return rows
 
 
-@router.post("/probe-info")
+@router.post("/probe-info", response_model=ModelProbeResponse)
 async def probe_model_info(
-    payload: Dict[str, Any],
+    payload: ModelProbeRequest,
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
     admin_user = Depends(require_admin),
 ):
+    payload = payload.model_dump()
     base_url = str(payload.get("base_url") or "").strip()
     connector = str(payload.get("connector") or "").strip() or None
     instance_id_raw = str(payload.get("instance_id") or "").strip()
@@ -367,6 +229,7 @@ async def probe_model_info(
             connector=connector,
             api_key=api_key,
             extra_config=extra_config,
+            provider_model_name=payload.get("provider_model_name"),
         )
         return {
             "provider_model_name": str(first.get("alias") or first.get("name") or ""),
@@ -376,7 +239,9 @@ async def probe_model_info(
             "raw": first,
         }
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Probe failed: {exc}")
+        logger.warning("Model metadata probe unavailable: %s", type(exc).__name__)
+        return ModelProbeResponse(provider_model_name=payload.get("provider_model_name") or "",
+                                  warning="Service metadata unavailable; missing characteristics may be entered manually")
 
 
 @router.post("/{model_id}/verify")
@@ -402,6 +267,7 @@ async def verify_model(
             connector=_resolve_connector(model),
             api_key=api_key,
             extra_config=model.extra_config,
+            provider_model_name=model.provider_model_name,
         )
         # `important_params` was a legacy HF-specific presentation field. Keep
         # the provider manifest diagnostic, but do not persist or expose its
@@ -417,18 +283,9 @@ async def verify_model(
             update_data["type"] = model_type
 
         extra = dict(model.extra_config or {})
-        if manifest.get("dimensions") is not None:
-            try:
-                extra["vector_dim"] = int(manifest.get("dimensions"))
-            except Exception:
-                pass
-        if manifest.get("context_window_tokens") is not None:
-            try:
-                context_window = int(manifest["context_window_tokens"])
-                if context_window > 0:
-                    update_data["context_window_tokens"] = context_window
-            except Exception:
-                pass
+        kind = model_type or model.type.value
+        update_data.update(discovered_characteristics(manifest, kind))
+        update_data["capabilities_checked_at"] = datetime.now(timezone.utc)
         extra["manifest"] = manifest
         update_data["extra_config"] = extra
 
@@ -437,7 +294,7 @@ async def verify_model(
             raise HTTPException(status_code=404, detail="Model not found")
 
         hs = HealthStatus.HEALTHY if health_status == "healthy" else HealthStatus.UNAVAILABLE
-        await service.update_health_status(updated.id, hs, latency_ms=None, error=None if health_status == "healthy" else "verify_failed")
+        await service.update_health_status(updated.id, hs, latency_ms=(manifest.get("_health") or {}).get("latency_ms"), error=None if health_status == "healthy" else "verify_failed")
         if health_status == "healthy":
             await service.update_model(updated.id, {"status": "available"})
         else:
@@ -575,7 +432,8 @@ async def create_model(
     """Create a new model"""
     try:
         service = ModelService(session)
-        model = await service.create_model(payload.model_dump())
+        data = await ModelMetadataService.prepare_write(session, payload.model_dump())
+        model = await service.create_model(data)
         return serialize_model(model)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -619,6 +477,10 @@ async def update_model(
     try:
         service = ModelService(session)
         data = payload.model_dump(exclude_unset=True)
+        existing = await service.get_by_id(uuid.UUID(model_id))
+        if not existing:
+            raise HTTPException(status_code=404, detail="Model not found")
+        data = await ModelMetadataService.prepare_write(session, data, existing)
         model = await service.update_model(uuid.UUID(model_id), data)
         
         if not model:

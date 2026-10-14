@@ -209,50 +209,20 @@ class CollectionVectorLifecycleService:
         return []
 
     async def resolve_embedding_dimensions(self, model_alias: str) -> int:
-        try:
-            result = await self.session.execute(
-                text(
-                    "SELECT extra_config "
-                    "FROM models "
-                    "WHERE alias = :alias AND type = 'EMBEDDING' "
-                    "AND enabled = true AND status = 'AVAILABLE' "
-                    "LIMIT 1"
-                ),
-                {"alias": model_alias},
-            )
-            extra = result.scalar_one_or_none() or {}
-            if isinstance(extra, dict):
-                raw_dim = extra.get("vector_dim", extra.get("dimensions"))
-                if raw_dim is not None:
-                    dim = int(raw_dim)
-                    if dim > 0:
-                        return dim
-        except Exception as e:
-            logger.warning(
-                "Failed to resolve embedding dimensions for vector collection provisioning",
-                extra={"model_alias": model_alias, "error": str(e)},
-            )
-        return 384
+        from app.services.vector_index_service import VectorIndexService
+        return (await VectorIndexService(self.session).resolve("capabilities", model_alias)).dimensions
 
     async def provision_qdrant_collection(self, tenant_id: uuid.UUID, qdrant_collection_name: str) -> None:
         if not qdrant_collection_name:
             return
-
         from app.adapters.impl.qdrant import QdrantVectorStore
-
-        vector_store = QdrantVectorStore()
+        from app.services.vector_index_service import VectorIndexService
         target_models = await self.resolve_target_vector_models(tenant_id)
         if not target_models:
-            raise RuntimeError(
-                f"No embedding target models resolved for tenant {tenant_id} while provisioning {qdrant_collection_name}"
-            )
-
-        for model_alias, scoped_collection_name in build_model_scoped_qdrant_collections(
-            qdrant_collection_name,
-            target_models,
-        ):
-            vector_dim = await self.resolve_embedding_dimensions(model_alias)
-            await vector_store.ensure_collection(scoped_collection_name, vector_dim)
+            raise RuntimeError(f"No embedding target models resolved for tenant {tenant_id}")
+        store = QdrantVectorStore()
+        for target in await VectorIndexService(self.session).resolve_many(qdrant_collection_name, target_models):
+            await store.ensure_collection(target.collection_name, target.dimensions)
 
     async def cleanup_qdrant_collection(self, qdrant_collection_name: str) -> None:
         if not qdrant_collection_name:
@@ -278,8 +248,16 @@ class CollectionVectorLifecycleService:
         *,
         model_aliases: list[str] | None = None,
     ) -> None:
+        import hashlib
+        from app.adapters.impl.qdrant import QdrantVectorStore
         aliases = normalize_embedding_model_aliases(model_aliases)
-        target_names = {str(qdrant_collection_name or "").strip()}
+        prefix = "vi_" + hashlib.sha256(qdrant_collection_name.encode()).hexdigest()[:16] + "_"
+        try:
+            target_names = set(await QdrantVectorStore().collection_names(prefix))
+        except Exception as exc:
+            logger.warning("Cannot discover vector index generations during cleanup: %s", exc)
+            target_names = set()
+        target_names.add(str(qdrant_collection_name or "").strip())
         target_names.update(
             scoped_name
             for _, scoped_name in build_model_scoped_qdrant_collections(
@@ -306,4 +284,4 @@ class CollectionVectorLifecycleService:
                 "Failed to drop table during collection cleanup",
                 extra={"table_name": table_name, "error": str(cleanup_err)},
             )
-        await self.cleanup_qdrant_collection(qdrant_collection_name or "")
+        await self.cleanup_model_scoped_qdrant_collections(qdrant_collection_name or "")

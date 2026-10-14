@@ -249,6 +249,9 @@ class CollectionRowService:
                     )
                 ],
             }
+            import hashlib
+            prefix = "vi_" + hashlib.sha256(collection.qdrant_collection_name.encode()).hexdigest()[:16] + "_"
+            target_collections.update(await vector_store.collection_names(prefix))
             for collection_name in target_collections:
                 if not collection_name:
                     continue

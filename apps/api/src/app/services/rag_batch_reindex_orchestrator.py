@@ -4,11 +4,14 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_, exists
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.model_registry import ModelRegistry
+from app.models.model_registry import ModelRegistry, ModelType, ModelStatus
+from app.models.tenant import Tenants
+from app.services.model_capabilities import embedding_fingerprint
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import RAGStatus
 from app.repositories.factory import AsyncRepositoryFactory
@@ -32,7 +35,7 @@ class RAGBatchReindexOrchestrator:
 
     Stale criteria:
     - has completed `index` node for model alias
-    - current model version exists and differs from indexed node version
+    - vector-space fingerprint differs or is absent (legacy indexes)
     """
 
     def __init__(self, session: AsyncSession):
@@ -64,7 +67,7 @@ class RAGBatchReindexOrchestrator:
                         "doc_id": str(row.doc_id),
                         "tenant_id": str(row.tenant_id),
                         "model_alias": str(row.node_key),
-                        "reason": "stale_model_version",
+                        "reason": "stale_embedding_configuration",
                     }
                     for row in stale_rows
                 ],
@@ -137,28 +140,54 @@ class RAGBatchReindexOrchestrator:
         model_alias: Optional[str],
         limit: int,
     ):
+        models_stmt = select(ModelRegistry).where(
+            ModelRegistry.type == ModelType.EMBEDDING,
+            ModelRegistry.enabled.is_(True), ModelRegistry.deleted_at.is_(None),
+            ModelRegistry.status == ModelStatus.AVAILABLE,
+        ).order_by(ModelRegistry.created_at.asc())
+        models = list((await self.session.execute(models_stmt)).scalars().all())
+        default = next((model.alias for model in models if model.default_for_type),
+                       models[0].alias if models else None)
+        stale_conditions = []
+        selected_conditions = []
+        for model in models:
+            if model_alias and model.alias != model_alias:
+                continue
+            try:
+                fingerprint = embedding_fingerprint(model)
+            except ValueError:
+                logger.warning("Model %s needs capability verification before reindex", model.alias)
+                continue
+            selected = True if model_alias or model.alias == default else Tenants.embedding_model_alias == model.alias
+            selected_conditions.append(and_(ModelRegistry.alias == model.alias, selected))
+            stale_conditions.append(and_(ModelRegistry.alias == model.alias,
+                RAGStatus.metrics_json["embedding_fingerprint"].astext.is_distinct_from(fingerprint)))
+        if not stale_conditions:
+            return []
+        chunk_stage = aliased(RAGStatus)
+        embedding_stage = aliased(RAGStatus)
+        chunks_ready = exists(select(chunk_stage.id).where(
+            chunk_stage.doc_id == RAGDocument.id, chunk_stage.node_type == "pipeline",
+            chunk_stage.node_key == "chunk", chunk_stage.status == "completed"))
+        embedding_active = exists(select(embedding_stage.id).where(
+            embedding_stage.doc_id == RAGDocument.id, embedding_stage.node_type == "embedding",
+            embedding_stage.node_key == ModelRegistry.alias,
+            embedding_stage.status.in_(["processing", "queued"])))
         stmt = (
-            select(
-                RAGStatus.doc_id,
-                RAGDocument.tenant_id,
-                RAGStatus.node_key,
-                RAGStatus.model_version,
-                ModelRegistry.model_version.label("current_model_version"),
-            )
-            .join(RAGDocument, RAGDocument.id == RAGStatus.doc_id)
-            .join(ModelRegistry, ModelRegistry.alias == RAGStatus.node_key)
-            .where(RAGStatus.node_type == "index")
-            .where(RAGStatus.status == "completed")
-            .where(RAGStatus.model_version.is_not(None))
-            .where(ModelRegistry.model_version.is_not(None))
-            .where(RAGStatus.model_version != ModelRegistry.model_version)
+            select(RAGDocument.id.label("doc_id"), RAGDocument.tenant_id, ModelRegistry.alias.label("node_key"))
+            .join(Tenants, Tenants.id == RAGDocument.tenant_id)
+            .join(ModelRegistry, or_(*selected_conditions))
+            .outerjoin(RAGStatus, and_(RAGStatus.doc_id == RAGDocument.id,
+                       RAGStatus.node_key == ModelRegistry.alias, RAGStatus.node_type == "index"))
+            .where(or_(
+                and_(RAGStatus.status.in_(["completed", "failed"]), or_(*stale_conditions)),
+                and_(or_(RAGStatus.id.is_(None), RAGStatus.status == "pending"), chunks_ready)))
+            .where(~embedding_active)
             .where(RAGDocument.status != "archived")
-            .order_by(RAGStatus.updated_at.asc())
+            .order_by(RAGDocument.created_at.asc(), ModelRegistry.alias)
             .limit(max(1, min(int(limit), 500)))
         )
         if tenant_id:
             stmt = stmt.where(RAGDocument.tenant_id == tenant_id)
-        if model_alias:
-            stmt = stmt.where(RAGStatus.node_key == model_alias)
         result = await self.session.execute(stmt)
         return result.all()

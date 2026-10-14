@@ -58,7 +58,8 @@ class ModelService:
             )
     
     def _normalize_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        payload = dict(data)
+        from app.services.model_capabilities import normalize_capability_payload
+        payload = normalize_capability_payload(data)
 
         connector = payload.get("connector")
         if connector is None:
@@ -208,13 +209,21 @@ class ModelService:
         model = await self.get_by_id(model_id)
         if not model:
             return None
+        if "capabilities_checked_at" not in data and any(
+            key in data and data[key] != getattr(model, key, None)
+            for key in ("embedding_dimensions", "max_input_tokens", "vector_normalized", "model_version")
+        ):
+            data = {**data, "capabilities_checked_at": None}
         old_default_for_type = bool(model.default_for_type)
         old_long_memory = bool(model.use_for_long_memory)
+        # Verification/health snapshots are diagnostic, not encoder changes.
         encoder_config_changed = old_long_memory and any(
             key in data and data[key] != getattr(model, key, None)
-            for key in ("provider_model_name", "base_url", "instance_id", "extra_config", "model_version")
+            for key in ("provider_model_name", "base_url", "instance_id", "connector", "model_version", "embedding_dimensions", "max_input_tokens", "vector_normalized")
         )
-        
+        if old_long_memory and "extra_config" in data:
+            encoder_config_changed |= (data.get("extra_config") or {}).get("revision") != (model.extra_config or {}).get("revision")
+
         data = self._normalize_payload({
             "type": model.type,
             "provider": data.get("provider", model.provider),
@@ -222,6 +231,9 @@ class ModelService:
             "instance_id": data.get("instance_id", model.instance_id),
             "base_url": data.get("base_url", model.base_url),
             "extra_config": data.get("extra_config", model.extra_config),
+            "embedding_dimensions": getattr(model, "embedding_dimensions", None),
+            "max_input_tokens": getattr(model, "max_input_tokens", None),
+            "vector_normalized": getattr(model, "vector_normalized", None),
             **data,
         })
         if old_long_memory and data.get("use_for_long_memory") is False:

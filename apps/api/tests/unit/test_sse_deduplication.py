@@ -72,6 +72,7 @@ async def test_no_publish_when_status_unchanged():
     manager._resolve_status_model_context = AsyncMock(return_value=(None, None, {}))
     manager._get_current_model_versions = AsyncMock(return_value={})
     manager._annotate_stale_models = MagicMock()
+    manager._get_current_model_fingerprints = AsyncMock(return_value={})
     manager._refresh_collection_statuses_for_document = AsyncMock()
 
     with patch("app.services.rag_status_manager.calculate_aggregate_status", return_value=("ready", {"effective_status": "ready"})):
@@ -106,6 +107,7 @@ async def test_publishes_when_status_changes():
     manager._resolve_status_model_context = AsyncMock(return_value=(None, None, {}))
     manager._get_current_model_versions = AsyncMock(return_value={})
     manager._annotate_stale_models = MagicMock()
+    manager._get_current_model_fingerprints = AsyncMock(return_value={})
     manager._refresh_collection_statuses_for_document = AsyncMock()
 
     with patch("app.services.rag_status_manager.calculate_aggregate_status", return_value=("ready", {"effective_status": "ready"})):

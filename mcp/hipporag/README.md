@@ -8,8 +8,9 @@ MCP shim at `POST /mcp` follows the standalone SQL connector pattern.
 ## Production integration
 
 `MEMORY_SEARCH_BACKEND=hipporag` is the default for API and Celery. The API selects
-the registry default LLM_CHAT for native OpenIE and the default EMBEDDING model
-for vectors. Provider credentials stay in the API. A temporary Redis capability
+the registry default LLM_CHAT for native OpenIE and the EMBEDDING model selected
+with `use_for_long_memory` for vectors. This selection is independent of ordinary
+RAG global/tenant defaults. Provider credentials stay in the API. A temporary Redis capability
 authorizes `/internal/hipporag/chat` and `/internal/hipporag/embed` callbacks and is
 revoked after the operation. The worker needs access to `api:8000`; experimental
 `HIPPO_LLM_*` variables do not select production models.
@@ -23,6 +24,7 @@ disabled. Their code and PostgreSQL data remain for history.
 
 `memory.search` calls `/portal/corpus/search` directly. The worker owns one shared
 persistent corpus in `portal-corpus.sqlite` and native indexes on its volume.
+These vectors and the native graph are not stored in Qdrant.
 Documents replace earlier revisions by ID; failed graph indexing rolls back corpus
 changes. Corpus search is independent of MemoryItem/MemoryClaim, glossary, dialog
 facts, tenant/project scopes and source ACL. The shared document memory is available
@@ -31,7 +33,7 @@ There is no legacy fallback, including when MEMORY_SEARCH_BACKEND is set to lega
 
 Backfill existing RAG-indexed canonical documents with:
 `docker compose exec -T api python - < scripts/index_hipporag_documents.py`.
-Model defaults still come from the registry; graph/cache identity uses semantic
+Model selections come from the registry; graph/cache identity uses semantic
 model configuration rather than mutable health timestamps. Native work is serialized.
 
 Encoder limits come from the real sentence encoder. Chunks use a conservative

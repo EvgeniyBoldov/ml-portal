@@ -44,13 +44,14 @@ async def test_config_service_registers_model_with_resolved_credentials() -> Non
         connector="openai_http",
         base_url=None,
         instance=SimpleNamespace(url="https://embedding.example"),
-        extra_config={"vector_dim": 1536},
+        extra_config={"vector_dim": 1536, "max_tokens": 8191},
         instance_id="instance-id",
     )
     result = MagicMock()
     result.scalars.return_value.first.return_value = model
     session = MagicMock()
     session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
     credentials = SimpleNamespace(
         auth_type="api_key",
         payload={"api_key": "secret"},
@@ -80,7 +81,31 @@ async def test_config_service_rejects_unknown_model() -> None:
     result.scalars.return_value.first.return_value = None
     session = MagicMock()
     session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
 
     with patch.object(EmbeddingServiceFactory, "list_available_models", return_value=[]), \
          pytest.raises(RuntimeError, match="Embedding model 'missing' is not configured"):
         await EmbeddingModelConfigService.ensure_registered(session, "missing")
+
+
+@pytest.mark.asyncio
+async def test_discovery_persists_the_same_characteristics_used_by_indexing(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services import model_metadata_service
+    model = SimpleNamespace(alias='discovery-test', provider='local', connector='local_emb_http',
+                            provider_model_name='encoder', base_url='http://encoder', instance_id=None,
+                            extra_config={}, embedding_dimensions=None, max_input_tokens=None,
+                            model_version=None, vector_normalized=None)
+    session = SimpleNamespace(execute=AsyncMock(), flush=AsyncMock())
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = model
+    session.execute.return_value = result
+    monkeypatch.setattr(model_metadata_service, '_probe_manifest', AsyncMock(return_value=(
+        {'alias':'encoder', 'dimensions':1024, 'max_tokens':8192, 'version':'v2', 'normalized':True}, 'healthy')))
+    await EmbeddingModelConfigService.ensure_registered(session, model.alias)
+    assert model.embedding_dimensions == 1024
+    assert model.max_input_tokens == 8192
+    assert model.extra_config['manifest']['version'] == 'v2'
+    assert model.capabilities_checked_at is not None
+    assert EmbeddingServiceFactory.get_service(model.alias).get_model_info().dimensions == 1024

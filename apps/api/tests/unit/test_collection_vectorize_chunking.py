@@ -63,3 +63,7 @@ def test_build_model_scoped_qdrant_collections_keeps_primary_unsuffixed():
         ("emb-default", "coll_test"),
         ("emb-tenant", "coll_test__emb-tenant"),
     ]
+
+
+def test_changing_model_order_does_not_revectorize_identical_spaces():
+    assert not _needs_revectorization_for_models({"embed_model_aliases":["a", "b"]}, ["b", "a"])

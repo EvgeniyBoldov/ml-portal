@@ -566,7 +566,8 @@ class RAGStatusManager:
             model_availability=model_availability,
         )
         current_versions = await self._get_current_model_versions(target_models)
-        self._annotate_stale_models(agg_details, index_nodes, current_versions, target_models)
+        current_fingerprints = await self._get_current_model_fingerprints(target_models)
+        self._annotate_stale_models(agg_details, index_nodes, current_versions, target_models, current_fingerprints)
 
         # Читаем текущий статус для дедупликации
         prev_result = await self.session.execute(
@@ -678,6 +679,7 @@ class RAGStatusManager:
         index_nodes: List[Any],
         current_versions: Dict[str, str],
         target_models: List[str],
+        current_fingerprints: Dict[str, str] | None = None,
     ) -> None:
         stale_models: List[str] = []
         for node in index_nodes:
@@ -686,7 +688,10 @@ class RAGStatusManager:
                 continue
             indexed_version = getattr(node, "model_version", None)
             current_version = current_versions.get(alias)
-            if indexed_version and current_version and indexed_version != current_version:
+            indexed_fingerprint = (getattr(node, "metrics_json", None) or {}).get("embedding_fingerprint")
+            current_fingerprint = (current_fingerprints or {}).get(alias)
+            if ((indexed_version and current_version and indexed_version != current_version)
+                    or (current_fingerprint and indexed_fingerprint != current_fingerprint)):
                 stale_models.append(alias)
 
         stale_models = sorted(set(stale_models))
@@ -695,6 +700,20 @@ class RAGStatusManager:
         counters["stale_models"] = len(stale_models)
         if stale_models and agg_details.get("policy") == "all_index_ready":
             agg_details["policy"] = "index_ready_but_stale"
+
+    async def _get_current_model_fingerprints(self, aliases: List[str]) -> Dict[str, str]:
+        from app.models.model_registry import Model
+        from app.services.model_capabilities import embedding_fingerprint
+        if not aliases:
+            return {}
+        rows = (await self.session.execute(select(Model).where(Model.alias.in_(aliases)))).scalars().all()
+        result = {}
+        for model in rows:
+            try:
+                result[model.alias] = embedding_fingerprint(model)
+            except ValueError:
+                continue  # Unknown capabilities need verification, never a guessed dimension.
+        return result
 
     async def _get_current_model_versions(self, model_aliases: List[str]) -> Dict[str, str]:
         aliases = [a for a in model_aliases if a]

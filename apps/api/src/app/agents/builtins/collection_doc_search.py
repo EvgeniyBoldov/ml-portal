@@ -121,13 +121,10 @@ class CollectionDocSearchTool(VersionedTool):
             apply_rerank_to_items,
             rerank_scores,
         )
-        from app.adapters.embeddings import EmbeddingServiceFactory
-        from app.services.embedding_model_config_service import EmbeddingModelConfigService
         from app.adapters.impl.qdrant import QdrantVectorStore
         from app.core.db import get_session_factory
         from app.services.collection.vector_lifecycle import (
             CollectionVectorLifecycleService,
-            build_model_scoped_qdrant_collections,
         )
         from app.services.collection_service import CollectionService
 
@@ -209,42 +206,24 @@ class CollectionDocSearchTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
-                model_scoped_collections = build_model_scoped_qdrant_collections(
-                    collection.qdrant_collection_name,
-                    target_models,
-                )
-                search_targets: list[tuple[str, str]] = []
-                for model_alias, scoped_collection_name in model_scoped_collections:
-                    exists = await vector_store.collection_exists(scoped_collection_name)
-                    log.info(
-                        "Qdrant collection existence check",
-                        qdrant_collection_name=scoped_collection_name,
-                        exists=exists,
-                        model_alias=model_alias,
-                    )
-                    if exists:
-                        search_targets.append((model_alias, scoped_collection_name))
+                from app.services.vector_index_service import VectorIndexService, VectorIndexTarget
+                indexes = VectorIndexService(session)
+                search_targets: list[tuple[VectorIndexTarget, str, dict | None]] = []
+                for target in await indexes.resolve_many(collection.qdrant_collection_name, target_models):
+                    for name, compatibility_filter in await indexes.search_targets(collection.qdrant_collection_name, target, vector_store):
+                        search_targets.append((target, name, compatibility_filter))
                 if not search_targets:
-                    log.warning("Qdrant collection does not exist yet")
-                    return ToolResult.ok(
-                        data={
-                            "hits": [],
-                            "total": 0,
-                            "collection": collection.slug,
-                            "applied_filters": filters or {},
-                        },
-                        message="Collection exists but has not been indexed yet.",
-                        delivery="direct",
-                        logs=log.entries_dict(),
-                    )
+                    return ToolResult.fail("Selected embedding indexes are not ready; reindex this collection.", logs=log.entries_dict())
 
                 # 3. Search in all target Qdrant collections with payload-level prefilter
                 qdrant_prefilter = self._build_qdrant_prefilter(filters) if filters else None
                 results: list[dict[str, Any]] = []
-                for model_alias, candidate_name in search_targets:
-                    await EmbeddingModelConfigService.ensure_registered(session, model_alias)
-                    embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-                    model_info = embedding_service.get_model_info()
+                query_vectors: dict[str, list[float]] = {}
+                for target, candidate_name, compatibility_filter in search_targets:
+                    model_alias = target.model_alias
+                    from app.services.bounded_embeddings import embed_texts_bounded
+                    embedding_service = target.embedding_service
+                    model_info = await asyncio.to_thread(embedding_service.get_model_info)
                     log.info(
                         "Embedding model resolved",
                         alias=model_alias,
@@ -252,15 +231,16 @@ class CollectionDocSearchTool(VersionedTool):
                         dimensions=model_info.dimensions if hasattr(model_info, "dimensions") else None,
                         qdrant_collection_name=candidate_name,
                     )
-                    query_embedding = await asyncio.to_thread(
-                        embedding_service.embed_texts, [query]
-                    )
+                    if target.fingerprint not in query_vectors:
+                        vectors = await asyncio.to_thread(embed_texts_bounded, embedding_service, [query])
+                        query_vectors[target.fingerprint] = vectors[0]
+                    query_embedding = [query_vectors[target.fingerprint]]
                     log.info("Query embedded", embedding_dim=len(query_embedding[0]), model_alias=model_alias)
                     model_results = await vector_store.search(
                         collection=candidate_name,
                         query=query_embedding[0],
                         top_k=k * 4,
-                        filter=qdrant_prefilter,
+                        filter=indexes.merge_filters(qdrant_prefilter, compatibility_filter),
                     )
                     for hit in model_results:
                         payload = hit.setdefault("payload", {})
@@ -283,17 +263,9 @@ class CollectionDocSearchTool(VersionedTool):
                         logs=log.entries_dict(),
                     )
 
-                # 6. Deduplicate by chunk_id, keep best score
-                seen: Dict[str, Dict[str, Any]] = {}
-                for hit in results:
-                    chunk_id = hit.get("payload", {}).get("chunk_id", hit.get("id"))
-                    if chunk_id not in seen or hit["score"] > seen[chunk_id]["score"]:
-                        seen[chunk_id] = hit
-
-                # Keep a larger cross-model candidate pool through reranking;
-                # truncating before rerank discarded exactly the candidates the
-                # reranker is meant to rescue.
-                sorted_hits = sorted(seen.values(), key=lambda h: h["score"], reverse=True)[: k * 4]
+                # Fuse model rankings, not incomparable raw cosine scores.
+                from app.services.vector_rank_fusion import fuse_vector_hits
+                sorted_hits = fuse_vector_hits(results)[: k * 4]
                 log.info("Deduplicated hits", dedup_count=len(sorted_hits))
 
                 # 6.1 Rerank results (required for document collections)

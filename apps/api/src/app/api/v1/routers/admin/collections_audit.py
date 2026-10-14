@@ -47,6 +47,26 @@ async def audit_qdrant_vector_collections(
         vector_store = QdrantVectorStore()
         qdrant_collections = await vector_store._client.get_collections()
         actual_names = {str(item.name) for item in qdrant_collections.collections}
+        import hashlib
+        # Every generation under a registered namespace is owned, including
+        # retained legacy/previous-model indexes. Never delete these as orphans.
+        for item in registered:
+            base = str(item.qdrant_collection_name)
+            prefix = "vi_" + hashlib.sha256(base.encode()).hexdigest()[:16] + "_"
+            for name in actual_names:
+                if name.startswith(prefix) or name.startswith(base + "__"):
+                    expected_map[name] = item
+            # The DB name is a namespace, no longer a required physical index.
+            if base not in actual_names:
+                expected_map.pop(base, None)
+            if item.has_vector_search:
+                from app.services.collection.vector_lifecycle import CollectionVectorLifecycleService
+                from app.services.vector_index_service import VectorIndexService
+                aliases = await CollectionVectorLifecycleService(session).resolve_target_vector_models(item.tenant_id)
+                for target in await VectorIndexService(session).resolve_many(base, aliases):
+                    expected_map[target.collection_name] = item
+        expected_names = set(expected_map)
+
 
         missing_entries: list[VectorCollectionAuditEntry] = []
         for name in sorted(expected_names - actual_names):

@@ -2,17 +2,16 @@
  * ModelPage — просмотр/создание/редактирование/удаление модели.
  *
  * Использует useEntityEditor для стандартной CRUD логики.
- * vectorDim — отдельный стейт, т.к. хранится в extra_config.
+ * Encoder capabilities are typed registry fields.
  */
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   adminApi,
   type Model,
   type ModelCreate,
   type ModelUpdate,
   type ModelType,
-  type ModelStatus,
   type ModelConnector,
 } from '@/shared/api/admin';
 import { toolInstancesApi } from '@/shared/api/toolInstances';
@@ -21,8 +20,10 @@ import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { Badge, Button, ConfirmDialog, Modal, Select, useToast } from '@/shared/ui';
+import { Button, ConfirmDialog, Modal, Select, useToast } from '@/shared/ui';
 import styles from './ModelPage.module.css';
+import { modelCharacteristicFields } from './modelPageFields';
+import { ModelConfigurationBlocks } from './ModelConfigurationBlocks';
 
 /* ─── Constants ─── */
 
@@ -32,18 +33,14 @@ const MODEL_TYPES: { value: ModelType; label: string }[] = [
   { value: 'reranker', label: 'Reranker' },
 ];
 
-const MODEL_STATUSES: { value: ModelStatus; label: string }[] = [
-  { value: 'available', label: 'Доступна' },
-  { value: 'unavailable', label: 'Недоступна' },
-  { value: 'deprecated', label: 'Устарела' },
-  { value: 'maintenance', label: 'Обслуживание' },
-];
-
 const PROTOCOLS: { value: ModelConnector; label: string }[] = [
   { value: 'openai_http', label: 'OpenAI HTTP' },
   { value: 'litellm_http', label: 'LiteLLM' },
   { value: 'azure_openai_http', label: 'Azure OpenAI' },
   { value: 'grpc', label: 'gRPC' },
+  { value: 'local_emb_http', label: 'Embedding Gateway' },
+  { value: 'local_rerank_http', label: 'Reranker Gateway' },
+  { value: 'local_llm_http', label: 'Локальный LLM' },
 ];
 
 /* ─── Field configs ─── */
@@ -134,49 +131,6 @@ const CONNECTOR_FIELDS: FieldConfig[] = [
   },
 ];
 
-const PARAMS_FIELDS: FieldConfig[] = [
-  {
-    key: 'provider_model_name',
-    type: 'text',
-    label: 'Название модели',
-    required: true,
-    placeholder: 'text-embedding-3-small / all-MiniLM-L6-v2',
-  },
-  {
-    key: 'model_version',
-    type: 'text',
-    label: 'Версия',
-    placeholder: '1.0',
-  },
-  {
-    key: 'type',
-    type: 'select',
-    label: 'Тип',
-    editable: true,
-    options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
-  },
-  {
-    key: 'context_window_tokens',
-    type: 'number',
-    label: 'Контекстное окно (токены)',
-    placeholder: '16384',
-  },
-  { key: 'request_timeout_s', type: 'number', label: 'Timeout запроса (сек.)', placeholder: '30' },
-  { key: 'max_retries', type: 'number', label: 'Повторы запроса', placeholder: '2' },
-  {
-    key: 'vector_dim',
-    type: 'number',
-    label: 'Размерность вектора (embedding)',
-    placeholder: '1536',
-  },
-];
-
-const OTHER_PARAMS_FIELDS: FieldConfig[] = [
-  { key: 'modality', type: 'text', label: 'Modality', editable: false },
-  { key: 'description', type: 'text', label: 'Description', editable: false },
-  { key: 'dimensions', type: 'text', label: 'Dimensions', editable: false },
-];
-
 const HEALTH_FIELDS: FieldConfig[] = [
   {
     key: 'health_status',
@@ -188,7 +142,7 @@ const HEALTH_FIELDS: FieldConfig[] = [
   {
     key: 'health_latency_ms',
     type: 'text',
-    label: 'Задержка (мс)',
+    label: 'Задержка проверки (мс)',
     editable: false,
   },
   {
@@ -208,7 +162,13 @@ const HEALTH_FIELDS: FieldConfig[] = [
 const META_FIELDS: FieldConfig[] = [
   { key: 'id', type: 'code', label: 'ID', editable: false },
   { key: 'instance_name', type: 'text', label: 'Коннектор', editable: false },
-  { key: 'is_system', type: 'badge', label: 'Системная', badgeTone: 'warn', editable: false },
+  {
+    key: 'is_system',
+    type: 'badge',
+    label: 'Системная',
+    badgeTone: 'warn',
+    editable: false,
+  },
   { key: 'created_at', type: 'date', label: 'Создана', editable: false },
   { key: 'updated_at', type: 'date', label: 'Обновлена', editable: false },
 ];
@@ -222,13 +182,20 @@ export function ModelPage() {
   const [maxRetries, setMaxRetries] = useState<string>('');
   const [probingInfo, setProbingInfo] = useState(false);
   const [manifestRaw, setManifestRaw] = useState<Record<string, unknown>>({});
+  const [maxInputTokens, setMaxInputTokens] = useState('');
   const [healthBadge, setHealthBadge] = useState<string>('unknown');
   const [showMigrationModal, setShowMigrationModal] = useState(false);
-  const [migrationTargetModelId, setMigrationTargetModelId] = useState<string>('');
+  const [migrationTargetModelId, setMigrationTargetModelId] =
+    useState<string>('');
   const LOCAL_CONNECTOR_SENTINEL = '__local__';
   const { showToast } = useToast();
+  const queryClient = useQueryClient();
 
-  const resolveBackendConnector = (type: ModelType, instanceId: string, protocol: ModelConnector): ModelConnector => {
+  const resolveBackendConnector = (
+    type: ModelType,
+    instanceId: string,
+    protocol: ModelConnector
+  ): ModelConnector => {
     if (instanceId !== LOCAL_CONNECTOR_SENTINEL) return protocol;
     if (type === 'embedding') return 'local_emb_http';
     if (type === 'reranker') return 'local_rerank_http';
@@ -245,7 +212,6 @@ export function ModelPage() {
     saving,
     showDeleteConfirm,
     setShowDeleteConfirm,
-    breadcrumbs,
     handleFieldChange,
     handleSave,
     handleEdit,
@@ -259,39 +225,38 @@ export function ModelPage() {
     basePath: '/admin/platform/models',
     listPath: '/admin/platform',
     api: {
-      get: (id) => adminApi.getModel(id),
-      create: (data) => adminApi.createModel(data),
+      get: id => adminApi.getModel(id),
+      create: data => adminApi.createModel(data),
       update: (id, data) => adminApi.updateModel(id, data),
-      delete: (id) => adminApi.deleteModel(id),
+      delete: id => adminApi.deleteModel(id),
     },
     queryKeys: {
       list: qk.admin.models.list({}),
-      detail: (id) => qk.admin.models.detail(id),
+      detail: id => qk.admin.models.detail(id),
     },
-    validateCreate: (data) => {
-      if (!String(data.provider_model_name || '').trim()) return 'Название модели обязательно';
-      if (!String(data.model_version || '').trim()) return 'Версия модели обязательна';
+    validateCreate: data => {
+      if (!String(data.provider_model_name || '').trim())
+        return 'Название модели обязательно';
       if (!String(data.type || '').trim()) return 'Тип модели обязателен';
 
       return null;
     },
-    validateUpdate: (data) => {
-      if (!String(data.provider_model_name || '').trim()) return 'Название модели обязательно';
-      if (!String(data.model_version || '').trim()) return 'Версия модели обязательна';
+    validateUpdate: data => {
+      if (!String(data.provider_model_name || '').trim())
+        return 'Название модели обязательно';
       if (!String(data.type || '').trim()) return 'Тип модели обязателен';
 
       return null;
     },
-    getInitialFormData: (m) => {
-      if (m?.extra_config?.vector_dim) {
-        setVectorDim(String(m.extra_config.vector_dim));
-      }
-      setContextWindow(String(m?.context_window_tokens ?? 16384));
+    getInitialFormData: m => {
+      setVectorDim(String(m?.embedding_dimensions ?? ''));
+      setMaxInputTokens(String(m?.max_input_tokens ?? ''));
+      setContextWindow(String(m?.context_window_tokens ?? ''));
       setRequestTimeout(String(m?.request_timeout_s ?? ''));
       setMaxRetries(String(m?.max_retries ?? ''));
       const connectorRaw = m?.connector ?? 'openai_http';
       const isLocalBackendConnector = String(connectorRaw).startsWith('local_');
-      const uiProtocol: ModelConnector = isLocalBackendConnector ? 'openai_http' : connectorRaw;
+      const uiProtocol: ModelConnector = connectorRaw;
       return {
         alias: m?.alias ?? '',
         name: m?.name ?? '',
@@ -300,7 +265,9 @@ export function ModelPage() {
         provider: m?.provider ?? '',
         provider_model_name: m?.provider_model_name ?? '',
         base_url: m?.base_url ?? '',
-        instance_id: m?.instance_id ?? (isLocalBackendConnector ? LOCAL_CONNECTOR_SENTINEL : ''),
+        instance_id:
+          m?.instance_id ??
+          (isLocalBackendConnector ? LOCAL_CONNECTOR_SENTINEL : ''),
         status: m?.status ?? 'available',
         enabled: m?.enabled ?? true,
         default_for_type: m?.default_for_type ?? false,
@@ -308,58 +275,106 @@ export function ModelPage() {
         model_version: m?.model_version ?? '',
         description: m?.description ?? '',
         extra_config: m?.extra_config ?? {},
+        vector_normalized: m?.vector_normalized ?? null,
       };
     },
-    transformCreate: (data) => {
+    transformCreate: data => {
       const resolvedConnector = resolveBackendConnector(
         data.type,
         String(data.instance_id || ''),
-        data.connector,
+        data.connector
       );
-      const extra_config: Record<string, unknown> = { ...(data.extra_config ?? {}) };
-      if (data.type === 'embedding' && vectorDim) {
-        extra_config.vector_dim = parseInt(vectorDim, 10);
-      }
+      const extra_config: Record<string, unknown> = {
+        ...(data.extra_config ?? {}),
+      };
+      delete extra_config.vector_dim;
+      delete extra_config.dimensions;
       return {
         ...data,
-        use_for_long_memory: data.type === 'embedding' ? data.use_for_long_memory : false,
+        use_for_long_memory:
+          data.type === 'embedding' ? data.use_for_long_memory : false,
         connector: resolvedConnector,
-        base_url: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? (data.base_url || undefined) : undefined,
-        instance_id: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? undefined : (data.instance_id || undefined),
+        base_url:
+          String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL
+            ? data.base_url || undefined
+            : undefined,
+        instance_id:
+          String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL
+            ? undefined
+            : data.instance_id || undefined,
         model_version: data.model_version || undefined,
         description: data.description || undefined,
-        extra_config: Object.keys(extra_config).length > 0 ? extra_config : undefined,
-        ...(contextWindow ? { context_window_tokens: parseInt(contextWindow, 10) } : {}),
-        ...(requestTimeout ? { request_timeout_s: parseInt(requestTimeout, 10) } : {}),
-        ...(maxRetries ? { max_retries: parseInt(maxRetries, 10) } : {}),
+        extra_config:
+          Object.keys(extra_config).length > 0 ? extra_config : undefined,
+        ...(data.type === 'embedding'
+          ? {
+              embedding_dimensions: vectorDim ? Number(vectorDim) : null,
+              vector_normalized: data.vector_normalized ?? null,
+            }
+          : {}),
+        ...(['embedding', 'reranker'].includes(data.type)
+          ? { max_input_tokens: maxInputTokens ? Number(maxInputTokens) : null }
+          : {}),
+        ...(data.type === 'llm_chat' && contextWindow
+          ? { context_window_tokens: Number(contextWindow) }
+          : {}),
+        ...(requestTimeout
+          ? { request_timeout_s: parseInt(requestTimeout, 10) }
+          : {}),
+        ...(data.type === 'llm_chat' && maxRetries
+          ? { max_retries: Number(maxRetries) }
+          : {}),
       } as ModelCreate;
     },
-    transformUpdate: (data) => {
+    transformUpdate: data => {
       const resolvedConnector = resolveBackendConnector(
         data.type,
         String(data.instance_id || ''),
-        data.connector,
+        data.connector
       );
-      const extra_config: Record<string, unknown> = { ...(data.extra_config ?? {}) };
-      if (data.type === 'embedding' && vectorDim) {
-        extra_config.vector_dim = parseInt(vectorDim, 10);
-      }
+      const extra_config: Record<string, unknown> = {
+        ...(data.extra_config ?? {}),
+      };
+      delete extra_config.vector_dim;
+      delete extra_config.dimensions;
       return {
         name: data.name,
         connector: resolvedConnector,
         provider_model_name: data.provider_model_name,
-        base_url: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? (data.base_url || undefined) : undefined,
-        instance_id: String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL ? undefined : (data.instance_id || undefined),
+        base_url:
+          String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL
+            ? data.base_url || null
+            : null,
+        instance_id:
+          String(data.instance_id || '') === LOCAL_CONNECTOR_SENTINEL
+            ? null
+            : data.instance_id || null,
         status: data.status,
         enabled: data.enabled,
         default_for_type: data.default_for_type,
-        use_for_long_memory: data.type === 'embedding' ? data.use_for_long_memory : false,
+        use_for_long_memory:
+          data.type === 'embedding' ? data.use_for_long_memory : false,
         model_version: data.model_version,
         description: data.description,
-        ...(contextWindow ? { context_window_tokens: parseInt(contextWindow, 10) } : {}),
-        ...(requestTimeout ? { request_timeout_s: parseInt(requestTimeout, 10) } : {}),
-        ...(maxRetries ? { max_retries: parseInt(maxRetries, 10) } : {}),
-        ...(data.type === 'embedding' ? { extra_config } : {}),
+        ...(data.type === 'embedding'
+          ? {
+              embedding_dimensions: vectorDim ? Number(vectorDim) : null,
+              vector_normalized: data.vector_normalized ?? null,
+            }
+          : {}),
+        ...(['embedding', 'reranker'].includes(data.type)
+          ? { max_input_tokens: maxInputTokens ? Number(maxInputTokens) : null }
+          : {}),
+        ...(data.type === 'llm_chat' && contextWindow
+          ? { context_window_tokens: Number(contextWindow) }
+          : {}),
+        ...(requestTimeout
+          ? { request_timeout_s: parseInt(requestTimeout, 10) }
+          : {}),
+        ...(data.type === 'llm_chat' && maxRetries
+          ? { max_retries: Number(maxRetries) }
+          : {}),
+        extra_config,
       } as ModelUpdate;
     },
     messages: {
@@ -370,26 +385,34 @@ export function ModelPage() {
   });
 
   const [showLongMemoryConfirm, setShowLongMemoryConfirm] = useState(false);
-  const [longMemoryConfirmAction, setLongMemoryConfirmAction] = useState<'select' | 'save'>('select');
+  const [longMemoryConfirmAction, setLongMemoryConfirmAction] = useState<
+    'select' | 'save'
+  >('select');
   const handleInfoChange = (key: string, value: unknown) => {
     if (key === 'use_for_long_memory' && value === true) {
       setLongMemoryConfirmAction('select');
       setShowLongMemoryConfirm(true);
       return;
     }
-    if (key === 'use_for_long_memory' && model?.use_for_long_memory && value === false) {
+    if (
+      key === 'use_for_long_memory' &&
+      model?.use_for_long_memory &&
+      value === false
+    ) {
       showToast('Выберите другую embedding-модель для LongMemory', 'info');
       return;
     }
+    if (key === 'type') setManifestRaw({});
     handleFieldChange(key, value);
   };
   const handleSaveWithLongMemoryConfirm = () => {
-    const encoderChanged = model?.use_for_long_memory && (
-      formData.provider_model_name !== model.provider_model_name ||
-      formData.model_version !== (model.model_version ?? '') ||
-      formData.base_url !== (model.base_url ?? '') ||
-      vectorDim !== String(model.extra_config?.vector_dim ?? '')
-    );
+    const encoderChanged =
+      model?.use_for_long_memory &&
+      (formData.provider_model_name !== model.provider_model_name ||
+        formData.model_version !== (model.model_version ?? '') ||
+        formData.base_url !== (model.base_url ?? '') ||
+        vectorDim !== String(model.embedding_dimensions ?? '') ||
+        maxInputTokens !== String(model.max_input_tokens ?? ''));
     if (encoderChanged) {
       setLongMemoryConfirmAction('save');
       setShowLongMemoryConfirm(true);
@@ -421,22 +444,32 @@ export function ModelPage() {
     staleTime: 60_000,
   });
   const { data: embeddingUsage } = useQuery({
-    queryKey: model?.id ? qk.admin.models.embeddingUsage(model.id) : ['admin', 'models', 'embedding-usage', 'none'],
+    queryKey: model?.id
+      ? qk.admin.models.embeddingUsage(model.id)
+      : ['admin', 'models', 'embedding-usage', 'none'],
     queryFn: () => adminApi.getEmbeddingUsage(model!.id),
-    enabled: Boolean(model?.id) && (model?.type === 'embedding'),
+    enabled: Boolean(model?.id) && model?.type === 'embedding',
     staleTime: 30_000,
   });
   const { data: embeddingModelsData } = useQuery({
-    queryKey: qk.admin.models.list({ type: 'embedding', enabled_only: true, size: 200 }),
-    queryFn: () => adminApi.getModels({ type: 'embedding', enabled_only: true, size: 200 }),
-    enabled: Boolean(model?.id) && (model?.type === 'embedding'),
+    queryKey: qk.admin.models.list({
+      type: 'embedding',
+      enabled_only: true,
+      size: 100,
+    }),
+    queryFn: () =>
+      adminApi.getModels({ type: 'embedding', enabled_only: true, size: 100 }),
+    enabled: Boolean(model?.id) && model?.type === 'embedding',
     staleTime: 30_000,
   });
 
   // ─── Derived ───
   const instanceOptions = [
     { value: LOCAL_CONNECTOR_SENTINEL, label: 'local' },
-    ...instances.map((inst) => ({ value: inst.id, label: `${inst.name} (${inst.slug})` })),
+    ...instances.map(inst => ({
+      value: inst.id,
+      label: `${inst.name} (${inst.slug})`,
+    })),
   ];
 
   const viewData = {
@@ -444,14 +477,21 @@ export function ModelPage() {
     name: model?.name ?? '',
     type: model?.type ?? 'llm_chat',
     description: model?.description ?? '',
-    connector: String(model?.connector || '').startsWith('local_') ? 'openai_http' : (model?.connector ?? 'openai_http'),
+    connector: model?.connector ?? 'openai_http',
     provider_model_name: model?.provider_model_name ?? '',
     base_url: model?.base_url ?? '',
-    instance_id: model?.instance_id ?? (String(model?.connector || '').startsWith('local_') ? LOCAL_CONNECTOR_SENTINEL : ''),
+    instance_id:
+      model?.instance_id ??
+      (String(model?.connector || '').startsWith('local_')
+        ? LOCAL_CONNECTOR_SENTINEL
+        : ''),
     model_version: model?.model_version ?? '',
+    vector_normalized: model?.vector_normalized ?? null,
     status: model?.status ?? 'available',
+    enabled: model?.enabled ?? false,
     default_for_type: model?.default_for_type ?? false,
     use_for_long_memory: model?.use_for_long_memory ?? false,
+    capabilities_checked_at: model?.capabilities_checked_at ?? '—',
     id: model?.id ?? '',
     instance_name: model?.instance_name ?? '—',
     is_system: model?.is_system ? 'Да' : 'Нет',
@@ -467,87 +507,156 @@ export function ModelPage() {
     context_window_tokens: contextWindow,
     request_timeout_s: requestTimeout,
     max_retries: maxRetries,
-    vector_dim: vectorDim,
+    capabilities_source: model?.capabilities_checked_at
+      ? 'Description сервиса'
+      : 'Настройки реестра',
+    embedding_dimensions: vectorDim,
+    max_input_tokens: maxInputTokens,
+    vector_normalized: blockData.vector_normalized,
   };
-  const otherParamsData = {
-    modality: String(manifestRaw.modality || '—'),
-    description: String(manifestRaw.description || '—'),
-    dimensions: String(manifestRaw.dimensions ?? '—'),
-  };
-  const isEmbedding = (isEditable ? formData.type : model?.type) === 'embedding';
-  const longMemoryFields: FieldConfig[] = isEmbedding ? [{
-    key: 'use_for_long_memory', type: 'boolean', label: 'Использовать для LongMemory',
-    description: 'Отдельный энкодер памяти. Смена запускает фоновую переиндексацию.',
-  }] : [];
+  const isEmbedding =
+    (isEditable ? formData.type : model?.type) === 'embedding';
+  const longMemoryFields: FieldConfig[] = isEmbedding
+    ? [
+        {
+          key: 'use_for_long_memory',
+          type: 'boolean',
+          label: 'Использовать для LongMemory',
+          description:
+            'Отдельный энкодер памяти. Смена запускает фоновую переиндексацию.',
+        },
+      ]
+    : [];
   const migrationModelOptions = (embeddingModelsData?.items || [])
-    .filter((m) => m.id !== model?.id)
-    .map((m) => ({ value: m.id, label: `${m.name} (${m.alias})` }));
+    .filter(m => m.id !== model?.id)
+    .map(m => ({ value: m.id, label: `${m.name} (${m.alias})` }));
 
   const healthData = {
     health_status: model?.health_status ?? 'unknown',
-    health_latency_ms: model?.health_latency_ms != null ? String(model.health_latency_ms) : '—',
+    health_latency_ms:
+      model?.health_latency_ms != null ? String(model.health_latency_ms) : '—',
     health_error: model?.health_error ?? '—',
     last_health_check_at: model?.last_health_check_at ?? '',
   };
 
   useEffect(() => {
     setHealthBadge(String(model?.health_status || 'unknown'));
-    const manifest = (model?.extra_config && typeof model.extra_config === 'object')
-      ? (model.extra_config as Record<string, unknown>).manifest
-      : undefined;
+    const manifest =
+      model?.extra_config && typeof model.extra_config === 'object'
+        ? (model.extra_config as Record<string, unknown>).manifest
+        : undefined;
     if (manifest && typeof manifest === 'object') {
       setManifestRaw(manifest as Record<string, unknown>);
     } else {
       setManifestRaw({});
     }
-  }, [model?.id, model?.health_status]);
+  }, [model?.id, model?.health_status, model?.extra_config]);
 
-  const currentInstanceId = String(isEditable ? formData.instance_id : (model?.instance_id || ''));
-  const currentConnector = String(isEditable ? formData.connector : model?.connector || '');
-  const isLocalConnector = currentInstanceId === LOCAL_CONNECTOR_SENTINEL || currentConnector.startsWith('local_');
+  const currentInstanceId = String(
+    isEditable ? formData.instance_id : model?.instance_id || ''
+  );
+  const currentConnector = String(
+    isEditable ? formData.connector : model?.connector || ''
+  );
+  const isLocalConnector =
+    currentInstanceId === LOCAL_CONNECTOR_SENTINEL ||
+    currentConnector.startsWith('local_');
 
-  const connectorFieldsWithOptions = CONNECTOR_FIELDS
-    .filter((f) => {
-      if (f.key === 'base_url' && !isLocalConnector) return false;
-      return true;
-    })
-    .map((f) => {
-      if (f.key === 'instance_id') {
-        return { ...f, options: instanceOptions };
-      }
-      if (f.key === 'provider_model_name' && isLocalConnector) {
-        return { ...f, editable: false };
-      }
-      if (f.key === 'base_url' && isLocalConnector) {
-        return {
-          ...f,
-          label: 'URL local-сервиса',
-          placeholder: 'http://emb:8001 или http://rerank:8002',
-          description: 'Базовый URL локального сервиса модели',
-        };
-      }
-      return f;
-    });
-
-  const currentModelType = String(isEditable ? formData.type : (model?.type || viewData.type || ''));
-  const paramsFields = PARAMS_FIELDS
-    .filter((f) => {
-      if (f.key === 'context_window_tokens') return currentModelType === 'llm_chat';
-      if (f.key === 'vector_dim') return isEmbedding;
-      return true;
-    })
-    .map((f) => {
-    if ((f.key === 'provider_model_name' || f.key === 'model_version') && isLocalConnector) {
-      return { ...f, editable: false, description: 'Заполняется через кнопку "Проверить"' };
+  const connectorFieldsWithOptions = CONNECTOR_FIELDS.filter(f => {
+    if (f.key === 'base_url' && !isLocalConnector) return false;
+    return true;
+  }).map(f => {
+    if (f.key === 'instance_id') {
+      return { ...f, options: instanceOptions };
     }
-    if (f.key === 'type' && isLocalConnector) {
-      return { ...f, editable: false, description: 'Определяется автоматически из metadata модели' };
+    if (f.key === 'connector' && isLocalConnector) {
+      return { ...f, editable: false };
     }
-    if (f.key === 'context_window_tokens' && manifestRaw.context_window_tokens != null) {
-      return { ...f, description: `Лимит по манифесту: ${String(manifestRaw.context_window_tokens)}` };
+    if (f.key === 'base_url' && isLocalConnector) {
+      return {
+        ...f,
+        label: 'URL local-сервиса',
+        placeholder: 'http://emb:8001 или http://rerank:8002',
+        description: 'Базовый URL локального сервиса модели',
+      };
     }
     return f;
   });
+
+  const currentModelType = String(
+    isEditable ? formData.type : model?.type || viewData.type || ''
+  );
+  const paramsFields = modelCharacteristicFields(currentModelType, manifestRaw);
+  const characteristicTitle =
+    currentModelType === 'embedding'
+      ? 'Характеристики Embedding'
+      : currentModelType === 'reranker'
+        ? 'Характеристики Reranker'
+        : 'Характеристики LLM';
+  const connectionFields = [
+    ...connectorFieldsWithOptions.map(f => ({ ...f, description: undefined })),
+    {
+      key: 'provider_model_name',
+      type: 'text' as const,
+      label: 'Модель у провайдера',
+      required: true,
+    },
+  ];
+  const identityFields = [
+    ...(isNew ? INFO_FIELDS_CREATE : INFO_FIELDS_VIEW)
+      .filter(f => f.key !== 'default_for_type')
+      .map(f => ({ ...f, description: undefined })),
+    {
+      key: 'type',
+      type: 'select' as const,
+      label: 'Тип модели',
+      editable:
+        isNew &&
+        !/(embed|rerank|llm|chat)/i.test(String(manifestRaw.modality || '')),
+      options: MODEL_TYPES.map(t => ({ value: t.value, label: t.label })),
+    },
+  ];
+  const usageFields: FieldConfig[] = [
+    {
+      key: 'enabled',
+      type: 'boolean',
+      label: 'Включена',
+      description:
+        'Разрешает использование модели платформой. Сам сервис этот переключатель не останавливает.',
+    },
+    {
+      key: 'default_for_type',
+      type: 'boolean',
+      label: 'По умолчанию для типа',
+    },
+    ...longMemoryFields,
+  ];
+  const handleParameterChange = (key: string, value: unknown) => {
+    if (key === 'context_window_tokens') setContextWindow(String(value ?? ''));
+    else if (key === 'request_timeout_s')
+      setRequestTimeout(String(value ?? ''));
+    else if (key === 'max_retries') setMaxRetries(String(value ?? ''));
+    else if (key === 'embedding_dimensions') setVectorDim(String(value ?? ''));
+    else if (key === 'max_input_tokens') setMaxInputTokens(String(value ?? ''));
+    else handleFieldChange(key, value);
+  };
+  const handleConnectionChange = (key: string, value: unknown) => {
+    setManifestRaw({});
+    if (key === 'instance_id' && value !== LOCAL_CONNECTOR_SENTINEL)
+      handleFieldChange('base_url', '');
+    if (key === 'instance_id')
+      handleFieldChange(
+        'connector',
+        value === LOCAL_CONNECTOR_SENTINEL
+          ? resolveBackendConnector(
+              currentModelType as ModelType,
+              LOCAL_CONNECTOR_SENTINEL,
+              'openai_http'
+            )
+          : 'openai_http'
+      );
+    handleFieldChange(key, value);
+  };
 
   const handleProbeModelInfo = async () => {
     setProbingInfo(true);
@@ -559,51 +668,100 @@ export function ModelPage() {
         health_status?: string;
         raw?: Record<string, unknown>;
       };
-      if (!isNew && model?.id) {
+      if (!isEditable && !isNew && model?.id) {
         const verified = await adminApi.verifyModel(model.id);
+        await queryClient.invalidateQueries({
+          queryKey: qk.admin.models.detail(model.id),
+        });
         info = {
           provider_model_name: verified.provider_model_name,
           model_version: verified.model_version || '',
-          model_type: (verified.resolved_type_from_manifest as string) || verified.type,
+          model_type:
+            (verified.resolved_type_from_manifest as string) || verified.type,
           health_status: verified.health_status || undefined,
           raw: (verified.manifest || {}) as Record<string, unknown>,
         };
       } else {
-        const current = String((isEditable ? formData.base_url : viewData.base_url) || '').trim();
-        const currentConnector = ((isEditable ? formData.connector : viewData.connector) || 'openai_http') as ModelConnector;
-        const currentInstanceId = String((isEditable ? formData.instance_id : viewData.instance_id) || '').trim();
-        const currentExtraConfig = (isEditable ? formData.extra_config : undefined) as Record<string, unknown> | undefined;
-        if (!current && !currentInstanceId) {
+        const current = String(
+          (isEditable ? formData.base_url : viewData.base_url) || ''
+        ).trim();
+        const currentConnector = ((isEditable
+          ? formData.connector
+          : viewData.connector) || 'openai_http') as ModelConnector;
+        const currentInstanceId = String(
+          (isEditable ? formData.instance_id : viewData.instance_id) || ''
+        ).trim();
+        const currentExtraConfig = (
+          isEditable ? formData.extra_config : undefined
+        ) as Record<string, unknown> | undefined;
+        if (
+          !current &&
+          (!currentInstanceId || currentInstanceId === LOCAL_CONNECTOR_SENTINEL)
+        ) {
           showToast('Укажите URL или выберите коннектор с URL', 'warning');
           return;
         }
         info = await adminApi.probeModelInfo({
           base_url: current || undefined,
-          connector: currentConnector,
-          instance_id: currentInstanceId || undefined,
+          connector: resolveBackendConnector(
+            currentModelType as ModelType,
+            currentInstanceId,
+            currentConnector
+          ),
+          provider_model_name:
+            String(blockData.provider_model_name || '') || undefined,
+          instance_id:
+            currentInstanceId === LOCAL_CONNECTOR_SENTINEL
+              ? undefined
+              : currentInstanceId || undefined,
           extra_config: currentExtraConfig,
         });
       }
 
-      if (info.provider_model_name) handleFieldChange('provider_model_name', info.provider_model_name);
-      if (info.model_version) handleFieldChange('model_version', info.model_version);
-      if (info.model_type) handleFieldChange('type', info.model_type);
+      if (info.provider_model_name)
+        handleFieldChange('provider_model_name', info.provider_model_name);
+      if (info.model_version)
+        handleFieldChange('model_version', info.model_version);
+      if (isNew && info.model_type) handleFieldChange('type', info.model_type);
       if (info.health_status) setHealthBadge(info.health_status);
       const raw = (info.raw || {}) as Record<string, unknown>;
       setManifestRaw(raw);
+      if (isEditable)
+        handleFieldChange('extra_config', {
+          ...((blockData.extra_config as Record<string, unknown>) || {}),
+          manifest: raw,
+        });
       const vector = raw.dimensions;
       const maxTok = raw.context_window_tokens;
-      if (typeof vector === 'number' && Number.isFinite(vector)) setVectorDim(String(vector));
-      if (typeof maxTok === 'number' && Number.isFinite(maxTok)) setContextWindow(String(maxTok));
-      showToast('Проверка выполнена', 'success');
+      if (typeof raw.max_tokens === 'number')
+        setMaxInputTokens(String(raw.max_tokens));
+      if (typeof raw.normalized === 'boolean')
+        handleFieldChange('vector_normalized', raw.normalized);
+      if (typeof vector === 'number' && Number.isFinite(vector) && vector > 0)
+        setVectorDim(String(vector));
+      if (typeof maxTok === 'number' && Number.isFinite(maxTok))
+        setContextWindow(String(maxTok));
+      showToast(
+        Object.keys(raw).length
+          ? 'Проверка выполнена. Отсутствующие характеристики можно заполнить вручную.'
+          : 'Сервис не сообщил характеристики. Заполните их вручную.',
+        Object.keys(raw).length ? 'success' : 'warning'
+      );
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Не удалось выполнить проверку', 'error');
+      showToast(
+        e instanceof Error ? e.message : 'Не удалось выполнить проверку',
+        'error'
+      );
     } finally {
       setProbingInfo(false);
     }
   };
 
-  const renderDocCounters = (total: number, vectorized: number, notVectorized: number) => (
+  const renderDocCounters = (
+    total: number,
+    vectorized: number,
+    notVectorized: number
+  ) => (
     <span className={styles.counterCell}>
       <span className={styles.counterTotal}>{total}</span>
       <span className={styles.counterSep}>/</span>
@@ -617,72 +775,46 @@ export function ModelPage() {
   if (isNew) {
     return (
       <>
-      <EntityPageV2
-        title="Новая модель"
-        mode="create"
-        saving={saving}
-        headerActions={(
-          <Button variant="outline" onClick={handleProbeModelInfo} disabled={probingInfo}>
-            {probingInfo ? 'Проверяем...' : 'Проверить'}
-          </Button>
-        )}
-        breadcrumbs={[
-          { label: 'Платформа', href: '/admin/platform' },
-          { label: 'Новая модель' },
-        ]}
-        backPath="/admin/platform"
-        onSave={handleSaveWithLongMemoryConfirm}
-        onCancel={handleCancel}
-      >
-        <Tab title="Создание" layout="grid">
-          <Block
-            title="Основная информация"
-            icon="cpu"
-            iconVariant="info"
-            width="1/2"
-            fields={[...INFO_FIELDS_CREATE, ...longMemoryFields]}
-            data={formData}
-            editable
-            onChange={handleInfoChange}
-          />
-          <Block
-            title="Подключение"
-            icon="server"
-            iconVariant="primary"
-            width="1/2"
-            height="stretch"
-            fields={connectorFieldsWithOptions}
-            data={formData}
-            editable
-            onChange={handleInfoChange}
-          />
-          <Block
-            title="Параметры модели"
-            icon="settings"
-            iconVariant="warning"
-            width="1/2"
-            fields={paramsFields}
-            data={paramsData}
-            editable
-            onChange={(key, value) => {
-              if (key === 'context_window_tokens') setContextWindow(String(value ?? ''));
-              else if (key === 'request_timeout_s') setRequestTimeout(String(value ?? ''));
-              else if (key === 'max_retries') setMaxRetries(String(value ?? ''));
-              else if (key === 'vector_dim') setVectorDim(String(value ?? ''));
-              else handleFieldChange(key, value);
-            }}
-          />
-          <Block
-            title="Остальные параметры"
-            icon="database"
-            iconVariant="info"
-            width="1/2"
-            fields={OTHER_PARAMS_FIELDS}
-            data={otherParamsData}
-          />
-        </Tab>
-      </EntityPageV2>
-      {longMemoryConfirmation}
+        <EntityPageV2
+          title="Новая модель"
+          mode="create"
+          saving={saving}
+          headerActions={
+            <Button
+              variant="outline"
+              onClick={handleProbeModelInfo}
+              disabled={probingInfo}
+            >
+              {probingInfo ? 'Проверяем...' : 'Проверить'}
+            </Button>
+          }
+          breadcrumbs={[
+            { label: 'Платформа', href: '/admin/platform' },
+            { label: 'Новая модель' },
+          ]}
+          backPath="/admin/platform"
+          onSave={handleSaveWithLongMemoryConfirm}
+          onCancel={handleCancel}
+        >
+          <Tab title="Создание" layout="grid">
+            <ModelConfigurationBlocks
+              identityFields={identityFields}
+              connectionFields={connectionFields}
+              characteristicFields={paramsFields}
+              usageFields={usageFields}
+              characteristicTitle={characteristicTitle}
+              modelType={currentModelType}
+              data={blockData}
+              characteristicData={paramsData}
+              editable={isEditable}
+              health={healthBadge}
+              onInfoChange={handleInfoChange}
+              onConnectionChange={handleConnectionChange}
+              onParameterChange={handleParameterChange}
+            />
+          </Tab>
+        </EntityPageV2>
+        {longMemoryConfirmation}
       </>
     );
   }
@@ -695,20 +827,27 @@ export function ModelPage() {
         mode={mode}
         loading={isLoading}
         saving={saving}
-        headerActions={(
+        headerActions={
           <div className={styles.headerActions}>
             {model?.type === 'embedding' && (
-              <Button variant="success" onClick={() => setShowMigrationModal(true)}>
+              <Button
+                variant="success"
+                onClick={() => setShowMigrationModal(true)}
+              >
                 Миграции
               </Button>
             )}
-            {isEditable && (
-              <Button variant="success" onClick={handleProbeModelInfo} disabled={probingInfo}>
+            {
+              <Button
+                variant="success"
+                onClick={handleProbeModelInfo}
+                disabled={probingInfo}
+              >
                 {probingInfo ? 'Проверяем...' : 'Проверить'}
               </Button>
-            )}
+            }
           </div>
-        )}
+        }
         breadcrumbs={[
           { label: 'Платформа', href: '/admin/platform' },
           { label: model?.name || 'Модель' },
@@ -734,58 +873,24 @@ export function ModelPage() {
             showDeleteInView: !model?.is_system,
           })}
         >
-          <Block
-            title="Основная информация"
-            icon="cpu"
-            iconVariant="info"
-            width="1/2"
-            fields={[...INFO_FIELDS_VIEW, ...longMemoryFields]}
+          <ModelConfigurationBlocks
+            identityFields={identityFields}
+            connectionFields={connectionFields}
+            characteristicFields={paramsFields}
+            usageFields={usageFields}
+            characteristicTitle={characteristicTitle}
+            modelType={currentModelType}
             data={blockData}
+            characteristicData={paramsData}
             editable={isEditable}
-            onChange={handleInfoChange}
-            headerActions={
-              healthBadge && healthBadge !== 'unknown' ? (
-                <Badge tone={healthBadge === 'healthy' ? 'success' : healthBadge === 'degraded' ? 'warn' : 'danger'}>
-                  {healthBadge}
-                </Badge>
-              ) : undefined
-            }
+            health={healthBadge}
+            onInfoChange={handleInfoChange}
+            onConnectionChange={handleConnectionChange}
+            onParameterChange={handleParameterChange}
           />
-          <Block
-            title="Подключение"
-            icon="server"
-            iconVariant="primary"
-            width="1/2"
-            height="stretch"
-            fields={connectorFieldsWithOptions}
-            data={blockData}
-            editable={isEditable}
-            onChange={handleInfoChange}
-          />
-          <Block
-            title="Параметры модели"
-            icon="settings"
-            iconVariant="warning"
-            width="1/2"
-            fields={paramsFields}
-            data={paramsData}
-            editable={isEditable}
-            onChange={(key, value) => {
-              if (key === 'context_window_tokens') setContextWindow(String(value ?? ''));
-              else if (key === 'request_timeout_s') setRequestTimeout(String(value ?? ''));
-              else if (key === 'max_retries') setMaxRetries(String(value ?? ''));
-              else if (key === 'vector_dim') setVectorDim(String(value ?? ''));
-              else handleFieldChange(key, value);
-            }}
-          />
-          <Block
-            title="Остальные параметры"
-            icon="database"
-            iconVariant="info"
-            width="1/2"
-            fields={OTHER_PARAMS_FIELDS}
-            data={otherParamsData}
-          />
+        </Tab>
+
+        <Tab title="Служебное" layout="grid" id="metadata">
           <Block
             title="Метаданные"
             icon="database"
@@ -795,7 +900,6 @@ export function ModelPage() {
             data={blockData}
           />
         </Tab>
-
         <Tab title="Health" layout="full" id="health">
           <Block
             title="Состояние модели"
@@ -807,13 +911,8 @@ export function ModelPage() {
           />
         </Tab>
         {model?.type === 'embedding' && (
-          <Tab title="Эмбендинги" layout="grid" id="embeddings">
-            <Block
-              title="Тенанты"
-              icon="users"
-              iconVariant="info"
-              width="1/2"
-            >
+          <Tab title="Индексация" layout="grid" id="embeddings">
+            <Block title="Тенанты" icon="users" iconVariant="info" width="1/2">
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
                   <thead>
@@ -825,19 +924,30 @@ export function ModelPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(embeddingUsage?.tenants || []).map((row) => (
+                    {(embeddingUsage?.tenants || []).map(row => (
                       <tr key={row.tenant_id}>
                         <td>
-                          <a href={`/admin/tenants/${row.tenant_id}`}>{row.tenant_name}</a>
+                          <a href={`/admin/tenants/${row.tenant_id}`}>
+                            {row.tenant_name}
+                          </a>
                         </td>
                         <td>{row.tenant_active ? 'active' : 'inactive'}</td>
                         <td>{row.collection_count}</td>
-                        <td>{renderDocCounters(row.total_docs, row.vectorized_docs, row.not_vectorized_docs)}</td>
+                        <td>
+                          {renderDocCounters(
+                            row.total_docs,
+                            row.vectorized_docs,
+                            row.not_vectorized_docs
+                          )}
+                        </td>
                       </tr>
                     ))}
-                    {(!embeddingUsage?.tenants || embeddingUsage.tenants.length === 0) && (
+                    {(!embeddingUsage?.tenants ||
+                      embeddingUsage.tenants.length === 0) && (
                       <tr>
-                        <td colSpan={4} className={styles.emptyCell}>Нет данных</td>
+                        <td colSpan={4} className={styles.emptyCell}>
+                          Нет данных
+                        </td>
                       </tr>
                     )}
                   </tbody>
@@ -860,16 +970,30 @@ export function ModelPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(embeddingUsage?.collections || []).map((row) => (
+                    {(embeddingUsage?.collections || []).map(row => (
                       <tr key={row.collection_id}>
-                        <td>{row.collection_name} <span className={styles.slug}>({row.collection_slug})</span></td>
+                        <td>
+                          {row.collection_name}{' '}
+                          <span className={styles.slug}>
+                            ({row.collection_slug})
+                          </span>
+                        </td>
                         <td>{row.tenant_name}</td>
-                        <td>{renderDocCounters(row.total_docs, row.vectorized_docs, row.not_vectorized_docs)}</td>
+                        <td>
+                          {renderDocCounters(
+                            row.total_docs,
+                            row.vectorized_docs,
+                            row.not_vectorized_docs
+                          )}
+                        </td>
                       </tr>
                     ))}
-                    {(!embeddingUsage?.collections || embeddingUsage.collections.length === 0) && (
+                    {(!embeddingUsage?.collections ||
+                      embeddingUsage.collections.length === 0) && (
                       <tr>
-                        <td colSpan={3} className={styles.emptyCell}>Нет данных</td>
+                        <td colSpan={3} className={styles.emptyCell}>
+                          Нет данных
+                        </td>
                       </tr>
                     )}
                   </tbody>
@@ -894,25 +1018,34 @@ export function ModelPage() {
         open={showMigrationModal}
         title="Миграция эмбендингов"
         onClose={() => setShowMigrationModal(false)}
-        footer={(
+        footer={
           <div className={styles.modalFooter}>
-            <Button variant="outline" onClick={() => setShowMigrationModal(false)}>Отмена</Button>
+            <Button
+              variant="outline"
+              onClick={() => setShowMigrationModal(false)}
+            >
+              Отмена
+            </Button>
             <Button
               variant="primary"
-              onClick={() => showToast('Миграции будут подключены следующим шагом', 'info')}
+              onClick={() =>
+                showToast('Миграции будут подключены следующим шагом', 'info')
+              }
               disabled={!migrationTargetModelId}
             >
               Запустить
             </Button>
           </div>
-        )}
+        }
       >
         <div className={styles.modalBody}>
-          <div className={styles.modalHint}>Выберите целевую embedding-модель (без текущей).</div>
+          <div className={styles.modalHint}>
+            Выберите целевую embedding-модель (без текущей).
+          </div>
           <Select
             value={migrationTargetModelId}
             options={migrationModelOptions}
-            onChange={(v) => setMigrationTargetModelId(String(v || ''))}
+            onChange={v => setMigrationTargetModelId(String(v || ''))}
             placeholder="Выберите модель"
           />
         </div>

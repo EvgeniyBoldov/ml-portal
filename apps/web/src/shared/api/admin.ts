@@ -313,6 +313,10 @@ export interface Model {
   instance_id?: string | null;
   instance_name?: string | null;
   extra_config?: Record<string, any> | null;
+  embedding_dimensions?: number | null;
+  max_input_tokens?: number | null;
+  vector_normalized?: boolean | null;
+  capabilities_checked_at?: string | null;
   context_window_tokens: number;
   request_timeout_s?: number | null;
   max_retries?: number | null;
@@ -342,6 +346,9 @@ export interface ModelCreate {
   base_url?: string;
   instance_id?: string;
   extra_config?: Record<string, any>;
+  embedding_dimensions?: number | null;
+  max_input_tokens?: number | null;
+  vector_normalized?: boolean | null;
   context_window_tokens?: number;
   request_timeout_s?: number | null;
   max_retries?: number | null;
@@ -361,6 +368,9 @@ export interface ModelUpdate {
   base_url?: string;
   instance_id?: string;
   extra_config?: Record<string, any>;
+  embedding_dimensions?: number | null;
+  max_input_tokens?: number | null;
+  vector_normalized?: boolean | null;
   context_window_tokens?: number;
   request_timeout_s?: number | null;
   max_retries?: number | null;
@@ -412,9 +422,11 @@ export interface ModelProbeInfoResponse {
   model_type?: 'llm_chat' | 'embedding' | 'reranker';
   health_status?: 'healthy' | 'degraded' | 'unavailable';
   raw?: Record<string, unknown>;
+  warning?: string | null;
 }
 
 export interface ModelProbeInfoRequest {
+  provider_model_name?: string;
   base_url?: string;
   connector?: ModelConnector;
   instance_id?: string;

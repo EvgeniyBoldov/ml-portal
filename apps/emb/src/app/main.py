@@ -79,6 +79,7 @@ class ModelInfo(BaseModel):
     alias: str
     dimensions: int
     max_tokens: int
+    normalized: bool | None = None
     version: str
     modality: str
     description: str
@@ -148,9 +149,7 @@ def _load_hf_metadata(model_path: str, fallback_alias: str, fallback_version: st
         or fallback_alias
     )
     version = (
-        str(config.get("transformers_version") or "")
-        or str(generation_config.get("transformers_version") or "")
-        or fallback_version
+        str(config.get("_commit_hash") or "") or fallback_version
     )
 
     max_tokens = (
@@ -237,10 +236,11 @@ class EmbeddingEngine:
             # The sentence encoder can have a smaller limit than the
             # underlying transformer (MiniLM: 256 versus 512).
             self.config.max_tokens = int(self.model.max_seq_length)
+            self.config.dimensions = int(self.model.get_sentence_embedding_dimension())
             logger.info(f"Model loaded successfully from {model_source}")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
-            # Fallback to dummy model
+            # Keep the service unavailable when model weights fail to load.
             self.model = None
     
     def _get_model_name(self) -> str:
@@ -250,9 +250,7 @@ class EmbeddingEngine:
     async def _call_model(self, texts: List[str]) -> List[List[float]]:
         """Call the actual model"""
         if self.model is None:
-            # Fallback to dummy vectors if model failed to load
-            logger.warning("Model not loaded, returning dummy vectors")
-            return [[0.1] * self.config.dimensions for _ in texts]
+            raise RuntimeError("Embedding model is not loaded")
         
         try:
             # Run model inference in thread pool to avoid blocking
@@ -267,8 +265,7 @@ class EmbeddingEngine:
             
         except Exception as e:
             logger.error(f"Error in model inference: {e}")
-            # Fallback to dummy vectors
-            return [[0.1] * self.config.dimensions for _ in texts]
+            raise RuntimeError("Embedding inference failed") from e
     
     def _update_metrics(self, latency: float, batch_size: int, success: bool):
         """Update metrics"""
@@ -374,6 +371,11 @@ class EmbeddingGateway:
     def get_model(self, alias: str) -> EmbeddingEngine:
         """Get model by alias"""
         if alias not in self.models:
+            matches = [engine for engine in self.models.values() if alias in {
+                engine.config.hf_metadata.get("name"), engine.config.manifest.get("model")
+            }]
+            if len(matches) == 1:
+                return matches[0]
             raise HTTPException(status_code=404, detail=f"Model {alias} not found")
         return self.models[alias]
     
@@ -389,6 +391,7 @@ class EmbeddingGateway:
                 alias=engine.config.alias,
                 dimensions=engine.config.dimensions,
                 max_tokens=engine.config.max_tokens,
+                normalized=any(type(module).__name__ == "Normalize" for module in engine.model) if engine.model is not None else None,
                 version=engine.config.version,
                 modality=str(
                     engine.config.hf_metadata.get("modality")
@@ -409,11 +412,13 @@ gateway = EmbeddingGateway()
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
-    return HealthResponse(
-        status="ok",
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        models=list(gateway.models.keys())
-    )
+    healthy = bool(gateway.models) and all(engine.model is not None for engine in gateway.models.values())
+    result = HealthResponse(status="ok" if healthy else "unavailable",
+        timestamp=datetime.now(timezone.utc).isoformat(), models=list(gateway.models.keys()))
+    if not healthy:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, content=result.model_dump())
+    return result
 
 
 @app.get("/models", response_model=List[ModelInfo])
@@ -426,7 +431,7 @@ async def list_models():
 async def description():
     """Primary model description endpoint used by platform probes."""
     models = gateway.list_models()
-    if not models:
+    if not models or gateway.get_model(models[0].alias).model is None:
         raise HTTPException(status_code=503, detail="No models loaded")
     return models[0]
 
@@ -484,9 +489,7 @@ async def embed_query(request: QueryRequest):
         # Get model
         model = gateway.get_model(request.model)
         
-        # Check if query exceeds max tokens
-        if len(request.query) > model.config.max_tokens:
-            raise HTTPException(status_code=400, detail="Query exceeds max tokens")
+        # Tokenization belongs to the loaded encoder; character count is not a token limit.
         
         # Embed query
         vectors = await model.embed_texts([request.query], request.priority)

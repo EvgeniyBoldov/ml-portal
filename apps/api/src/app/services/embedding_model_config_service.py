@@ -19,9 +19,6 @@ class EmbeddingModelConfigService:
 
     @staticmethod
     async def ensure_registered(session: AsyncSession, model_alias: str) -> None:
-        if model_alias in EmbeddingServiceFactory.list_available_models():
-            return
-
         result = await session.execute(
             select(Model).where(
                 (Model.alias == model_alias) & (Model.type == ModelType.EMBEDDING)
@@ -39,6 +36,39 @@ class EmbeddingModelConfigService:
 
         api_key = await EmbeddingModelConfigService._resolve_api_key(session, model)
         extra_config = model.extra_config or {}
+        from app.services.model_capabilities import ModelCapabilities
+        capabilities = ModelCapabilities.from_model(model)
+        if not capabilities.embedding_dimensions or not capabilities.max_input_tokens:
+            from app.services.model_metadata_service import _probe_manifest
+            manifest, _ = await _probe_manifest(base_url, connector=getattr(model, "connector", None),
+                api_key=api_key, extra_config=extra_config, provider_model_name=model.provider_model_name)
+            observed = ModelCapabilities.from_manifest(manifest, embedding=True)
+            for field in ("embedding_dimensions", "max_input_tokens", "model_version", "vector_normalized"):
+                configured, reported = getattr(capabilities, field), getattr(observed, field)
+                if configured is not None and reported is not None and configured != reported:
+                    raise ValueError(f"Embedding characteristic {field} differs from the service for {model_alias}; verify the model")
+            manifest = {key: value for key, value in manifest.items() if key != "important_params"}
+            extra_config = {**extra_config, "manifest": manifest}
+            model.extra_config = extra_config
+            from datetime import datetime, timezone
+            model.capabilities_checked_at = datetime.now(timezone.utc)
+            capabilities = ModelCapabilities(
+                embedding_dimensions=capabilities.embedding_dimensions or observed.embedding_dimensions,
+                max_input_tokens=capabilities.max_input_tokens or observed.max_input_tokens,
+                vector_normalized=capabilities.vector_normalized if capabilities.vector_normalized is not None else observed.vector_normalized,
+                model_version=capabilities.model_version or observed.model_version,
+            )
+        if not capabilities.embedding_dimensions or not capabilities.max_input_tokens:
+            raise ValueError(f"Embedding capabilities are unknown for '{model_alias}'; verify the model")
+        # Persist discovered/legacy capabilities inside the caller's transaction;
+        # repositories/services never commit a search or worker transaction here.
+        changed = False
+        for key, value in capabilities.model_dump().items():
+            if value is not None and getattr(model, key, None) is None:
+                setattr(model, key, value)
+                changed = True
+        if changed:
+            await session.flush()
         EmbeddingServiceFactory.register_model(
             ModelConfig(
                 alias=model.alias,
@@ -46,7 +76,11 @@ class EmbeddingModelConfigService:
                 provider_model_name=model.provider_model_name or model.alias,
                 base_url=base_url,
                 api_key=api_key,
-                dimensions=extra_config.get("vector_dim"),
+                dimensions=capabilities.embedding_dimensions,
+                max_tokens=capabilities.max_input_tokens,
+                model_version=capabilities.model_version,
+                normalized=capabilities.vector_normalized,
+                request_timeout_s=getattr(model, "request_timeout_s", None) or 30.0,
                 extra_config=extra_config,
                 connector=getattr(model, "connector", None) or "",
             )

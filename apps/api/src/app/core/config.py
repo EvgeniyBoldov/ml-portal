@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     # Embedding runtime behavior flags.
     EMB_OFFLINE: bool = Field(default=True, description="Disallow network downloads for embedding models")
     EMB_CACHE_DIR: str = Field(default="/tmp/sentence_transformers")
+    EMB_INPUT_TOKEN_RESERVE: int = Field(default=16, ge=4)
+    EMB_REQUEST_BATCH_SIZE: int = Field(default=32, ge=1, le=1000)
     
     # Reranker transport fallback; the selected registry model takes precedence.
     RERANK_SERVICE_URL: str = Field(default="http://rerank:8002", description="Reranker service URL")
@@ -151,6 +153,7 @@ class Settings(BaseSettings):
     UPLOAD_ALLOWED_MIME: str = Field(default="application/pdf,image/png,image/jpeg,application/octet-stream")
 
     # Qdrant
+    MULTI_EMBEDDING_RRF_K: int = Field(default=60, ge=1)
     QDRANT_URL: str = Field(default="http://localhost:6333")
 
     # Model Registry

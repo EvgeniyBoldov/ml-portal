@@ -33,6 +33,8 @@ Operational note:
   Template field alignment on these read paths uses `ensure_vector_infra=False`,
   so changing the default encoder cannot break listing due to an old index dimension.
 - if the effective embedding model changes, runtime marks table rows as pending and performs full revectorization before continuing with fresh vectors.
+- Provisioning, indexing and search resolve physical indexes through `VectorIndexService`: one collection namespace can have multiple encoder/dimension generations. Model defaults do not determine physical names.
+- Canonical document chunks are reused when rebuilding embeddings; embedding artifacts are tied to the full encoder fingerprint. See [the embedding contract](../BACKEND_ARCHITECTURE.md#embedding-model-and-vector-index-contract).
 
 ## 2. Tool Publication Flow
 

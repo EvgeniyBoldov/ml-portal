@@ -4,12 +4,13 @@
  * Tabs: Модели | Ограничения | Фолбеки | Лимиты | Общие доступы | RBAC
  * Uses EntityPageV2 + Tab architecture.
  */
+import { modelTableColumns } from './ModelTableColumns';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { credentialsApi } from '@/shared/api/credentials';
 import { adminApi, type Model, type ModelListResponse, type PlatformSettings, type PlatformSettingsUpdate } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
-import { DataTable, type DataTableColumn, Badge, Button } from '@/shared/ui';
+import { DataTable, Button } from '@/shared/ui';
 import { EntityPageV2, Tab } from '@/shared/ui';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
@@ -138,79 +139,6 @@ const CHAT_UPLOAD_FIELDS: FieldConfig[] = [
   },
 ];
 
-const MODEL_FIELDS: DataTableColumn<Model>[] = [
-  {
-    key: 'alias',
-    label: 'АЛИАС / НАЗВАНИЕ',
-    sortable: true,
-    render: (m: Model) => (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-        <span style={{ fontWeight: 500 }}>{m.alias}</span>
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{m.name}</span>
-      </div>
-    ),
-  },
-  {
-    key: 'type',
-    label: 'ТИП',
-    width: 110,
-    render: (m: Model) => {
-      const toneMap: Record<string, 'info' | 'success' | 'warn'> = {
-        llm_chat: 'info',
-        embedding: 'success',
-        reranker: 'warn',
-      };
-      const labelMap: Record<string, string> = {
-        llm_chat: 'LLM Chat',
-        embedding: 'Embedding',
-        reranker: 'Reranker',
-      };
-      return <Badge tone={toneMap[m.type] ?? 'info'}>{labelMap[m.type] ?? m.type}</Badge>;
-    },
-  },
-  {
-    key: 'connector',
-    label: 'КОННЕКТОР',
-    sortable: true,
-    render: (m: Model) => (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-        <span style={{ fontWeight: 500 }}>{m.connector}</span>
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{m.provider_model_name}</span>
-      </div>
-    ),
-  },
-  {
-    key: 'status',
-    label: 'СТАТУС',
-    width: 120,
-    render: (m: Model) => {
-      const toneMap: Record<string, 'success' | 'warn' | 'danger' | 'neutral'> = {
-        available: 'success',
-        unavailable: 'danger',
-        deprecated: 'neutral',
-        maintenance: 'warn',
-      };
-      const labelMap: Record<string, string> = {
-        available: 'Доступна',
-        unavailable: 'Недоступна',
-        deprecated: 'Устарела',
-        maintenance: 'Обслуживание',
-      };
-      return <Badge tone={toneMap[m.status] ?? 'neutral'}>{labelMap[m.status] ?? m.status}</Badge>;
-    },
-  },
-  {
-    key: 'default_for_type',
-    label: 'ПО УМОЛЧ.',
-    width: 100,
-    render: (m: Model) => m.default_for_type ? (
-      <Badge tone="success">По умолч.</Badge>
-    ) : (
-      <span style={{ color: 'var(--text-secondary)' }}>—</span>
-    ),
-  },
-];
-
 export function PlatformSettingsPage() {
   const navigate = useNavigate();
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -333,7 +261,7 @@ export function PlatformSettingsPage() {
         ]}
       >
         <DataTable
-          columns={MODEL_FIELDS}
+          columns={modelTableColumns}
           data={models}
           keyField="id"
           loading={modelsLoading}

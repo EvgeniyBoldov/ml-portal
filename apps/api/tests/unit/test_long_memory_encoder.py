@@ -84,3 +84,23 @@ def test_dispatch_happens_after_outer_commit_and_never_after_rollback(monkeypatc
         session.begin()
         session.commit()
         dispatch.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_health_manifest_changes_do_not_rebuild_long_memory(monkeypatch):
+    from app.repositories.long_memory_config_repository import LongMemoryConfigRepository
+    session = AsyncMock()
+    model = SimpleNamespace(id=uuid4(), alias="encoder", type=ModelType.EMBEDDING,
+        provider="local", provider_model_name="bge-m3", connector="local_emb_http", base_url="http://encoder",
+        instance_id=None, extra_config={}, enabled=True, status="available", model_version="v1",
+        embedding_dimensions=1024, max_input_tokens=8192, vector_normalized=True,
+        default_for_type=False, use_for_long_memory=True)
+    service = ModelService(session)
+    service.get_by_id = AsyncMock(return_value=model)
+    monkeypatch.setattr(service, "_enqueue_embedding_status_reconcile", lambda *args: None)
+    request = AsyncMock()
+    monkeypatch.setattr(LongMemoryConfigRepository, "request_reindex", request)
+    await service.update_model(model.id, {"extra_config": {"manifest": {"_health": {"latency_ms": 32}}}})
+    request.assert_not_awaited()
+    await service.update_model(model.id, {"embedding_dimensions": 384})
+    request.assert_awaited_once_with(model.id)

@@ -12,11 +12,9 @@ from celery import Task
 
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
-from app.adapters.embeddings import EmbeddingServiceFactory
-from app.services.embedding_model_config_service import EmbeddingModelConfigService
 from app.adapters.s3_client import s3_manager
 from app.repositories.rag_ingest_repos import AsyncChunkRepository, AsyncSourceRepository
-from app.services.document_artifacts import normalize_document_source_meta
+from app.services.document_artifacts import normalize_document_source_meta, get_document_artifact_key
 from app.storage.paths import get_idempotency_key
 from app.workers.tasks_rag_ingest.stage_context import IngestStageContext, run_stage
 from app.workers.tasks_rag_ingest.stage_results import EmbedResult, IndexResult
@@ -24,7 +22,7 @@ from app.workers.tasks_rag_ingest.stage_results import EmbedResult, IndexResult
 logger = get_logger(__name__)
 
 _INDEX_POINT_NAMESPACE = uuid.UUID("4b32c67e-86c7-4efb-8980-1e0570f31d16")
-_DOC_INDEX_VERSION = "doc-v3-model-scoped"
+_DOC_INDEX_VERSION = "doc-v4-vector-space"
 
 
 def _build_stable_point_id(tenant_id: str, source_id: str, model_alias: str, chunk_id: str) -> str:
@@ -75,12 +73,6 @@ def index_model(
 
             # 2. Check idempotency
             cached = await ctx.check_idempotency(model_alias=model_alias)
-            if cached:
-                logger.info(f"Index already completed for {source_id} with {model_alias}")
-                await ctx.set_completed(metrics={"status": "already_processed", "cached": True})
-                await ctx.session.commit()
-                return IndexResult(source_id=source_id, model_alias=model_alias, indexed_count=cached.get("indexed_count", 0))
-
             # 3. Validate embeddings key
             if not current_embeddings_key:
                 embed_idem_key = get_idempotency_key(ctx.tenant_id, ctx.source_id, "embed", model_alias)
@@ -140,10 +132,6 @@ def index_model(
             from app.adapters.impl.qdrant import QdrantVectorStore
 
             vector_store = QdrantVectorStore()
-            await EmbeddingModelConfigService.ensure_registered(ctx.session, model_alias)
-            embedding_service = EmbeddingServiceFactory.get_service(model_alias)
-            model_info = embedding_service.get_model_info()
-
             # Resolve Qdrant collection name: use collection's own name if available
             from sqlalchemy import select
             from app.models.collection import Collection
@@ -171,22 +159,19 @@ def index_model(
 
             coll_qdrant_name = membership_row.qdrant_collection_name if membership_row else None
             base_collection_name = coll_qdrant_name or f"{ctx.tenant_id_str}__documents"
-            # Index, search, provisioning and cleanup must derive exactly the
-            # same physical target.  The previous code used the base target
-            # until a dimensional collision happened, while search always
-            # looked at model-scoped targets for secondary models.
-            from app.services.collection.vector_lifecycle import (
-                get_vector_config_model_aliases,
-                get_model_scoped_qdrant_collection_name,
-            )
-            target_models = get_vector_config_model_aliases(
-                membership_row.vector_config if membership_row else None
-            )
-            if model_alias not in target_models:
-                target_models.append(model_alias)
-            collection_name = get_model_scoped_qdrant_collection_name(
-                base_collection_name, model_alias, target_models[0] if target_models else model_alias
-            )
+            from app.services.vector_index_service import VectorIndexService
+            target = await VectorIndexService(ctx.session).resolve(base_collection_name, model_alias)
+            collection_name = target.collection_name
+            if await VectorIndexService.cache_is_current(target, cached, current_embeddings_key,
+                                                         vector_store, source_id, ctx.tenant_id_str):
+                await ctx.set_completed(metrics={
+                    "status": "already_processed", "cached": True,
+                    "embedding_fingerprint": target.fingerprint,
+                    "model_version": target.version, "collection": collection_name,
+                    "indexed_count": cached.get("indexed_count", 0),
+                })
+                await ctx.session.commit()
+                return IndexResult(source_id=source_id, model_alias=model_alias, indexed_count=cached.get("indexed_count", 0), collection=collection_name)
 
             # Collection context for payload enrichment
             coll_collection_id = str(membership_row.collection_id) if membership_row else None
@@ -247,8 +232,15 @@ def index_model(
                             continue
 
                         vector = record["vector"]
+                        canonical_chunks_key = get_document_artifact_key(normalized_meta, "chunks")
+                        if canonical_chunks_key and record.get("chunks_key") != canonical_chunks_key:
+                            raise ValueError("Embedding artifact belongs to another canonical input; rerun embedding")
+                        if record.get("embedding_fingerprint") != target.fingerprint:
+                            raise ValueError("Embedding artifact belongs to another or unknown vector space; rerun embedding before indexing")
+                        from app.adapters.embeddings import validate_embedding_batch
+                        validate_embedding_batch([vector], 1, target.dimensions)
                         vectors.append(vector)
-                        vector_dim = len(vector) if isinstance(vector, (list, tuple)) else model_info.dimensions
+                        vector_dim = len(vector) if isinstance(vector, (list, tuple)) else target.dimensions
                         if not collection_ready:
                             await vector_store.ensure_collection(collection_name, vector_dim)
                             collection_ready = True
@@ -270,8 +262,9 @@ def index_model(
                             "lang": chunk.lang or "en",
                             "mime": "text/plain",
                             "embed_model_alias": model_alias,
+                            "embedding_fingerprint": target.fingerprint,
                             "index_version": _DOC_INDEX_VERSION,
-                            "version": model_info.version,
+                            "version": target.version,
                             "index_revision": _DOC_INDEX_VERSION,
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                             "tags": [],
@@ -312,11 +305,12 @@ def index_model(
             await ctx.set_completed(metrics={
                 "indexed_count": indexed_count,
                 "collection": collection_name,
-                "model_version": model_info.version,
+                "model_version": target.version,
+                "embedding_fingerprint": target.fingerprint,
                 "duration_sec": ctx.elapsed_sec,
             })
             await ctx.save_idempotency(
-                {"status": "completed", "indexed_count": indexed_count},
+                {"status": "completed", "indexed_count": indexed_count, "embedding_fingerprint": target.fingerprint, "collection": collection_name, "embeddings_key": current_embeddings_key},
                 model_alias=model_alias,
             )
             await ctx.session.commit()
