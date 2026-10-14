@@ -1,7 +1,7 @@
 /**
  * Query key factory for TanStack Query
  * Centralized query keys prevent hardcoding and ensure consistency
- * 
+ *
  * Usage:
  * - useQuery({ queryKey: qk.collections.appList({ active_only: true }) })
  * - queryClient.invalidateQueries({ queryKey: qk.collections.all() })
@@ -16,8 +16,7 @@ export const qk = {
       detail: (id: string) => ['sandbox', 'sessions', id] as const,
     },
     branches: {
-      list: (sessionId: string) =>
-        ['sandbox', 'branches', sessionId] as const,
+      list: (sessionId: string) => ['sandbox', 'branches', sessionId] as const,
     },
     branchOverrides: {
       list: (sessionId: string, branchId: string) =>
@@ -32,8 +31,7 @@ export const qk = {
         ['sandbox', 'runs', sessionId, runId] as const,
     },
     catalog: {
-      detail: (sessionId: string) =>
-        ['sandbox', 'catalog', sessionId] as const,
+      detail: (sessionId: string) => ['sandbox', 'catalog', sessionId] as const,
     },
   },
   admin: {
@@ -49,7 +47,8 @@ export const qk = {
       scopes: () => ['admin', 'memory', 'scopes'] as const,
       termCatalog: () => ['admin', 'memory', 'term-catalog'] as const,
       review: () => ['admin', 'memory', 'staging-review'] as const,
-      candidateEvidence: (id: string) => ['admin', 'memory', 'candidate-evidence', id] as const,
+      candidateEvidence: (id: string) =>
+        ['admin', 'memory', 'candidate-evidence', id] as const,
       scopeProposals: () => ['admin', 'memory', 'scope-proposals'] as const,
     },
     users: {
@@ -61,15 +60,24 @@ export const qk = {
     },
     tenants: {
       all: () => ['admin', 'tenants'] as const,
-      list: (params?: { page?: number }) => ['admin', 'tenants', 'list', params] as const,
+      list: (params?: { page?: number }) =>
+        ['admin', 'tenants', 'list', params] as const,
       detail: (id: string) => ['admin', 'tenants', id] as const,
       facts: (id: string) => ['admin', 'tenants', id, 'facts'] as const,
     },
     models: {
       all: () => ['admin', 'models'] as const,
-      list: (params?: { page?: number; size?: number; type?: string; enabled_only?: boolean; status?: string; search?: string }) => ['admin', 'models', 'list', params] as const,
+      list: (params?: {
+        page?: number;
+        size?: number;
+        type?: string;
+        enabled_only?: boolean;
+        status?: string;
+        search?: string;
+      }) => ['admin', 'models', 'list', params] as const,
       detail: (id: string) => ['admin', 'models', id] as const,
-      embeddingUsage: (id: string) => ['admin', 'models', id, 'embedding-usage'] as const,
+      embeddingUsage: (id: string) =>
+        ['admin', 'models', id, 'embedding-usage'] as const,
     },
     orchestration: {
       all: () => ['admin', 'orchestration'] as const,
@@ -77,8 +85,17 @@ export const qk = {
     },
     systemLlmRoles: {
       all: () => ['admin', 'system-llm-roles'] as const,
-      active: (role: 'planner' | 'turn_preflight' | 'memory' | 'synthesizer' | 'fact_extractor' | 'fact_compactor' | 'document_memory_extractor' | 'chat_context_compactor') =>
-        ['admin', 'system-llm-roles', 'active', role] as const,
+      active: (
+        role:
+          | 'planner'
+          | 'turn_preflight'
+          | 'memory'
+          | 'synthesizer'
+          | 'fact_extractor'
+          | 'fact_compactor'
+          | 'document_memory_extractor'
+          | 'chat_context_compactor'
+      ) => ['admin', 'system-llm-roles', 'active', role] as const,
     },
     audit: (params?: {
       page?: number;
@@ -95,20 +112,26 @@ export const qk = {
     list: (params?: { q?: string }) => ['agents', 'list', params] as const,
     detail: (slug: string) => ['agents', 'detail', slug] as const,
     versions: (slug: string) => ['agents', 'versions', slug] as const,
-    version: (slug: string, version: number) => ['agents', 'version', slug, version] as const,
+    version: (slug: string, version: number) =>
+      ['agents', 'version', slug, version] as const,
   },
   discoveredTools: {
     all: () => ['discovered-tools'] as const,
-    list: (params?: { source?: string; domain?: string; is_active?: boolean }) =>
-      ['discovered-tools', 'list', params] as const,
+    list: (params?: {
+      source?: string;
+      domain?: string;
+      is_active?: boolean;
+    }) => ['discovered-tools', 'list', params] as const,
     detail: (id: string) => ['discovered-tools', 'detail', id] as const,
   },
   prompts: {
     all: () => ['prompts'] as const,
-    list: (params?: { type?: string; q?: string }) => ['prompts', 'list', params] as const,
+    list: (params?: { type?: string; q?: string }) =>
+      ['prompts', 'list', params] as const,
     detail: (slug: string) => ['prompts', 'detail', slug] as const,
     versions: (slug: string) => ['prompts', 'versions', slug] as const,
-    version: (slug: string, version: number) => ['prompts', 'version', slug, version] as const,
+    version: (slug: string, version: number) =>
+      ['prompts', 'version', slug, version] as const,
     agents: (slug: string) => ['prompts', 'agents', slug] as const,
   },
   tools: {
@@ -118,8 +141,15 @@ export const qk = {
   },
   toolInstances: {
     all: () => ['connectors'] as const,
-    list: (params?: { is_active?: boolean; instance_kind?: string; connector_type?: string; connector_subtype?: string; placement?: string; limit?: number; skip?: number }) =>
-      ['connectors', 'list', params] as const,
+    list: (params?: {
+      is_active?: boolean;
+      instance_kind?: string;
+      connector_type?: string;
+      connector_subtype?: string;
+      placement?: string;
+      limit?: number;
+      skip?: number;
+    }) => ['connectors', 'list', params] as const,
     detail: (id: string) => ['connectors', 'detail', id] as const,
   },
   credentials: {
@@ -131,13 +161,16 @@ export const qk = {
   profile: {
     all: () => ['profile'] as const,
     detail: () => ['profile', 'me'] as const,
+    tokens: () => ['profile', 'tokens'] as const,
     facts: () => ['profile', 'facts'] as const,
-    credentials: (level: 'user' | 'tenant') => ['profile', 'credentials', level] as const,
+    credentials: (level: 'user' | 'tenant') =>
+      ['profile', 'credentials', level] as const,
     credentialInstances: () => ['profile', 'credential-instances'] as const,
   },
   rbac: {
     all: () => ['rbac'] as const,
-    list: (params?: Record<string, unknown>) => ['rbac', 'list', params] as const,
+    list: (params?: Record<string, unknown>) =>
+      ['rbac', 'list', params] as const,
     detail: (id: string) => ['rbac', 'detail', id] as const,
     enrichedRules: (params?: Record<string, unknown>) =>
       ['rbac', 'enriched-rules', params] as const,
@@ -171,21 +204,40 @@ export const qk = {
     memoryScopeCatalog: () => ['collections', 'memory-scope-catalog'] as const,
     appList: (params?: { active_only?: boolean }) =>
       ['collections', 'app-list', params] as const,
-    adminList: (params?: { page?: number; size?: number; tenant_id?: string; is_active?: boolean }) =>
-      ['collections', 'admin-list', params] as const,
+    adminList: (params?: {
+      page?: number;
+      size?: number;
+      tenant_id?: string;
+      is_active?: boolean;
+    }) => ['collections', 'admin-list', params] as const,
     presets: () => ['collections', 'type-presets'] as const,
     detail: (slug: string) => ['collections', 'detail', slug] as const,
     versions: (id: string) => ['collections', 'versions', id] as const,
-    version: (id: string, version: number) => ['collections', 'version', id, version] as const,
-    data: (slug: string, params?: { limit?: number; offset?: number; search?: string; tenant_id?: string }) =>
-      ['collections', 'data', slug, params] as const,
-    documents: (id: string, params?: { page?: number; size?: number; status?: string; query?: string }) =>
-      ['collections', 'documents', id, params] as const,
-    projectMemoryOverview: (params?: Record<string, unknown>) => ['collections', 'project-memory', 'overview', params] as const,
-    projectMemoryProject: (projectKey: string, params?: Record<string, unknown>) =>
+    version: (id: string, version: number) =>
+      ['collections', 'version', id, version] as const,
+    data: (
+      slug: string,
+      params?: {
+        limit?: number;
+        offset?: number;
+        search?: string;
+        tenant_id?: string;
+      }
+    ) => ['collections', 'data', slug, params] as const,
+    documents: (
+      id: string,
+      params?: { page?: number; size?: number; status?: string; query?: string }
+    ) => ['collections', 'documents', id, params] as const,
+    projectMemoryOverview: (params?: Record<string, unknown>) =>
+      ['collections', 'project-memory', 'overview', params] as const,
+    projectMemoryProject: (
+      projectKey: string,
+      params?: Record<string, unknown>
+    ) =>
       ['collections', 'project-memory', 'project', projectKey, params] as const,
     glossaryAll: () => ['collections', 'glossary', 'overview'] as const,
-    glossaryOverview: (params?: Record<string, unknown>) => ['collections', 'glossary', 'overview', params] as const,
+    glossaryOverview: (params?: Record<string, unknown>) =>
+      ['collections', 'glossary', 'overview', params] as const,
   },
   auth: {
     me: () => ['auth', 'me'] as const,

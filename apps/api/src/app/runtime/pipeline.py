@@ -5,7 +5,7 @@ Responsibilities (and NOTHING else):
     1. Resolve tenant/user/chat ids from the incoming request.
     2. Load the platform snapshot (config + routable agents + policy).
     3. Run mechanical glossary/entity lookup and TurnPreflight.
-    4. Route to direct synthesis, bounded recall, clarification, or planning.
+    4. Route via optional registered memory tools to synthesis, clarification, or planning.
     5. Run the persisted graph only for an execution task.
     6. Hand off to `MemoryWriter.finalize` after an answer.
 """
@@ -33,7 +33,6 @@ from app.runtime.entity_ids import (
     interaction_id as _interaction_id,
     memory_component_entity_id as _memory_component_entity_id,
     memory_orchestrator_id as _memory_orchestrator_id,
-    memory_recall_orchestrator_id as _memory_recall_orchestrator_id,
     planner_orchestrator_id,
     turn_preflight_orchestrator_id as _turn_preflight_orchestrator_id,
 )
@@ -50,9 +49,7 @@ from app.runtime.memory.mechanical_lookup import MechanicalLookupService
 from app.runtime.memory.project_context import ProjectContextResolver
 from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdentity, ScopeSelection, merge_selection
 from app.services.memory_scope_catalog import resolve_memory_scopes
-from app.runtime.memory.search import MemorySearchService
 from app.runtime.memory.execution_context import memory_execution_context
-from app.runtime.memory.turn_recall import recall_with_stable_scope
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
@@ -567,6 +564,7 @@ class RuntimePipeline:
             decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
                 user_request=effective_user_query,
                 mechanical_lookup=lookup,
+                ctx=ctx,
                 facts_context=turn_mem.planner_memory_context,
                 project_context=turn_mem.project_context,
                 chat_context=chat_context,
@@ -635,117 +633,9 @@ class RuntimePipeline:
         for index, item in enumerate(turn_mem.planner_memory_context):
             if isinstance(item, dict) and item.get("type") == "project_context":
                 turn_mem.planner_memory_context[index] = {**item, **turn_mem.project_context}
-        recall_context: dict[str, Any] | None = None
-        if decision.route == "recall":
-            memory_request = decision.memory_request
-            assert memory_request is not None
-            recall_id = _memory_recall_orchestrator_id(run_id_str)
-            selector_id = _memory_component_entity_id(run_id_str, "memory_selector", 0)
-            yield await emitter.emit(RuntimeEvent.orchestrator_start(
-                orchestrator_id=recall_id, run_id=run_id_str, role="memory_recall",
-            ), phase=OrchestrationPhase.PREFLIGHT)
-            # Recall is a first-class traceable operation.  Do not leave the
-            # inspector to infer selected memory from a later preflight call.
-            yield await emitter.emit(RuntimeEvent.agent_start(
-                agent_execution_id=selector_id,
-                parent_entity_type="orchestrator", parent_entity_id=recall_id,
-                agent_slug="memory_selector", task_title="Отбор контекста памяти",
-            ), phase=OrchestrationPhase.PREFLIGHT)
-            try:
-                async def search_scoped_memory(scope):
-                    return await MemorySearchService(self._session).search(
-                        query=memory_request.query, tenant_id=tenant_id, user_id=user_id,
-                        context_scope_keys=scope.keys, enforce_context=True,
-                        team_keys=memory_request.team_keys, project_keys=memory_request.project_keys,
-                        kinds=memory_request.kinds, scopes=memory_request.scopes,
-                        entity_ids=memory_request.entity_ids, direction=memory_request.direction,
-                        limit=memory_request.limit, fact_subject=memory_request.fact_subject,
-                    )
-
-                async def complete_scoped_recall(recalled, scope):
-                    scoped_context = _project_context_payload(scope, turn_mem.project_context)
-                    return await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
-                        user_request=effective_user_query, mechanical_lookup=lookup,
-                        facts_context=[*(
-                            {**item, **scoped_context} if item.get("type") == "project_context" else item
-                            for item in turn_mem.planner_memory_context
-                        ), recalled.get("memory_context") or {}],
-                        project_context=scoped_context, chat_context=chat_context,
-                        recent_dialogue=_recent_dialogue(list(request.messages or [])),
-                        continuation=continuation_state, recall_context=recalled,
-                        chat_id=chat_id, tenant_id=tenant_id, user_id=user_id,
-                        sandbox_overrides=request.sandbox_overrides,
-                        trace_parent_entity_id=preflight_id,
-                        event_sink=lambda event: emitter.emit(event, phase=OrchestrationPhase.PREFLIGHT),
-                    )
-
-                async def select_recall_scope(scope, routed):
-                    return await _turn_scope_context(self._session, scope, routed, lookup)
-
-                recall_context, decision, effective_scope_context = await recall_with_stable_scope(
-                    effective_scope_context, search=search_scoped_memory,
-                    complete=complete_scoped_recall, select=select_recall_scope,
-                )
-                turn_mem.project_context = _project_context_payload(effective_scope_context, turn_mem.project_context)
-                if recall_context.get("memory_context"):
-                    turn_mem.planner_memory_context.append(recall_context["memory_context"])
-                ctx.extra["project_context"] = turn_mem.project_context
-                ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
-                for index, item in enumerate(turn_mem.planner_memory_context):
-                    if isinstance(item, dict) and item.get("type") == "project_context":
-                        turn_mem.planner_memory_context[index] = {**item, **turn_mem.project_context}
-                yield await emitter.emit(RuntimeEvent.status(
-                    "memory_context_prepared",
-                    fallback=False,
-                    selected_facts=len((recall_context.get("memory_context") or {}).get("durable_facts") or []),
-                    selected_projects=len(recall_context.get("projects") or []),
-                    selected_glossary=len(recall_context.get("glossary") or []),
-                    selected_memory_items=len(recall_context.get("items") or []),
-                    memory_context=recall_context.get("memory_context") or {},
-                    search_scope=recall_context.get("search_scope") or {},
-                    entity_type="agent_execution", entity_id=selector_id,
-                    parent_entity_type="orchestrator", parent_entity_id=recall_id,
-                ), phase=OrchestrationPhase.PREFLIGHT)
-            except Exception as exc:
-                logger.error("TurnPreflight recall completion unavailable; planner route is blocked: %s", exc)
-                yield await emitter.emit(RuntimeEvent.orchestrator_end(
-                    orchestrator_id=recall_id, run_id=run_id_str, status="failed",
-                ), phase=OrchestrationPhase.PREFLIGHT)
-                yield await emitter.emit(RuntimeEvent.agent_end(
-                    agent_execution_id=selector_id, parent_entity_type="orchestrator",
-                    parent_entity_id=recall_id, agent_slug="memory_selector", status="failed",
-                ), phase=OrchestrationPhase.PREFLIGHT)
-                yield await emitter.emit(RuntimeEvent.orchestrator_end(
-                    orchestrator_id=preflight_id, run_id=run_id_str, status="failed",
-                ), phase=OrchestrationPhase.PREFLIGHT)
-                yield await emitter.emit(RuntimeEvent.error(
-                    "Turn preflight recall is unavailable",
-                    recoverable=True, error_code="turn_preflight_recall_unavailable", retryable=True,
-                    user_message=(
-                        "Не удалось получить контекст памяти для маршрутизации запроса. "
-                        "Планировщик не запускался; повторите запрос позже."
-                    ), source="turn_preflight", parent_entity_type="orchestrator", parent_entity_id=preflight_id,
-                ), phase=OrchestrationPhase.PREFLIGHT)
-                yield await emitter.emit(RuntimeEvent.stop(
-                    reason=PipelineStopReason.FAILED.value, run_id=run_id_str,
-                    message="TurnPreflight recall unavailable; planner was not invoked",
-                ), phase=OrchestrationPhase.PIPELINE)
-                yield await emitter.emit(RuntimeEvent.run_end(
-                    run_id=run_id_str, status=PipelineStopReason.FAILED.value,
-                ), phase=OrchestrationPhase.PIPELINE)
-                return
-            yield await emitter.emit(RuntimeEvent.status(
-                "memory_scope_selected", route=decision.route,
-                scope_context=effective_scope_context.model_payload(),
-            ), phase=OrchestrationPhase.PREFLIGHT)
-            yield await emitter.emit(RuntimeEvent.agent_end(
-                agent_execution_id=selector_id, parent_entity_type="orchestrator",
-                parent_entity_id=recall_id, agent_slug="memory_selector", status="completed",
-            ), phase=OrchestrationPhase.PREFLIGHT)
-            yield await emitter.emit(RuntimeEvent.orchestrator_end(
-                orchestrator_id=recall_id, run_id=run_id_str,
-                status="completed" if recall_context is not None else "failed",
-            ), phase=OrchestrationPhase.PREFLIGHT)
+        preflight_memory_results = decision.memory_tool_results
+        for record in preflight_memory_results:
+            turn_mem.planner_memory_context.append({"type": "planner_memory_result", **record})
         yield await emitter.emit(
             RuntimeEvent.orchestrator_end(
                 orchestrator_id=preflight_id,
@@ -796,7 +686,7 @@ class RuntimePipeline:
                 "direct_answer_draft": brief.answer_draft,
                 "plan_outline": [], "resolution_decisions": [], "completed_task_reports": [],
                 "limitations": [], "artifacts": [], "sources": [],
-                "memory_context": recall_context or {},
+                "memory_context": preflight_memory_results,
                 "memory_candidates": turn_mem.preflight_candidates,
                 "chat_context": chat_context,
                 "scope_context": effective_scope_context.model_payload(),
@@ -841,7 +731,7 @@ class RuntimePipeline:
                 yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="failed"), phase=OrchestrationPhase.PIPELINE)
             return
         preflight_task_brief: dict[str, Any] = {}
-        if decision.route in {"planner", "recall"} and decision.task_brief is not None:
+        if decision.route == "planner" and decision.task_brief is not None:
             effective_goal = decision.task_brief.goal
             runtime_state.goal = effective_goal
             preflight_task_brief = decision.task_brief.model_dump(mode="json")

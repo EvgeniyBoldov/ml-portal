@@ -35,7 +35,12 @@ Both types retain the existing version/publish lifecycle, prompt builder, model,
 limits and observation settings. Shadow agents are excluded from both routable
 catalogs and explicit planner selection; the chat selector also excludes them.
 
-`POST /api/v1/agents/shadow/invoke` requires a user Bearer **access** token.
+`POST /api/v1/agents/shadow/invoke` requires `Authorization: Bearer <token>`.
+The shared Bearer authentication dependency accepts a JWT access token or a
+personal API token created under `/api/v1/profile/tokens`. Refresh tokens and
+cookies are not machine API credentials. Personal tokens resolve the current
+active owner, role and active tenant memberships from the database; revocation
+and expiry take effect on the next request. Existing RBAC remains authoritative.
 Request: `{"agent":"agent_slug","data":{}}`.
 Successful response: `{"agent":"agent_slug","result":{}}` (application/json).
 Both envelopes reject extra fields and require JSON objects for data/result;
@@ -176,13 +181,14 @@ class ExecutionPreflight:
 
 Root-level системная роль перед planner. После дешёвого code-only lookup
 глоссария, проектов и сущностей она возвращает строгий route: `synthesis`,
-`planner`, `recall` или `clarify`. Для `planner` она формирует `TaskBrief`, для
-`synthesis` — `SynthesisBrief`; сама не выполняет tools, не создаёт задачи и
-не пишет память.
+`planner`, `clarify` либо промежуточный `tool_call`. Для `planner` она формирует
+`TaskBrief`, для `synthesis` — `SynthesisBrief`. Может вызывать зарегистрированный
+`memory.search` через общий executor операций; не создаёт задачи и не пишет память.
 
-Прямой synthesis выбирается только при достаточности уже имеющегося материала.
-Возможные действия, поиск, проверки и неопределённые параметры работы передаются
-planner. Уточнение preflight допустимо только для будущего прямого ответа с
+Прямой synthesis выбирается при достаточности входа и найденного документного материала.
+Простые вопросы из памяти решаются через собственный поиск и synthesis.
+Другие действия, источники, проверки и неопределённые параметры передаются planner.
+Уточнение preflight допустимо только для будущего прямого ответа с
 обоснованием `direct_answer_reason`; ошибки выбора memory scope также передаются
 planner с исходной задачей и унаследованным фокусом. Начальный фокус берётся из
 явных `memory_scope_keys` пользователя и tenant-а, пустых по умолчанию. Текущие
@@ -227,8 +233,8 @@ LLM-facing contract provider-agnostic и использует MCP-compatible des
 
 ```
 1. `ChatStreamService` или sandbox создаёт `ToolContext`; runtime выполняет ограниченный поиск опубликованных терминов и проектов.
-2. `TurnPreflight` возвращает `synthesis`, `planner`, `recall` или `clarify` и соответствующий строгий brief/request.
-3. `synthesis` передаёт `SynthesisBrief` напрямую Synthesizer без persisted plan и агентских задач. `recall` читает только запрошенный scoped context и вызывает TurnPreflight повторно.
+2. `TurnPreflight` может выполнить до трёх зарегистрированных `memory.search` с самостоятельно выбранными query, затем возвращает `synthesis`, `planner` или `clarify` со строгим brief.
+3. `synthesis` передаёт `SynthesisBrief` и найденные фрагменты со ссылками напрямую Synthesizer без persisted plan и агентских задач. Пустой успешный поиск может завершиться сообщением об отсутствии сведений, если запрос ограничен памятью. Поиск сверх бюджета preflight передаёт работу и контекст planner.
 4. `planner` передаёт `TaskBrief` в GraphPlanner. Planner сам использует canonical memory tools и генерирует полную неизменяемую iteration proposal только для агентской работы.
 5. Terminal является свойством iteration, а не task. `planner` создаёт следующую iteration; `synthesis` запрашивает финальную сборку ответа. Run становится `completed` только после успешного synthesis.
 6. Store возвращает typed scheduler decision. Orchestrator только исполняет его: создаёт attempt, вызывает агента, применяет один атомарный result либо вызывает planner/synthesizer.
@@ -317,10 +323,12 @@ a new LLM-call identity. Transport retries retain the original identity.
 
 Memory is not an unconditional pre-planner prompt stage. Mechanical lookup
 provides only bounded candidate aliases/projects/entities to TurnPreflight.
-For `recall`, runtime reads the requested scoped context before a second
-TurnPreflight decision. For `planner`, planner obtains project rules, processes
-and facts on demand through canonical memory operations; it does not receive a
-preassembled project-memory dump. Sandbox overlays remain scoped to the
+TurnPreflight and planner invoke the same registered document `memory.search`
+through `OperationRouter` and `DirectOperationExecutor` as agents. Query and optional
+limit derive from the tool contract; old recall routes and scope filters are unused.
+Results are preserved for subsequent roles; empty results differ from tool errors.
+Planner receives preflight evidence and may search further as needed.
+Sandbox overlays remain scoped to the
 immutable run snapshot.
 
 TurnPreflight can attach evidence-backed memory candidates, but the role is not
@@ -348,8 +356,9 @@ agent-triggered document extraction are also journalled semantic boundaries.
 Extraction is a child of `tool_call`; independent RAG ingestion keeps its own
 job-status/event contract.
 The canonical trace presentation hierarchy is
-`run -> turn_preflight -> llm_call`, затем либо `synthesis_run`, либо
-`memory_recall -> turn_preflight`, либо `planner orchestrator -> planner_iteration`.
+`run -> turn_preflight -> llm_call|tool_call`, затем либо `synthesis_run`, либо
+`planner orchestrator -> planner_iteration -> llm_call|tool_call`.
+Синтетические `memory_recall` и `memory_selector` больше не создаются.
 Агентская ветка сохраняет
 `planner_iteration -> step -> agent_execution -> llm_call|tool_call|interaction|error|snapshot`.
 `task` and `attempt` are persisted execution-control entities, not a competing

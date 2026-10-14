@@ -2,13 +2,11 @@
 Profile API - User profile and API tokens management
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from uuid import UUID
-import secrets
-import hashlib
 
 from app.api.deps import get_current_user, db_session, db_uow
 from app.core.db import get_session_factory
@@ -18,6 +16,7 @@ from app.core.crypto import get_crypto_service
 from app.models.user import Users
 from app.models.tenant import UserTenants
 from app.models.api_token import ApiToken
+from app.services.personal_access_token_service import PersonalAccessTokenService
 from app.models.credential_set import Credential
 from app.models.tool_instance import ToolInstance
 from app.models.tool import Tool
@@ -48,16 +47,15 @@ class ProfileResponse(BaseModel):
 
 
 class ApiTokenCreate(BaseModel):
-    name: str
-    scopes: Optional[str] = "mcp,chat,rag"
-    expires_days: Optional[int] = None  # None = never expires
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=255, pattern=r"\S")
+    expires_days: int | None = Field(default=None, ge=1, le=3650)
 
 
 class ApiTokenResponse(BaseModel):
     id: str
     name: str
     token_prefix: str
-    scopes: Optional[str]
     is_active: bool
     last_used_at: Optional[datetime]
     expires_at: Optional[datetime]
@@ -183,100 +181,38 @@ async def set_memory_scopes(
     return MemoryScopePreferences(memory_scope_keys=keys)
 
 
+def _token_response(token: ApiToken) -> ApiTokenResponse:
+    return ApiTokenResponse(id=str(token.id), name=token.name, token_prefix=token.token_prefix,
+        is_active=token.is_active, last_used_at=token.last_used_at, expires_at=token.expires_at,
+        created_at=token.created_at)
+
+
 @router.get("/tokens", response_model=List[ApiTokenResponse])
-async def list_tokens(current_user: UserCtx = Depends(get_current_user)):
-    """List user's API tokens"""
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            select(ApiToken)
-            .where(ApiToken.user_id == UUID(current_user.id))
-            .order_by(ApiToken.created_at.desc())
-        )
-        tokens = result.scalars().all()
-        
-        return [
-            ApiTokenResponse(
-                id=str(t.id),
-                name=t.name,
-                token_prefix=t.token_prefix,
-                scopes=t.scopes,
-                is_active=t.is_active,
-                last_used_at=t.last_used_at,
-                expires_at=t.expires_at,
-                created_at=t.created_at,
-            )
-            for t in tokens
-        ]
+async def list_tokens(
+    current_user: UserCtx = Depends(get_current_user), session: AsyncSession = Depends(db_session),
+):
+    tokens = await PersonalAccessTokenService(session).list_owned(UUID(current_user.id))
+    return [_token_response(token) for token in tokens]
 
 
 @router.post("/tokens", response_model=ApiTokenCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_token(
-    data: ApiTokenCreate,
-    current_user: UserCtx = Depends(get_current_user)
+    data: ApiTokenCreate, current_user: UserCtx = Depends(get_current_user),
+    session: AsyncSession = Depends(db_uow),
 ):
-    """Create a new API token. The full token is shown only once."""
-    # Generate secure token
-    raw_token = secrets.token_urlsafe(32)
-    token_prefix = raw_token[:8]
-    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    
-    # Calculate expiration
-    expires_at = None
-    if data.expires_days:
-        expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_days)
-    
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        token = ApiToken(
-            user_id=UUID(current_user.id),
-            name=data.name,
-            token_hash=token_hash,
-            token_prefix=token_prefix,
-            scopes=data.scopes,
-            expires_at=expires_at,
-        )
-        session.add(token)
-        await session.commit()
-        await session.refresh(token)
-        
-        return ApiTokenCreatedResponse(
-            id=str(token.id),
-            name=token.name,
-            token_prefix=token.token_prefix,
-            scopes=token.scopes,
-            is_active=token.is_active,
-            last_used_at=token.last_used_at,
-            expires_at=token.expires_at,
-            created_at=token.created_at,
-            token=raw_token,  # Show full token only once
-        )
+    """Create a personal Bearer token; return its secret only once."""
+    token, raw = await PersonalAccessTokenService(session).create(
+        user_id=UUID(current_user.id), name=data.name.strip(), expires_days=data.expires_days)
+    return ApiTokenCreatedResponse(**_token_response(token).model_dump(), token=raw)
 
 
 @router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_token(
-    token_id: UUID,
-    current_user: UserCtx = Depends(get_current_user)
+    token_id: UUID, current_user: UserCtx = Depends(get_current_user),
+    session: AsyncSession = Depends(db_uow),
 ):
-    """Delete an API token"""
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            select(ApiToken).where(
-                ApiToken.id == token_id,
-                ApiToken.user_id == UUID(current_user.id)
-            )
-        )
-        token = result.scalar_one_or_none()
-        
-        if not token:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Token not found"
-            )
-        
-        await session.delete(token)
-        await session.commit()
+    if not await PersonalAccessTokenService(session).delete_owned(token_id, UUID(current_user.id)):
+        raise HTTPException(status_code=404, detail="Token not found")
 
 
 @router.get("/facts", response_model=List[UserFactResponse])
@@ -467,39 +403,6 @@ async def change_profile_password(
         await session.commit()
 
     return {"ok": True}
-
-
-async def verify_api_token(token: str) -> Optional[tuple[Users, ApiToken]]:
-    """Verify API token and return user if valid"""
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            select(ApiToken, Users)
-            .join(Users, ApiToken.user_id == Users.id)
-            .where(
-                ApiToken.token_hash == token_hash,
-                ApiToken.is_active == True,
-                Users.is_active == True,
-            )
-        )
-        row = result.first()
-        
-        if not row:
-            return None
-        
-        api_token, user = row
-        
-        # Check expiration
-        if api_token.expires_at and api_token.expires_at < datetime.now(timezone.utc):
-            return None
-        
-        # Update last_used_at
-        api_token.last_used_at = datetime.now(timezone.utc)
-        await session.commit()
-        
-        return user, api_token
 
 
 # ============================================================================

@@ -144,6 +144,10 @@ def memory_visible_for_scope(item: dict[str, Any], scope_keys: list[str] | set[s
 
 def project_memory_context(value: dict[str, Any], scope_keys: list[str] | set[str]) -> dict[str, Any]:
     """Filter nested recall/search evidence together with its source references."""
+    # Registered memory.search reads the shared document corpus. Legacy
+    # MemoryItem applicability must not discard its passages in a focused chat.
+    if value.get("backend") == "hipporag" and "document_count" in value:
+        return dict(value)
     result = dict(value)
     selected = set(scope_keys)
     item_lists = ("items", "relevant_knowledge", "applicable_rules", "applicable_procedures", "known_constraints")

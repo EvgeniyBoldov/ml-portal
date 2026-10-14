@@ -106,7 +106,7 @@ def _render_memory_recall(recall: Dict[str, Any]) -> list[str]:
                     lines.append("[Procedure scope] " + ", ".join(entry["scope_keys"]))
                 lines.extend(_render_procedure(subject, entry.get("content")))
                 continue
-            value = str(entry.get("value") or "").strip()
+            value = str(entry.get("value") or entry.get("text") or "").strip()
             if not value and entry.get("content") is not None:
                 content = entry["content"]
                 value = (json.dumps(content, ensure_ascii=False, default=str)

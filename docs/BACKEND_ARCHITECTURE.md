@@ -1,5 +1,28 @@
 # Backend Architecture
 
+## User Bearer authentication
+
+`BearerAuthenticationService` authenticates both JWT access tokens and personal
+API tokens. `get_current_user` also permits a web access-token cookie;
+`get_bearer_user` requires the Authorization header for shadow and MCP.
+Tenant middleware uses the same service and caches the principal for route
+dependencies, so an opaque API token is never decoded as JWT.
+
+Personal tokens have format `mlp_pat_<32-hex-id>.<43-character-secret>`.
+The id is a public primary-key lookup; the secret contains 256 random bits.
+Only SHA-256 of the complete token and a public prefix are stored. Comparison
+uses constant-time digest comparison. Every request checks the active token,
+expiry, active/non-deprecated owner and current active tenant memberships.
+Tokens inherit the owner's current role/RBAC; there is no separate token-scope
+permission system. Successful authentication updates `last_used_at` in a
+dedicated transaction, without committing endpoint business changes.
+
+Profile token CRUD uses services/repositories and the established `db_uow`
+transaction dependency. Migration `0189` intentionally removes existing profile
+tokens and the obsolete `api_keys` table. `X-API-Key`, the old key service and
+`/api/v1/api-keys` routes are removed without fallback. Replacement tokens must
+be created in the profile. Credential replacement is irreversible.
+
 ## System LLM Role Contracts
 
 Response contracts for active runtime roles (Planner, Memory Preparer, Fact

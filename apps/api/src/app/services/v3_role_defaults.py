@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from app.models.system_llm_role import SystemLLMRoleType
-from app.services.turn_preflight_prompt import TURN_PREFLIGHT_PROMPT_V2
+from app.services.turn_preflight_prompt_v3 import TURN_PREFLIGHT_PROMPT_V3
 from app.services.orchestration_prompts import SYNTHESIZER_PROMPT_V3
 from app.runtime.memory.shadow_study_prompts import (
     SHADOW_DOCUMENT_SCREENING_PROMPT, SHADOW_DOCUMENT_STUDY_PROMPT,
@@ -25,7 +25,7 @@ TURN_PREFLIGHT_V1: Dict[str, Any] = {
     # Keep routing on the same configured connector family as the planner.
     # The former llama4 alias is not present in the current connector catalog.
     "model": "llm.groq.gptoss",
-    **TURN_PREFLIGHT_PROMPT_V2,
+    **TURN_PREFLIGHT_PROMPT_V3,
     "temperature": 0.1, }
 
 SYNTHESIZER_V3: Dict[str, Any] = {

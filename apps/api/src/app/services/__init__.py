@@ -9,7 +9,6 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "AgentService": ("app.services.agent_service", "AgentService"),
     "AgentError": ("app.services.agent_service", "AgentError"),
     "AgentNotFoundError": ("app.services.agent_service", "AgentNotFoundError"),
-    "APIKeyService": ("app.services.api_key_service", "APIKeyService"),
     "ChatStreamService": ("app.services.chat_stream_service", "ChatStreamService"),
     "CredentialService": ("app.services.credential_service", "CredentialService"),
     "IdempotencyService": ("app.services.idempotency_service", "IdempotencyService"),

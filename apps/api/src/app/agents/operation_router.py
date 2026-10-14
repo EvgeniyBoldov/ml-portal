@@ -89,6 +89,7 @@ class OperationRouter:
         effective_permissions: Optional[EffectivePermissions] = None,
         default_collection_allow: bool = True,
         collection_ids: Optional[Iterable[str]] = None,
+        system_operation_slugs: Optional[set[str]] = None,
     ) -> OperationResolveResult:
         if effective_permissions is None:
             effective_permissions = await self.runtime_rbac_resolver.resolve_effective_permissions(
@@ -211,6 +212,7 @@ class OperationRouter:
             effective_permissions=effective_permissions,
             user_id=user_id,
             tenant_id=tenant_id,
+            operation_slugs=system_operation_slugs,
         )
 
         attach_published_operation_summaries(
@@ -229,6 +231,7 @@ class OperationRouter:
         effective_permissions: Optional[EffectivePermissions],
         user_id: UUID,
         tenant_id: UUID,
+        operation_slugs: Optional[set[str]] = None,
     ) -> None:
         """Load global system tools and append to resolved operations."""
         from types import SimpleNamespace
@@ -249,6 +252,8 @@ class OperationRouter:
         )
 
         for capability in system_capabilities:
+            if operation_slugs is not None and capability.canonical_op_slug not in operation_slugs:
+                continue
             discovered_tool = capability.discovered_tool
             if str(getattr(discovered_tool, "slug", "") or "") in seen_operation_slugs:
                 continue

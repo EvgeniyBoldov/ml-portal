@@ -49,8 +49,13 @@
   padding: 10px 16px;
 }
 
-.tab:hover { color: var(--text); }
-.activeTab { color: var(--primary); border-bottom-color: var(--primary); }
+.tab:hover {
+  color: var(--text);
+}
+.activeTab {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
 
 /* Sections */
 .section {
@@ -352,6 +357,12 @@
   padding: 16px;
   margin-bottom: 12px;
   overflow-x: auto;
+}
+
+.usageCode pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .usageCode code {

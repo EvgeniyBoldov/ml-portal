@@ -20,7 +20,6 @@ from .tool_instance import ToolInstance, InstanceKind, InstancePlacement, Instan
 from .tool_release import ToolBackendRelease, ToolRelease, ToolReleaseStatus
 from .agent import Agent
 from .agent_version import AgentVersion, AgentVersionStatus
-from .api_key import APIKey
 from .api_token import ApiToken
 from .collection import (
     Collection,
@@ -109,7 +108,6 @@ __all__ = [
     "Agent",
     "AgentVersion",
     "AgentVersionStatus",
-    "APIKey",
     "ApiToken",
     "Collection",
     "CollectionSchema",

@@ -13,7 +13,6 @@ from starlette.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.logging import get_logger
-from app.core.security import decode_jwt
 from app.core.config import get_settings
 from app.core.redis import get_redis
 
@@ -203,27 +202,27 @@ class TenantMiddleware(BaseHTTPMiddleware):
         if tenant_id:
             tenant_id = tenant_id.strip()
 
-        if not tenant_id:
-            auth_header = request.headers.get("Authorization")
-            if auth_header and auth_header.startswith("Bearer "):
-                try:
-                    payload = decode_jwt(auth_header.split(" ", 1)[1])
-                    tenant_ids = payload.get("tenant_ids", []) or []
-                    if tenant_ids:
-                        tenant_id = str(tenant_ids[0])
-                except Exception as exc:
-                    logger.warning("Failed to extract tenant from JWT: %s", exc)
-            else:
-                # Cookie-based auth path (SSE/web apps) — align with get_current_user().
-                access_cookie = request.cookies.get("access_token")
-                if access_cookie:
-                    try:
-                        payload = decode_jwt(access_cookie)
-                        tenant_ids = payload.get("tenant_ids", []) or []
-                        if tenant_ids:
-                            tenant_id = str(tenant_ids[0])
-                    except Exception as exc:
-                        logger.warning("Failed to extract tenant from access_token cookie: %s", exc)
+        # Resolve the same principal as route dependencies. API tokens carry no
+        # tenant claims; their current memberships come from the database.
+        from app.api.deps import bearer_security
+        from app.services.bearer_authentication_service import BearerAuthenticationService
+        from app.core.exceptions import UnauthorizedError
+        auth_header = request.headers.get("Authorization")
+        credentials = await bearer_security(request)
+        token = credentials.credentials if credentials else (
+            request.cookies.get("access_token") if not auth_header else None)
+        if token:
+            try:
+                user = await BearerAuthenticationService().authenticate(token, allow_api_token=bool(credentials))
+                request.state.user = user
+                if not tenant_id and user.tenant_ids:
+                    tenant_id = user.tenant_ids[0]
+            except UnauthorizedError:
+                # Authentication dependencies report invalid credentials. Never
+                # interpret a personal token as JWT or fall back to cookies.
+                if self._is_protected_endpoint(request.url.path):
+                    return JSONResponse(status_code=401, content={"detail": "Invalid authorization"},
+                                        headers={"WWW-Authenticate": "Bearer"})
 
         if tenant_id:
             try:

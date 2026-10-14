@@ -278,36 +278,40 @@ async def test_search_translates_legacy_claim_project_applicability_for_task_han
 
 
 @pytest.mark.asyncio
-async def test_planner_search_keys_include_filters_and_failures_are_not_persisted(monkeypatch):
+async def test_planner_search_keys_include_arguments_and_failures_are_not_persisted(monkeypatch):
     from app.runtime.planner import graph_planner
     from app.runtime.planner.graph_planner import GraphPlanner, PlannerStep
     calls = [
-        {"operation": "memory.search", "query": "deploy", "kinds": ["rule"]},
-        {"operation": "memory.search", "query": "deploy", "kinds": ["procedure"]},
-        {"operation": "memory.search", "query": "deploy", "team_keys": ["team.other"]},
+        {"operation": "memory.search", "arguments": {"query": "deploy rules"}},
+        {"operation": "memory.search", "arguments": {"query": "deploy procedure", "limit": 12}},
+        {"operation": "memory.search", "arguments": {"query": "deploy"}},
     ]
     proposal = {"terminal": "planner", "tasks": [{"task_id": "t", "executor": "worker", "intent": "check", "instructions": "Check"}]}
     steps = [PlannerStep(kind="tool_call", tool_call=call) for call in calls]
     steps.append(PlannerStep(kind="proposal", proposal=proposal))
     planner = GraphPlanner(session=object(), llm_client=AsyncMock())
     planner._llm = SimpleNamespace(
-        role_service=SimpleNamespace(get_role_config=AsyncMock(return_value=SimpleNamespace())),
+        role_service=SimpleNamespace(get_role_config=AsyncMock(return_value={})),
         _compile_role_prompt=Mock(return_value="prompt"),
         invoke=AsyncMock(side_effect=[SimpleNamespace(value=step) for step in steps]),
     )
-    search = AsyncMock(side_effect=[
-        {"items": [], "search_scope": {"scope_keys": ["team.ops"]}},
-        {"items": [], "search_scope": {"scope_keys": ["team.ops"]}},
-        {"success": False, "error_code": "scope_widening_denied"},
-    ])
-    monkeypatch.setattr(graph_planner, "MemorySearchService", lambda session: SimpleNamespace(search=search))
+    records = [{"operation": call["operation"], "arguments": call["arguments"], "result": result}
+               for call, result in zip(calls, [{"success": True, "items": []},
+                                             {"success": True, "items": []},
+                                             {"success": False, "error_code": "memory_search_failed"}])]
+    tools = SimpleNamespace(descriptors=AsyncMock(return_value=[{"operation": "memory.search"}]),
+                            execute=AsyncMock(side_effect=records))
+    factory = lambda **kwargs: tools
+    factory.MAX_CALLS = 3
+    monkeypatch.setattr(graph_planner, "RoleMemoryTools", factory)
     scope = EffectiveScopeContext(selected=[identity("team.ops")], ceiling_keys=["team.ops"])
     request = PlanRequest(context=PlannerContext(goal="goal", trigger="initial", execution_ledger={}, scope_context=scope.model_payload()))
     await planner.plan(request=request)
     results = request.context.planner_search_results
     assert len(results) == 2
     assert results[0]["query_key"] != results[1]["query_key"]
-    assert search.await_args_list[0].kwargs["context_scope_keys"] == ["team.ops"]
+    assert tools.execute.await_count == 3
+    assert planner._llm.invoke.await_args.kwargs["payload"]["memory_tool_results"] == records
 
 
 def test_planner_search_recall_requirements_reach_synthesis_guard():

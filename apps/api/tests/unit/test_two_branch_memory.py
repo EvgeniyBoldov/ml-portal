@@ -170,8 +170,8 @@ async def test_document_grounded_scope_approval_does_not_require_or_create_term(
 @pytest.mark.asyncio
 async def test_confirmed_project_from_previous_question_is_not_blocked_by_initial_focus(monkeypatch):
     from app.runtime import turn_preflight
-    from app.runtime.turn_preflight import TurnPreflight, TurnPreflightDecision, MemoryRequest
-    decision = TurnPreflightDecision(route="recall", memory_request=MemoryRequest(query="rules", direction="project rules"),
+    from app.runtime.turn_preflight import TurnPreflight, TurnPreflightDecision
+    decision = TurnPreflightDecision(route="planner", task_brief={"goal": "rules", "direction": "project rules", "expected_result": "rules"},
         scope_selection={"keys": ["project.b"], "rationale": "User confirmed B"})
     preflight = TurnPreflight.__new__(TurnPreflight)
     preflight._session = object()
@@ -181,6 +181,6 @@ async def test_confirmed_project_from_previous_question_is_not_blocked_by_initia
     result = await preflight.decide(user_request="Да", mechanical_lookup={"scope_candidates": []},
         project_context={"effective_scope_keys": ["project.a"]},
         recent_dialogue=[{"role": "assistant", "content": "Вы про проект B?"}, {"role": "user", "content": "Да"}])
-    assert result.route == "recall"
+    assert result.route == "planner"
     assert result.scope_selection.keys == ["project.b"]
     resolve.assert_awaited_once()

@@ -1,5 +1,5 @@
 """
-API Token model for MCP/IDE authentication
+Personal API tokens for Bearer authentication
 """
 from __future__ import annotations
 from sqlalchemy import String, Boolean, Text, DateTime, ForeignKey, func
@@ -20,9 +20,7 @@ class ApiToken(Base):
     
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     token_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    token_prefix: Mapped[str] = mapped_column(String(10), nullable=False)  # First 8 chars for identification
-    
-    scopes: Mapped[str | None] = mapped_column(Text, nullable=True)  # Comma-separated scopes: mcp,chat,rag
+    token_prefix: Mapped[str] = mapped_column(String(20), nullable=False)  # Public prefix, never the secret
     
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     

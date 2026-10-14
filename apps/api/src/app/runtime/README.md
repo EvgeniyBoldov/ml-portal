@@ -49,12 +49,13 @@ confirmed active user and tenant facts, then combines it with bounded tool,
 agent-result, attachment and collection sections. It does not load the
 conversation summary into the active component registry.
 
-Durable project memory is read on demand through ACL-aware `MemorySearchService`
-and the canonical `memory.search` operation available to planner and agents.
-TurnPreflight starts with mechanical identity lookup and may request a bounded
-recall followed by a second routing decision. `MemoryPreparer`/`MemoryRecall`
-remain separate legacy helpers; they are not the mandatory active root route.
-Document memory is extracted during ingestion and published through review.
+Document memory uses the same registered HippoRAG `memory.search` operation for
+TurnPreflight, planner and agents. Root roles resolve it with `OperationRouter`
+and invoke `DirectOperationExecutor`, choosing query and optional limit themselves.
+Preflight can answer memory-only requests through synthesis without planning;
+search budget exhaustion hands the task and evidence to planner. Trace records
+real tool calls without synthetic recall or memory-selector entities. Legacy
+scoped memory readers remain separate helpers outside active root document search.
 
 Each runtime reader records its own actual input as a canonical
 `status(stage=memory_context_used)` snapshot. Sandbox inspectors combine that

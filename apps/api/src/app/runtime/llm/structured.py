@@ -842,8 +842,8 @@ class StructuredLLMCall:
                 from app.runtime.planner.prompt_contract import PLANNER_RUNTIME_CONTRACT
                 parts.append(PLANNER_RUNTIME_CONTRACT)
             if role_type == SystemLLMRoleType.TURN_PREFLIGHT.value:
-                from app.services.turn_preflight_prompt import TURN_PREFLIGHT_SCOPE_POLICY_V2
-                parts.append(TURN_PREFLIGHT_SCOPE_POLICY_V2)
+                from app.services.turn_preflight_prompt_v3 import TURN_PREFLIGHT_SCOPE_POLICY_V3, TURN_PREFLIGHT_TOOL_CONTRACT
+                parts.extend([TURN_PREFLIGHT_SCOPE_POLICY_V3, TURN_PREFLIGHT_TOOL_CONTRACT])
             parts.append(
                 "# RUNTIME RESPONSE CONTRACT\n"
                 "Верни строго валидный JSON по следующей схеме (без markdown и пояснений):\n"

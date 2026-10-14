@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict, Literal, Optional
-from uuid import UUID, uuid4
+from uuid import UUID
 from hashlib import sha256
 import json
 
@@ -12,14 +12,12 @@ from app.runtime.events import RuntimeEvent
 from app.runtime.input_builders import PlannerInputBuilder
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import IterationProposal, PlanRequest
-from app.runtime.memory.search import MemorySearchService
-from app.runtime.memory.search_contract import MemorySearchInput
-from app.runtime.memory.mechanical_lookup import MechanicalLookupService
-from pydantic import BaseModel, Field, model_validator
+from app.agents.context import ToolContext
+from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
+from pydantic import BaseModel, model_validator
 
 
-class PlannerMemoryToolCall(MemorySearchInput):
-    operation: Literal["memory.search", "memory.lookup"]
+PlannerMemoryToolCall = MemoryToolCall
 
 
 class PlannerStep(BaseModel):
@@ -73,6 +71,7 @@ class GraphPlanner:
         budget_registry: Optional[Any] = None,
         planner_budget_entity_id: Optional[str] = None,
         planner_iteration_trace_id: Optional[str] = None,
+        ctx: ToolContext | None = None,
         **_: Any,
     ) -> IterationProposal:
         if event_sink:
@@ -83,14 +82,8 @@ class GraphPlanner:
                 memory_context=request.context.memory_context,
             ))
         payload = self._input_builder.build_graph_request(request)
-        payload["planner_tools"] = [{
-            "operation": "memory.search",
-            "description": (
-                "Read bounded ACL-scoped project/company memory and confirmed glossary terms "
-                "before proposing tasks. Use it for long memory or abbreviations; "
-                "Use scopes=user/tenant for confirmed owned facts omitted from the initial profile; fact_subject selects an exact subject."
-            ),
-        }, {"operation": "memory.lookup", "description": "Find published scope and glossary candidates by name or alias; returns identities only."}]
+        tools = RoleMemoryTools(session=self._session, ctx=ctx)
+        payload["planner_tools"] = await tools.descriptors()
         role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
         # Editable role instructions and the generated protocol use one compiler.
         role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(
@@ -100,8 +93,9 @@ class GraphPlanner:
             role_config, role_override if isinstance(role_override, dict) else None, schema=PlannerStep,
         )
         tool_results: list[dict[str, Any]] = []
-        for _ in range(4):
-            payload["memory_tool_results"] = tool_results
+        for _ in range(RoleMemoryTools.MAX_CALLS + 1):
+            payload["memory_tool_results"] = list(tool_results)
+            payload["memory_tool_calls_remaining"] = RoleMemoryTools.MAX_CALLS - len(tool_results)
             result = await self._llm.invoke(
                 role=SystemLLMRoleType.PLANNER,
                 payload=payload,
@@ -124,57 +118,21 @@ class GraphPlanner:
                 return step.proposal
             call = step.tool_call
             assert call is not None
-            if len(tool_results) >= 3:
+            if len(tool_results) >= RoleMemoryTools.MAX_CALLS:
                 raise RuntimeError("planner memory tool-call limit exceeded without IterationProposal")
-            call_id = f"planner-memory-search-{uuid4()}"
-            arguments = call.model_dump(exclude={"operation"})
-            if event_sink:
-                await event_sink(RuntimeEvent.tool_call(
-                    tool=call.operation, call_id=call_id, arguments=arguments,
-                    parent_entity_type="planner_iteration",
-                    parent_entity_id=planner_iteration_trace_id,
-                    actor_type="planner", actor_entity_id=planner_iteration_trace_id,
-                ))
-            try:
-                effective_keys = list(request.context.scope_context.get("keys") or [])
-                if call.operation == "memory.lookup":
-                    data = await MechanicalLookupService(self._session).lookup(query=call.query,
-                                                                               tenant_id=tenant_id)
-                else:
-                    data = await MemorySearchService(self._session).search(
-                        query=call.query, tenant_id=tenant_id, user_id=user_id, project_keys=call.project_keys,
-                        context_scope_keys=effective_keys, enforce_context=True,
-                        team_keys=call.team_keys,
-                        scopes=call.scopes,
-                        kinds=call.kinds, entity_ids=call.entity_ids,
-                        direction=call.direction, limit=call.limit, fact_subject=call.fact_subject,
-                    )
-            except Exception as exc:
-                if event_sink:
-                    await event_sink(RuntimeEvent.tool_result(
-                        tool=call.operation, call_id=call_id, success=False, data={},
-                        error_code="memory_search_failed", safe_message="Не удалось прочитать память",
-                        parent_entity_type="planner_iteration",
-                        parent_entity_id=planner_iteration_trace_id,
-                        actor_type="planner", actor_entity_id=planner_iteration_trace_id,
-                    ))
-                raise RuntimeError("planner memory search failed") from exc
-            if event_sink:
-                await event_sink(RuntimeEvent.tool_result(
-                    tool=call.operation, call_id=call_id, success=data.get("success") is not False, data=data,
-                    parent_entity_type="planner_iteration",
-                    parent_entity_id=planner_iteration_trace_id,
-                    actor_type="planner", actor_entity_id=planner_iteration_trace_id,
-                ))
-            tool_results.append({"operation": call.operation, "arguments": call.model_dump(exclude={"operation"}), "result": data})
+            record = await tools.execute(call, actor="planner", parent_type="planner_iteration",
+                                         parent_id=planner_iteration_trace_id, event_sink=event_sink)
+            arguments = record["arguments"]
+            data = record["result"]
+            tool_results.append(record)
             if data.get("success") is False:
                 continue
             digest = sha256(json.dumps({"operation": call.operation, "arguments": arguments,
-                "scope_keys": sorted(request.context.scope_context.get("keys") or [])},
+                "backend": "hipporag"},
                 sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             request.context.planner_search_results.append({
                 "type": "planner_memory_result", "query_key": digest,
-                "operation": call.operation, "query": call.query[:300], "result": data,
+                "operation": call.operation, "query": call.arguments.query[:300], "result": data,
             })
             request.context.memory_context.append(request.context.planner_search_results[-1])
         raise RuntimeError("planner memory tool-call limit exceeded without IterationProposal")

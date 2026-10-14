@@ -5,7 +5,7 @@ import re
 from typing import Any, Awaitable, Callable, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
@@ -14,7 +14,8 @@ from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import SynthesisBrief
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.effective_scope import ScopeSelection
-from app.runtime.memory.search_contract import MemorySearchInput
+from app.agents.context import ToolContext
+from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
 
 
 class TaskBrief(BaseModel):
@@ -34,10 +35,6 @@ class DirectAnswerBrief(BaseModel):
     synthesis_brief: SynthesisBrief
     answer_draft: str = Field(..., min_length=1)
     model_config = {"extra": "forbid"}
-
-
-class MemoryRequest(MemorySearchInput):
-    direction: str = Field(..., min_length=1)
 
 
 class Clarification(BaseModel):
@@ -63,21 +60,26 @@ class MemoryCandidate(BaseModel):
 
 
 class TurnPreflightDecision(BaseModel):
-    route: Literal["synthesis", "planner", "recall", "clarify"]
+    route: Literal["synthesis", "planner", "tool_call", "clarify"]
     synthesis_brief: Optional[DirectAnswerBrief] = None
     task_brief: Optional[TaskBrief] = None
-    memory_request: Optional[MemoryRequest] = None
+    tool_call: Optional[MemoryToolCall] = None
+    _memory_tool_results: list[dict[str, Any]] = PrivateAttr(default_factory=list)
     clarification: Optional[Clarification] = None
     memory_candidates: list[MemoryCandidate] = Field(default_factory=list)
     scope_selection: ScopeSelection = Field(default_factory=ScopeSelection)
     model_config = {"extra": "forbid"}
+
+    @property
+    def memory_tool_results(self) -> list[dict[str, Any]]:
+        return self._memory_tool_results
 
     @model_validator(mode="after")
     def validate_route_payload(self) -> "TurnPreflightDecision":
         required = {
             "synthesis": self.synthesis_brief,
             "planner": self.task_brief,
-            "recall": self.memory_request,
+            "tool_call": self.tool_call,
             "clarify": self.clarification,
         }
         if required[self.route] is None:
@@ -134,7 +136,7 @@ class TurnPreflight:
         chat_context: dict[str, Any] | None = None,
         recent_dialogue: list[dict[str, str]] | None = None,
         continuation: dict[str, Any] | None = None,
-        recall_context: dict[str, Any] | None = None,
+        ctx: ToolContext | None = None,
         chat_id: UUID | None = None,
         tenant_id: UUID | None = None,
         user_id: UUID | None = None,
@@ -150,41 +152,58 @@ class TurnPreflight:
             await event_sink(RuntimeEvent.status(
                 "memory_context_used",
                 entity_type="orchestrator", entity_id=trace_parent_entity_id,
-                memory_context=[*(facts_context or []), mechanical_lookup, recall_context or {}],
+                memory_context=[*(facts_context or []), mechanical_lookup],
             ))
-        result = await self._llm.invoke(
-            role=SystemLLMRoleType.TURN_PREFLIGHT,
-            payload={
-                "user_request": self._routing_request(user_request),
-                "mechanical_lookup": mechanical_lookup,
-                # Confirmed user/tenant facts plus small runtime facts (such
-                # as the current date) are deliberately passed as a raw
-                # projection. Unlike document memory, these are operational
-                # context and must be available while resolving pronouns and
-                # tool scope.
-                "facts_context": list(facts_context or []),
-                "project_context": dict(project_context or {}),
-                "chat_context": dict(chat_context or {}),
-                "recent_dialogue": list(recent_dialogue or []),
-                "scope_policy": "team/project focus is initial context, not a ceiling. Select only concrete catalog keys supported by user choice or confirmation, including replies to agent questions. Mere mentions or unconfirmed questions do not change focus. memory_request selects search arguments independently of focus: retain all context teams; choose known projects, [] for outside-project knowledge or [project.all] for common project rules only. project.all is a search selector, never a concrete focus identity.",
-                "continuation": continuation or {},
-                "recall_context": recall_context,
-            },
-            schema=TurnPreflightDecision,
-            chat_id=chat_id,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            # The lifecycle entity is persisted as an orchestrator with
-            # role=turn_preflight. Keep the parent type aligned so the trace
-            # projector attaches the LLM call to the visible preflight card.
-            trace_parent_entity_type="orchestrator",
-            trace_parent_entity_id=trace_parent_entity_id,
-            event_sink=event_sink,
-            sandbox_overrides=sandbox_overrides,
-            budget_registry=budget_registry,
-            budget_entity_id=budget_entity_id,
-        )
-        decision = result.value
+        tools = RoleMemoryTools(session=self._session, ctx=ctx)
+        descriptors = await tools.descriptors()
+        tool_results: list[dict[str, Any]] = []
+        for _ in range(RoleMemoryTools.MAX_CALLS + 1):
+            result = await self._llm.invoke(
+                role=SystemLLMRoleType.TURN_PREFLIGHT,
+                payload={
+                    "user_request": self._routing_request(user_request),
+                    "mechanical_lookup": mechanical_lookup,
+                    # Confirmed user/tenant facts plus small runtime facts (such
+                    # as the current date) are deliberately passed as a raw
+                    # projection. Unlike document memory, these are operational
+                    # context and must be available while resolving pronouns and
+                    # tool scope.
+                    "facts_context": list(facts_context or []),
+                    "project_context": dict(project_context or {}),
+                    "chat_context": dict(chat_context or {}),
+                    "recent_dialogue": list(recent_dialogue or []),
+                    "scope_policy": "Focus controls execution context, not HippoRAG document search. Select only confirmed concrete catalog keys; memory.search takes query and optional limit.",
+                    "continuation": continuation or {},
+                    "available_tools": descriptors,
+                    "memory_tool_results": list(tool_results),
+                    "memory_tool_calls_remaining": RoleMemoryTools.MAX_CALLS - len(tool_results),
+                },
+                schema=TurnPreflightDecision,
+                chat_id=chat_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                # The lifecycle entity is persisted as an orchestrator with
+                # role=turn_preflight. Keep the parent type aligned so the trace
+                # projector attaches the LLM call to the visible preflight card.
+                trace_parent_entity_type="orchestrator",
+                trace_parent_entity_id=trace_parent_entity_id,
+                event_sink=event_sink,
+                sandbox_overrides=sandbox_overrides,
+                budget_registry=budget_registry,
+                budget_entity_id=budget_entity_id,
+            )
+            decision = result.value
+            if decision.route != "tool_call":
+                break
+            if len(tool_results) >= RoleMemoryTools.MAX_CALLS:
+                decision = self._planner_handoff(user_request, decision,
+                    reason="Бюджет поиска памяти исчерпан; используй найденный контекст и продолжи работу.")
+                break
+            assert decision.tool_call is not None
+            tool_results.append(await tools.execute(decision.tool_call, actor="turn_preflight",
+                parent_type="orchestrator", parent_id=trace_parent_entity_id, event_sink=event_sink))
+        decision._memory_tool_results = tool_results
+
         try:
             selection = _canonical_scope_selection(decision)
         except ValueError:
@@ -206,17 +225,19 @@ class TurnPreflight:
         # answer. They are not agent tasks: no planner executor is allowed to
         # claim that it has written memory. Keep an explicit "remember as a
         # fact" request on the direct path even if a best-effort model routes
-        # it to recall or planner.
+        # it to tool_call or planner.
         if self._is_explicit_fact_memory_write(user_request):
-            return self._memory_write_synthesis_decision(
+            routed = self._memory_write_synthesis_decision(
                 user_request=user_request,
                 memory_candidates=decision.memory_candidates,
             ).model_copy(update={"scope_selection": selection})
+            routed._memory_tool_results = tool_results
+            return routed
         if decision.route == "clarify" and not str(decision.clarification.direct_answer_reason or "").strip():
             return self._planner_handoff(user_request, decision, reason="Предварительное уточнение: " + decision.clarification.question,
                                          selection=selection)
         if decision.route in {"synthesis", "clarify"} and self._needs_collection_inventory(user_request):
-            return TurnPreflightDecision(
+            routed = TurnPreflightDecision(
                 route="planner",
                 task_brief=TaskBrief(
                     goal=user_request,
@@ -226,8 +247,8 @@ class TurnPreflight:
                 memory_candidates=decision.memory_candidates,
                 scope_selection=selection,
             )
-        if recall_context is not None and decision.route == "recall":
-            raise ValueError("TurnPreflight may request recall only once per turn")
+            routed._memory_tool_results = tool_results
+            return routed
         if decision.route == "planner" and decision.task_brief is not None:
             assignee = self._self_jira_assignee(user_request, facts_context or [])
             if assignee:
@@ -260,13 +281,15 @@ class TurnPreflight:
             expected_result="Ответ на исходный запрос с проверенными данными или обоснованным адресным уточнением.",
         )
         selected = selection or ScopeSelection()
-        return TurnPreflightDecision(
+        routed = TurnPreflightDecision(
             route="planner", scope_selection=selected, memory_candidates=decision.memory_candidates,
             task_brief=brief.model_copy(update={
                 "goal": user_request, "scope_keys": selected.keys, "scope_mode": selected.mode,
                 "constraints": [*brief.constraints, reason],
             }),
         )
+        routed._memory_tool_results = decision.memory_tool_results
+        return routed
 
     @staticmethod
     def _self_jira_assignee(

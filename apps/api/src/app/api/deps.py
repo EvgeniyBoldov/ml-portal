@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from typing import AsyncGenerator, Callable
 
 from fastapi import Depends, HTTPException, status, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from app.core.exceptions import UnauthorizedError
+from app.services.bearer_authentication_service import BearerAuthenticationService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -96,165 +99,78 @@ def get_redis_client():
 
 # Authentication dependencies
 
-def get_current_user_optional(request: Request) -> UserCtx | None:
-    """Optional auth for dev/debugging - returns None if no auth provided
-    
-    Use ONLY for non-critical endpoints like SSE in dev mode.
-    """
-    from app.core.security import decode_jwt
-    from app.core.config import get_settings
-    
-    settings = get_settings()
+bearer_security = HTTPBearer(auto_error=False, description="JWT access token or personal API token")
 
-    # Always relax auth for SSE stream endpoint specifically
-    # This avoids 401 on EventSource connections when cookies are missing in some envs
-    path = request.url.path or ""
-    if path.endswith("/api/v1/rag/events") or path.endswith("/rag/events"):
-        # Try header/cookie first, otherwise allow anonymous mock in any ENV
-        pass
+
+async def _request_user(
+    request: Request, credentials: HTTPAuthorizationCredentials | None, *, allow_cookie: bool,
+) -> UserCtx:
+    if request.headers.get("Authorization"):
+        if credentials is None:
+            raise HTTPException(401, "Invalid authorization", headers={"WWW-Authenticate": "Bearer"})
+        token = credentials.credentials
+        allow_api_token = True
     else:
-        # For all non-SSE endpoints, enforce auth in production as before
-        if settings.ENV == "production":
-            return get_current_user(request)
-    
-    token = None
-    
-    # Try to get token from Authorization header first
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-    
-    # If no header token, try to get from httpOnly cookie
+        token = request.cookies.get("access_token") if allow_cookie else None
+        allow_api_token = False
     if not token:
-        token = request.cookies.get("access_token")
-    
-    if not token:
-        # Fix #8: In production, return None instead of fake admin
-        # For dev/local only, return limited mock user (reader, not admin)
-        if settings.ENV == "production":
-            return None
-        return UserCtx(
-            id="dev-user",
-            email="dev@localhost",
-            role="reader",
-            tenant_ids=[],
-            scopes=["read"]
-        )
-    
+        raise HTTPException(401, "Bearer token required", headers={"WWW-Authenticate": "Bearer"})
+    cached = getattr(request.state, "user", None)
+    if isinstance(cached, UserCtx):
+        return cached
     try:
-        payload = decode_jwt(token)
-        if payload.get("type") != "access":
-            return None
-        
-        return UserCtx(
-            id=payload["sub"],
-            email=payload.get("email"),
-            role=payload.get("role", "reader"),
-            tenant_ids=payload.get("tenant_ids", []),
-            scopes=payload.get("scopes", [])
-        )
-    except Exception:
-        return None
+        user = await BearerAuthenticationService().authenticate(token, allow_api_token=allow_api_token)
+    except UnauthorizedError as exc:
+        raise HTTPException(401, str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
+    request.state.user = user
+    return user
 
-# Authentication dependencies
-def get_current_user(request: Request) -> UserCtx:
-    """Get current user from JWT token in Authorization header or httpOnly cookie
-    
-    For SSE: EventSource automatically sends cookies with withCredentials: true.
-    NO tokens in URL query params for security.
-    """
-    from app.core.security import decode_jwt
-    
-    token = None
-    
-    # Try to get token from Authorization header first
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-    
-    # If no header token, try to get from httpOnly cookie
-    if not token:
-        token = request.cookies.get("access_token")
-    
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid authorization",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-    
-    payload = decode_jwt(token)
-    
-    # Validate token type
-    if payload.get("type") != "access":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token type",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-    
-    return UserCtx(
-        id=payload["sub"],
-        email=payload.get("email"),
-        role=payload.get("role", "reader"),
-        tenant_ids=payload.get("tenant_ids", []),
-        scopes=payload.get("scopes", [])
-    )
+
+async def get_current_user(
+    request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer_security),
+) -> UserCtx:
+    """Authenticate Bearer access/API tokens or a web access-token cookie."""
+    return await _request_user(request, credentials, allow_cookie=True)
+
+
+async def get_bearer_user(
+    request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer_security),
+) -> UserCtx:
+    """Machine API authentication: a Bearer header is required."""
+    return await _request_user(request, credentials, allow_cookie=False)
+
+
+async def get_current_user_optional(request: Request) -> UserCtx | None:
+    """Existing optional development auth for non-critical SSE endpoints."""
+    from app.core.config import get_settings
+    settings = get_settings()
+    credentials = await bearer_security(request)
+    if request.headers.get("Authorization") or request.cookies.get("access_token"):
+        try:
+            return await _request_user(request, credentials, allow_cookie=True)
+        except HTTPException:
+            return None
+    if settings.ENV == "production":
+        if not request.url.path.endswith(("/api/v1/rag/events", "/rag/events")):
+            return await _request_user(request, credentials, allow_cookie=True)
+        return None
+    return UserCtx(id="dev-user", email="dev@localhost", role="reader", tenant_ids=[], scopes=["read"])
 
 
 async def get_current_user_sse(request: Request) -> UserCtx:
-    """Auth dependency for SSE endpoints.
-    
-    Accepts token from:
-    1. Authorization header (Bearer token)
-    2. httpOnly cookie (access_token)
-    
-    EventSource automatically sends cookies with credentials: 'include'.
-    DO NOT use query params for tokens - they leak in logs and browser history.
-    """
-    from app.core.security import decode_jwt
+    """Bearer/access cookie auth; retain the existing local SSE query fallback."""
     from app.core.config import get_settings
-
-    token = None
-    settings = get_settings()
-
-    # 1) Authorization header
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-
-    # 2) httpOnly cookie (preferred for SSE)
+    credentials = await bearer_security(request)
+    if request.headers.get("Authorization") or request.cookies.get("access_token"):
+        return await _request_user(request, credentials, allow_cookie=True)
+    token = request.query_params.get("token") if get_settings().ENV != "production" else None
     if not token:
-        token = request.cookies.get("access_token")
+        raise HTTPException(401, "Bearer token or access cookie required", headers={"WWW-Authenticate": "Bearer"})
+    try:
+        return await BearerAuthenticationService().authenticate(token, allow_api_token=False)
+    except UnauthorizedError as exc:
+        raise HTTPException(401, str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
 
-    # 3) query param fallback for dev/local SSE clients
-    # In production keep strict header/cookie-only auth.
-    if not token and settings.ENV != "production":
-        token = request.query_params.get("token")
-
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid authorization. Use httpOnly cookie or Authorization header.",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    payload = decode_jwt(token)
-
-    if payload.get("type") != "access":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token type",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    return UserCtx(
-        id=payload["sub"],
-        email=payload.get("email"),
-        role=payload.get("role", "reader"),
-        tenant_ids=payload.get("tenant_ids", []),
-        scopes=payload.get("scopes", [])
-    )
 
 def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
     """Require admin role"""

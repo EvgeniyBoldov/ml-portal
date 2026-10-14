@@ -1,6 +1,6 @@
 /**
  * ProfilePage - Личный кабинет пользователя
- * Управление профилем и API токенами для MCP/IDE
+ * Управление профилем и персональными API токенами
  */
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -32,7 +32,6 @@ interface ApiToken {
   id: string;
   name: string;
   token_prefix: string;
-  scopes: string | null;
   is_active: boolean;
   last_used_at: string | null;
   expires_at: string | null;
@@ -42,18 +41,6 @@ interface ApiToken {
 interface ApiTokenCreated extends ApiToken {
   token: string;
 }
-
-interface UserFact {
-  id: string;
-  scope: string;
-  subject: string;
-  value: string;
-  confidence: number;
-  source: string;
-  observed_at: string;
-  created_at: string;
-}
-
 
 const formatDate = (dateString: string | null) => {
   if (!dateString) return '—';
@@ -72,11 +59,11 @@ const formatRelativeDate = (dateString: string | null) => {
   if (!dateString) return null;
   const date = new Date(dateString);
   if (isNaN(date.getTime())) return null;
-  
+
   const now = new Date();
   const diff = date.getTime() - now.getTime();
   const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
-  
+
   if (days < 0) return 'Истёк';
   if (days === 0) return 'Сегодня';
   if (days === 1) return 'Завтра';
@@ -87,10 +74,14 @@ const formatRelativeDate = (dateString: string | null) => {
 
 const getRoleLabel = (role: string) => {
   switch (role) {
-    case 'admin': return 'Администратор';
-    case 'editor': return 'Редактор';
-    case 'reader': return 'Читатель';
-    default: return role;
+    case 'admin':
+      return 'Администратор';
+    case 'editor':
+      return 'Редактор';
+    case 'reader':
+      return 'Читатель';
+    default:
+      return role;
   }
 };
 
@@ -106,7 +97,20 @@ export default function ProfilePage() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
-  
+  const apiBaseUrl = `${window.location.origin}/api/v1`;
+  const shadowExample = [
+    `curl --request POST '${apiBaseUrl}/agents/shadow/invoke' \\`,
+    '  --header "Authorization: Bearer YOUR_TOKEN" \\',
+    '  --header "Content-Type: application/json" \\',
+    '  --data \'{"agent":"YOUR_SHADOW_AGENT","data":{}}\'',
+  ].join('\n');
+  const mcpExample = [
+    `curl --request POST '${apiBaseUrl}/mcp' \\`,
+    '  --header "Authorization: Bearer YOUR_TOKEN" \\',
+    '  --header "Content-Type: application/json" \\',
+    '  --data \'{"jsonrpc":"2.0","id":1,"method":"ping"}\'',
+  ].join('\n');
+
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newTokenName, setNewTokenName] = useState('');
   const [expiresDays, setExpiresDays] = useState('');
@@ -118,7 +122,9 @@ export default function ProfilePage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [revealPassword, setRevealPassword] = useState(false);
-  const [activeTab, setActiveTab] = useState<'info' | 'credentials' | 'facts'>('info');
+  const [activeTab, setActiveTab] = useState<'info' | 'credentials' | 'facts'>(
+    'info'
+  );
 
   // Fetch profile
   const { data: profile, isLoading: profileLoading } = useQuery({
@@ -128,7 +134,7 @@ export default function ProfilePage() {
 
   // Fetch tokens
   const { data: tokens = [], isLoading: tokensLoading } = useQuery({
-    queryKey: ['profile', 'tokens'],
+    queryKey: qk.profile.tokens(),
     queryFn: async () => {
       const result = await apiRequest<unknown>('/profile/tokens');
       if (!Array.isArray(result)) {
@@ -143,32 +149,33 @@ export default function ProfilePage() {
     mutationFn: async (data: { name: string; expires_days?: number }) => {
       const result = await apiRequest<ApiTokenCreated>('/profile/tokens', {
         method: 'POST',
-        body: JSON.stringify({ 
-          name: data.name, 
-          scopes: 'mcp,chat,rag',
+        body: JSON.stringify({
+          name: data.name,
           expires_days: data.expires_days || null,
         }),
       });
       return result;
     },
-    onSuccess: (data) => {
+    onSuccess: data => {
       setCreatedToken(data.token);
       setNewTokenName('');
       setExpiresDays('');
-      queryClient.invalidateQueries({ queryKey: ['profile', 'tokens'] });
+      queryClient.invalidateQueries({ queryKey: qk.profile.tokens() });
       showSuccess('Токен создан');
     },
-    onError: (error: any) => {
-      showError(error?.detail || 'Не удалось создать токен');
+    onError: (error: unknown) => {
+      showError(
+        error instanceof Error ? error.message : 'Не удалось создать токен'
+      );
     },
   });
 
   // Delete token mutation
   const deleteToken = useMutation({
-    mutationFn: (tokenId: string) => 
+    mutationFn: (tokenId: string) =>
       apiRequest(`/profile/tokens/${tokenId}`, { method: 'DELETE' }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['profile', 'tokens'] });
+      queryClient.invalidateQueries({ queryKey: qk.profile.tokens() });
       showSuccess('Токен удалён');
       setTokenToDelete(null);
     },
@@ -178,7 +185,10 @@ export default function ProfilePage() {
   });
 
   const changePassword = useMutation({
-    mutationFn: async (data: { current_password: string; new_password: string }) => {
+    mutationFn: async (data: {
+      current_password: string;
+      new_password: string;
+    }) => {
       return apiRequest<{ ok: boolean }>('/profile/password', {
         method: 'POST',
         body: JSON.stringify(data),
@@ -192,8 +202,8 @@ export default function ProfilePage() {
       setConfirmPassword('');
       setRevealPassword(false);
     },
-    onError: (error: any) => {
-      const detail = error?.detail || '';
+    onError: (error: unknown) => {
+      const detail = error instanceof Error ? error.message : '';
       if (String(detail).includes('invalid_current_password')) {
         showError('Текущий пароль указан неверно');
         return;
@@ -206,7 +216,6 @@ export default function ProfilePage() {
     },
   });
 
-
   const handleCreateToken = () => {
     if (!newTokenName.trim()) return;
     createToken.mutate({
@@ -218,7 +227,7 @@ export default function ProfilePage() {
   const handleCopyToken = async () => {
     if (!createdToken) return;
     try {
-      await navigator.clipboard.writeText(createdToken);
+      await window.navigator.clipboard.writeText(createdToken);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -253,7 +262,6 @@ export default function ProfilePage() {
     });
   };
 
-
   if (profileLoading) {
     return <div className={styles.loading}>Загрузка...</div>;
   }
@@ -268,165 +276,235 @@ export default function ProfilePage() {
       </div>
 
       <nav className={styles.tabs} aria-label="Разделы личного кабинета">
-        <button className={activeTab === 'info' ? styles.activeTab : styles.tab} onClick={() => setActiveTab('info')} type="button">Информация</button>
-        <button className={activeTab === 'credentials' ? styles.activeTab : styles.tab} onClick={() => setActiveTab('credentials')} type="button">Credentials</button>
-        <button className={activeTab === 'facts' ? styles.activeTab : styles.tab} onClick={() => setActiveTab('facts')} type="button">Факты</button>
+        <button
+          className={activeTab === 'info' ? styles.activeTab : styles.tab}
+          onClick={() => setActiveTab('info')}
+          type="button"
+        >
+          Информация
+        </button>
+        <button
+          className={
+            activeTab === 'credentials' ? styles.activeTab : styles.tab
+          }
+          onClick={() => setActiveTab('credentials')}
+          type="button"
+        >
+          Credentials
+        </button>
+        <button
+          className={activeTab === 'facts' ? styles.activeTab : styles.tab}
+          onClick={() => setActiveTab('facts')}
+          type="button"
+        >
+          Факты
+        </button>
       </nav>
 
       {/* Profile Section */}
-      {activeTab === 'info' && <>
-      <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
-          </svg>
-          Профиль
-        </h2>
-        
-        {profile && (
-          <div className={styles.profileGrid}>
-            <div className={styles.profileItem}>
-              <span className={styles.profileLabel}>Логин</span>
-              <span className={styles.profileValue}>{profile.login}</span>
-            </div>
-            <div className={styles.profileItem}>
-              <span className={styles.profileLabel}>Email</span>
-              <span className={styles.profileValue}>{profile.email || '—'}</span>
-            </div>
-            <div className={styles.profileItem}>
-              <span className={styles.profileLabel}>Роль</span>
-              <span className={styles.profileValue}>{getRoleLabel(profile.role)}</span>
-            </div>
-            <div className={styles.profileItem}>
-              <span className={styles.profileLabel}>Дата регистрации</span>
-              <span className={styles.profileValue}>{formatDate(profile.created_at)}</span>
-            </div>
-          </div>
-        )}
-      </section>
+      {activeTab === 'info' && (
+        <>
+          <section className={styles.section}>
+            <h2 className={styles.sectionTitle}>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+              Профиль
+            </h2>
 
-      {profile && <section className={styles.section}>
-        <ProfileMemoryScopes scopeKeys={profile.memory_scope_keys ?? []} tenantScopeKeys={profile.tenant_memory_scope_keys ?? []} />
-      </section>}
+            {profile && (
+              <div className={styles.profileGrid}>
+                <div className={styles.profileItem}>
+                  <span className={styles.profileLabel}>Логин</span>
+                  <span className={styles.profileValue}>{profile.login}</span>
+                </div>
+                <div className={styles.profileItem}>
+                  <span className={styles.profileLabel}>Email</span>
+                  <span className={styles.profileValue}>
+                    {profile.email || '—'}
+                  </span>
+                </div>
+                <div className={styles.profileItem}>
+                  <span className={styles.profileLabel}>Роль</span>
+                  <span className={styles.profileValue}>
+                    {getRoleLabel(profile.role)}
+                  </span>
+                </div>
+                <div className={styles.profileItem}>
+                  <span className={styles.profileLabel}>Дата регистрации</span>
+                  <span className={styles.profileValue}>
+                    {formatDate(profile.created_at)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </section>
 
-      </>}
+          {profile && (
+            <section className={styles.section}>
+              <ProfileMemoryScopes
+                scopeKeys={profile.memory_scope_keys ?? []}
+                tenantScopeKeys={profile.tenant_memory_scope_keys ?? []}
+              />
+            </section>
+          )}
+        </>
+      )}
 
       {/* API Tokens Section */}
-      {activeTab === 'info' && <>
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <h2 className={styles.sectionTitle}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-            </svg>
-            API Токены
-          </h2>
-          <Button onClick={() => setShowCreateModal(true)}>
-            + Создать токен
-          </Button>
-        </div>
+      {activeTab === 'info' && (
+        <>
+          <section className={styles.section}>
+            <div className={styles.sectionHeader}>
+              <h2 className={styles.sectionTitle}>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+                API Токены
+              </h2>
+              <Button onClick={() => setShowCreateModal(true)}>
+                + Создать токен
+              </Button>
+            </div>
 
-        <p className={styles.sectionDescription}>
-          Токены используются для доступа к API из IDE плагинов и внешних приложений (MCP).
-          Храните токены в безопасности — они дают полный доступ к вашему аккаунту.
-        </p>
+            <p className={styles.sectionDescription}>
+              Персональные токены используются для вызова API, shadow-агентов и
+              MCP из внешних приложений. Запросы выполняются с вашими
+              действующими правами. Храните токены в безопасности — полный токен
+              показывается только при создании. Удаление токена сразу прекращает
+              его действие.
+            </p>
 
-        {tokensLoading ? (
-          <div className={styles.loading}>Загрузка токенов...</div>
-        ) : tokens.length === 0 ? (
-          <div className={styles.emptyState}>
-            <p>У вас пока нет API токенов</p>
-            <Button onClick={() => setShowCreateModal(true)}>
-              Создать первый токен
-            </Button>
-          </div>
-        ) : (
-          <div className={styles.tokensList}>
-            {tokens.map(token => {
-              const expiresLabel = formatRelativeDate(token.expires_at);
-              const isExpired = expiresLabel === 'Истёк';
-              
-              return (
-                <div key={token.id} className={`${styles.tokenCard} ${isExpired ? styles.tokenExpired : ''}`}>
-                  <div className={styles.tokenInfo}>
-                    <div className={styles.tokenHeader}>
-                      <span className={styles.tokenName}>{token.name}</span>
-                      {expiresLabel && (
-                        <span className={`${styles.tokenBadge} ${isExpired ? styles.expired : ''}`}>
-                          {isExpired ? '⚠️ Истёк' : `⏱ ${expiresLabel}`}
-                        </span>
-                      )}
+            {tokensLoading ? (
+              <div className={styles.loading}>Загрузка токенов...</div>
+            ) : tokens.length === 0 ? (
+              <div className={styles.emptyState}>
+                <p>У вас пока нет API токенов</p>
+                <Button onClick={() => setShowCreateModal(true)}>
+                  Создать первый токен
+                </Button>
+              </div>
+            ) : (
+              <div className={styles.tokensList}>
+                {tokens.map(token => {
+                  const expiresLabel = formatRelativeDate(token.expires_at);
+                  const isExpired = expiresLabel === 'Истёк';
+
+                  return (
+                    <div
+                      key={token.id}
+                      className={`${styles.tokenCard} ${isExpired ? styles.tokenExpired : ''}`}
+                    >
+                      <div className={styles.tokenInfo}>
+                        <div className={styles.tokenHeader}>
+                          <span className={styles.tokenName}>{token.name}</span>
+                          {expiresLabel && (
+                            <span
+                              className={`${styles.tokenBadge} ${isExpired ? styles.expired : ''}`}
+                            >
+                              {isExpired ? '⚠️ Истёк' : `⏱ ${expiresLabel}`}
+                            </span>
+                          )}
+                        </div>
+                        <div className={styles.tokenMeta}>
+                          <span className={styles.tokenPrefix}>
+                            {token.token_prefix}...
+                          </span>
+                          <span className={styles.tokenDate}>
+                            Создан: {formatDate(token.created_at)}
+                          </span>
+                          {token.last_used_at && (
+                            <span className={styles.tokenDate}>
+                              Использован: {formatDate(token.last_used_at)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        variant="danger"
+                        onClick={() => setTokenToDelete(token)}
+                        disabled={deleteToken.isPending}
+                      >
+                        Удалить
+                      </Button>
                     </div>
-                    <div className={styles.tokenMeta}>
-                      <span className={styles.tokenPrefix}>{token.token_prefix}...</span>
-                      <span className={styles.tokenDate}>
-                        Создан: {formatDate(token.created_at)}
-                      </span>
-                      {token.last_used_at && (
-                        <span className={styles.tokenDate}>
-                          Использован: {formatDate(token.last_used_at)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <Button
-                    variant="danger"
-                    onClick={() => setTokenToDelete(token)}
-                    disabled={deleteToken.isPending}
-                  >
-                    Удалить
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                  );
+                })}
+              </div>
+            )}
 
-        {/* Usage Instructions */}
-        <div className={styles.usageSection}>
-          <h3 className={styles.usageTitle}>Как использовать токен</h3>
-          <div className={styles.usageCode}>
-            <code>
-              curl -H "X-API-Key: YOUR_TOKEN" \<br />
-              &nbsp;&nbsp;https://your-server/api/v1/mcp
-            </code>
-          </div>
-          <p className={styles.usageHint}>
-            Используйте токен в заголовке <code>X-API-Key</code> для авторизации запросов к MCP API.
-          </p>
-        </div>
-      </section>
-
-      </>}
+            {/* Usage Instructions */}
+            <div className={styles.usageSection}>
+              <h3 className={styles.usageTitle}>Как использовать токен</h3>
+              <p className={styles.usageHint}>Вызов shadow-агента</p>
+              <div className={styles.usageCode}>
+                <pre>
+                  <code>{shadowExample}</code>
+                </pre>
+              </div>
+              <p className={styles.usageHint}>Проверка подключения к MCP</p>
+              <div className={styles.usageCode}>
+                <pre>
+                  <code>{mcpExample}</code>
+                </pre>
+              </div>
+              <p className={styles.usageHint}>
+                Замените <code>YOUR_TOKEN</code> на созданный токен, а{' '}
+                <code>YOUR_SHADOW_AGENT</code> — на slug доступного вам
+                shadow-агента. Передавайте токен в заголовке{' '}
+                <code>Authorization: Bearer YOUR_TOKEN</code>. Тот же заголовок
+                используется для JWT access token.
+              </p>
+            </div>
+          </section>
+        </>
+      )}
 
       {/* Credentials Section */}
-      {activeTab === 'credentials' && <>
-      <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
-          </svg>
-          Мои Credentials
-        </h2>
-        <p className={styles.sectionDescription}>
-          Ваши персональные учётные данные для подключения к инструментам. 
-          Credentials шифруются и используются при выполнении запросов.
-        </p>
-        <CredentialsPanel
-          mode="user"
-          userId={profile?.id}
-          tenantId={profile?.tenants?.[0]}
-        />
-      </section>
-
-      </>}
+      {activeTab === 'credentials' && (
+        <>
+          <section className={styles.section}>
+            <h2 className={styles.sectionTitle}>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+              </svg>
+              Мои Credentials
+            </h2>
+            <p className={styles.sectionDescription}>
+              Ваши персональные учётные данные для подключения к инструментам.
+              Credentials шифруются и используются при выполнении запросов.
+            </p>
+            <CredentialsPanel
+              mode="user"
+              userId={profile?.id}
+              tenantId={profile?.tenants?.[0]}
+            />
+          </section>
+        </>
+      )}
 
       {/* Facts Section */}
-      {activeTab === 'facts' && <>
-      <FactsPanel mode="profile" />
-      {/*
+      {activeTab === 'facts' && (
+        <>
+          <FactsPanel mode="profile" />
+          {/*
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <h2 className={styles.sectionTitle}>
@@ -511,14 +589,18 @@ export default function ProfilePage() {
         )}
       </section>
       */}
-
-      </>}
+        </>
+      )}
 
       {/* Delete Token Confirmation */}
       <ConfirmDialog
         open={!!tokenToDelete}
         title="Удалить токен?"
-        message={tokenToDelete ? `Вы уверены, что хотите удалить токен "${tokenToDelete.name}"? Это действие нельзя отменить.` : ''}
+        message={
+          tokenToDelete
+            ? `Вы уверены, что хотите удалить токен "${tokenToDelete.name}"? Это действие нельзя отменить.`
+            : ''
+        }
         confirmLabel="Удалить"
         cancelLabel="Отмена"
         variant="danger"
@@ -530,72 +612,71 @@ export default function ProfilePage() {
         onCancel={() => setTokenToDelete(null)}
       />
 
-
       {/* Create Token Modal */}
-      <Modal 
-        open={showCreateModal} 
-        onClose={handleCloseModal} 
+      <Modal
+        open={showCreateModal}
+        onClose={handleCloseModal}
         title={createdToken ? 'Токен создан' : 'Создать токен'}
       >
         {createdToken ? (
-            <div className={styles.tokenCreated}>
-              <p className={styles.tokenWarning}>
-                ⚠️ Скопируйте токен сейчас. Он больше не будет показан!
-              </p>
-              <div className={styles.tokenDisplay}>
-                <code className={styles.tokenCode}>{createdToken}</code>
-                <Button onClick={handleCopyToken}>
-                  {copied ? '✓ Скопировано' : 'Копировать'}
-                </Button>
-              </div>
-              <div className={styles.modalActions}>
-                <Button onClick={handleCloseModal}>Готово</Button>
-              </div>
+          <div className={styles.tokenCreated}>
+            <p className={styles.tokenWarning}>
+              ⚠️ Скопируйте токен сейчас. Он больше не будет показан!
+            </p>
+            <div className={styles.tokenDisplay}>
+              <code className={styles.tokenCode}>{createdToken}</code>
+              <Button onClick={handleCopyToken}>
+                {copied ? '✓ Скопировано' : 'Копировать'}
+              </Button>
             </div>
-          ) : (
-            <div className={styles.createForm}>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Название токена</label>
-                <Input
-                  value={newTokenName}
-                  onChange={e => setNewTokenName(e.target.value)}
-                  placeholder="Например: VS Code Plugin"
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && newTokenName.trim()) {
-                      e.preventDefault();
-                      handleCreateToken();
-                    }
-                  }}
-                />
-                <span className={styles.formHelp}>
-                  Название поможет вам отличать токены друг от друга
-                </span>
-              </div>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Срок действия</label>
-                <Select
-                  value={expiresDays}
-                  onChange={(value) => setExpiresDays(value)}
-                  options={EXPIRATION_OPTIONS}
-                />
-                <span className={styles.formHelp}>
-                  Рекомендуем устанавливать срок действия для безопасности
-                </span>
-              </div>
-              <div className={styles.modalActions}>
-                <Button variant="outline" onClick={handleCloseModal}>
-                  Отмена
-                </Button>
-                <Button 
-                  onClick={handleCreateToken}
-                  disabled={!newTokenName.trim() || createToken.isPending}
-                >
-                  {createToken.isPending ? 'Создание...' : 'Создать'}
-                </Button>
-              </div>
+            <div className={styles.modalActions}>
+              <Button onClick={handleCloseModal}>Готово</Button>
             </div>
-          )}
+          </div>
+        ) : (
+          <div className={styles.createForm}>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Название токена</label>
+              <Input
+                value={newTokenName}
+                onChange={e => setNewTokenName(e.target.value)}
+                placeholder="Например: VS Code Plugin"
+                autoFocus
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && newTokenName.trim()) {
+                    e.preventDefault();
+                    handleCreateToken();
+                  }
+                }}
+              />
+              <span className={styles.formHelp}>
+                Название поможет вам отличать токены друг от друга
+              </span>
+            </div>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Срок действия</label>
+              <Select
+                value={expiresDays}
+                onChange={value => setExpiresDays(value)}
+                options={EXPIRATION_OPTIONS}
+              />
+              <span className={styles.formHelp}>
+                Рекомендуем устанавливать срок действия для безопасности
+              </span>
+            </div>
+            <div className={styles.modalActions}>
+              <Button variant="outline" onClick={handleCloseModal}>
+                Отмена
+              </Button>
+              <Button
+                onClick={handleCreateToken}
+                disabled={!newTokenName.trim() || createToken.isPending}
+              >
+                {createToken.isPending ? 'Создание...' : 'Создать'}
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal
@@ -631,7 +712,14 @@ export default function ProfilePage() {
               autoComplete="new-password"
             />
           </div>
-          <div className={styles.modalActions} style={{ justifyContent: 'flex-start', borderTop: 'none', paddingTop: 0 }}>
+          <div
+            className={styles.modalActions}
+            style={{
+              justifyContent: 'flex-start',
+              borderTop: 'none',
+              paddingTop: 0,
+            }}
+          >
             <Button
               variant="ghost"
               onClick={() => setRevealPassword(v => !v)}
@@ -641,16 +729,21 @@ export default function ProfilePage() {
             </Button>
           </div>
           <div className={styles.modalActions}>
-            <Button variant="outline" onClick={() => setShowPasswordModal(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setShowPasswordModal(false)}
+            >
               Отмена
             </Button>
-            <Button onClick={handleChangePassword} disabled={changePassword.isPending}>
+            <Button
+              onClick={handleChangePassword}
+              disabled={changePassword.isPending}
+            >
               {changePassword.isPending ? 'Сохранение...' : 'Сменить пароль'}
             </Button>
           </div>
         </div>
       </Modal>
-
     </div>
   );
 }

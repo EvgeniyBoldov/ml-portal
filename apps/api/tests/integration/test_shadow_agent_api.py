@@ -48,6 +48,45 @@ async def test_bearer_invocation_uses_token_user_and_current_membership(api):
 
 
 @pytest.mark.asyncio
+async def test_personal_api_token_uses_current_owner_identity_and_rbac(api, monkeypatch):
+    from datetime import datetime, timezone
+    import hashlib
+    import secrets
+    from app.services import bearer_authentication_service, personal_access_token_service
+    token_id = uuid4()
+    raw = f"mlp_pat_{token_id.hex}.{secrets.token_urlsafe(32)}"
+    token = SimpleNamespace(token_hash=hashlib.sha256(raw.encode()).hexdigest(), expires_at=None)
+    owner = SimpleNamespace(id=api.user_id, email="shadow-test@example.test", role="reader")
+    repo = SimpleNamespace(active_token_owner=AsyncMock(return_value=(token, owner)),
+        active_tenant_ids=AsyncMock(return_value=[str(api.tenant_id)]), record_use=AsyncMock())
+    monkeypatch.setattr(personal_access_token_service, "ApiTokensRepository", lambda session: repo)
+    auth_session = AsyncMock()
+    auth_session.__aenter__.return_value = auth_session
+    monkeypatch.setattr(bearer_authentication_service, "get_session_factory", lambda: lambda: auth_session)
+    async with httpx.AsyncClient(app=api.app, base_url="http://test") as client:
+        response = await client.post("/api/v1/agents/shadow/invoke", headers={"Authorization": f"Bearer {raw}"},
+                                     json={"agent": "shadow-a", "data": {"text": "hello"}})
+    assert response.status_code == 200
+    kwargs = api.invoke.await_args.kwargs
+    assert kwargs["user_id"] == api.user_id
+    assert kwargs["tenant_id"] == api.tenant_id
+    assert kwargs["scopes"] == []
+    repo.active_token_owner.assert_awaited_once_with(token_id)
+    repo.record_use.assert_awaited_once()
+    assert repo.record_use.await_args.args[1] <= datetime.now(timezone.utc)
+    auth_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_legacy_api_key_header_is_rejected(api):
+    async with httpx.AsyncClient(app=api.app, base_url="http://test") as client:
+        response = await client.post("/api/v1/agents/shadow/invoke", headers={"X-API-Key": api.token},
+                                     json={"agent": "shadow-a", "data": {}})
+    assert response.status_code == 401
+    api.invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("auth", ["missing", "cookie", "invalid", "refresh"])
 async def test_missing_cookie_invalid_and_refresh_credentials_are_rejected(api, auth):
     headers = {}
