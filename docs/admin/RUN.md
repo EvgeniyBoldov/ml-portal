@@ -41,6 +41,35 @@ refreshes that address automatically. After editing nginx configuration, run
 - Qdrant: `http://localhost:6333`
 - Flower: `http://localhost:5555`
 - HippoRAG worker (локальный HTTP): `http://localhost:8015/docs`
+- Docling Serve API (локальный HTTP): `http://localhost:8016/docs`
+- Docling playground: `http://localhost:8016/ui`
+
+### Docling Serve (только dev)
+
+Сервис `docling` использует официальный CPU-образ
+`quay.io/docling-project/docling-serve-cpu:v1.30.0` с включённым playground.
+Модели уже входят в образ. Контейнер запускается вместе с dev-стеком;
+отдельный запуск и проверка:
+
+```bash
+docker compose up -d --no-deps docling
+docker compose ps docling
+docker compose logs --tail=100 docling
+curl --fail http://localhost:8016/ready
+```
+
+В Docker-сети API доступен по `http://docling:5001`, с хоста — только через
+loopback на порту `DOCLING_PORT` (по умолчанию `8016`). `DOCLING_NUM_THREADS`
+(по умолчанию `2`) задаёт `OMP_NUM_THREADS`. Healthcheck проверяет `/ready`,
+включая готовность моделей и очереди конвертации; начальная загрузка может
+занять до нескольких минут. Для загрузки файла используется
+`POST /v1/convert/file`, контракт доступен в `/docs`.
+
+На этом этапе контейнер автономный: существующие способы извлечения текста
+и document ingestion ещё не переведены на Docling. Сервис не добавлен в
+production compose, release build или deployment scripts.
+
+Документация upstream: [Docling Serve](https://github.com/docling-project/docling-serve).
 
 Постоянные dev-сервисы `hipporag` и `memory-experiment` запускаются из основного
 compose. Индексы живут в отдельном volume, экспериментальные документы и SQLite —

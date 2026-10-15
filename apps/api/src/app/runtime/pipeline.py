@@ -51,6 +51,7 @@ from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdent
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
+from app.runtime.input_builders import compact_memory_tool_records
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.system_llm_role_service import SystemLLMRoleService
@@ -686,7 +687,7 @@ class RuntimePipeline:
                 "direct_answer_draft": brief.answer_draft,
                 "plan_outline": [], "resolution_decisions": [], "completed_task_reports": [],
                 "limitations": [], "artifacts": [], "sources": [],
-                "memory_context": preflight_memory_results,
+                "memory_context": compact_memory_tool_records(preflight_memory_results),
                 "memory_candidates": turn_mem.preflight_candidates,
                 "chat_context": chat_context,
                 "scope_context": effective_scope_context.model_payload(),

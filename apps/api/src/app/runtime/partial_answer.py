@@ -57,14 +57,10 @@ def partial_context(*, plan: dict[str, Any], state: RuntimeTurnState,
     context["limitations"] = safe_limitations
     for item in state.execution_limitations:
         safe_limitations.append({"message": limitation_message(item.get("code", ""))})
-    # Successful direct memory receipts are evidence, even if the agent failed
-    # before declaring a task result. Never re-query or execute tools here.
+    # Raw memory search receipts are retrieval context, not verified task
+    # results. A failed plan must not turn them into claims in the final answer.
     for entry in state.tool_ledger.entries:
-        if entry.success and entry.operation.endswith("memory.search") and isinstance(entry.result_data, dict):
-            data = entry.result_data
-            if isinstance(data.get("items"), list):
-                context["memory_context"].append({"type": "memory_recall", "relevant_knowledge": data["items"]})
-        elif entry.success is False:
+        if entry.success is False:
             safe_limitations.append({"message": limitation_message(entry.result_preview or "")})
     context["limitations"] = list({item["message"]: item for item in safe_limitations}.values())
     context["execution_summary"] = {"partial": True, "message": message}

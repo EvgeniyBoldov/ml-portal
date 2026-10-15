@@ -3,9 +3,107 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.runtime.memory.execution_context import memory_execution_context
+from app.runtime.memory.effective_scope import project_memory_context
 
 
 MAX_AGENT_DESCRIPTION_CHARS = 280
+MAX_PLANNER_MEMORY_PASSAGE_CHARS = 3_000
+
+
+def compact_memory_search_result(result: Any) -> dict[str, Any]:
+    """Project a search receipt to passages and source labels once."""
+    if not isinstance(result, dict):
+        return {}
+    items = result.get("items") if isinstance(result.get("items"), list) else []
+    compact_items = []
+    for item in items[:12]:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        refs = item.get("source_references") or metadata.get("source_refs") or []
+        compact_refs = []
+        seen_refs: set[tuple[str, str]] = set()
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            document_id = str(ref.get("document_id") or "")
+            title = str(ref.get("document_title") or ref.get("filename") or "")
+            key = (document_id, title)
+            if key in seen_refs:
+                continue
+            seen_refs.add(key)
+            compact_refs.append({"document_id": document_id, "document_title": title})
+        compact_items.append({
+            "kind": item.get("kind"),
+            "subject": item.get("subject") or metadata.get("document_title") or metadata.get("filename"),
+            "text": str(item.get("text") or "")[:MAX_PLANNER_MEMORY_PASSAGE_CHARS],
+            "source_id": metadata.get("source_id"),
+            "source_references": compact_refs,
+        })
+    memory_context = result.get("memory_context")
+    compact_context = {
+        key: memory_context.get(key)
+        for key in ("type", "rag_required", "tool_required", "clarification_required", "source_references")
+        if isinstance(memory_context, dict) and key in memory_context
+    }
+    return {
+        "success": result.get("success", True),
+        "backend": result.get("backend"),
+        "count": result.get("count", len(compact_items)),
+        "items": compact_items,
+        "memory_context": compact_context,
+    }
+
+
+def compact_memory_tool_records(records: Any) -> list[dict[str, Any]]:
+    compacted = []
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        compacted.append({
+            "operation": record.get("operation"),
+            "arguments": record.get("arguments"),
+            "result": compact_memory_search_result(record.get("result")),
+        })
+    return compacted
+
+
+def _planner_search_summaries(records: Any) -> list[dict[str, Any]]:
+    """Expose search bookkeeping without repeating passages from memory_context."""
+    summaries = []
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        summaries.append({
+            "operation": record.get("operation"),
+            "arguments": record.get("arguments"),
+            "success": result.get("success", True),
+            "count": result.get("count"),
+        })
+    return summaries
+
+
+def _planner_memory_projection(entries: Any, scope_keys: list[str]) -> list[dict[str, Any]]:
+    """Keep evidence useful for planning without serializing nested search copies."""
+    projected: list[dict[str, Any]] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict) or entry.get("type") != "planner_memory_result":
+            projected.append(entry)
+            continue
+
+        scoped = project_memory_context(entry, scope_keys)
+        record = scoped.get("result") if isinstance(scoped.get("result"), dict) else {}
+        compact_result = compact_memory_search_result(record)
+        projected.append({
+            "type": "planner_memory_result",
+            "query_key": scoped.get("query_key"),
+            "arguments": scoped.get("arguments"),
+            "result": {
+                **compact_result,
+            },
+        })
+    return projected
 
 
 class PlannerInputBuilder:
@@ -43,11 +141,13 @@ class PlannerInputBuilder:
             "trigger": context.trigger,
             "execution_ledger": context.execution_ledger,
             "available_artifacts": self._normalize_artifacts(context.available_artifacts),
-            "memory_context": context.memory_context,
+            "memory_context": _planner_memory_projection(
+                context.memory_context, list(context.scope_context.get("keys") or []),
+            ),
             "scope_context": context.scope_context,
             "execution_context": memory_execution_context(context.scope_context.get("keys") or [],
                 revision=int(context.scope_context.get("revision") or 0)),
-            "planner_search_results": context.planner_search_results,
+            "planner_search_results": _planner_search_summaries(context.planner_search_results),
             "task_brief": context.task_brief,
             "available_agents": agents,
             "iteration_contract": {

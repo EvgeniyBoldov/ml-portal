@@ -16,6 +16,7 @@ from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.effective_scope import ScopeSelection
 from app.agents.context import ToolContext
 from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
+from app.runtime.input_builders import compact_memory_tool_records
 
 
 class TaskBrief(BaseModel):
@@ -175,7 +176,7 @@ class TurnPreflight:
                     "scope_policy": "Focus controls execution context, not HippoRAG document search. Select only confirmed concrete catalog keys; memory.search takes query and optional limit.",
                     "continuation": continuation or {},
                     "available_tools": descriptors,
-                    "memory_tool_results": list(tool_results),
+                    "memory_tool_results": compact_memory_tool_records(tool_results),
                     "memory_tool_calls_remaining": RoleMemoryTools.MAX_CALLS - len(tool_results),
                 },
                 schema=TurnPreflightDecision,

@@ -184,15 +184,22 @@ They are intentionally lightweight:
 Flow:
 1. Code resolves scope-free glossary aliases and project names without an
    LLM call; values from durable memory are not injected at this stage.
-2. `TurnPreflight` returns a strict `synthesis`, `planner`, `recall` or
-   `clarify` decision. It provides a `SynthesisBrief`, `TaskBrief`,
-   `MemoryRequest` or one clarification question respectively.
-3. `synthesis` invokes Synthesizer directly. `recall` performs bounded scoped
-   read and re-enters TurnPreflight once. `planner` invokes GraphPlanner.
+2. `TurnPreflight` returns a strict `synthesis`, `planner`, `tool_call` or
+   `clarify` decision. A `tool_call` invokes the registered `memory.search`
+   operation and returns its result to TurnPreflight within the bounded tool
+   loop. It provides a `SynthesisBrief`, `TaskBrief` or one clarification
+   question for the corresponding terminal route.
+3. `synthesis` invokes Synthesizer directly. `planner` invokes GraphPlanner.
 4. Planner and agents use canonical scoped memory operations themselves;
    planner decides which recalled rules, processes and facts are relevant to
-   the plan.
-5. After every final synthesis, `finalize_memory` asynchronously runs
+   the plan. Planner input receives a compact projection of retrieved passages,
+   without nested duplicate copies of the same memory result.
+5. Planned synthesis uses task reports, task sources and runtime artifacts as
+   its evidence. Raw search history is available to planned synthesis only for
+   a memory-only plan with no agent tasks or limitations. Partial synthesis
+   after a failed plan excludes raw memory search results. Direct synthesis
+   after TurnPreflight memory search retains those results.
+6. After every final synthesis, `finalize_memory` asynchronously runs
    `FactExtractor -> FactCompactor -> FactReconciler` and persists only
    evidence-backed candidates. TurnPreflight proposals are hints, not writes.
 

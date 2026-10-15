@@ -1,4 +1,22 @@
 services:
+  # Standalone document conversion API for development; not deployed to production.
+  docling:
+    image: quay.io/docling-project/docling-serve-cpu:v1.30.0
+    restart: unless-stopped
+    environment:
+      DOCLING_SERVE_ENABLE_UI: "true"
+      DOCLING_SERVE_LOG_LEVEL: INFO
+      DOCLING_DEVICE: cpu
+      OMP_NUM_THREADS: ${DOCLING_NUM_THREADS:-2}
+    ports:
+      - "127.0.0.1:${DOCLING_PORT:-8016}:5001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/ready', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
   hipporag:
     build:
       context: .

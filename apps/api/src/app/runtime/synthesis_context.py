@@ -33,6 +33,9 @@ class SynthesisContextBuilder:
         context = self.build(plan=projected, iteration_id=iteration_id,
                              deleted_artifact_ids=deleted_artifact_ids)
         context["plan_outline"] = context["plan_outline"][:-1]
+        # A failed plan has no verified agent report for contextual search
+        # results. Do not let unrelated memory passages become an answer.
+        context["memory_context"] = []
         return context
 
     def build(
@@ -90,11 +93,16 @@ class SynthesisContextBuilder:
             if str(item.get("artifact_id") or "") not in deleted
         ]
         allowed_scope = set((plan.get("scope_context") or {}).get("keys") or [])
+        # Raw memory search passages are only a synthesis source for a
+        # memory-only plan. Once agent work exists, its reports and sources
+        # are the evidence package; passing the broad search history alongside
+        # them can create unsupported links between unrelated entities.
         memory_context = []
-        for item in plan.get("memory_context") or []:
-            if not isinstance(item, dict) or item.get("type") not in {"memory_recall", "planner_memory_result"}:
-                continue
-            memory_context.append(project_memory_context(item, allowed_scope))
+        if not tasks and not limitations:
+            for item in plan.get("memory_context") or []:
+                if not isinstance(item, dict) or item.get("type") not in {"memory_recall", "planner_memory_result"}:
+                    continue
+                memory_context.append(project_memory_context(item, allowed_scope))
         context = {"user_question": plan.get("goal"), "synthesis_brief": self._redact(iteration["synthesis_brief"]), "plan_outline": [{"sequence": item.get("sequence"), "terminal": item.get("terminal")} for item in plan.get("iterations", [])], "resolution_decisions": self._redact([{key: item.get(key) for key in ("task_id", "action", "output_keys", "reason")} for item in resolutions if item.get("action") != ResolutionAction.CONTINUE_WITH_TASKS.value]), "completed_task_reports": reports, "limitations": limitations, "memory_context": self._redact(memory_context), "artifacts": deliverable_artifacts, "sources": self._dedupe(sources, "source_id")}
         context["scope_context"] = self._redact(plan.get("scope_context") or {})
         context["execution_context"] = memory_execution_context(
