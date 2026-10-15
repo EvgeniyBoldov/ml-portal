@@ -116,6 +116,25 @@ describe('projectTraceStages memory components', () => {
     }));
   });
 
+  it.each([undefined, true, false])('shows preflight memory.search while waiting and after result=%s', (success) => {
+    const events = [
+      event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'preflight-search', role: 'turn_preflight' }),
+      event(2, 'llm_request', { entity_type: 'llm_call', entity_id: 'route-search', parent_entity_type: 'orchestrator', parent_entity_id: 'preflight-search' }),
+      event(3, 'llm_response', { entity_type: 'llm_call', entity_id: 'route-search', parent_entity_type: 'orchestrator', parent_entity_id: 'preflight-search', content: JSON.stringify({ route: 'tool_call', tool_call: { operation: 'memory.search', arguments: { query: 'NIMS' } } }) }),
+      event(4, 'tool_call', { entity_type: 'tool_call', entity_id: 'search-call', call_id: 'search-call', parent_entity_type: 'orchestrator', parent_entity_id: 'preflight-search', tool: 'memory.search', arguments: { query: 'NIMS' } }),
+    ];
+    if (success !== undefined) events.push(event(5, 'tool_result', {
+      entity_type: 'tool_call', entity_id: 'search-call', call_id: 'search-call', parent_entity_type: 'orchestrator', parent_entity_id: 'preflight-search', tool: 'memory.search', success, data: { items: [] },
+    }));
+    const state = replayRuntimeJournal(events);
+    const executor = projectTraceStages(state).find((stage) => stage.kind === 'turn_preflight')?.executorRuns[0];
+    expect(executor?.calls.map((call) => call.kind)).toEqual(['llm', 'tool']);
+    const search = executor?.calls[1];
+    expect(search?.requestView.toolName).toBe('memory.search');
+    expect(search?.entity.status).toBe(success === undefined ? 'running' : success ? 'completed' : 'failed');
+    expect(resolveTraceInspectionTarget(state, 'tool_call:search-call')?.kind).toBe('call');
+  });
+
   it('does not throw when turn preflight has an empty LLM response', () => {
     const state = replayRuntimeJournal([
       event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'preflight-empty', role: 'turn_preflight' }),

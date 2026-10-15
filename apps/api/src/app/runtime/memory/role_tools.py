@@ -1,7 +1,10 @@
 """Registered memory tools for root roles, using the agent operation executor."""
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import replace
+from time import monotonic
 from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
@@ -12,6 +15,9 @@ from app.agents.operation_executor import DirectOperationExecutor
 from app.agents.operation_router import OperationRouter
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.search_contract import HippoMemorySearchInput
+
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryToolCall(BaseModel):
@@ -62,22 +68,56 @@ class RoleMemoryTools:
         if event_sink:
             await event_sink(RuntimeEvent.tool_call(tool=call.operation, call_id=call_id,
                                                     arguments=arguments, **trace))
-        available = await self.descriptors()
-        if not available:
-            data = {"success": False, "error_code": "memory_search_unavailable",
-                    "error": "memory.search is unavailable in this execution context"}
-        else:
-            assert self._execution_ctx is not None
-            result = await self._executor.execute(
-                ToolCall(id=call_id, tool_name=call.operation, arguments=arguments), self._execution_ctx,
-            )
-            data = {**(result.data or {}), "success": result.success}
-            if not result.success:
-                data.update(error_code="memory_search_failed", error="Не удалось выполнить поиск в памяти")
-        if event_sink:
-            await event_sink(RuntimeEvent.tool_result(
-                tool=call.operation, call_id=call_id, success=data["success"], data=data,
-                error_code=data.get("error_code"), safe_message=data.get("error"), **trace,
-                result_delivery="direct", result_inline_complete=True,
-            ))
+        started = monotonic()
+        log_context = {
+            "operation": call.operation, "call_id": call_id, "actor": actor,
+            "parent_entity_type": parent_type, "parent_entity_id": parent_id,
+            "run_id": (self._ctx.extra.get("runtime_root_run_id") if self._ctx else None),
+            "user_id": str(self._ctx.user_id) if self._ctx else None,
+            "tenant_id": str(self._ctx.tenant_id) if self._ctx else None,
+        }
+        logger.info("memory_search_started tool=%s call_id=%s actor=%s parent_id=%s",
+                    call.operation, call_id, actor, parent_id,
+                    extra={**log_context, "status": "running"})
+        # Always close the admitted tool call, including failures during
+        # resolution and cancellation while waiting for HippoRAG. Keep the
+        # original exception/cancellation semantics for the owning role.
+        data: dict[str, Any] = {
+            "success": False, "error_code": "memory_search_failed",
+            "error": "Не удалось выполнить поиск в памяти",
+        }
+        status = "failed"
+        try:
+            available = await self.descriptors()
+            if not available:
+                data.update(error_code="memory_search_unavailable",
+                            error="memory.search is unavailable in this execution context")
+            else:
+                assert self._execution_ctx is not None
+                result = await self._executor.execute(
+                    ToolCall(id=call_id, tool_name=call.operation, arguments=arguments), self._execution_ctx,
+                )
+                data = {**(result.data or {}), "success": result.success}
+                if not result.success:
+                    data.update(error_code="memory_search_failed", error="Не удалось выполнить поиск в памяти")
+                else:
+                    status = "completed"
+        except asyncio.CancelledError:
+            status = "cancelled"
+            data.update(error_code="memory_search_cancelled", error="Поиск в памяти отменён")
+            raise
+        finally:
+            duration_ms = int((monotonic() - started) * 1000)
+            logger.info("memory_search_finished tool=%s call_id=%s status=%s duration_ms=%s",
+                        call.operation, call_id, status, duration_ms,
+                        extra={**log_context, "status": status, "duration_ms": duration_ms,
+                               "error_code": data.get("error_code")})
+            if event_sink:
+                event = RuntimeEvent.tool_result(
+                    tool=call.operation, call_id=call_id, success=data["success"], data=data,
+                    error_code=data.get("error_code"), safe_message=data.get("error"), **trace,
+                    result_delivery="direct", result_inline_complete=True,
+                )
+                event.data.update(status=status, duration_ms=duration_ms)
+                await event_sink(event)
         return {"operation": call.operation, "arguments": arguments, "result": data}

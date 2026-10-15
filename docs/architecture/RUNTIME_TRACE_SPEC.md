@@ -81,6 +81,14 @@ one `llm_call` entity; `tool_call`/`tool_result` share one `tool_call` entity.
 Agent-owned call entities are direct children of the executor run that initiated them.
 This is an explicit journal contract, not a frontend inference rule.
 
+Root-role `memory.search` calls are direct children of the preflight orchestrator
+or planner iteration. Their `tool_call` is admitted before execution and their
+`tool_result` closes the same call on success, failure or cancellation, with
+`duration_ms`. Server diagnostics emit `memory_search_started` and
+`memory_search_finished` with the same call ID, actor and terminal status;
+query text and search results are excluded from these logs.
+
+
 Each user-visible LLM request has one stable `llm_call_id` from its initial
 `llm_request` through the terminal response with an action or answer. Retries
 reuse that ID and retain the same LLM parent; their `protocol_retry` payload

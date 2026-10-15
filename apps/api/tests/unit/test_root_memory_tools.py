@@ -168,3 +168,65 @@ def test_document_passages_survive_scope_projection_and_agent_rendering():
     entry = {"type": "planner_memory_result", "result": data}
     assert project_memory_context(entry, ["project.a"])["result"] == data
     assert any("NIMS-3532 details" in line for line in _render_memory_recall(data["memory_context"]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "failure", "exception", "cancelled"])
+async def test_root_memory_search_lifecycle_is_visible_while_waiting(caplog, outcome):
+    import asyncio
+    import logging
+    from app.agents.context import ToolResult
+    from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
+
+    tools = RoleMemoryTools(session=object(), ctx=None)
+    tools.descriptors = AsyncMock(return_value=[{"operation": "memory.search"}])
+    tools._execution_ctx = object()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    events = []
+
+    async def execute(*args):
+        entered.set()
+        await release.wait()
+        if outcome == "exception":
+            raise RuntimeError("private backend details")
+        if outcome == "failure":
+            return ToolResult.fail("private backend details")
+        return ToolResult.ok({"items": []})
+
+    async def sink(event):
+        events.append(event)
+
+    tools._executor.execute = execute
+    with caplog.at_level(logging.INFO, logger="app.runtime.memory.role_tools"):
+        task = asyncio.create_task(tools.execute(
+            MemoryToolCall(operation="memory.search", arguments={"query": "private query"}),
+            actor="turn_preflight", parent_type="orchestrator", parent_id="preflight-1", event_sink=sink,
+        ))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        try:
+            assert [event.type.value for event in events] == ["tool_call"]
+            assert "memory_search_started" in caplog.text
+        finally:
+            release.set()
+            if outcome == "cancelled":
+                task.cancel()
+            result = (await asyncio.gather(task, return_exceptions=True))[0]
+
+    assert [event.type.value for event in events] == ["tool_call", "tool_result"]
+    start, end = events
+    assert start.data["call_id"] == end.data["call_id"]
+    assert end.data["parent_entity_id"] == "preflight-1"
+    assert end.data["success"] is (outcome == "success")
+    assert end.data["duration_ms"] >= 0
+    if outcome == "cancelled":
+        assert isinstance(result, asyncio.CancelledError)
+    if outcome == "exception":
+        assert isinstance(result, RuntimeError)
+    assert "memory_search_finished" in caplog.text
+    records = [record for record in caplog.records if record.name == "app.runtime.memory.role_tools"]
+    assert [record.call_id for record in records] == [start.data["call_id"]] * 2
+    assert records[-1].status == ("completed" if outcome == "success" else "cancelled" if outcome == "cancelled" else "failed")
+    assert records[-1].duration_ms == end.data["duration_ms"]
+    assert "private query" not in caplog.text
+    assert "private backend details" not in caplog.text
