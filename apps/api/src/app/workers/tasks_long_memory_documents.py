@@ -37,6 +37,15 @@ async def _execute(operation_id: str) -> dict:
                 return {"status": "ignored"}
             if operation.status == "running" and operation.updated_at > datetime.now(timezone.utc) - timedelta(seconds=settings.HIPPO_OPERATION_LEASE_SECONDS):
                 return {"status": "running"}
+            if operation.attempts >= settings.HIPPO_OPERATION_MAX_ATTEMPTS:
+                return {"status": "exhausted"}
+            if operation.status == "failed":
+                saved = operation.progress or {}
+                if saved.get("retryable") is False:
+                    return {"status": "failed"}
+                retry_at = saved.get("next_retry_at")
+                if retry_at and datetime.fromisoformat(retry_at) > datetime.now(timezone.utc):
+                    return {"status": "deferred"}
             document = await session.get(RAGDocument, operation.document_id)
             if operation.action == "add" and (document is None or document.long_memory_generation != operation.generation):
                 operation.status = "cancelled"
@@ -104,6 +113,10 @@ async def _execute(operation_id: str) -> dict:
                 operation.status = "failed"
                 operation.error = f"{type(exc).__name__}: {exc}"[:1000]
                 record = {**dict(operation.progress or {}), "status": "failed", "error": operation.error}
+                if record.get("retryable") is not False:
+                    delay = max(settings.HIPPO_OPERATION_RETRY_DELAY_SECONDS,
+                                float(record.get("retry_after_seconds") or 0))
+                    record["next_retry_at"] = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
                 steps = dict(record.get("steps") or {})
                 for key in ("extract", "index"):
                     value = dict(steps.get(key) or {"metrics": {}})

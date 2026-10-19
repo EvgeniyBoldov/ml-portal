@@ -20,7 +20,12 @@ export function adaptDocumentStatusToFlowModel(
     const stage = docStatus.stages[key];
     return {
       key,
-      label: key.charAt(0).toUpperCase() + key.slice(1),
+      label: {
+        upload: 'Загрузка файла',
+        extract: 'Извлечение текста',
+        normalize: 'Нормализация документа',
+        chunk: 'Разбиение на фрагменты',
+      }[key],
       status: getDisplayStatus(stage?.state),
       error: stage?.error,
       metrics: stage?.metrics,
@@ -31,7 +36,7 @@ export function adaptDocumentStatusToFlowModel(
 
   const embeddings = (docStatus.embed_models ?? []).map(item => ({
     key: item.id || item.name,
-    label: item.id || item.name,
+    label: `Векторизация · ${item.name || item.id}`,
     status: getDisplayStatus(item.state),
     version: item.version ?? null,
     error: item.error,
@@ -42,7 +47,7 @@ export function adaptDocumentStatusToFlowModel(
 
   const indexes = (docStatus.index_models ?? []).map(item => ({
     key: item.id || item.name,
-    label: item.id || item.name,
+    label: `Индексирование · ${item.name || item.id}`,
     status: getDisplayStatus(item.state),
     version: item.version ?? null,
     error: item.error,
@@ -60,21 +65,24 @@ export function adaptDocumentStatusToFlowModel(
   }
 
   const memoryKeys: string[] = [];
-  for (const item of docStatus.memory ?? []) {
-    const key = `memory.${item.key}`;
+  for (const memoryKey of ['knowledge', 'graph'] as const) {
+    const item = (docStatus.memory ?? []).find(
+      candidate => candidate.key === memoryKey
+    );
+    const key = `memory.${memoryKey}`;
     memoryKeys.push(key);
     lanes.push({
       key,
       label: 'LongMemory',
       items: [
         {
-          ...item,
+          ...(item ?? {}),
           key,
           label:
-            item.key === 'knowledge'
+            memoryKey === 'knowledge'
               ? 'Извлечение знаний'
               : 'Индекс LongMemory',
-          status: getDisplayStatus(item.status),
+          status: getDisplayStatus(item?.status),
         },
       ],
     });
@@ -82,8 +90,6 @@ export function adaptDocumentStatusToFlowModel(
   return {
     pipeline,
     lanes,
-    ...(memoryKeys.length
-      ? { parallel: { after: 'normalize', laneKeys: memoryKeys } }
-      : {}),
+    parallel: { after: 'normalize', laneKeys: memoryKeys },
   };
 }

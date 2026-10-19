@@ -107,6 +107,15 @@ make env
 - `HIPPO_TIMEOUT_SECONDS=1800` — worker request timeout and capability lifetime
   basis; indexing can take longer than interactive search.
 - `HIPPO_CHUNK_TOKENS=480` — conservative UTF-8 byte limit used by graph chunking.
+- `HIPPO_LLM_MAX_ATTEMPTS=3` — total attempts per LLM request in the HippoRAG
+  container. Temporary transport/provider failures and invalid output use bounded
+  retries; credentials, permissions, unsupported contracts and refusals fail immediately.
+- `HIPPO_LLM_RETRY_BASE_SECONDS=2`, `HIPPO_LLM_RETRY_MAX_SECONDS=30` — exponential
+  retry delay and maximum local wait. Longer provider `Retry-After` delays are
+  deferred to durable operation recovery.
+- `HIPPO_OPERATION_MAX_ATTEMPTS=4` — maximum durable document-operation attempts.
+- `HIPPO_OPERATION_RETRY_DELAY_SECONDS=60` — minimum delay before recovering a
+  failed operation in API/Celery. A longer provider cooldown takes precedence.
 
 Production keeps `/data` in the named volume `hipporag_data` (SQLite corpus,
 graphs, embeddings and extraction cache). There is one graph worker process;

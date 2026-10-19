@@ -1,4 +1,5 @@
 from types import SimpleNamespace as NS
+import json
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -96,6 +97,22 @@ async def test_qwen_settings_use_sdk_extra_body_and_trusted_stage_cap(monkeypatc
     assert kwargs["options"].output_token_cap == 768
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,retryable", [(429, True), (503, True), (401, False), (400, False)])
+async def test_model_callback_preserves_safe_failure_contract(monkeypatch, status, retryable):
+    from app.api.v1.routers import internal_hipporag as gateway
+    from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
+    error = LLMProviderError(code=LLMErrorCode.RATE_LIMITED if retryable else LLMErrorCode.INVALID_REQUEST,
+        safe_message="Safe provider failure", retryable=retryable, status_code=status,
+        retry_after_ms=3000 if retryable else None)
+    monkeypatch.setattr(gateway, "get_llm_client", lambda: NS(chat=AsyncMock(side_effect=error)))
+    result = await gateway.chat(gateway.ChatRequest(messages=[{"role": "user", "content": "query"}]),
+                                {"llm_alias": "system.default"})
+    assert result.status_code == status
+    assert json.loads(result.body)["detail"] == {"code": error.code.value,
+        "message": error.safe_message, "retryable": retryable, "retry_after_ms": error.retry_after_ms}
+
+
 def test_legacy_extractor_cannot_be_run_by_old_automatic_messages(monkeypatch):
     from app.workers import tasks_shadow_document_memory as tasks
     run = Mock()
@@ -130,15 +147,13 @@ def test_native_projection_schema_requires_canonical_rule_content():
 @pytest.mark.parametrize("allowed,member,status", [(False, True, 403), (True, False, 404)])
 async def test_manual_action_checks_permission_and_exact_document_membership(monkeypatch, allowed, member, status):
     from app.api.v1.routers.collections import documents
-    from app.runtime.memory import read_policy
-    from app.workers import tasks_shadow_document_memory as tasks
     collection_id, document_id = uuid4(), uuid4()
-    monkeypatch.setattr(documents, "_resolve_collection", AsyncMock(return_value=NS(tenant_id=uuid4())))
-    monkeypatch.setattr(read_policy, "allowed_source_collections", AsyncMock(return_value=[collection_id] if allowed else []))
+    monkeypatch.setattr(documents, "_resolve_collection", AsyncMock(return_value=NS(tenant_id=uuid4()),
+        side_effect=None if allowed else HTTPException(403, "Access denied")))
     monkeypatch.setattr(documents, "_resolve_document_membership", AsyncMock(return_value=NS(in_collection=member)))
-    dispatch = Mock()
-    monkeypatch.setattr(tasks.shadow_study_rag_document, "delay", dispatch)
+    service = Mock()
+    monkeypatch.setattr(documents, "LongMemoryDocumentService", service)
     with pytest.raises(HTTPException) as error:
-        await documents.extract_legacy_document_memory(collection_id, document_id, AsyncMock(), NS(id=str(uuid4())))
+        await documents.add_document_memory(collection_id, document_id, AsyncMock(), NS(id=str(uuid4())))
     assert error.value.status_code == status
-    dispatch.assert_not_called()
+    service.assert_not_called()

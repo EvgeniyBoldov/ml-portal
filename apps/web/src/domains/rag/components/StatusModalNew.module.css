@@ -1,27 +1,41 @@
 .modal {
-  max-width: 1200px;
-  width: 95vw;
+  display: flex;
+  flex-direction: column;
   max-height: 90vh;
+}
+
+.modalBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: clip;
+  overflow-y: auto;
 }
 
 .container {
   display: flex;
   flex-direction: column;
   gap: 24px;
-  max-height: calc(90vh - 100px);
-  overflow-y: auto;
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .pipelineSection {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  width: max-content;
+  max-width: 100%;
 }
 
 .detailsSection {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  width: 100%;
+  min-width: 0;
 }
 
 .loading,

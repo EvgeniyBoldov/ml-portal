@@ -6,12 +6,17 @@
   place-items: center;
   z-index: 1000;
   padding: var(--space-4);
+  overflow: clip;
   animation: fadeIn var(--transition-fast) ease-out;
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes slideIn {
@@ -103,4 +108,10 @@
 .xl {
   max-width: min(1200px, 95vw);
   width: min(95vw, 1200px);
+}
+
+.fit {
+  width: max-content;
+  max-width: calc(100vw - var(--space-8));
+  min-width: 0;
 }

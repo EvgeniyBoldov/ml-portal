@@ -1,8 +1,9 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import styles from './Modal.module.css';
 import Button from './Button';
 
-type Size = 'md' | 'half' | 'lg' | 'xl';
+type Size = 'md' | 'half' | 'lg' | 'xl' | 'fit';
 
 type Props = {
   open: boolean;
@@ -29,7 +30,7 @@ export default function Modal({
 
   const bodyClasses = [styles.body, bodyClassName].filter(Boolean).join(' ');
 
-  return (
+  return createPortal(
     <div
       className={styles.backdrop}
       onClick={onClose}
@@ -43,6 +44,7 @@ export default function Modal({
           size === 'half' ? styles.half : '',
           size === 'lg' ? styles.large : '',
           size === 'xl' ? styles.xl : '',
+          size === 'fit' ? styles.fit : '',
           className || '',
         ].join(' ')}
         onClick={e => e.stopPropagation()}
@@ -65,6 +67,7 @@ export default function Modal({
         <div className={bodyClasses}>{children}</div>
         {footer && <div className={styles.foot}>{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

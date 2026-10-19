@@ -6,6 +6,8 @@ import hashlib
 import json
 import sqlite3
 import os
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from threading import RLock
@@ -25,6 +27,14 @@ from hipporag.information_extraction import OpenIE
 
 from common import CHUNK_TOKENS, CLIENT, DATA, POOL, Document
 import document_operations as operations
+from model_failures import ModelRequestError, http_failure, model_failure
+
+logger = logging.getLogger(__name__)
+LLM_MAX_ATTEMPTS = int(os.getenv("HIPPO_LLM_MAX_ATTEMPTS", "3"))
+LLM_RETRY_BASE_SECONDS = float(os.getenv("HIPPO_LLM_RETRY_BASE_SECONDS", "2"))
+LLM_RETRY_MAX_SECONDS = float(os.getenv("HIPPO_LLM_RETRY_MAX_SECONDS", "30"))
+if not 1 <= LLM_MAX_ATTEMPTS <= 10 or not 0 < LLM_RETRY_BASE_SECONDS <= LLM_RETRY_MAX_SECONDS:
+    raise ValueError("Invalid HippoRAG LLM retry configuration")
 
 router = APIRouter(prefix="/portal")
 ENGINES: dict[str, HippoRAG] = {}
@@ -65,8 +75,9 @@ class PortalOpenIE(OpenIE):
             return NerRawOutput(chunk_id=chunk_key, response=text,
                 unique_entities=list(dict.fromkeys(entities)), metadata=metadata)
         except Exception as exc:
-            return NerRawOutput(chunk_id=chunk_key, response=text,
-                unique_entities=[], metadata={**metadata, "error": str(exc)})
+            failure = model_failure(exc)
+            raise ModelRequestError(f"NER chunk={chunk_key}: {failure}", code=failure.code,
+                retryable=failure.retryable, retry_after_seconds=failure.retry_after_seconds) from exc
 
     def triple_extraction(self, chunk_key: str, passage: str, named_entities: list[str]) -> TripleRawOutput:
         text, metadata = "", {}
@@ -83,8 +94,9 @@ class PortalOpenIE(OpenIE):
             triples = [triple for triple in triples if all(text_processing(value).strip() for value in triple)]
             return TripleRawOutput(chunk_id=chunk_key, response=text, triples=triples, metadata=metadata)
         except Exception as exc:
-            return TripleRawOutput(chunk_id=chunk_key, response=text,
-                triples=[], metadata={**metadata, "error": str(exc)})
+            failure = model_failure(exc)
+            raise ModelRequestError(f"Triple extraction chunk={chunk_key}: {failure}", code=failure.code,
+                retryable=failure.retryable, retry_after_seconds=failure.retry_after_seconds) from exc
 
     def batch_openie(self, *args, **kwargs):
         ner, triples = super().batch_openie(*args, **kwargs)
@@ -122,7 +134,8 @@ class RetrieveRequest(ExtractRequest):
 def callback(models: Models, operation: str, payload: dict) -> dict:
     response = CLIENT.post(f"{models.callback_url.rstrip('/')}/{operation}", json=payload,
                            headers={"Authorization": "Bearer " + models.token.get_secret_value()})
-    response.raise_for_status()
+    if not response.is_success:
+        raise http_failure(response)
     return response.json()
 
 
@@ -145,7 +158,8 @@ class GatewayLLM(BaseLLM):
         output = min(int(kwargs.get("max_new_tokens", 1536)), 4096)
         prompt = sum(self.tokens(str(message.get("content", ""))) + 32 for message in messages) + 256
         if prompt + output > self.models.context_tokens:
-            raise ValueError("HippoRAG prompt exceeds the selected model context budget")
+            raise ModelRequestError("HippoRAG prompt exceeds the selected model context budget",
+                code="llm_context_window_exceeded", retryable=False)
         schema_model = kwargs.get("_schema_model")
         payload = {"messages": messages, "max_tokens": output}
         if kwargs.get("response_format"):
@@ -158,21 +172,51 @@ class GatewayLLM(BaseLLM):
         root.mkdir(parents=True, exist_ok=True)
         path = root / f"{key}.json"
         if path.exists():
-            saved = json.loads(path.read_text())
             try:
+                saved = json.loads(path.read_text())
                 if schema_model is not None:
                     schema_model.model_validate_json(saved["text"])
                 return saved["text"], saved["metadata"], True
-            except ValueError:
+            except (ValueError, KeyError, TypeError):
                 pass  # Invalid derived entries must be regenerated, never reused.
-        response = callback(self.models, "chat", payload)
-        choice = response["choices"][0]
-        if choice.get("finish_reason") != "stop" or not choice["message"].get("content"):
-            raise ValueError("Incomplete HippoRAG model response")
-        text = choice["message"]["content"]
-        if schema_model is not None:
-            schema_model.model_validate_json(text)
-        metadata = {**response.get("usage", {}), "finish_reason": "stop"}
+        for attempt in range(1, LLM_MAX_ATTEMPTS + 1):
+            try:
+                response = callback(self.models, "chat", dict(payload))
+                choice = response["choices"][0]
+                if choice.get("finish_reason") == "content_filter" or choice["message"].get("refusal"):
+                    raise ModelRequestError("LLM refused extraction", code="llm_refusal", retryable=False)
+                if choice.get("finish_reason") == "length":
+                    next_output = min(payload["max_tokens"] * 2, 4096, self.models.context_tokens - prompt)
+                    can_grow = next_output > payload["max_tokens"]
+                    if can_grow:
+                        payload["max_tokens"] = next_output
+                    raise ModelRequestError("Incomplete HippoRAG model response (output limit)",
+                        code="llm_output_truncated", retryable=can_grow)
+                if choice.get("finish_reason") != "stop" or not choice["message"].get("content"):
+                    raise ModelRequestError("Incomplete HippoRAG model response", code="llm_invalid_output", retryable=True)
+                text = choice["message"]["content"]
+                if schema_model is not None:
+                    schema_model.model_validate_json(text)
+                break
+            except Exception as exc:
+                failure = model_failure(exc)
+                if not failure.retryable or attempt == LLM_MAX_ATTEMPTS:
+                    if failure is exc:
+                        raise
+                    raise failure from exc
+                # Long provider cooldowns belong to durable operation recovery,
+                # rather than blocking this executor or violating Retry-After.
+                if failure.retry_after_seconds > LLM_RETRY_MAX_SECONDS:
+                    if failure is exc:
+                        raise
+                    raise failure from exc
+                delay = max(failure.retry_after_seconds,
+                    min(LLM_RETRY_BASE_SECONDS * 2 ** (attempt - 1), LLM_RETRY_MAX_SECONDS))
+                logger.warning("HippoRAG LLM retry model=%s attempt=%s/%s code=%s delay_s=%s",
+                    self.models.llm_alias, attempt, LLM_MAX_ATTEMPTS, failure.code, delay)
+                time.sleep(delay)
+        metadata = {**response.get("usage", {}), "finish_reason": "stop", "attempts": attempt,
+                    "final_output_limit": payload["max_tokens"]}
         temporary = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
         temporary.write_text(json.dumps({"text": text, "metadata": metadata}, ensure_ascii=False))
         temporary.replace(path)
@@ -689,7 +733,9 @@ def execute_document_command(body: DocumentCommand, action: str) -> None:
         for key, value in record.get("steps", {}).items():
             if value["status"] == "processing":
                 operations.step(key, "failed")
-        operations.update(body.operation_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:1000], finished_at=operations.now())
+        operations.update(body.operation_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:1000],
+            retryable=getattr(exc, "retryable", True), error_code=getattr(exc, "code", None),
+            retry_after_seconds=getattr(exc, "retry_after_seconds", 0), finished_at=operations.now())
     finally:
         operations.CURRENT_OPERATION.reset(token)
 

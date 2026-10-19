@@ -1,6 +1,7 @@
 """Exercise migration, generation fencing and durable deletion on disposable PostgreSQL."""
 import importlib
 import os
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import RAGStatus, Source
 from app.services.long_memory_document_service import LongMemoryDocumentService, document_memory_nodes
+from app.models.long_memory_document import LongMemoryDocumentOperation
+from app.repositories.long_memory_document_repository import LongMemoryDocumentRepository
 
 
 @pytest.mark.asyncio
@@ -69,6 +72,45 @@ async def test_document_operations_survive_source_deletion_and_fence_old_progres
         finally:
             await scoped.dispose()
     finally:
+        async with engine.begin() as connection:
+            await connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not os.getenv('MEMORY_OPERATIONS_TEST_URL'), reason='Disposable PostgreSQL is required')
+async def test_recovery_respects_permanent_failures_cooldown_provider_delay_and_attempt_limit():
+    url = os.environ['MEMORY_OPERATIONS_TEST_URL']
+    schema = 'memory_retry_' + uuid4().hex
+    engine = create_async_engine(url)
+    scoped = create_async_engine(url, connect_args={'server_settings': {'search_path': schema + ',public'}})
+    try:
+        async with engine.begin() as connection:
+            await connection.exec_driver_sql(f'CREATE SCHEMA {schema}')
+        async with scoped.begin() as connection:
+            await connection.run_sync(LongMemoryDocumentOperation.__table__.create)
+        async with async_sessionmaker(scoped, expire_on_commit=False)() as session:
+            from app.core.config import get_settings
+            settings = get_settings()
+            now = datetime.now(timezone.utc)
+            old = now - timedelta(seconds=settings.HIPPO_OPERATION_RETRY_DELAY_SECONDS + 60)
+            def operation(status='failed', progress=None, attempts=1, updated_at=old):
+                row = LongMemoryDocumentOperation(id=uuid4(), document_id=uuid4(), tenant_id=uuid4(),
+                    generation=1, action='add', status=status, attempts=attempts,
+                    progress=progress or {}, payload={}, updated_at=updated_at)
+                session.add(row)
+                return row
+            transient = operation(progress={'retryable': True, 'next_retry_at': old.isoformat()})
+            legacy = operation()
+            pending = operation(status='pending', attempts=0, updated_at=now)
+            operation(progress={'retryable': False})
+            operation(progress={'retryable': True}, updated_at=now)
+            operation(progress={'retryable': True, 'next_retry_at': (now + timedelta(minutes=10)).isoformat()})
+            operation(attempts=settings.HIPPO_OPERATION_MAX_ATTEMPTS)
+            await session.commit()
+            assert set(await LongMemoryDocumentRepository(session).recoverable()) == {transient.id, legacy.id, pending.id}
+    finally:
+        await scoped.dispose()
         async with engine.begin() as connection:
             await connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
         await engine.dispose()

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     HIPPO_CALLBACK_URL: str = Field(default="http://api:8000/api/v1/internal/hipporag")
     HIPPO_OPERATION_LEASE_SECONDS: int = Field(default=60, ge=60, le=3600)
     HIPPO_OPERATION_MAX_ATTEMPTS: int = Field(default=4, ge=1, le=20)
+    HIPPO_OPERATION_RETRY_DELAY_SECONDS: int = Field(default=60, ge=1, le=3600)
     HIPPO_PROGRESS_POLL_SECONDS: float = Field(default=1.0, ge=0.2, le=30)
     HIPPO_TIMEOUT_SECONDS: int = Field(default=1800, ge=30, le=3600)
     DOCLING_URL: str = Field(default="http://docling:5001")

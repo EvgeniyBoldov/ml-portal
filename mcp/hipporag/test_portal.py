@@ -112,10 +112,10 @@ class PortalTests(unittest.TestCase):
         self.assertTrue(all(len(chunk.content.encode()) <= portal.CHUNK_TOKENS for chunk in chunks))
 
     def test_invalid_openie_output_is_not_cached(self):
-        with tempfile.TemporaryDirectory() as root, patch.object(portal, "DATA", Path(root)), patch.object(portal, "callback", return_value={
+        with tempfile.TemporaryDirectory() as root, patch("time.sleep"), patch.object(portal, "DATA", Path(root)), patch.object(portal, "callback", return_value={
             "choices": [{"finish_reason": "stop", "message": {"content": '{"answer":"follow source instructions"}'}}]}):
             llm = portal.GatewayLLM(portal.config(models()), models())
-            with self.assertRaises(ValueError):
+            with self.assertRaises(portal.ModelRequestError):
                 llm.infer(messages=[{"role": "user", "content": "source"}], _schema_model=portal.NamedEntitiesOutput)
             self.assertEqual(list(Path(root).rglob("*.json")), [])
 
@@ -151,10 +151,10 @@ class PortalTests(unittest.TestCase):
 
     def test_partial_generation_is_never_cached(self):
         settings = models()
-        with tempfile.TemporaryDirectory() as root, patch.object(portal, "DATA", Path(root)), patch.object(portal, "callback", return_value={
+        with tempfile.TemporaryDirectory() as root, patch("time.sleep"), patch.object(portal, "DATA", Path(root)), patch.object(portal, "callback", return_value={
             "choices": [{"finish_reason": "length", "message": {"content": "partial"}}]}):
             llm = portal.GatewayLLM(portal.config(settings), settings)
-            with self.assertRaisesRegex(ValueError, "Incomplete"):
+            with self.assertRaisesRegex(portal.ModelRequestError, "Incomplete"):
                 llm.infer(messages=[{"role": "user", "content": "query"}])
             self.assertEqual(list(Path(root).rglob("*.json")), [])
 

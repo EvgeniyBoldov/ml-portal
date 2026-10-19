@@ -36,10 +36,18 @@ class LongMemoryDocumentRepository:
 
     async def recoverable(self, limit: int = 50) -> list[UUID]:
         settings = get_settings()
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.HIPPO_OPERATION_LEASE_SECONDS)
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=settings.HIPPO_OPERATION_LEASE_SECONDS)
+        retry_cutoff = now - timedelta(seconds=settings.HIPPO_OPERATION_RETRY_DELAY_SECONDS)
+        progress = LongMemoryDocumentOperation.progress
         return list((await self.session.scalars(select(LongMemoryDocumentOperation.id).where(
             LongMemoryDocumentOperation.attempts < settings.HIPPO_OPERATION_MAX_ATTEMPTS,
-            or_(LongMemoryDocumentOperation.status.in_(("pending", "failed")),
+            or_(LongMemoryDocumentOperation.status == "pending",
+                (LongMemoryDocumentOperation.status == "failed")
+                & progress["retryable"].as_boolean().is_not(False)
+                & (LongMemoryDocumentOperation.updated_at <= retry_cutoff)
+                & or_(progress["next_retry_at"].as_string().is_(None),
+                      progress["next_retry_at"].as_string() <= now.isoformat()),
                 (LongMemoryDocumentOperation.status == "running") & (LongMemoryDocumentOperation.updated_at < cutoff)),
         ).order_by(LongMemoryDocumentOperation.created_at).limit(limit))).all())
 

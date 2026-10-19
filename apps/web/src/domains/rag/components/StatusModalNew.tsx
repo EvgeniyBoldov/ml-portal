@@ -474,8 +474,9 @@ export function StatusModalNew({
       open={true}
       onClose={onClose}
       title={docName || docStatus?.name || 'Статус документа'}
-      size="xl"
+      size="fit"
       className={styles.modal}
+      bodyClassName={styles.modalBody}
     >
       <div className={styles.container}>
         {/* Pipeline visualization */}

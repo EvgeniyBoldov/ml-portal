@@ -187,3 +187,17 @@ Deployment must copy `document_operations.py`, apply API migration 0192, and upd
 API, Celery, frontend, and this worker together. Encoder changes use the corpus
 reindex flow described above; document additions and removals use managed
 document operations.
+
+Production LLM calls have one bounded retry loop in `GatewayLLM` (SDK automatic
+retries are disabled by the application adapter). `HIPPO_LLM_MAX_ATTEMPTS=3`
+includes the initial call; backoff starts at `HIPPO_LLM_RETRY_BASE_SECONDS=2`
+and is capped by `HIPPO_LLM_RETRY_MAX_SECONDS=30`. Retry-After is respected;
+longer cooldowns are returned to durable operation recovery rather than retried
+early. Invalid/empty structured output is retryable; length truncation increases
+the output cap within the selected context and the 4096-token ceiling, sharing
+the same attempt limit. Credentials/permission errors, unsupported contracts,
+refusals, and context overflow are permanent failures. During local retries the
+extraction step stays processing. Validated successes are cached; failed calls
+are never cached, and partial extraction is never published. Extraction errors
+propagate through native OpenIE futures with their safe cause and chunk/stage,
+instead of allowing the library to replace them with a list of failed chunk IDs.

@@ -7,12 +7,13 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session
 from app.adapters.embeddings import EmbeddingServiceFactory
-from app.adapters.interfaces.llm import LLMCallOptions
+from app.adapters.interfaces.llm import LLMCallOptions, LLMProviderError
 from app.core.di import get_llm_client
 from app.core.redis import get_redis
 from app.services.embedding_model_config_service import EmbeddingModelConfigService
@@ -47,8 +48,13 @@ async def chat(body: ChatRequest, models: dict[str, Any] = Depends(capability)):
         params["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
     if body.response_format:
         params["response_format"] = body.response_format
-    return await get_llm_client().chat(body.messages, model=models["llm_alias"], params=params,
-                                      options=LLMCallOptions(output_token_cap=body.max_tokens, timeout_s=180))
+    try:
+        return await get_llm_client().chat(body.messages, model=models["llm_alias"], params=params,
+                                          options=LLMCallOptions(output_token_cap=body.max_tokens, timeout_s=180))
+    except LLMProviderError as exc:
+        return JSONResponse(status_code=exc.status_code or 502, content={"detail": {
+            "code": exc.code.value, "message": exc.safe_message, "retryable": exc.retryable,
+            "retry_after_ms": exc.retry_after_ms}})
 
 
 @router.post("/embed")

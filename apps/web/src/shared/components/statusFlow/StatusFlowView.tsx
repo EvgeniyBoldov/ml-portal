@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { Icon } from '@shared/ui/Icon';
+import { DocumentDAGView } from './DocumentDAGView';
 
 import type {
   FlowGraphModel,
@@ -21,22 +22,20 @@ const STATUS_COLORS: Record<FlowStatus, string> = {
 
 function FlowNodeButton({
   node,
-  compact = false,
   isControlActive,
   isSelected,
   onClick,
 }: {
   node: FlowNode;
-  compact?: boolean;
   isControlActive: boolean;
   isSelected: boolean;
   onClick: () => void;
 }) {
   const statusColor = STATUS_COLORS[node.status];
   const isActive = node.status === 'processing' || isControlActive;
-  const className = compact ? styles.laneNode : styles.nodeButton;
-  const iconClass = compact ? styles.laneIcon : styles.nodeIcon;
-  const labelClass = compact ? styles.laneName : styles.nodeLabel;
+  const className = styles.nodeButton;
+  const iconClass = styles.nodeIcon;
+  const labelClass = styles.nodeLabel;
 
   return (
     <button
@@ -44,14 +43,24 @@ function FlowNodeButton({
       onClick={onClick}
       style={{ '--status-color': statusColor } as React.CSSProperties}
     >
-      <div className={iconClass}>
-        <Icon name={getStatusIcon(node.status)} size={compact ? 16 : 20} />
+      <div className={`${iconClass} ${isActive ? styles.rotating : ''}`}>
+        <Icon name={getStatusIcon(node.status)} size={20} />
       </div>
-      <div className={labelClass}>{node.label}</div>
-      {!compact ? <div className={styles.nodeStatus}>{node.status}</div> : null}
+      <div className={labelClass} title={node.label}>
+        {node.label}
+      </div>
+      <div className={styles.nodeStatus}>{STATUS_LABELS[node.status]}</div>
     </button>
   );
 }
+
+const STATUS_LABELS: Record<FlowStatus, string> = {
+  pending: 'В ожидании',
+  queued: 'В очереди',
+  processing: 'Выполняется',
+  completed: 'Завершено',
+  failed: 'Ошибка',
+};
 
 function FlowConnector({ status }: { status: FlowStatus }) {
   const color = STATUS_COLORS[status];
@@ -170,65 +179,14 @@ export function StatusFlowView({
   const showLanes = lanes.length > 0 && maxItems > 0;
 
   if (model.parallel) {
-    const split =
-      model.pipeline.findIndex(node => node.key === model.parallel?.after) + 1;
-    const branchLanes = lanes.filter(lane =>
-      model.parallel?.laneKeys.includes(lane.key)
-    );
-    const ragLanes = lanes.filter(
-      lane => !model.parallel?.laneKeys.includes(lane.key)
-    );
     return (
-      <div className={styles.parallelLayout}>
-        <StatusFlowView
-          model={{ pipeline: model.pipeline.slice(0, split) }}
-          activeStageSlugs={activeStageSlugs}
-          selection={selection}
-          onSelect={onSelect}
-          showLegend={false}
-        />
-        <div className={styles.parallelBranches}>
-          <div className={styles.branchRow}>
-            <span>RAG</span>
-            <StatusFlowView
-              model={{ pipeline: model.pipeline.slice(split), lanes: ragLanes }}
-              activeStageSlugs={activeStageSlugs}
-              selection={selection}
-              onSelect={onSelect}
-              showLegend={false}
-            />
-          </div>
-          <div className={styles.branchRow}>
-            <span>LongMemory</span>
-            <div className={styles.mainRow}>
-              {branchLanes.map((lane, index) =>
-                lane.items.map(node => (
-                  <React.Fragment key={node.key}>
-                    {index > 0 ? (
-                      <FlowConnector
-                        status={branchLanes[index - 1].items[0].status}
-                      />
-                    ) : null}
-                    <FlowNodeButton
-                      node={node}
-                      compact
-                      isControlActive={activeSet.has(node.key)}
-                      isSelected={selection.nodeKey === node.key}
-                      onClick={() =>
-                        onSelect({
-                          nodeKey: node.key,
-                          laneKey: lane.key,
-                          itemKey: node.key,
-                        })
-                      }
-                    />
-                  </React.Fragment>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      <DocumentDAGView
+        model={model}
+        activeSet={activeSet}
+        selection={selection}
+        onSelect={onSelect}
+        showLegend={showLegend}
+      />
     );
   }
 
@@ -269,9 +227,7 @@ export function StatusFlowView({
               <div
                 className={styles.lanesHeader}
                 style={{
-                  gridTemplateColumns: lanes
-                    .map(() => 'minmax(120px, auto)')
-                    .join(' 48px '),
+                  gridTemplateColumns: lanes.map(() => '208px').join(' 48px '),
                 }}
               >
                 {lanes.map((lane, index) => (
@@ -284,9 +240,7 @@ export function StatusFlowView({
               <div
                 className={styles.lanesGrid}
                 style={{
-                  gridTemplateColumns: lanes
-                    .map(() => 'minmax(120px, auto)')
-                    .join(' 48px '),
+                  gridTemplateColumns: lanes.map(() => '208px').join(' 48px '),
                 }}
               >
                 {Array.from({ length: maxItems }).map((_, rowIndex) => (
@@ -305,7 +259,6 @@ export function StatusFlowView({
                           {item ? (
                             <FlowNodeButton
                               node={item}
-                              compact
                               isControlActive={activeSet.has(item.key)}
                               isSelected={
                                 selection.nodeKey === item.key &&
@@ -349,7 +302,9 @@ export function StatusFlowView({
                 className={styles.legendDot}
                 style={{ backgroundColor: STATUS_COLORS[status] }}
               />
-              <span className={styles.legendLabel}>{status}</span>
+              <span className={styles.legendLabel}>
+                {STATUS_LABELS[status]}
+              </span>
             </div>
           ))}
         </div>

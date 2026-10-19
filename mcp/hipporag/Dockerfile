@@ -13,6 +13,7 @@ COPY mcp/hipporag/server.py /worker/server.py
 COPY mcp/hipporag/common.py /worker/common.py
 COPY mcp/hipporag/portal.py /worker/portal.py
 COPY mcp/hipporag/document_operations.py /worker/document_operations.py
+COPY mcp/hipporag/model_failures.py /worker/model_failures.py
 COPY mcp/hipporag/worker.py /worker/worker.py
 RUN python -c "from hipporag import HippoRAG; import worker"
 RUN mkdir -p /data && chown appuser:appuser /data
