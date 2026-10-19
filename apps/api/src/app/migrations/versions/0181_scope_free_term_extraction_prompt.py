@@ -4,9 +4,6 @@ import json
 from alembic import op
 import sqlalchemy as sa
 
-from app.runtime.memory.shadow_study_prompts import SHADOW_DOCUMENT_STUDY_PROMPT
-from app.services.v3_role_defaults import DOCUMENT_MEMORY_EXTRACTOR_V1
-
 revision = "0181"
 down_revision = "0180"
 branch_labels = None
@@ -14,6 +11,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Load application defaults only when this migration is executed. Alembic
+    # imports every revision while resolving `heads`; importing runtime here at
+    # module load initializes production settings and unrelated adapters.
+    from app.runtime.memory.shadow_study_prompts import SHADOW_DOCUMENT_STUDY_PROMPT
+    from app.services.v3_role_defaults import DOCUMENT_MEMORY_EXTRACTOR_V1
+
     op.drop_constraint("fk_glossary_terms_approved_candidate", "glossary_terms", type_="foreignkey")
     op.alter_column("glossary_terms", "approved_candidate_id", existing_type=sa.UUID(), nullable=True)
     op.create_foreign_key("fk_glossary_terms_approved_candidate", "glossary_terms",
