@@ -16,6 +16,10 @@ class UploadDescriptor:
     size_bytes: int
 
 
+class ChatUploadTooLargeError(UploadValidationError):
+    """Chat upload exceeds its configured byte limit."""
+
+
 class UploadIntakePolicy:
     """Central intake policy for user-uploaded files."""
 
@@ -208,6 +212,30 @@ class UploadIntakePolicy:
             size_bytes=size_bytes,
         )
 
+    @staticmethod
+    def validate_chat_content(content: bytes, *, extension: str) -> None:
+        """Check container signatures before accepting files into chat storage."""
+        import io
+        import zipfile
+
+        if content.startswith((b"MZ", b"\x7fELF")):
+            raise UploadValidationError("Executable file content is not allowed")
+        if extension == "pdf" and b"%PDF-" not in content[:1024]:
+            raise UploadValidationError("File content does not match PDF format")
+        if extension in {"docx", "xlsx"}:
+            expected = "word/document.xml" if extension == "docx" else "xl/workbook.xml"
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                    if expected not in archive.namelist():
+                        raise UploadValidationError("File content does not match Office format")
+            except zipfile.BadZipFile as exc:
+                raise UploadValidationError("Invalid Office document container") from exc
+        if extension in {"doc", "xls"} and not content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+            raise UploadValidationError("File content does not match legacy Office format")
+        if extension in {"txt", "md", "csv", "log"} and b"\0" in content[:8192]:
+            if not content.startswith((b"\xff\xfe", b"\xfe\xff")):
+                raise UploadValidationError("Binary content does not match text format")
+
     @classmethod
     def _validate_common(cls, *, filename: str, size_bytes: int) -> str:
         normalized_filename = (filename or "").strip()
@@ -231,7 +259,7 @@ class UploadIntakePolicy:
         if size_bytes <= 0:
             raise UploadValidationError("Uploaded file is empty")
         if size_bytes > max_bytes:
-            raise UploadValidationError(
+            raise ChatUploadTooLargeError(
                 f"Uploaded file exceeds max size of {max_bytes} bytes"
             )
         return normalized_filename

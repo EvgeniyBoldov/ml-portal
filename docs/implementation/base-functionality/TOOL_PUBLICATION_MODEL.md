@@ -1,97 +1,37 @@
-# Tool Publication Model
+# Tool Publication and Resolution
 
-## Purpose
+## Current model
 
-This document defines how raw discovered capabilities become agent-visible runtime operations.
+Provider discovery and runtime execution are separate surfaces:
 
-Target model:
-- `DiscoveredTool` = raw capability artifact
-- `Tool` = publication container
-- `ToolRelease` = curated semantic/runtime version
-- `Operation` = final instance-scoped runtime action
+- `DiscoveredTool` stores an active capability snapshot from a provider.
+- `Tool` and `ToolRelease` provide optional curated catalog and execution
+  metadata; their existence does not gate an active provider capability.
+- `ResolvedOperation` is an internal execution contract for one resolved
+  collection/provider target.
+- The LLM-facing contract is a tool descriptor with name, description, and
+  input schema.
 
-`ToolResolver` is the prompt/runtime assembly layer for this chain.
+## Resolution flow
 
-## Core Rule
+1. A provider refreshes its discovered tool snapshot.
+2. The collection resolver selects the provider bound to the requested
+   collection and loads its active tools.
+3. Platform collection defaults are added where applicable.
+4. The runtime resolver applies collection compatibility, permissions,
+   credentials, and readiness, then builds internal execution bindings.
+5. Prompt assembly projects the available actions as callable tool schemas.
+6. A tool call is mapped back to its resolved internal binding for execution.
 
-Discovery inventory is broader than runtime vocabulary.
+Provider-specific URLs, credentials, persistence IDs, and execution bindings do
+not enter the model-facing contract. Collection calls use `collection_slug` as
+the public collection selector.
 
-Therefore:
-- not every `DiscoveredTool` becomes a `Tool`,
-- not every discovered capability is globally published,
-- agent never consumes raw discovery output directly.
+## Sandbox
 
-## Publication Pipeline
+Sandbox branches use the same provider-first resolution and tool projection as
+normal runtime. Branch overrides may affect registered runtime-safe values, but
+do not create a separate discovery or publication model.
 
-1. Discovery refreshes `DiscoveredTool`.
-2. Capability may remain unpublished.
-3. Admin may review it as a draft candidate.
-4. If accepted, capability is linked to a `Tool`.
-5. `ToolRelease` provides semantic/runtime metadata.
-6. Publication rules map raw capability into canonical operation meaning.
-7. Runtime builds instance-scoped `Operation`.
-
-## Entity Roles
-
-### `DiscoveredTool`
-- raw source/provider artifact
-- stores input/output contract and source linkage
-- may exist without any published runtime representation
-
-### `Tool`
-- stable business/publication container
-- groups semantic releases
-- keeps active release pointer
-
-### `ToolRelease`
-- semantic/runtime source of truth
-- stores safety, execution, routing, and LLM-facing metadata
-
-### `OperationSpec`
-- canonical operation meaning
-- stable product vocabulary independent from provider-native naming
-
-### `PublicationRule`
-- deterministic mapping from raw capability + context to canonical operation
-
-### `Operation`
-- final runtime action visible to agent and policy
-
-## Identity Rules
-
-1. Raw discovery identity:
-- `(source, provider_instance_id, discovered_tool.slug)`
-
-2. Publication container identity:
-- `tool.slug`
-
-3. Semantic version identity:
-- `tool_release.version`
-
-4. Runtime action identity:
-- `operation_slug = instance.<instance_slug>.<canonical_op_slug>`
-
-Important rule:
-- raw discovered identity must not become final planner vocabulary.
-
-## Sandbox Rule
-
-Sandbox may:
-- override effective `ToolRelease` fields,
-- temporarily publish an unpublished `DiscoveredTool` as a draft candidate,
-- build a branch-local effective published set.
-
-Sandbox may not:
-- mutate raw discovery contracts,
-- redefine execution adapters,
-- create a second global publication registry.
-
-## Deterministic Source Of Truth
-
-Runtime should assemble operations from one clear split:
-- raw contract from `DiscoveredTool`,
-- curated semantics from effective `ToolRelease`,
-- canonical meaning from `OperationSpec` + `PublicationRule`,
-- instance binding from resolver.
-
-This removes semantic duplication and keeps publication reviewable.
+See [Canonical Tool Flow](../../refactor/canonical-tool-flow.md) for the
+collection/provider resolver boundaries.

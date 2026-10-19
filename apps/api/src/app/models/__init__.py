@@ -182,3 +182,6 @@ __all__ = [
     "RuntimeTaskAttempt", "RuntimeToolResult",
     "RuntimePause",
 ]
+
+from .long_memory_document import LongMemoryDocumentOperation
+from .runtime_context import ChatArtifactRepresentation, RuntimeRunContext

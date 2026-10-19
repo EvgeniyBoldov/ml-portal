@@ -81,7 +81,7 @@ class MechanicalLookupService:
                      *(row.aliases or []), *linked.get(row.id, [])}
             matched = _matches(request_text, {str(value).strip().casefold() for value in forms if str(value).strip()})
             if matched:
-                candidates.append({"id": str(row.id), "key": row.key, "type": row.scope_type,
+                candidates.append({"id": str(row.id), "key": row.key, "type": "scope",
                                    "name": row.name, "aliases": list(row.aliases or []),
                                    "matched_forms": matched, "is_all": row.is_all})
         candidates.sort(key=lambda item: (0 if item["key"].casefold() in item["matched_forms"] else 1,
@@ -89,7 +89,7 @@ class MechanicalLookupService:
         ceiling = set(scope_ceiling_keys or [])
         if scope_ceiling_keys is not None:
             candidates = [item for item in candidates if item["key"] in ceiling]
-            matched_projects = [item for item in matched_projects if f"project.{item['key']}" in ceiling]
+            matched_projects = [item for item in matched_projects if item["key"] in ceiling]
         return {
             "projects": matched_projects[:6], "glossary": matched_terms[:12], "entities": [],
             "scope_candidates": candidates[:40],

@@ -30,6 +30,7 @@ from .facts import router as facts_router
 from .semantic_memory import router as semantic_memory_router
 from .agent_runs import router as agent_runs_router
 from .memory_jobs import router as memory_jobs_router
+from .long_memory import router as long_memory_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -58,6 +59,7 @@ router.include_router(projects_router, tags=["projects"])
 router.include_router(glossary_router, tags=["glossary"])
 router.include_router(facts_router, tags=["facts"])
 router.include_router(semantic_memory_router, tags=["semantic-memory"])
+router.include_router(long_memory_router, prefix="/memory/long-memory", tags=["long-memory-admin"])
 router.include_router(agent_runs_router, prefix="/agent-runs", tags=["agent-runs"])
 router.include_router(memory_jobs_router, prefix="/memory-jobs", tags=["memory-jobs"])
 

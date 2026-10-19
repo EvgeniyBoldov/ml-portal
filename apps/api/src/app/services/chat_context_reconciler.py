@@ -124,6 +124,8 @@ class ChatContextReconciler:
                     previous = dict(existing.payload or {})
                     payload = {
                         **payload,
+                        "scope_mode": previous.get("scope_mode", "inherit"),
+                        "suppress_scope_default": bool(previous.get("suppress_scope_default")),
                         "team_keys": list(previous.get("team_keys") or []),
                         "suppress_team_default": bool(previous.get("suppress_team_default")),
                         "project_keys": list(previous.get("project_keys") or []),

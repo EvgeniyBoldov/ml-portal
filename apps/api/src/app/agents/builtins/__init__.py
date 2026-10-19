@@ -48,6 +48,7 @@ def register_builtins() -> None:
     import app.agents.builtins.result_analyze  # noqa: F401
     import app.agents.builtins.calculator  # noqa: F401
     import app.agents.builtins.file_generate  # noqa: F401
+    import app.agents.builtins.chat_history  # noqa: F401
     import app.agents.builtins.file_read  # noqa: F401
     import app.agents.builtins.file_list  # noqa: F401
     import app.agents.builtins.file_delete  # noqa: F401

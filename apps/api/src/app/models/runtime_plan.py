@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Index
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Index, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,8 +28,8 @@ class RuntimePlan(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
     contract_version: Mapped[int] = mapped_column(Integer, nullable=False, default=2, server_default="2")
     last_failure: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
-    scope_context: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="'{}'::jsonb")
-    memory_context: Mapped[list[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default="'[]'::jsonb")
+    scope_context: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    memory_context: Mapped[list[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
 
@@ -62,7 +62,7 @@ class RuntimePlanTask(Base):
     __table_args__ = (
         UniqueConstraint("plan_id", "task_id", name="uq_runtime_plan_task_id"),
         Index("ix_runtime_plan_tasks_ready", "iteration_id", "status"),
-        CheckConstraint("status IN ('pending', 'running', 'waiting_retry', 'waiting_confirmation', 'completed', 'needs_dependency', 'unfulfillable', 'failed', 'blocked', 'cancelled')", name="ck_runtime_task_status"),
+        CheckConstraint("status IN ('pending', 'running', 'waiting_retry', 'waiting_input', 'waiting_confirmation', 'completed', 'needs_dependency', 'unfulfillable', 'failed', 'blocked', 'cancelled')", name="ck_runtime_task_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -76,9 +76,11 @@ class RuntimePlanTask(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     inputs: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     expected_outputs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    compiled_contract: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="'{}'::jsonb")
-    scope_context: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="'{}'::jsonb")
+    compiled_contract: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    scope_context: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     freshness_policy: Mapped[str] = mapped_column(String(32), nullable=False, default="allow_memory")
+    continuation_of: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    memory_context: Mapped[Optional[list[Dict[str, Any]]]] = mapped_column(JSONB, nullable=True, default=list, server_default=text("'[]'::jsonb"))
     result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

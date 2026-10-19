@@ -153,22 +153,20 @@ Binding rule:
 
 ## 7. Pause / Resume Flow
 
-Flow:
-1. Runtime stops on a task-local `waiting_confirmation` or a root-level
-   TurnPreflight `waiting_input` clarification.
-2. Confirmation fingerprint stays in the runtime plan; root clarification
-   context is persisted in `chat_turn` without a plan.
-3. User answers a clarification or confirms/rejects that exact operation.
-4. A clarification resumes the root turn at mechanical lookup and
-   TurnPreflight without creating a plan. Confirmation resumes the same
-   selected task; rejection is recorded as a
-   `cancelled` task with the runtime-owned `confirmation_rejected` limitation
-   and triggers the planner checkpoint.
+1. The runtime persists a typed interaction with its requester and checkpoint.
+   TurnPreflight pauses in the root turn; planner and task-agent interactions
+   also live in `runtime_pauses` under the existing plan.
+2. The user sends the current interaction ID and a typed `response` (text or
+   boolean), or cancels the run. Invalid/stale responses cannot consume a pause.
+3. Runtime adds the answer to the saved requester context and resumes that
+   checkpoint. Planner/task continuation bypasses TurnPreflight; completed tasks
+   and prior tool results remain intact.
+4. An approved operation obtains a signed token for its exact saved fingerprint.
+   A negative answer rejects it and reaches the planner as
+   `confirmation_rejected`. Cancellation ends the run and paused plan.
 
-Binding rule:
-- pause/resume is part of the chat execution contract,
-- a TurnPreflight clarification is a root interaction, never a paused plan or
-  a synthetic agent task.
+The chat and sandbox share this mechanism and answer envelope. Details are in
+[Runtime Interactions](./RUNTIME_INTERACTIONS.md).
 
 ## 8. Why This Document Exists
 
@@ -188,11 +186,13 @@ Flow:
    `clarify` decision. A `tool_call` invokes the registered `memory.search`
    operation and returns its result to TurnPreflight within the bounded tool
    loop. It provides a `SynthesisBrief`, `TaskBrief` or one clarification
-   question for the corresponding terminal route.
+   question for the corresponding terminal route. Clarifications and
+   confirmations use the persisted interaction contract in
+   [Runtime Interactions](./RUNTIME_INTERACTIONS.md), which resumes the
+   requesting preflight, planner iteration or agent task.
 3. `synthesis` invokes Synthesizer directly. `planner` invokes GraphPlanner.
 4. Planner and agents use canonical scoped memory operations themselves;
-   planner decides which recalled rules, processes and facts are relevant to
-   the plan. Planner input receives a compact projection of retrieved passages,
+   planner decides which retrieved documents are relevant to the plan. Chat scope slugs are application-owned; memory.search returns one independent group per scope. Planner input receives a compact projection of retrieved passages,
    without nested duplicate copies of the same memory result.
 5. Planned synthesis uses task reports, task sources and runtime artifacts as
    its evidence. Raw search history is available to planned synthesis only for

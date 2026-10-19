@@ -73,7 +73,9 @@ export interface ChatPausedRun {
 
 /** Restore the current interaction after navigation or a page refresh. */
 export async function getPausedRun(chatId: string) {
-  return apiRequest<{ pause: ChatPausedRun | null }>(`/chats/${chatId}/paused-run`);
+  return apiRequest<{ pause: ChatPausedRun | null }>(
+    `/chats/${chatId}/paused-run`
+  );
 }
 
 export async function sendMessage(
@@ -87,11 +89,17 @@ export async function sendMessage(
   });
 }
 
-export async function issueConfirmationToken(chatId: string, operationFingerprint: string) {
-  return apiRequest<{ token: string; expires_at: string }>(`/chats/${chatId}/confirm`, {
-    method: 'POST',
-    body: JSON.stringify({ operation_fingerprint: operationFingerprint }),
-  });
+export async function issueConfirmationToken(
+  chatId: string,
+  operationFingerprint: string
+) {
+  return apiRequest<{ token: string; expires_at: string }>(
+    `/chats/${chatId}/confirm`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ operation_fingerprint: operationFingerprint }),
+    }
+  );
 }
 
 export async function renameChat(chat_id: string, name: string) {
@@ -103,9 +111,12 @@ export async function renameChat(chat_id: string, name: string) {
 }
 
 export async function generateChatTitle(chatId: string) {
-  return apiRequest<{ title: string | null; generated: boolean }>(`/chats/${chatId}/title-generation`, {
-    method: 'POST',
-  });
+  return apiRequest<{ title: string | null; generated: boolean }>(
+    `/chats/${chatId}/title-generation`,
+    {
+      method: 'POST',
+    }
+  );
 }
 
 export async function updateChatTags(chat_id: string, tags: string[]) {
@@ -136,13 +147,19 @@ export async function resetChatContext(chatId: string) {
 /** Resume a paused run (confirm/cancel/input action) - returns Response for SSE streaming */
 export async function resumeRunStream(
   runId: string,
-  action: 'confirm' | 'cancel' | 'input',
-  input?: string,
+  action: 'confirm' | 'cancel' | 'input' | 'answer',
+  input?: string | boolean,
   signal?: AbortSignal,
+  pauseId?: string | null,
+  hasInteraction = false
 ): Promise<Response> {
   const { fetchStreamWithAuth } = await import('@/shared/api/streamAuth');
-  const body: Record<string, string> = { action };
-  if (action === 'input' && input) {
+  const body: Record<string, unknown> = { action };
+  if (pauseId) body.pause_id = pauseId;
+  if ((hasInteraction || action === 'answer') && action !== 'cancel') {
+    body.action = 'answer';
+    body.response = action === 'confirm' ? true : input;
+  } else if (action === 'input' && input) {
     body.input = input;
   }
   return fetchStreamWithAuth(`/chats/runs/${runId}/resume`, {

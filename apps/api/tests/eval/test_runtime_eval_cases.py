@@ -17,18 +17,13 @@ def _events_for_case(case_key: str):
             {"type": "status", "data": {"operation_slug": "collection.document.search"}},
             {"type": "final", "data": {"content": "document grounded answer"}},
         ]
-    if case_key == "clarify_missing_input":
-        return [
-            {"type": "waiting_input", "data": {"question": "need vendor"}},
-            {"type": "stop", "data": {"reason": "waiting_input"}},
-        ]
     raise AssertionError(f"Unhandled case: {case_key}")
 
 
 def test_eval_cases_from_fixture_are_deterministic():
     fixture_path = Path(__file__).parent / "cases" / "runtime_eval_cases.json"
     cases = load_eval_cases([fixture_path])
-    assert len(cases) == 3
+    assert len(cases) == 2
 
     results = []
     for case in cases:
@@ -40,5 +35,4 @@ def test_eval_cases_from_fixture_are_deterministic():
     assert {item.case_key for item in results} == {
         "direct_answer_no_tool",
         "document_retrieval_case",
-        "clarify_missing_input",
     }

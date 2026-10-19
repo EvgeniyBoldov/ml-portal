@@ -8,6 +8,7 @@ def test_build_paused_from_stop_waiting_confirmation_contains_canonical_fields()
             "run_id": "r-1",
             "question": "Apply changes?",
             "operation_fingerprint": "fp-1",
+            "action": {"type": "resume"},
         }
     )
 
@@ -15,7 +16,7 @@ def test_build_paused_from_stop_waiting_confirmation_contains_canonical_fields()
     assert payload["reason"] == "waiting_confirmation"
     assert payload["run_id"] == "r-1"
     assert payload["action"]["kind"] == "confirm"
-    assert payload["action"]["type"] == "resume"
+    assert "type" not in payload["action"]
     assert payload["action"]["operation_fingerprint"] == "fp-1"
     assert payload["context"]["contract_version"] == 1
 

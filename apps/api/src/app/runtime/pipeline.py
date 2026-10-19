@@ -51,6 +51,7 @@ from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdent
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
+from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction, interaction_from_context, require_interaction_allowed
 from app.runtime.input_builders import compact_memory_tool_records
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
@@ -81,7 +82,7 @@ async def _turn_scope_context(session, parent: EffectiveScopeContext, decision: 
     resolve_keys = list(dict.fromkeys([*selection.keys, *selection.mentioned_keys]))
     rows = await resolve_memory_scopes(session, resolve_keys) if resolve_keys else []
     previous = {item.key: item for item in parent.selected}
-    identities = {row.key: ScopeIdentity(id=str(row.id), key=row.key, type=row.scope_type,
+    identities = {row.key: ScopeIdentity(id=str(row.id), key=row.key, type="scope",
                  name=row.name, source="turn",
                  matched_forms=next((item.get("matched_forms", []) for item in lookup.get("scope_candidates", [])
                                      if item.get("key") == row.key), [])[:12],
@@ -97,27 +98,22 @@ async def _turn_scope_context(session, parent: EffectiveScopeContext, decision: 
 
 def _project_context_payload(context: EffectiveScopeContext, base: dict[str, Any]) -> dict[str, Any]:
     origins = {item.key: item.source for item in context.selected}
-    project_keys = [item.key.removeprefix("project.") for item in context.selected
-                    if item.type == "project" and item.key != "project.all"]
     selected_turn = [item for item in context.selected if item.source == "turn"]
-    focus_projects = [item.key.removeprefix("project.") for item in context.selected
-                      if item.type == "project" and item.source in {"turn", "chat_focus"} and item.key != "project.all"]
     scope_source = "turn" if any(item.source == "turn" for item in context.selected) else \
                    "chat_context" if any(item.source == "chat_focus" for item in context.selected) else \
                    "user_default" if any(item.source in {"user_default", "user_project_default"} for item in context.selected) else \
                    "tenant_default" if context.selected else "none"
     return {**base, "execution_context": memory_execution_context(context.keys, revision=context.revision),
             "effective_scope_keys": context.keys,
-            "effective_team_keys": [item.key.removeprefix("team.") for item in context.selected if item.type == "team"],
-            "effective_project_keys": project_keys, "explicit_project_keys": focus_projects,
+            "effective_team_keys": [],
+            "effective_project_keys": [], "explicit_project_keys": [],
             "explicit_scope_keys": [item.key for item in selected_turn],
             "scope_origins": origins, "scope_revision": context.revision,
             "scope_context": context.model_payload(), "scope_ceiling_keys": context.ceiling_keys,
             "mentioned_scope_keys": [item.key for item in context.mentioned],
             "scope_selection_explicit": context.mode == "replace" or any(item.source == "turn" for item in context.selected),
-            "suppress_team_default": context.explicit_clear or base.get("suppress_team_default", False) or (context.mode == "replace" and not any(item.type == "team" for item in context.selected)),
-            "suppress_project_default": context.explicit_clear or base.get("suppress_project_default", False)
-                                        or (context.mode == "replace" and not project_keys),
+            "suppress_scope_default": context.explicit_clear,
+            "suppress_team_default": False, "suppress_project_default": False,
             "source": "explicit" if scope_source == "turn" else scope_source,
             "scope_source": scope_source}
 
@@ -130,7 +126,7 @@ def _recent_dialogue(messages: list[dict[str, Any]], *, limit: int = 8, max_char
             continue
         content = str(message.get("content") or "").strip()
         if content:
-            result.append({"role": str(message["role"]), "content": content[:max_chars]})
+            result.append({**({"message_id": str(message["message_id"])} if message.get("message_id") else {}), "role": str(message["role"]), "content": content[:max_chars]})
     return result
 
 
@@ -215,6 +211,18 @@ def _build_continuation_state(
         "paused_context": paused_context,
         "user_response": str(checkpoint.get("user_input") or request.request_text or "").strip(),
     }
+    if "interaction_response" in checkpoint:
+        structured["interaction_response"] = checkpoint["interaction_response"]
+    history = [dict(item) for item in paused_context.get("clarification_history", []) if isinstance(item, dict)]
+    interaction = interaction_from_context(paused_context)
+    if interaction is not None and "interaction_response" in checkpoint:
+        history.append({"question": interaction.question, "answer": checkpoint["interaction_response"]})
+    elif structured["resume_action"] == "input":
+        question = str(paused_context.get("question") or paused_action.get("question") or "").strip()
+        if question and structured["user_response"]:
+            history.append({"question": question, "answer": structured["user_response"]})
+    if history:
+        structured["clarification_history"] = history
     source_snapshot = checkpoint.get("source_context_snapshot")
     if isinstance(source_snapshot, dict) and source_snapshot:
         structured["source_context_snapshot"] = source_snapshot
@@ -332,6 +340,7 @@ class RuntimePipeline:
         tenant_id = UUID(request.tenant_id)
 
         platform = await PlatformConfigLoader(self._session).load()
+        ctx.extra.setdefault("interaction_policy", dict(platform.config.get("interaction_policy") or {}))
         resume_checkpoint = _extract_resume_checkpoint(request)
         effective_goal = _extract_effective_goal(request, resume_checkpoint)
         continuation_state = _build_continuation_state(request, resume_checkpoint)
@@ -392,7 +401,6 @@ class RuntimePipeline:
             if request.chat_context_snapshot is not None
             else {"chat_id": chat_id, "sandbox_branch_id": branch_id, "revision": 0}
         )
-        scope_payload = chat_context.get("focus") if isinstance(chat_context.get("focus"), dict) else chat_context.get("scope") if isinstance(chat_context.get("scope"), dict) else {}
         base_scope_context = await _base_scope_context(
             self._session, chat_context=chat_context,
             user_id=user_id, tenant_id=tenant_id,
@@ -400,21 +408,17 @@ class RuntimePipeline:
         project_context = await ProjectContextResolver(self._session).resolve(
             request_text=effective_user_query,
             facts=[],  # Explicit profile preferences are the sole source of defaults.
-            chat_project_keys=[item.key.removeprefix("project.") for item in base_scope_context.selected
-                               if item.type == "project" and item.source == "chat_focus"],
+            chat_project_keys=[],
         )
-        project_payload = {**project_context.as_dict(), "default_project_keys": [
-            item.key.removeprefix("project.") for item in base_scope_context.selected
-            if item.type == "project" and item.source in {"user_default", "tenant_default"}
-        ]}
-        turn_mem.project_context = {**_project_context_payload(base_scope_context, project_payload),
-                                    "explicit_scope_keys": [],
-                                    "suppress_project_default": bool(scope_payload.get("suppress_project_default")),
-                                    "suppress_team_default": bool(scope_payload.get("suppress_team_default"))}
+        turn_mem.project_context = {
+            **_project_context_payload(base_scope_context, project_context.as_dict()),
+            "explicit_scope_keys": [],
+        }
         # The typed context is visible to planner/task construction and is
         # also the authoritative default for agent memory.search calls.
         turn_mem.planner_memory_context.append({"type": "project_context", **turn_mem.project_context})
         turn_mem.planner_memory_context.append({"type": "chat_context", **chat_context})
+        ctx.extra["memory_search_scope_keys"] = turn_mem.project_context["scope_context"]["keys"]
         ctx.extra["project_context"] = turn_mem.project_context
         ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
 
@@ -453,6 +457,19 @@ class RuntimePipeline:
             attachment_contexts=list(request.attachments or []),
             continuation=continuation_state,
         )
+        from app.runtime.run_context import RunContext
+        from app.services.runtime_run_context_service import RuntimeRunContextService
+        saved_context = None
+        if continuation_state and request.chat_id:
+            saved_context = await RuntimeRunContextService(self._session).load(
+                run_id=str(run_id), chat_id=request.chat_id, owner_id=request.user_id, branch_id=branch_id, tenant_id=request.tenant_id)
+        runtime_state.run_context = saved_context or RunContext(
+            original_request=request.request_text, goal=effective_goal,
+            artifact_descriptions={item["artifact_id"]: item.get("description", "")
+                for item in chat_context.get("artifacts", []) if item.get("artifact_id")},
+            chat_snapshot=chat_context, recent_dialogue=_recent_dialogue(list(request.messages or [])))
+        ctx.extra["runtime_turn_state"] = runtime_state
+        ctx.extra["runtime_branch_id"] = branch_id
         runtime_state.execution_mode = execution_mode
         run_id_str = str(run_id)
         sandbox_run = bool((request.sandbox_overrides or {}).get("sandbox_run_id"))
@@ -547,81 +564,107 @@ class RuntimePipeline:
             ),
             phase=OrchestrationPhase.PIPELINE,
         )
+        answered_interaction = interaction_from_context(continuation_state.get("paused_context"))
+        if answered_interaction is not None and "interaction_response" in continuation_state:
+            requester = answered_interaction.requester
+            yield await emitter.emit(RuntimeEvent(RuntimeEventType.QUESTION_ANSWER, {
+                "entity_type": "interaction", "entity_id": answered_interaction.id,
+                "parent_entity_type": "agent_execution" if requester.stage == "agent" else ("planner_iteration" if requester.stage == "planner" else "orchestrator"),
+                "parent_entity_id": requester.entity_id,
+                "requester": requester.model_dump(mode="json"), "question": answered_interaction.question,
+                "response": continuation_state["interaction_response"],
+                "user_answer": str(continuation_state["interaction_response"]), "resume_action": "answer",
+            }), phase=OrchestrationPhase.PIPELINE)
         # Root routing intentionally happens before any planner-only memory
         # preparation.  Mechanical lookup contains ids/aliases only.
         preflight_id = _turn_preflight_orchestrator_id(run_id_str)
-        yield await emitter.emit(
-            RuntimeEvent.orchestrator_start(
-                orchestrator_id=preflight_id,
-                run_id=run_id_str,
-                role="turn_preflight",
-            ),
-            phase=OrchestrationPhase.PREFLIGHT,
-        )
-        try:
-            lookup = await MechanicalLookupService(self._session).lookup(
-                request_text=effective_user_query, tenant_id=tenant_id,
-            )
-            decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
-                user_request=effective_user_query,
-                mechanical_lookup=lookup,
-                ctx=ctx,
-                facts_context=turn_mem.planner_memory_context,
-                project_context=turn_mem.project_context,
-                chat_context=chat_context,
-                recent_dialogue=_recent_dialogue(list(request.messages or [])),
-                continuation=continuation_state,
-                chat_id=chat_id,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                sandbox_overrides=request.sandbox_overrides,
-                trace_parent_entity_id=preflight_id,
-                event_sink=lambda event: emitter.emit(event, phase=OrchestrationPhase.PREFLIGHT),
-            )
-        except Exception as exc:  # conservative compatibility fallback
-            logger.error("TurnPreflight unavailable; planner route is blocked: %s", exc)
+        resuming_interaction = interaction_from_context(continuation_state.get("paused_context"))
+        # Old signed confirmation checkpoints also belong to a saved task.
+        resume_graph = (resuming_interaction is not None and resuming_interaction.requester.stage in {"planner", "agent"}) or (
+            resuming_interaction is None and continuation_state.get("resume_action") == "confirm")
+        if resume_graph:
+            lookup = {}
+            decision = TurnPreflightDecision(route="planner", task_brief=TaskBrief(
+                goal=effective_goal, direction="Continue the saved requester checkpoint with the validated user response.",
+                expected_result="Continue the existing plan without re-routing the user's answer."))
+            yield await emitter.emit(RuntimeEvent.status("interaction_resumed",
+                interaction_id=resuming_interaction.id if resuming_interaction else None,
+                requester=resuming_interaction.requester.model_dump(mode="json") if resuming_interaction else None,
+                parent_entity_type="run", parent_entity_id=run_id_str), phase=OrchestrationPhase.PIPELINE)
+        else:
             yield await emitter.emit(
-                RuntimeEvent.orchestrator_end(
-                    orchestrator_id=preflight_id, run_id=run_id_str, status="failed",
+                RuntimeEvent.orchestrator_start(
+                    orchestrator_id=preflight_id,
+                    run_id=run_id_str,
+                    role="turn_preflight",
                 ),
                 phase=OrchestrationPhase.PREFLIGHT,
             )
-            from app.runtime.orchestrator import _context_failure_event
-            context_failure = _context_failure_event(exc)
-            if context_failure is not None:
-                runtime_state.final_error = str(context_failure.data.get("user_message"))
-                context_failure.data.update(parent_entity_type="orchestrator", parent_entity_id=preflight_id)
-                yield await emitter.emit(context_failure, phase=OrchestrationPhase.PREFLIGHT)
-            else:
+            try:
+                lookup = dict(resuming_interaction.checkpoint.get("mechanical_lookup") or {}) if resuming_interaction else await MechanicalLookupService(self._session).lookup(
+                    request_text=effective_user_query, tenant_id=tenant_id,
+                )
+                decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
+                    user_request=effective_goal if resuming_interaction else effective_user_query,
+                    mechanical_lookup=lookup,
+                    ctx=ctx,
+                    facts_context=turn_mem.planner_memory_context,
+                    project_context=turn_mem.project_context,
+                    chat_context=chat_context,
+                    recent_dialogue=_recent_dialogue(list(request.messages or [])),
+                    attachments=list(request.attachments or []),
+                    continuation=continuation_state,
+                    chat_id=chat_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    sandbox_overrides=request.sandbox_overrides,
+                    trace_parent_entity_id=preflight_id,
+                    event_sink=lambda event: emitter.emit(event, phase=OrchestrationPhase.PREFLIGHT),
+                )
+            except Exception as exc:  # conservative compatibility fallback
+                logger.error("TurnPreflight unavailable; planner route is blocked: %s", exc)
                 yield await emitter.emit(
-                    RuntimeEvent.error(
-                        "Turn preflight is unavailable",
-                        recoverable=True,
-                        error_code="turn_preflight_unavailable",
-                        retryable=True,
-                        user_message=(
-                            "Не удалось определить маршрут запроса. Планировщик не запускался; "
-                            "повторите запрос позже."
-                        ),
-                        source="turn_preflight",
-                        parent_entity_type="orchestrator",
-                        parent_entity_id=preflight_id,
+                    RuntimeEvent.orchestrator_end(
+                        orchestrator_id=preflight_id, run_id=run_id_str, status="failed",
                     ),
                     phase=OrchestrationPhase.PREFLIGHT,
                 )
-            yield await emitter.emit(
-                RuntimeEvent.stop(
-                    reason=PipelineStopReason.FAILED.value,
-                    run_id=run_id_str,
-                    message="TurnPreflight unavailable; planner was not invoked",
-                ),
-                phase=OrchestrationPhase.PIPELINE,
-            )
-            yield await emitter.emit(
-                RuntimeEvent.run_end(run_id=run_id_str, status=PipelineStopReason.FAILED.value),
-                phase=OrchestrationPhase.PIPELINE,
-            )
-            return
+                from app.runtime.orchestrator import _context_failure_event
+                context_failure = _context_failure_event(exc)
+                if context_failure is not None:
+                    runtime_state.final_error = str(context_failure.data.get("user_message"))
+                    context_failure.data.update(parent_entity_type="orchestrator", parent_entity_id=preflight_id)
+                    yield await emitter.emit(context_failure, phase=OrchestrationPhase.PREFLIGHT)
+                else:
+                    yield await emitter.emit(
+                        RuntimeEvent.error(
+                            "Turn preflight is unavailable",
+                            recoverable=True,
+                            error_code="turn_preflight_unavailable",
+                            retryable=True,
+                            user_message=(
+                                "Не удалось определить маршрут запроса. Планировщик не запускался; "
+                                "повторите запрос позже."
+                            ),
+                            source="turn_preflight",
+                            parent_entity_type="orchestrator",
+                            parent_entity_id=preflight_id,
+                        ),
+                        phase=OrchestrationPhase.PREFLIGHT,
+                    )
+                yield await emitter.emit(
+                    RuntimeEvent.stop(
+                        reason=PipelineStopReason.FAILED.value,
+                        run_id=run_id_str,
+                        message="TurnPreflight unavailable; planner was not invoked",
+                    ),
+                    phase=OrchestrationPhase.PIPELINE,
+                )
+                yield await emitter.emit(
+                    RuntimeEvent.run_end(run_id=run_id_str, status=PipelineStopReason.FAILED.value),
+                    phase=OrchestrationPhase.PIPELINE,
+                )
+                return
 
         effective_scope_context = await _turn_scope_context(self._session, base_scope_context, decision, lookup)
         turn_mem.project_context = _project_context_payload(effective_scope_context, turn_mem.project_context)
@@ -629,6 +672,7 @@ class RuntimePipeline:
             "memory_scope_selected", route=decision.route,
             scope_context=effective_scope_context.model_payload(),
         ), phase=OrchestrationPhase.PREFLIGHT)
+        ctx.extra["memory_search_scope_keys"] = turn_mem.project_context["scope_context"]["keys"]
         ctx.extra["project_context"] = turn_mem.project_context
         ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
         for index, item in enumerate(turn_mem.planner_memory_context):
@@ -636,44 +680,87 @@ class RuntimePipeline:
                 turn_mem.planner_memory_context[index] = {**item, **turn_mem.project_context}
         preflight_memory_results = decision.memory_tool_results
         for record in preflight_memory_results:
-            turn_mem.planner_memory_context.append({"type": "planner_memory_result", **record})
-        yield await emitter.emit(
-            RuntimeEvent.orchestrator_end(
-                orchestrator_id=preflight_id,
-                run_id=run_id_str,
-                status=decision.route,
-            ),
-            phase=OrchestrationPhase.PREFLIGHT,
-        )
+            if (record.get("result") or {}).get("success", False):
+                runtime_state.run_context.add_evidence(record["tool"], record.get("arguments") or {}, record["result"])
+        available_ids = {item.ref.artifact_id for item in runtime_state.attachment_contexts}
+        runtime_state.run_context.artifact_descriptions.update({item.artifact_id: item.description
+            for item in decision.artifact_descriptions if item.artifact_id in available_ids})
+        if request.chat_id:
+            from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
+            representation_ids = {item.ref.artifact_id: item.representation_id
+                                  for item in runtime_state.attachment_contexts}
+            representation_ids.update({
+                str(item.data.get("artifact_id")): item.data.get("representation_id")
+                for item in runtime_state.run_context.evidence
+                if item.tool == "file.read" and item.data.get("artifact_id")
+            })
+            artifact_service = ChatArtifactReferenceService(self._session)
+            for item in decision.artifact_descriptions:
+                if (item.artifact_id in available_ids and item.description
+                        and representation_ids.get(item.artifact_id)):
+                    await artifact_service.set_description(
+                        artifact_id=item.artifact_id, chat_id=request.chat_id,
+                        owner_id=request.user_id, description=item.description,
+                        representation_id=representation_ids.get(item.artifact_id),
+                    )
+        if decision.task_brief:
+            runtime_state.run_context.goal = decision.task_brief.goal
+            runtime_state.run_context.constraints = list(decision.task_brief.constraints)
+        if decision.synthesis_brief:
+            runtime_state.run_context.answer_requirements = decision.synthesis_brief.synthesis_brief.answer_requirements
+        if request.chat_id:
+            await RuntimeRunContextService(self._session).save(run_id=run_id_str,
+                chat_id=request.chat_id, owner_id=request.user_id, branch_id=branch_id,
+                context=runtime_state.run_context)
+
+
+        if not resume_graph:
+            yield await emitter.emit(
+                RuntimeEvent.orchestrator_end(
+                    orchestrator_id=preflight_id,
+                    run_id=run_id_str,
+                    status=decision.route,
+                ),
+                phase=OrchestrationPhase.PREFLIGHT,
+            )
         if decision.route == "clarify":
             clarification = decision.clarification
             assert clarification is not None
+            require_interaction_allowed(ctx, "turn_preflight")
+            interaction = RuntimeInteraction.create(
+                InteractionQuestion(question=clarification.question, response_type=clarification.response_type),
+                InteractionRequester(stage="turn_preflight", entity_id=preflight_id),
+                checkpoint={"mechanical_lookup": lookup, "memory_tool_results": decision.memory_tool_results})
             clarification_context = dict(clarification.context)
+            clarification_context["interaction"] = interaction.model_dump(mode="json")
             # A TurnPreflight clarification intentionally has no persisted
             # plan. Preserve its original goal in the generic continuation
             # payload so the standard resume endpoint can recreate a root
             # checkpoint without querying PlanStore.
+            clarification_context["question"] = clarification.question
+            clarification_context["clarification_history"] = continuation_state.get("clarification_history", [])
             clarification_context["original_goal"] = effective_goal
             clarification_context["preflight_route"] = "clarify"
             yield await emitter.emit(
                 RuntimeEvent.waiting_input(
-                    clarification.question, run_id=run_id_str,
-                    parent_entity_type="run", parent_entity_id=run_id_str,
+                    clarification.question, run_id=run_id_str, entity_id=interaction.id,
+                    parent_entity_type="orchestrator", parent_entity_id=preflight_id,
+                    interaction_kind="confirm" if clarification.response_type == "boolean" else "clarify",
                 ),
                 phase=OrchestrationPhase.PREFLIGHT,
             )
             yield await emitter.emit(
-                RuntimeEvent.stop(reason=PipelineStopReason.WAITING_INPUT.value, run_id=run_id_str,
+                RuntimeEvent.stop(reason=interaction.reason, run_id=run_id_str,
                                   question=clarification.question, context=clarification_context),
                 phase=OrchestrationPhase.PIPELINE,
             )
             await self._apply_chat_context_outcome(
                 request=request, runtime_state=runtime_state, branch_id=branch_id,
-                terminal_state="waiting_input", project_context=turn_mem.project_context,
+                terminal_state=interaction.reason, project_context=turn_mem.project_context,
                 clarification={"question": clarification.question, "message": clarification_context.get("message")},
                 term_bindings=lookup.get("glossary") or [],
             )
-            yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="waiting_input"), phase=OrchestrationPhase.PIPELINE)
+            yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status=interaction.reason), phase=OrchestrationPhase.PIPELINE)
             return
         turn_mem.preflight_candidates = [
             candidate.model_dump(mode="json") for candidate in decision.memory_candidates
@@ -682,19 +769,22 @@ class RuntimePipeline:
             brief = decision.synthesis_brief
             assert brief is not None
             direct_context = {
-                "user_question": effective_user_query,
+                "user_question": effective_goal if resuming_interaction else effective_user_query,
                 "synthesis_brief": brief.synthesis_brief.model_dump(mode="json"),
                 "direct_answer_draft": brief.answer_draft,
                 "plan_outline": [], "resolution_decisions": [], "completed_task_reports": [],
-                "limitations": [], "artifacts": [], "sources": [],
-                "memory_context": compact_memory_tool_records(preflight_memory_results),
+                "limitations": [], "artifacts": [item.ref.model_dump(mode="json") for item in runtime_state.attachment_contexts
+                    if item.ref.artifact_id in brief.synthesis_brief.artifact_refs], "sources": [],
+                "memory_context": [],
                 "memory_candidates": turn_mem.preflight_candidates,
+                "run_context": runtime_state.run_context.projection(scope_keys=effective_scope_context.model_payload().get("keys") or [],
+                    evidence_refs=brief.synthesis_brief.evidence_refs or None),
                 "chat_context": chat_context,
                 "scope_context": effective_scope_context.model_payload(),
                 "execution_context": turn_mem.project_context["execution_context"],
             }
             async for event in self._assembler.synthesizer.stream(
-                runtime_state=runtime_state, run_id=run_id, synthesis_context=direct_context,
+                runtime_state=runtime_state, run_id=run_id, synthesis_context=direct_context, ctx=ctx,
                 model=request.model, platform_config=platform.config,
                 sandbox_overrides=request.sandbox_overrides, logging_level=run_logging_level,
             ):
@@ -709,6 +799,10 @@ class RuntimePipeline:
                     ):
                         yield memory_ev
                 else:
+                    await self._apply_chat_context_outcome(
+                        request=request, runtime_state=runtime_state, branch_id=branch_id,
+                        terminal_state="completed", project_context=turn_mem.project_context,
+                        term_bindings=lookup.get("glossary") or [])
                     self._dispatch_chat_post_final_tail(
                         turn_mem=turn_mem, runtime_state=runtime_state, request=request,
                         stop_reason=PipelineStopReason.COMPLETED, emitter=emitter,
@@ -720,7 +814,7 @@ class RuntimePipeline:
                         logging_level=run_logging_level,
                     )
                     # The user-visible chat stream ends on synthesizer FINAL.
-                    # Context, memory and run completion continue detached.
+                    # Fact writeback and run observability continue detached.
                     return
                 await self._apply_chat_context_outcome(
                     request=request, runtime_state=runtime_state, branch_id=branch_id,
@@ -771,7 +865,7 @@ class RuntimePipeline:
             orchestrator_id=orchestrator_id,
             checkpoint=resume_checkpoint,
         )
-        if question_answer_event is not None:
+        if question_answer_event is not None and answered_interaction is None:
             yield await emitter.emit(
                 question_answer_event,
                 phase=OrchestrationPhase.PLANNER,
@@ -941,6 +1035,10 @@ class RuntimePipeline:
         else:
             # Chat mode ends the user stream on FINAL. Its post-final work
             # runs with a separate session and can never fail that stream.
+            await self._apply_chat_context_outcome(
+                request=request, runtime_state=runtime_state, branch_id=branch_id,
+                terminal_state="completed", project_context=turn_mem.project_context,
+                term_bindings=lookup.get("glossary") or [])
             self._dispatch_chat_post_final_tail(
                 turn_mem=turn_mem,
                 runtime_state=runtime_state,
@@ -978,6 +1076,10 @@ class RuntimePipeline:
         """
         if not request.chat_id or not request.chat_turn_id:
             return
+        from app.services.runtime_run_context_service import RuntimeRunContextService
+        await RuntimeRunContextService(self._session).save(
+            run_id=str(runtime_state.run_id), chat_id=request.chat_id, owner_id=request.user_id,
+            branch_id=branch_id, context=runtime_state.run_context)
         projection = RuntimeOutcomeProjector.project(
             runtime_state=runtime_state, chat_id=request.chat_id,
             chat_turn_id=request.chat_turn_id, terminal_state=terminal_state,
@@ -1219,22 +1321,6 @@ class RuntimePipeline:
         try:
             async with session_factory() as tail_session:
                 tail_pipeline = RuntimePipeline(session=tail_session, llm_client=self._llm_client)
-                try:
-                    await tail_pipeline._apply_chat_context_outcome(
-                        request=request,
-                        runtime_state=runtime_state,
-                        branch_id=branch_id,
-                        terminal_state="completed",
-                        project_context=project_context,
-                        term_bindings=term_bindings,
-                    )
-                except Exception as exc:  # Context reconciliation is post-response best effort.
-                    tail_error = exc
-                    logger.exception(
-                        "chat_runtime_context_tail_failed",
-                        extra={"run_id": str(runtime_state.run_id), "chat_id": request.chat_id},
-                    )
-
                 try:
                     async for _ in tail_pipeline._finalize_memory(
                         turn_mem=turn_mem,

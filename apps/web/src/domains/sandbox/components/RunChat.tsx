@@ -3,7 +3,14 @@
  * Renders all historical runs from branch lineage + current active run.
  * Steps are expandable inline; clicking a step selects it for the right panel.
  */
-import { useState, useRef, useEffect, useMemo, type ChangeEvent, type KeyboardEvent } from 'react';
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Button from '@/shared/ui/Button';
 import { Icon } from '@/shared/ui/Icon';
@@ -16,14 +23,25 @@ import { sandboxApi } from '../api';
 import ChatQuestionCard from './ChatQuestionCard';
 import ChatAnswerCard from './ChatAnswerCard';
 import { ExecutionTrace } from './ExecutionTrace';
-import { projectTraceRun, type TraceInspectionTarget } from '../traceProjection';
+import {
+  projectTraceRun,
+  type TraceInspectionTarget,
+} from '../traceProjection';
 import styles from './RunChat.module.css';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function extractClarifyQuestion(pause: ActiveRun['pendingConfirmation']): string | null {
-  const contextQuestion = pause && typeof pause.context.question === 'string' ? pause.context.question.trim() : '';
-  const actionQuestion = pause && typeof pause.action.question === 'string' ? pause.action.question.trim() : '';
+function extractClarifyQuestion(
+  pause: ActiveRun['pendingConfirmation']
+): string | null {
+  const contextQuestion =
+    pause && typeof pause.context.question === 'string'
+      ? pause.context.question.trim()
+      : '';
+  const actionQuestion =
+    pause && typeof pause.action.question === 'string'
+      ? pause.action.question.trim()
+      : '';
   const question = contextQuestion || actionQuestion;
   return question || null;
 }
@@ -37,7 +55,10 @@ interface HistoricalRunItemProps {
   isCurrentBranch: boolean;
   isReadOnly: boolean;
   onForkBranch: (runId: string, sourceText: string) => void;
-  onSelectTraceTarget?: (target: TraceInspectionTarget, trace: ReturnType<typeof replayRuntimeJournal>) => void;
+  onSelectTraceTarget?: (
+    target: TraceInspectionTarget,
+    trace: ReturnType<typeof replayRuntimeJournal>
+  ) => void;
   selectedTraceTargetKey?: string | null;
 }
 
@@ -62,12 +83,15 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
 
   const trace = useMemo(
     () => replayRuntimeJournal(runDetail?.events ?? []),
-    [runDetail],
+    [runDetail]
   );
   const runView = useMemo(() => projectTraceRun(trace), [trace]);
   const finalContent = runView.finalContent;
   const finalAttachments = runView.attachments;
-  const isFailed = run.status === 'failed' || runView.status === 'failed' || Boolean(runView.error);
+  const isFailed =
+    run.status === 'failed' ||
+    runView.status === 'failed' ||
+    Boolean(runView.error);
 
   return (
     <div className={styles['conversation-item']}>
@@ -79,12 +103,21 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
         <span className={styles['branch-label']}>от ветки: {branch.name}</span>
       )}
 
-      <ExecutionTrace trace={trace} isRunning={false} onSelectTarget={(target) => onSelectTraceTarget?.(target, trace)} selectedTargetKey={selectedTraceTargetKey} />
+      <ExecutionTrace
+        trace={trace}
+        isRunning={false}
+        onSelectTarget={target => onSelectTraceTarget?.(target, trace)}
+        selectedTargetKey={selectedTraceTargetKey}
+      />
 
       <div className={styles['answer-row']}>
         {runDetail ? (
           <ChatAnswerCard
-            text={isFailed ? (runDetail.error ?? runView.error ?? 'Ошибка выполнения') : finalContent}
+            text={
+              isFailed
+                ? (runDetail.error ?? runView.error ?? 'Ошибка выполнения')
+                : finalContent
+            }
             isRunning={false}
             attachments={finalAttachments}
           />
@@ -119,14 +152,24 @@ interface Props {
   isReadOnly: boolean;
   isCreatingBranch?: boolean;
   onSelectBranch: (branchId: string) => void;
-  onCreateBranchFromMessage: (sourceText: string, parentRunId?: string | null) => Promise<void>;
-  onRun: (text: string, parentRunId?: string | null, artifactIds?: string[]) => void;
+  onCreateBranchFromMessage: (
+    sourceText: string,
+    parentRunId?: string | null
+  ) => Promise<void>;
+  onRun: (
+    text: string,
+    parentRunId?: string | null,
+    artifactIds?: string[]
+  ) => void;
   onResumeInput: (text: string) => Promise<boolean>;
-  onConfirmPausedRun: () => Promise<boolean>;
+  onConfirmPausedRun: (response?: boolean) => Promise<boolean>;
   onCancelPausedRun: () => Promise<boolean>;
   onStop: () => void;
   onSelectRun?: (runId?: string) => void;
-  onSelectTraceTarget?: (target: TraceInspectionTarget, trace: ReturnType<typeof replayRuntimeJournal>) => void;
+  onSelectTraceTarget?: (
+    target: TraceInspectionTarget,
+    trace: ReturnType<typeof replayRuntimeJournal>
+  ) => void;
   selectedTraceTargetKey?: string | null;
 }
 
@@ -169,8 +212,8 @@ export default function RunChat({
   const lastClarificationKeyRef = useRef<string | null>(null);
 
   const branchMap = useMemo(
-    () => new Map(branches.map((b) => [b.id, b])),
-    [branches],
+    () => new Map(branches.map(b => [b.id, b])),
+    [branches]
   );
 
   const branchLineage = useMemo(() => {
@@ -180,27 +223,29 @@ export default function RunChat({
     while (current && !seen.has(current.id)) {
       lineage.push(current);
       seen.add(current.id);
-      current = current.parent_branch_id ? branchMap.get(current.parent_branch_id) : undefined;
+      current = current.parent_branch_id
+        ? branchMap.get(current.parent_branch_id)
+        : undefined;
     }
     return lineage;
   }, [activeBranchId, branchMap]);
 
   const lineageBranchIds = useMemo(
-    () => new Set(branchLineage.map((b) => b.id)),
-    [branchLineage],
+    () => new Set(branchLineage.map(b => b.id)),
+    [branchLineage]
   );
 
   const lineageRuns = useMemo(
     () =>
       branchRuns
-        .filter((run) => run.branch_id && lineageBranchIds.has(run.branch_id))
+        .filter(run => run.branch_id && lineageBranchIds.has(run.branch_id))
         .sort((a, b) => a.started_at.localeCompare(b.started_at)),
-    [branchRuns, lineageBranchIds],
+    [branchRuns, lineageBranchIds]
   );
 
   const historicalRuns = useMemo(
-    () => lineageRuns.filter((run) => run.id !== activeRun.runId),
-    [lineageRuns, activeRun.runId],
+    () => lineageRuns.filter(run => run.id !== activeRun.runId),
+    [lineageRuns, activeRun.runId]
   );
 
   useEffect(() => {
@@ -208,23 +253,33 @@ export default function RunChat({
   }, [activeBranchId]);
 
   const latestClarifyEventId = useMemo(() => {
-    for (let index = activeRun.trace.eventIdsBySequence.length - 1; index >= 0; index -= 1) {
+    for (
+      let index = activeRun.trace.eventIdsBySequence.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
       const eventId = activeRun.trace.eventIdsBySequence[index];
-      if (activeRun.trace.eventsById[eventId]?.event_type === 'waiting_input') return eventId;
+      if (activeRun.trace.eventsById[eventId]?.event_type === 'waiting_input')
+        return eventId;
     }
     return null;
   }, [activeRun.trace.eventIdsBySequence, activeRun.trace.eventsById]);
 
   const latestClarifyQuestion = useMemo(
     () => extractClarifyQuestion(activeRun.pendingConfirmation),
-    [activeRun.pendingConfirmation],
+    [activeRun.pendingConfirmation]
   );
   const clarificationKey = activeRun.runId
     ? `${activeRun.runId}:${latestClarifyEventId ?? latestClarifyQuestion ?? 'waiting_input'}`
     : null;
 
   useEffect(() => {
-    if (!isWaitingInput || !clarificationKey || lastClarificationKeyRef.current === clarificationKey) return;
+    if (
+      !isWaitingInput ||
+      !clarificationKey ||
+      lastClarificationKeyRef.current === clarificationKey
+    )
+      return;
     lastClarificationKeyRef.current = clarificationKey;
     setInput('');
     setAttachments([]);
@@ -234,7 +289,11 @@ export default function RunChat({
   useEffect(() => {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [activeRun.trace.eventIdsBySequence.length, activeRun.progress.length, historicalRuns.length]);
+  }, [
+    activeRun.trace.eventIdsBySequence.length,
+    activeRun.progress.length,
+    historicalRuns.length,
+  ]);
 
   useEffect(() => {
     if (isWaitingInput && !isRunning) {
@@ -246,7 +305,7 @@ export default function RunChat({
     let mounted = true;
     import('@/shared/api/chats')
       .then(({ getChatUploadPolicy }) => getChatUploadPolicy())
-      .then((policy) => {
+      .then(policy => {
         if (mounted) setUploadPolicy(policy);
       })
       .catch(() => {
@@ -260,18 +319,28 @@ export default function RunChat({
   const handleSubmit = async () => {
     if (isWaitingInput || activeRun.status === 'waiting_confirmation') return;
     const text = input.trim();
-    if ((!text && attachments.length === 0) || isRunning || isReadOnly || isUploading) return;
+    if (
+      (!text && attachments.length === 0) ||
+      isRunning ||
+      isReadOnly ||
+      isUploading
+    )
+      return;
 
     let artifactIds: string[] = [];
     if (attachments.length > 0) {
       try {
         setIsUploading(true);
         const uploaded = await Promise.all(
-          attachments.map((item) => sandboxApi.uploadAttachment(sessionId, item.file))
+          attachments.map(item =>
+            sandboxApi.uploadAttachment(sessionId, item.file)
+          )
         );
-        artifactIds = uploaded.map((item) => item.artifact_id);
+        artifactIds = uploaded.map(item => item.artifact_id);
       } catch (err) {
-        setUploadError(err instanceof Error ? err.message : 'Ошибка загрузки файла');
+        setUploadError(
+          err instanceof Error ? err.message : 'Ошибка загрузки файла'
+        );
         setIsUploading(false);
         return;
       }
@@ -290,11 +359,22 @@ export default function RunChat({
 
     const maxBytes = uploadPolicy?.max_bytes ?? 50 * 1024 * 1024;
     const allowedExtensions = new Set(
-      (uploadPolicy?.allowed_extensions ?? ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv'])
-        .map((item) => item.toLowerCase().replace(/^\./, ''))
+      (
+        uploadPolicy?.allowed_extensions ?? [
+          'txt',
+          'md',
+          'pdf',
+          'doc',
+          'docx',
+          'xls',
+          'xlsx',
+          'csv',
+        ]
+      ).map(item => item.toLowerCase().replace(/^\./, ''))
     );
     const validFiles: File[] = [];
-    const allowedMimeByExt = uploadPolicy?.allowed_content_types_by_extension ?? {};
+    const allowedMimeByExt =
+      uploadPolicy?.allowed_content_types_by_extension ?? {};
     for (const file of files) {
       const fileName = (file.name || '').toLowerCase();
       const dotIdx = fileName.lastIndexOf('.');
@@ -304,13 +384,22 @@ export default function RunChat({
         continue;
       }
       if (file.size > maxBytes) {
-        setUploadError(`Файл "${file.name}" превышает лимит ${(maxBytes / 1024 / 1024).toFixed(0)} МБ`);
+        setUploadError(
+          `Файл "${file.name}" превышает лимит ${(maxBytes / 1024 / 1024).toFixed(0)} МБ`
+        );
         continue;
       }
       const allowedMime = allowedMimeByExt[ext];
       const mime = (file.type || '').toLowerCase();
-      if (mime && Array.isArray(allowedMime) && allowedMime.length > 0 && !allowedMime.includes(mime)) {
-        setUploadError(`Файл "${file.name}" имеет неподдерживаемый MIME: ${mime}`);
+      if (
+        mime &&
+        Array.isArray(allowedMime) &&
+        allowedMime.length > 0 &&
+        !allowedMime.includes(mime)
+      ) {
+        setUploadError(
+          `Файл "${file.name}" имеет неподдерживаемый MIME: ${mime}`
+        );
         continue;
       }
       validFiles.push(file);
@@ -321,20 +410,32 @@ export default function RunChat({
       return;
     }
     setUploadError(null);
-    setAttachments((prev) => [
+    setAttachments(prev => [
       ...prev,
-      ...validFiles.map((file) => ({ id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, file })),
+      ...validFiles.map(file => ({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file,
+      })),
     ]);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const removeAttachment = (id: string) => {
-    setAttachments((prev) => prev.filter((item) => item.id !== id));
+    setAttachments(prev => prev.filter(item => item.id !== id));
   };
 
   const acceptValue = useMemo(() => {
-    const list = uploadPolicy?.allowed_extensions ?? ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv'];
-    return list.map((ext) => (ext.startsWith('.') ? ext : `.${ext}`)).join(',');
+    const list = uploadPolicy?.allowed_extensions ?? [
+      'txt',
+      'md',
+      'pdf',
+      'doc',
+      'docx',
+      'xls',
+      'xlsx',
+      'csv',
+    ];
+    return list.map(ext => (ext.startsWith('.') ? ext : `.${ext}`)).join(',');
   }, [uploadPolicy]);
 
   const handleSubmitVoid = () => {
@@ -371,7 +472,7 @@ export default function RunChat({
   };
 
   const handleForkFromActive = () => {
-    const runListItem = lineageRuns.find((r) => r.id === activeRun.runId);
+    const runListItem = lineageRuns.find(r => r.id === activeRun.runId);
     const sourceText = runListItem?.request_text ?? input;
     if (!sourceText.trim() || isCreatingBranch) return;
     void onCreateBranchFromMessage(sourceText, activeRun.runId).then(() => {
@@ -381,21 +482,37 @@ export default function RunChat({
 
   const hasActiveRun = activeRun.status !== 'idle';
   const hasHistory = historicalRuns.length > 0;
-  const isPaused = activeRun.status === 'waiting_input' || activeRun.status === 'waiting_confirmation';
-  const activeRunView = useMemo(() => projectTraceRun(activeRun.trace), [activeRun.trace]);
-  const activeAttachments = activeRunView.attachments.length > 0 ? activeRunView.attachments : activeRun.finalAttachments;
+  const isPaused =
+    activeRun.status === 'waiting_input' ||
+    activeRun.status === 'waiting_confirmation';
+  const activeRunView = useMemo(
+    () => projectTraceRun(activeRun.trace),
+    [activeRun.trace]
+  );
+  const activeAttachments =
+    activeRunView.attachments.length > 0
+      ? activeRunView.attachments
+      : activeRun.finalAttachments;
   const activeUserMessage = useMemo(() => {
     const fromRun = String(activeRun.requestText || '').trim();
     if (fromRun) return fromRun;
-    const fromLineage = String(lineageRuns.find((r) => r.id === activeRun.runId)?.request_text || '').trim();
+    const fromLineage = String(
+      lineageRuns.find(r => r.id === activeRun.runId)?.request_text || ''
+    ).trim();
     if (fromLineage) return fromLineage;
     return input.trim();
   }, [activeRun.requestText, activeRun.runId, lineageRuns, input]);
 
   const activeAssistantMessage = useMemo(() => {
-    return String(activeRunView.finalContent || activeRun.finalContent || '').trim();
+    return String(
+      activeRunView.finalContent || activeRun.finalContent || ''
+    ).trim();
   }, [activeRunView.finalContent, activeRun.finalContent]);
-  const showActiveAnswerCard = !isPaused && (isRunning || activeAssistantMessage.length > 0 || activeAttachments.length > 0);
+  const showActiveAnswerCard =
+    !isPaused &&
+    (isRunning ||
+      activeAssistantMessage.length > 0 ||
+      activeAttachments.length > 0);
 
   return (
     <div className={styles.chat}>
@@ -404,13 +521,13 @@ export default function RunChat({
           <div className={styles['empty-chat']}>
             <div className={styles['empty-title']}>Sandbox</div>
             <div className={styles['empty-hint']}>
-              Введите запрос и запустите агента с текущими оверрайдами.
-              Каждый вызов инструмента записи потребует подтверждения.
+              Введите запрос и запустите агента с текущими оверрайдами. Каждый
+              вызов инструмента записи потребует подтверждения.
             </div>
           </div>
         )}
 
-        {historicalRuns.map((run) => (
+        {historicalRuns.map(run => (
           <HistoricalRunItem
             key={run.id}
             sessionId={sessionId}
@@ -430,11 +547,23 @@ export default function RunChat({
               <ChatQuestionCard text={activeUserMessage} />
             </div>
 
-            <ExecutionTrace trace={activeRun.trace} isRunning={isRunning} progress={activeRun.progress} onSelectTarget={(target) => onSelectTraceTarget?.(target, activeRun.trace)} selectedTargetKey={selectedTraceTargetKey} />
+            <ExecutionTrace
+              trace={activeRun.trace}
+              isRunning={isRunning}
+              progress={activeRun.progress}
+              onSelectTarget={target =>
+                onSelectTraceTarget?.(target, activeRun.trace)
+              }
+              selectedTargetKey={selectedTraceTargetKey}
+            />
 
             <div className={styles['answer-row']}>
               {showActiveAnswerCard && (
-                <ChatAnswerCard text={activeAssistantMessage} isRunning={isRunning} attachments={activeAttachments} />
+                <ChatAnswerCard
+                  text={activeAssistantMessage}
+                  isRunning={isRunning}
+                  attachments={activeAttachments}
+                />
               )}
               {!isReadOnly && !isRunning && activeAssistantMessage && (
                 <button
@@ -448,47 +577,97 @@ export default function RunChat({
               )}
             </div>
 
-            {!isReadOnly && (isWaitingInput || activeRun?.status === 'waiting_confirmation') && (
-              <div className={styles['clarify-box']}>
-                <div className={styles['clarify-title']}>
-                  {isWaitingInput
-                    ? (latestClarifyQuestion || 'Нужно уточнение от пользователя')
-                    : (String(activeRun?.pendingConfirmation?.context.summary || '')
-                      || String(activeRun?.pendingConfirmation?.context.message || '')
-                      || 'Требуется подтверждение')}
+            {!isReadOnly &&
+              (isWaitingInput ||
+                activeRun?.status === 'waiting_confirmation') && (
+                <div className={styles['clarify-box']}>
+                  <div className={styles['clarify-title']}>
+                    {isWaitingInput
+                      ? latestClarifyQuestion ||
+                        'Нужно уточнение от пользователя'
+                      : String(
+                          activeRun?.pendingConfirmation?.context.summary || ''
+                        ) ||
+                        String(
+                          activeRun?.pendingConfirmation?.context.message || ''
+                        ) ||
+                        'Требуется подтверждение'}
+                  </div>
+                  {isWaitingInput ? (
+                    <div className={styles['clarify-row']}>
+                      <textarea
+                        ref={clarifyInputRef}
+                        className={styles['input-field']}
+                        placeholder="Введите уточнение для продолжения..."
+                        value={input}
+                        onChange={e => setInput(e.target.value)}
+                        onKeyDown={handleClarifyKeyDown}
+                        rows={2}
+                        disabled={isRunning}
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          void handleClarifySubmit();
+                        }}
+                        disabled={
+                          !input.trim() || isRunning || attachments.length > 0
+                        }
+                      >
+                        Ответить
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => {
+                          void onCancelPausedRun();
+                        }}
+                        disabled={isRunning}
+                      >
+                        Отменить
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className={styles['clarify-row']}>
+                      {activeRun.pendingConfirmation?.context.interaction ? (
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            void onConfirmPausedRun(false);
+                          }}
+                          disabled={isRunning}
+                        >
+                          Нет
+                        </Button>
+                      ) : null}
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          void onConfirmPausedRun();
+                        }}
+                        disabled={isRunning}
+                      >
+                        Подтвердить
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => {
+                          void onCancelPausedRun();
+                        }}
+                        disabled={isRunning}
+                      >
+                        Отменить
+                      </Button>
+                    </div>
+                  )}
+                  {activeRun.error && (
+                    <div className={styles['upload-error']}>
+                      {activeRun.error}
+                    </div>
+                  )}
                 </div>
-                {isWaitingInput ? <div className={styles['clarify-row']}>
-                  <textarea
-                    ref={clarifyInputRef}
-                    className={styles['input-field']}
-                    placeholder="Введите уточнение для продолжения..."
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleClarifyKeyDown}
-                    rows={2}
-                    disabled={isRunning}
-                  />
-                  <Button
-                    size="sm"
-                  onClick={() => { void handleClarifySubmit(); }}
-                    disabled={!input.trim() || isRunning || attachments.length > 0}
-                  >
-                    Ответить
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => { void onCancelPausedRun(); }} disabled={isRunning}>
-                    Отменить
-                  </Button>
-                </div> : <div className={styles['clarify-row']}>
-                  <Button size="sm" onClick={() => { void onConfirmPausedRun(); }} disabled={isRunning}>
-                    Подтвердить
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => { void onCancelPausedRun(); }} disabled={isRunning}>
-                    Отменить
-                  </Button>
-                </div>}
-                {activeRun.error && <div className={styles['upload-error']}>{activeRun.error}</div>}
-              </div>
-            )}
+              )}
           </div>
         )}
       </div>
@@ -496,10 +675,16 @@ export default function RunChat({
       {!isReadOnly && !isPaused && (
         <div className={styles['input-area']}>
           <div className={styles['branch-tabs-shell']}>
-            <div className={styles['branch-tabs']} role="tablist" aria-label="Ветки чата">
-              {branches.map((branch) => {
+            <div
+              className={styles['branch-tabs']}
+              role="tablist"
+              aria-label="Ветки чата"
+            >
+              {branches.map(branch => {
                 const isActive = activeBranchId === branch.id;
-                const runCount = branchRuns.filter((r) => r.branch_id === branch.id).length;
+                const runCount = branchRuns.filter(
+                  r => r.branch_id === branch.id
+                ).length;
                 return (
                   <button
                     key={branch.id}
@@ -535,9 +720,13 @@ export default function RunChat({
             />
             <textarea
               className={styles['input-field']}
-              placeholder={isWaitingInput ? 'Введите уточнение для продолжения...' : 'Введите запрос для агента...'}
+              placeholder={
+                isWaitingInput
+                  ? 'Введите уточнение для продолжения...'
+                  : 'Введите запрос для агента...'
+              }
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={e => setInput(e.target.value)}
               onKeyDown={handleComposerKeyDown}
               rows={1}
               disabled={isRunning || isUploading}
@@ -549,29 +738,51 @@ export default function RunChat({
             ) : (
               <Button
                 size="sm"
-                onClick={isWaitingInput ? () => { void handleClarifySubmit(); } : handleSubmitVoid}
-                disabled={isWaitingInput ? !input.trim() : (!input.trim() && attachments.length === 0) || isUploading}
+                onClick={
+                  isWaitingInput
+                    ? () => {
+                        void handleClarifySubmit();
+                      }
+                    : handleSubmitVoid
+                }
+                disabled={
+                  isWaitingInput
+                    ? !input.trim()
+                    : (!input.trim() && attachments.length === 0) || isUploading
+                }
               >
-                {isUploading ? 'Загрузка...' : (isWaitingInput ? 'Ответить' : 'Запуск')}
+                {isUploading
+                  ? 'Загрузка...'
+                  : isWaitingInput
+                    ? 'Ответить'
+                    : 'Запуск'}
               </Button>
             )}
           </div>
           {attachments.length > 0 && (
             <div className={styles.attachments}>
-              {attachments.map((item) => (
+              {attachments.map(item => (
                 <div key={item.id} className={styles.attachment}>
                   <div className={styles.attachmentIcon}>
                     <Icon name="file" size={14} />
                   </div>
-                  <span className={styles.attachmentName}>{item.file.name}</span>
-                  <button type="button" className={styles.attachmentRemove} onClick={() => removeAttachment(item.id)}>
+                  <span className={styles.attachmentName}>
+                    {item.file.name}
+                  </span>
+                  <button
+                    type="button"
+                    className={styles.attachmentRemove}
+                    onClick={() => removeAttachment(item.id)}
+                  >
                     <Icon name="x" size={12} />
                   </button>
                 </div>
               ))}
             </div>
           )}
-          {uploadError && <div className={styles['upload-error']}>{uploadError}</div>}
+          {uploadError && (
+            <div className={styles['upload-error']}>{uploadError}</div>
+          )}
         </div>
       )}
     </div>

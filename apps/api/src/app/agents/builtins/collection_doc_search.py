@@ -60,6 +60,7 @@ _OUTPUT_SCHEMA_V1 = {
                     "score": {"type": "number"},
                     "page": {"type": "integer"},
                     "artifact_id": {"type": ["string", "null"]},
+                    "artifact": {"type": ["object", "null"], "description": "Normalized, content-free artifact passport"},
                     "metadata": {"type": "object"},
                 },
             },
@@ -329,8 +330,10 @@ class CollectionDocSearchTool(VersionedTool):
                     meta = row_meta.get(row_id, {}) if row_id else {}
                     membership = membership_map.get(str(source_id))
                     artifact_id = None
+                    artifact = None
                     if membership and ctx.chat_id:
-                        reference = await ChatArtifactReferenceService(session).register(
+                        artifact_service = ChatArtifactReferenceService(session)
+                        reference = await artifact_service.register(
                             chat_id=ctx.chat_id,
                             owner_id=ctx.user_id,
                             target=ArtifactTarget(
@@ -338,10 +341,13 @@ class CollectionDocSearchTool(VersionedTool):
                                 target_id=str(membership.id),
                                 collection_id=collection.id,
                                 display_name=source_name,
-                                metadata={"status": "ready"},
+                                metadata={"status": "ready", "description": source_name},
+                                source_id=str(source_id),
+                                source_type="rag_document",
                             ),
                         )
                         artifact_id = str(reference.id)
+                        artifact = artifact_service.manifest(reference)
 
                     hit_entry = {
                         "text": text,
@@ -349,6 +355,7 @@ class CollectionDocSearchTool(VersionedTool):
                         "score": round(hit["score"], 3),
                         "page": payload.get("page", 0),
                         "artifact_id": artifact_id,
+                        "artifact": artifact,
                     }
                     if meta:
                         hit_entry["metadata"] = meta
@@ -360,6 +367,7 @@ class CollectionDocSearchTool(VersionedTool):
                         "source_name": source_name,
                         "title": source_name,
                         "artifact_id": artifact_id,
+                        "artifact": artifact,
                         "chunk_id": payload.get("chunk_id"),
                         "text": text[:200],
                         "page": payload.get("page", 0),

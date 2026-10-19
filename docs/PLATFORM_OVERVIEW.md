@@ -53,10 +53,9 @@ ML Portal — мульти-тенантная AI-платформа для ко�
 - поиск (exact/like/range/vector),
 - использование как источника данных для инструментов/агентов.
 
-Текущая рабочая модель:
-- локальная табличная коллекция,
-- локальная документная коллекция,
-- заготовка под удаленный SQL catalog с отдельным resolver path.
+Поддерживаемые типы коллекций:
+- локальные `table`, `document` и `template`,
+- удалённые `sql` и `api` через привязанные data source и provider.
 
 Ограничения:
 
@@ -136,6 +135,13 @@ ML Portal — мульти-тенантная AI-платформа для ко�
 - credentials,
 - поведения агента через связки policy/baseline/tool bindings.
 
+Документная LongMemory использует самостоятельный каталог slug-проектов памяти.
+Scope чата — объединение настроек тенанта и пользователя с возможностью явной
+замены в чате. Каждый документ получает scope при загрузке (`company` по умолчанию).
+HippoRAG ищет параллельно по отдельному графу каждого выбранного scope и возвращает
+столько же независимых наборов результата. Это отдельный контракт от scope
+прав доступа и credentials. См. [Memory](architecture/MEMORY.md).
+
 ## 5. Потоки данных (крупными мазками)
 
 ## 5.1 Chat flow
@@ -166,12 +172,20 @@ ML Portal — мульти-тенантная AI-платформа для ко�
 
 ## 5.4 Pause / Resume flow
 
-1. Runtime останавливается только для адресного `waiting_confirmation` операции.
-2. Пауза фиксируется в runtime plan и `chat_turn` вместе с fingerprint операции.
-3. Подтверждение или отказ возобновляет тот же runtime run; отказ становится
-   terminal outcome задачи и возвращает управление planner.
-4. Уточняющий пользовательский вопрос завершается synthesis-ответом; следующий
-   ввод создаёт новый run в том же чате.
+Runtime uses one user-interaction mechanism for clarification and confirmation.
+The question stores its requester (TurnPreflight, planner or task agent), expected
+response schema and execution checkpoint. Responses use
+`{"action":"answer","pause_id":"...","response":...}` with text or a JSON
+boolean. Cancellation is a separate action.
+
+A response adds context to the asking component and resumes that point in the
+same run. Planner and agent continuations bypass TurnPreflight. Agent working
+messages and completed tool results survive the pause; completed tasks are not
+replayed. Operation confirmations additionally require a signed token for the
+stored operation fingerprint. A negative operation answer returns its rejection
+to planner without executing it.
+
+See [Runtime Interactions](architecture/RUNTIME_INTERACTIONS.md).
 
 ## 6. Какие данные где хранятся и зачем
 

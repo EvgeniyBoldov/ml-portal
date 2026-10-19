@@ -285,7 +285,7 @@ export function TenantPage() {
             onChange={handleFieldChange}
           />
           <MemoryScopePicker value={formData.memory_scope_keys ?? []} onChange={(keys) => handleFieldChange('memory_scope_keys', keys)}
-            description="Начальный контекст для пользователей tenant-а. По умолчанию команды и проекты не выбраны." />
+            description="Начальный контекст для пользователей tenant-а. По умолчанию проекты памяти не выбраны." />
         </Tab>
       </EntityPageV2>
     );
@@ -363,7 +363,7 @@ export function TenantPage() {
         })}>
           <MemoryScopePicker value={mode === 'edit' ? formData.memory_scope_keys ?? [] : tenant?.memory_scope_keys ?? []}
             onChange={(keys) => handleFieldChange('memory_scope_keys', keys)} readOnly={mode !== 'edit'} disabled={saving}
-            description="Наследуются пользователями без собственного выбора. По умолчанию команды и проекты не выбраны." />
+            description="Наследуются пользователями без собственного выбора. По умолчанию проекты памяти не выбраны." />
         </Tab>
 
         {!isNew && (

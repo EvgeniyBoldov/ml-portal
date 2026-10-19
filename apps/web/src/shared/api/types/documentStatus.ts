@@ -5,10 +5,32 @@
 
 // ─── Pipeline / Stage types (UI-side) ──────────────────────────
 
-export type StageKey = 'upload' | 'extract' | 'normalize' | 'chunk' | 'embedding' | 'index' | 'archive';
-export type StageState = 'idle' | 'queued' | 'running' | 'ok' | 'error' | 'skipped' | 'pending';
+export type StageKey =
+  | 'upload'
+  | 'extract'
+  | 'normalize'
+  | 'chunk'
+  | 'embedding'
+  | 'index'
+  | 'archive';
+export type StageState =
+  | 'idle'
+  | 'queued'
+  | 'running'
+  | 'ok'
+  | 'error'
+  | 'skipped'
+  | 'pending';
 
-export const STAGE_ORDER: StageKey[] = ['upload', 'extract', 'normalize', 'chunk', 'embedding', 'index', 'archive'];
+export const STAGE_ORDER: StageKey[] = [
+  'upload',
+  'extract',
+  'normalize',
+  'chunk',
+  'embedding',
+  'index',
+  'archive',
+];
 
 export interface StageStatus {
   stage: StageKey;
@@ -57,6 +79,7 @@ export interface DocStatus {
   stages: Record<StageKey, StageStatus>;
   embed_models?: IndexModelStatus[];
   index_models?: IndexModelStatus[];
+  memory?: PipelineNode[];
   archived?: boolean;
   ingest_policy?: IngestPolicy;
 }
@@ -87,6 +110,7 @@ export interface EmbeddingNode {
 export interface StatusGraph {
   doc_id: string;
   pipeline: PipelineNode[];
+  memory?: PipelineNode[];
   embeddings: EmbeddingNode[];
   index: EmbeddingNode[];
   agg_status: string;

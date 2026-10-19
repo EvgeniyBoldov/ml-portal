@@ -55,11 +55,12 @@ Runtime использует MCP-compatible tool descriptor как контра�
 turn. После ответа диалоговые кандидаты проходят асинхронные
 `FactExtractor -> FactCompactor -> FactReconciler`.
 
-Документная Semantic Memory хранится отдельно в source-backed
-`MemoryItem`/`MemoryClaim` и читается через ACL-aware `memory.search`. Её
-извлечение, публикация, виртуальные коллекции и границы доступа описаны в
-[архитектуре Memory](architecture/MEMORY.md). Контекст чата и runtime trace
-также являются отдельными persistence surfaces.
+Документная LongMemory хранится в общем native HippoRAG корпусе и доступна
+пользователям портала без фильтрации по user, tenant или ACL исходного
+документа. Scope выбирает индекс общего корпуса и не является разрешением
+доступа. Обычный RAG остаётся отдельным ACL-контуром. Текущий контракт,
+индексация и поиск описаны в [архитектуре Memory](architecture/MEMORY.md).
+Контекст чата и runtime trace также являются отдельными persistence surfaces.
 
 ### MCP runtime flags
 

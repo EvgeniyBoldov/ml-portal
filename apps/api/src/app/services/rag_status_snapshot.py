@@ -6,6 +6,8 @@ build_document_snapshot    — full StatusGraphResponse dict for the status moda
 """
 from __future__ import annotations
 
+from app.services.long_memory_document_service import document_memory_nodes
+
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -196,6 +198,7 @@ async def build_document_snapshot(
         graph = StatusGraphResponse(
             doc_id=str(doc_id),
             pipeline=pipeline_stages,
+            memory=await document_memory_nodes(session, doc_id),
             embeddings=embedding_models,
             index=index_models,
             agg_status=agg_status,

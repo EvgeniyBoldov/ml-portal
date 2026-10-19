@@ -311,6 +311,7 @@ export interface UploadDocumentRequest {
   meta_fields?: Record<string, string>;
   auto_ingest?: boolean;
   memory_enabled?: boolean;
+  memory_scope_keys?: string[];
   project_keys?: string[];
 }
 
@@ -712,6 +713,7 @@ export const collectionsApi = {
     if (data.meta_fields && Object.keys(data.meta_fields).length > 0) formData.append('meta_fields', JSON.stringify(data.meta_fields));
     if (data.auto_ingest !== undefined) formData.append('auto_ingest', String(data.auto_ingest));
     if (data.memory_enabled !== undefined) formData.append('memory_enabled', String(data.memory_enabled));
+    if (data.memory_scope_keys?.length) formData.append('memory_scope_keys', JSON.stringify(data.memory_scope_keys));
     if (data.project_keys?.length) formData.append('project_keys', JSON.stringify(data.project_keys));
 
     return apiRequest<UploadDocumentResponse>(
@@ -1021,8 +1023,8 @@ export const collectionsApi = {
   },
 
   // Document status & ingest (scoped to collection, not RAG)
-  extractLegacyDocumentMemory: async (collectionId: string, docId: string): Promise<{ status: string; task_id: string }> => {
-    return apiRequest(`/collections/${collectionId}/docs/${docId}/memory/legacy-extract`, { method: 'POST' });
+  addDocumentToMemory: async (collectionId: string, docId: string): Promise<{ status: string; operation_id: string }> => {
+    return apiRequest(`/collections/${collectionId}/docs/${docId}/memory`, { method: 'POST' });
   },
 
   getDocStatusGraph: async (collectionId: string, docId: string) => {

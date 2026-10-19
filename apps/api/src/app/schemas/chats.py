@@ -58,6 +58,11 @@ class ChatMessageStreamRequest(BaseModel):
     confirmation_tokens: Optional[List[str]] = Field(default=None, description="Confirmation tokens for gated operations")
 
 
+class ChatMemoryScopesUpdate(BaseModel):
+    scope_keys: list[str] | None = Field(default=None, max_length=120)
+    expected_revision: int = Field(ge=0)
+
+
 class ChatContextInspectionResponse(BaseModel):
     revision: int
     focus: Dict[str, Any] = Field(default_factory=dict)

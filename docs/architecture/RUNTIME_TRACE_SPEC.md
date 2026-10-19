@@ -322,14 +322,20 @@ context bounding already applied by runtime. These events use the existing
 journal/logger, admission levels, redaction, sequence and replay contracts.
 Full logging retains the redacted payload; lower levels never expose its body.
 
-Sandbox executor inspectors combine their own input snapshot and successful
-`memory.search`/`memory.lookup` results from their own calls. They never inherit
+Planner/task snapshots carry `memory_owner=planner|task`, `memory_owner_id` and
+`reason=iteration_started|attempt_started|search_completed`. They record both
+the restored memory at entry and the accumulated memory after each search.
+Complete search responses remain separately attached to their original tools.
+Sandbox executor inspectors use the latest recorded owner snapshot; they do not
+add tool response passages to it again. Historical traces without owner snapshots
+retain their existing projection from input and owned calls. They never inherit
 an unrestricted run snapshot or another executor's read results. The Memory tab
 separates user facts, tenant facts, glossary and long-term document knowledge;
 projects and runtime facts have separate context sections. Facts and terms use compact shared tables with one record per row.
 Document knowledge shows subject, content and kind in a table; its detail
-viewer retains the complete JSON with provenance. Empty groups and zero summary
-counters are hidden. Long values are bounded in rows and can be opened in the
+viewer retains the complete JSON with provenance. Document knowledge is grouped
+by scope, including empty groups and failures; zero summary counters are hidden.
+Long values are bounded in rows and can be opened in the
 shared read-only viewer. Memory tool response and Memory tabs reuse the same viewer.
 An empty recorded snapshot is distinguished from an absent historical snapshot.
 This is context made available to an executor, not proof that every item caused

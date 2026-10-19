@@ -1,6 +1,7 @@
 """Runtime input builders for planner/synthesizer surfaces."""
 from __future__ import annotations
 from typing import Any, Dict, List
+from copy import deepcopy
 
 from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.memory.effective_scope import project_memory_context
@@ -14,6 +15,10 @@ def compact_memory_search_result(result: Any) -> dict[str, Any]:
     """Project a search receipt to passages and source labels once."""
     if not isinstance(result, dict):
         return {}
+    if isinstance(result.get("groups"), list):
+        return {**deepcopy(result), "group_count": len(result["groups"]),
+                "success": result.get("success", True),
+                "partial": result.get("partial", any(not group.get("success", True) for group in result["groups"]))}
     items = result.get("items") if isinstance(result.get("items"), list) else []
     compact_items = []
     for item in items[:12]:
@@ -61,9 +66,10 @@ def compact_memory_tool_records(records: Any) -> list[dict[str, Any]]:
         if not isinstance(record, dict):
             continue
         compacted.append({
-            "operation": record.get("operation"),
+            **({"evidence_id": record["evidence_id"]} if record.get("evidence_id") else {}),
+            "tool": record.get("tool"),
             "arguments": record.get("arguments"),
-            "result": compact_memory_search_result(record.get("result")),
+            "result": (compact_memory_search_result(record.get("result")) if record.get("tool") == "memory.search" else deepcopy(record.get("result") or {})),
         })
     return compacted
 
@@ -76,7 +82,7 @@ def _planner_search_summaries(records: Any) -> list[dict[str, Any]]:
             continue
         result = record.get("result") if isinstance(record.get("result"), dict) else {}
         summaries.append({
-            "operation": record.get("operation"),
+            "tool": record.get("tool"),
             "arguments": record.get("arguments"),
             "success": result.get("success", True),
             "count": result.get("count"),
@@ -187,9 +193,14 @@ class PlannerInputBuilder:
             seen.add(artifact_id)
             result.append({
                 "artifact_id": artifact_id,
+                "is_current": bool(item.get("is_current")),
+                "representation_id": item.get("representation_id"),
+                "source_complete": bool(item.get("source_complete")),
                 "file_name": ref.get("file_name") or item.get("file_name") or "artifact",
                 "content_type": ref.get("content_type") or item.get("content_type"),
                 "size_bytes": ref.get("size_bytes") or item.get("size_bytes"),
+                "origin": ref.get("origin") or item.get("origin") or {},
+                "description": ref.get("description") or item.get("description"),
                 "snippet": item.get("snippet") or "",
                 "snippet_status": item.get("snippet_status") or "missing",
                 "readable": bool(item.get("readable")),

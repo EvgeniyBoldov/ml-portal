@@ -71,6 +71,8 @@ class RuntimeOutcomeProjector:
         redactor = RuntimeRedactor()
         artifacts: list[dict[str, Any]] = []
         for item in runtime_state.attachment_contexts:
+            if not item.is_current:
+                continue
             ref = item.ref
             artifacts.append({
                 "artifact_id": ref.artifact_id,
@@ -78,7 +80,16 @@ class RuntimeOutcomeProjector:
                 "content_type": ref.content_type,
                 "size_bytes": ref.size_bytes,
                 "role": "attachment",
+                "representation_id": item.representation_id, "truncated": item.truncated,
+                "status": item.snippet_status,
             })
+        artifacts.extend(runtime_state.run_context.generated_artifacts)
+        artifacts.extend(runtime_state.run_context.delivered_artifacts)
+        for evidence in runtime_state.run_context.evidence:
+            if evidence.tool == "file.read" and evidence.data.get("artifact_id"):
+                artifacts.append({**{key: evidence.data.get(key) for key in (
+                    "artifact_id", "file_name", "representation_id", "status", "truncated")}, "role": "read",
+                    "description": runtime_state.run_context.artifact_descriptions.get(evidence.data["artifact_id"], "")})
         for result in runtime_state.task_results:
             if not isinstance(result, dict):
                 continue
@@ -111,13 +122,19 @@ class RuntimeOutcomeProjector:
                 "safe_summary": str(redactor.redact(item.get("description") or ""))[:600], "artifact_ids": artifact_ids[:10],
                 "source_run_id": str(runtime_state.run_id),
             })
+        merged_artifacts: dict[str, dict[str, Any]] = {}
+        for artifact in artifacts:
+            artifact_id = str(artifact["artifact_id"])
+            merged_artifacts.setdefault(artifact_id, {}).update({
+                key: value for key, value in artifact.items() if value is not None and value != ""
+            })
         return RuntimeOutcomeProjection(
             run_id=str(runtime_state.run_id), chat_id=chat_id, chat_turn_id=chat_turn_id,
             user_message_id=user_message_id,
             current_user_intent=str(redactor.redact(current_user_intent))[:1200],
             terminal_state=terminal_state, effective_goal=runtime_state.goal[:1200],
             project_context=dict(project_context or {}), term_bindings=list(term_bindings or [])[:20], clarification=dict(clarification or {}) or None,
-            artifacts=artifacts[:50], deleted_artifact_ids=list(runtime_state.deleted_artifact_ids)[:50],
+            artifacts=list(merged_artifacts.values())[:50], deleted_artifact_ids=list(runtime_state.deleted_artifact_ids)[:50],
             limitations=limitations[:5], task_result_refs=task_result_refs[:20],
             assistant_outcome={"summary": str(redactor.redact(runtime_state.final_answer or ""))[:1200]},
         )

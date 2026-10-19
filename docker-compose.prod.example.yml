@@ -26,6 +26,23 @@ x-worker-image: &worker-image ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/
 
 services:
 
+  # Primary document conversion service; API falls back to its local parsers if unavailable.
+  docling:
+    image: quay.io/docling-project/docling-serve-cpu:v1.30.0
+    <<: *restart
+    environment:
+      DOCLING_SERVE_LOG_LEVEL: INFO
+      DOCLING_DEVICE: cpu
+      OMP_NUM_THREADS: ${DOCLING_NUM_THREADS:-2}
+    expose:
+      - "5001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/ready', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
   # Persistent shared document-memory graph. Models are resolved by the API
   # registry and accessed through short-lived capability-authenticated callbacks.
   hipporag:
@@ -158,6 +175,8 @@ services:
       - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
       - HIPPO_CALLBACK_URL=${HIPPO_CALLBACK_URL:-http://api:8000/api/v1/internal/hipporag}
       - HIPPO_TIMEOUT_SECONDS=${HIPPO_TIMEOUT_SECONDS:-1800}
+      - DOCLING_URL=${DOCLING_URL:-http://docling:5001}
+      - DOCLING_TIMEOUT_SECONDS=${DOCLING_TIMEOUT_SECONDS:-180}
       - TOOL_RESULTS_DB_URL=${TOOL_RESULTS_DB_URL:?TOOL_RESULTS_DB_URL is required}
     depends_on:
       postgres:
@@ -316,6 +335,8 @@ services:
       - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
       - HIPPO_CALLBACK_URL=${HIPPO_CALLBACK_URL:-http://api:8000/api/v1/internal/hipporag}
       - HIPPO_TIMEOUT_SECONDS=${HIPPO_TIMEOUT_SECONDS:-1800}
+      - DOCLING_URL=${DOCLING_URL:-http://docling:5001}
+      - DOCLING_TIMEOUT_SECONDS=${DOCLING_TIMEOUT_SECONDS:-180}
       - TOOL_RESULTS_DB_URL=${TOOL_RESULTS_DB_URL:?TOOL_RESULTS_DB_URL is required}
     depends_on:
       postgres:

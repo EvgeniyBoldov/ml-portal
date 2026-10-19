@@ -21,11 +21,13 @@ class _Payload(BaseModel):
 
 
 class ScopePayload(_Payload):
+    scope_mode: Literal["inherit", "replace"] = "inherit"
+    suppress_scope_default: bool = False
     team_keys: list[str] = Field(default_factory=list, max_length=30)
     suppress_team_default: bool = False
     project_keys: list[str] = Field(default_factory=list, max_length=30)
-    scope_keys: list[str] = Field(default_factory=list, max_length=60)
-    scope_origins: dict[str, Literal["turn", "chat_focus", "user_project_default", "user_default", "tenant_default"]] = Field(default_factory=dict, max_length=60)
+    scope_keys: list[str] = Field(default_factory=list, max_length=120)
+    scope_origins: dict[str, Literal["turn", "chat_focus", "user_project_default", "user_default", "tenant_default"]] = Field(default_factory=dict, max_length=120)
     scope_revision: int = Field(default=0, ge=0)
     mentioned_scope_keys: list[str] = Field(default_factory=list, max_length=30)
     suppress_project_default: bool = False
@@ -57,6 +59,11 @@ class TermBindingPayload(_Payload):
 
 
 class ArtifactPayload(_Payload):
+    description: str = Field(default="", max_length=600)
+    description_trust_class: Literal["model_inferred"] = "model_inferred"
+    representation_id: str | None = None
+    status: str | None = None
+    truncated: bool = False
     artifact_id: str = Field(min_length=1, max_length=255)
     role: str = Field(default="referenced", max_length=64)
     file_name: str = Field(default="", max_length=255)

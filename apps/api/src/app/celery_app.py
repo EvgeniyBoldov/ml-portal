@@ -39,6 +39,7 @@ app = Celery(
         # Shadow document study tasks
         "app.workers.tasks_shadow_document_memory",
         "app.workers.tasks_hipporag_document",
+        "app.workers.tasks_long_memory_documents",
     ],
     autodiscover_tasks=False,  # Отключаем автообнаружение задач
 )
@@ -50,6 +51,11 @@ celery_app = app
 def build_default_beat_schedule() -> dict:
     """Return canonical periodic task schedule for the platform."""
     return {
+        "long-memory-document-operations": {
+            "task": "app.workers.tasks_long_memory_documents.reconcile_long_memory_documents",
+            "schedule": 15.0,
+            "options": {"queue": "maintenance.default"},
+        },
         "long-memory-embedding-reindex": {
             "task": "app.workers.tasks_hipporag_document.reconcile_long_memory_reindex",
             "schedule": 30.0,
@@ -292,7 +298,8 @@ else:
     # LongMemory switches require durable queue recovery even on test stands
     # with general periodic maintenance disabled.
     app.conf.beat_schedule = {
-        "long-memory-embedding-reindex": build_default_beat_schedule()["long-memory-embedding-reindex"]
+        "long-memory-embedding-reindex": build_default_beat_schedule()["long-memory-embedding-reindex"],
+        "long-memory-document-operations": build_default_beat_schedule()["long-memory-document-operations"]
     }
 
 # Инициализация задач эмбеддингов

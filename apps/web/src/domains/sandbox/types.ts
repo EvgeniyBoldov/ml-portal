@@ -108,7 +108,13 @@ export interface SandboxRunListItem {
   snapshot_id: string | null;
   parent_run_id: string | null;
   request_text: string;
-  status: 'running' | 'completed' | 'cancelled' | 'failed' | 'waiting_confirmation' | 'waiting_input';
+  status:
+    | 'running'
+    | 'completed'
+    | 'cancelled'
+    | 'failed'
+    | 'waiting_confirmation'
+    | 'waiting_input';
   started_at: string;
   finished_at: string | null;
   steps_count: number;
@@ -186,7 +192,12 @@ export type SandboxStreamEvent =
   | { type: 'progress'; progress: RuntimeProgress }
   | { type: 'journal'; journal: RuntimeJournalEvent }
   | { type: 'delta'; runId: string; content: string }
-  | { type: 'final'; runId: string; content: string; attachments: SandboxFinalAttachment[] }
+  | {
+      type: 'final';
+      runId: string;
+      content: string;
+      attachments: SandboxFinalAttachment[];
+    }
   | { type: 'pause'; pause: SandboxPause }
   | { type: 'error'; runId: string; error: string }
   | { type: 'done'; runId: string };
@@ -194,7 +205,9 @@ export type SandboxStreamEvent =
 // ── Continuation ────────────────────────────────────────────────────────────
 
 export interface RuntimeResumeRequest {
-  action: 'input' | 'confirm' | 'cancel';
+  action: 'input' | 'confirm' | 'cancel' | 'answer';
+  pause_id?: string;
+  response?: string | boolean;
   input?: string;
 }
 
@@ -230,7 +243,14 @@ export interface SandboxResolverFieldSpec {
   key: string;
   label: string;
   field_path: string;
-  field_type: 'tags' | 'select' | 'json' | 'text' | 'integer' | 'float' | 'boolean';
+  field_type:
+    | 'tags'
+    | 'select'
+    | 'json'
+    | 'text'
+    | 'integer'
+    | 'float'
+    | 'boolean';
   editable: boolean;
   options: string[];
   help_text?: string | null;
@@ -282,7 +302,14 @@ export interface SandboxCatalog {
   resolver_blueprints: SandboxResolverBlueprint[];
 }
 
-export type SandboxSelectableType = 'agent' | 'tool' | 'router' | 'parameter' | 'run' | 'artifact' | 'memory';
+export type SandboxSelectableType =
+  | 'agent'
+  | 'tool'
+  | 'router'
+  | 'parameter'
+  | 'run'
+  | 'artifact'
+  | 'memory';
 
 export interface SandboxSelectedItem {
   type: SandboxSelectableType;
@@ -290,5 +317,11 @@ export interface SandboxSelectedItem {
   name: string;
   versionId?: string | null;
   artifactKind?: 'facts' | 'summary';
-  memoryKind?: 'chat_context' | 'chat_artifacts' | 'user_facts' | 'tenant_facts' | 'glossary' | 'project_memory';
+  memoryKind?:
+    | 'chat_context'
+    | 'chat_artifacts'
+    | 'user_facts'
+    | 'tenant_facts'
+    | 'glossary'
+    | 'project_memory';
 }

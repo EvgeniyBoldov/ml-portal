@@ -4,15 +4,45 @@ from app.runtime.synthesis_context import SynthesisContextBuilder
 
 
 def test_synthesis_receives_current_plan_focus_without_a_memory_search():
-    scope = {"keys": ["team.ops", "project.a"], "revision": 2}
+    scope = {"keys": ["company", "a"], "revision": 2}
     context = SynthesisContextBuilder().build(plan={
         "goal": "Найти задачи", "scope_context": scope,
         "iterations": [{"id": "final", "synthesis_brief": {"user_question": "Задачи", "purpose": "Ответить"}}],
         "memory_context": [{"type": "project_context", "scope_context": scope}],
     }, iteration_id="final")
     assert context["scope_context"] == scope
-    assert context["execution_context"]["team_keys"] == ["team.ops"]
-    assert context["execution_context"]["focused_project_keys"] == ["project.a"]
+    assert context["execution_context"]["scope_keys"] == ["company", "a"]
+
+
+def test_synthesis_keeps_rag_artifact_passport_and_exact_passage_provenance():
+    passport = {
+        "schema_version": 1, "artifact_id": "artifact-1",
+        "origin": {"kind": "rag_document", "source_id": "document-1", "collection_id": "collection-1"},
+        "file": {"name": "policy.pdf", "media_type": "application/pdf", "size_bytes": 500},
+        "description": {"text": "Company policy", "source": "source_metadata"},
+        "representation": None, "status": "ready", "attributes": {},
+    }
+    context = SynthesisContextBuilder().build(
+        plan={
+            "goal": "Summarize policy",
+            "iterations": [{"id": "final", "sequence": 1, "terminal": "synthesis",
+                "synthesis_brief": {"user_question": "Policy", "purpose": "Answer"}}],
+            "tasks": {"read": {"iteration_id": "final", "planned_order": 0,
+                "status": "completed", "intent": "Read source", "result": {
+                    "description": "Read source", "outputs": {}, "sources": [{
+                        "source_id": "document-1", "source_name": "policy.pdf",
+                        "artifact_id": "artifact-1", "artifact": passport,
+                        "chunk_id": "chunk-2", "page": 3, "score": 0.91,
+                        "text": "Applicable policy passage",
+                    }],
+                }}},
+        }, iteration_id="final")
+
+    source = context["sources"][0]
+    assert source["artifact"] == passport
+    assert source["chunk_id"] == "chunk-2"
+    assert source["page"] == 3
+    assert source["excerpt"] == "Applicable policy passage"
 
 
 def test_synthesis_uses_accepted_partial_output_and_keeps_unresolved_limitation() -> None:

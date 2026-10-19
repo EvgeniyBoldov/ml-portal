@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, Checkbox, ConfirmDialog, DataTable, EntityPageV2, Input, Modal, Select, Tab, LifecycleDeleteDialog, type DataTableColumn } from '@/shared/ui';
+import { Badge, Button, ConfirmDialog, DataTable, EntityPageV2, Input, Modal, Select, Tab, LifecycleDeleteDialog, type DataTableColumn } from '@/shared/ui';
 import { adminApi, type AdminGlossaryTerm, type MemoryScopeAdminItem, type MemoryScopeProposalAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import MemoryBulkRejectDialog from '@/domains/admin/components/MemoryBulkRejectDialog';
 import MemoryScopeProposalDialog from '@/domains/admin/components/MemoryScopeProposalDialog';
 import MemoryActionsMenu from '@/domains/admin/components/MemoryActionsMenu';
+import LongMemoryTab from '@/domains/admin/components/LongMemoryTab';
+import LongMemorySearchModal from '@/domains/admin/components/LongMemorySearchModal';
 import { reviewColumns } from '@/domains/admin/components/MemoryReviewTable';
 import { scopeColumns, scopeTypeLabels, type ScopeTableRow } from '@/domains/admin/components/MemoryScopeTable';
 import styles from './MemoryPage.module.css';
@@ -38,8 +40,8 @@ const memoryColumns: DataTableColumn<SemanticMemoryAdminItem>[] = [
 
 export default function MemoryPage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const initialTab = ['glossary', 'memory', 'review', 'scopes'].includes(searchParams.get('tab') ?? '') ? searchParams.get('tab')! : 'glossary';
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = ['glossary', 'memory', 'review', 'scopes', 'long-memory'].includes(searchParams.get('tab') ?? '') ? searchParams.get('tab')! : 'glossary';
   const [activeTab, setActiveTab] = useState(initialTab);
   const [query, setQuery] = useState('');
   const [memoryScopeType, setMemoryScopeType] = useState('');
@@ -55,7 +57,8 @@ export default function MemoryPage() {
   const [scopeEditor, setScopeEditor] = useState<MemoryScopeAdminItem | 'new' | null>(null);
   const [scopeToDelete, setScopeToDelete] = useState<MemoryScopeAdminItem | null>(null);
   const [scopeLifecycleAction, setScopeLifecycleAction] = useState<'delete' | 'restore'>('delete');
-  const [scopeForm, setScopeForm] = useState({ scope_type: 'team' as MemoryScopeAdminItem['scope_type'], key: '', name: '', aliases: '', is_all: false, project_type: '' });
+  const [isLongMemorySearchOpen, setIsLongMemorySearchOpen] = useState(false);
+  const [scopeForm, setScopeForm] = useState({ scope_type: 'project' as MemoryScopeAdminItem['scope_type'], key: '', name: '', aliases: '', is_all: false, project_type: '' });
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
@@ -186,7 +189,15 @@ export default function MemoryPage() {
       defaultTab={initialTab}
       mode="view"
       breadcrumbs={[{ label: 'Мемори' }]}
-      onTabChange={(tab) => { setActiveTab(tab); setQuery(''); }}
+      onTabChange={(tab) => {
+        setActiveTab(tab);
+        setQuery('');
+        setSearchParams((current) => {
+          const next = new URLSearchParams(current);
+          next.set('tab', tab);
+          return next;
+        }, { replace: true });
+      }}
       headerActions={(activeTab === 'glossary' || activeTab === 'memory') ? <Input aria-label="Поиск в текущей вкладке" placeholder={activeTab === 'glossary' ? 'Поиск терминов' : 'Поиск по памяти'} value={query} onChange={(event) => { setQuery(event.target.value); setMemoryPage(0); setSelectedMemoryIds(new Set()); setSelectedGlossaryIds(new Set()); }} /> : null}
     >
       <Tab title="Глоссарий" id="glossary" layout="full">
@@ -230,22 +241,24 @@ export default function MemoryPage() {
           loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20}
           onRowClick={(row) => navigate(`/admin/memory/review/${row.id}`)} />}
       </Tab>
-      <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'team', key: '', name: '', aliases: '', is_all: false, project_type: '' }); setScopeEditor('new'); }}>Создать скоуп</Button>]}>
+      <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'project', key: '', name: '', aliases: '', is_all: false, project_type: '' }); setScopeEditor('new'); }}>Создать скоуп</Button>]}>
         {scopesError || scopeProposalsError ? <p role="alert">Не удалось загрузить скоупы памяти и предложения.</p> : <DataTable columns={scopeColumns({ onReview: setScopeProposalEditor, onEdit: openScopeEditor, onLifecycle: (scope, action) => { setScopeLifecycleAction(action); setScopeToDelete(scope); } })} data={scopeRows} keyField="id" loading={scopesLoading || scopeProposalsLoading} emptyText="Скоупов пока нет" paginated pageSize={20} onRowClick={openScopeRow} />}
+      </Tab>
+      <Tab title="LongMemory" id="long-memory" layout="full" actions={[<Button key="long-memory-search" variant="outline" onClick={() => setIsLongMemorySearchOpen(true)}>Тестовый поиск</Button>]}>
+        <LongMemoryTab />
       </Tab>
     </EntityPageV2>
     <Modal open={Boolean(scopeEditor)} title={scopeEditor === 'new' ? 'Новый скоуп памяти' : 'Изменить скоуп памяти'} onClose={() => setScopeEditor(null)}>
       <div style={{ display: 'grid', gap: 12 }}>
-        <label className={styles.scopeField}>Тип<Select options={Object.entries(scopeTypeLabels).map(([value, label]) => ({ value, label }))} value={scopeForm.scope_type} disabled={scopeEditor !== 'new'} onChange={(value) => { const nextType = value as MemoryScopeAdminItem['scope_type']; setScopeForm({ ...scopeForm, scope_type: nextType, key: scopeForm.is_all ? `${nextType}.all` : `${nextType}.${slugifyScopeName(scopeForm.name)}` }); }} /></label>
-        {scopeEditor !== 'new' && <small style={{ color: 'var(--muted)' }}>Тип и ключ фиксируют идентичность скоупа; здесь можно изменить название и алиасы.</small>}
-        <label className={styles.scopeField}>Название<Input value={scopeForm.name} onChange={(event) => setScopeForm({ ...scopeForm, name: event.target.value, key: scopeForm.is_all ? scopeForm.key : `${scopeForm.scope_type}.${slugifyScopeName(event.target.value)}` })} /></label>
-        {scopeForm.scope_type === 'project' && !scopeForm.is_all && <label className={styles.scopeField}>Тип проекта<Input value={scopeForm.project_type} placeholder="IAAS, SAAS, колокейшен" onChange={(event) => setScopeForm({ ...scopeForm, project_type: event.target.value })} /></label>}
+        {scopeEditor !== 'new' && <small style={{ color: 'var(--muted)' }}>Slug фиксирует идентичность скоупа; название и алиасы можно изменить.</small>}
+        <label className={styles.scopeField}>Slug<Input value={scopeForm.key} disabled={scopeEditor !== 'new'} placeholder="company, nims, dcbox" onChange={(event) => setScopeForm({ ...scopeForm, key: event.target.value })} /></label>
+        <label className={styles.scopeField}>Название<Input value={scopeForm.name} onChange={(event) => setScopeForm({ ...scopeForm, name: event.target.value, key: scopeEditor === 'new' ? slugifyScopeName(event.target.value) : scopeForm.key })} /></label>
         <label className={styles.scopeField}>Алиасы<Input value={scopeForm.aliases} placeholder="архитекторы, архитектурная команда" onChange={(event) => setScopeForm({ ...scopeForm, aliases: event.target.value })} /></label>
-        {scopeEditor === 'new' && <Checkbox checked={scopeForm.is_all} onChange={(checked) => setScopeForm({ ...scopeForm, is_all: checked, key: checked ? `${scopeForm.scope_type}.all` : `${scopeForm.scope_type}.${slugifyScopeName(scopeForm.name)}` })} label="Общий скоуп типа" description={`Для этого типа будет создан ключ ${scopeForm.scope_type}.all.`} />}
-        {saveScope.isError && <p role="alert">Не удалось сохранить скоуп. Проверьте уникальность ключа и соответствие типа.</p>}
+        {saveScope.isError && <p role="alert">Не удалось сохранить скоуп. Проверьте уникальность slug.</p>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button variant="outline" onClick={() => setScopeEditor(null)}>Отмена</Button><Button disabled={!scopeForm.key || !scopeForm.name.trim() || saveScope.isPending} onClick={() => saveScope.mutate()}>{saveScope.isPending ? 'Сохраняем…' : 'Сохранить'}</Button></div>
       </div>
     </Modal>
+    <LongMemorySearchModal open={isLongMemorySearchOpen} onClose={() => setIsLongMemorySearchOpen(false)} />
     <LifecycleDeleteDialog open={Boolean(scopeToDelete)} action={scopeLifecycleAction} kind="memory_scope" entityId={scopeToDelete?.id ?? ''} entityLabel={scopeToDelete?.name ?? ''} onCancel={() => setScopeToDelete(null)} onSuccess={() => { setScopeToDelete(null); queryClient.invalidateQueries({ queryKey: ['admin', 'memory', 'scopes'] }); queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] }); }} />
     <ConfirmDialog open={confirmMemoryDeactivate} title={`Деактивировать записи памяти (${selectedMemoryIds.size})?`} message="Записи перестанут участвовать в активной памяти." confirmLabel="Деактивировать" cancelLabel="Отмена" variant="warning" confirmLoading={deactivateMemory.isPending} onCancel={() => setConfirmMemoryDeactivate(false)} onConfirm={() => deactivateMemory.mutate()} />
     <ConfirmDialog open={confirmGlossaryAction === 'deactivate'} title={`Деактивировать термины (${selectedGlossaryIds.size})?`} message="Термины останутся в админском списке, но перестанут попадать в глоссарий для поиска и извлечения новых документов." confirmLabel="Деактивировать" cancelLabel="Отмена" variant="warning" confirmLoading={glossaryAction.isPending} onCancel={() => setConfirmGlossaryAction(null)} onConfirm={() => glossaryAction.mutate()} />

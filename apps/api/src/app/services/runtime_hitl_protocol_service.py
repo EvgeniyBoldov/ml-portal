@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+from copy import deepcopy
+from app.runtime.interaction import RuntimeInteraction, interaction_from_context
 
 
 class RuntimeHitlProtocolService:
@@ -15,7 +17,6 @@ class RuntimeHitlProtocolService:
 
         action: Dict[str, Any] = {
             "kind": action_kind,
-            "type": "resume",  # legacy alias
             "reason": reason,
             "question": stop_payload.get("question"),
             "message": stop_payload.get("message"),
@@ -24,12 +25,20 @@ class RuntimeHitlProtocolService:
         existing_action = stop_payload.get("action")
         if isinstance(existing_action, dict):
             action.update(existing_action)
+            action.pop("type", None)
         for key in ("operation_fingerprint", "tool_slug", "operation", "risk_level", "args_preview", "summary"):
             if stop_payload.get(key) is not None:
                 action[key] = stop_payload[key]
 
         existing_context = stop_payload.get("context")
         context = dict(existing_context) if isinstance(existing_context, dict) else dict(stop_payload or {})
+        interaction = interaction_from_context(context)
+        if interaction is not None:
+            reason = interaction.reason
+            action.update(interaction.operation or {})
+            action.update(kind=cls._action_kind_for_reason(reason), pause_id=interaction.id,
+                          question=interaction.question)
+            context.update(pause_id=interaction.id, question=interaction.question)
         context.setdefault("contract_version", cls.CONTRACT_VERSION)
         return {
             "reason": reason,
@@ -38,6 +47,18 @@ class RuntimeHitlProtocolService:
             "context": context,
             "contract_version": cls.CONTRACT_VERSION,
         }
+
+    @staticmethod
+    def public_pause(payload: Dict[str, Any]) -> Dict[str, Any]:
+        result = deepcopy(payload)
+        context = result.get("context") or {}
+        interaction = interaction_from_context(context)
+        if interaction is not None:
+            context["interaction"] = interaction.public()
+        action = result.get("action") or {}
+        if isinstance(action.get("interaction"), dict):
+            action["interaction"] = RuntimeInteraction.model_validate(action["interaction"]).public()
+        return result
 
     @staticmethod
     def extract_operation_fingerprint(

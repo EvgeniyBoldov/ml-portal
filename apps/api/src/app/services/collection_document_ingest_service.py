@@ -31,7 +31,7 @@ from app.repositories.factory import AsyncRepositoryFactory
 from app.services.collection_service import CollectionService
 from app.core.exceptions import CollectionNotFoundError, CollectionDocumentUploadError, NotDocumentCollectionError
 from app.services.document_artifacts import build_document_source_meta
-from app.services.memory_scope_catalog import resolve_memory_scopes
+from app.services.memory_scope_catalog import DEFAULT_MEMORY_SCOPE, resolve_memory_scopes
 from app.services.rag_event_publisher import RAGEventPublisher
 from app.services.rag_status_manager import RAGStatusManager
 from app.services.upload_intake_policy import UploadIntakePolicy
@@ -76,15 +76,17 @@ class CollectionDocumentUploadService:
         memory_scope_keys: Optional[List[str]] = None,
     ) -> dict:
         """Upload a file into a document collection and persist RAG bookkeeping."""
-        collection = await self._get_document_collection(collection_id)
-        selected_scope_keys = [*(memory_scope_keys or []), *(f"project.{key}" for key in (project_keys or []))]
-        selected_scopes = await resolve_memory_scopes(self.session, selected_scope_keys)
-        normalized_meta_fields = self._validate_document_metadata(collection, meta_fields or {})
         UploadIntakePolicy.validate_document_upload(
             filename=filename,
             content_type=content_type,
             size_bytes=len(file_content),
         )
+        collection = await self._get_document_collection(collection_id)
+        selected_scope_keys = list(dict.fromkeys([*(memory_scope_keys or []), *(project_keys or [])])) or [DEFAULT_MEMORY_SCOPE]
+        if len(selected_scope_keys) != 1:
+            raise ValueError("Choose exactly one memory scope for a document")
+        selected_scopes = await resolve_memory_scopes(self.session, selected_scope_keys)
+        normalized_meta_fields = self._validate_document_metadata(collection, meta_fields or {})
 
         doc_id = uuid.uuid4()
         settings = get_settings()

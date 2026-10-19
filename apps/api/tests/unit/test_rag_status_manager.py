@@ -303,3 +303,20 @@ def test_annotate_stale_models_marks_policy_and_counter():
     assert agg_details["stale_models"] == ["emb-a"]
     assert agg_details["counters"]["stale_models"] == 1
     assert agg_details["policy"] == "index_ready_but_stale"
+
+
+@pytest.mark.asyncio
+async def test_stop_rag_does_not_cancel_independent_long_memory_nodes():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from uuid import uuid4
+    from app.services.rag_status_manager import RAGStatusManager
+    manager = RAGStatusManager(MagicMock(), MagicMock())
+    manager.status_repo.get_nodes_by_doc_id = AsyncMock(return_value=[
+        SimpleNamespace(node_type="memory", node_key="knowledge", status="processing"),
+        SimpleNamespace(node_type="memory", node_key="graph", status="queued"),
+    ])
+    manager.transition_stage = AsyncMock()
+    result = await manager.stop_ingest(uuid4())
+    assert result == {"stopped_stages": [], "task_ids": []}
+    manager.transition_stage.assert_not_awaited()

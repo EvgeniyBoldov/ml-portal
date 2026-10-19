@@ -276,7 +276,7 @@ describe('chat streaming', () => {
     const source = stream();
     vi.mocked(fetchStreamWithAuth).mockResolvedValue(source.response);
     const onError = vi.fn();
-    let pending: Promise<void>;
+    let pending: Promise<boolean>;
     act(() => {
       pending = result.current.actions.sendMessageStream(
         'chat',
@@ -321,7 +321,7 @@ describe('chat streaming', () => {
           resolve = value;
         })
     );
-    let pending: Promise<void>;
+    let pending: Promise<boolean>;
     act(() => {
       pending = result.current.actions.sendMessageStream(
         'chat',

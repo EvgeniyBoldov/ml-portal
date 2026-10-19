@@ -13,6 +13,23 @@ const item = {
 };
 
 describe('ConfirmationPrompt', () => {
+  it('returns a negative boolean answer separately from cancelling the run', () => {
+    const reject = vi.fn();
+    const cancel = vi.fn();
+    render(
+      <ConfirmationPrompt
+        item={item}
+        onConfirm={vi.fn()}
+        onReject={reject}
+        onCancel={cancel}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Нет$/ }));
+    expect(reject).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /^Отменить$/ }));
+    expect(cancel).toHaveBeenCalledOnce();
+  });
   it('uses the runtime question as its header and emits confirmation/cancellation callbacks', () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();

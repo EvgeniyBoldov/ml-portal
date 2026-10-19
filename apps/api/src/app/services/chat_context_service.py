@@ -11,7 +11,10 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.repositories.chats_repo import AsyncChatMessagesRepository
 from app.repositories.chat_context_repository import ChatContextRepository
-from app.services.chat_context_contracts import ChatContextApplyReceipt, ChatContextOperation, ChatContextSnapshot
+from app.services.chat_context_contracts import (
+    ArtifactPayload, DecisionPayload, OpenLoopPayload, TaskResultPayload, TermBindingPayload,
+    ChatContextApplyReceipt, ChatContextOperation, ChatContextSnapshot,
+)
 from app.services.chat_context_reconciler import ChatContextReconciler
 from app.runtime.context_outcome import RuntimeOutcomeProjection
 from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
@@ -150,11 +153,11 @@ class ChatContextService:
                 if item.kind == "scope": snapshot.focus = payload
                 elif item.kind == "goal": snapshot.active_goal = payload
                 elif item.kind == "recent_anchor": snapshot.recent_anchor = payload
-                elif item.kind == "term_binding": snapshot.term_bindings.append(payload)
-                elif item.kind == "artifact_ref": snapshot.artifacts.append(payload)
-                elif item.kind == "open_loop": snapshot.open_loops.append(payload)
-                elif item.kind == "decision": snapshot.decisions.append(payload)
-                elif item.kind == "task_result_ref": snapshot.task_result_refs.append(payload)
+                elif item.kind == "term_binding": snapshot.term_bindings.append(TermBindingPayload.model_validate(payload))
+                elif item.kind == "artifact_ref": snapshot.artifacts.append(ArtifactPayload.model_validate(payload))
+                elif item.kind == "open_loop": snapshot.open_loops.append(OpenLoopPayload.model_validate(payload))
+                elif item.kind == "decision": snapshot.decisions.append(DecisionPayload.model_validate(payload))
+                elif item.kind == "task_result_ref": snapshot.task_result_refs.append(TaskResultPayload.model_validate(payload))
             except ValueError:
                 # Historical/invalid rows are never copied into a prompt.
                 snapshot.uncertainties.append({"code": "invalid_context_item", "message": "An outdated context item was ignored."})
@@ -306,6 +309,38 @@ class ChatContextService:
         self._record_reconciliation(origin="reset", receipt=receipt)
         return receipt
 
+    async def set_memory_scopes(self, *, chat_id: str, owner_id: str, keys: list[str] | None,
+                               expected_revision: int) -> None:
+        """Persist an authenticated UI preference with a revision fence."""
+        from app.models.chat_memory import ChatMemoryItem
+        from app.services.memory_scope_preferences_service import MemoryScopePreferencesService
+        from app.services.chat_context_contracts import ScopePayload
+
+        validated = await MemoryScopePreferencesService(self.session).validate_keys(keys or [], max_scopes=120)
+        repository = ChatContextRepository(self.session)
+        head = await repository.get_or_create_head(chat_id=chat_id, branch_id=None)
+        if head.revision != expected_revision:
+            raise ValueError("stale_revision")
+        existing = await repository.active_item(chat_id=chat_id, branch_id=None, kind="scope", item_key="current_scope")
+        previous = ScopePayload.model_validate(existing.payload if existing else {}).model_dump(mode="json")
+        payload = ScopePayload.model_validate({**previous,
+            "scope_keys": validated, "scope_mode": "inherit" if keys is None else "replace",
+            "suppress_scope_default": keys == [], "scope_revision": head.revision + 1,
+            "scope_origins": {key: "chat_focus" for key in validated},
+            "project_keys": [], "team_keys": [], "suppress_team_default": False,
+            "suppress_project_default": False, "source": "explicit", "trust_class": "application_verified",
+        }).model_dump(mode="json")
+        if existing is None:
+            existing = ChatMemoryItem(chat_id=uuid.UUID(chat_id), kind="scope", item_key="current_scope", payload=payload)
+            repository.add_item(existing)
+        existing.payload = payload
+        existing.expires_at = None
+        existing.source_ref = f"user:{owner_id}:memory-scopes"
+        head.revision += 1
+        head.updated_through_turn_order += 1
+        existing.source_turn_order = head.updated_through_turn_order
+        await repository.flush()
+
     async def inspect_snapshot(self, *, chat_id: str, owner_id: str, tenant_id: str, branch_id: str | None = None) -> dict[str, Any]:
         """Return a user-safe inspection projection without internal source IDs."""
         snapshot = await self.load_snapshot(chat_id=chat_id, branch_id=branch_id, owner_id=owner_id, tenant_id=tenant_id)
@@ -316,15 +351,14 @@ class ChatContextService:
             chat_context=snapshot.model_dump(mode="json"),
         )
         focus.update({
-            "team_keys": [item.key.removeprefix("team.") for item in inherited.selected if item.type == "team"],
-            "project_keys": [item.key.removeprefix("project.") for item in inherited.selected if item.type == "project"],
-            "team_names": [item.name for item in inherited.selected if item.type == "team"],
-            "project_names": [item.name for item in inherited.selected if item.type == "project"],
+            "scope_keys": inherited.keys,
+            "scope_names": [item.name for item in inherited.selected],
+            "scope_mode": inherited.mode,
         })
         goal = snapshot.active_goal.model_dump() if snapshot.active_goal else {}
         return {
             "revision": snapshot.revision,
-            "focus": {key: focus.get(key) for key in ("team_keys", "project_keys", "team_names", "project_names", "topic", "entity_refs") if key in focus},
+            "focus": {key: focus.get(key) for key in ("scope_keys", "scope_names", "scope_mode", "topic", "entity_refs") if key in focus},
             "active_goal": {key: goal.get(key) for key in ("text", "status") if key in goal} or None,
             "term_bindings": [{key: item.model_dump().get(key) for key in ("term", "aliases") if key in item.model_dump()} for item in snapshot.term_bindings],
             "artifacts": [{key: item.model_dump().get(key) for key in ("file_name", "content_type", "size_bytes", "role") if key in item.model_dump()} for item in snapshot.artifacts],

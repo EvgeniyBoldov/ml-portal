@@ -14,10 +14,13 @@ def output_slot_example(task: TaskRequest, key: str) -> dict[str, Any]:
 def build_task_completion_prompt(task: TaskRequest) -> str:
     return "\n\n".join([
         "# RUNTIME TASK COMPLETION DECLARATION — ОБЯЗАТЕЛЬНЫЙ ПРОТОКОЛ",
-        "Верни один JSON-объект. completion: fulfilled, needs или unfulfillable. "
+        "Верни один JSON-объект. completion: fulfilled, needs, unfulfillable или interaction. "
         "Ты самостоятельно оцениваешь выполнение задачи. answer — необязательный текст; "
         "structured_response — любые фактически полученные JSON-данные; needs — зависимости "
         "с ref, key, description. Для completion=needs нужен непустой needs; для остальных needs=[].",
+        "Если нужен ответ пользователя, верни completion=interaction и interaction={question: конкретный вопрос, response_type: text или boolean}. "
+        "Runtime сохранит точку выполнения и вернёт ответ именно этой задаче. Не оформляй вопрос как fulfilled или missing need. "
+        "Для остальных completion поле interaction отсутствует или null.",
         "Схемы входа и результата — рекомендации. Сохрани реальные значения, включая null и пустые "
         "списки. Если данные отличаются от схемы, передай их и при необходимости объясни в answer. "
         "Не выдумывай данные. Пока нужна работа, используй доступные инструменты. "

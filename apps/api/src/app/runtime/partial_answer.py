@@ -81,6 +81,10 @@ async def stream_partial_answer(*, synthesizer: Any, plan: dict[str, Any],
         context = partial_context(plan=plan, state=runtime_state, failure_code=failure_code,
                                   max_chars=int(planner_kwargs.get("synthesis_context_max_chars") or 120_000))
         notices = list(dict.fromkeys(item["message"] for item in context["limitations"]))
+        if failure_code == "initial_planning_failed" and not context.get("completed_task_reports"):
+            runtime_state.final_answer = "\n".join(notices)
+            yield RuntimeEvent.final(runtime_state.final_answer, sources=[], run_id=str(plan["root_run_id"]), attachments=[])
+            return
         reserve = BudgetRegistry(run_limits=RunLimits(llm_calls=1, retries=0, wall_time_ms=timeout * 1000))
         buffered: list[RuntimeEvent] = []
         async with asyncio.timeout(timeout):

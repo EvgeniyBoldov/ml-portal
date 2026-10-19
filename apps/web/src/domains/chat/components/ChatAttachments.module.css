@@ -1,5 +1,5 @@
 .list { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
-.attachment { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-hover); color: var(--text); font-size: 12px; cursor: pointer; }
-.attachment:hover:not(:disabled) { background: var(--panel); }
-.attachment:disabled { cursor: wait; opacity: .65; }
+.attachment { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-hover); color: var(--text); font-size: 12px; text-decoration: none; }
+.attachment:hover { background: var(--panel); }
+.attachment:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
 .attachment span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

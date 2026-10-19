@@ -83,6 +83,7 @@ class RAGDocument(Base):
     agg_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     agg_details_json: Mapped[Dict[str, Any] | None] = mapped_column(PostgresJSONB, nullable=True)  # JSONB in DB
     # Fences stale workers from changing the UI projection after a retry.
+    long_memory_generation: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     ingest_generation: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     
     __table_args__ = (

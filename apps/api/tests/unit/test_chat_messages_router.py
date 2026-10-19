@@ -155,7 +155,7 @@ async def test_resume_run_reuses_paused_chat_turn(monkeypatch):
         user_id=user_id,
         status="paused",
         pause_status="waiting_input",
-        paused_action={"kind": "input"},
+        paused_action={"kind": "input", "pause_id": "pause-1"},
         paused_context={"question": "Какая тема?"},
         paused_at=datetime.now(timezone.utc),
     )
@@ -183,6 +183,7 @@ async def test_resume_run_reuses_paused_chat_turn(monkeypatch):
         body=RuntimeResumeRequest(
             action=RuntimeResumeAction.INPUT,
             input="Сетевая инженерия",
+            pause_id="pause-1",
         ),
         session=session,
         current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]),
@@ -198,8 +199,47 @@ async def test_resume_run_reuses_paused_chat_turn(monkeypatch):
     assert captured["stream_kwargs"]["continuation_meta"]["resumed_from_run_id"] == str(run_id)
     checkpoint = captured["stream_kwargs"]["continuation_meta"]["resume_checkpoint"]
     assert checkpoint["original_goal"] == "Что мне почитать?"
+    assert checkpoint["paused_context"]["question"] == "Какая тема?"
+    assert captured["stream_kwargs"]["content"] == "Сетевая инженерия"
+    assert captured["stream_kwargs"]["persist_user_message"] is True
     session.commit.assert_awaited_once()
     assert any("event: done" in chunk for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_resume_run_rejects_stale_pause_id_before_resuming(monkeypatch):
+    chat_id, user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4(), uuid4()
+    turn = SimpleNamespace(
+        id=uuid4(), chat_id=chat_id, user_id=user_id, status="paused",
+        pause_status="waiting_input",
+        paused_action={"kind": "input", "pause_id": "current-pause"},
+        paused_context={"question": "Какой проект?", "original_goal": "Подготовь отчёт"},
+        paused_at=datetime.now(timezone.utc),
+    )
+    session = AsyncMock()
+    session.execute.return_value = _Result(turn)
+
+    class _UnexpectedService:
+        def __init__(self, **_kwargs):
+            raise AssertionError("A stale pause must be rejected before streaming")
+
+    monkeypatch.setattr(chat_messages, "ChatStreamService", _UnexpectedService)
+    with pytest.raises(HTTPException) as exc:
+        await chat_messages.resume_run(
+            run_id=str(run_id),
+            body=RuntimeResumeRequest(
+                action=RuntimeResumeAction.INPUT,
+                input="Проект Альфа",
+                pause_id="old-pause",
+            ),
+            session=session,
+            current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]),
+            _rl=None,
+        )
+
+    assert exc.value.status_code == 409
+    assert turn.status == "paused"
+    session.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -207,7 +247,7 @@ async def test_resume_preflight_clarify_uses_goal_from_pause_context(monkeypatch
     chat_id, user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4(), uuid4()
     turn = SimpleNamespace(
         id=uuid4(), chat_id=chat_id, user_id=user_id, status="paused",
-        pause_status="waiting_input", paused_action=None,
+        pause_status="waiting_input", paused_action={"kind": "input", "pause_id": "pause-2"},
         paused_context={"question": "Какой проект?", "original_goal": "Обнови glossary"},
         paused_at=datetime.now(timezone.utc),
     )
@@ -228,7 +268,7 @@ async def test_resume_preflight_clarify_uses_goal_from_pause_context(monkeypatch
 
     response = await chat_messages.resume_run(
         run_id=str(run_id),
-        body=RuntimeResumeRequest(action=RuntimeResumeAction.INPUT, input="Проект Нема"),
+        body=RuntimeResumeRequest(action=RuntimeResumeAction.INPUT, input="Проект Нема", pause_id="pause-2"),
         session=session,
         current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]),
         _rl=None,

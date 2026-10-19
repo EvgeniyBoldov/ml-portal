@@ -45,6 +45,10 @@ export const qk = {
       candidate: (id: string) => ['admin', 'memory', 'candidate', id] as const,
       item: (id: string) => ['admin', 'memory', 'item', id] as const,
       scopes: () => ['admin', 'memory', 'scopes'] as const,
+      longMemoryDocuments: (params?: { query?: string; scope_key?: string; status?: string; limit?: number; offset?: number }) =>
+        ['admin', 'memory', 'long-memory', 'documents', params] as const,
+      longMemoryDocument: (id: string) => ['admin', 'memory', 'long-memory', 'documents', id] as const,
+      longMemoryDocumentTriples: (id: string, offset: number) => ['admin', 'memory', 'long-memory', 'documents', id, 'triples', offset] as const,
       termCatalog: () => ['admin', 'memory', 'term-catalog'] as const,
       review: () => ['admin', 'memory', 'staging-review'] as const,
       candidateEvidence: (id: string) =>

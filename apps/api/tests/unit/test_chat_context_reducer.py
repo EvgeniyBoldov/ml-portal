@@ -7,7 +7,7 @@ from app.services.chat_context_reducer import ChatContextReducer
 def test_reducer_keeps_only_typed_verified_continuity_operations() -> None:
     projection = RuntimeOutcomeProjection(
         run_id="run-1", chat_id="chat-1", chat_turn_id="turn-1", terminal_state="waiting_input",
-        effective_goal="Проверить отчёт", project_context={"explicit_project_keys": ["ML-Portal"]},
+        effective_goal="Проверить отчёт", project_context={"explicit_scope_keys": ["ml-portal"], "scope_selection_explicit": True},
         term_bindings=[{"id": "term-1", "term": "RAG", "matched_aliases": ["rag"]}],
         clarification={"question": "Какой отчёт использовать?"},
         artifacts=[{"artifact_id": "artifact-1", "file_name": "report.xlsx"}],
@@ -67,3 +67,12 @@ def test_failed_turn_does_not_persist_a_technical_error_as_context() -> None:
     operations = ChatContextReducer().reduce(projection=projection, expected_revision=2)
 
     assert not any(item.kind in {"goal", "recent_anchor"} for item in operations)
+
+
+def test_external_project_hint_does_not_change_memory_scope() -> None:
+    projection = RuntimeOutcomeProjection(
+        run_id="run-1", chat_id="chat-1", chat_turn_id="turn-1", terminal_state="completed",
+        project_context={"explicit_project_keys": ["external-project"]},
+    )
+    operations = ChatContextReducer().reduce(projection=projection, expected_revision=1)
+    assert not any(item.kind == "scope" for item in operations)

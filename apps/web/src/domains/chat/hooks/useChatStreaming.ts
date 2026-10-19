@@ -6,6 +6,7 @@ import {
   type SetStateAction,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { toApiError } from '@/shared/api/errors';
 import { qk } from '@/shared/api/keys';
 import { fetchStreamWithAuth } from '@/shared/api/streamAuth';
 import { generateChatTitle, resumeRunStream } from '@/shared/api/chats';
@@ -23,6 +24,8 @@ type MessagesByChat = Record<
   { items: ChatTimelineMessage[]; loading: boolean; loaded?: boolean }
 >;
 interface Options {
+  pausedInteractionId: string | null;
+  hasInteraction: boolean;
   activeRun: ActiveChatRun | null;
   setActiveRun: Dispatch<SetStateAction<ActiveChatRun | null>>;
   setMessagesByChat: Dispatch<SetStateAction<MessagesByChat>>;
@@ -37,24 +40,13 @@ interface Options {
 
 async function ensureResponse(response: Response) {
   if (response.ok && response.body) return;
-  let message = 'Не удалось открыть поток ответа';
-  try {
-    const text = await response.text();
-    try {
-      const payload = JSON.parse(text) as { detail?: unknown; error?: unknown };
-      const detail = payload.detail || payload.error;
-      if (typeof detail === 'string') message = detail;
-    } catch {
-      if (text) message = text;
-    }
-  } catch {
-    /* Keep the transport fallback. */
-  }
-  throw new Error(message);
+  throw await toApiError(response);
 }
 
 export function useChatStreaming({
   activeRun,
+  pausedInteractionId,
+  hasInteraction,
   setActiveRun,
   setMessagesByChat,
   setIsStreaming,
@@ -359,7 +351,7 @@ export function useChatStreaming({
     ) => {
       if (controllerRef.current) {
         onError('Дождитесь завершения текущего ответа');
-        return;
+        return false;
       }
       currentChatRef.current = chatId;
       const controller = new AbortController();
@@ -397,7 +389,7 @@ export function useChatStreaming({
         status: 'running',
       });
       const idempotencyKey = createIdempotencyKey();
-      await executeStream(
+      return executeStream(
         chatId,
         assistantId,
         userId,
@@ -433,8 +425,8 @@ export function useChatStreaming({
   const resumeStream = useCallback(
     async (
       runId: string,
-      action: 'confirm' | 'cancel' | 'input',
-      input: string,
+      action: 'confirm' | 'cancel' | 'input' | 'answer',
+      input: string | boolean,
       onChunk: (content: string) => void,
       onError: (message: string) => void
     ) => {
@@ -483,7 +475,9 @@ export function useChatStreaming({
             runId,
             action,
             input,
-            controller.signal
+            controller.signal,
+            pausedInteractionId,
+            hasInteraction
           );
           if (
             response.ok &&
@@ -501,6 +495,8 @@ export function useChatStreaming({
     },
     [
       activeRun,
+      pausedInteractionId,
+      hasInteraction,
       addMessages,
       clearPausedInteraction,
       executeStream,

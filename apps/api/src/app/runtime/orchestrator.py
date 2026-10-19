@@ -18,11 +18,14 @@ from app.runtime.orchestrator_contracts import (
     SchedulerActionKind, TaskAttemptFailure, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
     FreshnessPolicy, ResponseSpec, TaskOutputFulfillment, TaskOutputSpec, TerminalKind,
 )
+from app.runtime.interaction import InteractionRequired, RuntimeInteraction, InteractionQuestion, InteractionRequester, interaction_history
 from app.runtime.plan_store import PlanValidationError
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
 from app.runtime.memory.tool_ledger import canonical_operation_name, document_search_evidence_document_ids
-from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, project_memory_context, task_scope
+from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, project_memory_context, task_scope, scope_selection_changes
+from app.runtime.memory.document_memory import DOCUMENT_MEMORY_TYPES, document_memory
+from app.runtime.memory.execution_context import memory_execution_context
 
 
 def _context_failure_event(exc: BaseException) -> Optional[RuntimeEvent]:
@@ -41,7 +44,7 @@ def _context_failure_event(exc: BaseException) -> Optional[RuntimeEvent]:
 
 
 def _task_memory_context(task: TaskRequest, planner_memory_context: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Project planner context to the concrete task without semantic guessing.
+    """Pass shared facts and chat references, excluding planner search memory.
 
     Artifact references are forwarded only when the plan explicitly names their
     opaque id; task agents must not receive the entire conversational registry.
@@ -53,17 +56,14 @@ def _task_memory_context(task: TaskRequest, planner_memory_context: list[dict[st
     ])
 
     for entry in planner_memory_context:
+        if isinstance(entry, dict) and entry.get("type") in DOCUMENT_MEMORY_TYPES:
+            continue
         if not isinstance(entry, dict) or entry.get("type") != "chat_context":
-            if isinstance(entry, dict) and entry.get("type") in {"memory_recall", "planner_memory_result"}:
-                selected.append(project_memory_context(entry, allowed))
-            else:
-                selected.append(entry)
+            selected.append(entry)
             continue
         raw = dict(entry)
         focus = dict(raw.get("focus") or {})
-        focus.update(scope_keys=sorted(allowed),
-                     project_keys=[key.removeprefix("project.") for key in sorted(allowed)
-                                   if key.startswith("project.") and key != "project.all"])
+        focus.update(scope_keys=sorted(allowed), project_keys=[], team_keys=[])
         focus["scope_origins"] = {key: origin for key, origin in (focus.get("scope_origins") or {}).items() if key in allowed}
         artifacts = [
             item for item in raw.get("artifacts") or []
@@ -334,6 +334,7 @@ class GraphOrchestrator:
         self.event_sink = event_sink
         self.logging_level = logging_level
         self.reducer = TaskAttemptResultReducer()
+        self._task_state_lock = asyncio.Lock()
 
     async def _execute_with_heartbeat(
         self, *, plan_id: UUID, task_id: str, heartbeat_seconds: float, **kwargs: Any,
@@ -347,7 +348,8 @@ class GraphOrchestrator:
                 if done:
                     return execution_task.result()
                 if heartbeat is not None:
-                    await heartbeat(plan_id, task_id)
+                    async with self._task_state_lock:
+                        await heartbeat(plan_id, task_id)
         except BaseException:
             if not execution_task.done():
                 execution_task.cancel()
@@ -506,7 +508,7 @@ class GraphOrchestrator:
         compiled_tasks = []
         effective_scope = EffectiveScopeContext.model_validate(scope_context or {})
         for task in proposal.tasks:
-            if (task.scope_keys or task.scope_mode == "replace") and not task.scope_reason.strip():
+            if scope_selection_changes(effective_scope, ScopeSelection(keys=task.scope_keys, mode=task.scope_mode)) and not task.scope_reason.strip():
                 raise PlanValidationError(f"task {task.task_id} must explain its scope selection")
             try:
                 task_context = task_scope(effective_scope, ScopeSelection(
@@ -668,15 +670,22 @@ class GraphOrchestrator:
         iteration_number = len(request.context.execution_ledger.get("iterations", [])) + 1
         iteration_entity_id = UUID(planner_iteration_id(str(request.run_id), iteration_number))
         planner_kwargs.setdefault("event_sink", self.event_sink)
+        async def persist_memory(context: list[dict[str, Any]]) -> None:
+            await self.store.update_memory_context(plan_id, document_memory(context))
+        paused_snapshot = await self.store.snapshot(plan_id)
+        answers = interaction_history(paused_snapshot.get("pauses", []), stage="planner")
         proposal = await self.planner.plan(
             request=request,
             planner_iteration_trace_id=str(iteration_entity_id),
+            persist_memory=persist_memory,
+            interaction_answers=answers,
             **planner_kwargs,
         )
         proposal = self._compile(proposal, available_agents, request.context.execution_ledger,
                                  request.context.scope_context)
         if request.context.planner_search_results:
-            await self.store.update_memory_context(plan_id, request.context.planner_search_results)
+            await self.store.update_memory_context(plan_id, [*document_memory(request.context.memory_context),
+                                                           *request.context.planner_search_results])
         if proposal.synthesis_brief is not None and not _same_user_question(proposal.synthesis_brief.user_question, goal):
             raise PlanValidationError("synthesis brief user_question must equal the immutable plan goal")
         await self.store.apply_iteration(plan_id, proposal, iteration_id=iteration_entity_id)
@@ -688,6 +697,20 @@ class GraphOrchestrator:
                   planner_kwargs: Optional[Dict[str, Any]] = None) -> AsyncIterator[OrchestratorEvent]:
         planner_kwargs = dict(planner_kwargs or {})
         artifacts = list(available_artifacts or [])
+        async def pause_user(interaction: RuntimeInteraction, task_id: str | None = None) -> OrchestratorEvent:
+            requester = interaction.requester.model_copy(update={"plan_id": str(plan_id), "task_id": task_id})
+            interaction = interaction.model_copy(update={"requester": requester})
+            await self.store.pause_interaction(plan_id, interaction)
+            event_type = (RuntimeEventType.CONFIRMATION_REQUIRED if interaction.reason == "waiting_confirmation"
+                          else RuntimeEventType.WAITING_INPUT)
+            return OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent(event_type, {
+                "entity_type": "interaction", "entity_id": interaction.id,
+                "parent_entity_type": "agent_execution" if task_id else "planner_iteration",
+                "parent_entity_id": requester.entity_id,
+                "question": interaction.question, "message": interaction.question,
+                "interaction": interaction.model_dump(mode="json"),
+                **(interaction.operation or {}),
+            }))
         async def fail(code: str, exc: BaseException | str) -> None:
             await self.store.mark_failed(plan_id, code, str(exc))
         runtime_limits = planner_kwargs.get("runtime_limits") if isinstance(planner_kwargs.get("runtime_limits"), dict) else {}
@@ -725,6 +748,10 @@ class GraphOrchestrator:
                     iteration_id=applied_iteration_id, proposal=proposal,
                 ):
                     yield graph_event
+            except InteractionRequired as exc:
+                yield await pause_user(exc.interaction)
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
+                return
             except Exception as exc:
                 # Another delivery may have won the initial apply race.  It
                 # is not a planner failure and must never fail its live plan.
@@ -847,6 +874,10 @@ class GraphOrchestrator:
                     ):
                         yield graph_event
                     continue
+                except InteractionRequired as exc:
+                    yield await pause_user(exc.interaction)
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
+                    return
                 except Exception as exc:
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
                         iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=next_iteration_number, status="failed",
@@ -894,6 +925,10 @@ class GraphOrchestrator:
                         iteration_id=str(iteration.id if hasattr(iteration, "id") else iteration["id"]),
                         deleted_artifact_ids=list(getattr(runtime_state, "deleted_artifact_ids", []) or []),
                     )
+                    if getattr(runtime_state, "run_context", None) is not None:
+                        context["run_context"] = runtime_state.run_context.projection(
+                            scope_keys=list((planner_kwargs.get("scope_context") or {}).get("keys") or []),
+                            evidence_refs=(context.get("synthesis_brief") or {}).get("evidence_refs") or [])
                     context["limitations"].extend(
                         {"message": item["message"]}
                         for item in getattr(runtime_state, "execution_limitations", []) if item.get("message")
@@ -904,7 +939,7 @@ class GraphOrchestrator:
                     return
                 snapshot = await self.store.snapshot(plan_id)
                 try:
-                    async for event in self.synthesizer.stream(runtime_state=runtime_state, run_id=UUID(str(snapshot["root_run_id"])), synthesis_context=context,
+                    async for event in self.synthesizer.stream(runtime_state=runtime_state, run_id=UUID(str(snapshot["root_run_id"])), synthesis_context=context, ctx=planner_kwargs.get("ctx"),
                                                                model=planner_kwargs.get("model"), platform_config=planner_kwargs.get("platform_config"),
                                                                sandbox_overrides=planner_kwargs.get("sandbox_overrides"), logging_level=self.logging_level,
                                                                budget_registry=planner_kwargs.get("budget_registry"), budget_resolver=planner_kwargs.get("budget_resolver")):
@@ -982,25 +1017,30 @@ class GraphOrchestrator:
                     request = request.model_copy(update={
                         "memory_context": _task_memory_context(
                             request, context_items,
-                        ),
+                        ) + document_memory(request.memory_context),
                     })
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.status(
                         "task_scope_resolved", plan_id=str(plan_id), task_id=task_id,
                         scope_context=request.scope_context,
                     ))
                     task_kwargs = dict(planner_kwargs)
+                    async def persist_task_memory(context: list[dict[str, Any]]) -> None:
+                        async with self._task_state_lock:
+                            await self.store.update_task_memory(plan_id, task_id, context)
+                    task_kwargs["memory_persist"] = persist_task_memory
                     task_ctx = task_kwargs.get("ctx")
                     if task_ctx is not None and hasattr(task_ctx, "with_extra"):
                         task_scope_context = dict(request.scope_context or {})
                         selected = task_scope_context.get("selected") or []
-                        project_keys = [str(row.get("key", "")).removeprefix("project.") for row in selected
-                                        if str(row.get("key", "")).startswith("project.") and row.get("key") != "project.all"]
                         task_kwargs["ctx"] = task_ctx.with_extra(
                             project_context={"effective_scope_keys": [row.get("key") for row in selected],
-                                             "effective_project_keys": project_keys,
+                                             "effective_project_keys": [], "effective_team_keys": [],
                                              "scope_ceiling_keys": [row.get("key") for row in selected],
                                              "scope_context": task_scope_context},
                             effective_scope_context=task_scope_context,
+                            memory_search_scope_keys=list(task_scope_context.get("keys") or []),
+                            memory_execution_context=memory_execution_context(
+                                task_scope_context.get("keys") or [], revision=int(task_scope_context.get("revision") or 0)),
                         )
                     execution = await self._execute_with_heartbeat(
                         plan_id=plan_id,
@@ -1054,8 +1094,12 @@ class GraphOrchestrator:
                         plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
                         attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
                     ))
-                except TaskConfirmationRequired as exc:
-                    await self.store.pause_confirmation(plan_id, task_id, exc.payload)
+                except (TaskConfirmationRequired, InteractionRequired) as exc:
+                    interaction = exc.interaction if isinstance(exc, InteractionRequired) else RuntimeInteraction.create(
+                        InteractionQuestion(question=str(exc.payload.get("question") or exc.payload.get("summary") or "Подтвердите действие"), response_type="boolean"),
+                        InteractionRequester(stage="agent", entity_id=execution_id, task_id=task_id, agent_slug=task_executor),
+                        operation=exc.payload)
+                    interaction_event = await pause_user(interaction, task_id)
                     yield OrchestratorEvent(type="task_paused", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
                         agent_execution_id=execution_id,
@@ -1076,10 +1120,7 @@ class GraphOrchestrator:
                         plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
                         attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
                     ))
-                    yield OrchestratorEvent(type="confirmation_required", **{
-                        "plan_id": str(plan_id), "task_id": task_id,
-                        **trace_links, **exc.payload,
-                    })
+                    yield interaction_event
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
                     return
                 except TaskExecutionError as exc:

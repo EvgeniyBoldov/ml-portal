@@ -33,12 +33,17 @@ class AttachmentRef(BaseModel):
     content_type: Optional[str] = None
     size_bytes: Optional[int] = None
     status: Optional[str] = None
+    origin: Dict[str, Any] = Field(default_factory=dict)
+    description: Optional[str] = None
 
 
 class AttachmentContext(BaseModel):
+    source_complete: bool = False
+    representation_id: str | None = None
     ref: AttachmentRef
+    is_current: bool = False
     snippet: str = ""
-    snippet_status: Literal["ready", "truncated", "unreadable", "missing"] = "missing"
+    snippet_status: Literal["ready", "partial", "truncated", "unreadable", "unread", "missing"] = "missing"
     readable: bool = False
     truncated: bool = False
 

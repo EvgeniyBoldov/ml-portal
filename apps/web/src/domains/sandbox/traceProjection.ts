@@ -274,6 +274,8 @@ export interface TraceMemoryDecision {
 }
 
 export interface TraceMemoryContext {
+  owner?: { kind: string; id: string };
+  scopeGroups?: { scope: string; status: string; count: number; error?: string }[];
   fallback: boolean;
   selectedFacts: number;
   selectedProjects: number;
@@ -633,6 +635,9 @@ function memoryContextFor(events: RuntimeJournalEvent[], calls: TraceCall[] = []
   const recalled = calls.flatMap((call) => memoryContextFromTool(call) ?? []);
   if (!payload && !recalled.length) return undefined;
   const base = memoryContextFromPayload(payload ?? { memory_context: [] });
+  // Current executors record their actual accumulated memory after every search.
+  // Rebuilding it from child calls would reintroduce duplicates and stale finds.
+  if (payload?.memory_owner) return base;
   const context = [...base.context, ...recalled.flatMap((item) => item.context)];
   const unique = context.filter((item, index) => context.findIndex((other) => JSON.stringify(other) === JSON.stringify(item)) === index);
   return {
@@ -654,6 +659,7 @@ export function memoryContextFromPayload(payload: Record<string, unknown>): Trac
     const record = asRecord(value);
     if (!record) return [];
     if (record.result || record.memory_context) return collect(record.result ?? record.memory_context);
+    if (Array.isArray(record.groups)) return record.groups.flatMap(collect);
     const field = (key: string, type: string) => Array.isArray(record[key])
       ? (record[key] as unknown[]).flatMap((item) => asRecord(item) ? [{ ...asRecord(item), type }] : []) : [];
     if (record.type === 'fact' || (!record.type && record.scope && record.subject && record.value !== undefined)) return [{ ...record, type: 'fact' }];
@@ -692,14 +698,29 @@ export function memoryContextFromPayload(payload: Record<string, unknown>): Trac
     }
     if (['knowledge', 'company_knowledge', 'project_knowledge'].includes(type)) {
       const source = asRecord(record?.metadata);
-      const subject = asString(record?.subject) || asString(source?.document_title) || asString(source?.filename);
+      const subject = asString(record?.subject) || asString(source?.document_title) || asString(source?.filename) || 'Фрагмент документа';
       const content = record?.content;
       const value = asString(record?.text) || asString(record?.value) || (content ? JSON.stringify(content) : '');
-      return subject && value ? [{ type: 'knowledge', scope: asString(record?.scope) || 'unknown', kind: asString(record?.kind) || 'knowledge', subject, value, confidence: asNumber(record?.confidence), sourceReferences: Array.isArray(record?.source_references) ? record.source_references : Array.isArray(source?.source_refs) ? source.source_refs : [], raw: record ?? undefined }] : [];
+      return subject && value ? [{ type: 'knowledge', scope: asString(record?.scope_slug) || asString(record?.scope) || 'unknown', kind: asString(record?.kind) || 'knowledge', subject, value, confidence: asNumber(record?.confidence), sourceReferences: Array.isArray(record?.source_references) ? record.source_references : Array.isArray(source?.source_refs) ? source.source_refs : [], raw: record ?? undefined }] : [];
     }
     return [];
   });
+  const scopeGroups = new Map<string, { scope: string; status: string; count: number; error?: string }>();
+  const visitGroups = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(visitGroups); return; }
+    const record = asRecord(value);
+    if (!record) return;
+    if (record.result || record.memory_context) { visitGroups(record.result ?? record.memory_context); return; }
+    if (Array.isArray(record.groups)) record.groups.forEach(group => {
+      const row = asRecord(group);
+      const scope = asString(row?.scope_slug);
+      if (scope) scopeGroups.set(scope, { scope, status: asString(row?.status), count: asNumber(row?.count) ?? 0, error: asString(row?.error) || undefined });
+    });
+  };
+  visitGroups(rawContext);
   return {
+    ...(payload.memory_owner ? { owner: { kind: asString(payload.memory_owner), id: asString(payload.memory_owner_id) } } : {}),
+    ...(scopeGroups.size ? { scopeGroups: [...scopeGroups.values()] } : {}),
     fallback: payload.fallback === true,
     selectedFacts: asNumber(payload.selected_facts) ?? context.filter((item) => item.type === 'fact').length,
     selectedProjects: asNumber(payload.selected_projects) ?? context.filter((item) => item.type === 'project').length,

@@ -298,6 +298,8 @@ class ShadowMemoryPublicationService:
         term_id = await self._approved_proposal_term_id(proposal)
         if term_id is None and (proposal.term_candidate_id or proposal.glossary_term_id):
             raise ValueError("Scope proposal requires its referenced term to be approved and active")
+        proposal.proposed_key = proposal.proposed_key.removeprefix("project.").removeprefix("team.")
+        proposal.scope_type = "project"
         existing = await self._session.scalar(select(MemoryScope).where(
             MemoryScope.scope_type == proposal.scope_type,
             MemoryScope.key == proposal.proposed_key,

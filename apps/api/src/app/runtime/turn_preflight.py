@@ -10,24 +10,27 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.events import RuntimeEvent
+from app.runtime.interaction import InteractionQuestion, interaction_from_context
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import SynthesisBrief
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.effective_scope import ScopeSelection
 from app.agents.context import ToolContext
 from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
-from app.runtime.input_builders import compact_memory_tool_records
+from app.runtime.input_builders import PlannerInputBuilder, compact_memory_tool_records
+from app.runtime.contracts import AttachmentContext
 
 
 class TaskBrief(BaseModel):
     goal: str = Field(..., min_length=1)
     project_hints: list[str] = Field(default_factory=list, description="Project names/keys from the user or confirmed facts, including external projects absent from the memory catalog.")
-    scope_keys: list[str] = Field(default_factory=list, description="Concrete team.* or project.* memory catalog keys only. Empty inherits focus; user and tenant are not focus keys.")
+    scope_keys: list[str] = Field(default_factory=list, description="Exact catalog scope slugs only. Empty inherit preserves focus.")
     scope_mode: Literal["inherit", "replace"] = "inherit"
     entity_hints: list[str] = Field(default_factory=list)
     direction: str = Field(..., min_length=1)
     constraints: list[str] = Field(default_factory=list)
     expected_result: str = Field(..., min_length=1)
+    synthesis_brief: SynthesisBrief | None = None
     model_config = {"extra": "forbid"}
 
 
@@ -38,7 +41,7 @@ class DirectAnswerBrief(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class Clarification(BaseModel):
+class Clarification(InteractionQuestion):
     question: str = Field(..., min_length=1)
     direct_answer_reason: Optional[str] = Field(
         default=None, min_length=1,
@@ -60,7 +63,14 @@ class MemoryCandidate(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class ArtifactDescription(BaseModel):
+    model_config = {"extra": "forbid"}
+    artifact_id: str
+    description: str = Field(min_length=1, max_length=600)
+
+
 class TurnPreflightDecision(BaseModel):
+    artifact_descriptions: list[ArtifactDescription] = Field(default_factory=list)
     route: Literal["synthesis", "planner", "tool_call", "clarify"]
     synthesis_brief: Optional[DirectAnswerBrief] = None
     task_brief: Optional[TaskBrief] = None
@@ -104,11 +114,8 @@ def _canonical_scope_selection(decision: TurnPreflightDecision) -> ScopeSelectio
         raise ValueError("conflicting_scope_selection")
     if legacy.scope_mode == "replace" and selection.mode != "replace":
         raise ValueError("conflicting_scope_mode")
-    for scope_type in {key.partition(".")[0] for key in legacy_selection.keys}:
-        shared = {key for key in selection.keys if key.startswith(f"{scope_type}.")}
-        old = {key for key in legacy_selection.keys if key.startswith(f"{scope_type}.")}
-        if shared and shared != old:
-            raise ValueError("conflicting_scope_selection")
+    if selection.keys and legacy_keys and set(selection.keys) != set(legacy_keys):
+        raise ValueError("conflicting_scope_selection")
     return ScopeSelection(keys=[*selection.keys, *legacy_selection.keys], mode=selection.mode,
                           mentioned_keys=selection.mentioned_keys, rationale=selection.rationale)
 
@@ -136,6 +143,7 @@ class TurnPreflight:
         project_context: dict[str, Any] | None = None,
         chat_context: dict[str, Any] | None = None,
         recent_dialogue: list[dict[str, str]] | None = None,
+        attachments: list[AttachmentContext] | None = None,
         continuation: dict[str, Any] | None = None,
         ctx: ToolContext | None = None,
         chat_id: UUID | None = None,
@@ -157,7 +165,9 @@ class TurnPreflight:
             ))
         tools = RoleMemoryTools(session=self._session, ctx=ctx)
         descriptors = await tools.descriptors()
-        tool_results: list[dict[str, Any]] = []
+        resumed = interaction_from_context((continuation or {}).get("paused_context"))
+        tool_results: list[dict[str, Any]] = list(resumed.checkpoint.get("memory_tool_results") or []) if resumed else []
+        available_artifacts = PlannerInputBuilder._normalize_artifacts([item.model_dump(mode="json") for item in attachments or []])
         for _ in range(RoleMemoryTools.MAX_CALLS + 1):
             result = await self._llm.invoke(
                 role=SystemLLMRoleType.TURN_PREFLIGHT,
@@ -173,7 +183,8 @@ class TurnPreflight:
                     "project_context": dict(project_context or {}),
                     "chat_context": dict(chat_context or {}),
                     "recent_dialogue": list(recent_dialogue or []),
-                    "scope_policy": "Focus controls execution context, not HippoRAG document search. Select only confirmed concrete catalog keys; memory.search takes query and optional limit.",
+                    "available_artifacts": available_artifacts,
+                    "scope_policy": "Chat scope slugs control memory search. Each selected scope returns one independent group; query and limit are the only tool arguments.",
                     "continuation": continuation or {},
                     "available_tools": descriptors,
                     "memory_tool_results": compact_memory_tool_records(tool_results),
@@ -194,11 +205,30 @@ class TurnPreflight:
                 budget_entity_id=budget_entity_id,
             )
             decision = result.value
+            if (decision.route == "clarify" and len(available_artifacts) == 1
+                    and re.search(r"прикреп|загруз|attach|upload", decision.clarification.question, re.IGNORECASE)):
+                decision = TurnPreflightDecision(route="tool_call", tool_call=MemoryToolCall(
+                    tool="file.read", arguments={"artifact_id": available_artifacts[0]["artifact_id"]}))
+
+            if decision.route == "clarify" and self._repeats_answered_question(
+                decision.clarification.question, user_request, continuation or {},
+            ):
+                decision = self._planner_handoff(str((continuation or {}).get("original_goal") or user_request), decision,
+                    reason="Предложенное уточнение повторяет исходный запрос или уже отвеченный вопрос. Продолжи работу с имеющимися данными и ответами пользователя.")
             if decision.route != "tool_call":
                 break
             if len(tool_results) >= RoleMemoryTools.MAX_CALLS:
                 decision = self._planner_handoff(user_request, decision,
                     reason="Бюджет поиска памяти исчерпан; используй найденный контекст и продолжи работу.")
+                break
+            selection = _canonical_scope_selection(decision)
+            current_keys = set(((project_context or {}).get("scope_context") or {}).get("keys") or [])
+            if (selection.keys or selection.mode == "replace") and set(selection.keys) != current_keys:
+                # Pipeline applies the validated focus before invoking planner.
+                # Searching now would use the previous chat scope and attach
+                # evidence to a different selection in the final decision.
+                decision = self._planner_handoff(user_request, decision, selection=selection,
+                    reason="Сначала примени выбранные scope, затем выполни поиск по ним.")
                 break
             assert decision.tool_call is not None
             tool_results.append(await tools.execute(decision.tool_call, actor="turn_preflight",
@@ -214,14 +244,18 @@ class TurnPreflight:
         # A confirmation such as "yes" may refer to the agent's question in
         # recent_dialogue. Current-message alias matches and initial focus are
         # not a ceiling; validate the resulting identity against the catalog.
-        if set(keys).intersection({"team.all", "project.all"}):
-            return self._planner_handoff(user_request, decision, reason="Общий селектор памяти не задаёт конкретную область задачи; исходный фокус сохранён.")
         if keys or mentions:
             try:
                 await resolve_memory_scopes(self._session, list(dict.fromkeys([*keys, *mentions])))
             except ValueError:
                 return self._planner_handoff(user_request, decision, reason="Выбор области памяти не разрешён по активному каталогу; исходный фокус сохранён. Установи параметры работы по доступным источникам.")
         decision = decision.model_copy(update={"scope_selection": selection})
+        current_keys = set(((project_context or {}).get("scope_context") or {}).get("keys") or [])
+        if tool_results and decision.route == "synthesis" and (keys or selection.mode == "replace") and set(keys) != current_keys:
+            routed = self._planner_handoff(user_request, decision, selection=selection,
+                reason="Найденные фрагменты относятся к прежним scope. Выполни поиск в выбранных scope перед ответом.")
+            routed._memory_tool_results = tool_results
+            return routed
         # Durable user facts are persisted by MemoryWriter after the final
         # answer. They are not agent tasks: no planner executor is allowed to
         # claim that it has written memory. Keep an explicit "remember as a
@@ -270,6 +304,17 @@ class TurnPreflight:
                     }),
                 })
         return decision
+
+    @staticmethod
+    def _repeats_answered_question(question: str, user_request: str, continuation: dict[str, Any]) -> bool:
+        def normalized(value: Any) -> str:
+            return re.sub(r"[^\w]+", " ", str(value or "").casefold()).strip()
+        candidates = [user_request, continuation.get("original_goal")]
+        candidates.extend(item.get("question") for item in continuation.get("clarification_history", [])
+                          if isinstance(item, dict) and "answer" in item)
+        if continuation.get("resume_action") == "input" and continuation.get("user_response"):
+            candidates.extend((continuation.get(key) or {}).get("question") for key in ("paused_action", "paused_context"))
+        return bool(normalized(question)) and normalized(question) in {normalized(value) for value in candidates if value}
 
     @staticmethod
     def _planner_handoff(

@@ -44,6 +44,7 @@ _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
         "artifact_id": {"type": "string", "description": "Chat-scoped artifact reference UUID"},
+        "artifact": {"type": "object", "description": "Normalized, content-free artifact passport"},
         "file_name": {"type": "string"},
         "content_type": {"type": "string"},
         "size_bytes": {"type": "integer"},
@@ -77,6 +78,7 @@ class FileGenerateTool(VersionedTool):
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
         from app.core.db import get_session_factory
         from app.services.file_generation_service import FileGenerationService
+        from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
 
         log = ctx.tool_notes("file.generate")
 
@@ -131,7 +133,12 @@ class FileGenerateTool(VersionedTool):
                     filename=output_filename,
                     content=content,
                     format_name=fmt,
+                    metadata={"root_run_id": str(ctx.extra.get("runtime_root_run_id") or "")},
                 )
+                reference_service = ChatArtifactReferenceService(session)
+                reference = await reference_service.get_reference(
+                    artifact_id=artifact.artifact_id, chat_id=str(chat_id), owner_id=str(user_id))
+                passport = reference_service.manifest(reference)
                 await session.commit()
                 log.info(
                     "File saved",
@@ -141,6 +148,7 @@ class FileGenerateTool(VersionedTool):
                 return ToolResult.ok(
                     data={
                         "artifact_id": artifact.artifact_id,
+                        "artifact": passport,
                         "file_name": artifact.file_name,
                         "content_type": artifact.content_type,
                         "size_bytes": artifact.size_bytes,

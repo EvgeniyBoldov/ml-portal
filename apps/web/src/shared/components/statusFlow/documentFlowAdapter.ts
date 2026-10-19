@@ -3,13 +3,20 @@ import type { DocStatus } from '@shared/api/types/documentStatus';
 import type { FlowGraphModel } from './types';
 import { getDisplayStatus } from './statusFlowUtils';
 
-export function adaptDocumentStatusToFlowModel(docStatus: DocStatus | undefined): FlowGraphModel {
+export function adaptDocumentStatusToFlowModel(
+  docStatus: DocStatus | undefined
+): FlowGraphModel {
   if (!docStatus?.stages) {
     return { pipeline: [] };
   }
 
-  const pipelineKeys: Array<'upload' | 'extract' | 'normalize' | 'chunk'> = ['upload', 'extract', 'normalize', 'chunk'];
-  const pipeline = pipelineKeys.map((key) => {
+  const pipelineKeys: Array<'upload' | 'extract' | 'normalize' | 'chunk'> = [
+    'upload',
+    'extract',
+    'normalize',
+    'chunk',
+  ];
+  const pipeline = pipelineKeys.map(key => {
     const stage = docStatus.stages[key];
     return {
       key,
@@ -22,7 +29,7 @@ export function adaptDocumentStatusToFlowModel(docStatus: DocStatus | undefined)
     };
   });
 
-  const embeddings = (docStatus.embed_models ?? []).map((item) => ({
+  const embeddings = (docStatus.embed_models ?? []).map(item => ({
     key: item.id || item.name,
     label: item.id || item.name,
     status: getDisplayStatus(item.state),
@@ -33,7 +40,7 @@ export function adaptDocumentStatusToFlowModel(docStatus: DocStatus | undefined)
     finished_at: item.finished_at ?? null,
   }));
 
-  const indexes = (docStatus.index_models ?? []).map((item) => ({
+  const indexes = (docStatus.index_models ?? []).map(item => ({
     key: item.id || item.name,
     label: item.id || item.name,
     status: getDisplayStatus(item.state),
@@ -52,8 +59,31 @@ export function adaptDocumentStatusToFlowModel(docStatus: DocStatus | undefined)
     lanes.push({ key: 'index', label: 'Index', items: indexes });
   }
 
+  const memoryKeys: string[] = [];
+  for (const item of docStatus.memory ?? []) {
+    const key = `memory.${item.key}`;
+    memoryKeys.push(key);
+    lanes.push({
+      key,
+      label: 'LongMemory',
+      items: [
+        {
+          ...item,
+          key,
+          label:
+            item.key === 'knowledge'
+              ? 'Извлечение знаний'
+              : 'Индекс LongMemory',
+          status: getDisplayStatus(item.status),
+        },
+      ],
+    });
+  }
   return {
     pipeline,
     lanes,
+    ...(memoryKeys.length
+      ? { parallel: { after: 'normalize', laneKeys: memoryKeys } }
+      : {}),
   };
 }

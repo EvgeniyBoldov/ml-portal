@@ -25,6 +25,8 @@ export function MemoryContextViewer({
     title: string;
     items: TraceMemoryContextItem[];
     showScope?: boolean;
+    error?: string;
+    status?: string;
   }[] = [
     {
       title: 'Факты пользователя',
@@ -42,10 +44,21 @@ export function MemoryContextViewer({
       title: 'Глоссарий',
       items: context.context.filter(item => item.type === 'glossary'),
     },
-    {
-      title: 'Долговременная память',
-      items: context.context.filter(item => item.type === 'knowledge'),
-    },
+    ...(context.scopeGroups?.length
+      ? context.scopeGroups.map(group => ({
+          title: `Память · ${group.scope}`,
+          items: context.context.filter(
+            item => item.type === 'knowledge' && item.scope === group.scope
+          ),
+          status: group.status,
+          error: group.error,
+        }))
+      : [
+          {
+            title: 'Долговременная память',
+            items: context.context.filter(item => item.type === 'knowledge'),
+          },
+        ]),
     {
       title: 'Проекты',
       items: context.context.filter(item => item.type === 'project'),
@@ -66,6 +79,15 @@ export function MemoryContextViewer({
   ];
   return (
     <InspectorStack>
+      {context.owner ? (
+        <InspectorTextBlock
+          text={
+            context.owner.kind === 'planner'
+              ? 'Собственная накопленная память планера'
+              : `Собственная накопленная память задания ${context.owner.id}`
+          }
+        />
+      ) : null}
       <div className={styles.summary}>
         <InspectorStatus
           label={context.fallback ? 'Fallback без памяти' : 'Подготовлен'}
@@ -80,16 +102,35 @@ export function MemoryContextViewer({
           ))}
       </div>
       {groups
-        .filter(group => group.items.length > 0)
+        .filter(group => group.items.length > 0 || group.status)
         .map(group => (
           <InspectorSection
             key={group.title}
             title={`${group.title} · ${group.items.length}`}
           >
-            <MemoryItemsTable items={group.items} showScope={group.showScope} />
+            {group.status === 'failed' ? (
+              <InspectorStatus
+                label={group.error || 'Последний поиск завершился ошибкой'}
+                tone="warn"
+              />
+            ) : null}
+            {group.items.length ? (
+              <MemoryItemsTable
+                items={group.items}
+                showScope={group.showScope}
+              />
+            ) : (
+              <InspectorEmptyState
+                message={
+                  group.status === 'failed'
+                    ? 'Найденных фрагментов нет.'
+                    : 'Поиск выполнен, фрагменты не найдены.'
+                }
+              />
+            )}
           </InspectorSection>
         ))}
-      {!context.context.length ? (
+      {!context.context.length && !context.scopeGroups?.length ? (
         <InspectorEmptyState message="Память не использовалась." />
       ) : null}
       {context.ambiguities.length ? (

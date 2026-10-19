@@ -11,6 +11,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, field_validator
 
 from app.runtime.memory.components import MemoryBundle, MemorySection
+from app.runtime.run_context import RunContext
 from app.runtime.memory.tool_ledger import ToolLedger
 from app.runtime.contracts import (
     AttachmentContext,
@@ -37,6 +38,7 @@ class RuntimeTurnState(BaseModel):
     tenant_id: Optional[UUID] = None
     execution_mode: ExecutionMode = ExecutionMode.NORMAL
 
+    run_context: RunContext = Field(default_factory=RunContext)
     goal: str = ""
     execution_limitations: List[Dict[str, str]] = Field(default_factory=list)
     current_user_query: str = ""

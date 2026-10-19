@@ -38,6 +38,7 @@ interface ResumePausedState {
   question?: string | null;
   message?: string | null;
   action?: Record<string, unknown> | null;
+  interaction?: Record<string, unknown>;
 }
 
 interface ChatState {
@@ -55,6 +56,7 @@ interface ChatState {
   pendingInput: PendingInput | null;
   stopReason: string | null;
   pausedRunId: string | null;
+  hasInteraction: boolean;
   isStreaming: boolean;
 }
 
@@ -75,11 +77,11 @@ interface ChatActions {
     artifactIds?: string[],
     attachmentMeta?: unknown[],
     confirmationTokens?: string[]
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   resumeStream: (
     runId: string,
-    action: 'confirm' | 'cancel' | 'input',
-    input: string,
+    action: 'confirm' | 'cancel' | 'input' | 'answer',
+    input: string | boolean,
     onChunk: (chunk: string) => void,
     onError: (error: string) => void
   ) => Promise<boolean>;
@@ -93,6 +95,7 @@ const ChatMessagesStateContext = createContext<Pick<
   | 'pendingConfirmations'
   | 'pendingInput'
   | 'pausedRunId'
+  | 'hasInteraction'
   | 'isStreaming'
   | 'isLoading'
 > | null>(null);
@@ -114,6 +117,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [, setPendingConfirmationTokens] = useState<string[]>([]);
   const [pendingInput, setPendingInput] = useState<PendingInput | null>(null);
   const [, setStopReason] = useState<string | null>(null);
+  const [pausedInteractionId, setPausedInteractionId] = useState<string | null>(
+    null
+  );
+  const [hasInteraction, setHasInteraction] = useState(false);
   const [pausedRunId, setPausedRunId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const pauseLookupVersionRef = useRef(0);
@@ -193,6 +200,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setPendingInput(null);
     setStopReason(null);
     setPausedRunId(null);
+    setPausedInteractionId(null);
+    setHasInteraction(false);
   }, []);
 
   const clearPendingState = useCallback(() => {
@@ -226,8 +235,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     // A just-arrived stream pause is newer than any in-flight restoration
     // lookup that may still be about to return an older empty response.
     pauseLookupVersionRef.current += 1;
+    setHasInteraction(typeof resumeState.interaction?.id === 'string');
     setStopReason(reason);
     setPausedRunId(runId || null);
+    setPausedInteractionId(
+      typeof action.pause_id === 'string' ? action.pause_id : null
+    );
 
     if (reason === 'waiting_confirmation') {
       setPendingConfirmations([
@@ -291,6 +304,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               ? pause.context.message
               : undefined,
           action: pause.action,
+          interaction:
+            pause.context?.interaction &&
+            typeof pause.context.interaction === 'object'
+              ? (pause.context.interaction as Record<string, unknown>)
+              : undefined,
         });
       } catch (err) {
         // A paused run is supplementary UI state. Message history remains usable
@@ -304,6 +322,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const { abortStream, setCurrentChat, sendMessageStream, resumeStream } =
     useChatStreaming({
       activeRun,
+      pausedInteractionId,
+      hasInteraction,
       setActiveRun,
       setMessagesByChat,
       setIsStreaming,
@@ -344,6 +364,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       pendingConfirmations,
       pendingInput,
       pausedRunId,
+      hasInteraction,
       isStreaming,
       isLoading,
     }),
@@ -353,6 +374,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       pendingConfirmations,
       pendingInput,
       pausedRunId,
+      hasInteraction,
       isStreaming,
       isLoading,
     ]

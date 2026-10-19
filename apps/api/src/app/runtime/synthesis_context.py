@@ -100,15 +100,17 @@ class SynthesisContextBuilder:
         memory_context = []
         if not tasks and not limitations:
             for item in plan.get("memory_context") or []:
-                if not isinstance(item, dict) or item.get("type") not in {"memory_recall", "planner_memory_result"}:
+                if not isinstance(item, dict) or item.get("type") not in {"document_memory", "memory_recall", "planner_memory_result"}:
                     continue
                 memory_context.append(project_memory_context(item, allowed_scope))
         context = {"user_question": plan.get("goal"), "synthesis_brief": self._redact(iteration["synthesis_brief"]), "plan_outline": [{"sequence": item.get("sequence"), "terminal": item.get("terminal")} for item in plan.get("iterations", [])], "resolution_decisions": self._redact([{key: item.get(key) for key in ("task_id", "action", "output_keys", "reason")} for item in resolutions if item.get("action") != ResolutionAction.CONTINUE_WITH_TASKS.value]), "completed_task_reports": reports, "limitations": limitations, "memory_context": self._redact(memory_context), "artifacts": deliverable_artifacts, "sources": self._dedupe(sources, "source_id")}
         context["scope_context"] = self._redact(plan.get("scope_context") or {})
         context["execution_context"] = memory_execution_context(
-            sorted(allowed_scope), revision=int((plan.get("scope_context") or {}).get("revision") or 0),
+            list((plan.get("scope_context") or {}).get("keys") or []), revision=int((plan.get("scope_context") or {}).get("revision") or 0),
         )
-        return self._compact_to_limit(context)
+        # A memory-only answer receives the original passages. The model's
+        # normal context-window check handles overflow without losing evidence.
+        return context if memory_context else self._compact_to_limit(context)
 
     def _compact_to_limit(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Never lose a completed plan merely because evidence is verbose."""
@@ -167,6 +169,7 @@ class SynthesisContextBuilder:
                 "file_name": item.get("file_name") or item.get("name") or "file",
                 "content_type": item.get("content_type") or "",
                 "size_bytes": item.get("size_bytes"),
+                **({"artifact": item["artifact"]} if isinstance(item.get("artifact"), dict) else {}),
             })
             for item in value
             if isinstance(item, dict) and str(item.get("artifact_id") or "").strip()
@@ -183,8 +186,17 @@ class SynthesisContextBuilder:
             if not source_id:
                 continue
             source = {"source_id": source_id}
+            if item.get("artifact_id"):
+                source["artifact_id"] = str(item["artifact_id"])
+            if isinstance(item.get("artifact"), dict):
+                source["artifact"] = self._redact(item["artifact"])
             if item.get("source_name") or item.get("title") or item.get("name"):
                 source["source_name"] = item.get("source_name") or item.get("title") or item.get("name")
+            for key in ("chunk_id", "page", "score"):
+                if item.get(key) is not None:
+                    source[key] = item[key]
+            if item.get("text"):
+                source["excerpt"] = self._redact(str(item["text"])[:500])
             if item.get("url"):
                 source["url"] = item["url"]
             projected.append(self._redact(source))

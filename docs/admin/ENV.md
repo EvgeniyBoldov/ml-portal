@@ -47,6 +47,11 @@ make env
 - `CELERY_RESULT_BACKEND` — backend результатов Celery.
 - `BEAT` — флаг для планировщика задач (если используется).
 
+## Document extraction
+- `DOCLING_URL` — внутренний URL Docling Serve; основной parser backend для поддерживаемых файлов.
+- `DOCLING_TIMEOUT_SECONDS` — максимальное ожидание конвертации до переключения на локальный fallback.
+- `DOCLING_NUM_THREADS` — число CPU threads для Docling Serve.
+
 ## Auth / JWT / PAT / Confirmation
 - `JWT_SECRET` — основной секрет для JWT (обязательно заменить в prod).
 - `JWT_ALGORITHM` — алгоритм подписи JWT.
@@ -200,3 +205,15 @@ make up
 make ps
 docker compose logs --tail=200 api
 ```
+
+### Chat file context
+
+- `CHAT_FILE_READ_MAX_CHARS` (32000), `CHAT_FILE_READ_MAX_BYTES` (8388608): existing bounded extraction profile limits.
+- `CHAT_FILE_EXTRACTION_VERSION` (1): increment when an extraction change must invalidate saved representations.
+- `ROOT_CONTEXT_MAX_TOOL_CALLS` (6): root-role contextual tool-loop limit.
+- `CHAT_HISTORY_PAGE_LIMIT` (20), `CHAT_HISTORY_MESSAGE_MAX_CHARS` (4000): bounded explicit history reads.
+- `SYNTHESIS_MAX_FILES` (8): maximum new files in one synthesis response.
+
+Migration 0195 adds representation/run-context tables and updates active root/synthesis
+prompts while preserving model and call settings. Existing files acquire representations
+on explicit reads; no bulk extraction or HippoRAG indexing is performed.

@@ -30,7 +30,10 @@ const mapState = (s: string | undefined): StageState => {
 };
 
 export function adaptStatusGraphToDocStatus(graph: StatusGraph): DocStatus {
-  const stages: Record<StageKey, StageStatus> = {} as Record<StageKey, StageStatus>;
+  const stages: Record<StageKey, StageStatus> = {} as Record<
+    StageKey,
+    StageStatus
+  >;
 
   for (const node of graph.pipeline) {
     const stageKey = node.key as StageKey;
@@ -44,7 +47,7 @@ export function adaptStatusGraphToDocStatus(graph: StatusGraph): DocStatus {
     };
   }
 
-  const embed_models: IndexModelStatus[] = graph.embeddings.map((emb) => ({
+  const embed_models: IndexModelStatus[] = graph.embeddings.map(emb => ({
     id: emb.model,
     name: emb.model,
     state: mapState(emb.status),
@@ -54,7 +57,7 @@ export function adaptStatusGraphToDocStatus(graph: StatusGraph): DocStatus {
   }));
 
   const index_models: IndexModelStatus[] = Array.isArray(graph.index)
-    ? graph.index.map((idx) => ({
+    ? graph.index.map(idx => ({
         id: idx.model,
         name: idx.model,
         state: mapState(idx.status),
@@ -69,6 +72,7 @@ export function adaptStatusGraphToDocStatus(graph: StatusGraph): DocStatus {
     id: graph.doc_id,
     name: graph.doc_id,
     stages,
+    memory: graph.memory ?? [],
     embed_models,
     index_models,
     ingest_policy: graph.ingest_policy,

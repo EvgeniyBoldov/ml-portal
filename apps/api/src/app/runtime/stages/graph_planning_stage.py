@@ -17,8 +17,10 @@ from app.runtime.orchestrator import GraphOrchestrator
 from app.runtime.partial_answer import stream_partial_answer
 from app.runtime.plan_store import SqlPlanStore
 from app.runtime.turn_state import RuntimeTurnState
+from app.runtime.interaction import interaction_from_context
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.runtime.memory.service import MemorySnapshot
+from app.runtime.memory.execution_context import memory_execution_context
 
 
 class GraphPlanningOutcomeKind(str, Enum):
@@ -76,6 +78,9 @@ class GraphPlanningStage:
             self._orchestrator.event_sink = emit_planner_event
         run_id = UUID(str(runtime_state.run_id))
         plan = await self._store.get_by_run(run_id)
+        target = interaction_from_context(runtime_state.continuation.get("paused_context"))
+        if target is not None and target.requester.stage in {"agent", "planner"} and plan is None:
+            raise ValueError("Saved interaction plan no longer exists")
         plan_created = plan is None
         resumed_task_id: Optional[str] = None
         if plan is None:
@@ -102,11 +107,13 @@ class GraphPlanningStage:
                     **dict(saved_project_context),
                     "scope_context": dict(saved["scope_context"]),
                     "effective_scope_keys": [row.get("key") for row in selected if isinstance(row, dict)],
-                    "effective_project_keys": [str(row.get("key", "")).removeprefix("project.") for row in selected
-                                                if isinstance(row, dict) and str(row.get("key", "")).startswith("project.")
-                                                and row.get("key") != "project.all"],
+                    "effective_project_keys": [], "effective_team_keys": [],
                     "scope_ceiling_keys": list(saved["scope_context"].get("ceiling_keys") or []),
                 }
+                ctx.extra["memory_search_scope_keys"] = list(saved["scope_context"].get("keys") or [])
+                ctx.extra["memory_execution_context"] = memory_execution_context(
+                    ctx.extra["memory_search_scope_keys"], revision=int(saved["scope_context"].get("revision") or 0),
+                )
         if plan_created:
             yield PhasedEvent(
                 RuntimeEvent.plan_lifecycle(
@@ -120,18 +127,26 @@ class GraphPlanningStage:
             )
         if plan.status == "waiting_input":
             continuation = runtime_state.continuation if isinstance(runtime_state.continuation, dict) else {}
-            paused_action = continuation.get("paused_action") if isinstance(continuation.get("paused_action"), dict) else {}
-            paused_context = continuation.get("paused_context") if isinstance(continuation.get("paused_context"), dict) else {}
-            task_id = str(paused_context.get("task_id") or paused_action.get("task_id") or "").strip()
-            fingerprint = RuntimeHitlProtocolService.extract_operation_fingerprint(paused_action, paused_context)
-            resume_action = str(continuation.get("resume_action") or "").lower()
-            if resume_action not in {"confirm", "cancel"} or not task_id or not fingerprint:
-                raise ValueError("paused runtime run requires an explicit matching confirmation")
-            if resume_action == "confirm":
-                await self._store.resume_confirmation(plan.id, task_id, fingerprint)
-                resumed_task_id = task_id
+            interaction = interaction_from_context(continuation.get("paused_context"))
+            if interaction is not None:
+                if str(plan.id) != interaction.requester.plan_id or "interaction_response" not in continuation:
+                    raise ValueError("interaction does not match the saved plan checkpoint")
+                await self._store.resume_interaction(plan.id, interaction.id, continuation["interaction_response"])
+                if not (interaction.operation and continuation["interaction_response"] is False):
+                    resumed_task_id = interaction.requester.task_id
             else:
-                await self._store.reject_confirmation(plan.id, task_id, fingerprint)
+                paused_action = continuation.get("paused_action") if isinstance(continuation.get("paused_action"), dict) else {}
+                paused_context = continuation.get("paused_context") if isinstance(continuation.get("paused_context"), dict) else {}
+                task_id = str(paused_context.get("task_id") or paused_action.get("task_id") or "").strip()
+                fingerprint = RuntimeHitlProtocolService.extract_operation_fingerprint(paused_action, paused_context)
+                resume_action = str(continuation.get("resume_action") or "").lower()
+                if resume_action not in {"confirm", "cancel"} or not task_id or not fingerprint:
+                    raise ValueError("paused runtime run requires an explicit matching confirmation")
+                if resume_action == "confirm":
+                    await self._store.resume_confirmation(plan.id, task_id, fingerprint)
+                    resumed_task_id = task_id
+                else:
+                    await self._store.reject_confirmation(plan.id, task_id, fingerprint)
         effective_runtime_limits = dict(runtime_limits or {})
         task_attempts_limit = effective_runtime_limits.get("task_attempts")
         planner_entity_id = str(orchestrator_id or run_id)
@@ -210,6 +225,8 @@ class GraphPlanningStage:
                     runtime_event = RuntimeEvent.status("execution_interrupted",
                         error_code=runtime_event.data.get("error_code"),
                         parent_entity_type="run", parent_entity_id=str(runtime_state.run_id))
+                if isinstance(runtime_event.data.get("interaction"), dict):
+                    confirmation_context = dict(runtime_event.data)
                 if runtime_event.type == RuntimeEventType.WAITING_INPUT:
                     pause_question = str(runtime_event.data.get("question") or "").strip() or None
                 elif runtime_event.type == RuntimeEventType.CONFIRMATION_REQUIRED:
@@ -264,7 +281,8 @@ class GraphPlanningStage:
                 stop_reason=PipelineStopReason.COMPLETED,
             )
         elif status == "waiting_input":
-            is_confirmation = confirmation_context is not None
+            active_interaction = interaction_from_context(confirmation_context)
+            is_confirmation = active_interaction.reason == "waiting_confirmation" if active_interaction else confirmation_context is not None
             self.outcome = GraphPlanningOutcome(
                 kind=GraphPlanningOutcomeKind.PAUSED,
                 stop_reason=(PipelineStopReason.WAITING_CONFIRMATION if is_confirmation else PipelineStopReason.WAITING_INPUT),

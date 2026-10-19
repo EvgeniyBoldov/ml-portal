@@ -46,9 +46,9 @@ async def create_project(data: ProjectInput, db: AsyncSession = Depends(db_sessi
     project = Project(key=key, name=data.name.strip(), aliases=[item.strip() for item in data.aliases if item.strip()], description=data.description, project_type=data.project_type)
     db.add(project)
     await db.flush()
-    scope = (await db.execute(select(MemoryScope).where(MemoryScope.key == f"project.{key}"))).scalar_one_or_none()
+    scope = (await db.execute(select(MemoryScope).where(MemoryScope.key == key))).scalar_one_or_none()
     if scope is None:
-        db.add(MemoryScope(scope_type="project", key=f"project.{key}", name=project.name,
+        db.add(MemoryScope(scope_type="project", key=key, name=project.name,
                            aliases=list(project.aliases), project_id=project.id, project_type=project.project_type))
     elif scope.scope_type == "project" and scope.project_id is None:
         if scope.lifecycle_status != "active":

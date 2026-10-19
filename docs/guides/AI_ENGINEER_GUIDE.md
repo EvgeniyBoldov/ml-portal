@@ -135,3 +135,11 @@ Large results never require copying the full dataset into an LLM response.
 Source pagination and reading pagination are independent. New source adapters
 must declare record extraction and continuation rather than rely on guessed JSON
 paths. See [Runtime Tool Results](../architecture/RUNTIME_TOOL_RESULTS.md).
+
+## Документная LongMemory: scope corpora
+
+`memory.search(query, limit)` возвращает `groups` — ровно один независимый набор
+на выбранный scope чата, в том же порядке. Backend подставляет scope автоматически
+и выполняет запросы параллельно. Пустые и ошибочные группы не удаляются; `limit`
+действует отдельно на каждый набор. Объединения или общего rerank нет.
+Контракт результата, scope inheritance и миграция `0191` описаны в [Memory](../architecture/MEMORY.md).

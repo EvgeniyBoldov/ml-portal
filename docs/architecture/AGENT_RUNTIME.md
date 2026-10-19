@@ -2,7 +2,7 @@
 
 ## Обзор
 
-Целевой runtime построен как многослойный execution pipeline:
+Runtime построен как многослойный execution pipeline:
 
 `ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> mechanical lookup -> TurnPreflight -> GraphPlanner | Synthesizer`
 
@@ -88,7 +88,6 @@ validation. Shadow executions appear in the existing admin agent-run inspector.
   - optional `outputSchema`
 - Это **не означает обязательный сетевой hop**
 - Локальные коллекции пока остаются **local / in-process providers**
-- Если позже появится практический смысл, local collection provider можно вынести в отдельный MCP container/server без изменения planner/runtime contracts
 
 Канонический формат runtime trace и inspector contract фиксируются в [`docs/architecture/RUNTIME_TRACE_SPEC.md`](./RUNTIME_TRACE_SPEC.md).
 
@@ -175,7 +174,7 @@ class ExecutionPreflight:
 Документные коллекции привязаны к секретарю через `allowed_collection_ids`.
 Новые коллекции добавляются в привязки агента явно. `ExecutionPreflight` фильтрует
 эти коллекции согласно effective permissions пользователя и доступным операциям.
-`memory.search` выполняет собственную фильтрацию по ACL источников и scope памяти.
+`memory.search` использует scope чата для выбора отдельного графа из единой общей LongMemory. Поиск общий для пользователей портала и не фильтрует документы по ACL, пользователю или tenant. Scope организует поиск по индексам и не задаёт права доступа. Для обычных документных коллекций `ExecutionPreflight` по-прежнему применяет effective permissions.
 
 ### TurnPreflight
 
@@ -188,10 +187,10 @@ Root-level системная роль перед planner. После дешёв
 Прямой synthesis выбирается при достаточности входа и найденного документного материала.
 Простые вопросы из памяти решаются через собственный поиск и synthesis.
 Другие действия, источники, проверки и неопределённые параметры передаются planner.
-Уточнение preflight допустимо только для будущего прямого ответа с
+Preflight может вернуть `clarify` для прямого synthesis только с
 обоснованием `direct_answer_reason`; ошибки выбора memory scope также передаются
 planner с исходной задачей и унаследованным фокусом. Начальный фокус берётся из
-явных `memory_scope_keys` пользователя и tenant-а, пустых по умолчанию. Текущие
+объединения `memory_scope_keys` пользователя и tenant-а; при пустых профилях используется `company`. Явный выбор в чате заменяет набор. Текущие
 `scope_context` и `execution_context` доступны синтезеру в обеих ветках.
 
 ### RuntimePipeline
@@ -328,9 +327,14 @@ Memory is not an unconditional pre-planner prompt stage. Mechanical lookup
 provides only bounded candidate aliases/projects/entities to TurnPreflight.
 TurnPreflight and planner invoke the same registered document `memory.search`
 through `OperationRouter` and `DirectOperationExecutor` as agents. Query and optional
-limit derive from the tool contract; old recall routes and scope filters are unused.
-Results are preserved for subsequent roles; empty results differ from tool errors.
-Planner receives preflight evidence and may search further as needed.
+limit derive from the tool contract. The application injects chat scope slugs; each scope is searched independently in parallel and returns one result group, including empty and failed groups. HippoRAG is the default backend. The legacy retrieval backend remains selectable through `MEMORY_SEARCH_BACKEND=legacy`.
+The planner accumulates its own original passages across iterations; each task
+keeps its own document-memory context across attempts. Neither preflight searches
+nor another task's searches are automatically inherited. Exact duplicates are
+removed in code within each scope, without LLM composition or passage truncation.
+An explicit `continuation_of` restores the incomplete task's memory to its
+same-executor continuation under `continue_with_tasks`; helper tasks start empty.
+Empty results differ from tool errors, and neither erases earlier findings.
 Sandbox overlays remain scoped to the
 immutable run snapshot.
 
@@ -340,9 +344,10 @@ a writer and cannot turn them into durable facts.
 After terminal synthesis, the chat path emits the answer and dispatches
 `finalize_memory` asynchronously. That worker runs `FactExtractor`,
 `FactCompactor` and `FactReconciler` for user/tenant dialogue facts; project
-knowledge is not written through this path. Document-derived Semantic Memory
-uses the separate source-backed extraction and review flow described in
-[`MEMORY.md`](MEMORY.md). Writeback failures are isolated from the user answer.
+knowledge is not written through this path. Document LongMemory is indexed through the HippoRAG worker as described in
+[`MEMORY.md`](MEMORY.md). Previous semantic-memory extraction and publication
+code remains a separate legacy subsystem and is not the active search corpus.
+Writeback failures are isolated from the user answer.
 Sandbox fact overlays never persist directly to the durable `facts` table.
 
 ### Единый journal boundary
@@ -396,11 +401,11 @@ scopes decide detail from their own logging level.
 | Владелец | Параметры | Хранилище |
 |----------|-----------|-----------|
 | Run | время выполнения, параллельные задачи, итерации планирования, исполнения задач | `runtime_execution_limits` |
-| Агент | LLM-вызовы, вызовы инструментов, время выполнения | `actor_execution_limits` |
-| Оркестратор | LLM-вызовы, время выполнения; итерации ограничивает run | `actor_execution_limits` |
+| Агент | вызовы инструментов | `actor_execution_limits` |
+| Оркестратор | LLM-вызовы и время выполнения; planner также ограничен run-лимитом итераций | `actor_execution_limits` |
 | Модель | контекстное окно, таймаут запроса, число повторов | `models` |
 
-Для actor ограничения разрешаются по полям: настройка исполнителя → default его класса → code fallback; sandbox override применяется последним. Токенные бюджеты исполнителей отсутствуют. Токены в trace — статистика использования. Старые `ExecutionLimitsService`, таблица `execution_limits`, `max_tokens_total`, модельный `max_output_tokens` и `max_tokens` системных ролей удалены миграцией `0183`.
+Для actor ограничения разрешаются по полям: настройка исполнителя → default его класса → code fallback; sandbox override применяется последним. Токенные бюджеты исполнителей отсутствуют. Run-wide ledger учитывает фактическое использование токенов для статистики, но не ограничивает их. Старые `ExecutionLimitsService`, таблица `execution_limits`, `max_tokens_total`, модельный `max_output_tokens` и `max_tokens` системных ролей удалены миграцией `0183`.
 
 ### Применимость настроек вкладок оркестрации
 
@@ -417,8 +422,6 @@ scopes decide detail from their own logging level.
 | Изучатель документов | три промпта этапов из extras | model, temperature |
 
 `examples` — рабочий массив примеров с `input`, `output` и необязательным `description`; пустой массив допустим. Общий редактор произвольного `extras` скрыт: runtime читает только политику экстрактора (`max_facts_per_turn`, `max_subject_len`, `max_value_len`, `max_value_words`, `confidence_min`) и три промпта этапов изучателя документов. Остальные роли не читают extras. У изучателя документов общий промпт и examples заменяются промптом конкретного этапа. Planner сохраняет все секции БД и sandbox overrides; rules и output_requirements доступны в редакторе. Runtime добавляет только неизменяемую механику iteration и схему Pydantic. Рекомендуемые редактируемые промпты находятся в services/orchestration_prompts.py; planner применяется явно оператором, не перезаписывается bootstrap при старте.
-
-**Известное расхождение enforcement:** actor budgets подключены у planner и synthesizer в планируемом graph execution. Preflight, memory preparation, document study/review и вызовы fact extractor/compactor не передают BudgetRegistry в StructuredLLMCall. В worker фактов публикуются budget snapshots, но ограничения не проверяются, а обе компоненты получают snapshot facts limits. Поэтому редакторы actor limits экстрактора и нормализатора убраны; добавлять аналогичные поля другим ролям до подключения enforcement нельзя. Direct synthesis до создания graph registry также не получает actor budget. Это отдельный runtime gap; текущая правка интерфейса не меняет исполнение этих путей.
 
 Alias выбранного deployment сохраняется до коннектора: одинаковое provider model name у нескольких записей не должно менять выбранные credentials и окно.
 
@@ -514,71 +517,44 @@ target-specific execution binding.
 
 ## Pause / resume
 
-### Каноническое поведение
-- Runtime приостанавливает адресную задачу со статусом `waiting_confirmation`
-  либо root TurnPreflight с `waiting_input`.
-- Confirmation pause сохраняется с fingerprint операции и возобновляет тот же
-  runtime run и ту же задачу.
-- Уточнение TurnPreflight не является paused plan: оно сохраняет root
-  continuation context без plan/task, а ответ пользователя повторно проходит
-  mechanical lookup и TurnPreflight в том же root run.
+Clarification and confirmation use the same persisted `RuntimeInteraction`:
+question, response JSON schema, requester stage/entity and private continuation
+checkpoint. Current answer types are text and boolean. Runtime binds the
+requester; the client sends only the interaction ID and response.
 
-Перед подтверждённым повторным запуском исполнитель получает исходный task
-request и проверенный fingerprint операции.
+- TurnPreflight resumes its own original goal, lookup and memory context.
+- Planner questions resume the saved planner checkpoint in the same plan.
+- Agent questions and operation confirmations resume the same task's saved LLM
+  context, tool receipts and agent version. Completed tasks are not replayed.
+- Planner/task answers bypass TurnPreflight. A negative boolean response returns
+  to its requester; for an operation gate it rejects the operation and returns
+  control to planner. Cancellation terminates the paused run.
+- Chat and sandbox accept `{ "action": "answer", "pause_id": "...", "response": ... }`.
+  Signed operation confirmation tokens remain runtime-owned. Old `input`/`confirm`
+  payloads are adapters for existing clients.
 
-### Контракт paused_action / paused_context
-- Backend сохраняет confirmation state через
-  `RuntimeHitlProtocolService.build_paused_from_stop`; TurnPreflight сохраняет
-  отдельный root clarification context.
-- Resume endpoint читает соответствующий continuation context, не создавая
-  plan для clarification.
-- Pipeline не должен затирать эти данные при паузе.
+The full contract, persistence, policy and trace behavior are described in
+[Runtime Interactions](./RUNTIME_INTERACTIONS.md).
 
-### Resume endpoints
-- **Chat**: `POST /chats/runs/{id}/resume` → SSE-стрим (не JSON).
-- **Sandbox**: `POST /sandbox/sessions/{sid}/runs/{rid}/resume` → SSE-стрим, тот же `RuntimePipeline`, тот же run_id (не создавать новый).
-- Sandbox resume продолжает тот же sandbox run id; chat continuation не создаёт root journal run.
-- Оба endpoint принимают `{ "action": "confirm" | "cancel" }` для адресной
-  confirmation pause или `{ "answer": "..." }` для TurnPreflight
-  clarification. Ответ clarification не создаёт новый root run.
-- Подтверждение выполняется только signed confirmation token, выпущенным из
-  сохранённого pause state; raw fingerprints и отдельный confirm endpoint не
-  являются transport contract.
+## Tool surfaces
 
-## Retrieval Surfaces
+Collection tools are exposed by the resolved local provider or remote MCP
+provider, with platform collection defaults where applicable. Current local
+collection tool slugs include `collection.info`; document tools
+`collection.doc_search`, `collection.list_documents`, and
+`collection.get_document`; table tools `collection.search`, `collection.get`,
+and `collection.aggregate`; and template tools under `collection.template.*`.
+Remote MCP tool names come from the selected provider's active discovery. The
+LLM calls these as tools; internal execution bindings and provider targets are
+not part of the model-facing payload.
 
-Публичные collection operations (видны planner/LLM):
-- `collection.info`
-- `collection.document.search`
-- `collection.document.list`
-- `collection.document.get`
-- `collection.table.search`
-- `collection.template.list`
-- `collection.template.search`
-- `collection.template.get_schema`
-- `collection.template.fill`
-
-Внутренние builtin handler slugs (runtime implementation detail):
-- `collection.doc_search` -> публикуется как `collection.document.search`
-- `collection.search` -> публикуется как `collection.table.search`
-- template handlers уже используют canonical `collection.template.*` slugs;
-  их provider/instance binding остаётся внутренним.
-- `collection.text_search` -> внутренний runtime handler (не публикуется planner/LLM напрямую)
-
-Правило:
-- в prompts, planner и inspect surfaces используем только canonical tool names,
-- raw builtin slugs остаются внутренним адаптерным слоем.
-
-## Semantic Memory retrieval
-
-`memory.search` is the bounded system operation for document-derived project
-and company knowledge and confirmed glossary terms. It applies runtime ACL and
-returns typed, source-aware results. TurnPreflight uses a separate mechanical
-lookup for candidate aliases/projects/entities; it does not call `memory.search`
-itself. Planner and agents may call `memory.search` when they need durable
-knowledge. Project memory is source-backed and is not written by conversational
-`FactExtractor` writeback. See [`MEMORY.md`](MEMORY.md) for extraction,
-publication and UI contracts.
+`memory.search` is the registered tool for document-derived LongMemory. The
+application supplies the chat scope slugs; model arguments contain only `query`
+and optional `limit`. Retrieval runs against a separate ready HippoRAG graph per
+scope and returns one group per selected scope, including empty and failed
+searches. LongMemory is shared across portal users and does not apply source,
+user, or tenant ACL filters; ordinary RAG collections retain their own access
+checks. See [Memory](MEMORY.md).
 
 ## Runtime Evaluation Harness
 
@@ -597,9 +573,9 @@ executor `run_id` или sandbox root `run_id`. Отдельных legacy read c
 нет.
 
 Budget policy visibility:
-- planner и agent runtime публикуют status stage `budget_policy` в event stream,
-- в trace steps пишется `budget_policy` (и `budget_limit_exceeded` при срабатывании лимита),
-- `AgentToolRuntime` блокирует исполнение при достижении `max_tool_calls_total`.
+- run/orchestrator ledger публикует budget snapshots через runtime event stream;
+- agent tool loop применяет `max_tool_calls_total` и публикует limit events;
+- токены учитываются ledger как usage metrics, без enforcement токенного лимита.
 
 Runtime control-plane reads plan state and canonical event journal directly;
 Legacy control-plane endpoints удалены.
@@ -618,7 +594,7 @@ Structured answer contract (backend):
   - `meta.grounding.mode` (`none|weak|medium|strong`)
   - `meta.grounding.citations_count`
 
-## Добавление новой локальной операции
+## Добавление локального инструмента
 
 1. Создать local provider handler / adapter или зарегистрировать remote MCP
    capability
@@ -749,3 +725,13 @@ selected model's `request_timeout_s`; `HTTP_TIMEOUT_SECONDS` is used only when
 that field is unset. A selected registry model cannot fall back to a different
 environment model. The request timeout is forwarded to the rerank worker, whose
 deadline includes queue time and inference.
+
+## Turn files and shared context (0195)
+
+TurnPreflight may read chat files, document memory and older messages before routing.
+Planner is required for agent execution and specialized analysis, not merely for file
+I/O. The synthesizer can generate new response files through the shared writer while
+agents retain their execution-artifact capabilities. The final user-facing answer always
+comes from synthesis. See [root routing](ADR_TURN_PREFLIGHT_ROUTING.md),
+[file storage and delivery](CHAT_FILE_ATTACHMENTS.md), and
+[chat context](CHAT_CONTEXT_MEMORY.md) for persistence and transaction ownership.

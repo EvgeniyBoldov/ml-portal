@@ -160,3 +160,35 @@ describe('appendRuntimeProgress', () => {
     ).toEqual([{ ...stage, status: 'completed' }]);
   });
 });
+
+describe('terminal event ownership', () => {
+  it('does not replace final or current pause with a later obsolete pause', async () => {
+    for (const first of [
+      frame('final', { message_id: 'id', content: 'Готово' }),
+      frame('pause', {
+        run_id: 'run',
+        reason: 'waiting_input',
+        context: { question: 'Текущий вопрос?' },
+        action: {},
+      }),
+    ]) {
+      const observed: ChatStreamEvent[] = [];
+      await consumeChatStream(
+        response(
+          first +
+            frame('pause', {
+              run_id: 'run',
+              reason: 'waiting_input',
+              context: { question: 'Устаревший вопрос?' },
+              action: {},
+            })
+        ),
+        event => {
+          observed.push(event);
+        }
+      );
+      expect(observed).toHaveLength(1);
+      expect(JSON.stringify(observed)).not.toContain('Устаревший');
+    }
+  });
+});

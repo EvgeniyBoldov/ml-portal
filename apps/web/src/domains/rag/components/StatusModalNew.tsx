@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Modal from '@shared/ui/Modal';
 import { useToast } from '@shared/ui/Toast';
 import { apiRequest } from '@shared/api/http';
@@ -17,6 +17,7 @@ import {
 import styles from './StatusModalNew.module.css';
 
 interface StatusModalNewProps {
+  memoryUrl?: string;
   docId: string;
   docName?: string;
   onClose: () => void;
@@ -32,19 +33,52 @@ interface StatusModalNewProps {
   downloadUrlPrefix?: string;
 }
 
-export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl, retryUrlPrefix, stopUrlPrefix, downloadUrlPrefix }: StatusModalNewProps) {
+export function StatusModalNew({
+  docId,
+  docName,
+  onClose,
+  sseUrl,
+  statusGraphUrl,
+  retryUrlPrefix,
+  stopUrlPrefix,
+  downloadUrlPrefix,
+  memoryUrl,
+}: StatusModalNewProps) {
   const queryClient = useQueryClient();
   const sseRef = useRef<ReturnType<typeof openSSE> | null>(null);
   const invalidateAtRef = useRef<number>(0);
   const invalidateTimerRef = useRef<number | null>(null);
   const { showToast } = useToast();
-  
-  const { data: docStatus, isLoading, error } = useDocumentStatus(docId, statusGraphUrl);
-  const flowModel = React.useMemo(() => adaptDocumentStatusToFlowModel(docStatus), [docStatus]);
+
+  const {
+    data: docStatus,
+    isLoading,
+    error,
+  } = useDocumentStatus(docId, statusGraphUrl);
+  const memoryCommand = useMutation({
+    mutationFn: (action: 'add' | 'delete') =>
+      apiRequest(memoryUrl!, {
+        method: action === 'add' ? 'POST' : 'DELETE',
+        idempotent: true,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey });
+      showToast('Операция LongMemory поставлена в очередь', 'success');
+    },
+    onError: () =>
+      showToast('Не удалось запустить операцию LongMemory', 'error'),
+  });
+  const flowModel = React.useMemo(
+    () => adaptDocumentStatusToFlowModel(docStatus),
+    [docStatus]
+  );
   const { selection, setSelection } = useStatusFlowSelection(flowModel);
   const queryKey = React.useMemo(
-    () => (statusGraphUrl ? ['collections', 'doc-status', docId] : ['document-status', docId]),
-    [docId, statusGraphUrl],
+    () =>
+      statusGraphUrl
+        ? ['collections', 'doc-status', docId]
+        : ['document-status', docId],
+    [docId, statusGraphUrl]
   );
 
   const scheduleInvalidate = React.useCallback(() => {
@@ -114,24 +148,32 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
 
   const selectedStageSlug = React.useMemo(() => {
     if (!selection.nodeKey) return null;
-    if (selection.laneKey === 'embedding') return `embed.${selection.itemKey || selection.nodeKey}`;
-    if (selection.laneKey === 'index') return `index.${selection.itemKey || selection.nodeKey}`;
-    if (['upload', 'extract', 'normalize', 'chunk'].includes(selection.nodeKey)) return selection.nodeKey;
+    if (selection.laneKey === 'embedding')
+      return `embed.${selection.itemKey || selection.nodeKey}`;
+    if (selection.laneKey === 'index')
+      return `index.${selection.itemKey || selection.nodeKey}`;
+    if (['upload', 'extract', 'normalize', 'chunk'].includes(selection.nodeKey))
+      return selection.nodeKey;
     return null;
   }, [selection]);
 
   const selectedRetryStage = React.useMemo(() => {
     if (!selectedStageSlug) return null;
-    if (['upload', 'extract', 'normalize', 'chunk'].includes(selectedStageSlug)) {
+    if (
+      ['upload', 'extract', 'normalize', 'chunk'].includes(selectedStageSlug)
+    ) {
       return 'extract';
     }
     return selectedStageSlug;
   }, [selectedStageSlug]);
 
-  const controls = React.useMemo(() => docStatus?.ingest_policy?.controls || [], [docStatus?.ingest_policy?.controls]);
+  const controls = React.useMemo(
+    () => docStatus?.ingest_policy?.controls || [],
+    [docStatus?.ingest_policy?.controls]
+  );
   const controlByStage = React.useMemo(
-    () => new Map(controls.map((item) => [item.stage, item])),
-    [controls],
+    () => new Map(controls.map(item => [item.stage, item])),
+    [controls]
   );
   const activeStageSlugs = docStatus?.ingest_policy?.active_stages || [];
 
@@ -147,8 +189,12 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
     if (selectedControl?.can_stop) {
       return selectedControl.stage;
     }
-    if (['upload', 'extract', 'normalize', 'chunk'].includes(selectedStageSlug)) {
-      const activePipeline = controls.find((item) => item.node_type === 'pipeline' && item.can_stop);
+    if (
+      ['upload', 'extract', 'normalize', 'chunk'].includes(selectedStageSlug)
+    ) {
+      const activePipeline = controls.find(
+        item => item.node_type === 'pipeline' && item.can_stop
+      );
       return activePipeline?.stage || null;
     }
     return null;
@@ -160,7 +206,11 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
   }, [controlByStage, selectedStopStage]);
 
   // Handlers
-  const handleSelectStage = (nextSelection: { nodeKey: string | null; laneKey?: string | null; itemKey?: string | null }) => {
+  const handleSelectStage = (nextSelection: {
+    nodeKey: string | null;
+    laneKey?: string | null;
+    itemKey?: string | null;
+  }) => {
     setSelection(nextSelection);
   };
 
@@ -204,15 +254,24 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
   const handleDownloadOriginal = async () => {
     try {
       if (downloadUrlPrefix) {
-        const response = await apiRequest<{ file_id?: string; download_url?: string }>(`${downloadUrlPrefix}?kind=original`);
-        const href = response.download_url || (response.file_id ? buildFileDownloadUrl(response.file_id) : '');
+        const response = await apiRequest<{
+          file_id?: string;
+          download_url?: string;
+        }>(`${downloadUrlPrefix}?kind=original`);
+        const href =
+          response.download_url ||
+          (response.file_id ? buildFileDownloadUrl(response.file_id) : '');
         if (href) {
           window.open(href, '_blank', 'noopener,noreferrer');
         }
         return;
       }
       const fileId = buildRagDocFileId(docId, 'original');
-      window.open(buildFileDownloadUrl(fileId), '_blank', 'noopener,noreferrer');
+      window.open(
+        buildFileDownloadUrl(fileId),
+        '_blank',
+        'noopener,noreferrer'
+      );
     } catch (error) {
       showToast('Ошибка скачивания', 'error');
     }
@@ -221,15 +280,24 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
   const handleDownloadNormalized = async () => {
     try {
       if (downloadUrlPrefix) {
-        const response = await apiRequest<{ file_id?: string; download_url?: string }>(`${downloadUrlPrefix}?kind=canonical`);
-        const href = response.download_url || (response.file_id ? buildFileDownloadUrl(response.file_id) : '');
+        const response = await apiRequest<{
+          file_id?: string;
+          download_url?: string;
+        }>(`${downloadUrlPrefix}?kind=canonical`);
+        const href =
+          response.download_url ||
+          (response.file_id ? buildFileDownloadUrl(response.file_id) : '');
         if (href) {
           window.open(href, '_blank', 'noopener,noreferrer');
         }
         return;
       }
       const fileId = buildRagDocFileId(docId, 'canonical');
-      window.open(buildFileDownloadUrl(fileId), '_blank', 'noopener,noreferrer');
+      window.open(
+        buildFileDownloadUrl(fileId),
+        '_blank',
+        'noopener,noreferrer'
+      );
     } catch (error) {
       showToast('Ошибка скачивания', 'error');
     }
@@ -238,45 +306,147 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
   const selectedNode = React.useMemo(() => {
     if (!selection.nodeKey) return null;
     if (selection.laneKey) {
-      return flowModel.lanes?.find((lane) => lane.key === selection.laneKey)?.items.find((item) => item.key === (selection.itemKey || selection.nodeKey)) ?? null;
+      return (
+        flowModel.lanes
+          ?.find(lane => lane.key === selection.laneKey)
+          ?.items.find(
+            item => item.key === (selection.itemKey || selection.nodeKey)
+          ) ?? null
+      );
     }
-    return flowModel.pipeline.find((item) => item.key === selection.nodeKey) ?? null;
+    return (
+      flowModel.pipeline.find(item => item.key === selection.nodeKey) ?? null
+    );
   }, [flowModel, selection]);
 
   const detailActions = React.useMemo<FlowDetailAction[]>(() => {
     const actions: FlowDetailAction[] = [];
-    const showDownloadOriginal = !selection.laneKey && ['upload', 'extract'].includes(selection.nodeKey || '') && selectedNode?.status === 'completed';
-    const showDownloadNormalized = !selection.laneKey && selection.nodeKey === 'normalize' && selectedNode?.status === 'completed';
+    const showDownloadOriginal =
+      !selection.laneKey &&
+      ['upload', 'extract'].includes(selection.nodeKey || '') &&
+      selectedNode?.status === 'completed';
+    const showDownloadNormalized =
+      !selection.laneKey &&
+      selection.nodeKey === 'normalize' &&
+      selectedNode?.status === 'completed';
 
+    if (memoryUrl && !memoryCommand.isPending) {
+      const active = (docStatus?.memory ?? []).some(node =>
+        ['processing', 'queued'].includes(node.status)
+      );
+      const removed = (docStatus?.memory ?? []).some(
+        node =>
+          node.key === 'graph' &&
+          node.metrics?.action === 'delete' &&
+          node.status === 'completed'
+      );
+      const failed = (docStatus?.memory ?? []).some(
+        node => node.status === 'failed'
+      );
+      if (
+        !active &&
+        docStatus?.stages.normalize?.state === 'ok' &&
+        (!docStatus.memory?.length || removed || failed)
+      ) {
+        actions.push({
+          key: 'memory-add',
+          label: 'Добавить в LongMemory',
+          variant: 'outline',
+          onClick: () => memoryCommand.mutate('add'),
+        });
+      }
+      if (docStatus?.memory?.length && !removed) {
+        actions.push({
+          key: 'memory-delete',
+          label: 'Удалить из LongMemory',
+          variant: 'warning',
+          onClick: () => memoryCommand.mutate('delete'),
+        });
+      }
+    }
     if (showDownloadOriginal) {
-      actions.push({ key: 'download-original', label: 'Скачать оригинал', icon: 'download', variant: 'outline', onClick: handleDownloadOriginal });
+      actions.push({
+        key: 'download-original',
+        label: 'Скачать оригинал',
+        icon: 'download',
+        variant: 'outline',
+        onClick: handleDownloadOriginal,
+      });
     }
     if (showDownloadNormalized) {
-      actions.push({ key: 'download-normalized', label: 'Скачать JSON', icon: 'download', variant: 'outline', onClick: handleDownloadNormalized });
+      actions.push({
+        key: 'download-normalized',
+        label: 'Скачать JSON',
+        icon: 'download',
+        variant: 'outline',
+        onClick: handleDownloadNormalized,
+      });
     }
     if (canStopSelectedStage) {
-      actions.push({ key: 'stop', label: 'Остановить', icon: 'x', variant: 'warning', onClick: handleStop });
+      actions.push({
+        key: 'stop',
+        label: 'Остановить',
+        icon: 'x',
+        variant: 'warning',
+        onClick: handleStop,
+      });
     }
     if (canRetrySelectedStage) {
-      actions.push({ key: 'restart', label: 'Перезапустить', icon: 'refresh-cw', variant: 'primary', onClick: handleRestart });
+      actions.push({
+        key: 'restart',
+        label: 'Перезапустить',
+        icon: 'refresh-cw',
+        variant: 'primary',
+        onClick: handleRestart,
+      });
     }
     return actions;
-  }, [selection, selectedNode?.status, canStopSelectedStage, canRetrySelectedStage]);
+  }, [
+    selection,
+    selectedNode?.status,
+    canStopSelectedStage,
+    canRetrySelectedStage,
+    memoryUrl,
+    memoryCommand,
+    docStatus,
+  ]);
 
-  const metricLabels = React.useMemo(() => ({
-    checksum: 'Контрольная сумма',
-    encoding: 'Кодировка',
-    extractor: 'Экстрактор',
-    char_count: 'Символов',
-    word_count: 'Слов',
-    duration_sec: 'Время (сек)',
-    chunk_count: 'Чанков',
-    chunk_size_avg: 'Средний размер чанка',
-    overlap: 'Перекрытие',
-    vector_count: 'Векторов',
-    vector_dim: 'Размерность',
-    indexed_count: 'Проиндексировано',
-  }), []);
+  const metricLabels = React.useMemo(
+    () => ({
+      checksum: 'Контрольная сумма',
+      encoding: 'Кодировка',
+      extractor: 'Экстрактор',
+      char_count: 'Символов',
+      word_count: 'Слов',
+      duration_sec: 'Время (сек)',
+      passages: 'Фрагменты документа',
+      unique_passages: 'Уникальные фрагменты',
+      processed_passages: 'Обработано уникальных фрагментов',
+      entities: 'Сущности документа',
+      facts: 'Уникальные факты документа',
+      extracted_triples: 'Извлечено троек',
+      encoded_texts: 'Закодировано текстов в scope',
+      reused_vectors: 'Использовано векторов из кеша',
+      reused_extraction: 'Использовано сохранённое извлечение',
+      scopes_total: 'Индексов scope',
+      scopes_completed: 'Готово индексов scope',
+      scope_nodes: 'Узлов в обработанных scope',
+      scope_edges: 'Связей в обработанных scope',
+      scope_slugs: 'Проекты памяти',
+      removed_documents: 'Удалено документов',
+      added_documents: 'Добавлено документов',
+      graphs: 'Графы проектов',
+      action: 'Операция',
+      skipped: 'Этап пропущен',
+      chunk_count: 'Чанков',
+      chunk_size_avg: 'Средний размер чанка',
+      overlap: 'Перекрытие',
+      vector_count: 'Векторов',
+      vector_dim: 'Размерность',
+      indexed_count: 'Проиндексировано',
+    }),
+    []
+  );
 
   // Keep all hooks above the loading/error branches. The status query starts
   // in a loading state, and returning before the derived hooks run causes the
@@ -292,7 +462,9 @@ export function StatusModalNew({ docId, docName, onClose, sseUrl, statusGraphUrl
   if (error) {
     return (
       <Modal open={true} onClose={onClose} title="Статус документа" size="xl">
-        <div className={styles.error}>Не удалось загрузить статус документа</div>
+        <div className={styles.error}>
+          Не удалось загрузить статус документа
+        </div>
       </Modal>
     );
   }

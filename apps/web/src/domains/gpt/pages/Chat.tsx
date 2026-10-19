@@ -98,7 +98,7 @@ export default function Chat() {
     message: string,
     options: { agentSlug?: string; attachments?: File[] }
   ) => {
-    if (!chatId) return;
+    if (!chatId) return false;
     setBusy(true);
     setStreamError(null);
 
@@ -135,6 +135,10 @@ export default function Chat() {
         artifactIds,
         attachmentMeta
       );
+      // Once the chat request has been handed to the stream client, its
+      // failure is shown in the transcript/banner. Do not put the submitted
+      // message back into the composer (which can cause accidental resends).
+      return true;
     } catch (e: unknown) {
       console.error(e);
       setStreamError(
@@ -142,6 +146,7 @@ export default function Chat() {
           e instanceof Error ? e.message : 'Ошибка при отправке сообщения'
         )
       );
+      return false;
     } finally {
       setBusy(false);
     }
@@ -334,6 +339,30 @@ export default function Chat() {
             onCancel={() => {
               void handleInteractionCancel();
             }}
+            onReject={
+              state.hasInteraction
+                ? async () => {
+                    if (clarifyBusy) return;
+                    const runId =
+                      pendingConfirmation.runId || state.pausedRunId;
+                    if (!runId) return;
+                    setClarifyBusy(true);
+                    setStreamError(null);
+                    try {
+                      const resumed = await resumeStream(
+                        runId,
+                        'answer',
+                        false,
+                        () => {},
+                        err => setStreamError(_friendlyError(err))
+                      );
+                      if (resumed && chatId) await loadMessages(chatId);
+                    } finally {
+                      setClarifyBusy(false);
+                    }
+                  }
+                : undefined
+            }
             onConfirm={async () => {
               if (clarifyBusy) return;
               const runId = String(
@@ -407,6 +436,10 @@ export default function Chat() {
             onSend={handleSend}
             disabled={busy && !state.isStreaming}
             isStreaming={state.isStreaming}
+            previousMessage={
+              [...messages].reverse().find(message => message.role === 'user')
+                ?.content
+            }
             onStop={() => {
               abortStream();
               setBusy(false);

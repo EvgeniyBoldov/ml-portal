@@ -273,7 +273,7 @@ async def get_project_scope(current_user: UserCtx = Depends(get_current_user), s
     user = await AsyncUsersRepository(session).get_by_id(current_user.id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
-    return ProjectScopeResponse(project_keys=[key.removeprefix("project.") for key in user.memory_scope_keys if key.startswith("project.")])
+    return ProjectScopeResponse(project_keys=list(user.memory_scope_keys))
 
 
 @router.put("/project-scope", response_model=ProjectScopeResponse, deprecated=True)
@@ -285,10 +285,7 @@ async def set_project_scope(payload: ProjectScopeUpdate, current_user: UserCtx =
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     try:
-        await MemoryScopePreferencesService(session).update_user(user.id, [
-            *(key for key in user.memory_scope_keys if key.startswith("team.")),
-            *(f"project.{key}" for key in keys),
-        ])
+        await MemoryScopePreferencesService(session).update_user(user.id, keys)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ProjectScopeResponse(project_keys=keys)

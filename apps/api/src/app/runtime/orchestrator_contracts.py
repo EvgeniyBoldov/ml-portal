@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.runtime.task_value_normalization import is_absent
+from app.runtime.interaction import InteractionQuestion
 
 
 def _normalize_reference_list(value: Any) -> Any:
@@ -46,6 +47,7 @@ class TaskStatus(str, Enum):
     RUNNING = "running"
     WAITING_RETRY = "waiting_retry"
     WAITING_CONFIRMATION = "waiting_confirmation"
+    WAITING_INPUT = "waiting_input"
     COMPLETED = "completed"
     NEEDS_DEPENDENCY = "needs_dependency"
     UNFULFILLABLE = "unfulfillable"
@@ -129,6 +131,7 @@ class AgentExecutionCompletion(str, Enum):
     FULFILLED = "fulfilled"
     NEEDS = "needs"
     UNFULFILLABLE = "unfulfillable"
+    INTERACTION = "interaction"
 
 
 class UserLimitation(BaseModel):
@@ -267,6 +270,7 @@ class AgentTaskContract(BaseModel):
 class PlannedTask(BaseModel):
     """An immutable agent task. Planner and synthesis are not graph nodes."""
     task_id: str = Field(..., min_length=1)
+    continuation_of: Optional[str] = Field(default=None, description="Prior incomplete task continued by this task, with the same executor. Restores only that task's document memory.")
     executor: str = Field(..., min_length=1)
     intent: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
@@ -277,7 +281,7 @@ class PlannedTask(BaseModel):
     contract: TaskContractRef = Field(default_factory=TaskContractRef)
     depends_on: List[str] = Field(default_factory=list)
     freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
-    scope_keys: List[str] = Field(default_factory=list, max_length=60)
+    scope_keys: List[str] = Field(default_factory=list, max_length=120)
     scope_mode: Literal["inherit", "replace"] = "inherit"
     scope_reason: str = Field(default="", max_length=600)
     scope_context: Dict[str, Any] = Field(default_factory=dict, exclude=True)
@@ -322,7 +326,15 @@ class TaskResolution(BaseModel):
         return self
 
 
+from app.runtime.synthesis_files import FileDeliverable
+
+
 class SynthesisBrief(BaseModel):
+    artifact_refs: List[str] = Field(default_factory=list)
+    evidence_refs: List[str] = Field(default_factory=list)
+    delivery: Literal["text", "files", "text_and_files"] = "text"
+    content_mode: Literal["grounded", "generative", "mixed"] = "grounded"
+    files: List[FileDeliverable] = Field(default_factory=list)
     user_question: str = Field(..., min_length=1)
     planned_work: str = Field(..., min_length=1)
     purpose: str = Field(..., min_length=1)
@@ -436,12 +448,15 @@ class SchedulerDecision(BaseModel):
 
 class TaskRequest(BaseModel):
     task_id: str = Field(..., min_length=1)
+    continuation_of: Optional[str] = None
     executor: str = Field(..., min_length=1)
     intent: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
     dependency_outputs: Dict[str, Any] = Field(default_factory=dict)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
+    interaction_history: List[Dict[str, Any]] = Field(default_factory=list)
+    resume_checkpoint: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     protocol_version: Literal[2] = 2
     response_spec: ResponseSpec = Field(default_factory=ResponseSpec)
     expected_outputs: List[TaskOutputSpec] = Field(default_factory=list)
@@ -531,6 +546,7 @@ class TaskCompletionDeclaration(BaseModel):
     """Agent-owned completion with a deterministic legacy journal adapter."""
     completion_claim: AgentExecutionCompletion = Field(..., alias="completion")
     answer: Optional[str] = None
+    interaction: Optional[InteractionQuestion] = None
     structured_response: Any = None
     needs: List[DiscoveredNeed] = Field(default_factory=list)
     outputs: Dict[str, OutputSlot] = Field(default_factory=dict, exclude=True)
@@ -565,6 +581,8 @@ class TaskCompletionDeclaration(BaseModel):
 
     @model_validator(mode="after")
     def validate_completion(self) -> "TaskCompletionDeclaration":
+        if (self.completion_claim == AgentExecutionCompletion.INTERACTION) != (self.interaction is not None):
+            raise ValueError("interaction completion requires exactly one interaction question")
         if len({need.ref for need in self.needs}) != len(self.needs):
             raise ValueError("needs must contain unique refs")
         if self.completion_claim == AgentExecutionCompletion.NEEDS and not self.needs:
@@ -647,7 +665,7 @@ def task_completion_json_schema(request: TaskRequest, *, provider_compatible: bo
     for key in ("outputs", "coverage", "limitation"):
         schema["properties"].pop(key, None)
     schema["$defs"] = {key: val for key, val in schema.get("$defs", {}).items()
-                       if key in {"AgentExecutionCompletion", "DiscoveredNeed"}}
+                       if key in {"AgentExecutionCompletion", "DiscoveredNeed", "InteractionQuestion"}}
     return _terminal_provider_schema(schema) if provider_compatible else schema
 
 

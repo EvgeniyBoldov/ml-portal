@@ -88,6 +88,8 @@ class IngestStageContext:
     generation: Optional[int] = None
     start_time: float = field(default_factory=time.monotonic)
 
+    long_memory_operation_ids: list[str] = field(default_factory=list)
+
     # ── helpers ──────────────────────────────────────────
 
     @property
@@ -197,6 +199,14 @@ class IngestStageContext:
         digest = hashlib.sha256(json.dumps(result, sort_keys=True, default=str).encode("utf-8")).hexdigest()
         await self._update_stage_run(result=result, output_fingerprint=digest)
         command_ids = await self._enqueue_next_stages(result)
+        if self.stage_name == "normalize":
+            from app.services.long_memory_document_service import LongMemoryDocumentService
+            operation = await LongMemoryDocumentService(self.session).enqueue(
+                self.source_id, "add", automatic=True, ingest_run_id=str(self.run_id) if self.run_id else None,
+            )
+            if operation:
+                self.long_memory_operation_ids.append(str(operation.id))
+
         if self.run_id is not None:
             from app.models.rag_ingest import RAGIngestRun, RAGIngestStageRun, RAGIngestStageOutbox
             command = (await self.session.execute(
@@ -217,23 +227,6 @@ class IngestStageContext:
                 if run and run.status in {"queued", "running"}:
                     run.status = "completed"
                     run.finished_at = datetime.now(timezone.utc)
-                    from app.models.rag_ingest import RAGIngestStageOutbox
-                    shadow = (await self.session.execute(
-                        select(RAGIngestStageOutbox).where(
-                            RAGIngestStageOutbox.run_id == self.run_id,
-                            RAGIngestStageOutbox.stage_key == "hipporag",
-                        )
-                    )).scalar_one_or_none()
-                    if shadow is None:
-                        shadow = RAGIngestStageOutbox(
-                            run_id=self.run_id,
-                            stage_key="hipporag",
-                            payload={"source_id": str(self.source_id)},
-                            status="pending",
-                        )
-                        self.session.add(shadow)
-                        await self.session.flush()
-                    command_ids.append(str(shadow.id))
         return command_ids
 
     async def _enqueue_next_stages(self, result: Dict[str, Any]) -> list[str]:
@@ -483,6 +476,12 @@ def run_stage(
                     hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode("utf-8")).hexdigest(),
                     command_ids,
                 )
+                for operation_id in ctx.long_memory_operation_ids:
+                    from app.workers.tasks_long_memory_documents import execute_long_memory_document
+                    try:
+                        execute_long_memory_document.delay(operation_id)
+                    except Exception:
+                        logger.warning("LongMemory broker dispatch deferred to recovery: %s", operation_id, exc_info=True)
                 for command_id in command_ids:
                     from app.workers.tasks_rag_ingest.dispatch import dispatch_rag_ingest_stage_outbox
                     dispatch_rag_ingest_stage_outbox.delay(command_id)

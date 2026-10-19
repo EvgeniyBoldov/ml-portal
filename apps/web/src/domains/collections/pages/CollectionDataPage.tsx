@@ -9,6 +9,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
+import Select from '@shared/ui/Select';
 import Checkbox from '@shared/ui/Checkbox';
 import Badge from '@shared/ui/Badge';
 import Modal from '@shared/ui/Modal';
@@ -479,6 +480,11 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadMetaFields, setUploadMetaFields] = useState<Record<string, string>>({});
   const [uploadMemoryPolicy, setUploadMemoryPolicy] = useState<'collection' | 'enabled' | 'disabled'>('collection');
+  const [uploadScope, setUploadScope] = useState('company');
+  const memoryScopesQuery = useQuery({
+    queryKey: qk.collections.memoryScopeCatalog(), queryFn: collectionsApi.getMemoryScopeCatalog,
+    staleTime: 30_000, gcTime: 5 * 60_000, retry: 1,
+  });
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -574,7 +580,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       return collectionsApi.listDocuments(collectionId, params);
     },
     refetchInterval: query => query.state.data?.items.some(doc =>
-      ['queued', 'screening', 'studying', 'conflict_checking'].includes(doc.memory?.extraction_status ?? '')
+      ['pending', 'queued', 'running', 'completed'].includes(doc.memory?.extraction_status ?? '')
     ) ? 5000 : false,
     enabled: !!collectionId,
   });
@@ -752,6 +758,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
             meta_fields: Object.keys(uploadMetaFields).length > 0 ? uploadMetaFields : undefined,
             auto_ingest: true,
             memory_enabled: uploadMemoryPolicy === 'collection' ? undefined : uploadMemoryPolicy === 'enabled',
+            memory_scope_keys: [uploadScope],
           })
         )
       );
@@ -823,11 +830,11 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   };
 
   // Single doc actions
-  const handleLegacyMemoryExtraction = async (doc: CollectionDocument) => {
+  const handleAddMemory = async (doc: CollectionDocument) => {
     setExtractingMemoryIds(ids => new Set(ids).add(doc.id));
     try {
-      await collectionsApi.extractLegacyDocumentMemory(collectionId, doc.id);
-      showToast('Прежнее извлечение запущено. Новую память нужно подтвердить.', 'success');
+      await collectionsApi.addDocumentToMemory(collectionId, doc.id);
+      showToast('Документ добавляется в LongMemory. Процесс виден в статусе документа.', 'success');
       invalidateDocs();
     } catch {
       showToast('Не удалось запустить извлечение памяти', 'error');
@@ -1081,11 +1088,11 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                       <div className={styles.actions}>
                         <button
                           className={styles.actionBtn}
-                          onClick={() => handleLegacyMemoryExtraction(doc)}
+                          onClick={() => handleAddMemory(doc)}
                           disabled={isProc || doc.agg_status === 'archived' || extractingMemoryIds.has(doc.id)
-                            || ['queued', 'screening', 'studying', 'conflict_checking'].includes(doc.memory?.extraction_status ?? '')}
-                          title="Прежнее извлечение памяти: новая попытка потребует повторного подтверждения"
-                          aria-label="Запустить прежнее извлечение памяти"
+                            || ['pending', 'queued', 'running', 'completed'].includes(doc.memory?.extraction_status ?? '')}
+                          title="Добавить документ в LongMemory"
+                          aria-label="Добавить документ в LongMemory"
                         >
                           <Icon name="sparkles" size={16} />
                         </button>
@@ -1137,7 +1144,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         footer={
           <>
             <Button variant="ghost" onClick={() => setUploadModalOpen(false)}>Отмена</Button>
-            <Button onClick={handleUpload} disabled={uploadFiles.length === 0 || uploading}>
+            <Button onClick={handleUpload} disabled={uploadFiles.length === 0 || uploading || !memoryScopesQuery.data?.some(scope => scope.key === uploadScope)}>
               {uploading ? 'Загрузка...' : `Загрузить (${uploadFiles.length})`}
             </Button>
           </>
@@ -1170,14 +1177,21 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
             }}
           />
           <label className={styles.uploadField}>
-            <span>Semantic Memory</span>
+            <span>Проект для LongMemory</span>
+            <Select value={uploadScope} onChange={setUploadScope}
+              disabled={uploading || memoryScopesQuery.isLoading || memoryScopesQuery.isError}
+              options={(memoryScopesQuery.data ?? []).map(scope => ({ value: scope.key, label: `${scope.name} (${scope.key})` }))} />
+            {memoryScopesQuery.isError && <span role="alert">Не удалось загрузить проекты памяти.</span>}
+          </label>
+          <label className={styles.uploadField}>
+            <span>LongMemory</span>
             <select
               value={uploadMemoryPolicy}
               onChange={(event) => setUploadMemoryPolicy(event.target.value as 'collection' | 'enabled' | 'disabled')}
             >
               <option value="collection">Наследовать настройку коллекции</option>
               <option value="enabled">Включить для этих документов</option>
-              <option value="disabled">Исключить из Semantic Memory</option>
+              <option value="disabled">Исключить из LongMemory</option>
             </select>
           </label>
           {uploadFiles.length > 0 && (
@@ -1298,6 +1312,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
           sseUrl={collectionsApi.getDocumentStatusEventsUrl(collectionId, statusModalDocId)}
           statusGraphUrl={`/collections/${collectionId}/docs/${statusModalDocId}/status-graph`}
           retryUrlPrefix={`/collections/${collectionId}/docs/${statusModalDocId}/ingest/retry`}
+          memoryUrl={`/collections/${collectionId}/docs/${statusModalDocId}/memory`}
           stopUrlPrefix={`/collections/${collectionId}/docs/${statusModalDocId}/ingest/stop`}
         />
       )}

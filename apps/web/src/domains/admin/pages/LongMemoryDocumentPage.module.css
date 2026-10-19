@@ -1,0 +1,78 @@
+.infoList {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.infoList > div {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.infoList span,
+.muted {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.infoList strong {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.metricsList {
+  display: grid;
+  margin: 0;
+}
+
+.metricsList > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.metricsList > div:first-child {
+  padding-top: 0;
+}
+
+.metricsList > div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.metricsList dt {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.metricsList dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+  text-align: right;
+}
+
+.triplesCount {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+}
+
+.muted {
+  margin: 0 0 var(--sp-2);
+}
+
+.tripleCell {
+  max-width: 420px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}

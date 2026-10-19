@@ -2,6 +2,8 @@
 RAG Status endpoints (status-graph, models).
 """
 from __future__ import annotations
+
+from app.services.long_memory_document_service import document_memory_nodes
 from typing import List
 import uuid
 from datetime import datetime, timezone
@@ -152,6 +154,7 @@ async def get_status_graph(
         return StatusGraphResponse(
             doc_id=doc_id,
             pipeline=pipeline_stages,
+            memory=await document_memory_nodes(session, doc_uuid),
             embeddings=embedding_models,
             index=index_models,
             agg_status=agg_status,

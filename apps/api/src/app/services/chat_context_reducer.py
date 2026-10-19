@@ -13,25 +13,23 @@ class ChatContextReducer:
         source = [f"run:{projection.run_id}", f"turn:{projection.chat_turn_id}"]
         if projection.user_message_id:
             source.append(f"message:{projection.user_message_id}")
-        keys = projection.project_context.get("explicit_project_keys") or []
         scope_keys = projection.project_context.get("explicit_scope_keys") or []
-        normalized = list(dict.fromkeys(str(value).strip().casefold() for value in keys if str(value).strip()))
         normalized_scopes = list(dict.fromkeys(str(value).strip().casefold() for value in scope_keys if str(value).strip()))
         explicit_selection = bool(projection.project_context.get("scope_selection_explicit"))
-        if normalized or normalized_scopes or explicit_selection or "effective_scope_keys" in projection.project_context:
-            if explicit_selection or "effective_project_keys" in projection.project_context:
-                normalized = list(projection.project_context.get("effective_project_keys", normalized) or [])
+        if normalized_scopes or explicit_selection or "effective_scope_keys" in projection.project_context:
             if explicit_selection or "effective_scope_keys" in projection.project_context:
                 normalized_scopes = list(projection.project_context.get("effective_scope_keys", normalized_scopes) or [])
             operations.append(ChatContextOperation(action="update", kind="scope", item_key="current_scope",
-                payload={"project_keys": normalized, "scope_keys": normalized_scopes,
-                         "team_keys": [key.removeprefix("team.") for key in normalized_scopes if key.startswith("team.")],
-                         "suppress_team_default": bool(projection.project_context.get("suppress_team_default")),
-                         "suppress_project_default": bool(projection.project_context.get("suppress_project_default")),
+                payload={"project_keys": [], "scope_keys": normalized_scopes,
+                         "scope_mode": "replace" if explicit_selection else "inherit",
+                         "suppress_scope_default": bool(projection.project_context.get("suppress_scope_default")),
+                         "team_keys": [],
+                         "suppress_team_default": False,
+                         "suppress_project_default": False,
                          "scope_origins": dict(projection.project_context.get("scope_origins") or {}),
                          "scope_revision": int(projection.project_context.get("scope_revision") or 0),
                          "mentioned_scope_keys": list(projection.project_context.get("mentioned_scope_keys") or []),
-                         "source": "explicit" if explicit_selection or normalized or normalized_scopes else "inferred",
+                         "source": "explicit" if explicit_selection else "inferred",
                          "trust_class": "application_verified"}, source_ids=source, expected_revision=expected_revision))
         for binding in projection.term_bindings:
             entry_id = str(binding.get("id") or "").strip()
@@ -65,7 +63,7 @@ class ChatContextReducer:
             artifact_id = str(artifact.get("artifact_id") or artifact.get("id") or "").strip()
             if artifact_id:
                 operations.append(ChatContextOperation(action="touch", kind="artifact_ref", item_key=artifact_id,
-                    payload={"artifact_id": artifact_id, "role": str(artifact.get("role") or "referenced"), "file_name": str(artifact.get("file_name") or "")[:255], "trust_class": "application_verified"}, source_ids=[*source, f"artifact:{artifact_id}"], expected_revision=expected_revision))
+                    payload={"description": str(artifact.get("description") or "")[:600], "representation_id": artifact.get("representation_id"), "status": artifact.get("status"), "truncated": bool(artifact.get("truncated")), "artifact_id": artifact_id, "role": str(artifact.get("role") or "referenced"), "file_name": str(artifact.get("file_name") or "")[:255], "trust_class": "application_verified"}, source_ids=[*source, f"artifact:{artifact_id}"], expected_revision=expected_revision))
         for artifact_id in projection.deleted_artifact_ids:
             if artifact_id:
                 operations.append(ChatContextOperation(action="close", kind="artifact_ref", item_key=artifact_id,

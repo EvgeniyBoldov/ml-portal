@@ -6,6 +6,8 @@ from uuid import UUID, uuid4
 
 from app.schemas.runtime_continuation import RuntimeResumeAction
 from app.runtime.plan_store import SqlPlanStore
+from app.runtime.interaction import interaction_from_context
+from app.schemas.runtime_continuation import RuntimeResumeRequest
 
 
 class RuntimeResumeValidationError(ValueError):
@@ -17,6 +19,29 @@ class RuntimeResumeCheckpointService:
 
     def __init__(self, *, plan_store: Optional[SqlPlanStore] = None) -> None:
         self._plan_store = plan_store
+
+    @staticmethod
+    def resolve_request(request: RuntimeResumeRequest, paused_context: Any) -> tuple[RuntimeResumeAction, str, Any]:
+        interaction = interaction_from_context(paused_context)
+        if interaction is not None and request.pause_id != interaction.id:
+            raise RuntimeResumeValidationError("Уточнение устарело. Обновите состояние чата.")
+        if request.action is RuntimeResumeAction.CANCEL:
+            return request.action, "", None
+        if interaction is None:
+            if request.action is RuntimeResumeAction.ANSWER:
+                raise RuntimeResumeValidationError("Interaction checkpoint not found")
+            return request.action, str(request.input or ""), None
+        if request.pause_id != interaction.id:
+            raise RuntimeResumeValidationError("Уточнение устарело. Обновите состояние чата.")
+        value = request.response if request.action is RuntimeResumeAction.ANSWER else (
+            True if request.action is RuntimeResumeAction.CONFIRM else request.input)
+        try:
+            value = interaction.validate_response(value)
+        except ValueError as exc:
+            raise RuntimeResumeValidationError(str(exc)) from exc
+        action = RuntimeResumeAction.CONFIRM if value is True else RuntimeResumeAction.INPUT
+        text = value if isinstance(value, str) else ("Да" if value is True else "Нет")
+        return action, text, value
 
     @classmethod
     def from_session(cls, session: Any) -> "RuntimeResumeCheckpointService":
@@ -120,4 +145,7 @@ class RuntimeResumeCheckpointService:
             payload["original_user_request"] = str(original_user_request)
         if user_input:
             payload["user_input"] = user_input
+        interaction = interaction_from_context(paused_context)
+        if interaction is not None:
+            payload["interaction"] = interaction.model_dump(mode="json")
         return payload

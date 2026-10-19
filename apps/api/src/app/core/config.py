@@ -12,7 +12,12 @@ class Settings(BaseSettings):
     MEMORY_SEARCH_BACKEND: str = Field(default="hipporag", pattern="^(hipporag|legacy)$")
     HIPPO_WORKER_URL: str = Field(default="http://hipporag:8080")
     HIPPO_CALLBACK_URL: str = Field(default="http://api:8000/api/v1/internal/hipporag")
+    HIPPO_OPERATION_LEASE_SECONDS: int = Field(default=60, ge=60, le=3600)
+    HIPPO_OPERATION_MAX_ATTEMPTS: int = Field(default=4, ge=1, le=20)
+    HIPPO_PROGRESS_POLL_SECONDS: float = Field(default=1.0, ge=0.2, le=30)
     HIPPO_TIMEOUT_SECONDS: int = Field(default=1800, ge=30, le=3600)
+    DOCLING_URL: str = Field(default="http://docling:5001")
+    DOCLING_TIMEOUT_SECONDS: int = Field(default=180, ge=5, le=900)
 
     # Database
     DATABASE_URL: str = Field(default="postgresql://ml_portal:ml_portal_password@postgres:5432/ml_portal")
@@ -93,6 +98,13 @@ class Settings(BaseSettings):
     CHAT_CONTEXT_DECISION_LIMIT: int = Field(default=10, ge=1, le=50)
     CHAT_CONTEXT_TASK_RESULT_LIMIT: int = Field(default=20, ge=1, le=100)
     CHAT_CONTEXT_HISTORY_LIMIT: int = Field(default=12, ge=1, le=50)
+    CHAT_FILE_READ_MAX_CHARS: int = Field(default=32_000, ge=1)
+    CHAT_FILE_READ_MAX_BYTES: int = Field(default=8 * 1024 * 1024, ge=1)
+    CHAT_FILE_EXTRACTION_VERSION: int = Field(default=1, ge=1)
+    SYNTHESIS_MAX_FILES: int = Field(default=8, ge=1)
+    ROOT_CONTEXT_MAX_TOOL_CALLS: int = Field(default=6, ge=1)
+    CHAT_HISTORY_PAGE_LIMIT: int = Field(default=20, ge=1, le=100)
+    CHAT_HISTORY_MESSAGE_MAX_CHARS: int = Field(default=4000, ge=1)
     
     # Embedding runtime behavior flags.
     EMB_OFFLINE: bool = Field(default=True, description="Disallow network downloads for embedding models")

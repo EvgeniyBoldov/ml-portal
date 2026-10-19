@@ -39,6 +39,7 @@ _OUTPUT_SCHEMA_V1 = {
     "properties": {
         "document_id": {"type": "string"},
         "artifact_id": {"type": "string"},
+        "artifact": {"type": "object", "description": "Normalized, content-free artifact passport"},
         "filename": {"type": "string"},
         "title": {"type": "string"},
         "status": {"type": "string"},
@@ -176,7 +177,9 @@ class CollectionDocumentGetTool(VersionedTool):
                         display_name=doc.filename,
                         content_type=doc.content_type,
                         size_bytes=doc.size_bytes or doc.size,
-                        metadata={"status": doc.status},
+                        metadata={"status": doc.status, "description": doc.title or doc.filename},
+                        source_id=str(doc.id),
+                        source_type="rag_document",
                     ),
                 )
 
@@ -186,6 +189,7 @@ class CollectionDocumentGetTool(VersionedTool):
                     data={
                         "document_id": doc_id_str,
                         "artifact_id": str(reference.id),
+                        "artifact": ChatArtifactReferenceService.manifest(reference),
                         "filename": doc.filename,
                         "title": doc.title or doc.filename,
                         "status": doc.status,

@@ -423,7 +423,7 @@ export function UserPage() {
               onChange={handleFieldChange}
             />
             <MemoryScopePicker value={formData.memory_scope_keys} onChange={(keys) => handleFieldChange('memory_scope_keys', keys)}
-              description="По умолчанию команды и проекты не выбраны." />
+              description="По умолчанию проекты памяти не выбраны." />
           </Tab>
         </EntityPageV2>
         <SetPasswordModal

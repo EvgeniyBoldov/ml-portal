@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import httpx
 import mimetypes
 import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any, Awaitable, Callable, Optional
 
-from app.services.extractors import ExtractResult, ExtractorRegistry
+from app.core.config import get_settings
+from app.services.extractors import BaseExtractor, ExtractResult, ExtractorRegistry
 
 
 TEXT_EXTENSIONS = {
-    "txt", "md", "log", "json", "yaml", "yml", "xml", "html", "htm", "sql", "csv", "tsv"
+    "txt", "md", "py", "log", "json", "yaml", "yml", "xml", "html", "htm", "sql", "csv", "tsv"
 }
 TABLE_EXTENSIONS = {"csv", "tsv", "xlsx"}
+DOCLING_EXTENSIONS = {
+    "pdf", "docx", "pptx", "xlsx", "html", "htm", "md", "txt", "csv",
+    "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp",
+}
 
 
 @dataclass(frozen=True)
@@ -25,6 +31,7 @@ class ExtractionRequest:
     max_chars: int = 32_000
     max_bytes: int = 8 * 1024 * 1024
     observer: Optional[Callable[[str, dict[str, Any]], Awaitable[None]]] = None
+    fallback_extractor: Optional[BaseExtractor] = None
 
 
 @dataclass
@@ -39,7 +46,7 @@ class ExtractionOutput:
 
 
 class DocumentExtractionService:
-    """Shared profile-driven facade for tools and RAG ingestion."""
+    """Shared Docling-first extraction facade for chat and RAG ingestion."""
 
     async def extract(self, request: ExtractionRequest) -> ExtractionOutput:
         started_at = asyncio.get_running_loop().time()
@@ -72,10 +79,24 @@ class DocumentExtractionService:
                               warnings=output.warnings, duration_ms=int((asyncio.get_running_loop().time() - started_at) * 1000))
                 return output
 
-            result: ExtractResult = await asyncio.to_thread(
-                ExtractorRegistry.extract, request.payload, detected
-            )
+            ext = detected.rsplit(".", 1)[-1].lower() if "." in detected else ""
+            docling_error: Optional[str] = None
+            result: ExtractResult
+            if ext in DOCLING_EXTENSIONS:
+                try:
+                    result = await self._extract_docling(request, detected)
+                except Exception as exc:
+                    docling_error = f"Docling conversion failed; used local extractor ({type(exc).__name__})"
+                    result = await asyncio.to_thread(
+                        self._extract_fallback, request, detected
+                    )
+            else:
+                result = await asyncio.to_thread(
+                    self._extract_fallback, request, detected
+                )
             warnings = list(result.warnings)
+            if docling_error:
+                warnings.append(docling_error)
             text = result.text or ""
             truncated = False
             if request.profile == "chat_preview" and len(text) > request.max_chars:
@@ -83,7 +104,6 @@ class DocumentExtractionService:
                 truncated = True
                 warnings.append(f"Preview truncated to {request.max_chars} characters")
 
-            ext = detected.rsplit(".", 1)[-1].lower() if "." in detected else ""
             content_kind = "table" if ext in TABLE_EXTENSIONS else "document"
             if ext in TEXT_EXTENSIONS and ext not in TABLE_EXTENSIONS:
                 content_kind = "text"
@@ -107,6 +127,58 @@ class DocumentExtractionService:
                 duration_ms=int((asyncio.get_running_loop().time() - started_at) * 1000),
             )
             raise
+
+    @staticmethod
+    async def _extract_docling(request: ExtractionRequest, filename: str) -> ExtractResult:
+        settings = get_settings()
+        content_type = (
+            request.content_type
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
+        timeout = httpx.Timeout(settings.DOCLING_TIMEOUT_SECONDS)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{settings.DOCLING_URL.rstrip('/')}/v1/convert/file",
+                files={"files": (filename, request.payload, content_type)},
+                data={
+                    "to_formats": "md",
+                    "image_export_mode": "placeholder",
+                    "do_ocr": "true",
+                    "do_table_structure": "true",
+                    "abort_on_error": "true",
+                },
+            )
+            response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Docling returned an invalid response")
+        status = str(payload.get("status") or "").lower()
+        document = payload.get("document")
+        if status not in {"success", "partial_success"} or not isinstance(document, dict):
+            raise ValueError(f"Docling conversion status: {status or 'missing'}")
+        text = str(document.get("md_content") or document.get("text_content") or "").strip()
+        if not text:
+            raise ValueError("Docling returned empty document content")
+        errors = payload.get("errors")
+        warnings = [str(error)[:500] for error in errors] if isinstance(errors, list) else []
+        meta: dict[str, Any] = {"docling_status": status}
+        if isinstance(payload.get("processing_time"), (int, float)):
+            meta["docling_processing_time"] = payload["processing_time"]
+        return ExtractResult(text=text, kind="docling", meta=meta, warnings=warnings)
+
+    @staticmethod
+    def _extract_fallback(request: ExtractionRequest, filename: str) -> ExtractResult:
+        if request.fallback_extractor is not None:
+            return request.fallback_extractor.extract(request.payload, filename)
+        extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if extension not in set(ExtractorRegistry.supported_extensions()) | TEXT_EXTENSIONS:
+            return ExtractResult(
+                text="", kind="unsupported", warnings=[
+                    f"Docling is unavailable and no local extractor supports .{extension or 'unknown'}"
+                ],
+            )
+        return ExtractorRegistry.extract(request.payload, filename)
 
     @classmethod
     def detect_format(
@@ -138,10 +210,13 @@ class DocumentExtractionService:
         normalized_mime = str(content_type or "").split(";", 1)[0].strip().lower()
         mime_ext = mimetypes.guess_extension(normalized_mime or "") or ""
         mime_ext = mime_ext.lstrip(".")
-        if mime_ext in {"doc", "docx", "pdf", "xlsx", "csv", "txt"}:
+        if mime_ext in {
+            "doc", "docx", "pdf", "xlsx", "csv", "txt", "pptx", "html", "htm", "md",
+            "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp",
+        }:
             ext = mime_ext
 
-        if ext in set(ExtractorRegistry.supported_extensions()) | TEXT_EXTENSIONS:
+        if ext in set(ExtractorRegistry.supported_extensions()) | TEXT_EXTENSIONS | DOCLING_EXTENSIONS:
             return cls._with_extension(lower_name, ext)
 
         # Content sniffing fallback for extensionless UTF-8 text.  NUL bytes

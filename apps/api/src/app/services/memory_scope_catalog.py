@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory_scope import MemoryScope
 
+DEFAULT_MEMORY_SCOPE = "company"
+
 
 async def resolve_memory_scopes(session: AsyncSession, keys: list[str]) -> list[MemoryScope]:
     normalized = list(dict.fromkeys(str(key).strip().lower() for key in keys if str(key).strip()))
@@ -22,7 +24,7 @@ async def resolve_memory_scopes(session: AsyncSession, keys: list[str]) -> list[
 
 
 async def list_memory_scopes(session: AsyncSession, *, include_deprecated: bool = False) -> list[MemoryScope]:
-    stmt = select(MemoryScope).order_by(MemoryScope.scope_type, MemoryScope.key)
+    stmt = select(MemoryScope).order_by(MemoryScope.key)
     if not include_deprecated:
         stmt = stmt.where(MemoryScope.lifecycle_status == "active")
     return list((await session.execute(stmt)).scalars().all())

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -48,6 +48,10 @@ async def test_file_read_returns_text_for_docx(monkeypatch):
     data = _make_docx_bytes("First paragraph", "Second paragraph")
 
     session = AsyncMock()
+    session.add = MagicMock()
+    monkeypatch.setattr("app.repositories.artifact_representation_repository.ArtifactRepresentationRepository.find", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.adapters.s3_client.s3_manager.upload_fileobj", AsyncMock(return_value=True))
+    monkeypatch.setattr("app.services.document_extraction_service.DocumentExtractionService._extract_docling", AsyncMock(side_effect=ValueError("offline unit test")))
 
     class _SessionManager:
         async def __aenter__(self):

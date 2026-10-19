@@ -20,7 +20,10 @@ import ConfigPanel from '../components/ConfigPanel';
 import ConfirmWriteDialog from '../components/ConfirmWriteDialog';
 import type { SandboxSelectedItem } from '../types';
 import type { SandboxTraceState } from '../traceState';
-import { resolveTraceInspectionTarget, type TraceInspectionTarget } from '../traceProjection';
+import {
+  resolveTraceInspectionTarget,
+  type TraceInspectionTarget,
+} from '../traceProjection';
 import styles from './SandboxSessionPage.module.css';
 
 const SIDEBAR_WIDTH_KEY = 'sandbox.sidebar.width';
@@ -43,9 +46,13 @@ export default function SandboxSessionPage() {
   const { data: session, isLoading, isError } = useSandboxSession(sessionId);
   const { data: catalog } = useCatalogData(sessionId);
   const queryClient = useQueryClient();
-  const [selectedItem, setSelectedItem] = useState<SandboxSelectedItem | null>(null);
-  const [selectedTraceTarget, setSelectedTraceTarget] = useState<TraceInspectionTarget | null>(null);
-  const [selectedTraceState, setSelectedTraceState] = useState<SandboxTraceState | null>(null);
+  const [selectedItem, setSelectedItem] = useState<SandboxSelectedItem | null>(
+    null
+  );
+  const [selectedTraceTarget, setSelectedTraceTarget] =
+    useState<TraceInspectionTarget | null>(null);
+  const [selectedTraceState, setSelectedTraceState] =
+    useState<SandboxTraceState | null>(null);
   const [activeBranchId, setActiveBranchId] = useState<string>('');
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
@@ -57,16 +64,29 @@ export default function SandboxSessionPage() {
     const parsed = raw ? Number(raw) : NaN;
     return Number.isFinite(parsed) ? parsed : 320;
   });
-  const [isCompactLayout, setIsCompactLayout] = useState<boolean>(window.innerWidth < 1200);
-  
+  const [isCompactLayout, setIsCompactLayout] = useState<boolean>(
+    window.innerWidth < 1200
+  );
+
   const sandboxRun = useSandboxRun(sessionId ?? '');
 
   useEffect(() => {
-    if (!selectedTraceTarget || selectedTraceState?.runId !== sandboxRun.activeRun.trace.runId) return;
-    const resolved = resolveTraceInspectionTarget(sandboxRun.activeRun.trace, selectedTraceTarget.key);
+    if (
+      !selectedTraceTarget ||
+      selectedTraceState?.runId !== sandboxRun.activeRun.trace.runId
+    )
+      return;
+    const resolved = resolveTraceInspectionTarget(
+      sandboxRun.activeRun.trace,
+      selectedTraceTarget.key
+    );
     if (resolved) setSelectedTraceTarget(resolved);
     setSelectedTraceState(sandboxRun.activeRun.trace);
-  }, [sandboxRun.activeRun.trace, selectedTraceState?.runId, selectedTraceTarget?.key]);
+  }, [
+    sandboxRun.activeRun.trace,
+    selectedTraceState?.runId,
+    selectedTraceTarget?.key,
+  ]);
 
   const { data: branches = [] } = useQuery({
     queryKey: qk.sandbox.branches.list(sessionId ?? ''),
@@ -101,10 +121,14 @@ export default function SandboxSessionPage() {
         copy_overrides: true,
       });
     },
-    onSuccess: async (newBranch) => {
+    onSuccess: async newBranch => {
       setActiveBranchId(newBranch.id);
-      await queryClient.invalidateQueries({ queryKey: qk.sandbox.branches.list(sessionId ?? '') });
-      await queryClient.invalidateQueries({ queryKey: qk.sandbox.runs.list(sessionId ?? '') });
+      await queryClient.invalidateQueries({
+        queryKey: qk.sandbox.branches.list(sessionId ?? ''),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: qk.sandbox.runs.list(sessionId ?? ''),
+      });
     },
   });
 
@@ -115,9 +139,11 @@ export default function SandboxSessionPage() {
         name: branchName,
       });
     },
-    onSuccess: async (newBranch) => {
+    onSuccess: async newBranch => {
       setActiveBranchId(newBranch.id);
-      await queryClient.invalidateQueries({ queryKey: qk.sandbox.branches.list(sessionId ?? '') });
+      await queryClient.invalidateQueries({
+        queryKey: qk.sandbox.branches.list(sessionId ?? ''),
+      });
     },
   });
 
@@ -127,25 +153,38 @@ export default function SandboxSessionPage() {
       await sandboxApi.deleteBranchOverrides(sessionId ?? '', activeBranchId);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: qk.sandbox.branchOverrides.list(sessionId ?? '', activeBranchId) });
+      await queryClient.invalidateQueries({
+        queryKey: qk.sandbox.branchOverrides.list(
+          sessionId ?? '',
+          activeBranchId
+        ),
+      });
     },
   });
 
   const isOwner = user?.id === session?.owner_id;
   const isReadOnly = !isOwner;
 
-  const handleRun = (text: string, parentRunId?: string | null, artifactIds?: string[]) => {
+  const handleRun = (
+    text: string,
+    parentRunId?: string | null,
+    artifactIds?: string[]
+  ) => {
     if (isReadOnly) return;
     sandboxRun.run(text, parentRunId, activeBranchId || undefined, artifactIds);
   };
 
   const handleSelectRun = (runId?: string) => {
-    setSelectedItem({ type: 'run', id: runId ?? 'active', name: 'Лог выполнения' });
+    setSelectedItem({
+      type: 'run',
+      id: runId ?? 'active',
+      name: 'Лог выполнения',
+    });
   };
 
   const handleCreateBranchFromMessage = async (
     sourceText: string,
-    parentRunId?: string | null,
+    parentRunId?: string | null
   ): Promise<void> => {
     if (!sessionId || !activeBranchId || !sourceText.trim()) {
       return;
@@ -188,8 +227,13 @@ export default function SandboxSessionPage() {
   const startSidebarResize = () => {
     const onMove = (event: PointerEvent) => {
       const viewport = window.innerWidth;
-      const maxLeft = Math.min(SIDEBAR_MAX, viewport - configWidth - CHAT_MIN - HANDLE_WIDTH * 2);
-      setSidebarWidth(clamp(event.clientX, SIDEBAR_MIN, Math.max(SIDEBAR_MIN, maxLeft)));
+      const maxLeft = Math.min(
+        SIDEBAR_MAX,
+        viewport - configWidth - CHAT_MIN - HANDLE_WIDTH * 2
+      );
+      setSidebarWidth(
+        clamp(event.clientX, SIDEBAR_MIN, Math.max(SIDEBAR_MIN, maxLeft))
+      );
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -203,8 +247,13 @@ export default function SandboxSessionPage() {
     const onMove = (event: PointerEvent) => {
       const viewport = window.innerWidth;
       const rawRight = viewport - event.clientX;
-      const maxRight = Math.min(CONFIG_MAX, viewport - sidebarWidth - CHAT_MIN - HANDLE_WIDTH * 2);
-      setConfigWidth(clamp(rawRight, CONFIG_MIN, Math.max(CONFIG_MIN, maxRight)));
+      const maxRight = Math.min(
+        CONFIG_MAX,
+        viewport - sidebarWidth - CHAT_MIN - HANDLE_WIDTH * 2
+      );
+      setConfigWidth(
+        clamp(rawRight, CONFIG_MIN, Math.max(CONFIG_MIN, maxRight))
+      );
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -231,9 +280,7 @@ export default function SandboxSessionPage() {
           </button>
           <span className={styles['session-name']}>{session.name}</span>
           <div className={styles['header-meta']}>
-            <Badge
-              tone={session.status === 'active' ? 'success' : 'neutral'}
-            >
+            <Badge tone={session.status === 'active' ? 'success' : 'neutral'}>
               {session.status === 'active' ? 'Активна' : 'Архив'}
             </Badge>
             {isReadOnly && (
@@ -243,11 +290,16 @@ export default function SandboxSessionPage() {
         </div>
         <div className={styles['header-right']}>
           <div className={styles['session-info']}>
-            <span className={styles['session-info-item']}>TTL: {session.ttl_days} дн.</span>
             <span className={styles['session-info-item']}>
-              Истекает: {new Date(session.expires_at).toLocaleDateString('ru-RU')}
+              TTL: {session.ttl_days} дн.
             </span>
-            <span className={styles['session-info-item']}>{session.owner_email}</span>
+            <span className={styles['session-info-item']}>
+              Истекает:{' '}
+              {new Date(session.expires_at).toLocaleDateString('ru-RU')}
+            </span>
+            <span className={styles['session-info-item']}>
+              {session.owner_email}
+            </span>
           </div>
           {isOwner && (
             <Button
@@ -271,7 +323,11 @@ export default function SandboxSessionPage() {
           activeBranchId={activeBranchId}
           selectedItem={selectedItem}
           onSelectBranch={setActiveBranchId}
-          onSelectItem={(item) => { setSelectedItem(item); setSelectedTraceTarget(null); setSelectedTraceState(null); }}
+          onSelectItem={item => {
+            setSelectedItem(item);
+            setSelectedTraceTarget(null);
+            setSelectedTraceState(null);
+          }}
           onCreateBranch={() => createBranchMutation.mutate()}
           onClearBranchOverrides={() => clearOverridesMutation.mutate()}
           isClearingOverrides={clearOverridesMutation.isPending}
@@ -301,12 +357,17 @@ export default function SandboxSessionPage() {
           onSelectBranch={setActiveBranchId}
           onCreateBranchFromMessage={handleCreateBranchFromMessage}
           onRun={handleRun}
-          onResumeInput={(text) => sandboxRun.resumePausedRun('input', text)}
-          onConfirmPausedRun={() => sandboxRun.resumePausedRun('confirm')}
+          onResumeInput={text => sandboxRun.resumePausedRun('input', text)}
+          onConfirmPausedRun={(response = true) =>
+            sandboxRun.resumePausedRun('confirm', response)
+          }
           onCancelPausedRun={sandboxRun.cancelPausedRun}
           onStop={sandboxRun.stop}
           onSelectRun={handleSelectRun}
-          onSelectTraceTarget={(target, trace) => { setSelectedTraceTarget(target); setSelectedTraceState(trace); }}
+          onSelectTraceTarget={(target, trace) => {
+            setSelectedTraceTarget(target);
+            setSelectedTraceState(trace);
+          }}
           selectedTraceTargetKey={selectedTraceTarget?.key}
         />
       </div>

@@ -2,7 +2,12 @@ import React from 'react';
 
 import { Icon } from '@shared/ui/Icon';
 
-import type { FlowGraphModel, FlowNode, FlowSelection, FlowStatus } from './types';
+import type {
+  FlowGraphModel,
+  FlowNode,
+  FlowSelection,
+  FlowStatus,
+} from './types';
 import { getStatusIcon } from './statusFlowUtils';
 import styles from './StatusFlowView.module.css';
 
@@ -65,7 +70,9 @@ function FlowConnector({ status }: { status: FlowStatus }) {
           strokeDasharray={status === 'pending' ? '4 4' : 'none'}
         />
       </svg>
-      {isActive ? <div className={styles.connectorPulse} style={{ background: color }} /> : null}
+      {isActive ? (
+        <div className={styles.connectorPulse} style={{ background: color }} />
+      ) : null}
     </div>
   );
 }
@@ -82,7 +89,10 @@ function FlowBranchConnector({
   if (count === 0) return null;
 
   if (count === 1) {
-    const color = fromStatus === 'completed' ? STATUS_COLORS[statuses[0]] : STATUS_COLORS[fromStatus || 'pending'];
+    const color =
+      fromStatus === 'completed'
+        ? STATUS_COLORS[statuses[0]]
+        : STATUS_COLORS[fromStatus || 'pending'];
     return (
       <div className={styles.connector}>
         <svg width="40" height="2" viewBox="0 0 40 2">
@@ -128,7 +138,10 @@ function FlowBranchConnector({
   );
 }
 
-function getConnectorStatus(from: FlowNode, to: FlowNode | undefined): FlowStatus {
+function getConnectorStatus(
+  from: FlowNode,
+  to: FlowNode | undefined
+): FlowStatus {
   if (!to) return from.status;
   if (from.status === 'completed' && to.status !== 'pending') return to.status;
   if (from.status === 'completed') return 'completed';
@@ -140,16 +153,84 @@ export function StatusFlowView({
   activeStageSlugs = [],
   selection,
   onSelect,
+  showLegend = true,
 }: {
   model: FlowGraphModel;
+  showLegend?: boolean;
   activeStageSlugs?: string[];
   selection: FlowSelection;
   onSelect: (selection: FlowSelection) => void;
 }) {
-  const activeSet = React.useMemo(() => new Set(activeStageSlugs), [activeStageSlugs]);
+  const activeSet = React.useMemo(
+    () => new Set(activeStageSlugs),
+    [activeStageSlugs]
+  );
   const lanes = model.lanes ?? [];
-  const maxItems = Math.max(...lanes.map((lane) => lane.items.length), 0);
+  const maxItems = Math.max(...lanes.map(lane => lane.items.length), 0);
   const showLanes = lanes.length > 0 && maxItems > 0;
+
+  if (model.parallel) {
+    const split =
+      model.pipeline.findIndex(node => node.key === model.parallel?.after) + 1;
+    const branchLanes = lanes.filter(lane =>
+      model.parallel?.laneKeys.includes(lane.key)
+    );
+    const ragLanes = lanes.filter(
+      lane => !model.parallel?.laneKeys.includes(lane.key)
+    );
+    return (
+      <div className={styles.parallelLayout}>
+        <StatusFlowView
+          model={{ pipeline: model.pipeline.slice(0, split) }}
+          activeStageSlugs={activeStageSlugs}
+          selection={selection}
+          onSelect={onSelect}
+          showLegend={false}
+        />
+        <div className={styles.parallelBranches}>
+          <div className={styles.branchRow}>
+            <span>RAG</span>
+            <StatusFlowView
+              model={{ pipeline: model.pipeline.slice(split), lanes: ragLanes }}
+              activeStageSlugs={activeStageSlugs}
+              selection={selection}
+              onSelect={onSelect}
+              showLegend={false}
+            />
+          </div>
+          <div className={styles.branchRow}>
+            <span>LongMemory</span>
+            <div className={styles.mainRow}>
+              {branchLanes.map((lane, index) =>
+                lane.items.map(node => (
+                  <React.Fragment key={node.key}>
+                    {index > 0 ? (
+                      <FlowConnector
+                        status={branchLanes[index - 1].items[0].status}
+                      />
+                    ) : null}
+                    <FlowNodeButton
+                      node={node}
+                      compact
+                      isControlActive={activeSet.has(node.key)}
+                      isSelected={selection.nodeKey === node.key}
+                      onClick={() =>
+                        onSelect({
+                          nodeKey: node.key,
+                          laneKey: lane.key,
+                          itemKey: node.key,
+                        })
+                      }
+                    />
+                  </React.Fragment>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.pipeline}>
@@ -160,9 +241,15 @@ export function StatusFlowView({
               node={node}
               isControlActive={activeSet.has(node.key)}
               isSelected={selection.nodeKey === node.key && !selection.laneKey}
-              onClick={() => onSelect({ nodeKey: node.key, laneKey: null, itemKey: null })}
+              onClick={() =>
+                onSelect({ nodeKey: node.key, laneKey: null, itemKey: null })
+              }
             />
-            {index < model.pipeline.length - 1 ? <FlowConnector status={getConnectorStatus(node, model.pipeline[index + 1])} /> : null}
+            {index < model.pipeline.length - 1 ? (
+              <FlowConnector
+                status={getConnectorStatus(node, model.pipeline[index + 1])}
+              />
+            ) : null}
           </React.Fragment>
         ))}
 
@@ -172,7 +259,7 @@ export function StatusFlowView({
               count={maxItems}
               statuses={Array.from({ length: maxItems }, (_, rowIndex) => {
                 const rowStatuses = lanes
-                  .map((lane) => lane.items[rowIndex]?.status)
+                  .map(lane => lane.items[rowIndex]?.status)
                   .filter((status): status is FlowStatus => Boolean(status));
                 return rowStatuses[0] ?? 'pending';
               })}
@@ -181,7 +268,11 @@ export function StatusFlowView({
             <div className={styles.lanesWrapper}>
               <div
                 className={styles.lanesHeader}
-                style={{ gridTemplateColumns: lanes.map(() => 'minmax(120px, auto)').join(' 48px ') }}
+                style={{
+                  gridTemplateColumns: lanes
+                    .map(() => 'minmax(120px, auto)')
+                    .join(' 48px '),
+                }}
               >
                 {lanes.map((lane, index) => (
                   <React.Fragment key={lane.key}>
@@ -192,7 +283,11 @@ export function StatusFlowView({
               </div>
               <div
                 className={styles.lanesGrid}
-                style={{ gridTemplateColumns: lanes.map(() => 'minmax(120px, auto)').join(' 48px ') }}
+                style={{
+                  gridTemplateColumns: lanes
+                    .map(() => 'minmax(120px, auto)')
+                    .join(' 48px '),
+                }}
               >
                 {Array.from({ length: maxItems }).map((_, rowIndex) => (
                   <React.Fragment key={`row-${rowIndex}`}>
@@ -202,14 +297,27 @@ export function StatusFlowView({
                       const prevItem = prevLane?.items[rowIndex];
                       return (
                         <React.Fragment key={`${lane.key}-${rowIndex}`}>
-                          {laneIndex > 0 ? <FlowConnector status={prevItem?.status || 'pending'} /> : null}
+                          {laneIndex > 0 ? (
+                            <FlowConnector
+                              status={prevItem?.status || 'pending'}
+                            />
+                          ) : null}
                           {item ? (
                             <FlowNodeButton
                               node={item}
                               compact
                               isControlActive={activeSet.has(item.key)}
-                              isSelected={selection.nodeKey === item.key && selection.laneKey === lane.key}
-                              onClick={() => onSelect({ nodeKey: item.key, laneKey: lane.key, itemKey: item.key })}
+                              isSelected={
+                                selection.nodeKey === item.key &&
+                                selection.laneKey === lane.key
+                              }
+                              onClick={() =>
+                                onSelect({
+                                  nodeKey: item.key,
+                                  laneKey: lane.key,
+                                  itemKey: item.key,
+                                })
+                              }
                             />
                           ) : (
                             <div className={styles.laneNodePlaceholder} />
@@ -225,14 +333,27 @@ export function StatusFlowView({
         ) : null}
       </div>
 
-      <div className={styles.legend}>
-        {(['pending', 'queued', 'processing', 'completed', 'failed'] as FlowStatus[]).map((status) => (
-          <div key={status} className={styles.legendItem}>
-            <div className={styles.legendDot} style={{ backgroundColor: STATUS_COLORS[status] }} />
-            <span className={styles.legendLabel}>{status}</span>
-          </div>
-        ))}
-      </div>
+      {showLegend ? (
+        <div className={styles.legend}>
+          {(
+            [
+              'pending',
+              'queued',
+              'processing',
+              'completed',
+              'failed',
+            ] as FlowStatus[]
+          ).map(status => (
+            <div key={status} className={styles.legendItem}>
+              <div
+                className={styles.legendDot}
+                style={{ backgroundColor: STATUS_COLORS[status] }}
+              />
+              <span className={styles.legendLabel}>{status}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

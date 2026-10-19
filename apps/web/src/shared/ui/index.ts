@@ -41,7 +41,7 @@ export type { BaseLayoutType, BaseLayoutProps, SplitLayoutProps, TabsLayoutProps
 
 // DataTable
 export { default as DataTable } from './DataTable/DataTable';
-export type { DataTableColumn, DataTableProps } from './DataTable/DataTable';
+export type { DataTableColumn, DataTableProps, DataTableFilterValue } from './DataTable/DataTable';
 
 // TableHeader
 export { TableHeader } from './TableHeader';

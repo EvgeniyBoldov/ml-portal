@@ -11,7 +11,7 @@ from app.runtime.entity_ids import runtime_task_id
 
 
 @pytest.mark.asyncio
-async def test_glossary_provenance_requires_published_global_source() -> None:
+async def test_glossary_provenance_requires_active_nonempty_published_term() -> None:
     chat_id, turn_id, user_id, tenant_id, glossary_id = (uuid4() for _ in range(5))
     statements = []
 
@@ -28,14 +28,13 @@ async def test_glossary_provenance_requires_published_global_source() -> None:
         source_ids=[f"turn:{turn_id}", f"glossary:{glossary_id}"],
     )
 
-    params = list(statements[1].compile().params.values())
-    assert "global" in params
-    assert "resolved" in params
-    assert "term" in params
     sql = str(statements[1])
-    assert "glossary_terms.approved_candidate_id" in sql
-    assert "ragdocuments.scope" in sql
-    assert "ragdocuments.status" in sql
+    assert "glossary_terms.definition" in sql
+    assert "glossary_terms.is_active IS true" in sql
+    # Source metadata is audit history; approved manual definitions remain usable
+    # when the originating document has been archived or removed.
+    assert "ragdocuments" not in sql
+
 
 
 @pytest.mark.asyncio

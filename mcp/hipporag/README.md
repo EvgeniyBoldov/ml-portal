@@ -22,19 +22,19 @@ There is no typed candidate projection, extraction agent or publication/review g
 Legacy document extraction, section-study, finalization and reconciliation jobs are
 disabled. Their code and PostgreSQL data remain for history.
 
-`memory.search` calls `/portal/corpus/search` directly. The worker owns one shared
-persistent corpus in `portal-corpus.sqlite` and native indexes on its volume.
-These vectors and the native graph are not stored in Qdrant.
-Documents replace earlier revisions by ID; failed graph indexing rolls back corpus
-changes. Corpus search is independent of MemoryItem/MemoryClaim, glossary, dialog
-facts, tenant/project scopes and source ACL. The shared document memory is available
-to all authorized users of the tool. Ordinary RAG/collection permissions are unchanged.
-There is no legacy fallback, including when MEMORY_SEARCH_BACKEND is set to legacy.
+`memory.search` makes one parallel `/portal/corpus/search` request per selected
+chat scope. Each request requires `scope_slug`; the worker selects documents
+before graph retrieval and uses a separate ready index for that scope. The API
+returns one independent result group per scope, including empty and failed ones.
+There is no combined result or cross-scope reranking. `HIPPO_SEARCH_WORKERS`
+(default 8) bounds the retrieval pool. SQLite stores documents and scope metadata;
+OpenIE snapshots are shared by content and remain reusable when scopes change.
+See [Memory](../../docs/architecture/MEMORY.md) for migration and result contracts.
 
 Backfill existing RAG-indexed canonical documents with:
 `docker compose exec -T api python - < scripts/index_hipporag_documents.py`.
 Model selections come from the registry; graph/cache identity uses semantic
-model configuration rather than mutable health timestamps. Native work is serialized.
+model configuration rather than mutable health timestamps. Index writes are serialized; retrieval is parallel across scope graphs.
 
 Encoder limits come from the real sentence encoder. Chunks use a conservative
 UTF-8 byte bound; long queries/facts use bounded segments with averaged, normalized
@@ -157,7 +157,33 @@ retrieval results. The existing docs/flat/linked baseline can be compared after
 checking corpus hashes and extraction completeness.
 
 This is a trusted local experiment interface, bound to host loopback, without
-portal ACL enforcement or authentication. It must not be published as a public
-memory API. A future application integration must keep scope/ACL filtering and
-`memory.search` ownership in the portal. HippoRAG triples express semantic links;
-they do not by themselves encode authoritative applicability or permissions.
+portal authentication. It must not be published as a public memory API. The
+application owns `memory.search` and selects indexes from the shared LongMemory
+corpus by scope; LongMemory is not filtered by source ACL, user, or tenant.
+Ordinary RAG collection permissions remain enforced by their own application
+path. HippoRAG triples express semantic links; they do not define index scope.
+
+
+## Document lifecycle and observability
+
+The portal forks LongMemory after normalization, alongside the normal RAG
+chunk/embed/index branch. Managed commands use `POST /portal/documents/add` and
+`POST /portal/documents/delete` with an operation ID, document ID, generation,
+selected models, and (for add) the canonical document. They return 202 immediately.
+The caller retains its model capability until completion and polls
+`GET /portal/operations/{operation_id}`. `GET /portal/documents/{document_id}` reads
+per-document statistics without invoking models.
+
+`portal-operations.sqlite` stores command states and document generation heads.
+It uses a separate transaction from the corpus build so progress stays readable.
+The worker serializes mutations in its existing single executor. Index extraction
+and scope publication are reported separately. Add uses saved extraction when
+available; delete rebuilds remaining scope rosters without removing shared chunks.
+A newer accepted deletion fences an older in-flight add. Worker startup marks
+interrupted commands failed for application recovery. Derived previous graph
+generations remain on disk until separately collected.
+
+Deployment must copy `document_operations.py`, apply API migration 0192, and update
+API, Celery, frontend, and this worker together. Encoder changes use the corpus
+reindex flow described above; document additions and removals use managed
+document operations.

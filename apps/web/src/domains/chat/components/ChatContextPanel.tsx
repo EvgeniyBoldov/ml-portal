@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useChatContext, useResetChatContext } from '@/shared/api/hooks/useChats';
 import { Button, ConfirmDialog, Icon, Modal } from '@/shared/ui';
 
+import { ChatMemoryScopes } from './ChatMemoryScopes';
 import styles from './ChatContextPanel.module.css';
 
 type ContextItem = Record<string, unknown>;
@@ -106,10 +107,7 @@ export function ChatContextPanel({ chatId }: { chatId: string }) {
               </section>
               <section className={styles.section}>
                 <h3>Фокус</h3>
-                <dl className={styles.focusBranches}>
-                  <div><dt>Команды · кому</dt><dd>{textFrom(context.focus, ['team_names', 'team_keys']) ?? 'Без выбора конкретной команды'}</dd></div>
-                  <div><dt>Проекты · где</dt><dd>{textFrom(context.focus, ['project_names', 'project_keys']) ?? 'Общие проектные правила'}</dd></div>
-                </dl>
+                <ChatMemoryScopes chatId={chatId} context={context} />
                 {textFrom(context.focus, ['topic']) && <p className={styles.value}>{textFrom(context.focus, ['topic'])}</p>}
               </section>
               <ContextList title="Термины" items={context.term_bindings} fields={['term', 'aliases']} emptyText="Термины не закреплены." />

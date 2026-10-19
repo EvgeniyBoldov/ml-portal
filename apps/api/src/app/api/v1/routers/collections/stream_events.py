@@ -3,6 +3,8 @@ Collection document stream read endpoints.
 """
 from __future__ import annotations
 
+from app.services.long_memory_document_service import document_memory_nodes
+
 import asyncio
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Optional
@@ -378,6 +380,7 @@ async def get_collection_doc_status_graph(
         return StatusGraphResponse(
             doc_id=doc_id,
             pipeline=pipeline_stages,
+            memory=await document_memory_nodes(session, doc_uuid),
             embeddings=embedding_models,
             index=index_models,
             agg_status=agg_status,

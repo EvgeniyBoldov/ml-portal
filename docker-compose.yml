@@ -24,6 +24,7 @@ services:
     restart: unless-stopped
     environment:
       HIPPO_CHUNK_TOKENS: ${HIPPO_CHUNK_TOKENS:-480}
+      HIPPO_SEARCH_WORKERS: ${HIPPO_SEARCH_WORKERS:-8}
       HIPPO_DATA_DIR: /data
     ports:
       - "127.0.0.1:${HIPPO_PORT:-8015}:8080"
@@ -171,6 +172,8 @@ services:
       - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
       - HIPPO_CALLBACK_URL=${HIPPO_CALLBACK_URL:-http://api:8000/api/v1/internal/hipporag}
       - HIPPO_TIMEOUT_SECONDS=${HIPPO_TIMEOUT_SECONDS:-1800}
+      - DOCLING_URL=${DOCLING_URL:-http://docling:5001}
+      - DOCLING_TIMEOUT_SECONDS=${DOCLING_TIMEOUT_SECONDS:-180}
       - TOOL_RESULTS_DB_URL=postgresql+asyncpg://${TOOL_RESULTS_POSTGRES_USER:-tool_results}:${TOOL_RESULTS_POSTGRES_PASSWORD:-tool_results_password}@postgres-tool-results:5432/${TOOL_RESULTS_POSTGRES_DB:-tool_results}
     depends_on:
       postgres:
@@ -435,6 +438,8 @@ services:
       - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
       - HIPPO_CALLBACK_URL=${HIPPO_CALLBACK_URL:-http://api:8000/api/v1/internal/hipporag}
       - HIPPO_TIMEOUT_SECONDS=${HIPPO_TIMEOUT_SECONDS:-1800}
+      - DOCLING_URL=${DOCLING_URL:-http://docling:5001}
+      - DOCLING_TIMEOUT_SECONDS=${DOCLING_TIMEOUT_SECONDS:-180}
     working_dir: /app
     depends_on:
       postgres:

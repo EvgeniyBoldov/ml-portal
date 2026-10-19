@@ -340,6 +340,7 @@
 }
 
 .clarifyHeader h3 {
+  white-space: pre-wrap;
   margin: 0;
   font-size: var(--font-size-sm);
   font-weight: 600;

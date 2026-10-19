@@ -83,6 +83,7 @@ export interface DataTableProps<T = any> {
   searchValue?: string;
   onSearchChange?: (value: string) => void;
   searchFilter?: (row: T, query: string) => boolean;
+  onColumnFiltersChange?: (filters: Record<string, DataTableFilterValue>) => void;
   
   // Pagination
   paginated?: boolean;
@@ -125,6 +126,7 @@ export default function DataTable<T = any>({
   searchValue: controlledSearchValue,
   onSearchChange,
   searchFilter,
+  onColumnFiltersChange,
   paginated = false,
   serverPaginated = false,
   pageSize: controlledPageSize,
@@ -215,17 +217,17 @@ export default function DataTable<T = any>({
   }, [sortKey]);
 
   const updateColumnFilter = useCallback((key: string, value: DataTableFilterValue) => {
-    setColumnFilters(prev => ({
-      ...prev,
-      [key]: value,
-    }));
+    const nextFilters = { ...columnFilters, [key]: value };
+    setColumnFilters(nextFilters);
+    onColumnFiltersChange?.(nextFilters);
     setInternalCurrentPage(1);
-  }, []);
+  }, [columnFilters, onColumnFiltersChange]);
 
   const resetColumnFilters = useCallback(() => {
     setColumnFilters({});
+    onColumnFiltersChange?.({});
     setInternalCurrentPage(1);
-  }, []);
+  }, [onColumnFiltersChange]);
 
   // Filter data
   const filteredData = useMemo(() => {

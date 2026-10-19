@@ -31,7 +31,8 @@ def test_partial_context_preserves_evidence_and_hides_internal_failures():
     context = partial_context(plan=plan, state=state, failure_code='planner_checkpoint_failed')
     rendered = json.dumps(context, ensure_ascii=False)
     assert 'Согласовать окно работ' in rendered
-    assert 'Сделать резервную копию' in rendered
+    assert 'Сделать резервную копию' not in rendered
+    assert context['memory_context'] == []
     assert 'учётные данные' in rendered
     assert 'Traceback' not in rendered
     assert 'scope selection' not in rendered

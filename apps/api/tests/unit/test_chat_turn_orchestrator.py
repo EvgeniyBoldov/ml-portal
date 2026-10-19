@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 from uuid import uuid4
 
@@ -166,7 +166,7 @@ class TestChatTurnOrchestrator:
         )
 
     @pytest.mark.asyncio
-    async def test_execute_turn_emits_empty_response_error_when_runtime_returns_nothing(self, orchestrator: ChatTurnOrchestrator):
+    async def test_execute_turn_emits_empty_response_error_when_runtime_returns_nothing(self, orchestrator: ChatTurnOrchestrator, caplog):
         chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
         orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
         orchestrator.turn_service.attach_user_message = AsyncMock()
@@ -204,6 +204,9 @@ class TestChatTurnOrchestrator:
         errors = [event for event in events if event["type"] == "error"]
         assert len(errors) == 1
         assert errors[0]["error"] == "Empty response from agent"
+        diagnostic = next(record for record in caplog.records if record.message == "chat_turn_empty_agent_response")
+        assert diagnostic.chat_id == "00000000-0000-0000-0000-000000000010"
+        assert diagnostic.runtime_event_types == []
         orchestrator.turn_service.fail_turn.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -247,8 +250,8 @@ class TestChatTurnOrchestrator:
             turn_id,
             pause_status="waiting_input",
             runtime_run_id="00000000-0000-0000-0000-000000000040",
-            paused_action=None,
-            paused_context=None,
+            paused_action={"pause_id": ANY},
+            paused_context={"pause_id": ANY},
         )
         # The request/turn is committed before the long-running stream, then
         # the pause checkpoint is committed before its resumable SSE frame.
@@ -398,3 +401,24 @@ class TestChatTurnOrchestrator:
         assert "traceback" not in kwargs["content"].lower()
         assert kwargs["extra_meta"]["runtime_status"] == "failed"
         assert kwargs["extra_meta"]["runtime_error_code"] == "budget_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_finalization_failure_rolls_back_and_never_emits_final(orchestrator):
+    turn_id = uuid4()
+    orchestrator.context_service.load_chat_context.return_value = []
+    orchestrator.persistence_service.create_assistant_message.side_effect = RuntimeError("PRIVATE_WRITE_ERROR")
+
+    async def response(**kwargs):
+        yield {"type": "final_content", "content": "Prepared answer", "attachments": []}
+
+    events = [event async for event in orchestrator.execute_turn(
+        chat=SimpleNamespace(name="Test"), chat_id=str(uuid4()), user_id=str(uuid4()), tenant_id=str(uuid4()),
+        content="test", artifact_ids=[], attachment_meta=[], attachment_contexts=[], idempotency_key=None,
+        model=None, agent_slug=None, continuation_meta={}, persist_user_message=False,
+        resumed_turn_id=str(turn_id), run_with_router=response, store_idempotency=AsyncMock(), bind_attachments=AsyncMock())]
+    assert not any(event["type"] == "final" for event in events)
+    assert any(event.get("code") == "chat_finalization_failed" for event in events)
+    assert "PRIVATE_WRITE_ERROR" not in str(events)
+    orchestrator.turn_service.session.rollback.assert_awaited_once()
+    orchestrator.turn_service.fail_turn.assert_awaited_once_with(turn_id, error_message="chat_finalization_failed")

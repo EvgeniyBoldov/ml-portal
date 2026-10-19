@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -34,14 +34,14 @@ class TestChatContextService:
         chat_id, user_id, tenant_id = str(uuid4()), str(uuid4()), str(uuid4())
         service.load_snapshot = AsyncMock(return_value=ChatContextSnapshot(chat_id=chat_id, revision=0))
         resolve = AsyncMock(return_value=EffectiveScopeContext(selected=[
-            ScopeIdentity(key='team.ops', type='team', name='Инфраструктура', source='tenant_default'),
-            ScopeIdentity(key='project.nims', type='project', name='NIMS', source='user_default'),
+            ScopeIdentity(key='ops', type='scope', name='Инфраструктура', source='tenant_default'),
+            ScopeIdentity(key='nims', type='scope', name='NIMS', source='user_default'),
         ]))
         monkeypatch.setattr(memory_scope_preferences_service.MemoryScopePreferencesService, 'resolve_context', resolve)
         result = await service.inspect_snapshot(chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id)
         assert result['revision'] == 0
-        assert result['focus'] == {'team_keys': ['ops'], 'project_keys': ['nims'],
-                                   'team_names': ['Инфраструктура'], 'project_names': ['NIMS']}
+        assert result['focus'] == {'scope_keys': ['ops', 'nims'], 'scope_mode': 'inherit',
+                                   'scope_names': ['Инфраструктура', 'NIMS']}
         assert resolve.await_args.kwargs['user_id'] == UUID(user_id)
 
     @pytest.mark.asyncio
@@ -152,3 +152,39 @@ class TestChatContextService:
                 "meta": {"attachments": [{"id": "att-1", "file_name": "file.txt"}]},
             }
         ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("keys, mode, cleared", [(["ops"], "replace", False), ([], "replace", True), (None, "inherit", False)])
+async def test_chat_scope_preference_replaces_or_restores_inheritance(service, keys, mode, cleared):
+    head = SimpleNamespace(revision=4, updated_through_turn_order=10)
+    repository = AsyncMock()
+    repository.get_or_create_head.return_value = head
+    repository.active_item.return_value = None
+    repository.add_item = Mock()
+    with patch("app.services.chat_context_service.ChatContextRepository", return_value=repository), patch(
+        "app.services.memory_scope_preferences_service.MemoryScopePreferencesService.validate_keys",
+        AsyncMock(return_value=keys or []),
+    ):
+        await service.set_memory_scopes(chat_id=str(uuid4()), owner_id=str(uuid4()), keys=keys, expected_revision=4)
+    item = repository.add_item.call_args.args[0]
+    assert item.payload["scope_keys"] == (keys or [])
+    assert item.payload["scope_mode"] == mode
+    assert item.payload["suppress_scope_default"] == cleared
+    assert item.payload["team_keys"] == item.payload["project_keys"] == []
+    assert head.revision == 5
+    assert item.source_turn_order == 11
+    repository.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_chat_scope_preference_rejects_stale_revision(service):
+    repository = AsyncMock()
+    repository.get_or_create_head.return_value = SimpleNamespace(revision=5)
+    with patch("app.services.chat_context_service.ChatContextRepository", return_value=repository), patch(
+        "app.services.memory_scope_preferences_service.MemoryScopePreferencesService.validate_keys", AsyncMock(return_value=[]),
+    ):
+        with pytest.raises(ValueError, match="stale_revision"):
+            await service.set_memory_scopes(chat_id=str(uuid4()), owner_id=str(uuid4()), keys=[], expected_revision=4)
+    repository.active_item.assert_not_awaited()
+    repository.flush.assert_not_awaited()

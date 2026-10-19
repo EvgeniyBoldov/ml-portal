@@ -16,11 +16,13 @@ from app.models.runtime_plan import (
 )
 from app.runtime.orchestrator_contracts import (
     TaskExecutionReceipt, AttemptStatus, IterationProposal, IterationStatus,
-    PlanStatus, ResolutionAction, SchedulerActionKind, SchedulerDecision,
+    PlanStatus, PlannedTask, ResolutionAction, SchedulerActionKind, SchedulerDecision,
     TERMINAL_TASK_STATUSES, TaskAttemptFailure, TaskOutcome, TaskResult, TaskStatus,
     TerminalKind,
 )
-from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, task_scope
+from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, project_memory_context, task_scope, scope_selection_changes
+from app.runtime.memory.document_memory import accumulate_document_memory, document_memory
+from app.runtime.interaction import RuntimeInteraction, interaction_history
 
 
 def _now() -> datetime:
@@ -35,15 +37,30 @@ class TaskNotFoundError(KeyError):
     pass
 
 
+def _task_interactions(snapshot: dict[str, Any], task_id: str) -> dict[str, Any]:
+    history = interaction_history(snapshot.get("pauses", []), stage="agent", task_id=task_id)
+    return {
+        "interaction_history": [{"id": row["interaction"]["id"], "question": row["interaction"]["question"],
+                                 "response": row["response"]} for row in history],
+        "resume_checkpoint": deepcopy(history[-1]["interaction"]["checkpoint"]) if history else {},
+    }
+
+
 def _merge_memory_results(existing: list[dict[str, Any]], results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    core = [item for item in existing if item.get("type") != "planner_memory_result"]
-    searches = {item["query_key"]: item for item in existing
-                if item.get("type") == "planner_memory_result" and item.get("query_key")}
-    for item in results:
-        if item.get("query_key"):
-            searches.pop(item["query_key"], None)
-            searches[item["query_key"]] = item
-    return [*core, *list(searches.values())[-30:]]
+    merged = deepcopy(existing)
+    for entry in [*document_memory(existing), *results]:
+        result = entry.get("result", entry)
+        if isinstance(result, dict) and isinstance(result.get("groups"), list):
+            merged = accumulate_document_memory(merged, result)
+    return merged
+
+
+def _continuation_memory(task: PlannedTask, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    if not task.continuation_of:
+        return []
+    prior = snapshot["tasks"][task.continuation_of]
+    return [project_memory_context(entry, task.scope_context.get("keys", []))
+            for entry in document_memory(prior.get("memory_context") or [])]
 
 
 def _safe_failure_limitation(code: str) -> Dict[str, Any]:
@@ -110,7 +127,7 @@ def validate_iteration_semantics(proposal: IterationProposal, snapshot: Dict[str
     """
     effective_scope = EffectiveScopeContext.model_validate(snapshot.get("scope_context") or {})
     for task in proposal.tasks:
-        if (task.scope_keys or task.scope_mode == "replace") and not task.scope_reason.strip():
+        if scope_selection_changes(effective_scope, ScopeSelection(keys=task.scope_keys, mode=task.scope_mode)) and not task.scope_reason.strip():
             raise PlanValidationError(f"task {task.task_id} must explain its scope selection")
         try:
             task.scope_context = task_scope(effective_scope, ScopeSelection(
@@ -132,6 +149,14 @@ def validate_iteration_semantics(proposal: IterationProposal, snapshot: Dict[str
         if any(key not in outputs for key in resolution.output_keys):
             raise PlanValidationError("resolution accepts an absent prior output")
     resolutions = {item.task_id: item for item in proposal.resolutions}
+    for task in proposal.tasks:
+        if task.continuation_of:
+            previous = prior.get(task.continuation_of)
+            resolution = resolutions.get(task.continuation_of)
+            if (previous is None or previous.get("executor") != task.executor
+                    or resolution is None or resolution.action != ResolutionAction.CONTINUE_WITH_TASKS
+                    or task.task_id not in resolution.replacement_task_ids):
+                raise PlanValidationError("continuation_of requires an explicit continuation of an incomplete task with the same executor")
     bound: set[tuple[str, str]] = set()
     for binding in proposal.bindings:
         if (binding.need_task_id, binding.need_ref) not in needs:
@@ -227,7 +252,7 @@ class _MemoryStateMachine:
                 consumer["result"] = {"outcome": "unfulfillable", "description": str(exc),
                                       "reason_code": "binding_result_missing", "outputs": {}}
         _block_dependents(tasks)
-        waiting = [task for task in tasks.values() if task["status"] == TaskStatus.WAITING_CONFIRMATION.value]
+        waiting = [task for task in tasks.values() if task["status"] in {TaskStatus.WAITING_CONFIRMATION.value, TaskStatus.WAITING_INPUT.value}]
         if waiting:
             return SchedulerDecision(kind=SchedulerActionKind.WAIT_INPUT, iteration_id=iteration["id"])
         ready = _ready_tasks(tasks)
@@ -264,6 +289,12 @@ class InMemoryPlanStore:
         plan = self.get(plan_id)
         plan["memory_context"] = _merge_memory_results(list(plan.get("memory_context") or []), results)
 
+    def update_task_memory(self, plan_id: str, task_id: str, context: list[dict[str, Any]]) -> None:
+        task = self.get(plan_id)["tasks"][task_id]
+        if task["status"] != TaskStatus.RUNNING.value:
+            raise PlanValidationError("task memory update requires a running task")
+        task["memory_context"] = document_memory(context)
+
     def get(self, plan_id: str) -> Dict[str, Any]:
         try:
             return self.plans[plan_id]
@@ -287,7 +318,7 @@ class InMemoryPlanStore:
         if plan["status"] in {PlanStatus.COMPLETED.value, PlanStatus.FAILED.value, PlanStatus.CANCELLED.value}:
             return
         for task_id, task in plan["tasks"].items():
-            if task["status"] != TaskStatus.RUNNING.value:
+            if task["status"] not in {TaskStatus.RUNNING.value, TaskStatus.WAITING_INPUT.value, TaskStatus.WAITING_CONFIRMATION.value}:
                 continue
             task["status"] = TaskStatus.CANCELLED.value
             task["result"] = {"outcome": TaskOutcome.UNFULFILLABLE.value, "description": "Task execution was cancelled", "reason_code": reason, "outputs": {}, "limitation": {"code": reason, "message": "Execution was cancelled.", "action": "none"}}
@@ -298,6 +329,9 @@ class InMemoryPlanStore:
             if iteration["status"] == IterationStatus.ACTIVE.value:
                 iteration["checkpoint_status"] = "idle"
                 iteration["checkpoint_claimed_at"] = None
+        for pause in plan.get("pauses", []):
+            if pause.get("status") == "waiting":
+                pause["status"] = "cancelled"
         plan["status"] = PlanStatus.CANCELLED.value
 
     def heartbeat_task(self, plan_id: str, task_id: str) -> None:
@@ -337,6 +371,7 @@ class InMemoryPlanStore:
             plan["tasks"][task.task_id] = {**task.model_dump(mode="json"), "iteration_id": iteration["id"],
                                              "planned_order": order, "status": TaskStatus.PENDING.value,
                                              "scope_context": dict(task.scope_context or {}),
+                                             "memory_context": _continuation_memory(task, plan),
                                              "result": None, "attempts": 0, "next_retry_at": None}
         plan["bindings"].extend(item.model_dump(mode="json") for item in proposal.bindings)
         plan["resolutions"].extend({**item.model_dump(mode="json"), "iteration_id": iteration["id"]} for item in proposal.resolutions)
@@ -420,7 +455,55 @@ class InMemoryPlanStore:
         dependencies = {dep: plan["tasks"][dep]["result"] for dep in task["depends_on"]}
         return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"],
                 "inputs": inputs, "dependency_outputs": dependencies,
-                "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {})}
+                "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), **_task_interactions(plan, task_id)}
+
+    def pause_interaction(self, plan_id: str, interaction: RuntimeInteraction) -> None:
+        plan = self.get(plan_id)
+        if plan["status"] == PlanStatus.WAITING_INPUT.value:
+            raise PlanValidationError("plan already has an active interaction")
+        if interaction.requester.plan_id != str(plan_id):
+            raise PlanValidationError("interaction belongs to another plan")
+        task_id = interaction.requester.task_id
+        if task_id:
+            task = plan["tasks"].get(task_id)
+            if task is None or task["status"] != TaskStatus.RUNNING.value:
+                raise PlanValidationError("interaction requires a running task")
+            task["status"] = TaskStatus.WAITING_INPUT.value
+            plan["attempts"][task_id][-1].update(status="cancelled", finished_at=_now().isoformat(),
+                error={"code": "interaction_required", "message": interaction.question})
+        plan["pauses"].append({"task_id": task_id or "", "kind": "interaction",
+            "operation_fingerprint": (interaction.operation or {}).get("operation_fingerprint", ""),
+            "payload": {"interaction": interaction.model_dump(mode="json")}, "status": "waiting"})
+        plan["status"] = PlanStatus.WAITING_INPUT.value
+
+    def resume_interaction(self, plan_id: str, interaction_id: str, response: Any) -> None:
+        plan = self.get(plan_id)
+        pause = next((row for row in plan["pauses"] if row["status"] == "waiting"
+                      and (row["payload"].get("interaction") or {}).get("id") == interaction_id), None)
+        if pause is None:
+            raise PlanValidationError("interaction does not match active pause")
+        interaction = RuntimeInteraction.model_validate(pause["payload"]["interaction"])
+        response = interaction.validate_response(response)
+        task = None
+        if interaction.requester.task_id:
+            task = plan["tasks"].get(interaction.requester.task_id)
+            if task is None or task["status"] != TaskStatus.WAITING_INPUT.value:
+                raise PlanValidationError("interaction task is not waiting")
+        pause["payload"]["response"], pause["status"] = response, "answered"
+        if interaction.requester.task_id:
+            assert task is not None
+            if interaction.operation and response is False:
+                task["status"] = TaskStatus.CANCELLED.value
+                task["result"] = {"outcome": "unfulfillable", "description": "Required operation was rejected",
+                    "reason_code": "confirmation_rejected", "outputs": {},
+                    "limitation": {"code": "confirmation_rejected", "message": "The required operation was not approved.", "action": "none"}}
+            else:
+                task["status"] = TaskStatus.PENDING.value
+        else:
+            for iteration in plan["iterations"]:
+                if iteration["status"] == "active" and iteration["checkpoint_status"] == "planner_running":
+                    iteration["checkpoint_status"], iteration["checkpoint_claimed_at"] = "idle", None
+        plan["status"] = PlanStatus.ACTIVE.value
 
     def pause_confirmation(self, plan_id: str, task_id: str, payload: Dict[str, Any]) -> None:
         plan = self.get(plan_id)
@@ -523,6 +606,17 @@ class SqlPlanStore:
         await self._session.flush()
         await self._commit()
 
+    async def update_task_memory(self, plan_id: UUID, task_id: str, context: list[dict[str, Any]]) -> None:
+        await self._plan(plan_id, lock=True)
+        row = (await self._session.execute(select(RuntimePlanTask).where(
+            RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id,
+        ).with_for_update())).scalar_one()
+        if row.status != TaskStatus.RUNNING.value:
+            raise PlanValidationError("task memory update requires a running task")
+        row.memory_context = document_memory(context)
+        await self._session.flush()
+        await self._commit()
+
     async def mark_failed(self, plan_id: UUID, code: str, message: str) -> None:
         plan = await self._plan(plan_id, lock=True)
         plan.status, plan.last_failure = PlanStatus.FAILED.value, {"code": code, "message": message}
@@ -536,7 +630,10 @@ class SqlPlanStore:
         plan = await self._plan(plan_id, lock=True)
         if plan.status in {PlanStatus.COMPLETED.value, PlanStatus.FAILED.value, PlanStatus.CANCELLED.value}:
             return
-        rows = (await self._session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.status == TaskStatus.RUNNING.value).with_for_update())).scalars().all()
+        rows = (await self._session.execute(select(RuntimePlanTask).where(
+            RuntimePlanTask.plan_id == plan_id,
+            RuntimePlanTask.status.in_([TaskStatus.RUNNING.value, TaskStatus.WAITING_INPUT.value, TaskStatus.WAITING_CONFIRMATION.value]),
+        ).with_for_update())).scalars().all()
         for row in rows:
             row.status = TaskStatus.CANCELLED.value
             row.result = {"outcome": TaskOutcome.UNFULFILLABLE.value, "description": "Task execution was cancelled", "reason_code": reason, "outputs": {}, "limitation": {"code": reason, "message": "Execution was cancelled.", "action": "none"}}
@@ -546,6 +643,10 @@ class SqlPlanStore:
         iteration = await self._active_iteration(plan_id, lock=True)
         if iteration is not None:
             iteration.checkpoint_status, iteration.checkpoint_claimed_at = "idle", None
+        pauses = (await self._session.execute(select(RuntimePause).where(
+            RuntimePause.plan_id == plan_id, RuntimePause.status == "waiting").with_for_update())).scalars().all()
+        for pause in pauses:
+            pause.status, pause.resolved_at = "cancelled", _now()
         plan.status = PlanStatus.CANCELLED.value
         await self._session.flush()
         await self._commit()
@@ -586,7 +687,8 @@ class SqlPlanStore:
         plan = await self._plan(plan_id, lock=True)
         if plan.status not in {PlanStatus.DRAFT.value, PlanStatus.ACTIVE.value}:
             raise PlanValidationError("cannot apply an iteration to a terminal or paused plan")
-        validate_iteration_semantics(proposal, await self.snapshot(plan_id))
+        snapshot = await self.snapshot(plan_id)
+        validate_iteration_semantics(proposal, snapshot)
         active = await self._active_iteration(plan_id, lock=True)
         if active is not None:
             if active.checkpoint_status != "planner_running":
@@ -609,7 +711,9 @@ class SqlPlanStore:
                                   expected_outputs=[item.model_dump(mode="json", by_alias=True) for item in task.expected_outputs],
                                   compiled_contract={**task.contract.model_dump(mode="json"), "response_spec": task.response_spec.model_dump(mode="json", by_alias=True), "protocol_version": 2},
                                   scope_context=dict(getattr(task, "scope_context", {}) or {}),
-                                  freshness_policy=task.freshness_policy.value)
+                                  freshness_policy=task.freshness_policy.value,
+                                  continuation_of=task.continuation_of,
+                                  memory_context=_continuation_memory(task, snapshot))
             self._session.add(row)
             await self._session.flush()
             self._session.add_all([RuntimeTaskDependency(task_row_id=row.id, depends_on_task_id=dep) for dep in task.depends_on])
@@ -636,11 +740,13 @@ class SqlPlanStore:
             .order_by(RuntimePlanIteration.sequence, RuntimeTaskResolution.id)
         )).scalars().all()
         bindings = (await self._session.execute(select(RuntimeNeedBinding).where(RuntimeNeedBinding.plan_id == plan_id))).scalars().all()
+        pauses = (await self._session.execute(select(RuntimePause).where(RuntimePause.plan_id == plan_id).order_by(RuntimePause.created_at, RuntimePause.id))).scalars().all()
         return {
             "id": str(plan.id), "goal": plan.goal, "root_run_id": str(plan.root_run_id), "status": plan.status, "contract_version": plan.contract_version, "last_failure": plan.last_failure,
             "scope_context": dict(plan.scope_context or {}), "memory_context": list(plan.memory_context or []),
+            "pauses": [{"task_id": row.task_id, "payload": row.payload, "status": row.status} for row in pauses],
             "iterations": [{"id": str(row.id), "sequence": row.sequence, "terminal": row.terminal, "synthesis_brief": row.synthesis_brief, "status": row.status, "checkpoint_status": row.checkpoint_status, "checkpoint_claimed_at": row.checkpoint_claimed_at.isoformat() if row.checkpoint_claimed_at else None} for row in iterations],
-            "tasks": {row.task_id: {"task_id": row.task_id, "iteration_id": str(row.iteration_id), "planned_order": row.planned_order, "executor": row.executor, "intent": row.intent, "instructions": row.instructions, "inputs": row.inputs, "expected_outputs": row.expected_outputs, "contract": row.compiled_contract, "freshness_policy": row.freshness_policy, "scope_context": row.scope_context or {}, "depends_on": dependency_map.get(row.id, []), "status": row.status, "result": row.result, "attempts": row.attempts, "next_retry_at": row.next_retry_at.isoformat() if row.next_retry_at else None, "updated_at": row.updated_at.isoformat()} for row in tasks},
+            "tasks": {row.task_id: {"task_id": row.task_id, "iteration_id": str(row.iteration_id), "planned_order": row.planned_order, "executor": row.executor, "intent": row.intent, "instructions": row.instructions, "inputs": row.inputs, "expected_outputs": row.expected_outputs, "contract": row.compiled_contract, "freshness_policy": row.freshness_policy, "scope_context": row.scope_context or {}, "continuation_of": row.continuation_of, "memory_context": deepcopy(row.memory_context or []), "depends_on": dependency_map.get(row.id, []), "status": row.status, "result": row.result, "attempts": row.attempts, "next_retry_at": row.next_retry_at.isoformat() if row.next_retry_at else None, "updated_at": row.updated_at.isoformat()} for row in tasks},
             "needs": [{"task_id": next(row.task_id for row in tasks if row.id == need.task_row_id), "ref": need.need_ref, "key": need.need_key, "kind": need.kind, "description": need.description, "schema": need.schema, "context": need.context, "required": need.required} for need in needs],
             "resolutions": [{"iteration_id": str(row.iteration_id), "task_id": row.task_id, "action": row.action, "output_keys": row.output_keys, "replacement_task_ids": row.replacement_task_ids, "reason": row.reason} for row in resolutions],
             "bindings": [{"need_task_id": row.need_task_id, "need_ref": row.need_ref, "producer_task_id": row.producer_task_id, "output_key": row.output_key, "consumer_task_id": row.consumer_task_id, "consumer_input_key": row.consumer_input_key} for row in bindings],
@@ -718,7 +824,63 @@ class SqlPlanStore:
                 need = next((item for item in snapshot.get("needs", []) if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
         _validate_compiled_inputs(task, inputs)
-        return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": {dep: snapshot["tasks"][dep]["result"] for dep in task["depends_on"]}, "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {})}
+        return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": {dep: snapshot["tasks"][dep]["result"] for dep in task["depends_on"]}, "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), **_task_interactions(snapshot, task_id)}
+
+    async def pause_interaction(self, plan_id: UUID, interaction: RuntimeInteraction) -> None:
+        plan = await self._plan(plan_id, lock=True)
+        if plan.status == PlanStatus.WAITING_INPUT.value:
+            raise PlanValidationError("plan already has an active interaction")
+        if interaction.requester.plan_id != str(plan_id):
+            raise PlanValidationError("interaction belongs to another plan")
+        task_id = interaction.requester.task_id
+        if task_id:
+            row = (await self._session.execute(select(RuntimePlanTask).where(
+                RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id).with_for_update())).scalar_one()
+            if row.status != TaskStatus.RUNNING.value:
+                raise PlanValidationError("interaction requires a running task")
+            row.status = TaskStatus.WAITING_INPUT.value
+            attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(
+                RuntimeTaskAttempt.task_row_id == row.id, RuntimeTaskAttempt.attempt_number == row.attempts).with_for_update())).scalar_one()
+            attempt.status, attempt.finished_at = "cancelled", _now()
+            attempt.error = {"code": "interaction_required", "message": interaction.question}
+        self._session.add(RuntimePause(plan_id=plan_id, task_id=task_id or "", kind="interaction",
+            operation_fingerprint=(interaction.operation or {}).get("operation_fingerprint", ""),
+            payload={"interaction": interaction.model_dump(mode="json")}))
+        plan.status = PlanStatus.WAITING_INPUT.value
+        await self._session.flush()
+        await self._commit()
+
+    async def resume_interaction(self, plan_id: UUID, interaction_id: str, response: Any) -> None:
+        plan = await self._plan(plan_id, lock=True)
+        pauses = (await self._session.execute(select(RuntimePause).where(
+            RuntimePause.plan_id == plan_id, RuntimePause.status == "waiting").with_for_update())).scalars().all()
+        pause = next((row for row in pauses if (row.payload.get("interaction") or {}).get("id") == interaction_id), None)
+        if pause is None:
+            raise PlanValidationError("interaction does not match active pause")
+        interaction = RuntimeInteraction.model_validate(pause.payload["interaction"])
+        response = interaction.validate_response(response)
+        task_row = None
+        if interaction.requester.task_id:
+            task_row = (await self._session.execute(select(RuntimePlanTask).where(
+                RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == interaction.requester.task_id).with_for_update())).scalar_one()
+            if task_row.status != TaskStatus.WAITING_INPUT.value:
+                raise PlanValidationError("interaction task is not waiting")
+        pause.payload, pause.status, pause.resolved_at = {**pause.payload, "response": response}, "answered", _now()
+        if task_row is not None:
+            if interaction.operation and response is False:
+                task_row.status = TaskStatus.CANCELLED.value
+                task_row.result = {"outcome": "unfulfillable", "description": "Required operation was rejected",
+                    "reason_code": "confirmation_rejected", "outputs": {},
+                    "limitation": {"code": "confirmation_rejected", "message": "The required operation was not approved.", "action": "none"}}
+            else:
+                task_row.status = TaskStatus.PENDING.value
+        else:
+            iteration = await self._active_iteration(plan_id, lock=True)
+            if iteration is not None and iteration.checkpoint_status == "planner_running":
+                iteration.checkpoint_status, iteration.checkpoint_claimed_at = "idle", None
+        plan.status = PlanStatus.ACTIVE.value
+        await self._session.flush()
+        await self._commit()
 
     async def pause_confirmation(self, plan_id: UUID, task_id: str, payload: Dict[str, Any]) -> None:
         plan = await self._plan(plan_id, lock=True)

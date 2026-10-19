@@ -94,6 +94,10 @@ class FileCodecRegistry:
         return codec
 
     @classmethod
+    def normalize_filename(cls, format_name: str, filename: str) -> str:
+        return _normalize_filename(filename, cls.get(format_name).format.extension)
+
+    @classmethod
     def supported_formats(cls) -> tuple[str, ...]:
         return tuple(sorted(cls._codecs))
 

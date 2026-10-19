@@ -22,10 +22,10 @@ def final_decision(route="synthesis"):
 async def test_preflight_searches_before_final_route_and_retains_evidence(monkeypatch, items, route):
     from app.runtime import turn_preflight
     search_step = TurnPreflightDecision.model_validate({"route": "tool_call", "tool_call": {
-        "operation": "memory.search", "arguments": {"query": "NIMS-3532"}}})
-    record = {"operation": "memory.search", "arguments": {"query": "NIMS-3532", "limit": 8},
+        "tool": "memory.search", "arguments": {"query": "NIMS-3532"}}})
+    record = {"tool": "memory.search", "arguments": {"query": "NIMS-3532", "limit": 8},
               "result": {"success": True, "items": items, "count": len(items)}}
-    tools = SimpleNamespace(descriptors=AsyncMock(return_value=[{"operation": "memory.search"}]),
+    tools = SimpleNamespace(descriptors=AsyncMock(return_value=[{"tool": "memory.search"}]),
                             execute=AsyncMock(return_value=record))
     factory = lambda **kwargs: tools
     factory.MAX_CALLS = 3
@@ -37,7 +37,8 @@ async def test_preflight_searches_before_final_route_and_retains_evidence(monkey
     assert result.route == route
     assert result.memory_tool_results == [record]
     tools.execute.assert_awaited_once()
-    assert preflight._llm.invoke.await_args.kwargs["payload"]["memory_tool_results"] == [record]
+    from app.runtime.input_builders import compact_memory_tool_records
+    assert preflight._llm.invoke.await_args.kwargs["payload"]["memory_tool_results"] == compact_memory_tool_records([record])
 
 
 def test_preflight_contract_has_no_legacy_recall():
@@ -51,8 +52,8 @@ def test_preflight_contract_has_no_legacy_recall():
 async def test_preflight_tool_budget_hands_off_with_all_results(monkeypatch):
     from app.runtime import turn_preflight
     step = TurnPreflightDecision(route="tool_call", tool_call={
-        "operation": "memory.search", "arguments": {"query": "NIMS-3532"}})
-    record = {"operation": "memory.search", "arguments": {"query": "NIMS-3532"},
+        "tool": "memory.search", "arguments": {"query": "NIMS-3532"}})
+    record = {"tool": "memory.search", "arguments": {"query": "NIMS-3532"},
               "result": {"success": True, "items": []}}
     tools = SimpleNamespace(descriptors=AsyncMock(return_value=[]), execute=AsyncMock(return_value=record))
     factory = lambda **kwargs: tools
@@ -71,8 +72,8 @@ async def test_preflight_tool_budget_hands_off_with_all_results(monkeypatch):
 async def test_tool_error_is_presented_to_preflight_as_failure(monkeypatch):
     from app.runtime import turn_preflight
     step = TurnPreflightDecision(route="tool_call", tool_call={
-        "operation": "memory.search", "arguments": {"query": "NIMS-3532"}})
-    record = {"operation": "memory.search", "arguments": {"query": "NIMS-3532"},
+        "tool": "memory.search", "arguments": {"query": "NIMS-3532"}})
+    record = {"tool": "memory.search", "arguments": {"query": "NIMS-3532"},
               "result": {"success": False, "error_code": "memory_search_failed"}}
     tools = SimpleNamespace(descriptors=AsyncMock(return_value=[]), execute=AsyncMock(return_value=record))
     factory = lambda **kwargs: tools
@@ -102,9 +103,9 @@ async def test_root_dispatch_uses_registered_executor_and_preserves_agent_contex
     session = AsyncMock()
     session.__aenter__.return_value = session
     monkeypatch.setattr(memory_search, "get_session_factory", lambda: lambda: session)
-    native = AsyncMock(return_value={"backend": "hipporag", "document_count": 1,
+    native = AsyncMock(return_value={"backend": "hipporag", "groups": [{"scope_slug": "a", "success": True, "status": "completed", "document_count": 1,
         "hits": [{"text": "Issue details", "score": 0.9,
-                  "metadata": {"document_id": "doc1", "document_title": "NIMS-3532"}}]})
+                  "metadata": {"document_id": "doc1", "document_title": "NIMS-3532"}}]}]})
     monkeypatch.setattr(memory_search, "HippoRAGService", lambda _: SimpleNamespace(search_documents=native))
     legacy = AsyncMock(side_effect=AssertionError("Root roles must not read legacy memory"))
     monkeypatch.setattr(MemorySearchService, "search", legacy)
@@ -120,7 +121,7 @@ async def test_root_dispatch_uses_registered_executor_and_preserves_agent_contex
             provider_instance_id="system", provider_instance_slug="system", domain="system")))
     resolve = AsyncMock(return_value=SimpleNamespace(execution_graph=graph, resolved_operations=[]))
     monkeypatch.setattr(role_tools, "OperationRouter", lambda session: SimpleNamespace(resolve=resolve))
-    ctx = ToolContext(user_id=uuid4(), tenant_id=uuid4(), extra={"project_context": {"keys": ["project.a"]}})
+    ctx = ToolContext(user_id=uuid4(), tenant_id=uuid4(), extra={"memory_search_scope_keys": ["a"]})
     original_graph = RuntimeExecutionGraph()
     ctx.get_runtime_deps().execution_graph = original_graph
     tools = role_tools.RoleMemoryTools(session=object(), ctx=ctx)
@@ -128,14 +129,14 @@ async def test_root_dispatch_uses_registered_executor_and_preserves_agent_contex
     events = []
     async def sink(event):
         events.append(event)
-    record = await tools.execute(role_tools.MemoryToolCall(operation="memory.search", arguments={"query": "NIMS-3532"}),
+    record = await tools.execute(role_tools.MemoryToolCall(tool="memory.search", arguments={"query": "NIMS-3532"}),
         actor="turn_preflight", parent_type="orchestrator", parent_id=str(uuid4()), event_sink=sink)
-    assert record["result"]["count"] == 1
+    assert record["result"]["group_count"] == 1
     assert handler.execute.await_args.args[1] == {"query": "NIMS-3532", "limit": 8}
     assert handler.execute.await_args.args[0].user_id == ctx.user_id
-    native.assert_awaited_once_with("NIMS-3532", limit=8)
+    native.assert_awaited_once_with("NIMS-3532", scope_keys=["a"], limit=8)
     legacy.assert_not_awaited()
-    assert record["result"]["items"][0]["source_references"][0]["document_id"] == "doc1"
+    assert record["result"]["groups"][0]["items"][0]["source_references"][0]["document_id"] == "doc1"
     assert ctx.get_runtime_deps().execution_graph is original_graph
     assert resolve.await_args.kwargs["collection_ids"] == []
     assert resolve.await_args.kwargs["system_operation_slugs"] == {"memory.search"}
@@ -153,7 +154,7 @@ async def test_denied_memory_tool_is_neither_exposed_nor_executed():
     tools = RoleMemoryTools(session=object(), ctx=ctx)
     tools._executor.execute = AsyncMock()
     assert await tools.descriptors() == []
-    record = await tools.execute(MemoryToolCall(operation="memory.search", arguments={"query": "NIMS-3532"}),
+    record = await tools.execute(MemoryToolCall(tool="memory.search", arguments={"query": "NIMS-3532"}),
         actor="planner", parent_type="planner_iteration", parent_id=None, event_sink=None)
     assert record["result"]["success"] is False
     tools._executor.execute.assert_not_awaited()
@@ -162,12 +163,17 @@ async def test_denied_memory_tool_is_neither_exposed_nor_executed():
 def test_document_passages_survive_scope_projection_and_agent_rendering():
     from app.runtime.memory.effective_scope import project_memory_context
     from app.runtime.agent_executor import _render_memory_recall
-    data = {"backend": "hipporag", "document_count": 1,
-            "items": [{"kind": "document_passage", "subject": "Issue", "text": "NIMS-3532 details"}],
-            "memory_context": {"relevant_knowledge": [{"subject": "Issue", "text": "NIMS-3532 details"}]}}
+    data = {"backend": "hipporag", "groups": [
+        {"scope_slug": "a", "success": True, "status": "completed", "items": [
+            {"kind": "document_passage", "subject": "Issue", "text": "NIMS-3532 details"}]},
+        {"scope_slug": "other", "success": True, "status": "completed", "items": []},
+    ]}
     entry = {"type": "planner_memory_result", "result": data}
-    assert project_memory_context(entry, ["project.a"])["result"] == data
-    assert any("NIMS-3532 details" in line for line in _render_memory_recall(data["memory_context"]))
+    scoped = project_memory_context(entry, ["a"])["result"]
+    assert len(scoped["groups"]) == 1
+    assert scoped["groups"][0]["scope_slug"] == "a"
+    assert any("NIMS-3532 details" in line for line in _render_memory_recall(scoped))
+
 
 
 @pytest.mark.asyncio
@@ -179,7 +185,7 @@ async def test_root_memory_search_lifecycle_is_visible_while_waiting(caplog, out
     from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
 
     tools = RoleMemoryTools(session=object(), ctx=None)
-    tools.descriptors = AsyncMock(return_value=[{"operation": "memory.search"}])
+    tools.descriptors = AsyncMock(return_value=[{"tool": "memory.search"}])
     tools._execution_ctx = object()
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -200,7 +206,7 @@ async def test_root_memory_search_lifecycle_is_visible_while_waiting(caplog, out
     tools._executor.execute = execute
     with caplog.at_level(logging.INFO, logger="app.runtime.memory.role_tools"):
         task = asyncio.create_task(tools.execute(
-            MemoryToolCall(operation="memory.search", arguments={"query": "private query"}),
+            MemoryToolCall(tool="memory.search", arguments={"query": "private query"}),
             actor="turn_preflight", parent_type="orchestrator", parent_id="preflight-1", event_sink=sink,
         ))
         await asyncio.wait_for(entered.wait(), timeout=1)
@@ -230,3 +236,23 @@ async def test_root_memory_search_lifecycle_is_visible_while_waiting(caplog, out
     assert records[-1].duration_ms == end.data["duration_ms"]
     assert "private query" not in caplog.text
     assert "private backend details" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_preflight_applies_scope_change_before_searching(monkeypatch):
+    from app.runtime import turn_preflight
+    tools = SimpleNamespace(descriptors=AsyncMock(return_value=[{"tool": "memory.search"}]), execute=AsyncMock())
+    factory = lambda **kwargs: tools
+    factory.MAX_CALLS = 3
+    monkeypatch.setattr(turn_preflight, "RoleMemoryTools", factory)
+    monkeypatch.setattr(turn_preflight, "resolve_memory_scopes", AsyncMock(return_value=[]))
+    preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
+    preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(value=TurnPreflightDecision(
+        route="tool_call", tool_call={"tool": "memory.search", "arguments": {"query": "rules"}},
+        scope_selection={"keys": ["new"], "mode": "replace"},
+    )))
+    result = await preflight.decide(user_request="Switch to new and find rules", mechanical_lookup={},
+        project_context={"scope_context": {"keys": ["old"]}})
+    assert result.route == "planner"
+    assert result.scope_selection.keys == ["new"]
+    tools.execute.assert_not_awaited()

@@ -12,6 +12,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "test:e2e": "playwright test",
+    "test:e2e:chat": "playwright test --config playwright.chat.config.ts chat-contract",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "lint": "eslint src --ext .ts,.tsx --report-unused-disable-directives --max-warnings 0",

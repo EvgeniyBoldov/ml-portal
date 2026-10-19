@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from app.core.logging import get_logger
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, BinaryIO
+from typing import Optional, Dict, Any, BinaryIO, AsyncIterator
 from botocore.exceptions import ClientError, NoCredentialsError
 import boto3
 from botocore.config import Config
@@ -195,6 +195,24 @@ class S3Client:
             logger.error(f"Unexpected error deleting {key}: {e}")
             return False
     
+    async def iter_objects(self, bucket: str, prefix: str) -> AsyncIterator[Dict[str, Any]]:
+        """Walk all pages for cleanup; listing failures must not imply absence."""
+        client = self._get_client()
+        arguments: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix, "MaxKeys": 1000}
+        while True:
+            try:
+                response = await asyncio.to_thread(client.list_objects_v2, **arguments)
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") == "NoSuchBucket":
+                    return
+                raise
+            for item in response.get("Contents", []):
+                yield item
+            token = response.get("NextContinuationToken")
+            if not token:
+                return
+            arguments["ContinuationToken"] = token
+
     async def list_objects(self, bucket: str, prefix: str = "", 
                           max_keys: int = 1000) -> list[Dict[str, Any]]:
         """List objects in S3/MinIO bucket"""

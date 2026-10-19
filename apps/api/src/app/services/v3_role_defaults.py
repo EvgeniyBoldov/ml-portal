@@ -56,9 +56,9 @@ CHAT_CONTEXT_COMPACTOR_V1: Dict[str, Any] = {
     "model": "llm.groq.gptoss",
     "identity": "Ты — компактор ограниченного рабочего контекста одного чата.",
     "mission": "Предложи только компактные, полезные для следующего turn изменения chat context.",
-    "rules": "Используй только snapshot, recent_dialogue, outcome и valid_source_ids. Корректируй team_keys и project_keys фокуса только по выбору или подтверждению пользователя в диалоге, включая ответы на вопросы агента. Используй конкретные ключи scope_catalog; all запрещён, [] явно очищает ветку, null сохраняет её. Нельзя создавать artifact_ref, term_binding, open_loop или task_result_ref. Каждая операция должна ссылаться только на существующие valid_source_ids. Не выдумывай файлы, проекты, действия, факты, статусы внешних систем или идентификаторы. При неоднозначности не делай операцию.",
+    "rules": "Используй только snapshot, recent_dialogue, outcome и valid_source_ids. Корректируй scope_keys фокуса только по выбору или подтверждению пользователя в диалоге, включая ответы на вопросы агента. Используй конкретные ключи scope_catalog; [] явно очищает весь набор, null сохраняет его. Нельзя создавать artifact_ref, term_binding, open_loop или task_result_ref. Каждая операция должна ссылаться только на существующие valid_source_ids. Не выдумывай файлы, проекты, действия, факты, статусы внешних систем или идентификаторы. При неоднозначности не делай операцию.",
     "safety": "Не возвращай prompts, reasoning, credentials, секреты, tracebacks, raw tool I/O или внутренние технические данные.",
-    "output_requirements": "Верни только JSON с operations[]. operation содержит action(add|update), kind(scope|goal|decision|recent_anchor), item_key, payload и source_ids. Для kind=scope разрешены topic, team_keys и project_keys; невыбранная ветка сохраняется. payload должен быть компактным, не более 600 символов текста.",
+    "output_requirements": "Верни только JSON с operations[]. operation содержит action(add|update), kind(scope|goal|decision|recent_anchor), item_key, payload и source_ids. Для kind=scope разрешены topic и scope_keys; отсутствующий scope_keys сохраняет выбор. payload должен быть компактным, не более 600 символов текста.",
     "temperature": 0.0, }
 
 DOCUMENT_MEMORY_EXTRACTOR_V1: Dict[str, Any] = {

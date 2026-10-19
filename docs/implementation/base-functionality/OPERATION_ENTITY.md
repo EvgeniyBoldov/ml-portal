@@ -1,61 +1,27 @@
-# Operation Entity
+# Resolved Operation
 
 ## Purpose
 
-`Operation` is the only runtime action vocabulary exposed to agent and planner.
+`ResolvedOperation` is an internal execution contract produced after capability
+resolution. It carries the selected action's name and schema together with its
+collection/provider identity, policy metadata, and execution target. It is not a
+separate LLM protocol.
 
-It is not a raw discovered capability and not a stored semantic entity.
-It is a runtime projection built from persisted entities and resolver logic.
+The runtime uses the resolved contract to validate availability, apply RBAC and
+credential checks, build execution bindings, and execute a requested tool.
+Provider URLs, credentials, and target bindings remain internal.
 
-## Definition
+## Model-facing protocol
 
-An `Operation` is an instance-scoped executable action formed from:
-- `DiscoveredTool` contract,
-- effective `ToolRelease` semantics,
-- canonical publication mapping,
-- instance/provider execution binding.
+Agents call tools. Native tool-calling providers receive tool descriptors in the
+request's tools field; the plaintext fallback uses the canonical
+`tool_call` shape with a `tool` name and `arguments`. The runtime maps that name
+to the already resolved internal action. The LLM does not receive an
+`operation`-shaped call payload.
 
-The operation is produced only after `ToolResolver` normalizes the tool view and publication rules are applied.
+## Resolution
 
-## Core Rule
-
-Agents must consume `Operation`, not `DiscoveredTool` and not `ToolRelease`.
-
-That means:
-- discovery identity stays in infrastructure layer,
-- semantic curation stays in versioned tool layer,
-- runtime sees only the final published action.
-
-## Structure
-
-An operation must carry:
-- stable runtime identity,
-- canonical operation identity,
-- readable name and description,
-- input/output contract,
-- data/provider instance binding,
-- safety metadata,
-- credential scope,
-- execution target.
-
-## Publication Chain
-
-1. discovery refreshes `DiscoveredTool`
-2. admin links or creates `Tool`
-3. `ToolResolver` combines raw contract + effective `ToolRelease`
-4. publication mapping resolves canonical operation meaning
-5. runtime builds instance-scoped `Operation`
-
-## Responsibilities
-
-`Operation` is responsible for:
-- planner-safe action vocabulary,
-- final safety metadata used by policy,
-- execution binding for one runtime instance,
-- hiding provider-native noise from agent.
-
-`Operation` is not responsible for:
-- storing semantic versions,
-- owning raw provider contracts,
-- owning discovery lifecycle,
-- replacing RBAC or credential systems.
+`OperationRouter` combines collection/provider capability resolution,
+publication metadata, execution targets, credentials, and effective
+permissions. Collection-scoped calls use the public `collection_slug`; internal
+instance and target identifiers are not part of the public collection contract.

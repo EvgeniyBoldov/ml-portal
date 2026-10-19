@@ -41,13 +41,63 @@ class PortalTests(unittest.TestCase):
             with portal.corpus_connection() as connection:
                 self.assertEqual(portal.corpus_documents(connection), [])
 
-    def test_search_uses_entire_persisted_corpus_without_claims_or_acl(self):
+    def test_search_scope_is_applied_before_graph_retrieval(self):
         with tempfile.TemporaryDirectory() as root, patch.object(portal, "DATA", Path(root)), patch.object(portal, "graph", return_value=(Mock(), "graph")):
-            portal.index_corpus(portal.ExtractRequest(models=models(), documents=[portal.Document(id="doc1", content="Private source", metadata={"scope":"user"})]))
-            with patch.object(portal, "retrieve", return_value={"backend":"hipporag", "hits":[]}) as retrieve:
-                result = portal.search_corpus(portal.CorpusSearchRequest(models=models(), query="source"))
+            portal.index_corpus(portal.ExtractRequest(models=models(), documents=[
+                portal.Document(id="company-doc", content="Common", metadata={"scope_slugs": ["company"]}),
+                portal.Document(id="dcbox-doc", content="Specific", metadata={"scope_slugs": ["dcbox"]}),
+            ]))
+            with patch.object(portal, "retrieve", return_value={"backend": "hipporag", "hits": []}) as retrieve:
+                result = portal.search_corpus(portal.CorpusSearchRequest(models=models(), query="source", scope_slug="dcbox"))
                 self.assertEqual(result["document_count"], 1)
-                self.assertEqual(retrieve.call_args.args[0].documents[0].id, "doc1")
+                self.assertEqual([doc.id for doc in retrieve.call_args.args[0].documents], ["dcbox-doc"])
+                self.assertEqual(retrieve.call_args.args[0].scope_slug, "dcbox")
+                retrieve.reset_mock()
+                empty = portal.search_corpus(portal.CorpusSearchRequest(models=models(), query="source", scope_slug="empty"))
+                self.assertEqual(empty["hits"], [])
+                retrieve.assert_not_called()
+
+    def test_scope_changes_reuse_extraction_and_rebind_metadata(self):
+        document = portal.Document(id="doc", content="Source", metadata={"scope_slugs": ["company"]})
+        key = portal.compute_mdhash_id("Source", prefix="chunk-")
+        row = {"idx": key, "passage": "Source", "extracted_entities": [], "extracted_triples": []}
+        with tempfile.TemporaryDirectory() as root, patch.object(portal, "DATA", Path(root)):
+            parts = [{"content": "Source", "source_id": "doc:0:6", "metadata": {"document_id": "doc", "start": 0, "end": 6, "scope_slugs": ["company"]}}]
+            portal.save_snapshot(document, parts, [row])
+            path = portal.snapshot_path(document)
+            document.metadata["scope_slugs"] = ["dcbox"]
+            self.assertEqual(portal.snapshot_path(document), path)
+            with patch("common.split_document", side_effect=AssertionError("must not split")):
+                chunks, rows = portal.prepared_passages(portal.ExtractRequest(models=models(), documents=[document]), Mock(), embedding_only=True)
+            self.assertEqual(chunks[0].metadata["source_refs"][0]["scope_slugs"], ["dcbox"])
+            self.assertIn(key, rows)
+
+    def test_document_triples_are_returned_as_bounded_pages(self):
+        document = portal.Document(id="doc", content="Router requires backup.", metadata={"scope_slugs": ["company"]})
+        key = portal.compute_mdhash_id(document.content, prefix="chunk-")
+        triples = [[f"Entity {index}", "requires", f"Target {index}"] for index in range(120)]
+        row = {"idx": key, "passage": document.content, "extracted_entities": [], "extracted_triples": triples}
+        with tempfile.TemporaryDirectory() as root, patch.object(portal, "DATA", Path(root)):
+            with portal.corpus_connection() as connection:
+                connection.execute("INSERT INTO documents VALUES (?, ?, ?)",
+                    (document.id, document.content, json.dumps(document.metadata)))
+            portal.save_snapshot(document, [{"content": document.content, "source_id": "doc:0:24",
+                "metadata": {"document_id": "doc", "start": 0, "end": 24}}], [row])
+            result = portal.document_triples_page("doc", limit=50, offset=50)
+        self.assertEqual(result["total"], 120)
+        self.assertEqual(len(result["items"]), 50)
+        self.assertEqual(result["items"][0]["subject"], "Entity 50")
+        self.assertEqual(result["items"][-1]["object"], "Target 99")
+        self.assertEqual((result["items"][0]["source_start"], result["items"][0]["source_end"]), (0, 24))
+
+    def test_indexes_are_built_per_scope_without_combination_graphs(self):
+        documents = [portal.Document(id="one", content="First", metadata={"scope_slugs": ["company"]}),
+                     portal.Document(id="two", content="Second", metadata={"scope_slugs": ["dcbox"]})]
+        with patch.object(portal, "graph", return_value=(Mock(), "graph")) as graph:
+            result = portal.build_scope_graphs(models(), documents)
+        self.assertEqual(set(result), {"company", "dcbox"})
+        self.assertEqual(graph.call_count, 2)
+        self.assertTrue(all(len(call.args[0].documents) == 1 for call in graph.call_args_list))
 
     def test_llm_exposes_native_configuration_contract(self):
         settings = models()

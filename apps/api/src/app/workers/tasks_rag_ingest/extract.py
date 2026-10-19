@@ -135,31 +135,27 @@ def extract_document(
         extractor = await _resolve_extractor(ctx, ext)
         if extractor and getattr(extractor, "kind", "") == "pdf(layout-pdfminer)":
             logger.info(
-                "Resolved extractor: source_id=%s filename=%s ext=%s extractor=%s",
-                source_id,
-                filename,
-                ext,
-                getattr(extractor, "kind", type(extractor).__name__),
+                "Resolved fallback extractor: source_id=%s filename=%s extractor=%s",
+                source_id, filename, getattr(extractor, "kind", type(extractor).__name__),
             )
-            parser_result = extractor.extract(file_content, filename)
-            extracted_text = parser_result.text.strip()
-            extractor_kind = parser_result.kind
-            extraction_warnings = parser_result.warnings
-            extraction_meta = parser_result.meta
-        else:
-            shared = await DocumentExtractionService().extract(
-                ExtractionRequest(
-                    payload=file_content,
-                    filename=filename,
-                    content_type=source_meta.get("document", {}).get("content_type"),
-                    profile="rag_ingest",
-                    max_bytes=max(len(file_content), 1),
-                )
+        shared = await DocumentExtractionService().extract(
+            ExtractionRequest(
+                payload=file_content,
+                filename=filename,
+                content_type=source_meta.get("document", {}).get("content_type"),
+                profile="rag_ingest",
+                max_bytes=max(len(file_content), 1),
+                fallback_extractor=(
+                    extractor
+                    if getattr(extractor, "kind", "") == "pdf(layout-pdfminer)"
+                    else None
+                ),
             )
-            extracted_text = shared.text.strip()
-            extractor_kind = shared.parser
-            extraction_warnings = shared.warnings
-            extraction_meta = shared.meta
+        )
+        extracted_text = shared.text.strip()
+        extractor_kind = shared.parser
+        extraction_warnings = shared.warnings
+        extraction_meta = shared.meta
 
         if extraction_warnings:
             logger.warning(

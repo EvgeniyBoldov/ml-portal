@@ -45,7 +45,7 @@ class ChatMemoryItem(Base):
     sandbox_branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("sandbox_branches.id", ondelete="CASCADE"), nullable=True)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     item_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default="'{}'::jsonb")
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
     confidence: Mapped[float] = mapped_column(nullable=False, default=1.0, server_default="1.0")
     source_turn_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("chat_turns.id", ondelete="SET NULL"), nullable=True)

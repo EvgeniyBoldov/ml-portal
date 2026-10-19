@@ -97,7 +97,8 @@ class ChatTurnOrchestrator:
                     artifact_ids=artifact_ids,
                     message_id=user_message_id,
                 )
-            await self.turn_service.attach_user_message(turn_id, user_message_id)
+            if not resumed_turn_id:
+                await self.turn_service.attach_user_message(turn_id, user_message_id)
             # Persist the request/turn before a potentially long stream. The
             # terminal assistant, turn status and deterministic context share
             # a later transaction boundary.
@@ -155,6 +156,7 @@ class ChatTurnOrchestrator:
         rag_sources = []
         final_attachments: list[dict[str, Any]] = []
         llm_error: Optional[dict[str, str]] = None
+        runtime_event_types: list[str] = []
         final_stop_reason: Optional[str] = None
         run_paused = False
         paused_run_id: Optional[str] = None
@@ -181,6 +183,7 @@ class ChatTurnOrchestrator:
                 chat_context_snapshot=context_snapshot,
                 chat_user_message_id=user_message_id,
             ):
+                runtime_event_types.append(str(event_data.get("type") or "unknown"))
                 if isinstance(event_data.get("run_id"), str):
                     last_run_id = str(event_data.get("run_id"))
                 if event_data.get("type") == "delta":
@@ -212,6 +215,21 @@ class ChatTurnOrchestrator:
 
                 if event_data.get("type") not in ("final_content", "run_paused"):
                     yield event_data
+        except (asyncio.CancelledError, GeneratorExit):
+            # Streaming disconnect cancels the ASGI task. Finish the durable
+            # turn under a shield so it does not remain running indefinitely.
+            import anyio
+            with anyio.CancelScope(shield=True):
+                await self.turn_service.session.rollback()
+                if assistant_content.strip():
+                    partial = await self.persistence_service.create_assistant_message(
+                        chat_id=chat_id, content=assistant_content,
+                        extra_meta={"runtime_status": "cancelled", "runtime_run_id": last_run_id},
+                    )
+                    await self.turn_service.attach_assistant_message(turn_id, partial.message_id)
+                await self.turn_service.cancel_turn(turn_id, error_message="Client disconnected")
+                await self.turn_service.session.commit()
+            raise
         except Exception as runtime_exc:
             llm_error = self._normalize_runtime_error(
                 code="unknown_runtime_error",
@@ -223,36 +241,51 @@ class ChatTurnOrchestrator:
             yield {"type": "error", "error": llm_error["user_message"], "code": llm_error["code"]}
 
         if assistant_content and not llm_error:
-            assistant_message = await self.persistence_service.create_assistant_message(
-                chat_id=chat_id,
-                content=assistant_content,
-                rag_sources=rag_sources,
-                attachments=final_attachments,
-                extra_meta={
-                    **({"runtime_run_id": last_run_id} if last_run_id else {}),
-                    **({"runtime_stop_reason": final_stop_reason} if final_stop_reason else {}),
-                    **(
-                        {"runtime_status": final_stop_reason}
-                        if final_stop_reason and final_stop_reason not in {"completed", "stopped"}
-                        else {}
-                    ),
-                } or None,
-            )
-
-            if idempotency_key and user_message_id:
-                await store_idempotency(
-                    idempotency_key,
-                    user_message_id,
-                    assistant_message.message_id,
+            try:
+                assistant_message = await self.persistence_service.create_assistant_message(
+                    chat_id=chat_id,
+                    content=assistant_content,
+                    rag_sources=rag_sources,
+                    attachments=final_attachments,
+                    extra_meta={
+                        **({"runtime_run_id": last_run_id} if last_run_id else {}),
+                        **({"runtime_stop_reason": final_stop_reason} if final_stop_reason else {}),
+                        **(
+                            {"runtime_status": final_stop_reason}
+                            if final_stop_reason and final_stop_reason not in {"completed", "stopped"}
+                            else {}
+                        ),
+                    } or None,
                 )
 
-            await self.turn_service.complete_turn(
-                turn_id,
-                assistant_message_id=assistant_message.message_id,
-            )
-            # The optional worker must observe the same committed deterministic
-            # context and assistant message as the immediately following turn.
-            await self.turn_service.session.commit()
+                output_artifact_ids = [str(item["artifact_id"]) for item in final_attachments if item.get("artifact_id")]
+                if output_artifact_ids:
+                    await bind_attachments(chat_id=chat_id, owner_id=user_id, artifact_ids=output_artifact_ids,
+                                           message_id=str(assistant_message.message_id))
+
+                if idempotency_key and user_message_id:
+                    await store_idempotency(
+                        idempotency_key,
+                        user_message_id,
+                        assistant_message.message_id,
+                    )
+
+                await self.turn_service.complete_turn(
+                    turn_id,
+                    assistant_message_id=assistant_message.message_id,
+                )
+                # The optional worker must observe the same committed deterministic
+                # context and assistant message as the immediately following turn.
+                await self.turn_service.session.commit()
+            except Exception:
+                logger.exception("chat_turn_finalization_failed", extra={"chat_id": chat_id, "turn_id": str(turn_id)})
+                turn.force_error()
+                await self.turn_service.session.rollback()
+                await self.turn_service.fail_turn(turn_id, error_message="chat_finalization_failed")
+                await self.turn_service.session.commit()
+                yield {"type": "error", "code": "chat_finalization_failed",
+                       "error": "Не удалось сохранить ответ. Повторите запрос."}
+                return
             post_final_tail_ready.set()
             await self._dispatch_context_compaction(
                 chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
@@ -274,10 +307,25 @@ class ChatTurnOrchestrator:
             terminal_event_emitted = True
         elif not llm_error and not run_paused:
             turn.force_error()
+            logger.error(
+                "chat_turn_empty_agent_response",
+                extra={
+                    "chat_id": chat_id,
+                    "turn_id": str(turn_id),
+                    "runtime_run_id": runtime_run_id,
+                    "last_run_id": last_run_id,
+                    "runtime_event_types": runtime_event_types,
+                },
+            )
             await self.turn_service.fail_turn(turn_id, error_message="Empty response from agent")
             yield {"type": "error", "error": "Empty response from agent"}
             terminal_event_emitted = True
         elif run_paused:
+            from app.runtime.interaction import interaction_from_context
+            active_interaction = interaction_from_context(paused_context)
+            pause_id = active_interaction.id if active_interaction else str(uuid.uuid4())
+            paused_action = {**(paused_action or {}), "pause_id": pause_id}
+            paused_context = {**(paused_context or {}), "pause_id": pause_id}
             await self.turn_service.pause_turn(
                 turn_id,
                 pause_status=paused_reason or "paused",

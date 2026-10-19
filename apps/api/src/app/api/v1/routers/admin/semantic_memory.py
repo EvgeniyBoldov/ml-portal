@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Literal, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -243,11 +243,11 @@ class MemoryScopeResponse(BaseModel):
 
 class MemoryScopeWriteRequest(BaseModel):
     project_type: str | None = Field(default=None, max_length=80)
-    scope_type: str = Field(pattern="^(project|team)$")
-    key: str = Field(min_length=3, max_length=180, pattern="^[a-z0-9][a-z0-9._-]*$")
+    scope_type: Literal["project"] = "project"
+    key: str = Field(min_length=1, max_length=180, pattern="^[a-z0-9][a-z0-9._-]*$")
     name: str = Field(min_length=1, max_length=255)
     aliases: list[str] = Field(default_factory=list, max_length=50)
-    is_all: bool = False
+    is_all: Literal[False] = False
 
     @model_validator(mode="after")
     def validate_project_type(self) -> "MemoryScopeWriteRequest":
@@ -413,14 +413,12 @@ async def get_memory_scopes(db: AsyncSession = Depends(db_session), _: UserCtx =
 
 @router.post("/scopes", response_model=MemoryScopeResponse, status_code=201)
 async def create_memory_scope(body: MemoryScopeWriteRequest, db: AsyncSession = Depends(db_session), _: UserCtx = Depends(require_admin)):
-    if not body.key.startswith(f"{body.scope_type}.") or body.is_all != (body.key == f"{body.scope_type}.all"):
-        raise HTTPException(status_code=422, detail="scope_key_type_mismatch")
     row = MemoryScope(scope_type=body.scope_type, key=body.key, name=body.name.strip(),
                       aliases=[alias.strip() for alias in body.aliases if alias.strip()], is_all=body.is_all,
                       project_type=body.project_type if body.scope_type == "project" else None)
     if body.scope_type == "project" and not body.is_all:
         row.project_id = (await db.execute(select(Project.id).where(
-            Project.key == body.key.removeprefix("project."),
+            Project.key == body.key,
         ))).scalar_one_or_none()
     db.add(row)
     try:
@@ -437,8 +435,6 @@ async def update_memory_scope(scope_id: UUID, body: MemoryScopeWriteRequest,
     row = await db.get(MemoryScope, scope_id)
     if row is None:
         raise HTTPException(status_code=404, detail="not_found")
-    if not body.key.startswith(f"{body.scope_type}.") or body.is_all != (body.key == f"{body.scope_type}.all"):
-        raise HTTPException(status_code=422, detail="scope_key_type_mismatch")
     if body.scope_type != row.scope_type or body.key != row.key or body.is_all != row.is_all:
         raise HTTPException(status_code=409, detail="scope_identity_is_immutable")
     row.scope_type = body.scope_type

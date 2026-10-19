@@ -1,154 +1,44 @@
-# Collection-Asset Refactor
+# Collection and Runtime Binding
 
-## Purpose
+## Current model
 
-This document fixes the target model for data assets and runtime bindings.
+`Collection` is the semantic data asset. It owns the collection slug, type,
+schema, published semantic profile, and usage metadata. `ToolInstance` describes
+runtime access and provider connections. Credentials are resolved through the
+existing credential scope rules.
 
-The goal is to evolve the existing model without breaking runtime:
-- keep `Collection` as the semantic/data-asset layer,
-- keep `ToolInstance` as runtime access/connector layer,
-- remove behavior-level dependency on `instance.domain`,
-- unify local and remote collections under one resolution contract while
-  keeping their provider selection rules explicit.
+Supported collection types are `table`, `document`, `template`, `sql`, and
+`api`. Local collection types select a shared local provider by collection type.
+Remote SQL and API collections resolve their data instance and configured MCP
+provider chain.
 
-## Why This Refactor Exists
+## Runtime resolution
 
-Current model already has most required pieces:
-- `Collection` stores schema and collection metadata,
-- `ToolInstance(data)` is runtime identity and access boundary,
-- `ToolInstance(service)` is connector/provider access path,
-- local collection flow auto-creates a data instance.
+The runtime resolves a public `collection_slug` to an active collection, checks
+its effective permissions and readiness, then resolves the source/provider and
+its available tools. `CollectionRuntimeResolver` owns collection-to-source and
+provider resolution. `CollectionToolResolver` loads active discovered tools for
+that provider and adds platform collection defaults. The resulting execution
+bindings remain internal; agent-facing prompts expose tool names, descriptions,
+and schemas.
 
-The mismatch:
-- runtime/readiness paths still contain domain-based branches (`collection.*`),
-- semantic profile for remote data lives on instance,
-- local collection semantics are derived separately.
+Provider discovery does not require a product-code publication rule for each
+new capability. Active provider tools are eligible for the collections bound to
+that provider, subject to collection compatibility, permissions, and readiness.
 
-This creates mixed ownership and extra conditional logic.
+## Important boundaries
 
-## Target Model
+- `collection_slug` is the public collection selector; persistence IDs and
+  execution bindings remain internal.
+- Provider identity does not replace collection identity. A shared local provider
+  may serve multiple collections, and each call retains its explicit collection
+  target.
+- `instance.domain` may supply compatibility/fallback metadata, but collection
+  type and relational bindings drive collection behavior.
+- Collection schema and semantic metadata describe data. Provider configuration
+  and credentials describe access.
+- Resolved operations are internal execution contracts; the LLM protocol uses
+  tool calls.
 
-### 1. Collection = Data Asset Scope
-
-`Collection` is the semantic contract of data:
-- schema and field semantics,
-- asset description and use cases,
-- readiness as data product,
-- asset grouping (1:1 and 1:N both allowed).
-
-`1:1` is a special case of `1:N`.
-
-Examples:
-- local structured collection: one table (1:1),
-- SQL collection: set of related remote tables for one business scope (1:N),
-- NetBox collection: set of entities like devices/racks/prefixes (1:N),
-- Jira collection: set of entities like issues/comments/projects (1:N).
-
-Collection must not store endpoint contracts.
-
-### 2. ToolInstance = Access Layer
-
-`ToolInstance(data)`:
-- runtime identity,
-- access path and credentials,
-- optional link to service instance (`access_via_instance_id`).
-
-`ToolInstance(service)`:
-- connector/provider execution surface.
-
-Instance is not the owner of data semantics.
-
-### 3. Runtime Resolution Contract
-
-Runtime resolves in this order:
-1. public `collection_slug` to the semantic collection scope,
-2. effective access and readiness for that collection,
-3. local provider by `collection_type`, or the remote
-   `data_instance -> access_via/provider` chain,
-4. the provider's active discovered operations plus platform collection
-   defaults, projected into runtime operations with an internal target binding.
-
-The public operation contract is provider-agnostic. `collection_id` is an
-internal persistence/runtime identifier and is not exposed to the planner or
-LLM. Behavior is driven by collection type, relational source links and
-provider capabilities, not by `instance.domain` or provider-specific allow-lists.
-
-## Domain Policy
-
-`instance.domain` is transitional classification metadata only.
-
-Rules:
-- allowed as admin/UI grouping hint during migration,
-- not allowed as behavior key for runtime/readiness decisions,
-- should be gradually removed from operational logic.
-
-## Migration Plan
-
-### Phase 1 (started)
-
-Objective: remove collection behavior checks from `domain`.
-
-Implemented:
-- introduced `CollectionRuntimeResolver` as the collection-first target
-  resolver;
-- local collection provider selection uses explicit `collection_type`;
-- remote sources use the relational data-instance/provider chain;
-- canonical publication and internal target bindings no longer use
-  `instance.config.bindings` as runtime source of truth.
-
-### Phase 2
-
-Objective: move semantic ownership from instance to collection.
-
-Tasks:
-1. add versioned collection semantic profile entity/API,
-2. keep instance semantic profile as compatibility fallback,
-3. switch runtime semantic resolution priority:
-   - collection semantic profile,
-   - derived collection profile (fallback),
-   - legacy instance profile (temporary).
-
-### Phase 3
-
-Objective: unify local and remote collection lifecycle.
-
-Tasks:
-1. define uniform collection creation/discovery flow:
-   - local: admin defines schema, platform provisions storage,
-   - remote: discovery imports entities/schemas into collection scope,
-2. keep one invariant: every runtime-visible collection has a data instance binding.
-
-### Phase 4
-
-Objective: remove domain/provider-name coupling from operation resolution.
-
-Implemented:
-- active discovered tools are selected from the resolved provider;
-- collection defaults are added by the collection tool resolver;
-- runtime operation names come from the discovered MCP descriptor;
-- execution retains collection-specific target bindings;
-- a new MCP capability does not require a product-code publication rule.
-
-### Phase 5
-
-Objective: hard deprecation of domain in instances.
-
-Tasks:
-1. remove behavior dependencies on `domain`,
-2. migrate admin/API contracts to explicit binding/capability fields,
-3. then remove domain from storage and DTOs.
-
-## Non-goals
-
-This refactor does not:
-- introduce new collection types immediately,
-- redesign planner prompts,
-- redesign tool release model,
-- change endpoint contracts for existing local table/document flows in one step.
-
-## Implementation Notes
-
-Mandatory invariants during migration:
-1. runtime must stay backward compatible with existing instances,
-2. local collection flow must continue to auto-create data instances,
-3. collection permission and instance permission checks must both remain enforced.
+See [Canonical Tool Flow](../../refactor/canonical-tool-flow.md) for the
+provider discovery and tool-resolution contract.

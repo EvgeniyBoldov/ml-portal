@@ -219,21 +219,74 @@
 }
 
 @keyframes pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.1); opacity: 0.8; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes flow {
-  0% { transform: translateY(-50%) translateX(-100%); }
-  100% { transform: translateY(-50%) translateX(100%); }
+  0% {
+    transform: translateY(-50%) translateX(-100%);
+  }
+  100% {
+    transform: translateY(-50%) translateX(100%);
+  }
 }
 
 @keyframes movePulse {
-  0% { left: 0; opacity: 1; }
-  100% { left: calc(100% - 8px); opacity: 0; }
+  0% {
+    left: 0;
+    opacity: 1;
+  }
+  100% {
+    left: calc(100% - 8px);
+    opacity: 0;
+  }
+}
+
+.parallelLayout {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  overflow-x: auto;
+}
+
+.parallelBranches {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding-left: var(--sp-4);
+  border-left: 1px solid var(--border-color);
+}
+
+.branchRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  color: var(--text-primary);
+}
+
+.parallelBranches::before {
+  content: '';
+  position: absolute;
+  width: var(--sp-4);
+  left: calc(-1 * var(--sp-4));
+  top: 50%;
+  border-top: 1px solid var(--border-color);
 }

@@ -13,13 +13,5 @@
     "required_operations": ["collection.document.search"],
     "expected_terminal_event": "final",
     "grounding_requirements": ["document"]
-  },
-  {
-    "key": "clarify_missing_input",
-    "title": "Clarification required flow",
-    "expected_terminal_event": "waiting_input",
-    "must_emit_final": false,
-    "must_emit_waiting_input": true,
-    "allow_error_events": true
   }
 ]

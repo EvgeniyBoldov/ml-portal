@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 from uuid import UUID
-from hashlib import sha256
-import json
 
 from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
@@ -14,7 +12,9 @@ from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import IterationProposal, PlanRequest
 from app.agents.context import ToolContext
 from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
+from app.runtime.memory.document_memory import accumulate_document_memory, document_memory, search_receipt
 from pydantic import BaseModel, model_validator
+from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction, InteractionRequired, require_interaction_allowed
 
 
 PlannerMemoryToolCall = MemoryToolCall
@@ -22,9 +22,10 @@ PlannerMemoryToolCall = MemoryToolCall
 
 class PlannerStep(BaseModel):
     """One direct planner decision: contextual read or persisted proposal."""
-    kind: Literal["tool_call", "proposal"]
+    kind: Literal["tool_call", "proposal", "interaction"]
     tool_call: PlannerMemoryToolCall | None = None
     proposal: IterationProposal | None = None
+    interaction: InteractionQuestion | None = None
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="before")
@@ -40,6 +41,12 @@ class PlannerStep(BaseModel):
 
     @model_validator(mode="after")
     def validate_shape(self) -> "PlannerStep":
+        if self.kind == "interaction":
+            if self.interaction is None or self.tool_call is not None or self.proposal is not None:
+                raise ValueError("interaction step requires only an interaction question")
+            return self
+        if self.interaction is not None:
+            raise ValueError("interaction question requires kind=interaction")
         if self.kind == "tool_call" and self.tool_call is None:
             raise ValueError("tool_call step requires tool_call")
         if self.kind == "proposal" and self.proposal is None:
@@ -71,19 +78,30 @@ class GraphPlanner:
         budget_registry: Optional[Any] = None,
         planner_budget_entity_id: Optional[str] = None,
         planner_iteration_trace_id: Optional[str] = None,
+        persist_memory: Optional[Callable[[list[dict[str, Any]]], Awaitable[None]]] = None,
         ctx: ToolContext | None = None,
+        interaction_answers: list[dict[str, Any]] | None = None,
         **_: Any,
     ) -> IterationProposal:
+        answers = interaction_answers or []
+        matching_answer = next((row for row in reversed(answers)
+                                if row.get("interaction", {}).get("requester", {}).get("entity_id") == planner_iteration_trace_id), None)
+        resumed = matching_answer["interaction"].get("checkpoint", {}) if matching_answer else {}
+        if resumed.get("request"):
+            current_memory = request.context.memory_context
+            request = PlanRequest.model_validate(resumed["request"])
+            request.context.memory_context = current_memory
+        request.context.memory_context = accumulate_document_memory(request.context.memory_context, {})
         if event_sink:
             await event_sink(RuntimeEvent.status(
                 "memory_context_used",
                 entity_type="planner_iteration",
                 entity_id=planner_iteration_trace_id,
+                memory_owner="planner", memory_owner_id=str(request.plan_id), reason="iteration_started",
                 memory_context=request.context.memory_context,
             ))
-        payload = self._input_builder.build_graph_request(request)
         tools = RoleMemoryTools(session=self._session, ctx=ctx)
-        payload["planner_tools"] = await tools.descriptors()
+        descriptors = await tools.descriptors()
         role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
         # Editable role instructions and the generated protocol use one compiler.
         role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(
@@ -92,10 +110,22 @@ class GraphPlanner:
         system_prompt = self._llm._compile_role_prompt(
             role_config, role_override if isinstance(role_override, dict) else None, schema=PlannerStep,
         )
-        tool_results: list[dict[str, Any]] = []
+        system_prompt += (
+            "\nRuntime interaction protocol: when a user decision is necessary, return kind=interaction "
+            "with interaction={question: a specific question, response_type: text or boolean}. "
+            "Runtime saves this planner checkpoint and returns the typed answer to this planner. "
+            "Use interaction_answers as additional context for the original goal; do not repeat answered questions."
+        )
+        tool_results: list[dict[str, Any]] = list(resumed.get("tool_results") or [])
         for _ in range(RoleMemoryTools.MAX_CALLS + 1):
+            payload = self._input_builder.build_graph_request(request)
+            state = ctx.extra.get("runtime_turn_state") if ctx else None
+            if state is not None:
+                payload["run_context"] = state.run_context.projection(scope_keys=list(request.context.scope_context.get("keys") or []))
+            payload["planner_tools"] = descriptors
             payload["memory_tool_results"] = list(tool_results)
             payload["memory_tool_calls_remaining"] = RoleMemoryTools.MAX_CALLS - len(tool_results)
+            payload["interaction_answers"] = [{"question": row["interaction"]["question"], "response": row["response"]} for row in answers]
             result = await self._llm.invoke(
                 role=SystemLLMRoleType.PLANNER,
                 payload=payload,
@@ -113,6 +143,12 @@ class GraphPlanner:
                 budget_entity_id=planner_budget_entity_id,
             )
             step = result.value
+            if step.kind == "interaction":
+                require_interaction_allowed(ctx, "planner")
+                assert step.interaction is not None
+                raise InteractionRequired(RuntimeInteraction.create(step.interaction,
+                    InteractionRequester(stage="planner", entity_id=str(planner_iteration_trace_id), plan_id=str(request.plan_id)),
+                    checkpoint={"request": request.model_dump(mode="json"), "tool_results": tool_results}))
             if step.kind == "proposal":
                 assert step.proposal is not None
                 return step.proposal
@@ -122,17 +158,17 @@ class GraphPlanner:
                 raise RuntimeError("planner memory tool-call limit exceeded without IterationProposal")
             record = await tools.execute(call, actor="planner", parent_type="planner_iteration",
                                          parent_id=planner_iteration_trace_id, event_sink=event_sink)
-            arguments = record["arguments"]
             data = record["result"]
-            tool_results.append(record)
-            if data.get("success") is False:
-                continue
-            digest = sha256(json.dumps({"operation": call.operation, "arguments": arguments,
-                "backend": "hipporag"},
-                sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-            request.context.planner_search_results.append({
-                "type": "planner_memory_result", "query_key": digest,
-                "operation": call.operation, "query": call.arguments.query[:300], "result": data,
-            })
-            request.context.memory_context.append(request.context.planner_search_results[-1])
+            tool_results.append(search_receipt(record) if call.tool == "memory.search" else record)
+            if call.tool == "memory.search":
+                request.context.memory_context = accumulate_document_memory(request.context.memory_context, data)
+            request.context.planner_search_results = document_memory(request.context.memory_context)
+            if persist_memory:
+                await persist_memory(request.context.memory_context)
+            if event_sink:
+                await event_sink(RuntimeEvent.status(
+                    "memory_context_used", entity_type="planner_iteration", entity_id=planner_iteration_trace_id,
+                    memory_owner="planner", memory_owner_id=str(request.plan_id), reason="search_completed",
+                    memory_context=request.context.memory_context,
+                ))
         raise RuntimeError("planner memory tool-call limit exceeded without IterationProposal")

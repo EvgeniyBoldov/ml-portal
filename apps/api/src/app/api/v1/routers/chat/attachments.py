@@ -6,6 +6,7 @@ from app.api.deps import ChatContext, db_session, get_current_user, resolve_chat
 from app.core.security import UserCtx
 from app.schemas.chats import ChatAttachmentUploadResponse, ChatUploadPolicyResponse
 from app.core.exceptions import UploadValidationError
+from app.services.upload_intake_policy import ChatUploadTooLargeError
 from app.services.chat_attachment_service import ChatAttachmentService
 
 router = APIRouter()
@@ -46,7 +47,7 @@ async def upload_chat_attachment(
         return ChatAttachmentUploadResponse(**uploaded)
     except UploadValidationError as exc:
         await session.rollback()
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=413 if isinstance(exc, ChatUploadTooLargeError) else 400, detail=str(exc))
     except Exception:
         await session.rollback()
         raise

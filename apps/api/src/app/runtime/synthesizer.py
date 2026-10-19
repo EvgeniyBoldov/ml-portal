@@ -49,7 +49,7 @@ _FILE_DELIVERY_RULE = (
 )
 _PLANNED_SYNTHESIS_MODE = (
     "# SYNTHESIS INPUT MODE\n"
-    "mode=planned. Источником содержания являются только completed_task_reports, "
+    "mode=planned. Источником фактического содержания являются run_context.evidence, memory_context, completed_task_reports, "
     "результаты и пояснения всех задач с их статусами, runtime sources/artifacts и limitations. Не выдавай неуспешную работу за выполненную. "
     "synthesis_brief и plan_outline задают цель и форму ответа, а не доказывают выполнение. "
     "Не используй намерения задач или непроверенные утверждения как выполненный результат. "
@@ -60,7 +60,7 @@ _PLANNED_SYNTHESIS_MODE = (
 _DIRECT_SYNTHESIS_MODE = (
     "# SYNTHESIS INPUT MODE\n"
     "mode=direct. Отсутствие completed_task_reports нормально. Источником содержания являются "
-    "только direct_answer_draft, synthesis_brief и memory_context. Не требуй план, отчёты задач "
+    "direct_answer_draft, run_context.evidence и memory_context; synthesis_brief задаёт форму и разрешённую генерацию. Не требуй план, отчёты задач "
     "или новые данные. Не утверждай, что факт, запись памяти или иное действие уже завершены, "
     "если это не подтверждено в direct_answer_draft."
 )
@@ -81,6 +81,7 @@ class Synthesizer:
         self.session = session
         self.llm_client = llm_client
         self._input_builder = SynthesizerInputBuilder()
+        self._llm_client = llm_client
         self._streaming_call = RoleStreamingCall(session=session, llm_client=llm_client)
 
     async def stream(
@@ -95,6 +96,7 @@ class Synthesizer:
         budget_registry: Optional[BudgetRegistry] = None,
         budget_resolver: Optional[BudgetResolver] = None,
         logging_level: Optional[str] = None,
+        ctx=None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         # Completion belongs to this invocation only. A resumed/reused turn
         # state must never make a failed synthesis look successful.
@@ -113,14 +115,16 @@ class Synthesizer:
                 synth_role_cfg["temperature"] = float(role_override["temperature"])
         synth_prompt = _compile_role_prompt(synth_role_cfg, role_override if isinstance(role_override, dict) else None)
         if synthesis_context.get("direct_answer_draft"):
-            synth_prompt += (
-                f"\n\n{_DIRECT_SYNTHESIS_MODE}\n\n# DIRECT ANSWER MATERIAL\n"
-                "direct_answer_draft is runtime-owned material prepared by TurnPreflight. "
-                "Use it as the factual basis for this answer; edit only for clarity and do not add claims beyond it or memory_context."
-            )
+            synth_prompt += f"\n\n{_DIRECT_SYNTHESIS_MODE}"
         else:
             synth_prompt += f"\n\n{_PLANNED_SYNTHESIS_MODE}"
         synth_prompt = f"{synth_prompt}\n\n# FILE DELIVERY\n{_FILE_DELIVERY_RULE}"
+        synth_prompt += (
+            "\n# RUN CONTEXT\nUse run_context.original_request, constraints and answer_requirements to preserve the user's intent. "
+            "run_context.evidence contains observed source material; respect source identity, scope and truncation. "
+            "For content_mode=generative or mixed you may create requested examples and prose; do not invent company facts or claim unobserved actions. "
+            "Selected run evidence may support the answer even when task reports are empty."
+        )
         synth_prompt += (
             "\n\n# USER-FACING LIMITATIONS\n"
             "Не раскрывай технические ошибки, трассировки, коды сбоев или детали работы планера. "
@@ -139,8 +143,12 @@ class Synthesizer:
                 "Если подтверждённых данных недостаточно, сообщи это без выдуманного ответа."
             )
         synth_prompt += (
+            "\n\n# MEMORY SCOPE GROUPS\n"
+            "memory_context может содержать groups — независимые наборы поиска по scope. "
+            "Сохраняй принадлежность утверждений к scope; ошибка группы не означает отсутствия сведений. "
+            "Не приписывай свойства объекта из одного scope объекту другого scope. "
             "\n\n# EXECUTION FOCUS\n"
-            "scope_context и execution_context — подтверждённый приложением текущий фокус команд и проектов. "
+            "scope_context и execution_context — подтверждённый приложением текущий набор scope чата. "
             "Используй его для понимания области ответа. Он не доказывает внешние результаты. "
             "Пустой фокус допустим; не задавай вопрос о техническом скоупе и не требуй выбрать его для готового ответа."
         )
@@ -198,6 +206,46 @@ class Synthesizer:
         )
         sources = list(synthesis_context.get("sources") or [])
         attachments = self._attachments_from_context(synthesis_context)
+
+        if ctx is not None and attachments:
+            from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
+            requested = [item["artifact_id"] for item in attachments]
+            resolved = await ChatArtifactReferenceService(self.session).resolve_many(
+                artifact_ids=requested, chat_id=str(ctx.chat_id), owner_id=str(ctx.user_id), tenant_id=str(ctx.tenant_id))
+            if set(requested) != set(resolved):
+                raise ValueError("Selected answer artifacts are unavailable")
+        brief = synthesis_context.get("synthesis_brief") or {}
+        if brief.get("delivery") in {"files", "text_and_files"} or brief.get("files"):
+            from app.runtime.synthesis_files import generate_file_answer
+            file_events = []
+            try:
+                file_prompt = synth_prompt.replace(_FILE_DELIVERY_RULE, "Create requested files using the structured file response contract.")
+                full, created, file_events = await generate_file_answer(
+                    session=self.session, llm_client=self._llm_client, state=runtime_state,
+                    context=synthesis_context, prompt=file_prompt, ctx=ctx, synthesis_id=synthesis_run_id,
+                    sandbox_overrides={**(sandbox_overrides or {}), "role_overrides": {
+                        **((sandbox_overrides or {}).get("role_overrides") or {}),
+                        "synthesizer": {**(((sandbox_overrides or {}).get("role_overrides") or {}).get("synthesizer") or {}),
+                                        **({"model": model} if model else {})}}}, budget_registry=budget_registry, events=file_events)
+                for event in file_events:
+                    yield event
+                attachments.extend(created)
+                runtime_state.run_context.delivered_artifacts = attachments
+                runtime_state.final_answer = full
+                yield RuntimeEvent.final(full, sources=sources, run_id=str(run_id), attachments=attachments,
+                    entity_type="synthesis_run", entity_id=synthesis_run_id,
+                    parent_entity_type="run", parent_entity_id=str(run_id))
+                yield RuntimeEvent.synthesis_end(synthesis_id=synthesis_run_id, run_id=str(run_id), status="completed")
+            except Exception:
+                for event in file_events:
+                    yield event
+                logger.exception("synthesis_file_generation_failed", extra={"run_id": str(run_id)})
+                runtime_state.final_error = "Не удалось подготовить файл ответа. Повторите запрос."
+                yield RuntimeEvent.error(runtime_state.final_error, recoverable=True,
+                    error_code="synthesis_file_failed", user_message=runtime_state.final_error,
+                    parent_entity_type="synthesis_run", parent_entity_id=synthesis_run_id)
+                yield RuntimeEvent.synthesis_end(synthesis_id=synthesis_run_id, run_id=str(run_id), status="failed")
+            return
 
         # Full synthesis path. Role configuration owns prompt, model and
         # temperature. Call limits and transport parameters belong to the
@@ -448,6 +496,7 @@ class Synthesizer:
             sources=sources,
             attachments=attachments,
         )
+        runtime_state.run_context.delivered_artifacts = attachments
         yield RuntimeEvent.final(
             full, sources=sources, run_id=str(run_id), attachments=attachments,
             entity_type="synthesis_run", entity_id=synthesis_run_id,

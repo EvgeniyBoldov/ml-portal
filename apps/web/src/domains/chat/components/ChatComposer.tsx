@@ -9,18 +9,30 @@ interface Attachment {
 }
 
 interface ChatComposerProps {
-  onSend: (message: string, options: { agentSlug?: string; attachments?: File[] }) => void;
+  onSend: (
+    message: string,
+    options: { agentSlug?: string; attachments?: File[] }
+  ) => void | boolean | Promise<void | boolean>;
   onStop?: () => void;
   isStreaming?: boolean;
   disabled?: boolean;
   placeholder?: string;
+  previousMessage?: string;
 }
 
-export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholder }: ChatComposerProps) {
+export function ChatComposer({
+  onSend,
+  onStop,
+  isStreaming,
+  disabled,
+  placeholder,
+  previousMessage,
+}: ChatComposerProps) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const [uploadPolicy, setUploadPolicy] = useState<{
     max_bytes: number;
     allowed_extensions: string[];
@@ -41,7 +53,7 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
     let mounted = true;
     import('@/shared/api/chats')
       .then(({ getChatUploadPolicy }) => getChatUploadPolicy())
-      .then((policy) => {
+      .then(policy => {
         if (mounted) setUploadPolicy(policy);
       })
       .catch(() => {
@@ -65,23 +77,68 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, [showMenu]);
 
-  const handleSubmit = useCallback(() => {
-    if (!text.trim() && attachments.length === 0) return;
-    if (disabled) return;
+  const handleSubmit = useCallback(async () => {
+    if (
+      (!text.trim() && attachments.length === 0) ||
+      disabled ||
+      isStreaming ||
+      isSending
+    )
+      return;
 
+    const submittedText = text;
     const toSend = [...attachments];
-    onSend(text.trim(), {
-      attachments: toSend.map(a => a.file),
-    });
-
-    revokePreviews(toSend);
+    setIsSending(true);
     setText('');
     setAttachments([]);
     setUploadError(null);
-    textareaRef.current?.focus();
-  }, [text, attachments, disabled, onSend, revokePreviews]);
+    setShowMenu(false);
+    try {
+      const sent = await onSend(submittedText.trim(), {
+        attachments: toSend.map(a => a.file),
+      });
+
+      if (sent === false) {
+        setText(submittedText);
+        setAttachments(toSend);
+        return;
+      }
+      revokePreviews(toSend);
+      textareaRef.current?.focus();
+    } catch (error) {
+      setText(submittedText);
+      setAttachments(toSend);
+      throw error;
+    } finally {
+      setIsSending(false);
+    }
+  }, [
+    text,
+    attachments,
+    disabled,
+    isStreaming,
+    isSending,
+    onSend,
+    revokePreviews,
+  ]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      e.key === 'ArrowUp' &&
+      !e.shiftKey &&
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !text &&
+      previousMessage &&
+      !disabled &&
+      !isStreaming &&
+      !isSending
+    ) {
+      e.preventDefault();
+      setText(previousMessage);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -94,44 +151,63 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
 
     const maxBytes = uploadPolicy?.max_bytes ?? 50 * 1024 * 1024;
     const allowedExtensions = new Set(
-      (uploadPolicy?.allowed_extensions ?? ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv']).map((item) =>
-        item.toLowerCase().replace(/^\./, '')
-      )
+      (
+        uploadPolicy?.allowed_extensions ?? [
+          'txt',
+          'md',
+          'pdf',
+          'doc',
+          'docx',
+          'xls',
+          'xlsx',
+          'csv',
+        ]
+      ).map(item => item.toLowerCase().replace(/^\./, ''))
     );
 
     const validFiles: File[] = [];
-    const allowedMimeByExt = uploadPolicy?.allowed_content_types_by_extension ?? {};
+    let validationError: string | null = null;
+    const allowedMimeByExt =
+      uploadPolicy?.allowed_content_types_by_extension ?? {};
     for (const file of files) {
       const fileName = (file.name || '').toLowerCase();
       const dotIdx = fileName.lastIndexOf('.');
       const ext = dotIdx >= 0 ? fileName.slice(dotIdx + 1) : '';
       if (!ext || !allowedExtensions.has(ext)) {
-        setUploadError(`Файл "${file.name}" не поддерживается`);
+        validationError = `Файл "${file.name}" не поддерживается`;
         continue;
       }
       if (file.size > maxBytes) {
-        setUploadError(`Файл "${file.name}" превышает лимит ${(maxBytes / 1024 / 1024).toFixed(0)} МБ`);
+        validationError = `Файл "${file.name}" превышает лимит ${(maxBytes / 1024 / 1024).toFixed(0)} МБ`;
         continue;
       }
       const allowedMime = allowedMimeByExt[ext];
       const mime = (file.type || '').toLowerCase();
-      if (mime && Array.isArray(allowedMime) && allowedMime.length > 0 && !allowedMime.includes(mime)) {
-        setUploadError(`Файл "${file.name}" имеет неподдерживаемый MIME: ${mime}`);
+      if (
+        mime &&
+        !['application/octet-stream', 'binary/octet-stream'].includes(mime) &&
+        Array.isArray(allowedMime) &&
+        allowedMime.length > 0 &&
+        !allowedMime.includes(mime)
+      ) {
+        validationError = `Файл "${file.name}" имеет неподдерживаемый MIME: ${mime}`;
         continue;
       }
       validFiles.push(file);
     }
 
+    setUploadError(validationError);
     if (!validFiles.length) {
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
-    setUploadError(null);
     const newAttachments: Attachment[] = validFiles.map(file => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       file,
-      preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+      preview: file.type.startsWith('image/')
+        ? URL.createObjectURL(file)
+        : undefined,
     }));
     setAttachments(prev => [...prev, ...newAttachments]);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -155,11 +231,21 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
     };
   }, [revokePreviews]);
 
-  const canStop = isStreaming && !!onStop;
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && !disabled && !isStreaming;
+  const locked = disabled || isStreaming || isSending;
+  const canStop = (isStreaming || isSending) && !!onStop;
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && !locked;
   const acceptValue = useMemo(() => {
-    const list = uploadPolicy?.allowed_extensions ?? ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv'];
-    return list.map((ext) => (ext.startsWith('.') ? ext : `.${ext}`)).join(',');
+    const list = uploadPolicy?.allowed_extensions ?? [
+      'txt',
+      'md',
+      'pdf',
+      'doc',
+      'docx',
+      'xls',
+      'xlsx',
+      'csv',
+    ];
+    return list.map(ext => (ext.startsWith('.') ? ext : `.${ext}`)).join(',');
   }, [uploadPolicy]);
 
   return (
@@ -170,14 +256,23 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
           {attachments.map(att => (
             <div key={att.id} className={styles.attachment}>
               {att.preview ? (
-                <img src={att.preview} alt={att.file.name} className={styles.attachmentPreview} />
+                <img
+                  src={att.preview}
+                  alt={att.file.name}
+                  className={styles.attachmentPreview}
+                />
               ) : (
                 <div className={styles.attachmentIcon}>
                   <Icon name="file" size={14} />
                 </div>
               )}
               <span className={styles.attachmentName}>{att.file.name}</span>
-              <button className={styles.attachmentRemove} onClick={() => removeAttachment(att.id)} type="button">
+              <button
+                className={styles.attachmentRemove}
+                onClick={() => removeAttachment(att.id)}
+                type="button"
+                disabled={locked}
+              >
                 <Icon name="x" size={12} />
               </button>
             </div>
@@ -195,7 +290,7 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder || 'Напишите сообщение...'}
-          disabled={disabled}
+          disabled={locked}
           rows={1}
         />
 
@@ -204,11 +299,11 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
           <div className={styles.plusMenu} ref={menuRef}>
             <button
               className={styles.actionButton}
-              onClick={() => setShowMenu((v) => !v)}
+              onClick={() => setShowMenu(v => !v)}
               type="button"
               title="Добавить"
               aria-label="Открыть меню вложений"
-              disabled={disabled}
+              disabled={locked}
             >
               <Icon name="plus" size={20} />
             </button>
@@ -236,6 +331,7 @@ export function ChatComposer({ onSend, onStop, isStreaming, disabled, placeholde
             onChange={handleFileSelect}
             className={styles.fileInput}
             accept={acceptValue}
+            disabled={locked}
           />
 
           {canStop ? (

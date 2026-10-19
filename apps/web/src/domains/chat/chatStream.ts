@@ -8,6 +8,7 @@ export interface ChatStreamPause {
   question?: string;
   message?: string;
   action: Record<string, unknown>;
+  interaction?: Record<string, unknown>;
 }
 
 export interface ChatStreamFinal {
@@ -146,6 +147,10 @@ export async function consumeChatStream(
           runId: payload.run_id,
           reason: payload.reason,
           action: record(payload.action),
+          interaction:
+            typeof record(context.interaction).id === 'string'
+              ? record(context.interaction)
+              : undefined,
           question:
             typeof context.question === 'string' ? context.question : undefined,
           message:
@@ -164,6 +169,7 @@ export async function consumeChatStream(
           : message
       );
     }
+    if (terminal) return false;
   });
   if (!terminal && !(allowDoneOnly && hasReceivedDone)) {
     throw new Error(

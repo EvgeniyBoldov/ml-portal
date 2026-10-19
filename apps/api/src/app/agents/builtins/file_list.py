@@ -36,6 +36,7 @@ _OUTPUT_SCHEMA_V1 = {
                 "type": "object",
                 "properties": {
                     "artifact_id": {"type": "string"},
+                    "artifact": {"type": "object", "description": "Normalized, content-free artifact passport"},
                     "target_kind": {"type": "string"},
                     "file_name": {"type": "string"},
                     "content_type": {"type": "string"},
@@ -101,11 +102,16 @@ class FileListTool(VersionedTool):
                     chat_id=chat_id, owner_id=user_id
                 )
 
+                from app.runtime.artifact_visibility import branch_visible_artifacts
+                visible = branch_visible_artifacts(ctx)
                 files: List[Dict[str, Any]] = []
                 for row in rows:
+                    if visible is not None and str(row.id) not in visible:
+                        continue
                     if status_filter and (row.metadata_snapshot or {}).get("status") != status_filter:
                         continue
                     files.append({
+                        "artifact": ChatArtifactReferenceService.manifest(row),
                         "artifact_id": str(row.id),
                         "target_kind": row.target_kind,
                         "file_name": row.display_name,

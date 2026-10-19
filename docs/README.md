@@ -1,5 +1,7 @@
 # ML Portal Documentation
 
+Open work and architectural questions are tracked in the [root TODO](../TODO.md).
+Documents below describe current behavior and contracts.
 
 
 ## Start Here
@@ -27,12 +29,12 @@
 - [MCP Credential Flow](architecture/MCP_CREDENTIAL_FLOW.md)
 - [DCBox MCP](architecture/DCBOX_MCP.md)
 - [Sandbox Runtime](architecture/SANDBOX_RUNTIME.md)
+- [Runtime Interactions](architecture/RUNTIME_INTERACTIONS.md)
 - [Runtime Memory](architecture/RUNTIME_MEMORY.md)
 - [Memory](architecture/MEMORY.md) — текущие диалоговые и документные memory-контуры
 - [Chat Context Memory](architecture/CHAT_CONTEXT_MEMORY.md)
 - [Memory Risks and Accepted Decisions](architecture/MEMORY_RISKS.md)
 - [Chat File Attachments](architecture/CHAT_FILE_ATTACHMENTS.md)
-- [Entity Builder Pattern](architecture/ENTITY_BUILDER_PATTERN.md)
 
 ## Development Rules
 - [Repository Guidelines](../AGENTS.md) — руководство для участников и coding agents; команды, границы архитектуры и ссылки на правила

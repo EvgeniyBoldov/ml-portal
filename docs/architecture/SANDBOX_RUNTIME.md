@@ -236,18 +236,16 @@ Bad group boundaries:
 6. Emit the same trace primitives as production, with higher visibility.
 
 Paused-run rule:
-- A task-local `waiting_confirmation` is a persisted sandbox-run state, not a
-  completed run. Its confirmation action/context remain available until the
-  run is resumed or cancelled.
-- A TurnPreflight `waiting_input` clarification is a root interaction without
-  a plan or task. Its answer resumes the same sandbox run at mechanical lookup
-  and TurnPreflight.
-- Resume continues the same sandbox run and clears the persisted pause only
-  after its immutable resume snapshot has been constructed.
-- A paused run is cancelled by the common resume payload
-  `{ "action": "cancel" }`; the dedicated cancel endpoint is only for an
-  actively running execution. Aborting a browser stream is not a cancellation
-  signal.
+- Text questions and boolean confirmations use the same requester-bound
+  `RuntimeInteraction`, including a private checkpoint.
+- An answer resumes the same sandbox run at its requester: TurnPreflight,
+  planner checkpoint or task agent. Planner/task answers bypass TurnPreflight.
+- The resume snapshot is copied and validated before the persisted transport
+  pause is cleared. A matching signed token is required for a gated operation.
+- `{"action":"answer","pause_id":"...","response":false}` is a negative
+  answer. `{"action":"cancel","pause_id":"..."}` cancels the paused run.
+  The dedicated cancel endpoint handles actively running executions.
+- See [Runtime Interactions](./RUNTIME_INTERACTIONS.md) for the shared contract.
 
 Snapshot rule:
 - the run must use the immutable snapshot produced from the branch resolver state,

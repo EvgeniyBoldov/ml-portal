@@ -13,7 +13,7 @@ ScopeSource = Literal["turn", "chat_focus", "user_project_default", "user_defaul
 class ScopeIdentity(BaseModel):
     id: str | None = None
     key: str = Field(min_length=1, max_length=180)
-    type: str = Field(min_length=1, max_length=24)
+    type: str = Field(default="scope", min_length=1, max_length=24)
     name: str = Field(default="", max_length=255)
     source: ScopeSource = "none"
     matched_forms: list[str] = Field(default_factory=list, max_length=12)
@@ -22,8 +22,8 @@ class ScopeIdentity(BaseModel):
 
 class ScopeSelection(BaseModel):
     model_config = {"extra": "forbid"}
-    keys: list[str] = Field(default_factory=list, max_length=60,
-                           description="Concrete catalog identities team.* or project.* selected by the user. Empty inherits current focus. Never user, tenant, global, team.all or project.all.")
+    keys: list[str] = Field(default_factory=list, max_length=120,
+                           description="Catalog scope slugs selected by the user. Empty inherit preserves focus; empty replace explicitly clears it.")
     mode: Literal["inherit", "replace"] = "inherit"
     mentioned_keys: list[str] = Field(default_factory=list, max_length=30)
     rationale: str = Field(default="", max_length=600)
@@ -37,12 +37,12 @@ class ScopeSelection(BaseModel):
 class EffectiveScopeContext(BaseModel):
     version: int = 1
     revision: int = 0
-    selected: list[ScopeIdentity] = Field(default_factory=list, max_length=60)
+    selected: list[ScopeIdentity] = Field(default_factory=list, max_length=120)
     mentioned: list[ScopeIdentity] = Field(default_factory=list, max_length=30)
     ambiguities: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     mode: Literal["inherit", "replace"] = "inherit"
     explicit_clear: bool = False
-    ceiling_keys: list[str] = Field(default_factory=list, max_length=60)
+    ceiling_keys: list[str] = Field(default_factory=list, max_length=120)
 
     @computed_field
     @property
@@ -60,15 +60,12 @@ def merge_selection(
     *, source: ScopeSource,
     ceiling_keys: list[str] | None = None,
 ) -> EffectiveScopeContext:
-    """Inherit unchanged types; replace only types named by selection keys."""
-    if set(selection.keys).intersection({"project.all", "team.all"}):
-        raise ValueError("all_is_not_a_query_scope")
+    """An explicit selection replaces the flat scope set; absent selection inherits."""
     unknown = set(selection.keys + selection.mentioned_keys) - set(identities)
     if unknown:
         raise ValueError(f"unknown_scope_keys:{','.join(sorted(unknown))}")
-    parent_rows = [] if selection.mode == "replace" else list(parent.selected)
-    selected_types = {identities[key].type for key in selection.keys if key in identities}
-    kept = [row for row in parent_rows if row.type not in selected_types]
+    parent_rows = [] if selection.mode == "replace" or selection.keys else list(parent.selected)
+    kept = parent_rows
     incoming = [identities[key].model_copy(update={"source": source}) for key in selection.keys if key in identities]
     combined = {row.key: row for row in [*kept, *incoming]}
     keys = list(combined)
@@ -87,13 +84,13 @@ def merge_selection(
     )
 
 
+def scope_selection_changes(parent: EffectiveScopeContext, selection: ScopeSelection) -> bool:
+    return bool(selection.keys or selection.mode == "replace") and set(selection.keys) != set(parent.keys)
+
+
 def task_scope(parent: EffectiveScopeContext, selection: ScopeSelection) -> EffectiveScopeContext:
     keys = selection.keys
-    if selection.mode == "replace":
-        chosen = keys
-    else:
-        chosen_types = {row.type for row in parent.selected if row.key in keys}
-        chosen = [row.key for row in parent.selected if row.type not in chosen_types or row.key in keys]
+    chosen = keys if keys or selection.mode == "replace" else parent.keys
     ceiling = set(parent.ceiling_keys)
     if not set(chosen).issubset(ceiling):
         raise ValueError("scope_widening_denied")
@@ -109,45 +106,17 @@ def task_scope(parent: EffectiveScopeContext, selection: ScopeSelection) -> Effe
 
 
 def memory_visible_for_scope(item: dict[str, Any], scope_keys: list[str] | set[str]) -> bool:
-    """Teams describe recipients; projects describe execution location.
-
-    An absent project binding is outside-project knowledge. An absent team
-    binding is unaddressed knowledge. ``all`` is an atom selector, never a
-    request for enumerating scopes.
-    """
-    keys = set(str(key) for key in item.get("scope_keys") or [])
-    selected = set(scope_keys)
-    if any(key.partition(".")[0] not in {"team", "project"} for key in keys):
-        return False
-    if "team.all" in selected:
-        return False
-    query_projects = {key for key in item.get("query_scope_keys", []) if key.startswith("project.")}
-    if query_projects == {"project.all"}:
-        selected.add("project.all")
-    selected_projects = {key for key in selected if key.startswith("project.")}
-    if query_projects and not query_projects.intersection(selected_projects):
-        return False
-    projects = {key for key in selected if key.startswith("project.") and key != "project.all"}
-    bound_projects = {key for key in keys if key.startswith("project.")}
-    if projects:
-        if not bound_projects.intersection(projects) and "project.all" not in bound_projects:
-            return False
-    elif "project.all" in selected:
-        if "project.all" not in bound_projects:
-            return False
-    elif bound_projects or item.get("project_id"):
-        return False
-    teams = {key for key in selected if key.startswith("team.")}
-    bound_teams = {key for key in keys if key.startswith("team.")}
-    return not bound_teams or "team.all" in bound_teams or bool(bound_teams.intersection(teams))
+    """Applicability is the intersection with exact catalog slugs."""
+    bound = set(item.get("scope_keys") or ([item["scope_slug"]] if item.get("scope_slug") else []))
+    return bool(bound.intersection(scope_keys))
 
 
 def project_memory_context(value: dict[str, Any], scope_keys: list[str] | set[str]) -> dict[str, Any]:
     """Filter nested recall/search evidence together with its source references."""
-    # Registered memory.search reads the shared document corpus. Legacy
-    # MemoryItem applicability must not discard its passages in a focused chat.
-    if value.get("backend") == "hipporag" and "document_count" in value:
-        return dict(value)
+    if value.get("backend") == "hipporag" and isinstance(value.get("groups"), list):
+        groups = [group for group in value["groups"] if group.get("scope_slug") in scope_keys]
+        return {**value, "groups": groups, "group_count": len(groups),
+                "partial": any(not group.get("success", True) for group in groups)}
     result = dict(value)
     selected = set(scope_keys)
     item_lists = ("items", "relevant_knowledge", "applicable_rules", "applicable_procedures", "known_constraints")

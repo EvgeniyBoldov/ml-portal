@@ -100,9 +100,8 @@ class StructuredLLMCall:
         self.llm_client = llm_client
         self.role_service = SystemLLMRoleService(session)
         self.limits_service = RuntimeLimitsService(session)
-        # Trace logging deferred: v3 pipeline will use a dedicated RuntimeTrace
-        # service (see TODO in runtime/__init__.py). For now traces are skipped
-        # and trace_id is returned as None.
+        # LLM request/response tracing is emitted through the runtime event sink
+        # supplied to invoke(); trace persistence is owned by the event pipeline.
 
     async def invoke(
         self,

@@ -599,8 +599,80 @@ export interface MemoryScopeAdminItem {
   retention_days: number;
 }
 
+export interface LongMemoryAdminDocument {
+  document_id: string;
+  title: string;
+  filename: string;
+  status: string;
+  action: string | null;
+  scope_keys: string[];
+  metrics: Record<string, number>;
+  error: string | null;
+  updated_at: string | null;
+}
+
+export interface LongMemoryAdminDocumentPage {
+  items: LongMemoryAdminDocument[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface LongMemoryAdminDocumentDetail extends LongMemoryAdminDocument {
+  operation_id: string | null;
+  generation: number | null;
+  graphs: Array<{ scope_key: string; status: string }>;
+  triples_count: number;
+}
+
+export interface LongMemoryTriplePage {
+  document_id: string;
+  items: Array<{
+    id: string;
+    subject: string;
+    predicate: string;
+    object: string;
+    source_start: number | null;
+    source_end: number | null;
+  }>;
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface LongMemorySearchPreview {
+  scope_key: string;
+  success: boolean;
+  error: string | null;
+  hits: Array<{
+    text: string;
+    score: number;
+    document_id: string | null;
+    title: string | null;
+    filename: string | null;
+    start: number | null;
+    end: number | null;
+  }>;
+}
+
 // API functions
 export const adminApi = {
+  async getLongMemoryDocuments(params: { query?: string; scope_key?: string; status?: string; limit?: number; offset?: number } = {}): Promise<LongMemoryAdminDocumentPage> {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') search.set(key, String(value)); });
+    return apiRequest(`/admin/memory/long-memory/documents?${search.toString()}`);
+  },
+  async getLongMemoryDocument(documentId: string): Promise<LongMemoryAdminDocumentDetail> {
+    return apiRequest(`/admin/memory/long-memory/documents/${encodeURIComponent(documentId)}`);
+  },
+  async getLongMemoryDocumentTriples(documentId: string, params: { limit?: number; offset?: number } = {}): Promise<LongMemoryTriplePage> {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => { if (value !== undefined) search.set(key, String(value)); });
+    return apiRequest(`/admin/memory/long-memory/documents/${encodeURIComponent(documentId)}/triples?${search.toString()}`);
+  },
+  async searchLongMemory(body: { scope_key: string; query: string; limit?: number }): Promise<LongMemorySearchPreview> {
+    return apiRequest('/admin/memory/long-memory/search-preview', { method: 'POST', body: JSON.stringify(body) });
+  },
   async getMemoryTermCatalog(): Promise<PublishedMemoryTerm[]> {
     return apiRequest('/admin/memory/staging/term-catalog');
   },

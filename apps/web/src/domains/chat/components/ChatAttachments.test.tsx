@@ -1,22 +1,24 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { ChatAttachments } from './ChatAttachments';
 
 describe('ChatAttachments', () => {
-  it('opens a canonical file reference', () => {
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+  it('renders an artifact as a link to its canonical download route', () => {
     render(<ChatAttachments variant="artifact" attachments={[{ artifactId: 'artifact-1', fileName: 'result.xlsx' }]} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /result.xlsx/i }));
-    expect(open).toHaveBeenCalledWith(expect.stringContaining('/api/v1/files/'), '_blank', 'noopener,noreferrer');
-    open.mockRestore();
+    expect(screen.getByRole('link', { name: /result.xlsx/i })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/api/v1/files/artifact-1/download')
+    );
+    expect(screen.getByRole('link', { name: /result.xlsx/i })).toHaveAttribute('target', '_blank');
+    expect(screen.getByRole('link', { name: /result.xlsx/i })).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
   it('uses the download URL supplied by the backend', () => {
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     render(<ChatAttachments variant="artifact" attachments={[{ artifactId: 'artifact-1', fileName: 'result.xlsx', downloadUrl: '/api/v1/files/artifact-1/download' }]} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /result.xlsx/i }));
-    expect(open).toHaveBeenCalledWith('/api/v1/files/artifact-1/download', '_blank', 'noopener,noreferrer');
-    open.mockRestore();
+    expect(screen.getByRole('link', { name: /result.xlsx/i })).toHaveAttribute(
+      'href',
+      '/api/v1/files/artifact-1/download'
+    );
   });
 });

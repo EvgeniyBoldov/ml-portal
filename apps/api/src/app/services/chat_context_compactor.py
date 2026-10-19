@@ -42,8 +42,7 @@ class _AnchorCompactionOperation(_CompactionOperationBase):
 
 class FocusCompactionPayload(BaseModel):
     topic: str = Field(default="", max_length=600)
-    team_keys: list[str] | None = Field(default=None, max_length=30)
-    project_keys: list[str] | None = Field(default=None, max_length=30)
+    scope_keys: list[str] | None = Field(default=None, max_length=120)
 
 
 class _TopicCompactionOperation(_CompactionOperationBase):
@@ -134,43 +133,27 @@ def _canonical_key(kind: str, action: str, source_ids: list[str], payload: dict[
 
 FOCUS_COMPACTION_PROMPT = """Сожми рабочий контекст завершённого хода чата.
 Верни операции goal, decision, recent_anchor или scope с source_ids из valid_source_ids.
-Коррекция фокуса разрешена этим контрактом, даже если старый prompt запрещал её.
-Фокус состоит из двух независимых веток: team_keys (кому), project_keys (где).
-Используй только точные конкретные ключи из scope_catalog; all запрещён.
-Прочитай диалог, включая вопрос агента и подтверждение/ответ пользователя.
-Меняй ветку только если пользователь выбрал, уточнил или подтвердил её.
-Простое упоминание, пример или неподтверждённый вопрос агента не меняет фокус.
-null/отсутствующая ветка сохраняет предыдущий выбор, [] явно очищает ветку.
-При смене проекта сохраняй команду, если пользователь её не менял, и наоборот.
+scope_keys — единый список точных slug из scope_catalog без типов и префиксов.
+Меняй scope_keys только при явном выборе пользователя; упоминание проекта не меняет выбор.
+null/отсутствие scope_keys сохраняет предыдущий выбор; [] явно очищает весь набор.
+Документный memory.search использует весь выбранный набор, независимо по каждому scope.
 Не переписывай подтверждённые решения догадками. Каждый вывод ссылается на evidence.
 """
 
 
 def focus_compaction_payload(previous: dict[str, Any], proposal: FocusCompactionPayload,
                              known: set[str]) -> dict[str, Any] | None:
-    """Preserve untouched branches and validate exact catalog identities."""
-    from app.runtime.memory.search import normalize_query_keys
     result = ScopePayload.model_validate(previous).model_dump(mode="json")
-    changed = False
-    for branch in ("team", "project"):
-        values = getattr(proposal, f"{branch}_keys")
-        if values is None:
-            continue
-        try:
-            keys = normalize_query_keys(values, branch)
-        except ValueError:
-            return None
+    changed = proposal.scope_keys is not None
+    if changed:
+        keys = list(dict.fromkeys(str(key).strip().casefold() for key in proposal.scope_keys))
         if not set(keys).issubset(known):
             return None
-        result[f"{branch}_keys"] = [key.removeprefix(f"{branch}.") for key in keys]
-        result["scope_keys"] = [key for key in result["scope_keys"] if not key.startswith(f"{branch}.")] + keys
-        result[f"suppress_{branch}_default"] = not keys
-        result["scope_origins"] = {key: origin for key, origin in result["scope_origins"].items() if not key.startswith(f"{branch}.")}
-        result["scope_origins"].update({key: "chat_focus" for key in keys})
-        changed = True
+        result.update(scope_keys=keys, scope_mode="replace", suppress_scope_default=not keys,
+                      scope_origins={key: "chat_focus" for key in keys}, project_keys=[], team_keys=[],
+                      suppress_project_default=False, suppress_team_default=False)
     if proposal.topic:
         result["topic"] = proposal.topic
-    # Pure topic inference must not replace exact scope state.
     result["source"] = "explicit" if changed else "inferred"
     result["scope_revision"] += int(changed)
     return result

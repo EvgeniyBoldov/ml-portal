@@ -18,6 +18,7 @@ export default defineConfig(function (_a) {
             },
         },
         server: {
+            allowedHosts: ['nginx'],
             host: true, // Listen on all addresses
             port: Number(env.VITE_PORT) || 5173,
             strictPort: false,

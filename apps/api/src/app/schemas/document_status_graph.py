@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, List, Dict
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StatusNode(BaseModel):
@@ -61,6 +61,7 @@ class IngestPolicyResponse(BaseModel):
 class StatusGraphResponse(BaseModel):
     doc_id: str
     pipeline: List[PipelineStage]
+    memory: List[PipelineStage] = Field(default_factory=list)
     embeddings: List[EmbeddingModel]
     index: List[EmbeddingModel]
     agg_status: str

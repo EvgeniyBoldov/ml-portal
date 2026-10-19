@@ -252,6 +252,15 @@ class ChatStreamService:
                     logger.warning("chat_attachment_not_found: %s", exc)
                     yield _safe_stream_error("attachment_not_found", "Attachment not found or access denied")
                     return
+            current_artifact_ids = list(artifact_ids)
+            if resumed_turn_id:
+                from app.models.chat import ChatMessages
+                resumed_turn = await self.chat_turn_service.get_by_id(resumed_turn_id)
+                if resumed_turn and resumed_turn.user_message_id:
+                    original_message = await self.session.get(ChatMessages, resumed_turn.user_message_id)
+                    original_meta = original_message.meta if original_message else None
+                    current_artifact_ids = [str(item["artifact_id"]) for item in
+                        (original_meta or {}).get("attachments", []) if item.get("artifact_id")]
             history_attachment_meta = self._extract_attachment_meta_from_messages(context)
             history_artifact_ids = [
                 str(item.get("artifact_id") or "")
@@ -263,10 +272,11 @@ class ChatStreamService:
                 for item in context_snapshot.artifacts
                 if item.artifact_id
             ]
-            effective_artifact_ids = list(dict.fromkeys([*history_artifact_ids, *snapshot_artifact_ids, *artifact_ids]))
+            effective_artifact_ids = list(dict.fromkeys([*history_artifact_ids, *snapshot_artifact_ids, *current_artifact_ids, *artifact_ids]))
             if effective_artifact_ids:
                 attachment_contexts = await self.attachment_service.build_runtime_artifact_contexts(
                     artifact_ids=effective_artifact_ids,
+                    current_artifact_ids=current_artifact_ids,
                     chat_id=chat_id,
                     owner_id=user_id,
                 )
@@ -298,6 +308,10 @@ class ChatStreamService:
 
         except Exception as e:
             logger.error(f"Error in send_message_stream: {e}", exc_info=True)
+            if resumed_turn_id:
+                await self.session.rollback()
+                await self.chat_turn_service.fail_turn(resumed_turn_id, error_message="chat_stream_failed")
+                await self.session.commit()
             yield _safe_stream_error("chat_stream_failed", "Failed to process chat request")
 
     @staticmethod
@@ -498,5 +512,6 @@ class ChatStreamService:
                 "missing_credentials": e.missing.credentials if e.missing else [],
             }
         except Exception as e:
+            await self.session.rollback()
             logger.error(f"Router error: {e}", exc_info=True)
             yield _safe_stream_error("routing_failed", "Routing failed")

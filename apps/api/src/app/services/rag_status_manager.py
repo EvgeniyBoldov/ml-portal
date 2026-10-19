@@ -377,6 +377,8 @@ class RAGStatusManager:
         }
 
         for node in nodes:
+            if node.node_type == "memory" and node.node_key in {"knowledge", "graph"}:
+                continue  # Independent LongMemory commands are cancelled by a newer delete operation.
             stage = self._format_stage_name(node.node_type, node.node_key)
             if node.status not in active_statuses:
                 continue

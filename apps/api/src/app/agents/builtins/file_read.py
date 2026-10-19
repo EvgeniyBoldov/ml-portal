@@ -10,9 +10,6 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_TEXT_EXTENSIONS = {"txt", "md", "csv", "tsv", "json", "yaml", "yml", "log", "sql", "xml", "html"}
-_MAX_READ_BYTES = 2 * 1024 * 1024
-
 _INPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {"artifact_id": {"type": "string", "description": "Chat artifact reference UUID"}},
@@ -23,6 +20,7 @@ _OUTPUT_SCHEMA_V1 = {
     "type": "object",
     "properties": {
         "artifact_id": {"type": "string"},
+        "artifact": {"type": "object", "description": "Normalized, content-free artifact passport"},
         "file_name": {"type": "string"},
         "content_type": {"type": "string"},
         "size_bytes": {"type": "integer"},
@@ -58,14 +56,12 @@ class FileReadTool(VersionedTool):
         description="Resolve a chat artifact reference, validate access, and extract a bounded preview",
     )
     async def v1_0_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
-        from app.adapters.s3_client import s3_manager
         from app.core.db import get_session_factory
         from app.services.chat_artifact_reference_service import (
             ChatArtifactReferenceError,
             ChatArtifactReferenceNotFound,
             ChatArtifactReferenceService,
         )
-        from app.services.document_extraction_service import DocumentExtractionService, ExtractionRequest
 
         log = ctx.tool_notes("file.read")
 
@@ -103,71 +99,41 @@ class FileReadTool(VersionedTool):
                         artifact_id = str(reference.id)
                     except (ValueError, ChatArtifactReferenceNotFound):
                         return ToolResult.fail("Invalid artifact_id", logs=log.entries_dict())
-                resolved = await service.resolve(
-                    artifact_id=artifact_id,
-                    chat_id=chat_id,
-                    owner_id=user_id,
-                    tenant_id=ctx.tenant_id,
-                )
-                payload = await s3_manager.get_object(resolved.bucket, resolved.key)
-                if payload is None:
-                    log.error("Failed to load artifact from storage", artifact_id=artifact_id)
-                    return ToolResult.fail(
-                        "Artifact exists in metadata but could not be loaded from storage.",
-                        logs=log.entries_dict(),
-                    )
-                size_bytes = len(payload)
+                from app.runtime.artifact_visibility import branch_visible_artifacts
+                visible = branch_visible_artifacts(ctx)
+                if visible is not None and artifact_id not in visible:
+                    return ToolResult.fail("Artifact is unavailable in this branch", logs=log.entries_dict())
+                from app.runtime.events import RuntimeEvent, RuntimeEventType, OrchestrationPhase
                 call_id = str(ctx.extra.get("runtime_active_tool_call_id") or artifact_id)
-                async def observe_extraction(stage: str, payload: dict) -> None:
-                    sink = ctx.extra.get("runtime_event_logger")
-                    if sink is None:
-                        return
-                    from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
-                    event_type = {
-                        "started": RuntimeEventType.EXTRACTION_STARTED,
-                        "completed": RuntimeEventType.EXTRACTION_COMPLETED,
-                        "failed": RuntimeEventType.EXTRACTION_FAILED,
-                    }[stage]
-                    await sink.emit(RuntimeEvent(event_type, {
-                        "entity_type": "extraction",
-                        "entity_id": f"{call_id}:extraction",
-                        "parent_entity_type": "tool_call",
-                        "parent_entity_id": call_id,
-                        "artifact_id": artifact_id,
-                        **payload,
-                    }), phase=OrchestrationPhase.AGENT)
+                sink = ctx.extra.get("runtime_event_logger")
+                actor = ctx.extra.get("runtime_read_actor", "agent")
+                phase = {"turn_preflight": OrchestrationPhase.PREFLIGHT,
+                         "planner": OrchestrationPhase.PLANNER}.get(actor, OrchestrationPhase.AGENT)
 
-                extraction = await DocumentExtractionService().extract(
-                    ExtractionRequest(
-                        payload=payload,
-                        filename=resolved.file_name,
-                        content_type=resolved.content_type,
-                        profile="chat_preview",
-                        max_bytes=_MAX_READ_BYTES,
-                        observer=observe_extraction,
-                    )
-                )
+                async def observe(stage: str, payload: dict) -> None:
+                    if sink is not None:
+                        event_type = {"started": RuntimeEventType.EXTRACTION_STARTED,
+                            "completed": RuntimeEventType.EXTRACTION_COMPLETED,
+                            "failed": RuntimeEventType.EXTRACTION_FAILED}[stage]
+                        await sink.emit(RuntimeEvent(event_type, {"entity_type": "extraction",
+                            "entity_id": f"{call_id}:extraction", "parent_entity_type": "tool_call",
+                            "parent_entity_id": call_id, "artifact_id": artifact_id, **payload}), phase=phase)
 
-                log.info(
-                    "File read OK",
-                    artifact_id=artifact_id,
-                    file_name=resolved.file_name,
-                    size_bytes=size_bytes,
-                    representation=extraction.content_kind,
-                )
+                from app.services.artifact_representation_service import ArtifactRepresentationService
+                data = await ArtifactRepresentationService(session).read(
+                    artifact_id=artifact_id, chat_id=str(chat_id), owner_id=str(user_id),
+                    tenant_id=str(ctx.tenant_id) if ctx.tenant_id else None, observer=observe)
+                reference = await service.get_reference(
+                    artifact_id=artifact_id, chat_id=chat_id, owner_id=user_id)
+                data["artifact"] = service.manifest(reference)
+                await session.commit()
+                if sink is not None:
+                    await sink.emit(RuntimeEvent.status("file_representation_used", artifact_id=artifact_id,
+                        representation_id=data["representation_id"], reused=data["reused"],
+                        truncated=data["truncated"], parent_entity_type="tool_call", parent_entity_id=call_id), phase=phase)
                 return ToolResult.ok(
-                    data={
-                        "artifact_id": artifact_id,
-                        "file_name": resolved.file_name,
-                        "content_type": resolved.content_type or "application/octet-stream",
-                        "size_bytes": size_bytes,
-                        "representation": extraction.content_kind,
-                        "content": extraction.text,
-                        "truncated": extraction.truncated,
-                        "parser": extraction.parser,
-                        "warnings": extraction.warnings,
-                    },
-                    message=f"File '{resolved.file_name}' read successfully.",
+                    data=data, delivery="direct",
+                    message=f"File '{data['file_name']}' read successfully.",
                     logs=log.entries_dict(),
                 )
         except ChatArtifactReferenceError as exc:

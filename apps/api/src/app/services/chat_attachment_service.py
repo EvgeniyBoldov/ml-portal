@@ -77,8 +77,8 @@ class ChatAttachmentService:
         owner_id: str,
         file: UploadFile,
     ) -> dict[str, Any]:
-        content = await file.read()
         policy = await self.get_upload_policy()
+        content = await file.read(policy.max_bytes + 1)
         descriptor = UploadIntakePolicy.validate_chat_upload(
             filename=file.filename or f"upload_{uuid.uuid4()}",
             content_type=file.content_type,
@@ -86,6 +86,8 @@ class ChatAttachmentService:
             max_bytes=policy.max_bytes,
             allowed_extensions=policy.allowed_extensions,
         )
+
+        UploadIntakePolicy.validate_chat_content(content, extension=descriptor.extension)
 
         attachment_id = uuid.uuid4()
         checksum = calculate_file_checksum(content)
@@ -129,6 +131,8 @@ class ChatAttachmentService:
                 content_type=row.content_type,
                 size_bytes=row.size_bytes,
                 metadata={"status": row.status},
+                source_id=str(row.id),
+                source_type="chat_upload",
             ),
         )
         return self._artifact_metadata(reference)
@@ -198,6 +202,8 @@ class ChatAttachmentService:
                         content_type=row.content_type,
                         size_bytes=row.size_bytes,
                         metadata={"status": row.status, **supplied_metadata},
+                        source_id=str(row.id),
+                        source_type="generated_attachment",
                     ),
                 )
                 return self._artifact_metadata(reference)
@@ -310,6 +316,8 @@ class ChatAttachmentService:
         linked_at = datetime.now(timezone.utc)
         target_message_id = uuid.UUID(message_id)
         for row in rows:
+            if row.message_id is not None:
+                continue
             row.message_id = target_message_id
             row.linked_at = linked_at
         await self.session.flush()
@@ -356,6 +364,7 @@ class ChatAttachmentService:
             except ChatArtifactReferenceNotFound as exc:
                 raise ChatAttachmentNotFoundError(str(exc)) from exc
             result.append({
+                **references.manifest(reference),
                 "artifact_id": str(reference.id),
                 "file_name": reference.display_name or "artifact",
                 "file_ext": self._extension(reference.display_name),
@@ -371,13 +380,14 @@ class ChatAttachmentService:
         artifact_ids: Iterable[str],
         chat_id: str,
         owner_id: str,
-        max_chars_per_file: int = 12000,
+        current_artifact_ids: Iterable[str] = (),
     ) -> list[AttachmentContext]:
         """Resolve opaque artifacts into bounded runtime contexts.
 
         Source identifiers and storage coordinates stay behind this boundary.
         """
         references = ChatArtifactReferenceService(self.session)
+        current_ids = {str(item) for item in current_artifact_ids}
         contexts: list[AttachmentContext] = []
         seen: set[str] = set()
         for raw_id in artifact_ids:
@@ -391,26 +401,9 @@ class ChatAttachmentService:
                 )
             except ChatArtifactReferenceNotFound as exc:
                 raise ChatAttachmentNotFoundError(str(exc)) from exc
-            snippet = ""
-            snippet_status = "missing"
-            readable = False
-            truncated = False
-            if reference.target_kind == "chat_attachment":
-                try:
-                    target_id = uuid.UUID(reference.target_id)
-                except (TypeError, ValueError):
-                    raise ChatAttachmentNotFoundError("Artifact attachment target is invalid")
-                row = await self.session.get(ChatAttachment, target_id)
-                if row is None or str(row.chat_id) != str(chat_id) or str(row.owner_id) != str(owner_id):
-                    raise ChatAttachmentNotFoundError("Artifact attachment was not found or access denied")
-                snippet = await self._load_text_content(row, max_chars=max_chars_per_file) or ""
-                readable = bool(snippet)
-                truncated = snippet.endswith("\n...[truncated]")
-                if readable:
-                    snippet_status = "truncated" if truncated else "ready"
-                else:
-                    payload = await s3_manager.get_object(row.storage_bucket, row.storage_key)
-                    snippet_status = "unreadable" if payload else "missing"
+            from app.services.artifact_representation_service import ArtifactRepresentationService
+            representation = await ArtifactRepresentationService(self.session).metadata(artifact_id)
+            passport = references.manifest(reference)
             contexts.append(
                 AttachmentContext(
                     ref=AttachmentRef(
@@ -420,11 +413,16 @@ class ChatAttachmentService:
                         content_type=reference.content_type,
                         size_bytes=reference.size_bytes,
                         status=str((reference.metadata_snapshot or {}).get("status") or "ready"),
+                        origin=passport["origin"],
+                        description=(passport.get("description") or {}).get("text"),
                     ),
-                    snippet=snippet,
-                    snippet_status=snippet_status,
-                    readable=readable,
-                    truncated=truncated,
+                    is_current=artifact_id in current_ids,
+                    representation_id=representation.get("id"),
+                    source_complete=representation.get("status") == "ready",
+                    snippet="",
+                    snippet_status=representation.get("status", "missing"),
+                    readable=representation.get("status") in {"ready", "partial"},
+                    truncated=representation.get("status") == "partial",
                 )
             )
         return contexts
@@ -432,6 +430,7 @@ class ChatAttachmentService:
     @staticmethod
     def _artifact_metadata(reference: ChatArtifactReference) -> dict[str, Any]:
         return {
+            **ChatArtifactReferenceService.manifest(reference),
             "artifact_id": str(reference.id),
             "file_name": reference.display_name or "artifact",
             "file_ext": ChatAttachmentService._extension(reference.display_name) or "",
@@ -505,28 +504,6 @@ class ChatAttachmentService:
         )
         await self.session.flush()
         return int(result.rowcount or 0)
-
-    async def _load_text_content(self, row: ChatAttachment, *, max_chars: int) -> Optional[str]:
-        payload = await s3_manager.get_object(row.storage_bucket, row.storage_key)
-        if not payload:
-            return None
-        from app.services.document_extraction_service import DocumentExtractionService, ExtractionRequest
-
-        result = await DocumentExtractionService().extract(
-            ExtractionRequest(
-                payload=payload,
-                filename=row.file_name or "",
-                content_type=row.content_type,
-                profile="chat_preview",
-                max_chars=max_chars,
-            )
-        )
-        if not result.text:
-            return None
-        decoded = result.text
-        if len(decoded) <= max_chars:
-            return decoded
-        return f"{decoded[:max_chars]}\n...[truncated]"
 
     async def _get_platform_settings_row(self) -> PlatformSettings | None:
         result = await self.session.execute(select(PlatformSettings).limit(1))

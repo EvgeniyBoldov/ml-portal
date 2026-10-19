@@ -15,6 +15,7 @@ export interface ChatConfirmationItem {
 interface ConfirmationPromptProps {
   item: ChatConfirmationItem;
   onConfirm: () => void;
+  onReject?: () => void;
   onCancel: () => void;
   disabled?: boolean;
 }
@@ -22,6 +23,7 @@ interface ConfirmationPromptProps {
 export function ConfirmationPrompt({
   item,
   onConfirm,
+  onReject,
   onCancel,
   disabled = false,
 }: ConfirmationPromptProps) {
@@ -83,6 +85,16 @@ export function ConfirmationPrompt({
         >
           Отменить
         </button>
+        {onReject && (
+          <button
+            type="button"
+            className={styles.btn}
+            onClick={onReject}
+            disabled={disabled}
+          >
+            Нет
+          </button>
+        )}
         <button
           type="button"
           className={`${styles.btn} ${styles.btnPrimary}`}

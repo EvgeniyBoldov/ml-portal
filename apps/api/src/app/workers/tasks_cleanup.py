@@ -288,6 +288,8 @@ def cleanup_orphaned_chat_attachments(self):
             )
             service = ChatArtifactReferenceService(session)
             deleted_count = await service.cleanup_orphaned_attachments(older_than=older_than)
+            from app.services.runtime_storage_cleanup_service import RuntimeStorageCleanupService
+            deleted_count += await RuntimeStorageCleanupService(session).cleanup(older_than=older_than)
             await session.commit()
             logger.info(
                 "Deleted %s orphaned chat attachments older than %s",

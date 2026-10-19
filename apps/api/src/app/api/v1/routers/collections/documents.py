@@ -5,15 +5,17 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Query
 from sqlalchemy import String, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import db_uow, get_current_user, get_redis_client
+from app.api.deps import db_session, db_uow, get_current_user, get_redis_client
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import UserCtx
+from app.models.collection import Collection
 from app.repositories.factory import AsyncRepositoryFactory
 from app.services.collection_service import CollectionService
 from app.services.collection_document_ingest_service import CollectionDocumentUploadService
@@ -32,32 +34,58 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-@router.post("/{collection_id}/docs/{doc_id}/memory/legacy-extract", status_code=202)
-async def extract_legacy_document_memory(
-    collection_id: uuid.UUID, doc_id: uuid.UUID,
-    session: AsyncSession = Depends(db_uow), user: UserCtx = Depends(get_current_user),
-):
-    from app.models.rag import RAGDocument
-    from app.models.rag_ingest import Source
-    from app.runtime.memory.read_policy import allowed_source_collections
-    from app.workers.tasks_hipporag_document import index_hipporag_document
+from app.schemas.long_memory_document import LongMemoryDocumentInspection, LongMemoryDocumentReceipt
+from app.services.long_memory_document_service import LongMemoryDocumentService
 
+
+async def _memory_document(collection_id: uuid.UUID, doc_id: uuid.UUID, session: AsyncSession, user: UserCtx) -> Collection:
     collection = await _resolve_collection(collection_id, session, user)
-    allowed = await allowed_source_collections(session, user_id=uuid.UUID(str(user.id)), tenant_id=collection.tenant_id)
-    if collection_id not in allowed:
-        raise HTTPException(403, "Collection access denied")
     membership = await _resolve_document_membership(session, collection.tenant_id, collection_id, doc_id)
     if not membership.in_collection:
         raise HTTPException(404, "Document not found in collection")
-    document = await session.get(RAGDocument, doc_id)
-    if document is None or document.status == "archived" or not document.s3_key_processed:
-        raise HTTPException(409, "Canonical document is unavailable")
-    request_id = str(uuid.uuid4())
-    source = await session.get(Source, doc_id)
-    if source is None:
-        raise HTTPException(409, "Document source is unavailable")
-    task = index_hipporag_document.delay({"source_id": str(doc_id)}, str(source.tenant_id), request_id)
-    return {"document_id": str(doc_id), "status": "queued", "backend": "hipporag", "task_id": task.id}
+    return collection
+
+
+@router.get("/{collection_id}/docs/{doc_id}/memory", response_model=LongMemoryDocumentInspection)
+async def inspect_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID,
+    session: AsyncSession = Depends(db_session), user: UserCtx = Depends(get_current_user)) -> dict[str, Any]:
+    await _memory_document(collection_id, doc_id, session, user)
+    result = await LongMemoryDocumentService(session).inspection(doc_id)
+    from app.services.hipporag_service import HippoRAGService
+    try:
+        result["worker"] = await HippoRAGService(session).document_info(doc_id)
+    except Exception:
+        result["worker"] = {"availability": "unknown", "error": "LongMemory worker is unavailable"}
+    return result
+
+
+async def _queue_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID, action: Literal["add", "delete"],
+                                 session: AsyncSession, user: UserCtx) -> dict[str, str]:
+    await _memory_document(collection_id, doc_id, session, user)
+    try:
+        operation = await LongMemoryDocumentService(session).enqueue(doc_id, action)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await session.commit()
+    from app.workers.tasks_long_memory_documents import execute_long_memory_document
+    try:
+        execute_long_memory_document.delay(str(operation.id))
+    except Exception:
+        logger.warning("LongMemory dispatch deferred to recovery operation=%s", operation.id, exc_info=True)
+    return {"document_id": str(doc_id), "operation_id": str(operation.id), "status": "queued" if operation.status == "pending" else operation.status}
+
+
+@router.post("/{collection_id}/docs/{doc_id}/memory", status_code=202, response_model=LongMemoryDocumentReceipt)
+@router.post("/{collection_id}/docs/{doc_id}/memory/legacy-extract", status_code=202, response_model=LongMemoryDocumentReceipt, deprecated=True)
+async def add_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID,
+    session: AsyncSession = Depends(db_session), user: UserCtx = Depends(get_current_user)) -> dict[str, Any]:
+    return await _queue_document_memory(collection_id, doc_id, "add", session, user)
+
+
+@router.delete("/{collection_id}/docs/{doc_id}/memory", status_code=202, response_model=LongMemoryDocumentReceipt)
+async def remove_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID,
+    session: AsyncSession = Depends(db_session), user: UserCtx = Depends(get_current_user)) -> dict[str, Any]:
+    return await _queue_document_memory(collection_id, doc_id, "delete", session, user)
 
 
 async def _cleanup_document_vectors(collection, session: AsyncSession, doc_id: uuid.UUID) -> None:
@@ -130,7 +158,10 @@ async def upload_collection_document(
         except json.JSONDecodeError:
             doc_memory_scope_keys = [value.strip().lower() for value in memory_scope_keys.split(",") if value.strip()]
     try:
-        await resolve_memory_scopes(session, [*doc_memory_scope_keys, *(f"project.{key}" for key in doc_project_keys)])
+        selected_scopes = list(dict.fromkeys([*doc_memory_scope_keys, *doc_project_keys]))
+        if len(selected_scopes) > 1:
+            raise ValueError("Choose exactly one memory scope for the document")
+        await resolve_memory_scopes(session, selected_scopes or ["company"])
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -247,7 +278,6 @@ async def list_collection_documents(
         rows = (await session.execute(base_q.offset(offset).limit(size))).all()
 
         items = []
-        from app.models.document_memory_staging import DocumentMemorySnapshot
         for doc, source_meta in rows:
             meta = normalize_document_source_meta(source_meta)
             document_meta = meta.get("document", {})
@@ -260,15 +290,7 @@ async def list_collection_documents(
                 if memory_policy == "explicit" or "enabled" in memory_meta
                 else bool(collection.memory_enabled)
             )
-            memory_status = (await session.execute(select(RAGStatus).where(
-                RAGStatus.doc_id == doc.id,
-                RAGStatus.node_type == "memory",
-                RAGStatus.node_key == "extract",
-            ))).scalar_one_or_none()
-            memory_snapshot = await session.scalar(select(DocumentMemorySnapshot).where(
-                DocumentMemorySnapshot.document_id == doc.id,
-                DocumentMemorySnapshot.status != "superseded",
-            ).order_by(DocumentMemorySnapshot.updated_at.desc()).limit(1))
+            memory_inspection = await LongMemoryDocumentService(session).inspection(doc.id)
 
             agg_status = doc.agg_status
             if not agg_status:
@@ -315,8 +337,8 @@ async def list_collection_documents(
                     "effective_enabled": effective_memory_enabled,
                     "project_keys": list(memory_meta.get("project_keys") or []),
                     "scope_keys": list(memory_meta.get("scope_keys") or []),
-                    "extraction_status": memory_snapshot.status if memory_snapshot else memory_status.status if memory_status is not None else "not_queued",
-                    "extraction_metrics": dict(memory_snapshot.metrics or {}) if memory_snapshot else dict(memory_status.metrics_json or {}) if memory_status is not None else {},
+                    "extraction_status": "deleted" if memory_inspection["action"] == "delete" and memory_inspection["status"] == "completed" else memory_inspection["status"],
+                    "extraction_metrics": memory_inspection["progress"],
                 },
                 "artifacts": {
                     kind: artifact for kind, artifact in artifacts.items() if artifact.get("key")
@@ -456,6 +478,9 @@ async def delete_collection_documents(
                     except Exception as exc:
                         logger.warning(f"Row delete failed for {row_id}: {exc}")
 
+                existing_document = await session.get(RAGDocument, did)
+                if existing_document is not None:
+                    await LongMemoryDocumentService(session).enqueue(did, "delete")
                 await session.execute(sa_delete(RAGStatus).where(RAGStatus.doc_id == did))
                 await session.execute(
                     sa_delete(DocumentCollectionMembership).where(

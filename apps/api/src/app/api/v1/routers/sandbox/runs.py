@@ -420,6 +420,7 @@ async def run_sandbox(
         try:
             attachment_contexts = await attachment_service.build_runtime_artifact_contexts(
                 artifact_ids=[str(item) for item in data.artifact_ids],
+                current_artifact_ids=[str(item) for item in data.artifact_ids],
                 chat_id=str(sandbox_chat_id),
                 owner_id=str(u_uuid),
             )
@@ -612,16 +613,23 @@ async def resume_sandbox_run(
     if not run or run.session_id != session_id:
         raise HTTPException(status_code=404, detail="Run not found")
     try:
-        user_input = RuntimeResumeCheckpointService.validate_action(
-            pause_status=run.status,
-            action=data.action,
-            user_input=data.input,
-        )
+        from app.runtime.interaction import interaction_from_context
+        interaction = interaction_from_context(run.paused_context)
+        resolved_action, resolved_input, interaction_response = RuntimeResumeCheckpointService.resolve_request(data, run.paused_context)
+        if interaction is not None:
+            if run.status not in {"waiting_input", "waiting_confirmation"}:
+                raise RuntimeResumeValidationError("Run is not waiting for resume")
+            user_input = resolved_input
+            data = data.model_copy(update={"action": resolved_action})
+        else:
+            user_input = RuntimeResumeCheckpointService.validate_action(
+                pause_status=run.status, action=data.action, user_input=data.input,
+            )
     except RuntimeResumeValidationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     action = data.action.value
 
-    if data.action is RuntimeResumeAction.CANCEL and str(run.status or "") != "waiting_confirmation":
+    if data.action is RuntimeResumeAction.CANCEL and (interaction is not None or str(run.status or "") != "waiting_confirmation"):
         await svc.finish_run(run_id, "cancelled", "Cancelled by user")
         turn = await ChatTurnService(db).get_by_runtime_run_id(run_id)
         if turn is not None:
@@ -630,6 +638,9 @@ async def resume_sandbox_run(
                 await ChatContextService(db, None, None).cancel_turn_context(
                     chat_id=str(turn.chat_id), chat_turn_id=str(turn.id), branch_id=str(run.branch_id),
                 )
+        if interaction is not None and interaction.requester.plan_id:
+            from app.runtime.plan_store import SqlPlanStore
+            await SqlPlanStore(db).cancel_plan(uuid.UUID(interaction.requester.plan_id), reason="user_cancelled")
         await db.commit()
 
         async def _cancel_gen() -> AsyncGenerator[str, None]:
@@ -656,6 +667,7 @@ async def resume_sandbox_run(
     attachment_service = ChatAttachmentService(db)
     attachment_contexts = await attachment_service.build_runtime_artifact_contexts(
         artifact_ids=list(run.input_artifact_ids or []),
+        current_artifact_ids=list(run.input_artifact_ids or []),
         chat_id=str(sandbox_chat_id),
         owner_id=str(u_uuid),
     )
@@ -674,11 +686,8 @@ async def resume_sandbox_run(
             goal=str(run.request_text or ""),
         ),
     )
-
-    # The resume checkpoint is now copied in memory; clear the persisted pause
-    # state and make the same sandbox run active again.
-    await svc.resume_run(run_id)
-    await db.commit()
+    if interaction is not None:
+        checkpoint["interaction_response"] = interaction_response
 
     # Get branch info
     branch = await svc.get_branch(run.branch_id) if run.branch_id else None
@@ -704,7 +713,13 @@ async def resume_sandbox_run(
                     )
                     confirmation_tokens = [token]
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("Failed to issue sandbox confirmation token on resume: %s", exc)
+                    raise HTTPException(status_code=503, detail="Не удалось подтвердить действие; повторите ответ.") from exc
+
+    # The resume checkpoint is now copied in memory; clear the persisted pause
+    # state and make the same sandbox run active again.
+    await svc.resume_run(run_id)
+    await db.commit()
+
 
     async def event_stream() -> AsyncGenerator[str, None]:
         session_factory = get_session_factory()

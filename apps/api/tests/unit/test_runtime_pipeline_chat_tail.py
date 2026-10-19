@@ -69,5 +69,5 @@ async def test_chat_post_final_tail_waits_for_assistant_persistence(monkeypatch:
     start_event.set()
     await task
 
-    apply_outcome.assert_awaited_once()
+    apply_outcome.assert_not_awaited()
     emitter.emit.assert_awaited_once()

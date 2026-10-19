@@ -53,6 +53,7 @@ _OUTPUT_SCHEMA_V1 = {
                     "template_version": {"type": "string"},
                     "description": {"type": "string"},
                     "artifact_id": {"type": "string"},
+                    "artifact": {"type": "object", "description": "Normalized, content-free artifact passport"},
                 },
             },
         },
@@ -148,7 +149,9 @@ class TemplateListTool(VersionedTool):
                             display_name=str(file_meta.get("filename") or row.get("title") or "template"),
                             content_type=str(file_meta.get("content_type") or "application/octet-stream"),
                             size_bytes=file_meta.get("size"),
-                            metadata={"status": "ready"},
+                            metadata={"status": "ready", "description": str(row.get("description") or row.get("title") or "")},
+                            source_id=file_target_id,
+                            source_type="template_file",
                         ),
                     )
                     templates.append({
@@ -158,6 +161,7 @@ class TemplateListTool(VersionedTool):
                         "template_version": row.get("template_version") or "",
                         "description": row.get("description") or "",
                         "artifact_id": str(reference.id),
+                        "artifact": ChatArtifactReferenceService.manifest(reference),
                     })
 
                 return ToolResult.ok(

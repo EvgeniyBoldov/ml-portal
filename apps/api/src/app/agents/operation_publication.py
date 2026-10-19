@@ -262,6 +262,7 @@ _OPERATION_SPECS: Dict[str, OperationSpec] = {
 # Planner/LLM-facing retrieval operations.
 # Raw builtin tool slugs are adapter-level implementation details and must not leak into prompts.
 PUBLIC_RETRIEVAL_OPERATIONS: tuple[str, ...] = (
+    "file.read",
     "collection.document.search",
     "collection.table.search",
     "collection.template.search",

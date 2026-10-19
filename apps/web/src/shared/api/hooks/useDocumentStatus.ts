@@ -9,7 +9,7 @@ import { adaptStatusGraphToDocStatus } from '@shared/lib/documentStatusAdapter';
 
 export function useDocumentStatus(
   docId: string | undefined,
-  statusGraphUrl?: string,
+  statusGraphUrl?: string
 ) {
   return useQuery<StatusGraph, Error, DocStatus>({
     queryKey: statusGraphUrl
@@ -27,5 +27,17 @@ export function useDocumentStatus(
     select: (data: StatusGraph) => adaptStatusGraphToDocStatus(data),
     enabled: !!docId,
     staleTime: 0,
+    refetchInterval: query => {
+      const graph = query.state.data;
+      const nodes = [
+        ...(graph?.memory ?? []),
+        ...(graph?.pipeline ?? []),
+        ...(graph?.embeddings ?? []),
+        ...(graph?.index ?? []),
+      ];
+      return nodes.some(node => ['queued', 'processing'].includes(node.status))
+        ? 2000
+        : false;
+    },
   });
 }

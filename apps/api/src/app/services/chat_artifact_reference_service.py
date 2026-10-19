@@ -18,6 +18,11 @@ from app.models.rag_ingest import DocumentCollectionMembership, Source
 from app.services.file_delivery_service import FileDeliveryNotFoundError, FileDeliveryService, ResolvedDownload
 from app.services.permission_service import PermissionService
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
+from app.schemas.chat_artifacts import (
+    ArtifactDescription,
+    ArtifactOrigin,
+    ChatArtifactManifest,
+)
 
 
 class ChatArtifactReferenceError(ValueError):
@@ -41,6 +46,8 @@ class ArtifactTarget:
     content_type: Optional[str] = None
     size_bytes: Optional[int] = None
     metadata: Optional[dict[str, Any]] = None
+    source_id: Optional[str] = None
+    source_type: Optional[str] = None
 
 
 class ChatArtifactReferenceService:
@@ -66,10 +73,23 @@ class ChatArtifactReferenceService:
             )
         )
         if existing:
+            existing.display_name = target.display_name or existing.display_name
+            existing.content_type = target.content_type or existing.content_type
+            existing.size_bytes = target.size_bytes if target.size_bytes is not None else existing.size_bytes
+            existing.metadata_snapshot = self._normalized_metadata(
+                artifact_id=str(existing.id), target_kind=target.kind,
+                target_id=str(target.target_id), collection_id=target.collection_id,
+                display_name=existing.display_name, content_type=existing.content_type,
+                size_bytes=existing.size_bytes,
+                metadata={**(existing.metadata_snapshot or {}), **(target.metadata or {})},
+                source_id=target.source_id, source_type=target.source_type,
+            )
+            await self.session.flush()
             return existing
 
+        reference_id = uuid.uuid4()
         reference = ChatArtifactReference(
-            id=uuid.uuid4(),
+            id=reference_id,
             chat_id=chat_uuid,
             owner_id=owner_uuid,
             target_kind=target.kind,
@@ -78,11 +98,123 @@ class ChatArtifactReferenceService:
             display_name=target.display_name,
             content_type=target.content_type,
             size_bytes=target.size_bytes,
-            metadata_snapshot=target.metadata or {},
+            metadata_snapshot=self._normalized_metadata(
+                artifact_id=str(reference_id), target_kind=target.kind,
+                target_id=str(target.target_id), collection_id=target.collection_id,
+                display_name=target.display_name, content_type=target.content_type,
+                size_bytes=target.size_bytes, metadata=target.metadata or {},
+                source_id=target.source_id, source_type=target.source_type,
+            ),
         )
         self.session.add(reference)
         await self.session.flush()
         return reference
+
+    def _normalize_reference(self, reference: ChatArtifactReference) -> bool:
+        previous = dict(reference.metadata_snapshot or {})
+        origin = previous.get("origin") if isinstance(previous.get("origin"), dict) else {}
+        normalized = self._normalized_metadata(
+            artifact_id=str(reference.id), target_kind=reference.target_kind,
+            target_id=reference.target_id, collection_id=reference.collection_id,
+            display_name=reference.display_name, content_type=reference.content_type,
+            size_bytes=reference.size_bytes, metadata=previous,
+            source_id=origin.get("source_id"), source_type=origin.get("source_type"),
+        )
+        if normalized == previous:
+            return False
+        reference.metadata_snapshot = normalized
+        return True
+
+    @staticmethod
+    def _normalized_metadata(*, artifact_id: str, target_kind: str, target_id: str,
+                             collection_id: uuid.UUID | None, display_name: str | None,
+                             content_type: str | None, size_bytes: int | None,
+                             metadata: dict[str, Any], source_id: str | None,
+                             source_type: str | None) -> dict[str, Any]:
+        previous = ChatArtifactReferenceService._without_file_content(dict(metadata or {}))
+        previous_origin = previous.get("origin") if isinstance(previous.get("origin"), dict) else {}
+        generated = target_kind == "chat_attachment" and previous.get("status") == "generated"
+        if target_kind == "collection_document":
+            origin_kind = "rag_document"
+        elif target_kind == "chat_attachment":
+            origin_kind = "agent_generated" if generated else "user_upload"
+        else:
+            origin_kind = "external_file"
+        origin = ArtifactOrigin(
+            kind=origin_kind,
+            source_id=str(source_id or previous_origin.get("source_id") or target_id),
+            source_type=source_type or previous_origin.get("source_type") or target_kind,
+            collection_id=str(collection_id) if collection_id else previous_origin.get("collection_id"),
+            created_by_run_id=str(previous.get("root_run_id") or previous_origin.get("created_by_run_id") or "") or None,
+        )
+        file_metadata = {
+            "name": display_name or previous.get("file_name") or "artifact",
+            "media_type": content_type or previous.get("content_type"),
+            "size_bytes": size_bytes if size_bytes is not None else previous.get("size_bytes"),
+        }
+        description = previous.get("description")
+        if isinstance(description, str):
+            description = {"text": description[:600], "source": "source_metadata"}
+        elif isinstance(description, dict) and isinstance(description.get("text"), str):
+            description = {**description, "text": description["text"][:600]}
+        representation = previous.get("representation")
+        result = {
+            **previous,
+            "schema_version": 1,
+            "artifact_id": artifact_id,
+            "origin": origin.model_dump(mode="json"),
+            "file": file_metadata,
+            "description": ArtifactDescription.model_validate(description).model_dump(mode="json") if description else None,
+            "representation": representation,
+            "status": str(previous.get("status") or "ready"),
+        }
+        return result
+
+    @staticmethod
+    def _without_file_content(value: Any, *, preserve_description_text: bool = False) -> Any:
+        content_keys = {"content", "snippet", "preview", "body", "extracted_text", "file_content"}
+        if isinstance(value, dict):
+            return {key: ChatArtifactReferenceService._without_file_content(
+                        item, preserve_description_text=preserve_description_text or key == "description")
+                    for key, item in value.items()
+                    if str(key).lower() not in content_keys
+                    and (preserve_description_text or str(key).lower() != "text")}
+        if isinstance(value, list):
+            return [ChatArtifactReferenceService._without_file_content(
+                item, preserve_description_text=preserve_description_text) for item in value]
+        return value
+
+    @staticmethod
+    def manifest(reference: ChatArtifactReference) -> dict[str, Any]:
+        """Return the normalized passport, upgrading legacy JSON metadata in memory."""
+        metadata = ChatArtifactReferenceService._normalized_metadata(
+            artifact_id=str(reference.id), target_kind=reference.target_kind,
+            target_id=reference.target_id, collection_id=reference.collection_id,
+            display_name=reference.display_name, content_type=reference.content_type,
+            size_bytes=reference.size_bytes, metadata=reference.metadata_snapshot or {},
+            source_id=None, source_type=None,
+        )
+        return ChatArtifactManifest.model_validate({
+            "schema_version": metadata["schema_version"],
+            "artifact_id": str(reference.id), "origin": metadata["origin"],
+            "file": metadata["file"], "description": metadata.get("description"),
+            "representation": metadata.get("representation"), "status": metadata["status"],
+            "attributes": {key: value for key, value in metadata.items()
+                           if key not in {"schema_version", "artifact_id", "origin", "file", "description", "representation", "status"}},
+        }).model_dump(mode="json")
+
+    async def set_description(self, *, artifact_id: str, chat_id: str, owner_id: str,
+                              description: str, representation_id: str | None) -> None:
+        text = description.strip()[:600]
+        if not text:
+            return
+        reference = await self.get_reference(artifact_id=artifact_id, chat_id=chat_id, owner_id=owner_id)
+        metadata = dict(reference.metadata_snapshot or {})
+        metadata["description"] = ArtifactDescription(
+            text=text, source="model_inferred", representation_id=representation_id,
+        ).model_dump(mode="json")
+        reference.metadata_snapshot = metadata
+        await self.session.flush()
 
     async def list_for_chat(
         self,
@@ -98,7 +230,13 @@ class ChatArtifactReferenceService:
             )
             .order_by(ChatArtifactReference.created_at.desc())
         )
-        return list(result.scalars().all())
+        references = list(result.scalars().all())
+        changed = False
+        for reference in references:
+            changed = self._normalize_reference(reference) or changed
+        if changed:
+            await self.session.flush()
+        return references
 
     async def get_reference(
         self,
@@ -120,6 +258,8 @@ class ChatArtifactReferenceService:
         )
         if not reference:
             raise ChatArtifactReferenceNotFound("Artifact reference not found or access denied")
+        if self._normalize_reference(reference):
+            await self.session.flush()
         return reference
 
     async def get_reference_for_target(
@@ -140,6 +280,8 @@ class ChatArtifactReferenceService:
         )
         if not reference:
             raise ChatArtifactReferenceNotFound("Artifact reference not found or access denied")
+        if self._normalize_reference(reference):
+            await self.session.flush()
         return reference
 
     async def resolve(
@@ -178,6 +320,11 @@ class ChatArtifactReferenceService:
                 ChatArtifactReference.owner_id == uuid.UUID(str(owner_id)),
             )
         )).scalars().all())
+        changed = False
+        for reference in rows:
+            changed = self._normalize_reference(reference) or changed
+        if changed:
+            await self.session.flush()
         resolved: dict[str, ResolvedDownload] = {}
         for reference in rows:
             try:
@@ -277,6 +424,8 @@ class ChatArtifactReferenceService:
         reference = await self.get_reference(
             artifact_id=artifact_id, chat_id=chat_id, owner_id=owner_id
         )
+        from app.services.artifact_representation_service import ArtifactRepresentationService
+        await ArtifactRepresentationService(self.session).delete_for_artifact(str(reference.id))
         file_name = reference.display_name or "artifact"
         if reference.target_kind == "chat_attachment":
             resolved = await self.resolve(

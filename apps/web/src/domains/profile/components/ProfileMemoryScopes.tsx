@@ -41,7 +41,7 @@ export function ProfileMemoryScopes({
         onChange={setSelected}
         disabled={save.isPending}
         inheritedKeys={tenantScopeKeys}
-        description="Выберите команды и проекты для контекста чатов. Если ветка не выбрана, она наследуется из tenant-а. Явный выбор в чате имеет приоритет."
+        description="Выбранные проекты добавляются к проектам тенанта. В чате можно заменить весь набор своим выбором."
       />
       <Button
         onClick={() => save.mutate()}

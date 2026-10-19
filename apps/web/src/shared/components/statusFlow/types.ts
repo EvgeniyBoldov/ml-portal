@@ -1,4 +1,9 @@
-export type FlowStatus = 'pending' | 'queued' | 'processing' | 'completed' | 'failed';
+export type FlowStatus =
+  | 'pending'
+  | 'queued'
+  | 'processing'
+  | 'completed'
+  | 'failed';
 
 export interface FlowNode {
   key: string;
@@ -21,6 +26,7 @@ export interface FlowLane {
 export interface FlowGraphModel {
   pipeline: FlowNode[];
   lanes?: FlowLane[];
+  parallel?: { after: string; laneKeys: string[] };
 }
 
 export interface FlowSelection {

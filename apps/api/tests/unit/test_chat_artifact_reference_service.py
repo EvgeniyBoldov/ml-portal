@@ -58,3 +58,36 @@ async def test_register_creates_reference_for_new_target() -> None:
     assert result.target_kind == "collection_document"
     session.add.assert_called_once_with(result)
     session.flush.assert_awaited_once()
+    manifest = service.manifest(result)
+    assert manifest["origin"]["kind"] == "rag_document"
+    assert manifest["file"]["name"] == "report.txt"
+
+
+@pytest.mark.asyncio
+async def test_artifact_passport_is_normalized_and_never_contains_file_body() -> None:
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.scalar = AsyncMock(return_value=None)
+    service = ChatArtifactReferenceService(session)
+    result = await service.register(
+        chat_id=uuid4(), owner_id=uuid4(),
+        target=ArtifactTarget(
+            kind="chat_attachment", target_id=str(uuid4()), source_id="source-1",
+            source_type="generated_attachment", display_name="answer.md",
+            content_type="text/markdown", size_bytes=42,
+            metadata={"status": "generated", "root_run_id": "run-1",
+                      "format": "md", "description": "Short summary",
+                      "content": "must never be persisted"},
+        ),
+    )
+
+    metadata = result.metadata_snapshot
+    assert metadata["origin"] == {
+        "kind": "agent_generated", "source_id": "source-1",
+        "source_type": "generated_attachment", "collection_id": None,
+        "created_by_run_id": "run-1",
+    }
+    assert metadata["file"] == {"name": "answer.md", "media_type": "text/markdown", "size_bytes": 42}
+    assert metadata["description"] == {"text": "Short summary", "source": "source_metadata", "representation_id": None}
+    assert "content" not in metadata
+    assert "text" not in metadata

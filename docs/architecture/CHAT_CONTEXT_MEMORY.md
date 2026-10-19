@@ -3,8 +3,19 @@
 ## Status
 
 Implemented architecture contract. `chat_memory_items` is the typed,
-revisioned persistence surface defined here; future changes must preserve the
-boundaries and invariants in this document.
+revisioned persistence surface for chat-local working context.
+
+## Scope contract since migration 0191
+
+The active focus uses flat `scope_keys` and `scope_mode=inherit|replace`.
+Inheritance unions tenant and user preferences; empty profiles select `company`.
+An explicit empty chat override searches no documents, while `scope_keys=null` on
+`PUT /chats/{id}/memory-scopes` restores inheritance. UI updates use a revision
+fence and survive delayed runtime writeback. `memory.search` returns one independent
+result group per selected scope. The request and persistence contract uses
+`scope_keys`; legacy `team_keys` and `project_keys` are accepted only in the
+chat-context reducer as compatibility input. The current memory search contract
+is described in [Memory](MEMORY.md#scope-чата).
 
 ## 1. Purpose
 
@@ -20,10 +31,10 @@ the runtime can understand follow-up requests such as:
 It is deliberately narrower than complete message history, durable user
 memory, project knowledge, runtime control state, and observability.
 
-The first delivery must make conversational references deterministic without
-attempting to remember everything said or done in a chat.
+The runtime preserves bounded conversational references without copying the full
+transcript or execution journal into chat memory.
 
-The target flow is:
+The current flow is:
 
 ```text
 persisted chat messages + current ChatContextSnapshot
@@ -39,33 +50,10 @@ persisted chat messages + current ChatContextSnapshot
 
 The runtime journal is not part of this flow.
 
-### Two-branch execution focus
-
-The chat focus contains independent `team_keys` (recipients) and `project_keys`
-(execution location). Initial defaults resolve per branch as chat > user > tenant.
-User and tenant defaults come exclusively from their explicit `memory_scope_keys`
-profile fields, empty by default (migration `0182`). An empty user branch inherits
-the tenant branch. Defaults are reread each turn and retain their origin; they do
-not freeze as explicit chat selections. Dialogue scope facts no longer set these
-defaults. The inspection panel resolves the same inheritance and displays team
-and project names even before the first completed turn.
-The application exposes the current focus as an `execution_context` fact to the
-planner, agent and synthesizer in both direct and planned answer paths.
-Search always retains all context teams and permits only known
-projects. Clarified choices update the current turn context before searching. After the turn, the compactor
-updates focus from user choices and confirmed answers, including replies to the
-agent's questions. A mere mention or an unconfirmed question is not a selection.
-
-Compactor `null`/omitted branches preserve the previous selection; `[]` explicitly
-clears a branch and suppresses its defaults. Only active catalog identities are
-accepted. `project.all` is always available as a search selector for common project
-rules only; it never enumerates concrete projects. Omitted projects inherit focus,
-`[]` searches outside projects, and concrete project searches include common rules.
-`team.all` is an atom binding and cannot replace context teams in a query.
-Changes retain source references and use the existing revision/CAS guard.
-The chat context panel displays the team and project branches separately.
-See [Memory](MEMORY.md#две-ветки-применимости-команды-и-проекты) for matching
-semantics, independent project groups, and evidence-backed project precedence.
+> **Текущий контракт LongMemory:** документная память является единым общим корпусом
+> для пользователей портала. Scope из настроек пользователя/tenant и чата выбирают
+> тематические индексы общего корпуса; они не задают ACL и не создают изолированные
+> копии памяти. Обычные RAG-коллекции используют собственные проверки доступа.
 
 ## 2. Related contracts
 
@@ -121,9 +109,9 @@ Chat context memory is not:
 - a place for credentials, prompts, hidden reasoning, stack traces, provider
   responses, or raw exceptions.
 
-The first implementation does not need parallel goal trees, semantic search
-over the whole conversation, arbitrary historical task replay, or a general
-knowledge graph.
+The current implementation does not provide parallel goal trees, semantic
+search over the whole conversation, arbitrary historical task replay, or a
+general knowledge graph.
 
 ## 5. Canonical state surfaces
 
@@ -134,11 +122,13 @@ The system has several related but non-interchangeable surfaces.
 | `chatmessages` | User-visible transcript and message metadata | Bounded recent tail and message references |
 | `chat_turns` | Chat turn lifecycle, idempotency, pause/resume binding | Turn identity, terminal state, safe pause context |
 | `chat_memory_items` | Materialized chat-local working context | Yes; it is the persistence surface defined here |
-| `chat_artifact_references` | Chat-scoped artifact registry and resolvable target identity | Only opaque `artifact_id` plus an authorized metadata projection |
+| `chat_artifact_references` | Chat-scoped artifact registry, resolvable target identity, and content-free normalized passport | `artifact_id` plus an authorized passport projection; file text only after explicit `file.read` |
 | `runtime_plans`, tasks, attempts | Execution control plane | Only typed outcome references and bounded user-relevant status |
 | `RuntimeTurnState` | In-memory state of the current run | Source for terminal outcome projection |
+| `runtime_run_contexts` | Plan-independent run manifest and stored working-context snapshot | Only typed outcome references |
+| `chat_artifact_representations` | Versioned extracted file content | Representation ID, completeness and bounded description |
 | `facts` | Confirmed durable user/tenant facts | Read separately through `MemoryService`; never copied into chat memory |
-| project `MemoryItem` records | Source-backed project/company knowledge | Retrieved separately; never copied into chat memory |
+| Document LongMemory | Shared source-derived knowledge searched by scope | Retrieved separately; never copied into chat memory |
 | `runtime_execution_events` | Operator observability journal | Never read, copied, replayed, or summarized into chat memory |
 
 The same fact may be referenced by more than one surface, but it has one
@@ -202,9 +192,8 @@ Application service responsible for:
 It does not resolve artifact bytes, query the runtime journal, or call external
 systems.
 
-The existing `ChatMemoryService` is the natural migration point. It should
-either evolve into this service or become its repository-facing collaborator;
-there must not be two active chat-context services.
+`ChatContextService` owns chat-context reads and writes. The separate
+`MemoryService` handles durable user and tenant facts.
 
 ### 7.2 `RuntimeOutcomeProjector`
 
@@ -335,13 +324,11 @@ codes. It contains no memory payload and is not exposed as chat transport.
 
 ## 8. Core contracts
 
-The following shapes are conceptual target contracts. Public and persistence
-schemas may use Pydantic/ORM representations, but their semantics must remain
-stable.
+The following are the current bounded runtime and persistence contracts.
 
 ### 8.0 Persistence layout
 
-The target persistence has a small revision head plus typed item rows:
+Persistence uses a small revision head plus typed item rows:
 
 ```text
 chat_context_heads
@@ -381,7 +368,8 @@ indexes as well as service validation.
   "revision": 17,
   "updated_through_turn_id": "uuid",
   "focus": {
-    "project_keys": ["ml-portal"],
+    "scope_keys": ["ml-portal"],
+    "scope_mode": "inherit",
     "topic": "chat context memory",
     "entity_refs": [],
     "source": "explicit"
@@ -408,11 +396,11 @@ immutable for the duration of a run.
 
 ### 8.2 Context item kinds
 
-The initial target set is:
+The current context item kinds are:
 
 | Kind | Cardinality | Purpose |
 | --- | --- | --- |
-| `scope` | one active item | Current team/project focus and conversational topic |
+| `scope` | one active item | Current document-memory scope focus and conversational topic |
 | `goal` | one active item initially | Current user objective |
 | `term_binding` | bounded set | Terms and abbreviations actually used in this chat |
 | `artifact_ref` | bounded set | Conversational meaning around a registry artifact |
@@ -421,9 +409,9 @@ The initial target set is:
 | `recent_anchor` | one active item | Compact bridge beyond the raw dialogue tail |
 | `task_result_ref` | bounded set | Reference to a user-relevant runtime outcome, not its raw payload |
 
-The existing names `open_question`, `chat_fact`, and `summary` require a
-migration decision before implementation. The target contract should use one
-canonical vocabulary; compatibility aliases must not survive indefinitely.
+The canonical names are `open_loop`, `decision`, and `recent_anchor`; the
+runtime contract does not use `open_question`, `chat_fact`, or `summary` item
+kinds.
 
 ### 8.3 Common item envelope
 
@@ -466,9 +454,8 @@ artifact ID, plan task entity ID, or a deterministic content fingerprint.
   "terminal_state": "completed|waiting_input|waiting_confirmation|failed",
   "effective_goal": "...",
   "project_context": {
-    "explicit_project_keys": [],
-    "effective_project_keys": [],
-    "ambiguous": false
+    "scope_keys": [],
+    "scope_mode": "inherit"
   },
   "clarification": null,
   "plan": {
@@ -762,8 +749,8 @@ source_run_id
 The safe summary comes from a runtime-owned bounded result or final synthesis
 receipt. It is not copied from raw journal data.
 
-For the first phase, task-result references may be omitted entirely. Active
-goal, open loop, and artifacts cover the primary continuity use cases.
+Task-result references are persisted as bounded, provenance-backed context
+items. Their configured default limit is 20 and their default TTL is 30 days.
 
 ## 13. Error and limitation projection
 
@@ -803,13 +790,12 @@ At turn start, runtime receives:
 1. the current user message;
 2. a bounded recent dialogue tail;
 3. the typed chat context snapshot;
-4. independently resolved durable and project memory as needed.
+4. independently resolved durable facts and document LongMemory as needed.
 
 The recent tail preserves exact wording. The snapshot preserves the stable
 working state after older messages leave the tail.
 
-`recent_anchor` is not a prose transcript summary. Its first version should be
-small and explicit:
+`recent_anchor` is a bounded structured bridge beyond the recent dialogue tail:
 
 ```text
 last_user_intent
@@ -818,9 +804,7 @@ current_referents[]
 source user/assistant message ids
 ```
 
-A broader conversation summary may be added later, but it must replace—not
-coexist with—the legacy competing summary surfaces as an active source of
-truth.
+No broader conversation summary is part of the active chat-context contract.
 
 ## 15. Consumer-specific projections
 
@@ -865,8 +849,8 @@ Receives only task-relevant context selected mechanically from the snapshot:
 - applicable term bindings and explicit constraints;
 - dependency outputs owned by the current plan.
 
-Passing the same full chat tail to every agent is a compatibility fallback,
-not the target contract.
+Agents receive task-relevant context selected mechanically from the snapshot;
+they do not receive the full chat transcript as chat memory.
 
 ### 15.4 Synthesizer
 
@@ -881,18 +865,18 @@ does not independently reinterpret historical context.
 
 All limits come from configuration, not embedded prompt assumptions.
 
-Recommended initial policy:
+Configured default bounds and lifecycle:
 
 | Kind | Active limit | Default lifecycle |
 | --- | ---: | --- |
 | `scope` | 1 | Until explicit switch or chat deletion |
 | `goal` | 1 | Until completed, cancelled, or superseded |
-| `term_binding` | 20 | LRU/TTL with touch on reuse |
-| `artifact_ref` | 50 | Until deletion/unavailability; LRU prompt selection |
-| `open_loop` | 5 | Until resolved/cancelled; TTL for stale blocked items |
+| `term_binding` | 20 | TTL 90 days; touch on reuse |
+| `artifact_ref` | 50 | Until deletion/unavailability; bounded prompt selection |
+| `open_loop` | 5 | Blocked items expire after 30 days |
 | `decision` | 10 | Until superseded or chat retention cleanup |
 | `recent_anchor` | 1 | Replaced each completed/paused turn |
-| `task_result_ref` | 20 | TTL/LRU; not enabled in phase one |
+| `task_result_ref` | 20 | TTL/LRU; default TTL 30 days |
 
 Database reads must apply per-kind limits. A single global `ORDER BY updated_at
 LIMIT N` is invalid because many recent artifacts could evict the current
@@ -1015,125 +999,19 @@ the operation.
 Context quality degradation is preferable to invented context. Empty context is
 safer than a guessed project, file, or completed action.
 
-## 22. Target module boundaries
+## 22. Current implementation modules
 
-The exact filenames may change during implementation, but responsibilities
-should map as follows:
+- `app/runtime/context_outcome.py` projects safe outcomes from runtime state.
+- `app/services/chat_context_contracts.py` defines typed context contracts.
+- `app/services/chat_context_service.py` reads and writes chat context.
+- `app/services/chat_context_reducer.py` creates deterministic context changes.
+- `app/services/chat_context_compactor.py` proposes bounded topic updates.
+- `app/services/chat_context_reconciler.py` validates and persists updates.
+- `app/repositories/chat_context_repository.py` owns typed database access.
+- `app/services/chat_artifact_reference_service.py` registers and authorizes
+  chat artifact references.
 
-```text
-app/runtime/context_outcome.py
-  RuntimeOutcomeProjection contracts and pure projector
-
-app/runtime/ports.py
-  ChatContextOutcomePort protocol and no-op contract
-
-app/services/chat_context_service.py
-  read orchestration and snapshot projection
-
-app/services/chat_context_reducer.py
-  deterministic outcome -> operations
-
-app/services/chat_context_compactor.py
-  optional bounded LLM proposal
-
-app/services/chat_context_reconciler.py
-  validation and persistence orchestration
-
-app/repositories/chat_context_repository.py
-  typed queries and mutations only
-
-app/services/chat_artifact_reference_service.py
-  canonical artifact registration and authorization
-```
-
-`RuntimePipeline` should depend on a typed projection/sink boundary rather than
-constructing ORM `ChatMemoryItem` rows. Routers remain HTTP/SSE boundaries and
-contain no context business logic.
-
-## 23. Phased implementation
-
-### Phase 0 — contract and wiring corrections
-
-- Establish canonical item vocabulary and Pydantic contracts.
-- Add `chat_context_heads` revision/CAS contract and active-item uniqueness.
-- Add `chat_turn_id` plus expected context revision to the serializable runtime
-  request and wire `ChatContextOutcomePort` through `PipelineAssembler`.
-- Update TurnPreflight prompt/default/DB rollout to consume chat context and
-  recent dialogue explicitly.
-- Pass selected chat context into direct synthesis.
-- Render selected chat context for agent tasks.
-- Normalize nested/flat artifact DTOs.
-- Replace global projection limit with per-kind bounds and expiry checks.
-- Add service-level tests before introducing inference.
-
-### Phase 1 — deterministic continuity
-
-- Implement `RuntimeOutcomeProjection` without journal reads.
-- Register verified run artifacts in `chat_artifact_references`.
-- Persist conversational artifact roles in chat context.
-- Reconcile explicit project scope and glossary bindings.
-- Add one active goal from explicit deterministic inputs where possible.
-- Persist and close clarification/confirmation open loops.
-- Add revision, ordering, idempotency, and provenance.
-
-This phase should support «там», «тот файл», «продолжай» after a recent
-explicit goal, and project switching.
-
-### Phase 2 — bounded semantic compaction
-
-- Add `ChatContextCompactor` for topic, implicit goal, explicit decisions, and
-  recent anchor.
-- Run asynchronously with a revision guard.
-- Add conflict/ambiguity projection and clarification behavior.
-- Add retention and stale-item cleanup.
-
-### Phase 3 — plan/outcome continuity
-
-- Add bounded `task_result_ref` where product scenarios require it.
-- Preserve user-relevant completed/remaining/blocked work without storing the
-  executable plan.
-- Support intentional continuation of prior work through a new planning
-  decision.
-
-### Phase 4 — product and operations
-
-- Add admin/user inspection and forget/reset controls if required.
-- Add quality metrics and evaluation suites.
-- Decide whether a broader conversation summary is necessary after measuring
-  snapshot and recent-tail coverage.
-
-## 24. Acceptance scenarios
-
-The architecture is complete enough for implementation when the following are
-deterministic:
-
-1. User selects project A, later says «проверь там»; project A is selected.
-2. User explicitly switches to project B; project A is superseded as current
-   focus.
-3. Two projects are equally plausible; runtime asks one clarification.
-4. User uploads a file, waits more than the raw message-tail window, then says
-   «используй тот файл»; the file is resolved through the registry and
-   re-authorized.
-5. Two files are plausible; runtime asks which one.
-6. An agent generates a verified file; it appears in the chat registry without
-   parsing agent prose or journal events.
-7. An agent mentions an invented artifact ID; it is not registered.
-8. A collection artifact later loses access; cached chat metadata does not
-   bypass RBAC.
-9. A clarification pauses a turn; the next answer resumes and closes the same
-   open loop.
-10. A technical provider error does not become conversational memory.
-11. An authorization limitation that blocks the user's goal remains as a safe
-    open loop.
-12. The next turn starts immediately after the prior response and sees the
-    deterministic context update even if LLM compaction has not run.
-13. An older delayed compactor cannot overwrite a newer project or goal.
-14. Two chats owned by the same user never share chat-local goals or artifacts.
-15. Two sandbox branches never share chat-local context.
-16. Runtime logging level `none`, `brief`, or `full` has no effect on the
-    resulting chat context.
-
-## 25. Implementation closure
+## 23. Current implementation
 
 The following contract requirements are implemented and covered by focused
 service/runtime tests:
@@ -1161,9 +1039,9 @@ service/runtime tests:
 
 The document's non-goals remain intentional exclusions, not deferred gaps.
 
-## 26. Binding decisions
+## 24. Current invariants
 
-The following decisions are fixed for implementation planning:
+The current contract preserves these invariants:
 
 1. Raw runtime journal data never enters chat memory.
 2. Chat memory is chat-local and separate from durable facts and project
@@ -1180,3 +1058,21 @@ The following decisions are fixed for implementation planning:
    guarded.
 9. Every artifact is re-authorized when used.
 10. Ambiguity produces clarification, not guessing.
+
+## Turn file/context implementation since 0195
+
+The same original request and explicit constraints reach all runtime stages. Root roles
+can explicitly page older messages through `chat.history.read` with a `before_message_id`
+cursor; this is a bounded transcript read, not journal replay or semantic search.
+Sandbox uses frozen branch history rather than reading a shared hidden-chat transcript.
+
+Run context is checkpointed independently of planning. Evidence carries a stable ID,
+owner, operation arguments and original source material; memory groups retain their scope.
+Planner chooses `evidence_refs` for final synthesis rather than implicitly forwarding its
+whole search history. File descriptions in chat context are marked `model_inferred`.
+
+Deterministic outcome reconciliation runs on the owning request session before chat
+finalization commits. It is no longer part of the detached post-final task. Only fact
+writeback and optional semantic compaction remain asynchronous. Failure of mandatory
+reconciliation prevents a successful final response; the transport rolls back pending
+writes. The next turn accepted after `final` observes the committed answer and context.

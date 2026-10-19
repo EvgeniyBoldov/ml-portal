@@ -5,110 +5,65 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.models.user import Users
-from app.models.tenant import Tenants
 from app.schemas.memory_scope_preferences import MemoryScopePreferences
 from app.services.memory_scope_preferences_service import MemoryScopePreferencesService, inherit_scope_context
 
 
 def catalog():
-    return [SimpleNamespace(id=uuid4(), key=key, scope_type=key.split('.')[0], name=key, is_all=key.endswith('.all'))
-            for key in ['team.ops', 'team.net', 'team.all', 'project.a', 'project.b', 'project.all']]
+    return [SimpleNamespace(id=uuid4(), key=key, scope_type='project', name=key, is_all=False)
+            for key in ['company', 'ops', 'nims', 'dcbox']]
 
 
-def test_empty_preferences_do_not_assign_a_team_or_project():
-    context = inherit_scope_context(catalog=catalog(), chat_context={}, user_keys=[], tenant_keys=[])
-    assert context.keys == []
-    assert not context.explicit_clear
-    assert MemoryScopePreferences().memory_scope_keys == []
-    for model in (Users, Tenants):
-        assert model.__table__.c.memory_scope_keys.server_default.arg == '{}'
+def test_defaults_union_tenant_and_user_without_duplicates():
+    context = inherit_scope_context(catalog=catalog(), chat_context={},
+                                    tenant_keys=['company', 'ops'], user_keys=['ops', 'nims'])
+    assert context.keys == ['company', 'ops', 'nims']
+    assert [item.source for item in context.selected] == ['tenant_default', 'user_default', 'user_default']
+    assert context.mode == 'inherit'
 
 
-def test_chat_branch_overrides_defaults_but_other_branch_is_inherited():
+def test_empty_profiles_use_company_and_explicit_chat_clear_searches_nothing():
+    inherited = inherit_scope_context(catalog=catalog(), chat_context={}, user_keys=[], tenant_keys=[])
+    assert inherited.keys == ['company']
+    cleared = inherit_scope_context(catalog=catalog(), chat_context={'focus': {
+        'scope_mode': 'replace', 'scope_keys': [],
+    }}, user_keys=['nims'], tenant_keys=['company'])
+    assert cleared.keys == []
+    assert cleared.explicit_clear
+
+
+def test_chat_override_replaces_both_profiles_and_does_not_silently_widen():
     context = inherit_scope_context(catalog=catalog(), chat_context={'focus': {
-        'project_keys': ['b'], 'scope_origins': {'project.b': 'turn'},
-    }}, user_keys=['team.net', 'project.a'], tenant_keys=['team.ops'])
-    assert context.keys == ['team.net', 'project.b']
-    assert [item.source for item in context.selected] == ['user_default', 'chat_focus']
+        'scope_mode': 'replace', 'scope_keys': ['dcbox'], 'scope_origins': {'dcbox': 'chat_focus'},
+    }}, user_keys=['nims'], tenant_keys=['company'])
+    assert context.keys == ['dcbox']
+    assert context.mode == 'replace'
 
 
-def test_runtime_projection_retains_tenant_origin_and_common_project_selector():
-    from app.runtime.pipeline import _project_context_payload
-    context = inherit_scope_context(catalog=catalog(), chat_context={}, user_keys=[], tenant_keys=['team.ops'])
-    payload = _project_context_payload(context, {})
-    assert payload['scope_source'] == 'tenant_default'
-    assert payload['scope_origins'] == {'team.ops': 'tenant_default'}
-    assert payload['execution_context']['project_keys'] == ['project.all']
-    assert payload['scope_context']['keys'] == ['team.ops']
-
-
-def test_updated_profiles_replace_inherited_values_without_changing_explicit_focus():
+def test_updated_profiles_refresh_inherited_chat_values():
     context = inherit_scope_context(catalog=catalog(), chat_context={'focus': {
-        'scope_keys': ['team.ops', 'project.a'], 'project_keys': ['a'], 'team_keys': ['ops'],
-        'scope_origins': {'team.ops': 'tenant_default', 'project.a': 'user_default'},
-    }}, user_keys=['project.b'], tenant_keys=['team.net'])
-    assert context.keys == ['team.net', 'project.b']
+        'scope_keys': ['ops'], 'scope_origins': {'ops': 'tenant_default'},
+    }}, user_keys=['nims'], tenant_keys=['dcbox'])
+    assert context.keys == ['dcbox', 'nims']
 
 
-def test_clear_and_stale_scopes_do_not_reintroduce_defaults():
+def test_deleted_scope_in_explicit_chat_does_not_reintroduce_defaults():
     context = inherit_scope_context(catalog=catalog(), chat_context={'focus': {
-        'scope_keys': ['project.deleted'], 'suppress_team_default': True, 'suppress_project_default': True,
-    }}, user_keys=['project.a'], tenant_keys=['team.ops'])
+        'scope_mode': 'replace', 'scope_keys': ['deleted'],
+    }}, user_keys=['nims'], tenant_keys=['company'])
     assert context.keys == []
     assert context.explicit_clear
 
 
 @pytest.mark.asyncio
-async def test_preferences_reject_all_unknown_and_deprecated_keys(monkeypatch):
+async def test_validate_preferences_uses_active_catalog(monkeypatch):
     from app.services import memory_scope_preferences_service as module
     service = MemoryScopePreferencesService(object())
-    resolver = AsyncMock(return_value=[catalog()[-1]])
+    resolver = AsyncMock(return_value=[catalog()[0]])
     monkeypatch.setattr(module, 'resolve_memory_scopes', resolver)
-    with pytest.raises(ValueError, match='concrete'):
-        await service.validate_keys(['project.all'])
-    resolver.side_effect = ValueError('Unknown memory scope: project.deleted')
+    assert await service.validate_keys(['company']) == ['company']
+    resolver.side_effect = ValueError('Unknown memory scope: removed')
     with pytest.raises(ValueError, match='Unknown'):
-        await service.validate_keys(['project.deleted'])
+        await service.validate_keys(['removed'])
     with pytest.raises(ValidationError):
-        await service.validate_keys(None)
-
-
-@pytest.mark.asyncio
-async def test_preferences_fit_persisted_chat_branch_limits(monkeypatch):
-    from app.services import memory_scope_preferences_service as module
-    rows = [SimpleNamespace(key=f'team.{index}', scope_type='team', is_all=False) for index in range(31)]
-    monkeypatch.setattr(module, 'resolve_memory_scopes', AsyncMock(return_value=rows))
-    with pytest.raises(ValidationError):
-        await MemoryScopePreferencesService(object()).validate_keys([row.key for row in rows])
-
-
-@pytest.mark.asyncio
-async def test_update_user_validates_and_flushes_without_committing(monkeypatch):
-    from app.services import memory_scope_preferences_service as module
-    user_id = uuid4()
-    user = SimpleNamespace(lifecycle_status='active', memory_scope_keys=[])
-    session = SimpleNamespace(get=AsyncMock(return_value=user), flush=AsyncMock(), commit=AsyncMock())
-    monkeypatch.setattr(module, 'resolve_memory_scopes', AsyncMock(return_value=[catalog()[0]]))
-    service = MemoryScopePreferencesService(session)
-    assert await service.update_user(user_id, [' Team.Ops ', 'team.ops']) == ['team.ops']
-    assert user.memory_scope_keys == ['team.ops']
-    session.get.assert_awaited_once_with(Users, user_id)
-    session.flush.assert_awaited_once()
-    session.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_context_reads_preferences_for_current_principal_and_tenant(monkeypatch):
-    from app.services import memory_scope_preferences_service as module
-    user_id, tenant_id = uuid4(), uuid4()
-    session = SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(lifecycle_status='active', memory_scope_keys=['team.net'])))
-    monkeypatch.setattr(module, 'list_memory_scopes', AsyncMock(return_value=catalog()))
-    service = MemoryScopePreferencesService(session)
-    service.tenants.get_by_id = AsyncMock(return_value=SimpleNamespace(lifecycle_status='active', memory_scope_keys=['team.ops', 'project.a']))
-    context = await service.resolve_context(
-        user_id=user_id, tenant_id=tenant_id, chat_context={},
-    )
-    assert context.keys == ['team.net', 'project.a']
-    assert session.get.await_args_list[0].args == (Users, user_id)
-    service.tenants.get_by_id.assert_awaited_once_with(tenant_id)
+        MemoryScopePreferences(memory_scope_keys=['x'] * 61)

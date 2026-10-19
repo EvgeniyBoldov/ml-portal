@@ -34,6 +34,18 @@ class FileGenerationService:
             raise ValueError(
                 f"File content exceeds limit of {MAX_GENERATED_FILE_BYTES} bytes"
             )
+        if metadata and metadata.get("root_run_id") and metadata.get("deliverable_key") is not None:
+            from app.repositories.generated_artifact_repository import GeneratedArtifactRepository
+            from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
+            existing = await GeneratedArtifactRepository(self.session).find_for_deliverable(
+                chat_id=chat_id, owner_id=owner_id, run_id=str(metadata["root_run_id"]),
+                key=str(metadata["deliverable_key"]))
+            if existing:
+                await ChatArtifactReferenceService(self.session).resolve(
+                    artifact_id=str(existing.id), chat_id=chat_id, owner_id=owner_id, tenant_id=None)
+                return GeneratedArtifact(artifact_id=str(existing.id), file_name=existing.display_name,
+                    content_type=existing.content_type, size_bytes=existing.size_bytes,
+                    metadata=dict(existing.metadata_snapshot or {}))
         artifact = await ArtifactWriter(self.session).write(
             chat_id=chat_id,
             owner_id=owner_id,

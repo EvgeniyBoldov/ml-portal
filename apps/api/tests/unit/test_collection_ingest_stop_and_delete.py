@@ -10,6 +10,14 @@ from app.api.v1.routers.collections import documents as documents_router
 from app.api.v1.routers.collections import stream_lifecycle as lifecycle_router
 
 
+@pytest.fixture(autouse=True)
+def memory_cleanup(monkeypatch):
+    cleanup = AsyncMock()
+    monkeypatch.setattr(documents_router, "_cleanup_document_vectors", AsyncMock())
+    monkeypatch.setattr(documents_router.LongMemoryDocumentService, "enqueue", cleanup)
+    return cleanup
+
+
 def _scalar_result(value):
     return SimpleNamespace(scalar_one_or_none=lambda: value)
 
@@ -76,7 +84,7 @@ async def test_stop_pipeline_revokes_all_active_tasks(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delete_documents_stops_ingest_before_delete(monkeypatch):
+async def test_delete_documents_stops_ingest_before_delete(monkeypatch, memory_cleanup):
     collection_id = uuid4()
     tenant_id = uuid4()
     doc_id = uuid4()
@@ -146,9 +154,10 @@ async def test_delete_documents_stops_ingest_before_delete(monkeypatch):
     )
 
     assert result["deleted"] == 1
+    memory_cleanup.assert_awaited()
     fake_status_manager.stop_ingest.assert_awaited_once_with(doc_id)
     revoke_mock.assert_called_once_with("task-del-1", terminate=True, signal="SIGTERM")
-    documents_router._cleanup_document_vectors.assert_awaited_once_with(fake_collection.qdrant_collection_name, doc_id)
+    documents_router._cleanup_document_vectors.assert_awaited_once_with(fake_collection, fake_session, doc_id)
     assert result["skipped_foreign"] == []
     assert result["failed"] == []
 

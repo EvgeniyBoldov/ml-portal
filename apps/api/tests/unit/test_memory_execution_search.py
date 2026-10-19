@@ -93,6 +93,6 @@ async def test_agent_tool_uses_chat_fact_even_when_task_focus_is_narrower(monkey
 def test_root_document_search_does_not_replace_concrete_chat_focus():
     from app.runtime.turn_preflight import TurnPreflightDecision, _canonical_scope_selection
     decision = TurnPreflightDecision(route="tool_call", tool_call={
-        "operation": "memory.search", "arguments": {"query": "common rules"}})
+        "tool": "memory.search", "arguments": {"query": "common rules"}})
     assert _canonical_scope_selection(decision).keys == []
     assert decision.tool_call.arguments.query == "common rules"

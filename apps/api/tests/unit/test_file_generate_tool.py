@@ -38,6 +38,21 @@ async def test_file_generate_commits_created_attachment(monkeypatch):
         )
     )
     service_instance = SimpleNamespace(generate=generate)
+    passport = {
+        "schema_version": 1,
+        "artifact_id": attachment_payload["artifact_id"],
+        "origin": {"kind": "agent_generated"},
+        "file": {"name": "example.txt"},
+        "description": None,
+        "representation": None,
+        "status": "generated",
+        "attributes": {},
+    }
+    get_reference = AsyncMock(return_value=SimpleNamespace(metadata_snapshot={}))
+    references = SimpleNamespace(
+        get_reference=get_reference,
+        manifest=lambda _reference: passport,
+    )
 
     monkeypatch.setattr(
         "app.core.db.get_session_factory",
@@ -46,6 +61,10 @@ async def test_file_generate_commits_created_attachment(monkeypatch):
     monkeypatch.setattr(
         "app.services.file_generation_service.FileGenerationService",
         lambda _session: service_instance,
+    )
+    monkeypatch.setattr(
+        "app.services.chat_artifact_reference_service.ChatArtifactReferenceService",
+        lambda _session: references,
     )
 
     tool = FileGenerateTool()
@@ -66,7 +85,9 @@ async def test_file_generate_commits_created_attachment(monkeypatch):
 
     assert result.success is True
     assert result.data["artifact_id"] == attachment_payload["artifact_id"]
+    assert result.data["artifact"] == passport
     generate.assert_awaited_once()
+    get_reference.assert_awaited_once()
     session.commit.assert_awaited_once()
 
 

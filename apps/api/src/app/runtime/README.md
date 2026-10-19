@@ -49,18 +49,23 @@ confirmed active user and tenant facts, then combines it with bounded tool,
 agent-result, attachment and collection sections. It does not load the
 conversation summary into the active component registry.
 
-Document memory uses the same registered HippoRAG `memory.search` operation for
-TurnPreflight, planner and agents. Root roles resolve it with `OperationRouter`
-and invoke `DirectOperationExecutor`, choosing query and optional limit themselves.
+Document memory exposes the same registered HippoRAG `memory.search` tool to
+TurnPreflight, planner and agents. Root roles resolve its internal execution
+binding with `OperationRouter` and invoke `DirectOperationExecutor`, choosing
+query and optional limit themselves.
 Preflight can answer memory-only requests through synthesis without planning;
-search budget exhaustion hands the task and evidence to planner. Trace records
+search budget exhaustion hands the task and brief to planner. Trace records
 real tool calls without synthetic recall or memory-selector entities. Legacy
 scoped memory readers remain separate helpers outside active root document search.
 
-Each runtime reader records its own actual input as a canonical
-`status(stage=memory_context_used)` snapshot. Sandbox inspectors combine that
-snapshot with successful memory tool results owned by that reader; memory
-writeback candidates remain a separate projection.
+Planner memory persists across iterations; task memory persists across attempts
+and explicit same-executor `continuation_of` continuations. Tasks independently
+search for their own knowledge instead of inheriting planner/peer search history.
+Original passages accumulate by scope with exact code deduplication, without
+LLM composition or passage truncation. Every search records a full tool response
+and `status(stage=memory_context_used, memory_owner, memory_owner_id)` snapshot.
+Sandbox inspectors show the latest owner snapshot; tool inspectors show the
+individual search response. Memory writeback candidates remain separate.
 
 Terminal writeback is owned by `MemoryWriter` and normally runs in the Celery
 `finalize_memory` task after the answer. The writer pipeline is
@@ -78,7 +83,7 @@ Rule of thumb:
 |---|---|---|
 | Planner prompt | active `system_llm_roles.planner` row in DB | `SystemLLMRoleService` |
 | Final synthesis prompt | DB role prompt with fallback | `app/runtime/synthesizer.py`, `app/services/system_llm_role_service.py` |
-| Memory preparation and fact prompts | DB-backed runtime roles | `app/runtime/memory/preparer.py`, `fact_extractor.py`, `fact_compactor.py` |
+| Post-turn fact prompts | DB-backed runtime roles | `app/runtime/memory/fact_extractor.py`, `fact_compactor.py` |
 
 Notes:
 - Planner prompt is compiled exclusively from the active planner role in DB.
@@ -164,21 +169,6 @@ CI gates:
 - `pytest tests/unit -q --tb=short`
 - `pytest tests/eval -q`
 - `--cov=app.runtime --cov=app.agents.contracts --cov=app.agents.credential_resolver --cov=app.agents.execution_preflight --cov=app.agents.operation_router --cov=app.agents.runtime_rbac_resolver --cov-fail-under=70`
-
-## Completed (was TODO)
-
-- ✅ Remove bidirectional state bridge `WorkingMemory ↔ RuntimeTurnState` — fully migrated to `RuntimeTurnState` as single source of truth.
-- ✅ Remove `WorkingMemory` from public runtime package exports (`app.runtime`, `app.runtime.memory`).
-
-## TODO
-
-- Remove legacy operation transport from agent-facing LLM flow:
-  stop exposing operation-shaped contracts to models, keep tool-first prompting/protocol,
-  and keep operation resolution as an internal runtime concern only.
-- Add `QueryRewriter` stage (behind a feature flag) before planner input assembly.
-- Persist both `original_query` and `rewritten_query` in runtime trace.
-- Implement remote `collection.info` runtime enrichment for `sql` / `api` collections:
-  return provider-aware field/value profiling, remote freshness signals, and safe distinct/top-value hints without relying on local table profiling.
 
 ### Agent response protocol v2
 

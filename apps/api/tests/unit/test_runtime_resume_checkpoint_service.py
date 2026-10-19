@@ -17,7 +17,7 @@ def test_build_resume_checkpoint_payload_contains_required_fields():
         tenant_id=uuid4(),
         user_id=uuid4(),
         chat_id=uuid4(),
-        paused_action={"type": "resume"},
+        paused_action={"kind": "input"},
         paused_context={"reason": "waiting_input"},
         resume_action="input",
         user_input="hello",
@@ -38,7 +38,7 @@ def test_build_resume_checkpoint_payload_carries_source_goal_snapshot():
         tenant_id=uuid4(),
         user_id=uuid4(),
         chat_id=uuid4(),
-        paused_action={"type": "resume"},
+        paused_action={"kind": "confirm"},
         paused_context={"reason": "waiting_confirmation"},
         resume_action="confirm",
         source_context_snapshot={

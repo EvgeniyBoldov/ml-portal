@@ -19,7 +19,7 @@ async def test_artifact_writer_returns_canonical_reference(monkeypatch) -> None:
         }
     )
     monkeypatch.setattr(
-        "app.services.artifact_writer.ChatAttachmentService",
+        "app.services.chat_attachment_service.ChatAttachmentService",
         lambda _session: SimpleNamespace(create_generated_attachment=create),
     )
 

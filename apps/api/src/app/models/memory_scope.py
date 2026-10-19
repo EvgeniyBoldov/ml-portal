@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, ENUM, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,23 +15,21 @@ from app.models.mixins.lifecycle import LifecycleMixin
 
 class MemoryScopeType(str, Enum):
     PROJECT = "project"
-    TEAM = "team"
 
 
 class MemoryScope(Base, LifecycleMixin):
     __tablename__ = "memory_scopes"
     __table_args__ = (
-        UniqueConstraint("scope_type", "key", name="uq_memory_scopes_type_key"),
-        Index("uq_memory_scopes_all_type", "scope_type", unique=True, postgresql_where="is_all"),
+        UniqueConstraint("key", name="uq_memory_scopes_key"),
         UniqueConstraint("project_id", name="uq_memory_scopes_project_id"),
-        CheckConstraint("key LIKE scope_type::text || '.%' AND ((is_all AND key = scope_type::text || '.all') OR (NOT is_all AND key <> scope_type::text || '.all'))", name="ck_memory_scopes_all_key"),
-        CheckConstraint("project_id IS NULL OR (scope_type = 'project' AND NOT is_all)", name="ck_memory_scopes_project_type"),
+        CheckConstraint("key ~ '^[a-z0-9][a-z0-9._-]*$'", name="ck_memory_scopes_slug"),
+        CheckConstraint("scope_type = 'project' AND NOT is_all", name="ck_memory_scopes_flat"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     scope_type: Mapped[str] = mapped_column(ENUM(
         "project", "team", name="memoryscopetype", create_type=False,
-    ), nullable=False)
+    ), nullable=False, default="project", server_default="project")
     project_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     key: Mapped[str] = mapped_column(String(180), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -51,7 +49,7 @@ class MemoryScopeGlossaryTerm(Base):
 
 
 class DocumentMemoryScope(Base):
-    """A document-level hint; it never grants access or scopes every claim."""
+    """Document applicability for the native scope corpus; independent of source access."""
     __tablename__ = "document_memory_scopes"
 
     document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ragdocuments.id", ondelete="CASCADE"), primary_key=True)

@@ -19,6 +19,7 @@ export default defineConfig(({ command, mode }) => {
       },
     },
     server: {
+      allowedHosts: ['nginx'], // Internal Docker proxy used by browser E2E
       host: true, // Listen on all addresses
       port: Number(env.VITE_PORT) || 5173,
       strictPort: false,

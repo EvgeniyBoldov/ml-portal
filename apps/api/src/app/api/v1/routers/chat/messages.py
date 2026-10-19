@@ -25,7 +25,7 @@ from app.models.chat_turn import ChatTurn
 from app.repositories.chats_repo import AsyncChatMessagesRepository
 from app.repositories.factory import AsyncRepositoryFactory
 from app.schemas.chat_events import ChatSSEEventType, ErrorPayload, format_chat_sse, format_chat_sse_done
-from app.schemas.chats import ChatContextInspectionResponse, ChatContextResetResponse, ChatMessageStreamRequest
+from app.schemas.chats import ChatContextInspectionResponse, ChatContextResetResponse, ChatMessageStreamRequest, ChatMemoryScopesUpdate
 from app.schemas.confirmations import ConfirmationIssueRequest, ConfirmationIssueResponse
 from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeRequest
 from app.services.chat_router_event_mapper import build_resume_content, map_service_event_to_sse
@@ -54,6 +54,25 @@ async def inspect_chat_context(
         chat_id=str(chat_ctx.chat_id), owner_id=str(chat_ctx.user_id), tenant_id=str(chat_ctx.tenant_id),
     )
     return ChatContextInspectionResponse.model_validate(result)
+
+
+@router.put("/{chat_id}/memory-scopes", response_model=ChatContextInspectionResponse)
+async def set_chat_memory_scopes(
+    chat_id: str, body: ChatMemoryScopesUpdate,
+    chat_ctx: ChatContext = Depends(resolve_chat_context), session: AsyncSession = Depends(db_session),
+) -> ChatContextInspectionResponse:
+    if str(chat_ctx.chat_id) != chat_id:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    service = ChatContextService(session, None, None)
+    try:
+        await service.set_memory_scopes(chat_id=chat_id, owner_id=str(chat_ctx.user_id),
+                                       keys=body.scope_keys, expected_revision=body.expected_revision)
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if str(exc) == "stale_revision" else 422, detail=str(exc)) from exc
+    await session.commit()
+    return ChatContextInspectionResponse.model_validate(await service.inspect_snapshot(
+        chat_id=chat_id, owner_id=str(chat_ctx.user_id), tenant_id=str(chat_ctx.tenant_id),
+    ))
 
 
 @router.delete("/{chat_id}/context", response_model=ChatContextResetResponse)
@@ -111,7 +130,7 @@ async def get_paused_run(
         "action": turn.paused_action if isinstance(turn.paused_action, dict) else {},
         "context": turn.paused_context if isinstance(turn.paused_context, dict) else {},
     })
-    return {"pause": paused}
+    return {"pause": RuntimeHitlProtocolService.public_pause(paused)}
 
 
 @router.get("/{chat_id}/messages")
@@ -231,7 +250,7 @@ async def send_message_stream(
             yield format_chat_sse_done()
         except Exception as e:
             logger.error(f"Error in chat stream: {e}", exc_info=True)
-            yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error=str(e)))
+            yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error="Не удалось обработать запрос. Попробуйте позже.", code="chat_stream_failed"))
             yield format_chat_sse_done()
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
@@ -286,7 +305,7 @@ async def resume_run(
         select(ChatTurn).where(
             ChatTurn.runtime_run_id == run_uuid,
             ChatTurn.status == "paused",
-        )
+        ).with_for_update()
     )
     turn = run_result.scalar_one_or_none()
     if not turn:
@@ -300,18 +319,30 @@ async def resume_run(
     paused_action = turn.paused_action
     paused_context = turn.paused_context
 
+    expected_pause_id = (paused_action or {}).get("pause_id")
+    if expected_pause_id and body.pause_id != expected_pause_id:
+        raise HTTPException(status_code=409, detail="Уточнение устарело. Обновите состояние чата.")
+
     user_input = body.input
     try:
-        normalized_input = RuntimeResumeCheckpointService.validate_action(
-            pause_status=str(turn.pause_status or ""),
-            action=body.action,
-            user_input=user_input,
-        )
+        from app.runtime.interaction import interaction_from_context
+        interaction = interaction_from_context(paused_context)
+        action, resolved_input, interaction_response = RuntimeResumeCheckpointService.resolve_request(body, paused_context)
+        if interaction is not None:
+            normalized_input = resolved_input
+            body = body.model_copy(update={"action": action})
+        else:
+            normalized_input = RuntimeResumeCheckpointService.validate_action(
+                pause_status=str(turn.pause_status or ""), action=body.action, user_input=user_input,
+            )
     except RuntimeResumeValidationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if body.action is RuntimeResumeAction.CANCEL:
         await turn_service.cancel_turn(turn.id, error_message="Cancelled by user")
+        if interaction is not None and interaction.requester.plan_id:
+            from app.runtime.plan_store import SqlPlanStore
+            await SqlPlanStore(session).cancel_plan(uuid.UUID(interaction.requester.plan_id), reason="user_cancelled")
         if turn.chat_id:
             await ChatContextService(session, None, None).cancel_turn_context(
                 chat_id=str(turn.chat_id), chat_turn_id=str(turn.id),
@@ -345,6 +376,29 @@ async def resume_run(
             goal=original_goal,
         ),
     )
+    if interaction is not None:
+        checkpoint["interaction_response"] = interaction_response
+
+    # P0-4: For confirm action, issue a confirmation token so the resumed pipeline
+    # can pass the HITL gate without looping back to another confirmation_required.
+    confirmation_tokens: list[str] = []
+    if body.action is RuntimeResumeAction.CONFIRM and isinstance(paused_action, dict):
+        fingerprint = RuntimeHitlProtocolService.extract_operation_fingerprint(
+            paused_action if isinstance(paused_action, dict) else None,
+            paused_context if isinstance(paused_context, dict) else None,
+        )
+        if fingerprint and turn.chat_id:
+            try:
+                conf_svc = get_confirmation_service()
+                token, _ = conf_svc.issue(
+                    fingerprint=fingerprint,
+                    user_id=uuid.UUID(str(current_user.id)),
+                    chat_id=uuid.UUID(str(turn.chat_id)),
+                )
+                confirmation_tokens = [token]
+            except Exception as _ce:
+                raise HTTPException(status_code=503, detail="Не удалось подтвердить действие; повторите ответ.") from _ce
+
 
     # Keep one ChatTurn for the entire paused/resumed lifecycle.  Cancelling
     # this row before continuation made the next request look stale and also
@@ -365,26 +419,6 @@ async def resume_run(
         paused_action=paused_action if isinstance(paused_action, dict) else None,
         paused_context=paused_context if isinstance(paused_context, dict) else None,
     )
-
-    # P0-4: For confirm action, issue a confirmation token so the resumed pipeline
-    # can pass the HITL gate without looping back to another confirmation_required.
-    confirmation_tokens: list[str] = []
-    if body.action is RuntimeResumeAction.CONFIRM and isinstance(paused_action, dict):
-        fingerprint = RuntimeHitlProtocolService.extract_operation_fingerprint(
-            paused_action if isinstance(paused_action, dict) else None,
-            paused_context if isinstance(paused_context, dict) else None,
-        )
-        if fingerprint and turn.chat_id:
-            try:
-                conf_svc = get_confirmation_service()
-                token, _ = conf_svc.issue(
-                    fingerprint=fingerprint,
-                    user_id=uuid.UUID(str(current_user.id)),
-                    chat_id=uuid.UUID(str(turn.chat_id)),
-                )
-                confirmation_tokens = [token]
-            except Exception as _ce:
-                logger.warning("Failed to issue confirmation token on resume: %s", _ce)
 
     user_uuid_val = uuid.UUID(str(current_user.id))
     chats_repo = AsyncChatsRepository(session, tenant_uuid_val, user_uuid_val)
@@ -414,7 +448,7 @@ async def resume_run(
                 },
                 resumed_turn_id=str(turn.id),
                 confirmation_tokens=confirmation_tokens,
-                persist_user_message=False,
+                persist_user_message=interaction is not None or body.action is RuntimeResumeAction.INPUT,
             ):
                 try:
                     sse_text = map_service_event_to_sse(event)
@@ -426,7 +460,7 @@ async def resume_run(
             yield format_chat_sse_done()
         except Exception as e:
             logger.error(f"Error in resume stream: {e}", exc_info=True)
-            yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error=str(e)))
+            yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error="Не удалось обработать запрос. Попробуйте позже.", code="chat_stream_failed"))
             yield format_chat_sse_done()
 
     return StreamingResponse(_resume_gen(), media_type="text/event-stream")

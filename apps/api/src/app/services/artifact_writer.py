@@ -5,9 +5,6 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.chat_attachment_service import ChatAttachmentService
-
-
 @dataclass(frozen=True)
 class GeneratedArtifact:
     artifact_id: str
@@ -33,6 +30,10 @@ class ArtifactWriter:
         content_type: Optional[str],
         metadata: Optional[dict[str, Any]] = None,
     ) -> GeneratedArtifact:
+        # Keep attachment service loading lazy: it imports runtime contracts,
+        # whose synthesis contracts also depend on this writer.
+        from app.services.chat_attachment_service import ChatAttachmentService
+
         if not chat_id:
             raise ValueError("Generated artifacts require a chat context")
         if not owner_id:

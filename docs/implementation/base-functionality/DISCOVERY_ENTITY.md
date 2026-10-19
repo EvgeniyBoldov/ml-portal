@@ -2,66 +2,26 @@
 
 ## Purpose
 
-`Discovery` scans capability sources and stores raw executable artifacts.
+Discovery refreshes the active capability snapshot for local handlers and
+remote MCP providers. A `DiscoveredTool` records the provider identity, name,
+description, input/output schemas, source metadata, and active/last-seen state.
 
-Its only question is:
-"what capabilities currently exist in connected local and remote providers?"
+## Runtime use
 
-## Output
+The collection resolver selects the provider for a requested collection. The
+tool resolver loads that provider's active discovered capabilities, adds
+platform collection defaults where applicable, applies collection
+compatibility, and returns the runtime tool set. Runtime then applies effective
+permissions, readiness, credentials, and safety policy before exposing tool
+schemas to the model.
 
-Discovery produces `DiscoveredTool`.
+A persisted `Tool` or `ToolRelease` may enrich a capability with curated
+metadata, but provider discovery and collection binding determine its
+availability. Discovery snapshots alone do not grant access: runtime access
+checks remain authoritative.
 
-`DiscoveredTool` is a raw capability snapshot with:
-- `slug`, `name`, `description`
-- `source`
-- `provider_instance_id`
-- `input_schema`, `output_schema`
-- domain or context hints from source
-- lifecycle state (`is_active`, `last_seen_at`)
+## Sandbox
 
-This is not a published runtime tool and not a semantic release.
-`ToolResolver` consumes this raw artifact together with `ToolRelease` to build the agent-facing tool view.
-
-## Sources
-
-Discovery currently ingests:
-- local registry handlers,
-- remote MCP provider capabilities.
-
-Both are normalized into the same raw artifact type.
-
-## Responsibilities
-
-Discovery is responsible for:
-- scanning sources,
-- upserting `DiscoveredTool`,
-- preserving source provenance,
-- tracking appearance/disappearance over time,
-- refreshing raw contracts.
-
-Discovery is not responsible for:
-- creating `Tool`,
-- curating runtime semantics,
-- publishing planner vocabulary,
-- deciding whether a capability is agent-visible.
-
-## Relation To Tool Publication
-
-`DiscoveredTool` is the input to publication, not the publication result.
-
-Possible states:
-1. capability exists only as `DiscoveredTool`
-2. capability is reviewed in sandbox as draft candidate
-3. capability is linked to a `Tool`
-4. capability is represented in runtime through effective `ToolRelease`
-
-Important rule:
-- not every discovered capability must be published,
-- discovery inventory is intentionally broader than runtime vocabulary.
-
-## Relation To Sandbox
-
-Sandbox may treat unpublished `DiscoveredTool` as a draft publication candidate.
-
-This does not mutate global admin publication state.
-It only creates an effective branch-local view through resolver overlays.
+Sandbox resolution uses the same provider discovery and collection binding
+rules. Explicit sandbox overrides may change supported runtime-safe metadata;
+they do not mutate global discovery snapshots.

@@ -44,12 +44,15 @@ refreshes that address automatically. After editing nginx configuration, run
 - Docling Serve API (локальный HTTP): `http://localhost:8016/docs`
 - Docling playground: `http://localhost:8016/ui`
 
-### Docling Serve (только dev)
+### Docling Serve
 
 Сервис `docling` использует официальный CPU-образ
 `quay.io/docling-project/docling-serve-cpu:v1.30.0` с включённым playground.
-Модели уже входят в образ. Контейнер запускается вместе с dev-стеком;
-отдельный запуск и проверка:
+Модели уже входят в образ. Контейнер запускается вместе с dev-стеком и
+production compose template. `DocumentExtractionService` использует Docling как
+основной parser backend для поддерживаемых форматов; при недоступности сервиса,
+ошибке или пустом результате применяются локальные экстракторы. Отдельный
+запуск и проверка:
 
 ```bash
 docker compose up -d --no-deps docling
@@ -65,11 +68,11 @@ loopback на порту `DOCLING_PORT` (по умолчанию `8016`). `DOCLI
 занять до нескольких минут. Для загрузки файла используется
 `POST /v1/convert/file`, контракт доступен в `/docs`.
 
-На этом этапе контейнер автономный: существующие способы извлечения текста
-и document ingestion ещё не переведены на Docling. Сервис не добавлен в
-production compose, release build или deployment scripts.
-
-Документация upstream: [Docling Serve](https://github.com/docling-project/docling-serve).
+`DOCLING_URL` задаёт внутренний URL сервиса (по умолчанию
+`http://docling:5001`), а `DOCLING_TIMEOUT_SECONDS` — тайм-аут конвертации
+(по умолчанию 180 секунд). Сервис не публикует порт в production compose;
+API и workers обращаются к нему по внутренней сети. Для документации внешнего
+API см. [Docling Serve](https://github.com/docling-project/docling-serve).
 
 Постоянные dev-сервисы `hipporag` и `memory-experiment` запускаются из основного
 compose. Индексы живут в отдельном volume, экспериментальные документы и SQLite —

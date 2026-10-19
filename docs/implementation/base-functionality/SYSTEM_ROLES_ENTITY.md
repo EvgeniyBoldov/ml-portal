@@ -1,64 +1,30 @@
-# System Roles Entity
+# System LLM Roles
 
-## Purpose
+## Active turn roles
 
-This document defines the active system LLM roles of the runtime and their
-strict boundaries. They coordinate or support execution; none is a business
-agent or an owner of domain tools.
+- **TurnPreflight** routes a user turn to direct synthesis, planner, memory
+  search, or clarification. It may propose durable user/tenant fact candidates
+  but does not write them.
+- **Planner** proposes persisted agent tasks and the next terminal decision.
+  Runtime owns task state, retries, dependencies, and execution.
+- **Synthesizer** prepares the user-facing answer from the bounded synthesis
+  context. It does not execute tools or change the plan.
 
-The active role set is `planner`, `memory`, `fact_extractor`,
-`fact_compactor` and `synthesizer`. Historical `triage`, `summary` and
-`summary_compactor` roles are not part of the active runtime contract.
+## Post-turn fact roles
 
-## Role responsibilities
+- **FactExtractor** proposes facts supported by the completed turn and its
+  evidence.
+- **FactCompactor** deduplicates and selects a bounded reconciliation action.
+- **FactReconciler** validates and persists eligible user/tenant facts. The
+  LLM roles do not write directly to durable storage.
 
-### Planner
+Document LongMemory indexing uses the HippoRAG worker's configured model calls.
+The older `memory` preparation role and Semantic Memory extraction/evaluation
+roles remain in configuration/code for legacy paths; they are not part of the
+active root-turn `memory.search` flow.
 
-Planner produces one immutable `IterationProposal`. It receives the goal,
-bounded memory, available agents/artifacts and the execution ledger. It returns
-only agent tasks, bindings, resolutions for earlier incomplete work, and one
-terminal: `planner` or `synthesis`.
+## Shared boundaries
 
-Planner does not execute tools, mutate task state, create a confirmation gate,
-or appear as a task node. When a prior task is incomplete, it must explicitly
-continue it with new task ids, accept named partial outputs, exclude scope, or
-report a limitation.
-
-### Memory Preparer
-
-Memory Preparer selects bounded indexes of confirmed facts, projects and
-semantic memory for the planner. Runtime selects published document glossary
-terms by name and aliases. Memory Preparer neither writes facts nor decides routing,
-task lifecycle or user-visible answers. A failure produces an empty optional
-memory projection rather than failing the run.
-
-### Fact Extractor and Fact Compactor
-
-These post-turn roles prepare evidence-backed user and tenant fact candidates.
-Extractor identifies supported candidate facts; Compactor deduplicates and
-selects a compaction action. `FactReconciler`, not an LLM role, owns durable
-persistence. Neither role changes the execution plan or acts as evidence for a
-current task result.
-
-### Synthesizer
-
-Synthesizer receives a bounded synthesis context: synthesis brief, completed
-reports, explicitly accepted partial outputs, verified references and current
-user-visible limitations. It writes the final user answer only. It does not
-plan, invoke tools, choose agents, hide limitations or add facts.
-
-## Shared contract rules
-
-- Structured roles use typed Pydantic DTOs and generated JSON schemas.
-- Synthesizer uses a plain-text contract and accepts only the prepared context.
-- Runtime owns task lifecycle, retries, dependency blocking, confirmations and
-  verification of artifacts/evidence.
-- Roles consume normalized bounded DTOs, never raw ORM rows, tool journals,
-  credentials or provider diagnostics.
-
-## Relation to agents and policy
-
-Agents execute the immutable tasks assigned by planner. Policy and runtime
-gates decide whether an operation may execute; a system role can neither
-bypass nor approve a destructive operation. A confirmation is a task-local
-runtime state, not a planner or synthesizer decision.
+Structured roles derive JSON schemas from Pydantic contracts. Roles receive
+bounded normalized DTOs, not raw ORM rows, credentials, or provider diagnostics.
+Runtime owns access checks, tool execution, task lifecycle, and persistence.

@@ -22,15 +22,15 @@ from app.runtime.orchestrator_contracts import TaskRequest
 
 
 def identity(key, source="chat_focus"):
-    return ScopeIdentity(id=str(uuid4()), key=key, type=key.partition(".")[0], name=key, source=source)
+    return ScopeIdentity(id=str(uuid4()), key=key, type="scope", name=key, source=source)
 
 
-def test_turn_selection_replaces_only_its_type_and_records_mention_separately():
+def test_turn_selection_replaces_flat_set_and_records_mention_separately():
     parent = EffectiveScopeContext(revision=4, selected=[identity("project.a"), identity("team.ops")],
         ceiling_keys=["project.a", "team.ops"])
     identities = {"team.data": identity("team.data", "turn"), "product.core": identity("product.core", "turn")}
     result = merge_selection(parent, ScopeSelection(keys=["team.data"], mentioned_keys=["product.core"]), identities, source="turn")
-    assert result.keys == ["project.a", "team.data"]
+    assert result.keys == ["team.data"]
     assert [item.key for item in result.mentioned] == ["product.core"]
     assert result.revision == 5
 
@@ -42,11 +42,11 @@ def test_explicit_replace_empty_clears_all_scopes_and_ceiling():
     assert result.keys == [] and result.ceiling_keys == [] and result.explicit_clear
 
 
-def test_task_subset_preserves_other_types_and_cannot_widen():
+def test_task_subset_cannot_widen():
     parent = EffectiveScopeContext(selected=[identity("project.a"), identity("project.b"), identity("team.ops")],
         ceiling_keys=["project.a", "project.b", "team.ops"])
     child = task_scope(parent, ScopeSelection(keys=["project.b"]))
-    assert child.keys == ["project.b", "team.ops"]
+    assert child.keys == ["project.b"]
     with pytest.raises(ValueError, match="scope_widening_denied"):
         task_scope(parent, ScopeSelection(keys=["product.core"]))
     clear = task_scope(parent, ScopeSelection(mode="replace"))
@@ -66,10 +66,10 @@ def test_planner_request_exposes_scope_contract_and_task_compiler_persists_subse
     }]})
     compiled = GraphOrchestrator._compile(proposal, [{"slug": "worker", "supports_dynamic_contracts": True}],
         {"tasks": [], "needs": [], "bindings": [], "resolutions": []}, context.model_payload())
-    assert compiled.tasks[0].scope_context["keys"] == ["project.a", "team.ops"]
+    assert compiled.tasks[0].scope_context["keys"] == ["project.a"]
 
 
-def test_task_memory_projection_filters_other_applicability():
+def test_task_memory_projection_does_not_inherit_planner_search_memory():
     request = type("Task", (), {"scope_context": {"keys": ["project.a", "team.ops"]},
                                 "intent": "check", "instructions": "check", "inputs": {}})()
     recall = {"type": "memory_recall", "items": [
@@ -78,8 +78,9 @@ def test_task_memory_projection_filters_other_applicability():
         {"id": "c", "scope_keys": ["project.a", "team.other"]},
         {"id": "global"},
     ]}
-    [result] = _task_memory_context(request, [recall])
-    assert [item["id"] for item in result["items"]] == ["a"]
+    assert _task_memory_context(request, [recall]) == []
+    fact = {"scope": "user", "subject": "role", "value": "engineer"}
+    assert _task_memory_context(request, [fact, recall]) == [fact]
 
 
 @pytest.mark.asyncio
@@ -143,15 +144,20 @@ def test_store_scope_validation_cannot_be_bypassed_by_skipping_compiler():
         store.apply_iteration(plan["id"], proposal)
 
 
-def test_planner_search_history_keeps_original_facts_and_recall():
+def test_planner_search_history_keeps_facts_and_all_original_passages():
     store = InMemoryPlanStore()
     core = [{"scope": "user", "subject": "role", "value": "engineer"},
             {"type": "project_context"}, {"type": "memory_recall"}]
     plan = store.create(goal="goal", root_run_id=str(uuid4()), tenant_id=str(uuid4()), memory_context=core)
-    store.update_memory_context(plan["id"], [{"type": "planner_memory_result", "query_key": str(i)} for i in range(35)])
-    assert plan["memory_context"][:3] == core
-    assert len(plan["memory_context"]) == 33
-    assert plan["memory_context"][3]["query_key"] == "5"
+    store.update_memory_context(plan["id"], [{"type": "planner_memory_result", "query_key": str(i),
+        "result": {"groups": [{"scope_slug": "company", "success": True, "items": [{"text": f"passage {i}"}]}]}}
+        for i in range(35)])
+    assert plan["memory_context"][:2] == core[:2]
+    from app.runtime.memory.document_memory import document_memory
+    [memory] = document_memory(plan["memory_context"])
+    assert len(memory["groups"][0]["items"]) == 35
+    assert memory["groups"][0]["items"][0]["text"] == "passage 0"
+
 
 
 def test_agent_receives_planner_search_statements_even_after_many_user_facts():
@@ -217,11 +223,14 @@ def test_user_project_defaults_are_not_promoted_to_explicit_chat_focus():
     assert context.selected[0].source == "user_default"
 
 
-def test_replacing_focus_with_only_team_scope_suppresses_project_default():
+def test_flat_scope_does_not_populate_legacy_project_branches():
     from app.runtime.pipeline import _project_context_payload
-    context = EffectiveScopeContext(selected=[identity("team.ops", "turn")], mode="replace", ceiling_keys=["team.ops"])
+    context = EffectiveScopeContext(selected=[identity("ops", "turn")], mode="replace", ceiling_keys=["ops"])
     payload = _project_context_payload(context, {"source": "user_default"})
-    assert payload["suppress_project_default"]
+    assert not payload["suppress_project_default"]
+    assert payload["effective_project_keys"] == []
+    assert payload["effective_team_keys"] == []
+    assert payload["scope_context"]["keys"] == ["ops"]
     assert payload["source"] == "explicit"
 
 
@@ -248,43 +257,27 @@ async def test_scope_claims_preserve_separate_wording_and_evidence_for_the_same_
     assert all(value["state"] == "active" for value in values)
 
 
-@pytest.mark.asyncio
-async def test_search_translates_legacy_claim_project_applicability_for_task_handoff(monkeypatch):
-    from app.runtime.memory import search as search_module
-    a, b = uuid4(), uuid4()
-    projects = [{"id": a, "key": "a", "name": "A"}, {"id": b, "key": "b", "name": "B"}]
-    items = [{"id": uuid4(), "kind": "rule", "subject": "deploy", "project_id": None,
-              "applicability": {"project_ids": [str(project)]}, "scope_keys": [], "confidence": 1,
-              "state": "active", "content": {"statement": str(project)}, "content_text": str(project),
-              "source_references": []} for project in (a, b)]
-    monkeypatch.setattr(search_module, "GlossaryService", lambda session: SimpleNamespace(list_confirmed_terms=AsyncMock(return_value=[])))
-    monkeypatch.setattr(search_module, "resolve_memory_scopes", AsyncMock(return_value=[
-        SimpleNamespace(scope_type="project", key=f"project.{row['key']}", name=row['name'],
-                        project_id=row['id'], is_all=False) for row in projects
-    ]))
-    monkeypatch.setattr(search_module, "MemorySemanticIndex", lambda session: SimpleNamespace(search_ids=AsyncMock(return_value=[])))
-    recall = SimpleNamespace(eligible_item_ids=AsyncMock(return_value=[row["id"] for row in items]),
-                             _term_linked_item_ids=AsyncMock(return_value=[]),
-                             _lexical_ids=AsyncMock(return_value=[]), _visible_relation_item_ids=AsyncMock(return_value=[]),
-                             _accessible_semantic_items=AsyncMock(return_value=items))
-    monkeypatch.setattr(search_module, "MemoryRecallService", lambda **kwargs: recall)
-    result = await search_module.MemorySearchService(object()).search(query="deploy", tenant_id=None,
-        context_scope_keys=["project.a", "project.b"], scope_ceiling_keys=["project.a", "project.b"])
-    assert [item["scope_keys"] for item in result["items"]] == [["project.a"], ["project.b"]]
-    narrowed = project_memory_context(result, ["project.a"])
-    assert len(narrowed["items"]) == 1
-    assert narrowed["memory_context"]["uncertainties"] == []
-    assert narrowed["memory_context"]["rag_required"] is False
+def test_native_search_projection_preserves_empty_and_failed_scope_groups():
+    value = {"type": "planner_memory_result", "result": {"backend": "hipporag", "groups": [
+        {"scope_slug": "a", "success": True, "items": []},
+        {"scope_slug": "b", "success": False, "items": [], "error_code": "memory_search_failed"},
+        {"scope_slug": "c", "success": True, "items": [{"text": "other scope"}]},
+    ], "group_count": 3}}
+    narrowed = project_memory_context(value, ["a", "b"])
+    assert narrowed["result"]["groups"] == value["result"]["groups"][:2]
+    assert narrowed["result"]["group_count"] == 2
+    assert narrowed["result"]["partial"]
+    assert len(value["result"]["groups"]) == 3
 
 
 @pytest.mark.asyncio
-async def test_planner_search_keys_include_arguments_and_failures_are_not_persisted(monkeypatch):
+async def test_planner_search_retains_passages_and_failure_receipts(monkeypatch):
     from app.runtime.planner import graph_planner
     from app.runtime.planner.graph_planner import GraphPlanner, PlannerStep
     calls = [
-        {"operation": "memory.search", "arguments": {"query": "deploy rules"}},
-        {"operation": "memory.search", "arguments": {"query": "deploy procedure", "limit": 12}},
-        {"operation": "memory.search", "arguments": {"query": "deploy"}},
+        {"tool": "memory.search", "arguments": {"query": "deploy rules"}},
+        {"tool": "memory.search", "arguments": {"query": "deploy procedure", "limit": 12}},
+        {"tool": "memory.search", "arguments": {"query": "deploy"}},
     ]
     proposal = {"terminal": "planner", "tasks": [{"task_id": "t", "executor": "worker", "intent": "check", "instructions": "Check"}]}
     steps = [PlannerStep(kind="tool_call", tool_call=call) for call in calls]
@@ -295,11 +288,12 @@ async def test_planner_search_keys_include_arguments_and_failures_are_not_persis
         _compile_role_prompt=Mock(return_value="prompt"),
         invoke=AsyncMock(side_effect=[SimpleNamespace(value=step) for step in steps]),
     )
-    records = [{"operation": call["operation"], "arguments": call["arguments"], "result": result}
-               for call, result in zip(calls, [{"success": True, "items": []},
-                                             {"success": True, "items": []},
-                                             {"success": False, "error_code": "memory_search_failed"}])]
-    tools = SimpleNamespace(descriptors=AsyncMock(return_value=[{"operation": "memory.search"}]),
+    records = [{"tool": call["tool"], "arguments": call["arguments"], "result": {"success": index < 2,
+        "groups": [{"scope_slug": "team.ops", "success": index < 2,
+                    "items": [{"text": f"passage {index}"}] if index < 2 else [],
+                    **({"error_code": "memory_search_failed"} if index == 2 else {})}]}}
+        for index, call in enumerate(calls)]
+    tools = SimpleNamespace(descriptors=AsyncMock(return_value=[{"tool": "memory.search"}]),
                             execute=AsyncMock(side_effect=records))
     factory = lambda **kwargs: tools
     factory.MAX_CALLS = 3
@@ -308,10 +302,12 @@ async def test_planner_search_keys_include_arguments_and_failures_are_not_persis
     request = PlanRequest(context=PlannerContext(goal="goal", trigger="initial", execution_ledger={}, scope_context=scope.model_payload()))
     await planner.plan(request=request)
     results = request.context.planner_search_results
-    assert len(results) == 2
-    assert results[0]["query_key"] != results[1]["query_key"]
+    assert len(results) == 1
+    assert [item["text"] for item in results[0]["groups"][0]["items"]] == ["passage 0", "passage 1"]
+    assert results[0]["partial"]
     assert tools.execute.await_count == 3
-    assert planner._llm.invoke.await_args.kwargs["payload"]["memory_tool_results"] == records
+    from app.runtime.memory.document_memory import search_receipt
+    assert planner._llm.invoke.await_args.kwargs["payload"]["memory_tool_results"] == [search_receipt(record) for record in records]
 
 
 def test_planner_search_recall_requirements_reach_synthesis_guard():
@@ -322,14 +318,16 @@ def test_planner_search_recall_requirements_reach_synthesis_guard():
     assert _recall_requires_tool(context)
 
 
-def test_accumulated_memory_reads_do_not_prevent_completed_plan_synthesis():
+def test_memory_only_synthesis_keeps_original_passages_without_silent_truncation():
     import json
     from app.runtime.synthesis_context import SynthesisContextBuilder
-    plan = {"goal": "goal", "scope_context": {"keys": []}, "tasks": {}, "iterations": [
+    plan = {"goal": "goal", "scope_context": {"keys": ["company"]}, "tasks": {}, "iterations": [
         {"id": "i", "sequence": 1, "terminal": "synthesis", "synthesis_brief": {"purpose": "answer"}}],
         "memory_context": [{"type": "planner_memory_result", "result": {
-            "items": [{"subject": "x", "content": "x" * 2000}]}} for _ in range(30)]}
+            "backend": "hipporag", "groups": [{"scope_slug": "company", "success": True,
+            "items": [{"subject": "x", "text": "x" * 2000}]}]}} for _ in range(30)]}
     result = SynthesisContextBuilder(max_chars=4000).build(plan=plan, iteration_id="i")
-    assert result["memory_context_truncated"]
-    assert len(json.dumps(result)) <= 4000
+    assert "memory_context_truncated" not in result
+    assert result["memory_context"][0]["result"]["groups"][0]["items"][0]["text"] == "x" * 2000
+    assert len(json.dumps(result)) > 4000
     assert len(plan["memory_context"]) == 30
