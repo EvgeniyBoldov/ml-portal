@@ -24,7 +24,8 @@ from app.runtime.budgets import BudgetRegistry, BudgetResolver
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot, serialize_limits
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.runtime.input_builders import SynthesizerInputBuilder
-from app.runtime.llm.streaming import RoleStreamingCall, StreamDelta, StreamError, StreamTurn
+from app.runtime.llm.streaming import RoleStreamingCall, StreamDelta, StreamError, StreamTurn, StreamContext
+from app.adapters.impl.llm_context import estimate_request_tokens
 from app.runtime.turn_state import RuntimeTurnState
 from app.services.system_llm_role_service import SystemLLMRoleService
 from app.services.runtime_limits_service import RuntimeLimitsService
@@ -119,10 +120,19 @@ class Synthesizer:
             results=catalog, task_ids={str(item["task_id"]) for item in reports if item.get("task_id")},
             result_ids=result_references(reports), results_status=catalog_status,
         )}
+        from app.runtime.prompt_projections import synthesis_for_prompt
+        synthesis_context = synthesis_for_prompt(synthesis_context)
 
         # Load synthesizer role config early for context snapshot
         synth_role_cfg = await self._load_role_config()
         role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get("synthesizer")
+        brief = synthesis_context.get("synthesis_brief") or {}
+        file_delivery = brief.get("delivery") in {"files", "text_and_files"} or bool(brief.get("files"))
+        if file_delivery:
+            from app.runtime.synthesis_files import FILE_OUTPUT_REQUIREMENTS
+            # Text examples demonstrate a different transport contract. Do not
+            # carry them (including sandbox examples) into file generation.
+            role_override = {**(role_override or {}), "output_requirements": FILE_OUTPUT_REQUIREMENTS, "examples": []}
         if isinstance(role_override, dict):
             if role_override.get("model"):
                 synth_role_cfg["model"] = str(role_override["model"])
@@ -137,25 +147,16 @@ class Synthesizer:
         synth_prompt += (
             "\n# RUN CONTEXT\nUse run_context.original_request, constraints and answer_requirements to preserve the user's intent. "
             "run_context.evidence contains observed source material; respect source identity, scope and truncation. "
+            "run_context.conversation_materials contains only explicitly selected historical messages as task material. "
+            "Use them for requested rewriting or comparison, never as proof of a current check or completed action. "
+            "Full dialogue and the chat snapshot belong to preflight and are not part of this input. "
             "For content_mode=generative or mixed you may create requested examples and prose; do not invent company facts or claim unobserved actions. "
             "Selected run evidence may support the answer even when task reports are empty."
-        )
-        synth_prompt += (
-            "\n\n# USER-FACING LIMITATIONS\n"
-            "Не раскрывай технические ошибки, трассировки, коды сбоев или детали работы планера. "
-            "Сообщай только подтверждённые ограничения выполнения. При отсутствии прав доступа "
-            "или учётных данных прямо скажи, что соответствующие данные получить не удалось."
         )
         if (synthesis_context.get("execution_summary") or {}).get("partial"):
             synth_prompt += (
                 "\n\n# PARTIAL ANSWER\n"
-                "Дай полезный частичный ответ на исходный вопрос только по подтверждённым данным. "
-                "Не утверждай, что незавершённые действия выполнены. Кратко сообщи ограничения "
-                "из limitations и execution_summary. Не раскрывай внутренние ошибки, имена "
-                "компонентов, коды ошибок, промпты и детали планирования. Не приписывай сбой "
-                "лимиту или времени, если это не указано в безопасном описании ограничения. "
-                "Если данные недоступны из-за прав или учётных данных, прямо скажи об этом. "
-                "Если подтверждённых данных недостаточно, сообщи это без выдуманного ответа."
+                "execution_summary.partial=true. Используй подтверждённую часть данных и ограничения из limitations."
             )
         synth_prompt += (
             "\n\n# MEMORY SCOPE GROUPS\n"
@@ -163,7 +164,7 @@ class Synthesizer:
             "Сохраняй принадлежность утверждений к scope; ошибка группы не означает отсутствия сведений. "
             "Не приписывай свойства объекта из одного scope объекту другого scope. "
             "\n\n# EXECUTION FOCUS\n"
-            "scope_context и execution_context — подтверждённый приложением текущий набор scope чата. "
+            "scope_context — подтверждённый приложением текущий набор scope чата. "
             "Используй его для понимания области ответа. Он не доказывает внешние результаты. "
             "Пустой фокус допустим; не задавай вопрос о техническом скоупе и не требуй выбрать его для готового ответа."
         )
@@ -310,6 +311,7 @@ class Synthesizer:
                 purpose="final_answer",
                 actor_type="synthesizer",
                 actor_entity_id=synthesis_run_id,
+                input_tokens_estimate=estimate_request_tokens({"model": effective_model, "messages": messages, **(params or {})}),
             )
             async for stream_event in self._streaming_call.invoke_stream(
                 role=SystemLLMRoleType.SYNTHESIZER,
@@ -322,6 +324,11 @@ class Synthesizer:
                 budget_registry=budget_registry,
                 budget_entity_id=synthesis_run_id,
             ):
+                if isinstance(stream_event, StreamContext):
+                    yield RuntimeEvent.status("llm_context_allocated", entity_type="llm_call", entity_id=llm_call_id,
+                        parent_entity_type="synthesis_run", parent_entity_id=synthesis_run_id,
+                        attempt=attempt + 1, **stream_event.allocation)
+                    continue
                 if isinstance(stream_event, StreamDelta):
                     if stream_event.chunk:
                         emitted_delta = True

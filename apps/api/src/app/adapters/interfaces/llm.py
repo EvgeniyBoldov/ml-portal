@@ -47,6 +47,7 @@ class LLMCallOptions:
     timeout_s: Optional[float] = None
     output_token_cap: Optional[int] = None
     on_transport_retry: Optional[Callable[[], Awaitable[None]]] = None
+    on_context_allocation: Optional[Callable[[Mapping[str, Any]], Awaitable[None]]] = None
 
 
 @dataclass(frozen=True)

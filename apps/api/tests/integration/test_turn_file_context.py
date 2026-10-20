@@ -109,14 +109,23 @@ async def test_generated_file_representation_and_run_survive_new_session(databas
         assert same.artifact_id == artifact.artifact_id
         read = await ArtifactRepresentationService(session).read(artifact_id=artifact.artifact_id,
             chat_id=chat, owner_id=owner, tenant_id=None)
-        context = RunContext(original_request="Create example", constraints=["Python"])
-        context.add_evidence("file.read", {"artifact_id": artifact.artifact_id}, read)
+        context = RunContext(original_request="Create example", constraints=["Python"],
+            chat_snapshot={"recent_anchor": {"assistant_outcome": "UNSELECTED_OLD_ANSWER"}},
+            recent_dialogue=[{"message_id": "selected", "role": "assistant", "content": "Selected example"}])
+        evidence_id = context.add_evidence("file.read", {"artifact_id": artifact.artifact_id}, read)
+        context.task_brief = {"goal": "Create example", "direction": "Use the selected example",
+            "expected_result": "Python file", "constraints": ["Python"],
+            "message_refs": ["selected"], "evidence_refs": [evidence_id],
+            "resolved_references": [{"expression": "example", "meaning": "Selected example", "source_message_ids": ["selected"]}]}
         await RuntimeRunContextService(session).save(run_id=run_id, chat_id=chat, owner_id=owner, branch_id=None, context=context)
         await session.commit()
     async with database() as session:
         restored = await RuntimeRunContextService(session).load(run_id=run_id, chat_id=chat, owner_id=owner, branch_id=None)
         assert restored.constraints == ["Python"]
         assert restored.evidence[0].data["content"] == "print('hello')"
+        assert restored.task_brief == context.task_brief
+        assert restored.projection()["conversation_materials"][0]["message_id"] == "selected"
+        assert "UNSELECTED_OLD_ANSWER" not in str(restored.projection())
         cached = await ArtifactRepresentationService(session).read(artifact_id=artifact.artifact_id,
             chat_id=chat, owner_id=owner, tenant_id=None)
         assert cached["reused"] and cached["representation_id"] == read["representation_id"]

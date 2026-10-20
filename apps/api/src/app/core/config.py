@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     FILE_DATA_INDEX_TTL_SECONDS: int = Field(default=86400, ge=60)
     SYNTHESIS_MAX_FILES: int = Field(default=8, ge=1)
     ROOT_CONTEXT_MAX_TOOL_CALLS: int = Field(default=6, ge=1)
+    LLM_SCHEMA_REPAIR_MAX_ERRORS: int = Field(default=12, ge=1, le=100)
     CHAT_HISTORY_PAGE_LIMIT: int = Field(default=20, ge=1, le=100)
     CHAT_HISTORY_MESSAGE_MAX_CHARS: int = Field(default=4000, ge=1)
     

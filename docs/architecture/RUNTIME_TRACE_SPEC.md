@@ -98,6 +98,16 @@ reconstruct retry chains from adjacent sequence numbers, timestamps, or a
 shared executor parent. Historical rows that used a different ID per retry
 remain compatible through their explicit shared `logical_llm_call_id`.
 
+Each structured request records its attempt number and `input_tokens_estimate`
+using the same serialization/token estimator as the outbound adapter, including
+tool contracts and `response_format`. Streaming/agent requests use that
+estimator too. Structured and streaming calls additionally emit
+`status(stage=llm_context_allocated)` under their `llm_call`, with resolved model,
+context window, estimated/reserved input, minimum output and available output.
+This event precedes a local context rejection, so an emitted request does not
+prove that the provider received it. Estimates for non-OpenAI tokenizers use
+the documented fallback encoding and safety margin; they are not provider usage.
+
 When native tool calling is unavailable, the failed native attempt still emits
 a terminal `llm_response`; the plaintext-protocol fallback emits a correlated
 `protocol_retry` and reuses the same call ID. A fallback must never leave its
@@ -340,3 +350,11 @@ shared read-only viewer. Memory tool response and Memory tabs reuse the same vie
 An empty recorded snapshot is distinguished from an absent historical snapshot.
 This is context made available to an executor, not proof that every item caused
 a claim in its final answer. Candidate writeback remains separate.
+
+Successful planner envelope recovery is recorded as a status on the same LLM call:
+`stage=llm_response_normalized`, `attempt`, and `normalizations=[{path,operation}]`.
+Operations are `infer_proposal_kind`, `move_proposal_kind_to_root`,
+`unwrap_proposal_envelope`, and `wrap_legacy_proposal`. The record contains no
+copied task data. The original model text stays in `llm_response`; the accepted
+canonical iteration is persisted by orchestration. A normalization record is
+not evidence that task execution has succeeded.

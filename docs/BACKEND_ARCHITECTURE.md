@@ -29,13 +29,44 @@ Response contracts for active runtime roles (Planner, Memory Preparer, Fact
 Extractor, Fact Compactor and Synthesizer) are generated dynamically from
 Pydantic models:
 
-- **Source of truth**: Pydantic models (`IterationProposal`,
+- **Source of truth**: Pydantic models (`PlannerStep` with nested `IterationProposal`,
   `_PreparationOutput`, `_LLMFactOutput`, `_CompactionOutput`) define the JSON
   schema for structured roles
 - **Schema generation**: `build_response_contract()` in `app/services/system_llm_role_contracts.py` generates JSON Schema via `model_json_schema()`
 - **Enrichment**: Schema is enriched with contract metadata (`x_when` for conditional fields, `oneOf` for discriminated unions)
 - **Startup validation**: `validate_role_contracts()` runs on startup and blocks app launch if schema divergence detected
 - **Format lock**: All built-in roles have `format_locked: true` — contracts are read-only in UI
+- **Request assembly**: Shared structured calls send the compact generated schema
+  once in `response_format.json_schema`; system prompts retain behavior rules and
+  examples without a generated schema copy. On fallback to `json_object`, the
+  same schema moves into the system prompt. Local Pydantic validation runs in
+  either mode. File synthesis follows the same contract transport.
+
+Root tool descriptors carry names/descriptions only: their argument models
+already belong to the structured response schema. Role examples come only from
+the configured database role; backend contracts add mechanics without another
+set of demonstrations. Native agent tools carry operation schemas in `tools`;
+plaintext agents carry them in one tools block, with collection cards listing
+only operation names. Agents with tools keep the completion schema in their
+prompt and validate it locally; LLM-only tasks use `response_format` with a
+schema-free completion instruction. File synthesis replaces the text-output
+section with its JSON delivery contract before compiling the prompt.
+
+Prompt projections remove identical compatibility aliases (`description` versus
+`answer`, `outputs` versus `structured_response`), preserving distinct legacy
+values and the original persisted results. Planner receives goal once, brief
+requirements once, selected run materials and one canonical `scope_context`.
+Preflight retains conversation context but omits an echoed current message and
+anchor text already represented in the dialogue. Inventories carry metadata;
+tool instructions live in system/tool contracts. Schema correction keeps only
+the latest failed answer and bounded validation feedback, without Pydantic's
+copy of the rejected input (`LLM_SCHEMA_REPAIR_MAX_ERRORS`, default 12). Real
+tool results and interaction history remain intact.
+
+Migration `0197` compacts only the three audited verbose role profiles by exact
+policy fingerprint. It preserves identity, examples, model and parameters,
+backs up the previous policy in role extras, and skips customized profiles.
+Downgrade restores only policies that have not subsequently been edited.
 
 ### Contract Types
 

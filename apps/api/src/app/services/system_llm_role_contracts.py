@@ -55,7 +55,7 @@ def _get_output_model(role: SystemLLMRoleType) -> Type[BaseModel] | None:
     model: Type[BaseModel] | None = None
 
     if role == SystemLLMRoleType.PLANNER:
-        from app.runtime.planner.graph_planner import PlannerStep
+        from app.runtime.planner.response_contract import PlannerStep
         model = PlannerStep
     elif role == SystemLLMRoleType.TURN_PREFLIGHT:
         from app.runtime.turn_preflight import TurnPreflightDecision
@@ -107,7 +107,7 @@ def _enrich_schema_with_contract_metadata(schema: Dict[str, Any], role: SystemLL
 
 
 @lru_cache(maxsize=32)
-def build_response_contract(role_type: SystemLLMRoleType | str) -> Dict[str, Any]:
+def build_response_contract(role_type: SystemLLMRoleType | str, *, delivery: str = "text") -> Dict[str, Any]:
     """Build response contract for a system LLM role.
 
     JSON schemas are generated from Pydantic models to ensure contract matches
@@ -117,6 +117,11 @@ def build_response_contract(role_type: SystemLLMRoleType | str) -> Dict[str, Any
     role = SystemLLMRoleType(normalized)
     examples_v2 = get_role_examples(role)
 
+    if role == SystemLLMRoleType.SYNTHESIZER and delivery in {"files", "text_and_files"}:
+        from app.runtime.synthesis_files import FileSynthesisOutput
+        return _json_contract(FileSynthesisOutput.model_json_schema(),
+                              on_invalid="retry_with_runtime_limits_then_fail")
+
     # Try to get Pydantic model for this role
     output_model = _get_output_model(role)
 
@@ -125,13 +130,16 @@ def build_response_contract(role_type: SystemLLMRoleType | str) -> Dict[str, Any
         schema = output_model.model_json_schema()
         # Enrich with contract-specific metadata
         schema = _enrich_schema_with_contract_metadata(schema, role)
-        contract = _json_contract(schema, on_invalid="retry_once_then_fallback", format_locked=True)
+        contract = _json_contract(schema, on_invalid=(
+            "retry_with_runtime_limits_then_fail" if role == SystemLLMRoleType.PLANNER
+            else "retry_with_runtime_limits_then_configured_fallback"
+        ), format_locked=True)
         contract["examples_v2"] = examples_v2
         return contract
 
     if role == SystemLLMRoleType.SYNTHESIZER:
         contract = _plain_text_contract(
-            on_invalid="accept_with_runtime_safety_filters",
+            on_invalid="report_stream_failure",
             criteria=[
                 "Answer must be grounded in provided context and facts",
                 "Keep response concise and readable",

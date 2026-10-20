@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +28,12 @@ class ChatHistoryService:
             content = row.content.get("text", "") if isinstance(row.content, dict) else str(row.content or "")
             if not isinstance(content, str):
                 content = json.dumps(content, ensure_ascii=False)
+            meta = row.meta if isinstance(getattr(row, "meta", None), dict) else {}
+            created_at = getattr(row, "created_at", None)
             messages.append({"message_id": str(row.id), "role": row.role,
+                **({"created_at": created_at.isoformat()} if isinstance(created_at, datetime) else {}),
+                **({"source_run_id": meta["runtime_run_id"]} if meta.get("runtime_run_id") else {}),
+                **({"status": meta["runtime_status"]} if meta.get("runtime_status") else {}),
                 "content": content[:settings.CHAT_HISTORY_MESSAGE_MAX_CHARS],
                 "truncated": len(content) > settings.CHAT_HISTORY_MESSAGE_MAX_CHARS})
         return {"messages": messages, "has_more": has_more,

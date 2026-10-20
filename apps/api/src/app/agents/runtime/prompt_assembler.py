@@ -106,13 +106,11 @@ class PromptAssembler:
             resolved_operations=resolved_operations,
             prompt_labels=prompt_labels,
             prompt_budgets=prompt_budgets,
-            include_operation_contracts=not native_tool_calling,
+            # Detailed operation contracts live in native tools or the single
+            # plaintext tools block below, never in the collection cards too.
+            include_operation_contracts=False,
         )
-        system_operations_prompt = self.assemble_system_operations_prompt(
-            resolved_operations=resolved_operations,
-            prompt_labels=prompt_labels,
-            prompt_budgets=prompt_budgets,
-        ) if not native_tool_calling else ""
+        system_operations_prompt = ""
         constraints_prompt = self.assemble_constraints_prompt(
             exec_request=exec_request,
             policy_limits=resolved_policy_limits,

@@ -105,10 +105,11 @@ def test_initial_ledger_cannot_be_cleared_with_a_fictitious_resolution():
 
 
 def test_runtime_delegation_example_matches_the_envelope_and_input_catalog():
-    import json
-
-    example_input = json.loads(next(line.removeprefix("Input: ") for line in PLANNER_RUNTIME_CONTRACT.splitlines() if line.startswith("Input: ")))
-    output = json.loads(next(line.removeprefix("Output: ") for line in PLANNER_RUNTIME_CONTRACT.splitlines() if line.startswith("Output: ")))
+    from app.services.orchestration_prompts import PLANNER_PROMPT_V3
+    # Operator-managed role examples are the sole source of demonstrations.
+    assert "Output: " not in PLANNER_RUNTIME_CONTRACT
+    example_input = PLANNER_PROMPT_V3["examples"][0]["input"]
+    output = PLANNER_PROMPT_V3["examples"][0]["output"]
     Draft202012Validator(PlannerStep.model_json_schema()).validate(output)
     step = PlannerStep.model_validate(output)
     compiled = GraphOrchestrator._compile(step.proposal, example_input["available_agents"], example_input["execution_ledger"])

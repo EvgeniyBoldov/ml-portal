@@ -61,9 +61,10 @@ def test_synthesis_uses_accepted_partial_output_and_keeps_unresolved_limitation(
     reports = context["completed_task_reports"]
     assert {report["task_id"] for report in reports} == {"partial", "missing"}
     partial = next(report for report in reports if report["task_id"] == "partial")
-    assert partial["description"] == "9 of 10"
+    assert partial["answer"] == "9 of 10"
     assert partial["status"] == "unfulfillable"
-    assert partial["outputs"] == {"nine": {"text": "nine"}, "ten": {"text": "ten"}}
+    assert partial["structured_response"] == {"nine": {"text": "nine"}, "ten": {"text": "ten"}}
+    assert "outputs" not in partial and "description" not in partial
 
     assert context["limitations"] == [{"task_id": "missing", "status": "failed", "reason_code": "access_denied", "message": "Access denied"}]
 

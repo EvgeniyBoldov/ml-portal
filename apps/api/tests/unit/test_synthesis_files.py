@@ -44,7 +44,7 @@ def setup(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_generated_file_becomes_verified_run_artifact(setup):
-    kwargs, generate, _ = setup
+    kwargs, generate, llm = setup
     message, artifacts, events = await generate_file_answer(**kwargs)
     assert message == "Готов файл"
     assert artifacts == kwargs["state"].run_context.generated_artifacts
@@ -52,6 +52,9 @@ async def test_generated_file_becomes_verified_run_artifact(setup):
     assert generate.await_args.kwargs["content"] == "print('hello')"
     assert [event.type.value for event in events] == ["tool_call", "tool_result"]
     assert str(UUID(events[0].data["call_id"])) == events[0].data["call_id"]
+    assert llm.await_args.kwargs["schema"] is FileSynthesisOutput
+    assert '"properties"' not in llm.await_args.kwargs["system_prompt"]
+    assert "response_format" in llm.await_args.kwargs["system_prompt"]
 
 
 @pytest.mark.asyncio

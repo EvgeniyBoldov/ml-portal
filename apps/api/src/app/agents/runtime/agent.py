@@ -259,6 +259,10 @@ class AgentToolRuntime(BaseRuntime):
         # Runtime contracts are appended after rendering, including sandbox
         # prompt overrides; agent-version instructions cannot replace them.
         terminal_contract_prompt = ctx.extra.get("task_completion_prompt")
+        native_completion_format = (ctx.extra.get("task_completion_response_format")
+                                    if not available_operations and ctx.extra.get("task_completion_instructions") else None)
+        if native_completion_format:
+            terminal_contract_prompt = ctx.extra.get("task_completion_instructions") or terminal_contract_prompt
         if isinstance(terminal_contract_prompt, str) and terminal_contract_prompt.strip():
             system_prompt += "\n\n" + terminal_contract_prompt
         run_id_override: Optional[UUID] = None
@@ -445,6 +449,8 @@ class AgentToolRuntime(BaseRuntime):
         pending_logical_llm_call_id: Optional[str] = None
         terminal_contract_correction_sent = False
         terminal_json_corrections = 0
+        from app.runtime.llm.repair import ProtocolRepair
+        protocol_repair = ProtocolRepair()
         require_retrieval = str(ctx.extra.get("task_freshness_policy") or "allow_memory") == "require_retrieval"
 
         def has_fresh_retrieval_receipt() -> bool:
@@ -521,14 +527,18 @@ class AgentToolRuntime(BaseRuntime):
                 llm_start = time.time()
                 raw_response_dict: Optional[Dict[str, Any]] = None
                 tools_payload = build_tools_payload(available_operations) if native_tool_calling else None
+                from app.adapters.impl.llm_context import estimate_request_tokens
                 yield RuntimeEvent.llm_request(
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
                     model=gen.model,
                     temperature=gen.temperature,
                     timeout_s=effective_llm_timeout_s,
-                    messages=llm_messages,
+                    messages=deepcopy(llm_messages),
                     tools=tools_payload,
+                    input_tokens_estimate=estimate_request_tokens({"model": gen.model, "messages": llm_messages,
+                        **({"response_format": native_completion_format} if native_completion_format else {}),
+                        **({"tools": tools_payload, "tool_choice": "required" if loop_state.force_tool_choice else "auto"} if tools_payload else {})}),
                     parent_entity_type="agent_execution",
                     parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
                     agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
@@ -556,14 +566,15 @@ class AgentToolRuntime(BaseRuntime):
                         loop_state.force_tool_choice = False
                         raw_response = self.llm.normalize_response(raw_response_dict)
                     else:
-                        terminal_response_format = ctx.extra.get("task_completion_response_format")
+                        # With tools, the completion schema is in the prompt.
+                        # An LLM-only task uses native schema mode instead.
                         raw_response = await self.llm.call(
                             messages=llm_messages,
                             model=gen.model,
                             temperature=gen.temperature,
                             timeout_s=effective_llm_timeout_s,
                             on_transport_retry=on_transport_retry,
-                            response_format=terminal_response_format,
+                            response_format=native_completion_format,
                         )
                 except asyncio.CancelledError:
                     logger.warning(
@@ -847,17 +858,6 @@ class AgentToolRuntime(BaseRuntime):
                         terminal_candidate = json.loads(parsed.text)
                     except (TypeError, ValueError):
                         terminal_candidate = None
-                    if isinstance(terminal_candidate, dict) and terminal_candidate.get("completion") == "interaction":
-                        require_interaction_allowed(ctx, "agent", agent.slug)
-                        question = InteractionQuestion.model_validate(terminal_candidate.get("interaction"))
-                        checkpoint = interaction_checkpoint()
-                        checkpoint["messages"].append({"role": "assistant", "content": question.question})
-                        yield RuntimeEvent(RuntimeEventType.WAITING_INPUT, {
-                            "question": question.question, "interaction_question": question.model_dump(mode="json"),
-                            "checkpoint": checkpoint,
-                        })
-                        await run_session.finish("waiting_input", question.question)
-                        return
                     # Do not force a tool call merely because tools exist: the
                     # agent owns the terminal choice.  A fulfilled declaration
                     # that contradicts require_retrieval gets one correction
@@ -869,23 +869,22 @@ class AgentToolRuntime(BaseRuntime):
                         terminal_validator(raw_response) if callable(terminal_validator)
                         else ([] if self._has_valid_task_completion_declaration(raw_response)
                               else ["Invalid terminal declaration: follow the supplied completion schema."])
-                    ) if terminal_response_format else []
+                    ) if terminal_response_format else (
+                        [] if not isinstance(terminal_candidate, dict) or terminal_candidate.get("completion") != "interaction"
+                        or self._has_valid_task_completion_declaration(parsed.text)
+                        else ["Invalid interaction completion declaration."]
+                    )
                     if (
                         terminal_response_format
                         and terminal_json_corrections < max(1, policy.max_retries)
                         and terminal_errors
                     ):
                         terminal_json_corrections += 1
-                        llm_messages.append({"role": "assistant", "content": raw_response})
-                        llm_messages.append({
-                            "role": "user",
-                            "content": (
-                                "The task declaration failed validation:\n" + "\n".join(terminal_errors)
-                                + "\nИсправь только оболочку ответа: completion, answer, structured_response, needs. "
-                                "Сохрани фактические данные. Схемы данных рекомендательны. "
-                                "Верни весь JSON без Markdown; не повторяй операции ради исправления протокола."
-                            ),
-                        })
+                        protocol_repair.apply(llm_messages, raw_response,
+                            "The task declaration failed validation:\n" + "\n".join(terminal_errors)
+                            + "\nИсправь только оболочку ответа: completion, answer, structured_response, needs, interaction. "
+                            "Сохрани фактические данные. Схемы данных рекомендательны. "
+                            "Верни весь JSON без Markdown; не повторяй операции ради исправления протокола.")
                         # A changed prompt is a new decision, not a transport
                         # retry. Keep native tools available to repair evidence.
                         await run_session.record_event("protocol_retry", {
@@ -899,6 +898,22 @@ class AgentToolRuntime(BaseRuntime):
                             "reason": "terminal_json_correction", "validation_errors": terminal_errors,
                         })
                         continue
+                    if isinstance(terminal_candidate, dict) and terminal_candidate.get("completion") == "interaction":
+                        if terminal_errors:
+                            message = "Invalid task completion declaration"
+                            yield RuntimeEvent.error(message, error_code="output_contract_invalid", recoverable=False)
+                            await run_session.finish("failed", message)
+                            return
+                        require_interaction_allowed(ctx, "agent", agent.slug)
+                        question = InteractionQuestion.model_validate(terminal_candidate.get("interaction"))
+                        checkpoint = interaction_checkpoint()
+                        checkpoint["messages"].append({"role": "assistant", "content": question.question})
+                        yield RuntimeEvent(RuntimeEventType.WAITING_INPUT, {
+                            "question": question.question, "interaction_question": question.model_dump(mode="json"),
+                            "checkpoint": checkpoint,
+                        })
+                        await run_session.finish("waiting_input", question.question)
+                        return
                     completion_claim = None
                     try:
                         candidate = json.loads(parsed.text)
@@ -914,11 +929,8 @@ class AgentToolRuntime(BaseRuntime):
                         and not has_fresh_retrieval_receipt()
                     ):
                         terminal_contract_correction_sent = True
-                        llm_messages.append({"role": "assistant", "content": raw_response})
-                        llm_messages.append({
-                            "role": "user",
-                            "content": "Your fulfilled declaration cannot be accepted: this task requires fresh retrieval and no successful retrieval receipt exists. Reconsider the next step. You may call an available operation, return needs if external data is missing, or return unfulfillable with a limitation.",
-                        })
+                        protocol_repair.apply(llm_messages, raw_response,
+                            "Your fulfilled declaration cannot be accepted: this task requires fresh retrieval and no successful retrieval receipt exists. Reconsider the next step. You may call an available operation, return needs if external data is missing, or return unfulfillable with a limitation.")
                         pending_llm_call_id = llm_call_id
                         pending_logical_llm_call_id = logical_llm_call_id
                         await run_session.record_event("protocol_retry", {
@@ -988,8 +1000,7 @@ class AgentToolRuntime(BaseRuntime):
                         invalid_operation_slugs=invalid_operation_slugs,
                         available_operations=available_operations,
                     )
-                    llm_messages.append({"role": "assistant", "content": raw_response})
-                    llm_messages.append({"role": "user", "content": retry_message})
+                    protocol_repair.apply(llm_messages, raw_response, retry_message)
                     retry_payload = {
                         "step": step + 1,
                         "reason": "invalid_operation_slug",

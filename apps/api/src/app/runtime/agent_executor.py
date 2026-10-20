@@ -62,10 +62,6 @@ from app.runtime.interaction import InteractionQuestion, InteractionRequester, R
 
 logger = get_logger(__name__)
 
-MAX_SUB_AGENT_MESSAGES = 6
-MAX_SUB_AGENT_MESSAGE_CHARS = 600
-
-
 def _render_memory_recall(recall: Dict[str, Any]) -> list[str]:
     """Keep remembered statements distinct from their documentary evidence."""
     lines: list[str] = []
@@ -445,6 +441,7 @@ class AgentExecutor:
         # Apply after prompt rendering so version/sandbox overrides cannot
         # replace the mandatory terminal task contract.
         ctx.extra["task_completion_prompt"] = build_task_completion_prompt(task)
+        ctx.extra["task_completion_instructions"] = build_task_completion_prompt(task, include_schema=False)
         ctx.extra["task_completion_validator"] = validate_terminal
 
         try:
@@ -571,6 +568,7 @@ class AgentExecutor:
         finally:
             ctx.extra.pop("task_completion_validator", None)
             ctx.extra.pop("task_completion_prompt", None)
+            ctx.extra.pop("task_completion_instructions", None)
 
         # 4. The terminal response is the sole task contract.  A second LLM
         # commit pass would make a valid response non-authoritative and add an
@@ -932,51 +930,21 @@ class AgentExecutor:
         """Compose sub-agent messages with the immutable task input contract.
 
         The complete typed ``task.inputs`` object is rendered as the final
-        task-input block; there is no special legacy recall-input path.
+        task-input block. Outer chat messages belong to preflight; the planner
+        passes any selected conversational material explicitly in task inputs.
         """
-        query = task.instructions
-        if not query:
-            query = goal or (outer_messages[-1].get("content", "") if outer_messages else "")
-
-        # Drop previous system messages (the sub-agent injects its own system prompt).
-        # Keep only the latest bounded slice and trim message size to control token usage.
+        query = task.instructions or goal
         non_system: List[Dict[str, Any]] = []
-        for msg in outer_messages:
-            if msg.get("role") == "system":
-                continue
-            role = str(msg.get("role") or "").strip()
-            content = str(msg.get("content", "")).strip()
-            if not role or not content:
-                continue
-            # Do not feed prior provider limit errors back into the sub-agent —
-            # they create self-reinforcing prompt bloat and repeated failures.
-            lowered = content.lower()
-            if (
-                "error code: 413" in lowered
-                or "request too large" in lowered
-                or "rate_limit_exceeded" in lowered
-                or "tokens per minute" in lowered
-            ):
-                continue
-            non_system.append(
-                {
-                    "role": role,
-                    "content": content[:MAX_SUB_AGENT_MESSAGE_CHARS],
-                }
-            )
-        non_system = non_system[-MAX_SUB_AGENT_MESSAGES:]
-        # Replace last user message with the focused query for this sub-agent step.
-        if non_system and non_system[-1].get("role") == "user":
-            non_system = non_system[:-1]
 
         # Build the final user message: inject recall context if present
         parts: List[str] = []
         from app.runtime.memory.execution_context import memory_execution_context
         execution = execution_context if execution_context is not None else memory_execution_context(
             (task.scope_context or {}).get("keys") or [])
-        parts.append("[Execution context — application fact]\n" + json.dumps(execution, ensure_ascii=False))
         if task.scope_context:
             parts.append("[Task scope]\n" + json.dumps(task.scope_context, ensure_ascii=False, default=str))
+        else:
+            parts.append("[Execution context — application fact]\n" + json.dumps(execution, ensure_ascii=False))
         if task.contract.input_schema:
             parts.append("[Input schema — advisory; actual input takes precedence]\n" + json.dumps(task.contract.input_schema, ensure_ascii=False, default=str))
         if task.inputs:
@@ -992,10 +960,11 @@ class AgentExecutor:
             for task_id, output in task.dependency_outputs.items():
                 if not isinstance(output, dict):
                     continue
-                projection = {
+                from app.runtime.prompt_projections import task_result_for_prompt
+                projection = task_result_for_prompt({
                     "outcome": output.get("outcome"),
                     "status": output.get("status"),
-                    "description": str(output.get("description") or "")[:1200],
+                    "description": output.get("description"),
                     "outputs": output.get("outputs") or {},
                     "answer": output.get("answer"),
                     "structured_response": output.get("structured_response"),
@@ -1004,7 +973,7 @@ class AgentExecutor:
                     "receipts": list((output.get("verified") or {}).get("receipts") or [])[:8],
                     "evidence": (output.get("verified") or {}).get("evidence") or {},
                     "artifacts": list((output.get("verified") or {}).get("artifacts") or [])[:8],
-                }
+                })
                 try:
                     rendered = json.dumps(projection, ensure_ascii=False, default=str)
                 except (TypeError, ValueError):

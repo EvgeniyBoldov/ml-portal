@@ -17,7 +17,7 @@ from app.core.http.tls import outbound_http_verify
 from app.services.model_connector_profiles import build_model_auth_headers
 from app.adapters.interfaces.llm import LLMCallOptions, LLMConnectionResolver, LLMErrorCode, LLMProviderError
 from app.services.llm_connection_resolver import RegistryLLMConnectionResolver
-from app.adapters.impl.llm_context import allocate_context, context_exhausted
+from app.adapters.impl.llm_context import inspect_context, context_exhausted
 
 logger = get_logger(__name__)
 
@@ -319,7 +319,12 @@ class OpenAICompatibleLLM:
         # cannot override it through either provider parameter spelling.
         request.pop("max_tokens", None)
         request.pop("max_completion_tokens", None)
-        allocation = allocate_context(request, context_window)
+        allocation = inspect_context(request, context_window)
+        if options is not None and options.on_context_allocation is not None:
+            from dataclasses import asdict
+            await options.on_context_allocation({"model": request.get("model"), **asdict(allocation)})
+        if allocation.max_output_tokens < allocation.minimum_output_tokens:
+            raise context_exhausted()
         request["max_tokens"] = allocation.max_output_tokens
         if options is not None and options.output_token_cap is not None:
             if options.output_token_cap < 1:

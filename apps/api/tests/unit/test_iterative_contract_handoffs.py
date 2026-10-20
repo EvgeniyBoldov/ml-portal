@@ -81,7 +81,7 @@ def test_latest_resolution_controls_synthesis_and_report_unresolved_is_visible()
 
     context = SynthesisContextBuilder().build(plan=plan, iteration_id="iteration")
 
-    assert context["completed_task_reports"][0]["description"] == "partial"
+    assert context["completed_task_reports"][0]["answer"] == "partial"
     assert context["limitations"] == [{"task_id": "task", "status": "unfulfillable", "reason_code": "incomplete", "message": "Still incomplete"}]
     assert context["resolution_decisions"] == [{"task_id": "task", "action": "report_unresolved", "output_keys": [], "reason": "current"}]
 

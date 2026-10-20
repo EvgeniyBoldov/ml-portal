@@ -56,8 +56,13 @@ class ChatContextService:
                 content_text = json.dumps(content_text)
 
             message_id = getattr(msg, "id", None)
+            created_at = getattr(msg, "created_at", None)
+            meta = msg.meta if isinstance(getattr(msg, "meta", None), dict) else {}
             context.append({
                 **({"message_id": str(message_id)} if message_id is not None else {}),
+                **({"created_at": created_at.isoformat()} if isinstance(created_at, datetime) else {}),
+                **({"source_run_id": meta["runtime_run_id"]} if meta.get("runtime_run_id") else {}),
+                **({"status": meta["runtime_status"]} if meta.get("runtime_status") else {}),
                 "role": msg.role,
                 "content": str(content_text),
                 **(

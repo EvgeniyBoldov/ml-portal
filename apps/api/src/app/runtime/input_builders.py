@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any, Dict, List
 from copy import deepcopy
 
-from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.memory.effective_scope import project_memory_context
 from app.runtime.datastore_context import build_datastore, task_files
+from app.runtime.prompt_projections import synthesis_for_prompt
 
 
 MAX_AGENT_DESCRIPTION_CHARS = 280
@@ -75,26 +75,12 @@ def compact_memory_tool_records(records: Any) -> list[dict[str, Any]]:
     return compacted
 
 
-def _planner_search_summaries(records: Any) -> list[dict[str, Any]]:
-    """Expose search bookkeeping without repeating passages from memory_context."""
-    summaries = []
-    for record in records or []:
-        if not isinstance(record, dict):
-            continue
-        result = record.get("result") if isinstance(record.get("result"), dict) else {}
-        summaries.append({
-            "tool": record.get("tool"),
-            "arguments": record.get("arguments"),
-            "success": result.get("success", True),
-            "count": result.get("count"),
-        })
-    return summaries
-
-
 def _planner_memory_projection(entries: Any, scope_keys: list[str]) -> list[dict[str, Any]]:
     """Keep evidence useful for planning without serializing nested search copies."""
     projected: list[dict[str, Any]] = []
     for entry in entries or []:
+        if isinstance(entry, dict) and entry.get("type") in {"chat_context", "project_context"}:
+            continue
         if not isinstance(entry, dict) or entry.get("type") != "planner_memory_result":
             projected.append(entry)
             continue
@@ -157,24 +143,9 @@ class PlannerInputBuilder:
                 context.memory_context, list(context.scope_context.get("keys") or []),
             ),
             "scope_context": context.scope_context,
-            "execution_context": memory_execution_context(context.scope_context.get("keys") or [],
-                revision=int(context.scope_context.get("revision") or 0)),
-            "planner_search_results": _planner_search_summaries(context.planner_search_results),
-            "task_brief": context.task_brief,
+            "task_brief": {key: value for key, value in context.task_brief.items()
+                           if key != "goal" or value != context.goal},
             "available_agents": agents,
-            "iteration_contract": {
-                "protocol_version": 2,
-                "data_schemas_are_advisory": True,
-                "only_required_artifacts_are_enforced": True,
-                "bindings_allow_prior_completed_producers": True,
-                "tasks_are_agents_only": True,
-                "terminal": ["planner", "synthesis"],
-                "synthesis_requires_brief": True,
-                "partial_results_require_resolution": True,
-                "bindings_require_pending_needs": True,
-                "empty_needs_require_empty_bindings": True,
-                "bound_consumer_inputs_must_be_omitted": True,
-            },
         }
         return payload
 
@@ -200,6 +171,6 @@ class SynthesizerInputBuilder:
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
-                "content": json.dumps(synthesis_context, ensure_ascii=False, default=str, indent=2),
+                "content": json.dumps(synthesis_for_prompt(synthesis_context), ensure_ascii=False, default=str, separators=(",", ":")),
             },
         ]

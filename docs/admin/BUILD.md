@@ -12,6 +12,11 @@ make dev-up
 The local base is `ml-portal-base-ml:latest`. It is intentionally unrelated to
 production release tags.
 
+MCP images install dependencies from the selected server's `requirements.txt`
+before copying its source. The dependency layer is reused while that file is
+unchanged, and changes to another MCP server do not invalidate the image's
+source layer.
+
 ## Production release
 
 Production images are built only on a DevOps workstation from a clone of the

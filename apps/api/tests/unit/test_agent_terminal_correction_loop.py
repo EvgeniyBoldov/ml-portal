@@ -19,14 +19,23 @@ from app.services.runtime_event_logger import RuntimeLoggingLevel
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("repair", [False, True])
-async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native_tools(monkeypatch, native, repair):
+@pytest.mark.parametrize("with_tools", [False, True])
+@pytest.mark.parametrize("first_response", ["prose", "invalid_interaction", "interaction_exhausted", "valid_interaction"])
+async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native_tools(monkeypatch, native, repair, with_tools, first_response):
     task = TaskRequest(task_id="task", executor="viewer", intent="list", instructions="List",
                        expected_outputs=[{"key": "list", "description": "List", "schema": {"type": "array"}}])
     valid = json.dumps({"completion": "fulfilled", "report": "done", "outputs": {
         "list": {"kind": "value", "value": []}}, "needs": []})
     responses = ["Here is the list.", json.dumps({"completion": "fulfilled", "report": "done",
                                                  "outputs": {"list": []}, "needs": []}), valid]
-    if not repair:
+    if first_response in {"invalid_interaction", "interaction_exhausted"}:
+        responses[0] = json.dumps({"completion": "interaction", "interaction": {"question": "Which?"},
+                                   "needs": [{"ref": "n", "key": "x", "description": "Missing"}]})
+    if first_response == "interaction_exhausted":
+        responses = [responses[0]] * 3
+    elif first_response == "valid_interaction" and repair:
+        responses[-1] = json.dumps({"completion": "interaction", "interaction": {"question": "Which?"}})
+    elif not repair:
         responses[-1] = responses[1]
     runtime = AgentToolRuntime(Mock())
     runtime.llm.call = AsyncMock(side_effect=responses)
@@ -46,6 +55,7 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
     deps = SimpleNamespace(sandbox_overrides={"prompt": "Sandbox override: answer in prose"}, resolved_operations=[])
     ctx = SimpleNamespace(extra={"task_completion_response_format": {"type": "json_schema"},
                                  "task_completion_prompt": build_task_completion_prompt(task),
+                                 "task_completion_instructions": build_task_completion_prompt(task, include_schema=False),
                                  "task_completion_validator": lambda raw: AgentExecutor._terminal_validation_errors(
                                      raw, task=task, verified={})},
                           get_runtime_deps=lambda: deps, set_runtime_deps=lambda value: None, log_intent=AsyncMock())
@@ -55,18 +65,37 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
         target=ProviderExecutionTarget(operation_slug="test.read", provider_type="local",
             handler_slug="test.read", data_instance_id="system", data_instance_slug="system"))],
                               resolved_data_instances=[], rbac_audit={}, partial_mode_warning=None, run_id=uuid4())
+    if not with_tools:
+        request.resolved_operations = []
+    request.agent_version = None
     events = [event async for event in runtime.execute(request, [{"role": "user", "content": "List"}], ctx)]
+    if first_response == "interaction_exhausted":
+        assert not any(event.type in {RuntimeEventType.WAITING_INPUT, RuntimeEventType.FINAL} for event in events)
+        assert any(event.type == RuntimeEventType.ERROR and event.data.get("error_code") == "output_contract_invalid" for event in events)
+        return
+    if first_response == "valid_interaction" and repair:
+        waiting = [event for event in events if event.type == RuntimeEventType.WAITING_INPUT]
+        assert len(waiting) == 1
+        assert waiting[0].data["question"] == "Which?"
+        assert not any(event.type == RuntimeEventType.FINAL for event in events)
+        return
     final = [event for event in events if event.type == RuntimeEventType.FINAL]
     assert len(final) == 1
+    assert not any(event.type == RuntimeEventType.WAITING_INPUT for event in events)
     assert final[0].data["content"] == responses[-1]
     assert bool(ctx.extra["task_completion_validator"](responses[-1])) is not repair
-    calls = runtime.llm.call_raw if native else runtime.llm.call
+    calls = runtime.llm.call_raw if native and with_tools else runtime.llm.call
     assert calls.await_count == 3
-    if native:
+    if native and with_tools:
         runtime.llm.call.assert_not_awaited()
         assert all(call.kwargs["tools"] for call in calls.await_args_list)
         assert all(call.kwargs["response_format"] is None for call in calls.await_args_list)
     requests = [event.data for event in events if event.type == RuntimeEventType.LLM_REQUEST]
+    counts = [len(event["messages"]) for event in requests]
+    assert counts == [counts[0], counts[0] + 2, counts[0] + 2]
+    assert all((call.kwargs["response_format"] is None) == with_tools for call in calls.await_args_list)
+    system = requests[0]["messages"][0]["content"]
+    assert ("JSON Schema протокола из Pydantic" in system) == with_tools
     assert len({event["llm_call_id"] for event in requests}) == 3
     for event in requests:
         system = event["messages"][0]["content"]

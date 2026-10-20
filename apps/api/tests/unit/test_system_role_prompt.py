@@ -29,7 +29,7 @@ def test_role_sections_are_identical_in_database_and_both_callers():
     assert prompt.count("# PLANNER TOOL LOOP\n") == 1
 
 
-def test_planner_overrides_are_preserved_with_locked_generated_schema():
+def test_planner_overrides_are_preserved_without_copying_provider_schema():
     config = {"role_type": "planner", **PLANNER_PROMPT_V3}
     overrides = {"rules": "CUSTOM RULES", "output_requirements": "CUSTOM OUTPUT", "examples": []}
     prompt = StructuredLLMCall._compile_role_prompt(config, overrides, schema=PlannerStep)
@@ -37,11 +37,9 @@ def test_planner_overrides_are_preserved_with_locked_generated_schema():
     assert "CUSTOM OUTPUT" in prompt
     assert PLANNER_PROMPT_V3["rules"] not in prompt
     assert "# EXAMPLES" not in prompt
-    encoded = prompt.split("по следующей схеме (без markdown и пояснений):\n", 1)[1]
-    schema = json.loads(encoded)
-    assert schema == StructuredLLMCall._compact_response_schema(PlannerStep.model_json_schema())
-    assert "\n" not in encoded
-    Draft202012Validator.check_schema(schema)
+    assert "response_format" in prompt
+    assert '"$defs"' not in prompt
+    assert '"oneOf"' not in prompt
 
 
 def test_override_none_inherits_and_empty_string_clears_section():

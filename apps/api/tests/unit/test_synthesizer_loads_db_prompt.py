@@ -69,6 +69,31 @@ def _synthesis_context(*, artifacts=None) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_file_delivery_replaces_text_output_contract_before_compilation(monkeypatch):
+    from app.runtime.synthesis_files import FILE_OUTPUT_REQUIREMENTS
+    captured = {}
+
+    async def generate(**kwargs):
+        captured.update(kwargs)
+        return "done", [], []
+
+    monkeypatch.setattr("app.runtime.synthesis_files.generate_file_answer", generate)
+    monkeypatch.setattr("app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
+        AsyncMock(return_value={"identity": "Editor", "rules": "Keep facts", "model": "test",
+                               "output_requirements": "TEXT_ONLY_SENTINEL. Return ordinary text, never JSON.",
+                               "examples": [{"input": {}, "output": "TEXT_EXAMPLE_SENTINEL"}]}))
+    state = _runtime_state()
+    synth = Synthesizer(session=SimpleNamespace(), llm_client=_LLMClientProbe([]))
+    context = {**_synthesis_context(), "synthesis_brief": {"delivery": "files", "files": [{"filename": "a.txt", "format": "txt"}]}}
+    events = [event async for event in synth.stream(runtime_state=state, run_id=state.run_id, synthesis_context=context)]
+    assert events
+    assert captured["prompt"].count(FILE_OUTPUT_REQUIREMENTS) == 1
+    assert "TEXT_ONLY_SENTINEL" not in captured["prompt"]
+    assert "TEXT_EXAMPLE_SENTINEL" not in captured["prompt"]
+    assert "Keep facts" in captured["prompt"]
+
+
+@pytest.mark.asyncio
 async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     llm = _LLMClientProbe(["hello ", "world"])
     synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)

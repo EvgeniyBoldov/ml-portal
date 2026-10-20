@@ -438,7 +438,8 @@ class GraphOrchestrator:
                                    available_results=catalog, result_catalog_status=catalog_status,
                                    deleted_artifact_ids=list(deleted),
                                    memory_context=list(snapshot.get("memory_context", planner_kwargs.get("planner_memory_context")) or []),
-                                   task_brief=dict(planner_kwargs.get("task_brief") or {}),
+                                   task_brief=dict(getattr(getattr(runtime_state, "run_context", None), "task_brief", {})
+                                                   or planner_kwargs.get("task_brief") or {}),
                                    scope_context=dict(snapshot.get("scope_context") or planner_kwargs.get("scope_context") or {})),
             plan_id=plan_id,
             run_id=UUID(str(snapshot["root_run_id"])),
@@ -469,8 +470,9 @@ class GraphOrchestrator:
             if len(json.dumps(bounded, ensure_ascii=False, default=str)) <= max_chars:
                 break
             result = task.get("result") if isinstance(task, dict) else None
-            if isinstance(result, dict) and result.get("outputs"):
-                result["outputs"] = {"_truncated": "output retained in task journal"}
+            if isinstance(result, dict) and (result.get("outputs") or result.get("structured_response")):
+                result.pop("outputs", None)
+                result["structured_response"] = {"_truncated": "output retained in task journal"}
         if len(json.dumps(bounded, ensure_ascii=False, default=str)) > max_chars:
             bounded["tasks"] = [
                 {key: task.get(key) for key in ("task_id", "iteration_id", "status", "attempts", "result")}
@@ -478,26 +480,30 @@ class GraphOrchestrator:
             ]
             for task in bounded["tasks"]:
                 if isinstance(task.get("result"), dict):
-                    task["result"]["outputs"] = {"_truncated": "see task journal"}
+                    task["result"].pop("outputs", None)
+                    task["result"]["structured_response"] = {"_truncated": "see task journal"}
         return bounded
 
     @staticmethod
     def _planner_ledger(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         """A complete structural index. No status or failure is silently dropped."""
+        from app.runtime.prompt_projections import task_result_for_prompt
         tasks = []
         for task_id, task in sorted(dict(snapshot.get("tasks") or {}).items(), key=lambda item: (item[1].get("iteration_id", ""), item[1].get("planned_order", 0), item[0])):
             result = task.get("result") if isinstance(task.get("result"), dict) else {}
             verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
             # Agent transcripts and internal telemetry are not planner context.
             # The planner receives only runtime-owned evidence metadata.
-            evidence = {key: verified.get(key) for key in ("receipts", "evidence", "artifacts", "sources", "fresh_retrieval") if key in verified}
+            evidence = {key: verified.get(key) for key in ("receipts", "evidence", "fresh_retrieval") if key in verified}
             tasks.append({"task_id": task_id, "iteration_id": task.get("iteration_id"), "intent": task.get("intent"),
                           "executor": task.get("executor"), "instructions": task.get("instructions"), "inputs": task.get("inputs", {}),
                           "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "expected_outputs": task.get("expected_outputs", []), "freshness_policy": task.get("freshness_policy"),
                           "scope_context": task.get("scope_context", {}),
                           "status": task.get("status"), "depends_on": task.get("depends_on", []), "attempts": task.get("attempts", 0),
-                          "result": {"completion": result.get("completion"), "needs": result.get("needs", []), "answer": result.get("answer", result.get("description")), "structured_response": result.get("structured_response", result.get("outputs")), "diagnostics": result.get("diagnostics", []), "attachments": result.get("attachments", verified.get("artifacts", [])), "sources": result.get("sources", verified.get("sources", [])), "description": result.get("description"), "reason_code": result.get("reason_code"), "outputs": result.get("outputs", {}), "limitation": result.get("limitation"), "evidence": evidence}})
-        return {"plan_status": snapshot.get("status"), "iterations": snapshot.get("iterations", []), "tasks": tasks,
+                          "result": task_result_for_prompt({"completion": result.get("completion"), "needs": result.get("needs", []), "answer": result.get("answer", result.get("description")), "structured_response": result.get("structured_response", result.get("outputs")), "diagnostics": result.get("diagnostics", []), "attachments": (result.get("attachments") or verified.get("artifacts", [])), "sources": (result.get("sources") or verified.get("sources", [])), "description": result.get("description"), "reason_code": result.get("reason_code"), "outputs": result.get("outputs", {}), "limitation": result.get("limitation"), "evidence": evidence})})
+        return {"plan_status": snapshot.get("status"), "iterations": [
+                    {key: value for key, value in iteration.items() if key != "synthesis_brief"}
+                    for iteration in snapshot.get("iterations", [])], "tasks": tasks,
                 "needs": snapshot.get("needs", []), "bindings": snapshot.get("bindings", []),
                 "resolutions": snapshot.get("resolutions", [])}
 
@@ -942,7 +948,8 @@ class GraphOrchestrator:
                     if getattr(runtime_state, "run_context", None) is not None:
                         context["run_context"] = runtime_state.run_context.projection(
                             scope_keys=list((planner_kwargs.get("scope_context") or {}).get("keys") or []),
-                            evidence_refs=(context.get("synthesis_brief") or {}).get("evidence_refs") or [])
+                            evidence_refs=(context.get("synthesis_brief") or {}).get("evidence_refs") or [],
+                            message_refs=(context.get("synthesis_brief") or {}).get("message_refs") or [])
                     context["limitations"].extend(
                         {"message": item["message"]}
                         for item in getattr(runtime_state, "execution_limitations", []) if item.get("message")

@@ -27,6 +27,16 @@ planner, retaining the previous focus. `user`/`tenant` identify fact owners and
 never become document-memory scope identities. An external project name may
 remain in `task_brief.project_hints` without an entry in the memory scope catalog.
 
+TurnPreflight owns conversational interpretation: it alone receives the automatic
+dialogue tail and chat snapshot. Its `TaskBrief` preserves the current objective,
+conditions, resolved references with message provenance, and unresolved questions.
+Downstream roles receive the exact current request and selected materials instead
+of automatic history replay. `message_refs` selects historical text as task material;
+`evidence_refs` selects retrieved source material. Historical assistant messages do
+not establish current facts or completed actions. The complete brief is saved in
+the run context and restored for planner/agent continuations. Planner can explicitly
+request older history if the handoff is insufficient.
+
 ```text
 user message
   -> mechanical glossary/project lookup

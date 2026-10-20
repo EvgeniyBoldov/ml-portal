@@ -334,6 +334,7 @@ from app.runtime.synthesis_files import FileDeliverable
 class SynthesisBrief(BaseModel):
     artifact_refs: List[str] = Field(default_factory=list)
     evidence_refs: List[str] = Field(default_factory=list)
+    message_refs: List[str] = Field(default_factory=list)
     delivery: Literal["text", "files", "text_and_files"] = "text"
     content_mode: Literal["grounded", "generative", "mixed"] = "grounded"
     files: List[FileDeliverable] = Field(default_factory=list)
@@ -562,6 +563,26 @@ class TaskCompletionDeclaration(BaseModel):
     coverage: List[OutputCoverageClaim] = Field(default_factory=list, exclude=True)
     limitation: Optional[UserLimitation] = Field(default=None, exclude=True)
     model_config = {"extra": "forbid", "populate_by_name": True}
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        schema = handler.resolve_ref_schema(super().__get_pydantic_json_schema__(core_schema, handler))
+        schema["oneOf"] = [
+            {
+                "properties": {
+                    "completion": {"const": completion.value},
+                    "needs": {"minItems": 1} if completion == AgentExecutionCompletion.NEEDS else {"maxItems": 0},
+                    "interaction": {"type": "object"} if completion == AgentExecutionCompletion.INTERACTION else {"type": "null"},
+                },
+                "required": ["needs"] if completion == AgentExecutionCompletion.NEEDS else (
+                    ["interaction"] if completion == AgentExecutionCompletion.INTERACTION else []
+                ),
+            }
+            for completion in AgentExecutionCompletion
+        ]
+        return schema
 
     @property
     def report(self) -> str:

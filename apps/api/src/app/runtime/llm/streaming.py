@@ -15,6 +15,7 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.budgets import BudgetRegistry
 from app.runtime.error_payloads import build_debug_payload
 from app.runtime.llm.usage import estimate_tokens
+from app.adapters.impl.llm_context import estimate_request_tokens
 from app.services.runtime_limits_service import RuntimeLimitsService
 from app.services.system_llm_role_service import SystemLLMRoleService
 
@@ -52,7 +53,12 @@ class StreamError:
     debug: Optional[Dict[str, Any]] = None
 
 
-StreamEvent = StreamDelta | StreamTurn | StreamError
+@dataclass(frozen=True)
+class StreamContext:
+    allocation: Dict[str, Any]
+
+
+StreamEvent = StreamDelta | StreamTurn | StreamError | StreamContext
 
 
 class RoleStreamingCall:
@@ -91,7 +97,7 @@ class RoleStreamingCall:
         if isinstance(params_override, dict):
             params.update(params_override)
 
-        input_tokens = estimate_tokens(str(messages))
+        input_tokens = estimate_request_tokens({"model": model, "messages": messages, **params})
         if budget_registry is not None and budget_entity_id:
             budget_registry.consume(budget_entity_id, "llm_calls", 1, reason="llm_call")
             budget_registry.consume(budget_entity_id, "tokens_in", input_tokens, reason="llm_input")
@@ -100,17 +106,23 @@ class RoleStreamingCall:
         started_at = time.monotonic()
         stream_error: Optional[Exception] = None
         stream_traceback: Optional[str] = None
+        allocations: List[Dict[str, Any]] = []
         try:
+            async def on_context_allocation(allocation: Any) -> None:
+                allocations.append(dict(allocation))
             async def on_transport_retry() -> None:
                 if budget_registry is not None and budget_entity_id:
                     budget_registry.consume(budget_entity_id, "llm_calls", 1, reason="context_correction")
                     budget_registry.consume(budget_entity_id, "retries", 1, reason="context_correction")
             stream_iter = self._llm_client.chat_stream(
                 messages, model=model, params=params or None,
-                options=LLMCallOptions(timeout_s=timeout_s, on_transport_retry=on_transport_retry),
+                options=LLMCallOptions(timeout_s=timeout_s, on_transport_retry=on_transport_retry,
+                                       on_context_allocation=on_context_allocation),
             )
             async with asyncio.timeout(timeout_s):
                 async for chunk in _collect_stream(stream_iter):
+                    while allocations:
+                        yield StreamContext(allocations.pop(0))
                     if not chunk:
                         continue
                     buffer.append(chunk)
@@ -118,6 +130,9 @@ class RoleStreamingCall:
         except Exception as exc:  # noqa: BLE001
             stream_error = exc
             stream_traceback = traceback.format_exc()
+
+        while allocations:
+            yield StreamContext(allocations.pop(0))
 
         content = "".join(buffer).strip()
         tokens_out = estimate_tokens(content)

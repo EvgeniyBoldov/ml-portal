@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, AsyncIterator
 from uuid import UUID
 
@@ -17,14 +18,22 @@ logger = get_logger(__name__)
 
 
 def limitation_message(code: str) -> str:
-    value = code.casefold()
-    if any(word in value for word in ("credential", "authentication", "unauthorized", "401", "учётных данных", "учетных данных")):
+    # Pydantic's extra_forbidden is a shape error, never an ACL receipt.
+    # Match whole diagnostic tokens so arbitrary substrings cannot become
+    # permission / timeout / limit claims in the final answer.
+    value = re.sub(r"\bextra_forbidden\b", "schema_field_rejected", code.casefold())
+    words = " " + " ".join(re.findall(r"[^\W_]+", value)) + " "
+
+    def contains(codes: tuple[str, ...]) -> bool:
+        return any(" " + item.replace("_", " ") + " " in words for item in codes)
+
+    if contains(("credential", "credentials", "authentication", "unauthorized", "401", "учётных данных", "учетных данных")):
         return "Часть данных недоступна: отсутствуют или не действуют учётные данные для источника."
-    if any(word in value for word in ("access_denied", "access denied", "permission", "forbidden", "403", "нет доступа", "доступ запрещ")):
+    if contains(("access_denied", "access denied", "permission", "forbidden", "403", "нет доступа", "доступ запрещ")):
         return "Часть данных недоступна: недостаточно прав доступа к источнику."
-    if any(word in value for word in ("timeout", "timed out", "wall_time", "time_limit")):
+    if contains(("timeout", "timed out", "wall_time", "time_limit")):
         return "Обработка запроса заняла слишком много времени; полный результат получить не удалось."
-    if any(word in value for word in ("limit", "budget", "max_llm_calls", "max_tool_calls", "max_retries", "context_window_exceeded")):
+    if contains(("limit", "budget", "max_llm_calls", "max_tool_calls", "max_retries", "context_window_exceeded")):
         return "Достигнут лимит выполнения запроса; часть работы осталась незавершённой."
     return "Не удалось завершить обработку запроса; полный результат пока не получен."
 

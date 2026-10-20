@@ -1,7 +1,6 @@
 """Structured file-answer generation; persistence belongs to the owning session."""
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -16,6 +15,12 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.services.file_formats import FileCodecRegistry
 from app.services.file_generation_service import FileGenerationService
 from sqlalchemy.ext.asyncio import AsyncSession
+
+FILE_OUTPUT_REQUIREMENTS = (
+    "Верни один JSON-объект по FileSynthesisOutput из response_format. "
+    "files содержит тела запрошенных файлов; message — текст для пользователя после сохранения. "
+    "Не добавляй download URL или Markdown-оболочку."
+)
 
 if TYPE_CHECKING:
     from app.core.http.clients import LLMClientProtocol
@@ -84,8 +89,7 @@ async def generate_file_answer(
 
     result = await StructuredLLMCall(session=session, llm_client=llm_client).invoke(
         role=SystemLLMRoleType.SYNTHESIZER, payload=context, schema=FileSynthesisOutput,
-        system_prompt=prompt + "\nReturn JSON matching this schema: " + json.dumps(FileSynthesisOutput.model_json_schema(), ensure_ascii=False) +
-        "\nCreate the requested file bodies. message is the user-facing response after all files are saved. No download URLs.",
+        system_prompt=prompt if FILE_OUTPUT_REQUIREMENTS in prompt else prompt + "\n" + FILE_OUTPUT_REQUIREMENTS,
         chat_id=state.chat_id, user_id=state.user_id, tenant_id=state.tenant_id,
         trace_parent_entity_type="synthesis_run", trace_parent_entity_id=synthesis_id,
         sandbox_overrides=sandbox_overrides, budget_registry=budget_registry, budget_entity_id=synthesis_id,

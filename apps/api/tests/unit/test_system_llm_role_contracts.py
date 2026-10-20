@@ -25,7 +25,9 @@ def test_planner_step_accepts_the_previous_bare_proposal_during_rollout() -> Non
     from app.runtime.planner.graph_planner import PlannerStep
 
     step = PlannerStep.model_validate({
-        "tasks": [], "terminal": "planner", "bindings": [], "resolutions": [],
+        "tasks": [{"task_id": "read_1", "executor": "reader", "intent": "Read the source",
+                   "instructions": "Retrieve the requested information."}],
+        "terminal": "planner", "bindings": [], "resolutions": [],
     })
     assert step.kind == "proposal"
     assert step.proposal is not None

@@ -308,9 +308,23 @@ planner data requirements cannot alter this envelope. All editable role sections
 (identity, mission, rules, safety, output requirements, examples) come from the
 active database configuration, with explicit sandbox section overrides. A shared
 renderer is used for the database preview, planner and synthesizer; structured
-examples are serialized as JSON. The backend adds iteration mechanics and one
-compact JSON Schema generated from the Pydantic contract. It never replaces the
+examples are serialized as JSON. The backend adds iteration mechanics to the
+prompt and sends one compact JSON Schema generated from the Pydantic contract
+through `response_format.json_schema`, without copying the schema into the prompt.
+If the provider rejects native schema mode and the request falls back to
+`json_object`, the schema is moved into the system prompt for that retry only.
+Local Pydantic validation remains authoritative in both modes. This applies to
+all shared structured role calls, including preflight, planner, context compaction
+and file synthesis. It never replaces the
 operator's planner rules. Planner start snapshots use this same assembled prompt.
+TurnPreflight alone automatically receives recent dialogue and the chat snapshot.
+It compiles a self-contained task brief with resolved references, constraints,
+uncertainties and explicit source/message references. Planner receives that brief,
+the exact current request and selected materials instead of the transcript.
+Agents receive task inputs/dependencies; their own continuation messages survive
+pauses. Synthesis receives current reports and explicitly selected materials.
+Historical messages are separate conversational material, not fresh execution
+evidence. See [consumer projections](CHAT_CONTEXT_MEMORY.md#15-consumer-specific-projections).
 For current external data, the planner assigns a suitable available agent; writing
 planned_work in a synthesis brief does not execute that work. terminal selects
 control after tasks complete. Empty terminal synthesis remains valid for a required
@@ -326,8 +340,9 @@ An empty ledger needs no placeholder task or cleanup resolution. Empty published
 contracts allow dynamic tasks when the agent advertises that capability;
 `requires_fresh_retrieval=false` does not prohibit fresh retrieval.
 Corrections are bounded by max_retries (at least one correction), as well as
-the existing LLM-call and wall-time budgets, and each changed prompt receives
-a new LLM-call identity. Transport retries retain the original identity.
+the existing LLM-call and wall-time budgets, and agent correction decisions receive a new LLM-call identity. Shared structured
+role corrections retain one logical call identity with an explicit attempt number;
+transport retries also retain that identity.
 
 ### Memory lifecycle
 
@@ -749,3 +764,44 @@ Preflight/planner may read canonical pages and search explicitly prepared files;
 agents can prepare private vector or LongMemory indexes. A missing index/scope
 or absent document chunks is `document_not_indexed`, never a successful empty
 search. File search does not publish files into the shared memory corpus.
+
+### Model response boundaries
+
+Planner response declarations live in `runtime/planner/response_contract.py`.
+They reuse the domain validators, but their generated schema omits runtime-owned
+`protocol_version`, `scope_context`, `contract_hash` and `input_schema`. Runtime
+converts a validated declaration into the canonical `IterationProposal` before
+compilation and persistence. `synthesis_brief.user_question` may be omitted;
+runtime supplies the immutable goal. An explicit legacy question is preserved
+and must still pass the existing goal-equality check.
+
+The planner compatibility adapter accepts a bare iteration, a single `proposal`
+without `kind`, a misplaced proposal discriminator, or exactly one extra proposal
+envelope. It does not recursively search task data, override explicit conflicting
+kinds, drop unknown fields, or repair task dependencies. The ordinary validators
+and compiler still decide whether a recovered proposal can execute. Successful
+normalization emits `status.stage=llm_response_normalized`; the original response
+remains in the LLM journal. This adapter does not relax the published new-output
+schema. Legacy journals and new responses remain distinguishable.
+
+Shared structured parsing preserves all array elements and arbitrary JSON values.
+It no longer removes blank placeholders or converts objects into string refs.
+Invalid declared types trigger protocol correction rather than data rewriting.
+Agent completion schemas express the `completion`/`needs`/`interaction` branch
+constraints enforced by Pydantic. Every interaction declaration is validated
+before a user checkpoint is created, including after correction retries expire.
+Legacy agent `report`/value-slot readers remain available for stored responses.
+Protocol requirements are mandatory; requested business-data schemas remain
+advisory.
+
+Synthesis selects its output contract by delivery mode. File delivery replaces
+text output instructions and omits text examples, including sandbox text examples.
+The contract catalog accepts `delivery=files|text_and_files` to expose the generated
+`FileSynthesisOutput` schema; the default remains streamed text. Failure-policy
+metadata describes configured runtime retries rather than claiming a fixed single
+retry or automatic factual safety filters. Error classification must not turn
+Pydantic `extra_forbidden` into an access-denied claim.
+
+Migration 0198 updates only the exact known planner output policy that omitted
+`kind=interaction`. It preserves custom policies and backs up the old field in
+extras; downgrade does not overwrite a subsequent operator edit.

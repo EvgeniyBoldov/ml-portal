@@ -189,6 +189,7 @@ async def test_model_resolver_strips_alias_and_provider_name():
     session = SimpleNamespace(
         execute=AsyncMock(
             side_effect=[
+                SimpleNamespace(scalar_one_or_none=lambda: True),
                 SimpleNamespace(scalar_one_or_none=lambda: "  provider/model  "),
             ]
         )
@@ -198,5 +199,5 @@ async def test_model_resolver_strips_alias_and_provider_name():
     resolved = await resolver.resolve("  alias/model  ")
 
     assert resolved == "provider/model"
-    assert session.execute.await_count == 1
+    assert session.execute.await_count == 2
     assert _cache["alias/model"][0] == "provider/model"

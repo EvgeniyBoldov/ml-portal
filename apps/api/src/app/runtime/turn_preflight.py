@@ -20,6 +20,7 @@ from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
 from app.runtime.input_builders import compact_memory_tool_records
 from app.runtime.datastore_context import build_datastore, file_metadata
 from app.runtime.contracts import AttachmentContext
+from app.runtime.run_context import ResolvedReference
 
 
 class TaskBrief(BaseModel):
@@ -31,6 +32,10 @@ class TaskBrief(BaseModel):
     direction: str = Field(..., min_length=1)
     constraints: list[str] = Field(default_factory=list)
     expected_result: str = Field(..., min_length=1)
+    resolved_references: list[ResolvedReference] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    message_refs: list[str] = Field(default_factory=list)
     synthesis_brief: SynthesisBrief | None = None
     model_config = {"extra": "forbid"}
 
@@ -143,7 +148,7 @@ class TurnPreflight:
         facts_context: list[dict[str, Any]] | None = None,
         project_context: dict[str, Any] | None = None,
         chat_context: dict[str, Any] | None = None,
-        recent_dialogue: list[dict[str, str]] | None = None,
+        recent_dialogue: list[dict[str, Any]] | None = None,
         attachments: list[AttachmentContext] | None = None,
         continuation: dict[str, Any] | None = None,
         ctx: ToolContext | None = None,
@@ -156,6 +161,9 @@ class TurnPreflight:
         budget_registry: Any = None,
         budget_entity_id: str | None = None,
     ) -> TurnPreflightDecision:
+        # Old checkpoints may still mix chat/project snapshots into memory.
+        facts_context = [item for item in facts_context or []
+                         if item.get("type") not in {"chat_context", "project_context"}]
         if self._is_glossary_write_request(user_request):
             return self._glossary_document_decision(user_request=user_request)
         if event_sink:
@@ -169,6 +177,12 @@ class TurnPreflight:
         resumed = interaction_from_context((continuation or {}).get("paused_context"))
         tool_results: list[dict[str, Any]] = list(resumed.checkpoint.get("memory_tool_results") or []) if resumed else []
         available_artifacts = file_metadata([item.model_dump(mode="json") for item in attachments or []])
+        from app.runtime.prompt_projections import preflight_context
+        dialogue = list(recent_dialogue or [])
+        if dialogue and dialogue[-1].get("role") == "user" and dialogue[-1].get("content") == user_request:
+            dialogue = dialogue[:-1]
+        prompt_project, prompt_chat = preflight_context(dict(project_context or {}), dict(chat_context or {}),
+                                                       dialogue=dialogue, user_request=user_request)
         for _ in range(RoleMemoryTools.MAX_CALLS + 1):
             result = await self._llm.invoke(
                 role=SystemLLMRoleType.TURN_PREFLIGHT,
@@ -181,13 +195,13 @@ class TurnPreflight:
                     # context and must be available while resolving pronouns and
                     # tool scope.
                     "facts_context": list(facts_context or []),
-                    "project_context": dict(project_context or {}),
-                    "chat_context": dict(chat_context or {}),
-                    "recent_dialogue": list(recent_dialogue or []),
+                    "project_context": prompt_project,
+                    "chat_context": prompt_chat,
+                    "recent_dialogue": dialogue,
                     "datastore": build_datastore(files=available_artifacts),
-                    "scope_policy": "Chat scope slugs control memory search. Each selected scope returns one independent group; query and limit are the only tool arguments.",
                     "continuation": continuation or {},
-                    "available_tools": descriptors,
+                    "available_tools": [{key: value for key, value in descriptor.items() if key != "input_schema"}
+                                        for descriptor in descriptors],
                     "memory_tool_results": compact_memory_tool_records(tool_results),
                     "memory_tool_calls_remaining": RoleMemoryTools.MAX_CALLS - len(tool_results),
                 },

@@ -1,5 +1,5 @@
 """
-StructuredLLMCall — shared helper used by Triage, Planner and Synthesizer.
+StructuredLLMCall — shared helper for structured system-role requests.
 
 Responsibilities:
     * Render role system prompt + structured JSON user payload
@@ -27,13 +27,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.adapters.interfaces.llm import LLMCallOptions, LLMErrorCode, LLMProviderError
+from app.adapters.impl.llm_context import estimate_request_tokens
 from app.core.logging import get_logger
+from app.core.config import get_settings
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.usage import estimate_tokens
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 from app.services.runtime_limits_service import RuntimeLimitsService
 from app.services.system_llm_role_service import SystemLLMRoleService
 from app.services.system_role_prompt import compile_system_role_prompt
+from app.runtime.llm.repair import ProtocolRepair
 
 logger = get_logger(__name__)
 
@@ -159,7 +162,7 @@ class StructuredLLMCall:
             role_override,
             schema=schema,
         )
-        user_message = json.dumps(payload, ensure_ascii=False, default=str)
+        user_message = json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":"))
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
@@ -174,7 +177,6 @@ class StructuredLLMCall:
         if temperature is not None:
             params["temperature"] = temperature
         role_key = str(role.value).strip().lower()
-        input_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_message)
         # The adapter owns the actual SDK request timeout. Keeping the limit
         # here as well bounds callers that use a test/different implementation.
 
@@ -198,6 +200,7 @@ class StructuredLLMCall:
                 )
                 params["response_format"] = {"type": "json_object"}
 
+        input_tokens = estimate_request_tokens({"model": model, "messages": messages, **params})
         request_bytes = len(json.dumps(
             {"messages": messages, "params": params},
             ensure_ascii=False,
@@ -225,6 +228,8 @@ class StructuredLLMCall:
         )
 
         last_error: Optional[str] = None
+        # Keep one latest repair, never replay the entire correction history.
+        repair = ProtocolRepair()
         last_exception: Optional[BaseException] = None
         last_traceback: Optional[str] = None
         raw_response = ""
@@ -245,6 +250,8 @@ class StructuredLLMCall:
 
         for attempt in range(max_retries + 1):
             attempt_started = time.monotonic()
+            # Fallback and validation corrections can change the messages.
+            input_tokens = estimate_request_tokens({"model": model, "messages": messages, **params})
 
             def consume_attempt_time() -> int:
                 duration_ms = int((time.monotonic() - attempt_started) * 1000)
@@ -330,19 +337,29 @@ class StructuredLLMCall:
                     purpose="planning_decision" if role_key == "planner" else role_key,
                     model=model,
                     temperature=temperature,
+                    attempt=attempt + 1,
+                    max_attempts=max_retries + 1,
                     input_tokens_estimate=input_tokens,
                     request_bytes=attempt_request_bytes,
                     response_schema_bytes=attempt_response_schema_bytes,
-                    messages=messages,
+                    messages=[dict(message) for message in messages],
                 ))
             try:
                 async def on_transport_retry() -> None:
                     if budget_registry is not None and budget_entity_id:
                         budget_registry.consume(budget_entity_id, "llm_calls", 1, reason="context_correction")
                         budget_registry.consume(budget_entity_id, "retries", 1, reason="context_correction")
+                async def on_context_allocation(allocation: Any) -> None:
+                    if event_sink is not None and resolved_trace_parent_id:
+                        await event_sink(RuntimeEvent.status(
+                            "llm_context_allocated", entity_type="llm_call", entity_id=llm_call_id,
+                            logical_llm_call_id=logical_llm_call_id, attempt=attempt + 1,
+                            **trace_identity, **allocation,
+                        ))
                 response = await asyncio.wait_for(
                     self.llm_client.chat(messages, model=model, params=params or None,
-                                         options=LLMCallOptions(timeout_s=timeout_s, on_transport_retry=on_transport_retry)),
+                                         options=LLMCallOptions(timeout_s=timeout_s, on_transport_retry=on_transport_retry,
+                                                                on_context_allocation=on_context_allocation)),
                     timeout=timeout_s,
                 )
             except asyncio.CancelledError:
@@ -414,7 +431,7 @@ class StructuredLLMCall:
                         LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED,
                     }
                     and attempt < max_retries
-                    and self._shrink_request_for_provider_limit(params)
+                    and self._fallback_to_json_object(params, messages)
                 )
                 fail_fast = (
                     (isinstance(exc, LLMProviderError) and not exc.retryable)
@@ -492,7 +509,8 @@ class StructuredLLMCall:
                 continue
 
             try:
-                parsed = self._parse_and_validate(raw_response, schema)
+                normalizations: list[dict[str, str]] = []
+                parsed = self._parse_and_validate(raw_response, schema, normalizations=normalizations)
             except StructuredCallError as exc:
                 last_error = str(exc)
                 logger.info(
@@ -506,20 +524,21 @@ class StructuredLLMCall:
                     # the concrete validation error back on the next attempt so
                     # the model can repair its proposal instead of repeating
                     # the same invalid shape until retries are exhausted.
-                    messages.append({"role": "assistant", "content": raw_response})
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "Your previous JSON response failed schema validation:\n"
-                            f"{last_error}\n"
-                            "Correct the response to satisfy the supplied schema and all runtime rules. "
-                            "Return the complete corrected JSON object only. Preserve valid information, "
-                            "and do not claim actions or results that have not occurred."
-                        ),
-                    })
+                    repair.apply(messages, raw_response,
+                        "Your previous JSON response failed schema validation:\n"
+                        f"{last_error}\n"
+                        "Correct the response to satisfy the supplied schema and all runtime rules. "
+                        "Return the complete corrected JSON object only. Preserve valid information, "
+                        "and do not claim actions or results that have not occurred.")
                 await wait_before_retry()
                 continue
 
+            if normalizations and event_sink is not None and resolved_trace_parent_id:
+                await event_sink(RuntimeEvent.status(
+                    "llm_response_normalized", entity_type="llm_call", entity_id=llm_call_id,
+                    parent_entity_type=trace_parent_entity_type, parent_entity_id=resolved_trace_parent_id,
+                    attempt=attempt + 1, normalizations=normalizations,
+                ))
             duration_ms = int((time.monotonic() - start) * 1000)
             if event_sink is not None and resolved_trace_parent_id:
                 await event_sink(RuntimeEvent.llm_response(
@@ -614,18 +633,29 @@ class StructuredLLMCall:
         return result
 
     @staticmethod
-    def _shrink_request_for_provider_limit(params: Dict[str, Any]) -> bool:
-        """Remove the optional schema envelope after a provider payload error.
+    def _fallback_to_json_object(
+        params: Dict[str, Any], messages: list[Dict[str, str]],
+    ) -> bool:
+        """Move the contract to the prompt only when native schema mode fails.
 
         The local Pydantic validator still enforces the same response contract.
-        Output allocation remains exclusively in the connector.
+        JSON-object mode constrains syntax only, so the model needs the schema
+        in its instructions instead. Never send both copies in one request.
         """
-        changed = False
         response_format = params.get("response_format")
         if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
+            schema = response_format["json_schema"]["schema"]
             params["response_format"] = {"type": "json_object"}
-            changed = True
-        return changed
+            messages[0] = {
+                **messages[0],
+                "content": messages[0]["content"] + (
+                    "\n\n# FALLBACK RESPONSE CONTRACT\n"
+                    "Native schema mode is unavailable. Return only valid JSON matching this schema:\n"
+                    + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+                ),
+            }
+            return True
+        return False
 
     @staticmethod
     def _extract_text(response: Any) -> str:
@@ -648,112 +678,18 @@ class StructuredLLMCall:
         return str(response or "")
 
     @classmethod
-    def _parse_and_validate(cls, raw: str, schema: Type[T]) -> T:
+    def _parse_and_validate(cls, raw: str, schema: Type[T], *, normalizations: list[dict[str, str]] | None = None) -> T:
         data = cls._extract_json(raw)
         if data is None:
             raise StructuredCallError("no JSON block detected in LLM response")
-        # Some OpenAI-compatible models insert ``\"\"`` between objects while
-        # serialising long arrays (``[{...}, \"\", {...}]``). This is valid JSON
-        # but never valid runtime data: every list item in our structured
-        # contracts is either an object or a non-empty scalar. Drop only empty
-        # string placeholders before Pydantic validation; all meaningful
-        # fields and the schema remain authoritative.
-        data = cls._drop_empty_list_placeholders(data)
         try:
-            return schema.model_validate(data)
-        except ValidationError:
-            # Fallback: coerce common LLM output mismatches (weak models often
-            # return objects where strings are expected).
-            coerced = cls._coerce_schema_types(data, schema)
-            try:
-                return schema.model_validate(coerced)
-            except ValidationError as exc:
-                raise StructuredCallError(f"schema validation failed: {exc.errors()}") from exc
-
-    @classmethod
-    def _drop_empty_list_placeholders(cls, value: Any) -> Any:
-        if isinstance(value, dict):
-            return {key: cls._drop_empty_list_placeholders(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [
-                cls._drop_empty_list_placeholders(item)
-                for item in value
-                if not (isinstance(item, str) and not item.strip())
-            ]
-        return value
-
-    @staticmethod
-    def _coerce_schema_types(data: Any, schema: Type[T]) -> Any:
-        """Coerce common weak-model mismatches: list[dict]→list[str], dict[str,dict]→dict[str,str], etc."""
-        if not isinstance(data, dict):
-            return data
-
-        import typing
-
-        result = dict(data)
-        try:
-            hints = typing.get_type_hints(schema)
-        except Exception:
-            return result
-
-        for field_name, field_type in hints.items():
-            if field_name not in result:
-                continue
-            value = result[field_name]
-            origin = typing.get_origin(field_type)
-            args = typing.get_args(field_type)
-
-            # list[str] that came as list[dict] → take .text / .name / str()
-            if origin is list and args and args[0] is str:
-                if isinstance(value, list):
-                    coerced: list[str] = []
-                    for item in value:
-                        if isinstance(item, str):
-                            coerced.append(item)
-                        elif isinstance(item, dict):
-                            coerced.append(
-                                item.get("text")
-                                or item.get("name")
-                                or item.get("description")
-                                or str(item)
-                            )
-                        else:
-                            coerced.append(str(item))
-                    result[field_name] = coerced
-
-            # dict[str, str] that came as dict[str, dict] → take .name / str()
-            elif origin is dict and len(args) >= 2 and args[0] is str and args[1] is str:
-                if isinstance(value, dict):
-                    coerced_dict: dict[str, str] = {}
-                    for k, v in value.items():
-                        if isinstance(v, str):
-                            coerced_dict[k] = v
-                        elif isinstance(v, dict):
-                            coerced_dict[k] = (
-                                v.get("name")
-                                or v.get("description")
-                                or v.get("text")
-                                or str(v)
-                            )
-                        else:
-                            coerced_dict[k] = str(v)
-                    result[field_name] = coerced_dict
-                elif isinstance(value, list):
-                    # list[dict] → dict[str, str]
-                    coerced_dict = {}
-                    for item in value:
-                        if isinstance(item, dict):
-                            key = item.get("id") or item.get("name") or str(len(coerced_dict))
-                            val = (
-                                item.get("name")
-                                or item.get("description")
-                                or item.get("text")
-                                or str(item)
-                            )
-                            coerced_dict[str(key)] = str(val)
-                    result[field_name] = coerced_dict
-
-        return result
+            return schema.model_validate(data, context={"response_normalizations": normalizations} if normalizations is not None else None)
+        except ValidationError as exc:
+            validation_errors = exc.errors(include_input=False, include_url=False, include_context=False)
+            errors = [{"path": "$" + "".join(f"[{key}]" if isinstance(key, int) else f".{key}" for key in error["loc"]),
+                       "type": error["type"], "message": error["msg"]}
+                      for error in validation_errors[:get_settings().LLM_SCHEMA_REPAIR_MAX_ERRORS]]
+            raise StructuredCallError("schema validation failed: " + json.dumps(errors, ensure_ascii=False)) from exc
 
     @staticmethod
     def _extract_json(text: str) -> Optional[Any]:
@@ -829,14 +765,13 @@ class StructuredLLMCall:
 
         Mirrors SystemLLMRole.compiled_prompt logic so overrides to identity/mission/etc.
         are reflected in the final prompt sent to the LLM. The database keeps the
-        operator-authored output requirements; structured roles additionally receive
-        the non-editable runtime schema that the parser enforces.
+        operator-authored output requirements and runtime mechanics. The schema
+        is supplied separately through response_format and enforced by the parser.
         """
         parts = [compile_system_role_prompt(role_config, role_override)]
         role_type = str(role_config.get("role_type") or "").strip().lower()
 
         if role_type != SystemLLMRoleType.SYNTHESIZER.value and schema is not None:
-            generated_schema = StructuredLLMCall._compact_response_schema(schema.model_json_schema())
             if role_type == SystemLLMRoleType.PLANNER.value:
                 from app.runtime.planner.prompt_contract import PLANNER_RUNTIME_CONTRACT
                 parts.append(PLANNER_RUNTIME_CONTRACT)
@@ -845,8 +780,7 @@ class StructuredLLMCall:
                 parts.extend([TURN_PREFLIGHT_SCOPE_POLICY_V3, TURN_PREFLIGHT_TOOL_CONTRACT])
             parts.append(
                 "# RUNTIME RESPONSE CONTRACT\n"
-                "Верни строго валидный JSON по следующей схеме (без markdown и пояснений):\n"
-                f"{json.dumps(generated_schema, ensure_ascii=False, separators=(',', ':'))}"
+                "Верни строго валидный JSON по схеме из response_format, без markdown и пояснений."
             )
 
         return "\n\n".join(parts)

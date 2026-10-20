@@ -33,24 +33,33 @@ class ContextAllocation:
     max_output_tokens: int
 
 
-def allocate_context(request: Mapping[str, Any], context_window: int) -> ContextAllocation:
+def estimate_request_tokens(request: Mapping[str, Any]) -> int:
+    input_payload = {key: request[key] for key in (
+        "messages", "tools", "tool_choice", "functions", "function_call", "response_format",
+    ) if key in request}
+    serialized = json.dumps(input_payload, ensure_ascii=False, separators=(",", ":"))
+    return len(_encoding(str(request.get("model") or "")).encode(serialized, disallowed_special=()))
+
+
+def inspect_context(request: Mapping[str, Any], context_window: int) -> ContextAllocation:
     """Count all textual input, including tool definitions and response schemas.
 
     JSON framing is included as a conservative approximation of chat templates.
     This is an estimate for non-OpenAI tokenizers; the connector handles an
     explicit provider correction without modifying or truncating the input.
     """
-    input_payload = {key: request[key] for key in (
-        "messages", "tools", "tool_choice", "functions", "function_call", "response_format",
-    ) if key in request}
-    serialized = json.dumps(input_payload, ensure_ascii=False, separators=(",", ":"))
-    estimated = len(_encoding(str(request.get("model") or "")).encode(serialized, disallowed_special=()))
+    estimated = estimate_request_tokens(request)
     reserved = math.ceil(estimated * INPUT_SAFETY_FACTOR)
     minimum = math.ceil(context_window * MIN_OUTPUT_FRACTION)
     available = context_window - reserved
-    if available < minimum:
-        raise context_exhausted()
     return ContextAllocation(context_window, estimated, reserved, minimum, available)
+
+
+def allocate_context(request: Mapping[str, Any], context_window: int) -> ContextAllocation:
+    allocation = inspect_context(request, context_window)
+    if allocation.max_output_tokens < allocation.minimum_output_tokens:
+        raise context_exhausted()
+    return allocation
 
 
 def context_exhausted() -> LLMProviderError:

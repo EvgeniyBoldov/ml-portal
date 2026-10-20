@@ -11,8 +11,8 @@ def output_slot_example(task: TaskRequest, key: str) -> dict[str, Any]:
     return {"kind": "value", "value": "<observed data>"}
 
 
-def build_task_completion_prompt(task: TaskRequest) -> str:
-    return "\n\n".join([
+def build_task_completion_prompt(task: TaskRequest, *, include_schema: bool = True) -> str:
+    parts = [
         "# RUNTIME TASK COMPLETION DECLARATION — ОБЯЗАТЕЛЬНЫЙ ПРОТОКОЛ",
         "Верни один JSON-объект. completion: fulfilled, needs, unfulfillable или interaction. "
         "Ты самостоятельно оцениваешь выполнение задачи. answer — необязательный текст; "
@@ -21,7 +21,7 @@ def build_task_completion_prompt(task: TaskRequest) -> str:
         "Если нужен ответ пользователя, верни completion=interaction и interaction={question: конкретный вопрос, response_type: text или boolean}. "
         "Runtime сохранит точку выполнения и вернёт ответ именно этой задаче. Не оформляй вопрос как fulfilled или missing need. "
         "Для остальных completion поле interaction отсутствует или null.",
-        "Схемы входа и результата — рекомендации. Сохрани реальные значения, включая null и пустые "
+        "Оболочка завершения обязательна; схемы данных inputs и structured_response — рекомендации. Сохрани реальные значения, включая null и пустые "
         "списки. Если данные отличаются от схемы, передай их и при необходимости объясни в answer. "
         "Не выдумывай данные. Пока нужна работа, используй доступные инструменты. "
         "Preview не заменяет полные данные: проверяй схему через result.describe, "
@@ -29,8 +29,12 @@ def build_task_completion_prompt(task: TaskRequest) -> str:
         "Файлы и источники прикладывает runtime из выполненных операций. Не возвращай artifact-слоты, "
         "coverage или идентификаторы доказательств. Если требуется файл, создай его доступной операцией.",
         "Requested presentation (schema is advisory): " + json.dumps(_presentation_hint(task), ensure_ascii=False, separators=(",", ":")),
-        "JSON Schema протокола из Pydantic:\n" + json.dumps(_prompt_schema(task_completion_json_schema(task)), ensure_ascii=False, separators=(",", ":")),
-    ])
+    ]
+    if include_schema:
+        parts.append("JSON Schema протокола из Pydantic:\n" + json.dumps(_prompt_schema(task_completion_json_schema(task)), ensure_ascii=False, separators=(",", ":")))
+    else:
+        parts.append("Полная схема завершения передана в response_format.")
+    return "\n\n".join(parts)
 
 
 def _presentation_hint(task: TaskRequest) -> dict[str, Any]:

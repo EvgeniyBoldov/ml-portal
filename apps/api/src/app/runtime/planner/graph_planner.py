@@ -1,7 +1,7 @@
 """LLM planner adapter for immutable runtime iterations."""
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, Literal, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 from uuid import UUID
 
 from app.core.http.clients import LLMClientProtocol
@@ -11,75 +11,11 @@ from app.runtime.input_builders import PlannerInputBuilder
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import IterationProposal, PlanRequest
 from app.agents.context import ToolContext
-from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
+from app.runtime.memory.role_tools import RoleMemoryTools
 from app.runtime.memory.document_memory import accumulate_document_memory, document_memory, search_receipt
-from pydantic import BaseModel, GetJsonSchemaHandler, model_validator
-from pydantic.json_schema import JsonSchemaValue
-from pydantic_core import CoreSchema
-from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction, InteractionRequired, require_interaction_allowed
+from app.runtime.interaction import InteractionRequester, RuntimeInteraction, InteractionRequired, require_interaction_allowed
 
-
-PlannerMemoryToolCall = MemoryToolCall
-
-
-class PlannerStep(BaseModel):
-    """One direct planner decision: contextual read or persisted proposal."""
-    kind: Literal["tool_call", "proposal", "interaction"]
-    tool_call: PlannerMemoryToolCall | None = None
-    proposal: IterationProposal | None = None
-    interaction: InteractionQuestion | None = None
-    model_config = {"extra": "forbid"}
-
-    @classmethod
-    def __get_pydantic_json_schema__(
-        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler,
-    ) -> JsonSchemaValue:
-        """Publish the same payload selection enforced by validate_shape."""
-        schema = handler.resolve_ref_schema(super().__get_pydantic_json_schema__(core_schema, handler))
-        schema["oneOf"] = [
-            {
-                "properties": {
-                    "kind": {"const": kind},
-                    payload: {"type": "object"},
-                    **{
-                        other: {"type": "null"}
-                        for other in ("tool_call", "proposal", "interaction") if other != payload
-                    },
-                },
-                "required": [payload],
-            }
-            for kind, payload in (("tool_call", "tool_call"), ("proposal", "proposal"), ("interaction", "interaction"))
-        ]
-        return schema
-
-    @model_validator(mode="before")
-    @classmethod
-    def accept_legacy_proposal(cls, value: Any) -> Any:
-        # Existing operator-managed planner prompts may still instruct the
-        # former bare IterationProposal contract during rollout.  Treat that
-        # exact shape as a proposal, without accepting arbitrary free-form
-        # payloads.
-        if isinstance(value, dict) and "kind" not in value and "terminal" in value:
-            return {"kind": "proposal", "proposal": value}
-        return value
-
-    @model_validator(mode="after")
-    def validate_shape(self) -> "PlannerStep":
-        if self.kind == "interaction":
-            if self.interaction is None or self.tool_call is not None or self.proposal is not None:
-                raise ValueError("interaction step requires only an interaction question")
-            return self
-        if self.interaction is not None:
-            raise ValueError("interaction question requires kind=interaction")
-        if self.kind == "tool_call" and self.tool_call is None:
-            raise ValueError("tool_call step requires tool_call")
-        if self.kind == "proposal" and self.proposal is None:
-            raise ValueError("proposal step requires proposal")
-        if self.kind == "tool_call" and self.proposal is not None:
-            raise ValueError("tool_call step cannot contain proposal")
-        if self.kind == "proposal" and self.tool_call is not None:
-            raise ValueError("proposal step cannot contain tool_call")
-        return self
+from app.runtime.planner.response_contract import PlannerStep
 
 
 class GraphPlanner:
@@ -145,8 +81,11 @@ class GraphPlanner:
             payload = self._input_builder.build_graph_request(request)
             state = ctx.extra.get("runtime_turn_state") if ctx else None
             if state is not None:
-                payload["run_context"] = state.run_context.projection(scope_keys=list(request.context.scope_context.get("keys") or []))
-            payload["planner_tools"] = descriptors
+                from app.runtime.prompt_projections import selected_materials
+                payload["run_context"] = selected_materials(state.run_context.projection(scope_keys=list(request.context.scope_context.get("keys") or [])))
+            # Argument schemas already live in PlannerStep.tool_call.
+            payload["planner_tools"] = [{key: value for key, value in descriptor.items() if key != "input_schema"}
+                                        for descriptor in descriptors]
             payload["memory_tool_results"] = list(tool_results)
             payload["memory_tool_calls_remaining"] = RoleMemoryTools.MAX_CALLS - len(tool_results)
             payload["interaction_answers"] = [{"question": row["interaction"]["question"], "response": row["response"]} for row in answers]
@@ -175,7 +114,7 @@ class GraphPlanner:
                     checkpoint={"request": request.model_dump(mode="json"), "tool_results": tool_results}))
             if step.kind == "proposal":
                 assert step.proposal is not None
-                return step.proposal
+                return step.to_runtime_proposal(goal=request.context.goal)
             call = step.tool_call
             assert call is not None
             if len(tool_results) >= RoleMemoryTools.MAX_CALLS:

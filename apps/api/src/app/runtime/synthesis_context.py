@@ -8,6 +8,7 @@ from app.runtime.orchestrator_contracts import ResolutionAction, TaskStatus
 from app.runtime.redactor import RuntimeRedactor
 from app.runtime.memory.effective_scope import project_memory_context
 from app.runtime.memory.execution_context import memory_execution_context
+from app.runtime.prompt_projections import task_result_for_prompt
 
 
 DEFAULT_SYNTHESIS_CONTEXT_MAX_CHARS = 120_000
@@ -75,13 +76,13 @@ class SynthesisContextBuilder:
             excluded = latest_resolutions.get(task_id, {}).get("action") == ResolutionAction.EXCLUDE_FROM_SCOPE.value
             if result and not excluded:
                 verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
-                reports.append({"task_id": task_id, "intent": self._redact(task.get("intent")),
+                reports.append(task_result_for_prompt({"task_id": task_id, "intent": self._redact(task.get("intent")),
                                 "status": status, "completion": result.get("completion"),
-                                "description": self._redact(result.get("answer") or result.get("description")),
+                                "description": self._redact(result.get("description")),
                                 "answer": self._redact(result.get("answer", result.get("description"))),
                                 "structured_response": self._redact(result.get("structured_response", outputs)),
                                 "outputs": self._redact(outputs), "needs": self._redact(result.get("needs", [])),
-                                "diagnostics": self._redact(result.get("diagnostics", []))})
+                                "diagnostics": self._redact(result.get("diagnostics", []))}))
                 artifacts.extend(self._artifact_projection(result.get("attachments") or verified.get("artifacts")))
                 sources.extend(self._source_projection(result.get("sources") or verified.get("sources")))
             if status != TaskStatus.COMPLETED.value and task_id not in resolved:
@@ -145,12 +146,12 @@ class SynthesisContextBuilder:
         for report in bounded.get("completed_task_reports", []):
             if len(json.dumps(bounded, ensure_ascii=False, default=str)) <= self._max_chars:
                 break
-            if isinstance(report, dict) and report.get("outputs"):
-                report["outputs"] = {"_truncated": "full value retained in task journal"}
+            if isinstance(report, dict) and (report.get("outputs") or report.get("structured_response")):
+                report.pop("outputs", None)
                 report["structured_response"] = {"_truncated": "full value retained in task journal"}
         if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
             bounded["completed_task_reports"] = [
-                {key: report.get(key) for key in ("task_id", "intent", "status", "completion", "description")}
+                {key: report.get(key) for key in ("task_id", "intent", "status", "completion", "answer")}
                 for report in bounded.get("completed_task_reports", []) if isinstance(report, dict)
             ]
         if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:

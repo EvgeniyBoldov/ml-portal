@@ -825,18 +825,32 @@ Receives:
 
 Its prompt contract must explicitly authorize these inputs and define the
 precedence rule. It must clarify unresolved ambiguity rather than guess.
+TurnPreflight is the only role that automatically receives the dialogue tail
+and chat snapshot. Neither snapshot is copied into `facts_context` or planner
+memory. It compiles a self-contained `TaskBrief`, preserving names, conditions
+and constraints, resolving conversational references through
+`resolved_references` (`expression`, `meaning`, `source_message_ids`) and
+retaining unresolved questions in `uncertainties`.
 
 ### 15.2 Planner
 
 Receives:
 
 - normalized `TaskBrief`;
-- focus and active goal;
+- the current task's goal and effective scope;
 - authorized artifact metadata;
-- relevant open loops/constraints;
+- constraints and uncertainties selected by preflight;
 - normal durable memory context.
 
-It does not need the raw transcript. It never treats a previous plan reference
+The exact current request remains in `run_context.original_request`. Preflight
+selects source material through `TaskBrief.evidence_refs` and historical messages
+through `TaskBrief.message_refs`. Selected messages appear as data in
+`run_context.conversation_materials`; history reads never become source evidence
+merely because the read succeeded. Unknown selected references are reported in
+`unavailable_material_refs`. The planner can explicitly read more history when
+its brief is insufficient.
+
+It does not receive the automatic raw transcript. It never treats a previous plan reference
 as an instruction to execute without producing a new valid iteration.
 
 ### 15.3 Agent
@@ -849,17 +863,28 @@ Receives only task-relevant context selected mechanically from the snapshot:
 - applicable term bindings and explicit constraints;
 - dependency outputs owned by the current plan.
 
-Agents receive task-relevant context selected mechanically from the snapshot;
-they do not receive the full chat transcript as chat memory.
+Agents receive task-relevant inputs and dependencies from the planner, plus the
+current request and constraints. The planner selects applicable resolved references
+and passes them in task inputs/instructions. No previous chat messages
+are injected as assistant/user messages. A task's own working transcript still
+survives its pause/resume checkpoint. If historical text is needed for an agent's
+task, the planner passes the selected material explicitly in task inputs.
 
 ### 15.4 Synthesizer
 
-Direct synthesis receives the selected chat context used by TurnPreflight in
-addition to `SynthesisBrief` and `direct_answer_draft`.
+Direct synthesis receives `SynthesisBrief`, `direct_answer_draft` and explicitly
+selected evidence/messages. It does not receive the complete chat snapshot.
 
 Planned synthesis remains grounded in completed reports, accepted partial
 outputs, verified artifacts, limitations, and the final synthesis brief. It
 does not independently reinterpret historical context.
+The final `SynthesisBrief.evidence_refs` and `message_refs` select additional
+source/dialogue material. Historical messages can support rewriting or comparison,
+but do not prove current external state or successful execution. The stored
+`RunContext` retains the original snapshot and dialogue for continuity; its LLM
+projection uses an allowlist and excludes prior answers, delivery cache and
+unselected material. The full preflight brief is checkpointed with the run and
+reused for planner/agent continuations instead of a generic continuation brief.
 
 ## 16. Bounds, retention, and staleness
 

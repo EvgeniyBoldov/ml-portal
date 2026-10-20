@@ -118,15 +118,17 @@ def _project_context_payload(context: EffectiveScopeContext, base: dict[str, Any
             "scope_source": scope_source}
 
 
-def _recent_dialogue(messages: list[dict[str, Any]], *, limit: int = 8, max_chars: int = 1_200) -> list[dict[str, str]]:
+def _recent_dialogue(messages: list[dict[str, Any]], *, limit: int = 8, max_chars: int = 1_200) -> list[dict[str, Any]]:
     """Bound transcript projection for the routing role, never a raw journal."""
-    result: list[dict[str, str]] = []
+    result: list[dict[str, Any]] = []
     for message in messages[-limit:]:
         if not isinstance(message, dict) or message.get("role") not in {"user", "assistant"}:
             continue
         content = str(message.get("content") or "").strip()
         if content:
-            result.append({**({"message_id": str(message["message_id"])} if message.get("message_id") else {}), "role": str(message["role"]), "content": content[:max_chars]})
+            result.append({**{key: message[key] for key in ("message_id", "created_at", "source_run_id", "status") if message.get(key)},
+                           "role": str(message["role"]), "content": content[:max_chars],
+                           "truncated": bool(message.get("truncated")) or len(content) > max_chars})
     return result
 
 
@@ -416,8 +418,6 @@ class RuntimePipeline:
         }
         # The typed context is visible to planner/task construction and is
         # also the authoritative default for agent memory.search calls.
-        turn_mem.planner_memory_context.append({"type": "project_context", **turn_mem.project_context})
-        turn_mem.planner_memory_context.append({"type": "chat_context", **chat_context})
         ctx.extra["memory_search_scope_keys"] = turn_mem.project_context["scope_context"]["keys"]
         ctx.extra["project_context"] = turn_mem.project_context
         ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
@@ -584,7 +584,8 @@ class RuntimePipeline:
             resuming_interaction is None and continuation_state.get("resume_action") == "confirm")
         if resume_graph:
             lookup = {}
-            decision = TurnPreflightDecision(route="planner", task_brief=TaskBrief(
+            decision = TurnPreflightDecision(route="planner", task_brief=TaskBrief.model_validate(runtime_state.run_context.task_brief)
+                if runtime_state.run_context.task_brief else TaskBrief(
                 goal=effective_goal, direction="Continue the saved requester checkpoint with the validated user response.",
                 expected_result="Continue the existing plan without re-routing the user's answer."))
             yield await emitter.emit(RuntimeEvent.status("interaction_resumed",
@@ -592,6 +593,16 @@ class RuntimePipeline:
                 requester=resuming_interaction.requester.model_dump(mode="json") if resuming_interaction else None,
                 parent_entity_type="run", parent_entity_id=run_id_str), phase=OrchestrationPhase.PIPELINE)
         else:
+            # A preflight clarification may expose new dialogue messages. Keep
+            # already selected material while refreshing its bounded tail.
+            recent_dialogue = _recent_dialogue(list(request.messages or []))
+            selected_messages = set(runtime_state.run_context.task_brief.get("message_refs") or [])
+            recent_ids = {item.get("message_id") for item in recent_dialogue}
+            runtime_state.run_context.recent_dialogue = [
+                *[item for item in runtime_state.run_context.recent_dialogue
+                  if item.get("message_id") in selected_messages and item.get("message_id") not in recent_ids],
+                *recent_dialogue,
+            ]
             yield await emitter.emit(
                 RuntimeEvent.orchestrator_start(
                     orchestrator_id=preflight_id,
@@ -611,7 +622,7 @@ class RuntimePipeline:
                     facts_context=turn_mem.planner_memory_context,
                     project_context=turn_mem.project_context,
                     chat_context=chat_context,
-                    recent_dialogue=_recent_dialogue(list(request.messages or [])),
+                    recent_dialogue=recent_dialogue,
                     attachments=list(request.attachments or []),
                     continuation=continuation_state,
                     chat_id=chat_id,
@@ -675,9 +686,6 @@ class RuntimePipeline:
         ctx.extra["memory_search_scope_keys"] = turn_mem.project_context["scope_context"]["keys"]
         ctx.extra["project_context"] = turn_mem.project_context
         ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
-        for index, item in enumerate(turn_mem.planner_memory_context):
-            if isinstance(item, dict) and item.get("type") == "project_context":
-                turn_mem.planner_memory_context[index] = {**item, **turn_mem.project_context}
         preflight_memory_results = decision.memory_tool_results
         for record in preflight_memory_results:
             if (record.get("result") or {}).get("success", False):
@@ -704,6 +712,7 @@ class RuntimePipeline:
                         representation_id=representation_ids.get(item.artifact_id),
                     )
         if decision.task_brief:
+            runtime_state.run_context.task_brief = decision.task_brief.model_dump(mode="json")
             runtime_state.run_context.goal = decision.task_brief.goal
             runtime_state.run_context.constraints = list(decision.task_brief.constraints)
         if decision.synthesis_brief:
@@ -778,8 +787,7 @@ class RuntimePipeline:
                 "memory_context": [],
                 "memory_candidates": turn_mem.preflight_candidates,
                 "run_context": runtime_state.run_context.projection(scope_keys=effective_scope_context.model_payload().get("keys") or [],
-                    evidence_refs=brief.synthesis_brief.evidence_refs or None),
-                "chat_context": chat_context,
+                    evidence_refs=brief.synthesis_brief.evidence_refs, message_refs=brief.synthesis_brief.message_refs),
                 "scope_context": effective_scope_context.model_payload(),
                 "execution_context": turn_mem.project_context["execution_context"],
             }
