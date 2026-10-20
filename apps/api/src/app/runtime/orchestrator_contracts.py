@@ -7,7 +7,9 @@ from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, GetJsonSchemaHandler, field_validator, model_validator
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
 
 from app.runtime.task_value_normalization import is_absent
 from app.runtime.interaction import InteractionQuestion
@@ -395,22 +397,26 @@ class IterationProposal(BaseModel):
         return self
 
     @classmethod
-    def model_json_schema(cls, *args: Any, **kwargs: Any) -> Dict[str, Any]:
-        """Expose terminal conditionality to the model as well as Pydantic.
+    def __get_pydantic_json_schema__(
+        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        """Keep handoff constraints when nested inside the actual PlannerStep.
 
-        Pydantic's optional field schema cannot express this cross-field rule
-        by itself; without this projection a provider can emit a syntactically
-        valid synthesis proposal that the runtime must later reject.
+        Overriding model_json_schema only affects direct calls on this class;
+        Pydantic bypasses that method while generating a parent's $defs.
         """
-        schema = super().model_json_schema(*args, **kwargs)
+        schema = handler.resolve_ref_schema(super().__get_pydantic_json_schema__(core_schema, handler))
         schema.setdefault("allOf", []).extend([
             {
                 "if": {"properties": {"terminal": {"const": TerminalKind.SYNTHESIS.value}}, "required": ["terminal"]},
-                "then": {"required": ["synthesis_brief"]},
+                "then": {"required": ["synthesis_brief"], "properties": {"synthesis_brief": {"type": "object"}}},
             },
             {
                 "if": {"properties": {"terminal": {"const": TerminalKind.PLANNER.value}}, "required": ["terminal"]},
-                "then": {"properties": {"synthesis_brief": {"type": "null"}}},
+                "then": {
+                    "required": ["tasks"],
+                    "properties": {"tasks": {"minItems": 1}, "synthesis_brief": {"type": "null"}},
+                },
             },
         ])
         return schema

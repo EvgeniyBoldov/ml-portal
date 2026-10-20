@@ -13,7 +13,9 @@ from app.runtime.orchestrator_contracts import IterationProposal, PlanRequest
 from app.agents.context import ToolContext
 from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
 from app.runtime.memory.document_memory import accumulate_document_memory, document_memory, search_receipt
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, GetJsonSchemaHandler, model_validator
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
 from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction, InteractionRequired, require_interaction_allowed
 
 
@@ -27,6 +29,28 @@ class PlannerStep(BaseModel):
     proposal: IterationProposal | None = None
     interaction: InteractionQuestion | None = None
     model_config = {"extra": "forbid"}
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        """Publish the same payload selection enforced by validate_shape."""
+        schema = handler.resolve_ref_schema(super().__get_pydantic_json_schema__(core_schema, handler))
+        schema["oneOf"] = [
+            {
+                "properties": {
+                    "kind": {"const": kind},
+                    payload: {"type": "object"},
+                    **{
+                        other: {"type": "null"}
+                        for other in ("tool_call", "proposal", "interaction") if other != payload
+                    },
+                },
+                "required": [payload],
+            }
+            for kind, payload in (("tool_call", "tool_call"), ("proposal", "proposal"), ("interaction", "interaction"))
+        ]
+        return schema
 
     @model_validator(mode="before")
     @classmethod

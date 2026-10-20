@@ -317,6 +317,14 @@ control after tasks complete. Empty terminal synthesis remains valid for a requi
 clarification or an established limitation. In planned synthesis, empty reports do
 not establish missing integration, permissions or empty inventory; final answers
 must not promise automatic continuation.
+The provider receives the `PlannerStep` envelope, not a standalone
+`IterationProposal` schema. Payload selection and terminal constraints are
+projected with Pydantic JSON Schema hooks so that nested `$defs` retain them:
+`terminal=planner` requires nonempty tasks and no synthesis brief;
+`terminal=synthesis` requires a nonnull brief and may also schedule real tasks.
+An empty ledger needs no placeholder task or cleanup resolution. Empty published
+contracts allow dynamic tasks when the agent advertises that capability;
+`requires_fresh_retrieval=false` does not prohibit fresh retrieval.
 Corrections are bounded by max_retries (at least one correction), as well as
 the existing LLM-call and wall-time budgets, and each changed prompt receives
 a new LLM-call identity. Transport retries retain the original identity.
