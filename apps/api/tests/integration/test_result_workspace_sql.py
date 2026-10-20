@@ -53,6 +53,82 @@ async def save(workspace, scope, *, call="first", items=None, total=3, next_page
 
 
 @pytest.mark.asyncio
+async def test_datastore_inventory_uses_real_catalog_provenance_and_scope(workspace_pg):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.agents.context import ToolContext
+    from app.runtime.datastore_context import build_datastore
+    from app.runtime.input_builders import PlannerInputBuilder
+    from app.runtime.orchestrator import GraphOrchestrator
+
+    _, scope, engine = workspace_pg
+    # Use a UUID run identity, as required by the planner request contract.
+    scope = {**scope, "run_id": str(uuid4())}
+    store = ToolResultStore()
+    async def create(call, task, **overrides):
+        return await store.save(**{**scope, **overrides}, call_id=call, operation="api.list",
+            task_id=task, agent_execution_id="attempt-" + task, payload=[{"name": "PRIVATE_ROW"}])
+    own = await create("own", "consumer")
+    dependency = await create("dependency", "producer")
+    await create("sibling", "sibling")
+    await create("different-user", "consumer", user_id=uuid4())
+    await create("different-tenant", "consumer", tenant_id=uuid4())
+    await create("different-run", "consumer", run_id=str(uuid4()))
+    expired = await create("expired", "consumer")
+    async with engine.begin() as connection:
+        await connection.execute(text("UPDATE runtime_tool_payloads SET expires_at=now()-interval '1 second' WHERE id=CAST(:id AS uuid)"),
+                                 {"id": expired["result_id"]})
+    catalog = await store.list_for_run(**scope)
+    assert len(catalog) == 3
+    assert catalog[0]["task_id"] == "consumer"
+    assert catalog[0]["call_id"] == "own"
+    assert catalog[0]["agent_execution_id"] == "attempt-consumer"
+    files = [{"artifact_id": "input", "file_name": "source.pdf", "snippet": "PRIVATE_FILE"}]
+    consumer = build_datastore(files=files, results=catalog, task_ids={"consumer", "producer"})
+    assert [item.get("result_id") for item in consumer["items"] if item["kind"] == "result"] == [
+        own["result_id"], dependency["result_id"]]
+    import json
+    assert "PRIVATE_" not in json.dumps(consumer)
+
+    snapshot = {"root_run_id": scope["run_id"], "tasks": {}, "memory_context": [], "status": "active"}
+    orchestrator = GraphOrchestrator(store=SimpleNamespace(snapshot=AsyncMock(return_value=snapshot)),
+                                    planner=None, executor=None)
+    request = await orchestrator._planner_request(plan_id=uuid4(), goal="Review", trigger="task_outcome",
+        available_agents=[], available_artifacts=files, planner_kwargs={"ctx": ToolContext(
+            user_id=scope["user_id"], tenant_id=scope["tenant_id"])})
+    planner_inventory = PlannerInputBuilder().build_graph_request(request)["datastore"]
+    assert len([item for item in planner_inventory["items"] if item["kind"] == "result"]) == 3
+    assert planner_inventory["results_status"] == "available"
+
+
+@pytest.mark.asyncio
+async def test_datastore_prompt_migration_preserves_custom_rules_and_other_roles(workspace_pg):
+    _, _, engine = workspace_pg
+    path = Path("app/migrations/versions/0196_datastore_prompt_inventory.py")
+    spec = importlib.util.spec_from_file_location("datastore_prompt_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    old = "CUSTOM: available_artifacts содержит паспорта доступных вложений: artifact_id. CUSTOM END"
+    async with engine.begin() as connection:
+        await connection.execute(text("""CREATE TABLE system_llm_roles
+            (role_type text, rules text, is_active boolean, updated_at timestamptz)"""))
+        await connection.execute(text("""INSERT INTO system_llm_roles VALUES
+            ('turn_preflight', :rules, true, now()), ('planner', :rules, true, now()),
+            ('turn_preflight', :rules, false, now())"""), {"rules": old})
+        def migrate(sync_connection, fn):
+            with Operations.context(MigrationContext.configure(sync_connection)):
+                fn()
+        await connection.run_sync(lambda sync: migrate(sync, migration.upgrade))
+        rows = (await connection.execute(text("SELECT role_type, rules, is_active FROM system_llm_roles"))).all()
+        assert sum("datastore.items" in row.rules for row in rows) == 1
+        active = next(row.rules for row in rows if row.role_type == "turn_preflight" and row.is_active)
+        assert active.startswith("CUSTOM: ") and active.endswith("CUSTOM END")
+        await connection.run_sync(lambda sync: migrate(sync, migration.downgrade))
+        assert set((await connection.execute(text("SELECT rules FROM system_llm_roles"))).scalars()) == {old}
+
+
+@pytest.mark.asyncio
 async def test_pages_share_identity_read_sql_and_access(workspace_pg):
     workspace, scope, engine = workspace_pg
     saved, _ = await save(workspace, scope)

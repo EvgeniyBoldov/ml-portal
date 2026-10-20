@@ -305,6 +305,19 @@ def cleanup_orphaned_chat_attachments(self):
         raise self.retry(exc=e)
 
 
+@shared_task(name="app.workers.tasks_cleanup.cleanup_expired_file_data_indexes",
+             bind=True, max_retries=3, default_retry_delay=60)
+def cleanup_expired_file_data_indexes(self):
+    """Expire private file indexes independently of attachment/storage cleanup."""
+    import asyncio
+    from app.services.file_data_service import FileDataService
+    try:
+        return asyncio.run(FileDataService.cleanup_expired_indexes())
+    except Exception as exc:
+        logger.exception("Failed to cleanup private file indexes")
+        raise self.retry(exc=exc)
+
+
 @shared_task(
     name="app.workers.tasks_cleanup.cleanup_deprecated_entities",
     bind=True,

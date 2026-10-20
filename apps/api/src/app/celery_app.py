@@ -151,6 +151,10 @@ def build_default_beat_schedule() -> dict:
             "task": "app.workers.tasks_cleanup.cleanup_orphaned_chat_attachments",
             "schedule": 3600.0,  # 1 hour
         },
+        "private-file-indexes-expired-cleanup": {
+            "task": "app.workers.tasks_cleanup.cleanup_expired_file_data_indexes",
+            "schedule": 3600.0,
+        },
         "chat-context-expiry-cleanup": {
             "task": "app.workers.tasks_cleanup.expire_chat_context_items",
             "schedule": 3600.0,
@@ -238,6 +242,7 @@ app.conf.task_routes = {
     "app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions": {"queue": "cleanup_low", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_expired_tool_payloads": {"queue": "cleanup_low", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_orphaned_chat_attachments": {"queue": "cleanup_low", "priority": 1},
+    "app.workers.tasks_cleanup.cleanup_expired_file_data_indexes": {"queue": "cleanup_low", "priority": 1},
     
     # Memory writeback tasks
     "app.workers.tasks_memory.finalize_memory": {"queue": "memory", "priority": 1},

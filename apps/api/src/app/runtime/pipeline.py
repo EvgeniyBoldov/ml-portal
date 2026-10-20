@@ -692,7 +692,7 @@ class RuntimePipeline:
             representation_ids.update({
                 str(item.data.get("artifact_id")): item.data.get("representation_id")
                 for item in runtime_state.run_context.evidence
-                if item.tool == "file.read" and item.data.get("artifact_id")
+                if item.tool in {"file.read", "file.data.read", "file.data.search"} and item.data.get("artifact_id")
             })
             artifact_service = ChatArtifactReferenceService(self._session)
             for item in decision.artifact_descriptions:

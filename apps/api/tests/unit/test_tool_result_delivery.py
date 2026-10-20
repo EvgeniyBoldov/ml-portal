@@ -15,7 +15,8 @@ from app.agents.runtime.tools import OperationExecutionFacade
 @pytest.mark.asyncio
 @pytest.mark.parametrize('operation', ['memory.search', 'collection.list_documents'])
 async def test_direct_result_bypasses_store_and_reaches_model_and_trace(monkeypatch, operation):
-    payload = {'items' if operation == 'memory.search' else 'documents': [{'text': 'я' * 8000}], 'count': 1}
+    payload = ({'groups': [{'scope_slug': 'company', 'success': True, 'items': [{'text': 'я' * 8000}]}]}
+               if operation == 'memory.search' else {'documents': [{'text': 'я' * 8000}], 'count': 1})
     result = ToolResult.ok(payload, delivery='direct')
     store = Mock(save=AsyncMock(side_effect=AssertionError('Direct responses must not be stored')))
     monkeypatch.setattr(agent_module, 'ToolResultStore', lambda: store)
@@ -36,11 +37,18 @@ async def test_direct_result_bypasses_store_and_reaches_model_and_trace(monkeypa
     store.save.assert_not_awaited()
     assert outputs[0]['success']
     assert outputs[0]['data'] == payload
-    assert json.loads(messages[0][1]) == {**payload, 'evidence_call_id': 'call'}
+    if operation == 'memory.search':
+        receipt = json.loads(messages[0][1])
+        assert receipt['evidence_call_id'] == 'call' and receipt['memory_updated']
+        assert 'я' * 8000 not in messages[0][1]
+        assert 'я' * 8000 in str(ctx.extra['task_memory_context'])
+    else:
+        assert json.loads(messages[0][1]) == {**payload, 'evidence_call_id': 'call'}
     trace = next(call.args[1] for call in session.record_event.await_args_list if call.args[0] == 'tool_result')
     assert trace['data'] == payload
     assert 'result_id' not in trace['data']
-    assert events[-1].data['data'] == payload
+    tool_event = next(event for event in events if event.type.value == 'tool_result')
+    assert tool_event.data['data'] == payload
 
 
 def test_direct_context_is_complete_json_even_above_workspace_and_preview_limits():
@@ -128,7 +136,9 @@ async def test_document_listing_commits_returned_file_references(monkeypatch):
     collection = SimpleNamespace(id=uuid4(), tenant_id=tenant, slug='reglament', collection_type='document', table_name=None, fields=[])
     monkeypatch.setattr(module, 'CollectionService', lambda _: SimpleNamespace(get_by_slug=AsyncMock(return_value=collection)))
     register = AsyncMock(return_value=SimpleNamespace(id=reference_id))
-    monkeypatch.setattr(module, 'ChatArtifactReferenceService', lambda _: SimpleNamespace(register=register))
+    reference_service = Mock(return_value=SimpleNamespace(register=register))
+    reference_service.manifest.return_value = {'artifact_id': str(reference_id)}
+    monkeypatch.setattr(module, 'ChatArtifactReferenceService', reference_service)
     tool = next(cls for cls in vars(module).values() if isinstance(cls, type) and getattr(cls, 'tool_slug', None) == 'collection.list_documents')()
     result = await tool.v1_0_0(ToolContext(user_id=uuid4(), tenant_id=tenant, chat_id=uuid4()), {'collection_slug': 'reglament'})
     assert result.success

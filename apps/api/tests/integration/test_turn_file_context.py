@@ -185,3 +185,84 @@ async def test_history_pages_are_bounded_and_cannot_cross_chat_or_owner(database
             await service.read(chat_id=chat, owner_id=str(uuid4()), before_message_id=None, limit=2)
         with pytest.raises(ValueError):
             await service.read(chat_id=chat, owner_id=owner, before_message_id=foreign.id, limit=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.getenv("FILE_DATA_QDRANT") != "1", reason="requires isolated Qdrant file index")
+async def test_file_data_tools_prepare_read_search_and_missing_chunks(database, monkeypatch):
+    from uuid import UUID
+    from app.agents.context import ToolContext
+    from app.agents.builtins.file_data import FileDataReadTool, FileDataPrepareTool, FileDataSearchTool
+    from app.adapters.impl.qdrant import QdrantVectorStore
+    from app.services.vector_index_service import VectorIndexTarget, physical_index_name
+    from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
+    from app.services.collection.vector_lifecycle import CollectionVectorLifecycleService
+
+    class Encoder:
+        def get_model_info(self):
+            return SimpleNamespace(dimensions=2, max_tokens=512)
+
+        def embed_texts(self, texts):
+            return [[1.0, 0.0] if "treasure" in text else [0.0, 1.0] for text in texts]
+
+    async def target(self, base, alias):
+        return VectorIndexTarget(alias, physical_index_name(base, "f" * 64), 2, "f" * 64, "test-v1",
+                                 embedding_service=Encoder())
+
+    monkeypatch.setattr("app.core.db.get_session_factory", lambda: database)
+    monkeypatch.setattr(CollectionVectorLifecycleService, "resolve_target_vector_models", AsyncMock(return_value=["test.emb"]))
+    monkeypatch.setattr("app.services.vector_index_service.VectorIndexService.resolve", target)
+    owner, chat = await seed(database)
+    text_value = "# treasure in a document\n" + "value = 'unchanged'\n" * 2000
+    async with database() as session:
+        artifact = await FileGenerationService(session).generate(chat_id=chat, owner_id=owner,
+            filename="large.py", format_name="py", content=text_value)
+        await session.commit()
+    ctx = ToolContext(user_id=UUID(owner), tenant_id=uuid4(), chat_id=UUID(chat))
+    search_args = {"artifact_id": artifact.artifact_id, "query": "treasure", "backend": "vector"}
+    absent = await FileDataSearchTool().execute(ctx, search_args)
+    assert not absent.success and absent.metadata["error_code"] == "document_not_indexed"
+    prepared = await FileDataPrepareTool().execute(ctx, {"artifact_id": artifact.artifact_id})
+    assert prepared.success and prepared.data["chunk_count"] > 1
+    store = QdrantVectorStore()
+    client = await store.get_client()
+    async with database() as session:
+        reference = await ChatArtifactReferenceService(session).get_reference(
+            artifact_id=artifact.artifact_id, chat_id=chat, owner_id=owner)
+        collection = reference.metadata_snapshot["file_data"]["vector"]["collection"]
+        passport = ChatArtifactReferenceService.manifest(reference)
+        assert "collection" not in passport["attributes"]["file_data"]["vector"]
+    try:
+        page = await FileDataReadTool().execute(ctx, {"artifact_id": artifact.artifact_id, "limit": 10000})
+        assert page.success and page.data["total_chars"] == len(text_value)
+        assert page.data["next_offset"] == 10000 and not page.data["read_complete"]
+        found = await FileDataSearchTool().execute(ctx, search_args)
+        assert found.success and found.delivery == "direct" and found.data["hits"]
+        hit = found.data["hits"][0]
+        assert hit["text"] == text_value[hit["start"]:hit["end"]]
+        assert found.metadata["sources"][0]["artifact_id"] == artifact.artifact_id
+        forbidden = await FileDataSearchTool().execute(ToolContext(user_id=uuid4(), tenant_id=ctx.tenant_id, chat_id=ctx.chat_id), search_args)
+        assert not forbidden.success and forbidden.metadata["error_code"] == "artifact_unavailable"
+        await store.delete_by_filter(collection, {"artifact_id": artifact.artifact_id})
+        missing_chunks = await FileDataSearchTool().execute(ctx, search_args)
+        assert not missing_chunks.success and missing_chunks.metadata["error_code"] == "document_not_indexed"
+        repaired = await FileDataPrepareTool().execute(ctx, {"artifact_id": artifact.artifact_id})
+        assert repaired.success and not repaired.data["reused"]
+        async with database() as session:
+            reference = await ChatArtifactReferenceService(session).get_reference(
+                artifact_id=artifact.artifact_id, chat_id=chat, owner_id=owner)
+            current_collection = reference.metadata_snapshot["file_data"]["vector"]["collection"]
+        await store.delete_collection(current_collection)
+        missing_collection = await FileDataSearchTool().execute(ctx, search_args)
+        assert not missing_collection.success and missing_collection.metadata["error_code"] == "document_not_indexed"
+        assert not await store.collection_exists(current_collection)
+    finally:
+        # Failed assertions must also leave the shared test Qdrant clean.
+        async with database() as session:
+            reference = await ChatArtifactReferenceService(session).get_reference(
+                artifact_id=artifact.artifact_id, chat_id=chat, owner_id=owner)
+            latest = reference.metadata_snapshot["file_data"]["vector"]["collection"]
+        for name in {collection, latest}:
+            if await store.collection_exists(name):
+                await store.delete_collection(name)
+        await client.close()

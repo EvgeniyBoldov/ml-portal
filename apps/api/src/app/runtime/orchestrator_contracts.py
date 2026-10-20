@@ -422,6 +422,9 @@ class PlannerContext(BaseModel):
     execution_ledger: Dict[str, Any]
     available_agents: List[Dict[str, Any]] = Field(default_factory=list)
     available_artifacts: List[Dict[str, Any]] = Field(default_factory=list)
+    available_results: List[Dict[str, Any]] = Field(default_factory=list)
+    result_catalog_status: str = "available"
+    deleted_artifact_ids: List[str] = Field(default_factory=list)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
     task_brief: Dict[str, Any] = Field(default_factory=dict)
     scope_context: Dict[str, Any] = Field(default_factory=dict)

@@ -1,5 +1,39 @@
 # Runtime tool results and Data Workspace
 
+## Model input inventory
+
+Runtime supplies a `datastore` projection directly in role inputs. Its `items`
+list contains `kind=file` artifact passports and `kind=result` dataset metadata.
+There is no `datastore.list` tool and no additional persistence surface. Files
+remain in the chat artifact registry and object storage; datasets remain in the
+Result Store. Files are read through `file.*`, datasets through `result.*`.
+
+The shared projector is `runtime/datastore_context.py`. It includes identifiers,
+file origin/description and representation state, or dataset producer task/call,
+cardinality, revision, source completeness, SQL reference and bounded column
+schema. It excludes file snippets, dataset samples, payloads, source continuation
+arguments, memory and execution journals. The inventory is metadata, not proof
+that a source was read or used. Source tools continue to validate every access.
+
+Preflight receives its input-file passports. Each planner invocation refreshes
+the authorized run dataset catalog and files referenced by task outcomes.
+Agents receive input-file passports, explicit dependency/source files and
+checkpoint artifacts; their dataset inventory includes their own task, explicit
+dependencies/continuation and dataset IDs passed in task inputs or dependencies.
+This is a prompt visibility rule, not a new access boundary: Result Workspace
+still enforces run/user/tenant/TTL on reads. Synthesis receives input and selected
+delivery/source files, plus datasets from its selected task reports or explicit
+result references. Inventory membership does not select an attachment for delivery.
+Deleted files are omitted. Dataset lists no longer silently show only the latest
+ten entries; individual column schemas remain bounded and can be read further
+with `result.describe`. New tool replies carry newly produced references during
+an agent loop; after an interaction resume the initial inventory is refreshed,
+replacing its saved copy. Catalog-load failures are marked `results_status=unavailable`
+instead of being presented as an empty successful catalog.
+
+Role-owned memory and task outcomes retain their existing prompt sections.
+File indexing/search and agent notes are outside this inventory change.
+
 Tool results are temporary run-scoped datasets, not long-term Memory or prompt
 text. Successful dataset payloads are redacted and persisted in the dedicated
 `postgres-tool-results` database, including empty and single-record responses.
@@ -10,8 +44,11 @@ output creates a new dataset. The original call ID remains explicit metadata.
 `ToolResult.delivery` explicitly selects `stored` (the default) or `direct`.
 API collection/MCP datasets retain the default storage and normalization path.
 `memory.search`, `collection.doc_search` and `collection.list_documents` return `direct`: runtime redacts
-their payload and passes complete JSON to the model, trace and SSE without
+their payload and passes complete JSON to trace and SSE without
 Result Store persistence, dataset descriptors, `result_id` or preview truncation.
+Document-search/listing results also reach the model directly. Agent
+`memory.search` passages accumulate in the owning task's memory prompt section;
+its conversation tool reply is a receipt, avoiding a second copy of the passages.
 These tools bound their response through their own `limit` arguments; model
 context limits still apply. Successful direct calls retain `evidence_call_id`
 in the model message. The turn ledger preserves the delivery mode on reuse.
@@ -64,6 +101,11 @@ A dataset can contain zero or 50,000 records; cardinality does not change the
 storage model. Byte limits remain explicit. All records/pages inherit parent
 TTL through cascading deletion. Current workspace access requires matching run,
 tenant and user and an unexpired parent; references do not grant access.
+
+Dataset metadata lives in `runtime_tool_payloads` in the dedicated results
+database. The similarly named `runtime_tool_results` model in the main database
+retains per-attempt operation receipts/payload references; it is a separate
+runtime audit surface, not the dataset catalog.
 
 ## Native workspace tools
 

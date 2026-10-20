@@ -48,6 +48,13 @@ consumers. Descriptions inferred by preflight are marked as model-inferred and
 bound to the representation they describe. The passport never contains file
 text or a text preview; content is available only through explicit `file.read`.
 
+Role prompt builders expose these passports in `datastore.items` with
+`kind=file`, alongside metadata for saved tool datasets (`kind=result`). This
+inventory shares the existing artifact identity and does not copy file content
+or replace artifact access checks. See [Data Workspace](RUNTIME_TOOL_RESULTS.md#model-input-inventory)
+for role visibility and handoff rules. Existing extracted previews are excluded
+from inventory projections, including legacy attachment contexts.
+
 For collection RAG files, the passport identifies the source document and
 collection while the artifact target remains the resolvable collection
 membership. A retrieved passage/chunk is run evidence with its own provenance;
@@ -154,6 +161,8 @@ stored representation object or invoking extraction. Files are read explicitly
 through `file.read`. Chat context stores only references, read status and a
 bounded model-inferred description.
 Chat uploads are not automatically indexed by HippoRAG or published into shared memory.
+Explicit private indexing and document-local paged reads/search are available
+through [file.data.*](FILE_DATA.md), independently of shared document memory.
 
 Internal objects abandoned by transaction rollback and obsolete run snapshots are
 collected by the existing orphan-cleanup worker after its grace period. Original

@@ -18,6 +18,11 @@ class ToolCallReusePolicy:
     ) -> Optional[Tuple[ToolResult, list[dict]]]:
         if not bool(ctx.extra.get("runtime_tool_reuse_enabled", True)):
             return None
+        from app.runtime.memory.tool_ledger import canonical_operation_name
+        if canonical_operation_name(operation_slug).startswith("file.data."):
+            # Access, source revisions and temporary-index readiness must be
+            # revalidated even for identical calls within the same turn.
+            return None
         # A task that explicitly requires fresh retrieval must never satisfy
         # that requirement from an earlier receipt, even within one turn.
         if str(ctx.extra.get("task_freshness_policy") or "") == "require_retrieval":

@@ -69,3 +69,38 @@ async def test_storage_failure_does_not_register_representation(setup):
     with pytest.raises(ValueError):
         await service.read(artifact_id=str(uuid4()), chat_id=str(uuid4()), owner_id=str(uuid4()), tenant_id=None)
     service.session.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_canonical_is_complete_and_has_a_separate_cache_identity(setup):
+    service, storage, resolve, extract = setup
+    resolve.return_value.size_bytes = 6
+    extract.return_value.text = "long document\n" * 4000
+    extract.return_value.truncated = False
+    extract.return_value.meta = {}
+    scope = dict(artifact_id=str(uuid4()), chat_id=str(uuid4()), owner_id=str(uuid4()), tenant_id=None)
+    first = await service.canonical(**scope)
+    assert len(first["content"]) > 32000 and first["source_complete"]
+    assert extract.await_args.args[0].profile == "rag_ingest"
+    row = service.session.add.call_args.args[0]
+    assert row.extraction_key.startswith("file_data:")
+    assert "content" not in row.details
+    service.repository.find.return_value = row
+    storage.get_object.side_effect = [b"source", json.dumps({key: value for key, value in first.items()
+        if key not in {"representation_id", "reused"}}).encode()]
+    second = await service.canonical(**scope)
+    assert second["reused"] and second["representation_id"] == first["representation_id"]
+    assert resolve.await_count == 2 and extract.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_search_cannot_create_a_missing_canonical_representation(setup):
+    service, storage, resolve, extract = setup
+    resolve.return_value.size_bytes = 6
+    scope = dict(artifact_id=str(uuid4()), chat_id=str(uuid4()), owner_id=str(uuid4()), tenant_id=None)
+    assert await service.canonical(**scope, extract=False) is None
+    extract.assert_not_awaited()
+    storage.upload_fileobj.assert_not_awaited()
+    resolve.side_effect = ChatArtifactAccessDenied("revoked")
+    with pytest.raises(ChatArtifactAccessDenied):
+        await service.canonical(**scope, extract=False)

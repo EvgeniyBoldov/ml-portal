@@ -35,6 +35,7 @@ class AttachmentRef(BaseModel):
     status: Optional[str] = None
     origin: Dict[str, Any] = Field(default_factory=dict)
     description: Optional[str] = None
+    data_indexes: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AttachmentContext(BaseModel):

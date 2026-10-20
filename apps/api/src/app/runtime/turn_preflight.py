@@ -17,7 +17,8 @@ from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.effective_scope import ScopeSelection
 from app.agents.context import ToolContext
 from app.runtime.memory.role_tools import MemoryToolCall, RoleMemoryTools
-from app.runtime.input_builders import PlannerInputBuilder, compact_memory_tool_records
+from app.runtime.input_builders import compact_memory_tool_records
+from app.runtime.datastore_context import build_datastore, file_metadata
 from app.runtime.contracts import AttachmentContext
 
 
@@ -167,7 +168,7 @@ class TurnPreflight:
         descriptors = await tools.descriptors()
         resumed = interaction_from_context((continuation or {}).get("paused_context"))
         tool_results: list[dict[str, Any]] = list(resumed.checkpoint.get("memory_tool_results") or []) if resumed else []
-        available_artifacts = PlannerInputBuilder._normalize_artifacts([item.model_dump(mode="json") for item in attachments or []])
+        available_artifacts = file_metadata([item.model_dump(mode="json") for item in attachments or []])
         for _ in range(RoleMemoryTools.MAX_CALLS + 1):
             result = await self._llm.invoke(
                 role=SystemLLMRoleType.TURN_PREFLIGHT,
@@ -183,7 +184,7 @@ class TurnPreflight:
                     "project_context": dict(project_context or {}),
                     "chat_context": dict(chat_context or {}),
                     "recent_dialogue": list(recent_dialogue or []),
-                    "available_artifacts": available_artifacts,
+                    "datastore": build_datastore(files=available_artifacts),
                     "scope_policy": "Chat scope slugs control memory search. Each selected scope returns one independent group; query and limit are the only tool arguments.",
                     "continuation": continuation or {},
                     "available_tools": descriptors,

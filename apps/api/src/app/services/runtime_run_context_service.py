@@ -28,7 +28,7 @@ class RuntimeRunContextService:
         from app.services.chat_artifact_reference_service import ChatArtifactReferenceService, ChatArtifactReferenceError
         retained = []
         for evidence in context.evidence:
-            if evidence.tool == "file.read":
+            if evidence.tool in {"file.read", "file.data.read", "file.data.search"}:
                 try:
                     await ChatArtifactReferenceService(self.session).resolve(
                         artifact_id=evidence.data["artifact_id"], chat_id=chat_id,

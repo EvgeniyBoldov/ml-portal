@@ -24,7 +24,7 @@ def test_graph_planner_input_builder_uses_only_iteration_contract():
     payload = PlannerInputBuilder().build_graph_request(_request())
 
     assert set(payload) == {
-        "goal", "trigger", "execution_ledger", "available_artifacts", "memory_context", "task_brief",
+        "goal", "trigger", "execution_ledger", "datastore", "memory_context", "task_brief",
         "available_agents", "iteration_contract",
         "scope_context", "planner_search_results", "execution_context",
     }
@@ -56,12 +56,13 @@ def test_graph_planner_input_builder_normalizes_artifact_contexts():
         "snippet": "hello", "snippet_status": "ready", "readable": True,
     }]))
 
-    assert payload["available_artifacts"] == [{
-        "artifact_id": "artifact-1", "is_current": False, "representation_id": None, "source_complete": False, "file_name": "notes.txt", "content_type": "text/plain",
-        "size_bytes": None, "origin": {}, "description": None,
-        "snippet": "hello", "snippet_status": "ready",
-        "readable": True, "truncated": False,
-    }]
+    entry = payload["datastore"]["items"][0]
+    assert entry["artifact_id"] == "artifact-1"
+    assert entry["file_name"] == "notes.txt"
+    assert entry["representation_status"] == "ready"
+    assert "snippet" not in entry
+    assert "hello" not in json.dumps(payload["datastore"])
+
 
 
 def test_synthesizer_input_builder_serializes_only_the_prebuilt_context():
@@ -70,6 +71,19 @@ def test_synthesizer_input_builder_serializes_only_the_prebuilt_context():
 
     assert messages[0]["content"] == "sys"
     assert json.loads(messages[1]["content"]) == context
+
+
+def test_planner_inventory_includes_task_files_and_results_but_filters_deleted_files():
+    payload = PlannerInputBuilder().build_graph_request(_request(
+        execution_ledger={"tasks": [{"result": {
+            "attachments": [{"artifact_id": "generated", "file_name": "answer.md"}],
+            "sources": [{"artifact_id": "removed", "file_name": "removed.pdf"}],
+        }}]}, deleted_artifact_ids=["removed"],
+        available_results=[{"result_id": "dataset", "task_id": "fetch", "operation": "api.list",
+                            "row_count": 0, "observed_schema": {}, "source_complete": True}],
+    ))
+    assert [(item["kind"], item.get("artifact_id") or item.get("result_id"))
+            for item in payload["datastore"]["items"]] == [("file", "generated"), ("result", "dataset")]
 
 
 def test_memory_group_projection_preserves_empty_and_failed_groups_without_merging():

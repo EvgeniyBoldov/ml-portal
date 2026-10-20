@@ -219,6 +219,9 @@ docker compose logs --tail=200 api
 
 - `CHAT_FILE_READ_MAX_CHARS` (32000), `CHAT_FILE_READ_MAX_BYTES` (8388608): existing bounded extraction profile limits.
 - `CHAT_FILE_EXTRACTION_VERSION` (1): increment when an extraction change must invalidate saved representations.
+- `FILE_DATA_MAX_BYTES` (52428800), `FILE_DATA_MAX_CHARS` (500000): complete canonical extraction limits for `file.data.*`; oversize output fails without creating a partial index.
+- `FILE_DATA_CHUNK_CHARS` (2000), `FILE_DATA_CHUNK_OVERLAP` (200): private vector index character spans; overlap must be smaller than chunk size.
+- `FILE_DATA_INDEX_TTL_SECONDS` (86400): lifetime of private file indexes, enforced at search and collected by an independent hourly cleanup task.
 - `ROOT_CONTEXT_MAX_TOOL_CALLS` (6): root-role contextual tool-loop limit.
 - `CHAT_HISTORY_PAGE_LIMIT` (20), `CHAT_HISTORY_MESSAGE_MAX_CHARS` (4000): bounded explicit history reads.
 - `SYNTHESIS_MAX_FILES` (8): maximum new files in one synthesis response.

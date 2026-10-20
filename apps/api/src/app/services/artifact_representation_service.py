@@ -23,6 +23,55 @@ class ArtifactRepresentationService:
         self.session = session
         self.repository = ArtifactRepresentationRepository(session)
 
+    async def canonical(self, *, artifact_id: str, chat_id: str, owner_id: str,
+                        tenant_id: str | None, extract: bool = True) -> dict[str, Any] | None:
+        """Versioned complete text for paged reads/indexing; never use a preview."""
+        resolved = await ChatArtifactReferenceService(self.session).resolve(
+            artifact_id=artifact_id, chat_id=chat_id, owner_id=owner_id, tenant_id=tenant_id)
+        settings = get_settings()
+        if resolved.size_bytes and resolved.size_bytes > settings.FILE_DATA_MAX_BYTES:
+            raise ValueError("File exceeds the file-data extraction size limit")
+        payload = await s3_manager.get_object(resolved.bucket, resolved.key)
+        if payload is None:
+            raise ValueError("Artifact content is unavailable")
+        if len(payload) > settings.FILE_DATA_MAX_BYTES:
+            raise ValueError("File exceeds the file-data extraction size limit")
+        fingerprint = hashlib.sha256(payload).hexdigest()
+        extraction_key = f"file_data:v{settings.CHAT_FILE_EXTRACTION_VERSION}:{settings.FILE_DATA_MAX_CHARS}"
+        await self.repository.lock_artifact(uuid.UUID(artifact_id))
+        row = await self.repository.find(uuid.UUID(artifact_id), fingerprint, extraction_key)
+        if row:
+            cached = await s3_manager.get_object(row.storage_bucket, row.storage_key)
+            if cached is not None:
+                return {**json.loads(cached), "representation_id": str(row.id), "reused": True}
+        if not extract:
+            return None
+        extraction = await DocumentExtractionService().extract(ExtractionRequest(
+            payload=payload, filename=resolved.file_name, content_type=resolved.content_type,
+            profile="rag_ingest", max_bytes=settings.FILE_DATA_MAX_BYTES))
+        if len(extraction.text) > settings.FILE_DATA_MAX_CHARS:
+            raise ValueError("Extracted document exceeds the file-data character limit; no partial index was created")
+        complete = not extraction.truncated and extraction.meta.get("docling_status") != "partial_success"
+        result = {"artifact_id": artifact_id, "file_name": resolved.file_name,
+                  "content_type": resolved.content_type, "size_bytes": len(payload),
+                  "content": extraction.text, "source_fingerprint": fingerprint,
+                  "source_complete": complete, "parser": extraction.parser, "warnings": extraction.warnings,
+                  "status": ("ready" if complete else "partial") if extraction.text else "unreadable"}
+        representation_id = row.id if row else uuid.uuid4()
+        key = f"chat-representations/{chat_id}/{artifact_id}/{representation_id}.json"
+        if not await s3_manager.upload_fileobj(resolved.bucket, key, BytesIO(json.dumps(result, ensure_ascii=False).encode())):
+            raise ValueError("Could not persist extracted file content")
+        if row is None:
+            row = ChatArtifactRepresentation(id=representation_id, artifact_id=uuid.UUID(artifact_id),
+                source_fingerprint=fingerprint, extraction_key=extraction_key,
+                storage_bucket=resolved.bucket, storage_key=key)
+            self.session.add(row)
+        row.details = {key: value for key, value in result.items() if key != "content"}
+        await self._record_manifest_representation(artifact_id=artifact_id, representation_id=representation_id,
+            fingerprint=fingerprint, extraction_key=extraction_key, status=result["status"])
+        await self.session.flush()
+        return {**result, "representation_id": str(representation_id), "reused": False}
+
     async def read(self, *, artifact_id: str, chat_id: str, owner_id: str,
                    tenant_id: str | None, observer: Any = None) -> dict[str, Any]:
         # ACL is revalidated even on cache hits. A cached conversion grants no access.

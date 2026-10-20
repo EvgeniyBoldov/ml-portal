@@ -5,6 +5,7 @@ from copy import deepcopy
 
 from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.memory.effective_scope import project_memory_context
+from app.runtime.datastore_context import build_datastore, task_files
 
 
 MAX_AGENT_DESCRIPTION_CHARS = 280
@@ -146,7 +147,12 @@ class PlannerInputBuilder:
             "goal": context.goal,
             "trigger": context.trigger,
             "execution_ledger": context.execution_ledger,
-            "available_artifacts": self._normalize_artifacts(context.available_artifacts),
+            "datastore": build_datastore(
+                files=[*context.available_artifacts, *task_files(
+                    item.get("result") for item in context.execution_ledger.get("tasks", [])
+                    if isinstance(item, dict))],
+                results=context.available_results, results_status=context.result_catalog_status,
+                deleted_artifact_ids=context.deleted_artifact_ids),
             "memory_context": _planner_memory_projection(
                 context.memory_context, list(context.scope_context.get("keys") or []),
             ),
@@ -178,36 +184,6 @@ class PlannerInputBuilder:
         if len(text) <= limit:
             return text
         return text[:limit]
-
-    @staticmethod
-    def _normalize_artifacts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        result: List[Dict[str, Any]] = []
-        seen: set[str] = set()
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            ref = item.get("ref") if isinstance(item.get("ref"), dict) else item
-            artifact_id = str(ref.get("artifact_id") or item.get("artifact_id") or "").strip()
-            if not artifact_id or artifact_id in seen:
-                continue
-            seen.add(artifact_id)
-            result.append({
-                "artifact_id": artifact_id,
-                "is_current": bool(item.get("is_current")),
-                "representation_id": item.get("representation_id"),
-                "source_complete": bool(item.get("source_complete")),
-                "file_name": ref.get("file_name") or item.get("file_name") or "artifact",
-                "content_type": ref.get("content_type") or item.get("content_type"),
-                "size_bytes": ref.get("size_bytes") or item.get("size_bytes"),
-                "origin": ref.get("origin") or item.get("origin") or {},
-                "description": ref.get("description") or item.get("description"),
-                "snippet": item.get("snippet") or "",
-                "snippet_status": item.get("snippet_status") or "missing",
-                "readable": bool(item.get("readable")),
-                "truncated": bool(item.get("truncated")),
-            })
-        return result
-
 
 class SynthesizerInputBuilder:
     """Render the already validated final-plan synthesis context."""

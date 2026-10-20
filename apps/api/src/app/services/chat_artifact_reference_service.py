@@ -194,13 +194,24 @@ class ChatArtifactReferenceService:
             size_bytes=reference.size_bytes, metadata=reference.metadata_snapshot or {},
             source_id=None, source_type=None,
         )
+        indexes = metadata.get("file_data") or {}
+        public_indexes = {backend: {
+            key: entry[key] for key in ("status", "representation_id", "source_fingerprint", "chunk_count", "expires_at")
+            if key in entry} for backend, entry in indexes.items() if isinstance(entry, dict)}
+        for entry in public_indexes.values():
+            if entry.get("expires_at", 0) <= datetime.now(timezone.utc).timestamp():
+                entry["status"] = "expired"
+            elif ((metadata.get("representation") or {}).get("source_fingerprint")
+                  and entry.get("source_fingerprint") != metadata["representation"]["source_fingerprint"]):
+                entry["status"] = "stale"
         return ChatArtifactManifest.model_validate({
             "schema_version": metadata["schema_version"],
             "artifact_id": str(reference.id), "origin": metadata["origin"],
             "file": metadata["file"], "description": metadata.get("description"),
             "representation": metadata.get("representation"), "status": metadata["status"],
-            "attributes": {key: value for key, value in metadata.items()
-                           if key not in {"schema_version", "artifact_id", "origin", "file", "description", "representation", "status"}},
+            "attributes": {**{key: value for key, value in metadata.items()
+                           if key not in {"schema_version", "artifact_id", "origin", "file", "description", "representation", "status", "file_data"}},
+                           **({"file_data": public_indexes} if public_indexes else {})},
         }).model_dump(mode="json")
 
     async def set_description(self, *, artifact_id: str, chat_id: str, owner_id: str,
@@ -424,6 +435,8 @@ class ChatArtifactReferenceService:
         reference = await self.get_reference(
             artifact_id=artifact_id, chat_id=chat_id, owner_id=owner_id
         )
+        from app.services.file_data_service import FileDataService
+        await FileDataService(self.session).delete_indexes(reference=reference)
         from app.services.artifact_representation_service import ArtifactRepresentationService
         await ArtifactRepresentationService(self.session).delete_for_artifact(str(reference.id))
         file_name = reference.display_name or "artifact"

@@ -8,6 +8,7 @@ import sqlite3
 import os
 import logging
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from threading import RLock
@@ -434,20 +435,22 @@ def graph_identity(body: ExtractRequest) -> str:
         + (body.models.embedding_identity or body.models.identity) + serialized).encode()).hexdigest()
 
 
-def graph(body: ExtractRequest, *, embedding_only: bool = False, allow_build: bool = True) -> tuple[HippoRAG, str]:
+def graph(body: ExtractRequest, *, embedding_only: bool = False, allow_build: bool = True,
+          load_only: bool = False) -> tuple[HippoRAG, str]:
     identity = graph_identity(body)
     with engine_lock(identity):
-        return _graph(body, identity=identity, embedding_only=embedding_only, allow_build=allow_build)
+        return _graph(body, identity=identity, embedding_only=embedding_only, allow_build=allow_build, load_only=load_only)
 
 
-def _graph(body: ExtractRequest, *, identity: str, embedding_only: bool, allow_build: bool) -> tuple[HippoRAG, str]:
+def _graph(body: ExtractRequest, *, identity: str, embedding_only: bool, allow_build: bool,
+           load_only: bool = False) -> tuple[HippoRAG, str]:
     llm = GatewayLLM(config(body.models), body.models)
     hippo = ENGINES.get(identity)
     if hippo is None:
         root = DATA / "portal-indexes" / identity
         if not allow_build and not (root / "ready").exists():
             raise HTTPException(status_code=409, detail="LongMemory embedding index is being rebuilt; retry later")
-        passages, saved_rows = prepared_passages(body, llm, embedding_only=embedding_only)
+        passages, saved_rows = ([], {}) if load_only else prepared_passages(body, llm, embedding_only=embedding_only)
         settings = config(body.models)
         settings.llm_name = "portal-extraction"
         settings.force_index_from_scratch = not (root / "ready").exists()
@@ -457,8 +460,9 @@ def _graph(body: ExtractRequest, *, identity: str, embedding_only: bool, allow_b
                         index_identity=f"{GRAPH_PROFILE}:{body.models.embedding_identity or body.models.identity}")
         hippo.openie = ReusableOpenIE(llm, saved_rows, embedding_only=embedding_only)
         try:
-            hippo.index(passages)
-            save_extraction(body, passages, hippo._openie_info)
+            if not load_only:
+                hippo.index(passages)
+                save_extraction(body, passages, hippo._openie_info)
         except Exception:
             hippo.close()
             raise
@@ -505,6 +509,145 @@ async def warm_route(body: ExtractRequest):
 @router.post("/search")
 async def retrieve_route(body: RetrieveRequest):
     return await asyncio.get_running_loop().run_in_executor(POOL, retrieve, body)
+
+
+class FileIndexRequest(BaseModel):
+    models: Models
+    namespace: str = Field(pattern=r"^[a-f0-9]{64}$")
+    documents: list[Document] = Field(min_length=1, max_length=1)
+    expires_at: int = Field(gt=0)
+
+
+class FileSearchRequest(BaseModel):
+    models: Models
+    namespace: str = Field(pattern=r"^[a-f0-9]{64}$")
+    documents: list[Document] = Field(min_length=1, max_length=1)
+    expected_index: str = Field(pattern=r"^[a-f0-9]{64}$")
+    expected_chunks: int = Field(ge=1)
+    query: str | None = Field(default=None, min_length=1, max_length=4000)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+def file_body(body: FileIndexRequest | FileSearchRequest) -> ExtractRequest:
+    documents = [document.model_copy(update={"metadata": {**document.metadata,
+        "file_namespace": body.namespace, "file_model_identity": body.models.identity}}) for document in body.documents]
+    return ExtractRequest(models=body.models, documents=documents, scope_slug=f"file.{body.namespace}")
+
+
+def file_chunk_count(engine: HippoRAG, document_id: str) -> int:
+    keys = set(engine.chunk_embedding_store.get_all_ids())
+    matched = sum(1 for key in keys if any(ref.get("document_id") == document_id
+        for ref in engine.chunk_metadata.get(key, {}).get("source_refs", [])))
+    return matched if matched == len(keys) else 0
+
+
+def prepare_file(body: FileIndexRequest) -> dict:
+    request = file_body(body)
+    identity = graph_identity(request)
+    with engine_lock(identity):
+        if body.expires_at <= time.time():
+            raise HTTPException(status_code=422, detail="Private file index expiry is in the past")
+        path = DATA / "portal-indexes" / identity / "private.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Publish only after a complete native index exists. No shared-corpus
+        # document or scope row is created for a private chat artifact.
+        marker = {"namespace": body.namespace, "expires_at": body.expires_at, "status": "building",
+                  "snapshot": snapshot_path(request.documents[0]).name}
+        path.write_text(json.dumps(marker))
+        engine, identity = graph(request)
+        count = file_chunk_count(engine, body.documents[0].id)
+        if not count or body.expires_at <= time.time():
+            raise HTTPException(status_code=409, detail="Document has no indexed chunks")
+        marker.update(status="ready", chunk_count=count)
+        temporary = path.with_name(f"private.{uuid4().hex}.tmp")
+        temporary.write_text(json.dumps(marker))
+        temporary.replace(path)
+        return {"status": "ready", "index": identity, "chunk_count": count}
+
+
+def search_file(body: FileSearchRequest) -> dict:
+    request = file_body(body)
+    identity = graph_identity(request)
+    missing = {"status": "not_indexed", "error_code": "document_not_indexed", "chunk_count": 0}
+    if identity != body.expected_index:
+        return missing
+    with engine_lock(identity):
+        root = DATA / "portal-indexes" / identity
+        marker = root / "private.json"
+        if not marker.exists() or not (root / "ready").exists():
+            return missing
+        metadata = json.loads(marker.read_text())
+        if metadata.get("status") != "ready" or metadata.get("namespace") != body.namespace or metadata.get("expires_at", 0) <= time.time():
+            return missing
+        engine, _ = graph(request, allow_build=False, load_only=True)
+        count = file_chunk_count(engine, body.documents[0].id)
+        if count <= 0 or count != body.expected_chunks or count != metadata.get("chunk_count"):
+            return missing
+        if body.query is None:
+            return {"status": "ready", "chunk_count": count, "hits": []}
+        result = engine.retrieve([body.query], num_to_retrieve=body.top_k)[0]
+        return {"status": "ready", "chunk_count": count, "hits": [
+            {"text": text, "score": float(score), "metadata": metadata}
+            for text, score, metadata in zip(result.docs, result.doc_scores, result.doc_metadata)]}
+
+
+@router.post("/files/prepare")
+async def prepare_file_route(body: FileIndexRequest):
+    return await asyncio.get_running_loop().run_in_executor(POOL, prepare_file, body)
+
+
+@router.post("/files/search")
+async def search_file_route(body: FileSearchRequest):
+    return await asyncio.get_running_loop().run_in_executor(SEARCH_POOL, search_file, body)
+
+
+class FileDeleteRequest(BaseModel):
+    namespace: str = Field(pattern=r"^[a-f0-9]{64}$")
+    index: str = Field(pattern=r"^[a-f0-9]{64}$")
+    expired_only: bool = False
+
+
+def delete_file_index(body: FileDeleteRequest) -> dict:
+    import shutil
+    with engine_lock(body.index):
+        root = DATA / "portal-indexes" / body.index
+        path = root / "private.json"
+        if not path.exists():
+            return {"deleted": False}
+        marker = json.loads(path.read_text())
+        if marker.get("namespace") != body.namespace:
+            raise HTTPException(status_code=403, detail="Private index namespace mismatch")
+        if body.expired_only and marker.get("expires_at", 0) > time.time():
+            return {"deleted": False}
+        with CACHE_LOCK:
+            engine = ENGINES.pop(body.index, None)
+        if engine is not None:
+            engine.close()
+        snapshot = marker.get("snapshot", "")
+        if snapshot and Path(snapshot).name == snapshot:
+            (DATA / "portal-extractions" / snapshot).unlink(missing_ok=True)
+        shutil.rmtree(root)
+        return {"deleted": True}
+
+
+def cleanup_file_indexes() -> dict:
+    deleted = 0
+    for path in (DATA / "portal-indexes").glob("*/private.json"):
+        marker = json.loads(path.read_text())
+        if marker.get("expires_at", 0) <= time.time():
+            deleted += int(delete_file_index(FileDeleteRequest(namespace=marker["namespace"], index=path.parent.name,
+                                                               expired_only=True))["deleted"])
+    return {"deleted": deleted}
+
+
+@router.post("/files/delete")
+async def delete_file_route(body: FileDeleteRequest):
+    return await asyncio.get_running_loop().run_in_executor(POOL, delete_file_index, body)
+
+
+@router.post("/files/cleanup")
+async def cleanup_files_route():
+    return await asyncio.get_running_loop().run_in_executor(POOL, cleanup_file_indexes)
 
 
 class CorpusSearchRequest(BaseModel):

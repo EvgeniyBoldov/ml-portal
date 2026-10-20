@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -112,6 +113,32 @@ async def test_synthesizer_loads_db_prompt_and_passes_role_params_to_llm():
     assert events[-2].type.value == "final"
     assert events[-1].type.value == "synthesis_end"
     assert state.final_answer == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_inventory_uses_selected_reports_and_preserves_file_delivery(monkeypatch):
+    from app.runtime.contracts import AttachmentContext, AttachmentRef
+    catalog = [
+        {"result_id": "selected", "task_id": "inspect", "operation": "api.list", "observed_schema": {}},
+        {"result_id": "excluded", "task_id": "unrelated", "operation": "api.list", "observed_schema": {}},
+    ]
+    monkeypatch.setattr("app.runtime.datastore_context.load_result_catalog",
+                        AsyncMock(return_value=(catalog, "available")))
+    monkeypatch.setattr("app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
+                        AsyncMock(return_value={"prompt": "Test", "model": "test"}))
+    state = _runtime_state()
+    state.attachment_contexts = [AttachmentContext(ref=AttachmentRef(
+        artifact_id="input", file_name="input.pdf"), snippet="PRIVATE_FILE")]
+    llm = _LLMClientProbe(["Answer"])
+    synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)
+    events = [event async for event in synth.stream(runtime_state=state, run_id=state.run_id,
+        synthesis_context=_synthesis_context(artifacts=[{"artifact_id": "generated", "file_name": "answer.md"}]))]
+    context = json.loads(llm.calls[0]["messages"][1]["content"])
+    assert [item.get("artifact_id") or item.get("result_id") for item in context["datastore"]["items"]] == [
+        "input", "generated", "selected"]
+    assert "PRIVATE_FILE" not in json.dumps(context["datastore"])
+    final = next(event for event in events if event.type.value == "final")
+    assert [item["artifact_id"] for item in final.data["attachments"]] == ["generated"]
 
 
 @pytest.mark.asyncio

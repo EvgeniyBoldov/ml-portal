@@ -183,7 +183,7 @@ class ToolResultStore:
     async def list_for_run(self, *, run_id: str, tenant_id: UUID, user_id: UUID, connection: AsyncConnection | None = None) -> list[dict[str, Any]]:
         """Return the compact SQL source catalog visible to one runtime run."""
         statement = text("""
-            SELECT id::text AS result_id, operation, row_count,
+            SELECT id::text AS result_id, operation, row_count, task_id, call_id, agent_execution_id,
                    jsonb_typeof(payload) AS payload_type,
                    source_complete, observed_schema, sample, sample_complete, schema_complete,
                    query_sql, source_result_ids, dataset_meta, revision, source_total
@@ -202,6 +202,9 @@ class ToolResultStore:
             "result_id": row["result_id"],
             "sql_ref": sql_ref_for_result(row["result_id"]),
             "operation": row["operation"],
+            "task_id": row["task_id"],
+            "call_id": row["call_id"],
+            "agent_execution_id": row["agent_execution_id"],
             "row_count": int(row["row_count"] or 0),
             "payload_type": row["payload_type"],
             "source_complete": bool(row["source_complete"]),

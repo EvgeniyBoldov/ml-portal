@@ -420,9 +420,23 @@ class GraphOrchestrator:
         max_ledger_chars = int(planner_kwargs.get("planner_ledger_max_chars") or 160_000)
         if ledger_size > max_ledger_chars:
             ledger = self._compact_ledger(ledger, max_ledger_chars)
+        from app.runtime.datastore_context import load_result_catalog, task_files
+        ctx = planner_kwargs.get("ctx")
+        catalog, catalog_status = await load_result_catalog(ctx=ctx, run_id=str(snapshot["root_run_id"]))
+        runtime_state = planner_kwargs.get("runtime_state")
+        deleted = set(getattr(runtime_state, "deleted_artifact_ids", []) or [])
+        current_artifacts = [
+            item.model_dump(mode="json") for item in getattr(runtime_state, "attachment_contexts", [])
+            if item.ref.artifact_id not in deleted
+        ] if runtime_state is not None else list(available_artifacts)
+        current_artifacts.extend(task_files(
+            item.get("result") for item in (snapshot.get("tasks") or {}).values()
+            if isinstance(item, dict)))
         return PlanRequest(
             context=PlannerContext(goal=goal, trigger=trigger, execution_ledger=ledger,
-                                   available_agents=available_agents, available_artifacts=available_artifacts,
+                                   available_agents=available_agents, available_artifacts=current_artifacts,
+                                   available_results=catalog, result_catalog_status=catalog_status,
+                                   deleted_artifact_ids=list(deleted),
                                    memory_context=list(snapshot.get("memory_context", planner_kwargs.get("planner_memory_context")) or []),
                                    task_brief=dict(planner_kwargs.get("task_brief") or {}),
                                    scope_context=dict(snapshot.get("scope_context") or planner_kwargs.get("scope_context") or {})),

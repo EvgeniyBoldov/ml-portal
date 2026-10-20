@@ -105,6 +105,21 @@ class Synthesizer:
         synthesis_run_id = str(uuid4())
         synthesis_status = "completed"
 
+        from app.runtime.datastore_context import build_datastore, load_result_catalog, result_references
+        reports = synthesis_context.get("completed_task_reports") or []
+        catalog, catalog_status = await load_result_catalog(ctx=ctx, run_id=str(run_id))
+        files = [
+            *[item.model_dump(mode="json") for item in runtime_state.attachment_contexts
+              if item.ref.artifact_id not in runtime_state.deleted_artifact_ids],
+            *(synthesis_context.get("artifacts") or []), *(synthesis_context.get("sources") or []),
+        ]
+        synthesis_context = {**synthesis_context, "datastore": build_datastore(
+            files=[item for item in files if str((item.get("ref") or item).get("artifact_id") or "")
+                   not in runtime_state.deleted_artifact_ids],
+            results=catalog, task_ids={str(item["task_id"]) for item in reports if item.get("task_id")},
+            result_ids=result_references(reports), results_status=catalog_status,
+        )}
+
         # Load synthesizer role config early for context snapshot
         synth_role_cfg = await self._load_role_config()
         role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get("synthesizer")

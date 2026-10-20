@@ -192,7 +192,7 @@ class SynthesisContextBuilder:
                 source["artifact"] = self._redact(item["artifact"])
             if item.get("source_name") or item.get("title") or item.get("name"):
                 source["source_name"] = item.get("source_name") or item.get("title") or item.get("name")
-            for key in ("chunk_id", "page", "score"):
+            for key in ("chunk_id", "page", "score", "representation_id", "start", "end"):
                 if item.get(key) is not None:
                     source[key] = item[key]
             if item.get("text"):

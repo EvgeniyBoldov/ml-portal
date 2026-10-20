@@ -415,6 +415,7 @@ class ChatAttachmentService:
                         status=str((reference.metadata_snapshot or {}).get("status") or "ready"),
                         origin=passport["origin"],
                         description=(passport.get("description") or {}).get("text"),
+                        data_indexes=(passport.get("attributes") or {}).get("file_data") or {},
                     ),
                     is_current=artifact_id in current_ids,
                     representation_id=representation.get("id"),

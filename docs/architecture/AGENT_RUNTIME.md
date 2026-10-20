@@ -735,3 +735,9 @@ agents retain their execution-artifact capabilities. The final user-facing answe
 comes from synthesis. See [root routing](ADR_TURN_PREFLIGHT_ROUTING.md),
 [file storage and delivery](CHAT_FILE_ATTACHMENTS.md), and
 [chat context](CHAT_CONTEXT_MEMORY.md) for persistence and transaction ownership.
+
+Document-local operations are described in [File Data](FILE_DATA.md).
+Preflight/planner may read canonical pages and search explicitly prepared files;
+agents can prepare private vector or LongMemory indexes. A missing index/scope
+or absent document chunks is `document_not_indexed`, never a successful empty
+search. File search does not publish files into the shared memory corpus.

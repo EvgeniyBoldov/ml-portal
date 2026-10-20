@@ -47,10 +47,10 @@ async def test_preflight_receives_current_file_and_routes_file_reading_to_planne
         snippet="Annual report, revenue increased", snippet_status="ready", readable=True)
     decision = await preflight.decide(user_request="что скажешь о вложении?", mechanical_lookup={}, attachments=[attachment])
     assert decision.route == "planner"
-    assert preflight._llm.invoke.await_args.kwargs["payload"]["available_artifacts"][0]["artifact_id"] == attachment.ref.artifact_id
+    assert preflight._llm.invoke.await_args.kwargs["payload"]["datastore"]["items"][0]["artifact_id"] == attachment.ref.artifact_id
 
 
-def test_agent_receives_extracted_attachment_preview_as_untrusted_file_content():
+def test_agent_receives_only_attachment_metadata_and_must_read_contents():
     task = TaskRequest(task_id="read", executor="worker", intent="read file", instructions="Read the report")
     attachment = {
         "ref": {"artifact_id": str(uuid4()), "file_name": "report.pdf",
@@ -61,11 +61,10 @@ def test_agent_receives_extracted_attachment_preview_as_untrusted_file_content()
     }
     message = AgentExecutor._build_sub_messages([], task, "read the report", attachments=[attachment])[-1]["content"]
 
-    assert "ATTACHMENT_7391" in message
-    assert "origin=rag_document/rag_document" in message
+    assert "ATTACHMENT_7391" not in message
+    assert '"kind": "rag_document"' in message
     assert "Quarterly report" in message
-    assert '"Verification code: ATTACHMENT_7391"' in message
-    assert "use file.read for more" in message
+    assert "file.read(artifact_id)" in message
 
 
 def test_repeating_inherited_task_scopes_requires_no_new_scope_rationale():
