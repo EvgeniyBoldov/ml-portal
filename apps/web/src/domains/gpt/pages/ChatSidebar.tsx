@@ -5,8 +5,13 @@ import { useNavigate, useParams } from 'react-router-dom';
 import Modal from '@shared/ui/Modal';
 import Input from '@shared/ui/Input';
 import Popover from '@shared/ui/Popover';
-import { useChats, useCreateChat, useDeleteChat, useRenameChat, useUpdateChatTags } from '@shared/api/hooks/useChats';
-import { useChatStore } from '@app/store/useChatStore';
+import {
+  useChats,
+  useCreateChat,
+  useDeleteChat,
+  useRenameChat,
+  useUpdateChatTags,
+} from '@shared/api/hooks/useChats';
 import { useToast } from '@shared/ui/Toast';
 import { ChatTags } from '@domains/chat/components';
 
@@ -30,10 +35,9 @@ export default function ChatSidebar() {
   const { chatId } = useParams();
   const nav = useNavigate();
   const { showToast } = useToast();
-  
+
   // Server state
-  const searchQuery = useChatStore(state => state.searchQuery);
-  const { data, isLoading } = useChats(searchQuery);
+  const { data } = useChats();
   const createChatMutation = useCreateChat();
   const deleteChatMutation = useDeleteChat();
   const renameChatMutation = useRenameChat();
@@ -57,9 +61,11 @@ export default function ChatSidebar() {
 
   async function onCreate() {
     try {
-      const result = await createChatMutation.mutateAsync({ name: 'Новый чат' });
+      const result = await createChatMutation.mutateAsync({
+        name: 'Новый чат',
+      });
       nav(`/gpt/chat/${result.chat_id}`);
-    } catch (error) {
+    } catch {
       showToast('Ошибка создания чата', 'error');
     }
   }
@@ -189,7 +195,7 @@ export default function ChatSidebar() {
                   });
                   setRenameTarget(null);
                   showToast('Чат переименован', 'success');
-                } catch (error) {
+                } catch {
                   showToast('Ошибка переименования', 'error');
                 }
               }}
@@ -226,7 +232,7 @@ export default function ChatSidebar() {
                   if (chatId === deleteTarget.id) nav('/gpt/chat');
                   setDeleteTarget(null);
                   showToast('Чат удалён', 'success');
-                } catch (error) {
+                } catch {
                   showToast('Ошибка удаления', 'error');
                 }
               }}
@@ -252,7 +258,7 @@ export default function ChatSidebar() {
               });
               setEditTagsTarget(null);
               showToast('Теги обновлены', 'success');
-            } catch (error) {
+            } catch {
               showToast('Ошибка обновления тегов', 'error');
             }
           }}

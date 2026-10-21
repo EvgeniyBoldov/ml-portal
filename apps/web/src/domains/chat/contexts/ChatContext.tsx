@@ -7,10 +7,8 @@ import React, {
   ReactNode,
   useMemo,
 } from 'react';
-import { useChats } from '@shared/api/hooks/useChats';
-import type { Chat } from '@shared/api/types';
 import type { ChatPausedRun } from '@/shared/api/chats';
-import type { ActiveChatRun, ChatTimelineMessage } from '../types';
+import type { ActiveChatRun, ChatHistory, ChatTimelineMessage } from '../types';
 import { toRenderableMessage } from '../chatMessages';
 import { useChatStreaming } from '../hooks/useChatStreaming';
 
@@ -42,19 +40,10 @@ interface ResumePausedState {
 }
 
 interface ChatState {
-  chatsOrder: string[];
-  chatsById: Record<string, Chat>;
-  messagesByChat: Record<
-    string,
-    { items: Message[]; loading: boolean; loaded?: boolean }
-  >;
-  error: string | null;
-  isLoading: boolean;
+  messagesByChat: Record<string, ChatHistory>;
   activeRun: ActiveChatRun | null;
   pendingConfirmations: PendingConfirmation[];
-  pendingConfirmationTokens: string[];
   pendingInput: PendingInput | null;
-  stopReason: string | null;
   pausedRunId: string | null;
   hasInteraction: boolean;
   isStreaming: boolean;
@@ -62,7 +51,7 @@ interface ChatState {
 
 interface ChatActions {
   loadMessages: (chatId: string) => Promise<void>;
-  setCurrentChat: (chatId: string) => void;
+  setCurrentChat: (chatId: string | null) => void;
   clearPendingState: () => void;
   applyPausedState: (state: ResumePausedState) => void;
   loadPausedRun: (chatId: string) => Promise<void>;
@@ -70,13 +59,10 @@ interface ChatActions {
   sendMessageStream: (
     chatId: string,
     message: string,
-    useRag: boolean,
     onChunk: (chunk: string) => void,
     onError: (error: string) => void,
-    agentSlug?: string,
     artifactIds?: string[],
-    attachmentMeta?: unknown[],
-    confirmationTokens?: string[]
+    attachmentMeta?: unknown[]
   ) => Promise<boolean>;
   resumeStream: (
     runId: string,
@@ -97,26 +83,17 @@ const ChatMessagesStateContext = createContext<Pick<
   | 'pausedRunId'
   | 'hasInteraction'
   | 'isStreaming'
-  | 'isLoading'
-> | null>(null);
-const ChatCatalogStateContext = createContext<Pick<
-  ChatState,
-  'chatsOrder' | 'chatsById' | 'messagesByChat'
 > | null>(null);
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [messagesByChat, setMessagesByChat] = useState<
-    Record<string, { items: Message[]; loading: boolean; loaded?: boolean }>
+    Record<string, ChatHistory>
   >({});
   const [activeRun, setActiveRun] = useState<ActiveChatRun | null>(null);
-  const [, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [pendingConfirmations, setPendingConfirmations] = useState<
     PendingConfirmation[]
   >([]);
-  const [, setPendingConfirmationTokens] = useState<string[]>([]);
   const [pendingInput, setPendingInput] = useState<PendingInput | null>(null);
-  const [, setStopReason] = useState<string | null>(null);
   const [pausedInteractionId, setPausedInteractionId] = useState<string | null>(
     null
   );
@@ -131,29 +108,40 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       (historyVersionsRef.current[chatId] || 0) + 1;
   }, []);
 
-  const { data: chats } = useChats();
-  const chatItems = chats?.items ?? [];
-  const chatsOrder = chatItems.map(chat => chat.id);
-  const chatsById = chatItems.reduce<Record<string, Chat>>((acc, chat) => {
-    acc[chat.id] = chat;
-    return acc;
-  }, {});
-
   const loadMessages = useCallback(async (chatId: string) => {
     const streamVersion = historyVersionsRef.current[chatId] || 0;
     const requestVersion = (historyRequestsRef.current[chatId] || 0) + 1;
     historyRequestsRef.current[chatId] = requestVersion;
-    setIsLoading(true);
-    setError(null);
+    setMessagesByChat(prev => ({
+      ...prev,
+      [chatId]: {
+        ...prev[chatId],
+        items: prev[chatId]?.items || [],
+        loading: true,
+        error: undefined,
+      },
+    }));
     try {
       const chatsApi = await import('@shared/api/chats');
-      const resp = await chatsApi.listMessages(chatId, 100);
-      if (historyRequestsRef.current[chatId] !== requestVersion) return;
-      const items = Array.isArray(resp?.items)
-        ? resp.items
-            .map(item => toRenderableMessage(item))
-            .filter((item): item is Message => item !== null)
-        : [];
+      const byId = new Map<string, Message>();
+      const cursors = new Set<string>();
+      let cursor: string | undefined;
+      // The API paginates forwards from the oldest message. Read through to
+      // the tail before replacing the transcript, including after a cached turn.
+      do {
+        const resp = await chatsApi.listMessages(chatId, 100, cursor);
+        if (historyRequestsRef.current[chatId] !== requestVersion) return;
+        const page = Array.isArray(resp?.items) ? resp.items : [];
+        page
+          .map(item => toRenderableMessage(item))
+          .filter((item): item is Message => item !== null)
+          .forEach(item => byId.set(item.id, item));
+        cursor = resp?.next_cursor || undefined;
+        if (cursor && cursors.has(cursor))
+          throw new Error('Не удалось загрузить продолжение истории');
+        if (cursor) cursors.add(cursor);
+      } while (cursor);
+      const items = [...byId.values()];
       setMessagesByChat(prev => {
         // Restore older history while retaining messages received since this
         // request started. A later canonical reload replaces optimistic rows.
@@ -183,22 +171,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           items: prev[chatId]?.items || [],
           loading: false,
           loaded: true,
+          error:
+            err instanceof Error ? err.message : 'Ошибка загрузки сообщений',
         },
       }));
-      setError(
-        err instanceof Error ? err.message : 'Ошибка загрузки сообщений'
-      );
-    } finally {
-      setIsLoading(false);
     }
   }, []);
 
   const clearPausedInteraction = useCallback(() => {
     pauseLookupVersionRef.current += 1;
     setPendingConfirmations([]);
-    setPendingConfirmationTokens([]);
     setPendingInput(null);
-    setStopReason(null);
     setPausedRunId(null);
     setPausedInteractionId(null);
     setHasInteraction(false);
@@ -236,7 +219,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     // lookup that may still be about to return an older empty response.
     pauseLookupVersionRef.current += 1;
     setHasInteraction(typeof resumeState.interaction?.id === 'string');
-    setStopReason(reason);
     setPausedRunId(runId || null);
     setPausedInteractionId(
       typeof action.pause_id === 'string' ? action.pause_id : null
@@ -327,7 +309,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setActiveRun,
       setMessagesByChat,
       setIsStreaming,
-      setError,
       clearPendingState,
       clearPausedInteraction,
       applyPausedState,
@@ -366,7 +347,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       pausedRunId,
       hasInteraction,
       isStreaming,
-      isLoading,
     }),
     [
       messagesByChat,
@@ -376,24 +356,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       pausedRunId,
       hasInteraction,
       isStreaming,
-      isLoading,
     ]
-  );
-  const catalogStateValue = useMemo(
-    () => ({
-      chatsOrder,
-      chatsById,
-      messagesByChat,
-    }),
-    [chatsOrder, chatsById, messagesByChat]
   );
 
   return (
     <ChatActionsContext.Provider value={actionsValue}>
       <ChatMessagesStateContext.Provider value={messagesStateValue}>
-        <ChatCatalogStateContext.Provider value={catalogStateValue}>
-          {children}
-        </ChatCatalogStateContext.Provider>
+        {children}
       </ChatMessagesStateContext.Provider>
     </ChatActionsContext.Provider>
   );
@@ -411,14 +380,6 @@ export function useChatMessagesState() {
   const context = useContext(ChatMessagesStateContext);
   if (!context) {
     throw new Error('useChatMessagesState must be used within ChatProvider');
-  }
-  return context;
-}
-
-export function useChatCatalogState() {
-  const context = useContext(ChatCatalogStateContext);
-  if (!context) {
-    throw new Error('useChatCatalogState must be used within ChatProvider');
   }
   return context;
 }

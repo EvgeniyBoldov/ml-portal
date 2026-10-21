@@ -17,7 +17,7 @@ export interface PaginatedResponse<T> {
   pagination?: Pagination;
 }
 
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T = unknown> {
   data?: T;
   error?: {
     code: string;
@@ -70,27 +70,6 @@ export interface ChatUpdateRequest {
 
 export interface ChatTagsUpdateRequest {
   tags: string[];
-}
-
-export interface ChatMessageCreateRequest {
-  content: string;
-  use_rag?: boolean;
-  response_stream?: boolean;
-  execution_mode?: ExecutionMode;
-  artifact_ids?: string[];
-  confirmation_tokens?: string[];
-}
-
-export interface ChatMessageResponse {
-  id: string;
-  chat_id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string | Record<string, unknown>;
-  model?: string;
-  tokens_in?: number;
-  tokens_out?: number;
-  meta?: Record<string, unknown>;
-  created_at: string;
 }
 
 export interface User {

@@ -35,100 +35,6 @@
   margin: 0;
 }
 
-.headerRuntime {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-height: 24px;
-  max-width: 65%;
-}
-
-.headerStages {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.headerStage {
-  font-size: 11px;
-  color: var(--text-secondary);
-  padding: 2px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  background: var(--bg-primary);
-  max-width: 320px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.headerTyping {
-  display: inline-flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.headerTyping span {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--primary);
-  animation: header-typing 1.2s ease-in-out infinite;
-}
-
-.headerTyping span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.headerTyping span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-@keyframes header-typing {
-  0%, 80%, 100% {
-    opacity: 0.3;
-    transform: scale(0.8);
-  }
-  40% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.streamStatus {
-  font-size: var(--font-size-xs);
-  color: var(--primary);
-  padding: var(--sp-1) var(--sp-3);
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-  border-radius: var(--radius-full);
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-.envelopeBadge {
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
-  padding: var(--sp-1) var(--sp-3);
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-full);
-  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-}
-
-.stateBadge {
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
-  padding: var(--sp-1) var(--sp-3);
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-full);
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
 /* Messages Container */
 .messagesContainer {
   flex: 1;
@@ -142,14 +48,20 @@
   background: var(--bg-primary, #ffffff);
   /* Force minimum height to expand */
   min-height: 300px;
-  /* Smooth scrolling */
-  scroll-behavior: smooth;
   /* Ensure proper scrollbar styling */
   scrollbar-width: thin;
   scrollbar-color: var(--border-color) transparent;
 }
 
 /* Webkit scrollbar styling */
+.messagesContent {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: var(--sp-1);
+  min-height: 100%;
+}
+
 .messagesContainer::-webkit-scrollbar {
   width: 6px;
 }
@@ -190,16 +102,6 @@
   background: var(--bg-secondary);
 }
 
-/* ChatComposer wrapper - ensure proper flex behavior */
-.chatContainer :global(.composer) {
-  flex-shrink: 0;
-  height: auto;
-  min-height: 60px;
-  max-height: 200px;
-  border-top: 1px solid var(--border-color);
-  background: var(--panel);
-}
-
 .composerSlot {
   flex-shrink: 0;
   border-top: 1px solid var(--border-color);
@@ -213,6 +115,7 @@
 }
 
 .noMessages {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -241,34 +144,6 @@
   font-size: var(--font-size-sm);
 }
 
-/* Confirmation Banner */
-.confirmationBanner {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
-  padding: var(--sp-4);
-  margin: var(--sp-2) var(--sp-5);
-  background: rgba(245, 158, 11, 0.08);
-  border: 1px solid var(--warning, #f59e0b);
-  border-radius: var(--radius-md);
-  flex-shrink: 0;
-}
-
-.confirmationText {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-2);
-  font-size: var(--font-size-sm);
-  color: var(--text-primary);
-  line-height: 1.5;
-}
-
-.confirmationActions {
-  display: flex;
-  gap: var(--sp-2);
-  justify-content: flex-end;
-}
-
 .confirmBtn {
   padding: var(--sp-2) var(--sp-4);
   border-radius: var(--radius-md);
@@ -286,38 +161,6 @@
 
 .confirmBtnApprove:hover {
   opacity: 0.9;
-}
-
-.confirmBtnCancel {
-  background: transparent;
-  color: var(--text-secondary);
-  border-color: var(--border-color);
-}
-
-.confirmBtnCancel:hover {
-  background: var(--bg-secondary);
-}
-
-/* Waiting Input Banner */
-.waitingInputBanner {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  padding: var(--sp-4);
-  margin: var(--sp-2) var(--sp-5);
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid var(--info, #3b82f6);
-  border-radius: var(--radius-md);
-  flex-shrink: 0;
-}
-
-.waitingInputText {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-2);
-  font-size: var(--font-size-sm);
-  color: var(--text-primary);
-  line-height: 1.5;
 }
 
 .clarifyBox {

@@ -11,6 +11,10 @@ import { UserMessage } from '@/domains/chat/components/UserMessage';
 import { AssistantMessage } from '@/domains/chat/components/AssistantMessage';
 import { ConfirmationPrompt } from '@/domains/chat/components/ConfirmationPrompt/ConfirmationPrompt';
 import { Icon } from '@/shared/ui/Icon';
+import { useChatScroll } from '@/domains/chat/hooks/useChatScroll';
+import type { ChatTimelineMessage } from '@/domains/chat/types';
+
+const EMPTY_MESSAGES: ChatTimelineMessage[] = [];
 
 export default function Chat() {
   const { chatId } = useParams();
@@ -24,92 +28,63 @@ export default function Chat() {
     abortStream,
     resumeStream,
   } = useChatActions();
-  const historyRef = useRef<HTMLDivElement>(null);
+  const submissionRef = useRef<AbortController | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [streamError, setStreamError] = React.useState<string | null>(null);
   const [clarifyInput, setClarifyInput] = React.useState('');
   const [clarifyBusy, setClarifyBusy] = React.useState(false);
-  const [isNearBottom, setIsNearBottom] = React.useState(true);
-  const [hasUnread, setHasUnread] = React.useState(false);
-  const prevMessageCountRef = useRef(0);
 
   const current = useMemo(
     () => (chatId ? state.messagesByChat[chatId] : undefined),
     [chatId, state.messagesByChat]
   );
-  const messages = current?.items || [];
-
-  const scrollToBottom = React.useCallback(
-    (force: boolean = false) => {
-      if (historyRef.current) {
-        if (!force && !isNearBottom) return;
-        historyRef.current.scrollTop = historyRef.current.scrollHeight;
-      }
-    },
-    [isNearBottom]
+  const messages = current?.items || EMPTY_MESSAGES;
+  const { historyRef, contentRef, hasUnread, scrollToBottom } = useChatScroll(
+    chatId,
+    messages
   );
 
   useEffect(() => {
-    const nextCount = messages.length;
-    const prevCount = prevMessageCountRef.current;
-    if (nextCount > prevCount) {
-      if (isNearBottom) {
-        scrollToBottom(true);
-        setHasUnread(false);
-      } else {
-        setHasUnread(true);
-      }
-    }
-    prevMessageCountRef.current = nextCount;
-  }, [messages.length, isNearBottom, scrollToBottom]);
-
-  useEffect(() => {
-    const container = historyRef.current;
-    if (!container) return;
-    const onScroll = () => {
-      const distanceFromBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight;
-      const near = distanceFromBottom <= 80;
-      setIsNearBottom(near);
-      if (near) setHasUnread(false);
-    };
-    container.addEventListener('scroll', onScroll);
-    onScroll();
-    return () => container.removeEventListener('scroll', onScroll);
-  }, [chatId, messages.length]);
-
-  useEffect(() => {
-    if (!chatId) return;
     // Pending confirmation/input is run-specific; drop stale state when chat changes.
     clearPendingState();
     setClarifyInput('');
-    setCurrentChat(chatId);
-    void loadPausedRun(chatId);
+    setCurrentChat(chatId || null);
+    if (chatId) void loadPausedRun(chatId);
     setBusy(false);
+    setClarifyBusy(false);
     setStreamError(null);
-  }, [chatId, clearPendingState, setCurrentChat, loadPausedRun]);
+    return () => {
+      submissionRef.current?.abort();
+      submissionRef.current = null;
+      abortStream();
+    };
+  }, [chatId, clearPendingState, setCurrentChat, loadPausedRun, abortStream]);
 
   useEffect(() => {
     if (chatId && !current?.loaded) void loadMessages(chatId);
   }, [chatId, current?.loaded, loadMessages]);
 
-  // Handle send with agent support
   const handleSend = async (
     message: string,
-    options: { agentSlug?: string; attachments?: File[] }
+    options: { attachments?: File[] }
   ) => {
     if (!chatId) return false;
+    const submission = new AbortController();
+    submissionRef.current = submission;
     setBusy(true);
     setStreamError(null);
 
     try {
-      scrollToBottom(true);
+      scrollToBottom();
       let artifactIds: string[] = [];
       let attachmentMeta: Array<Record<string, unknown>> = [];
       if (options.attachments?.length) {
         const { uploadChatAttachment } = await import('@shared/api/chats');
+        if (submission.signal.aborted) return false;
         const uploaded = await Promise.all(
-          options.attachments.map(file => uploadChatAttachment(chatId, file))
+          options.attachments.map(file =>
+            uploadChatAttachment(chatId, file, submission.signal)
+          )
         );
         artifactIds = uploaded.map(item => item.artifact_id);
         attachmentMeta = uploaded.map(item => ({
@@ -122,16 +97,17 @@ export default function Chat() {
         }));
       }
 
+      // A stopped upload must not start a new turn, even if its response won
+      // the race with cancellation or the user has navigated to another chat.
+      if (submission.signal.aborted) return false;
       await sendMessageStream(
         chatId,
         message,
-        false,
         () => {},
         (err: string) => {
           const friendlyErr = _friendlyError(err);
           setStreamError(friendlyErr);
         },
-        options.agentSlug,
         artifactIds,
         attachmentMeta
       );
@@ -140,6 +116,8 @@ export default function Chat() {
       // message back into the composer (which can cause accidental resends).
       return true;
     } catch (e: unknown) {
+      if (submission.signal.aborted) return false;
+      submission.abort();
       console.error(e);
       setStreamError(
         _friendlyError(
@@ -148,7 +126,10 @@ export default function Chat() {
       );
       return false;
     } finally {
-      setBusy(false);
+      if (submissionRef.current === submission) {
+        submissionRef.current = null;
+        setBusy(false);
+      }
     }
   };
 
@@ -280,50 +261,60 @@ export default function Chat() {
 
       {/* Messages */}
       <div className={styles.messagesContainer} ref={historyRef}>
-        {messages.length === 0 && !state.isLoading ? (
-          <div className={styles.noMessages}>
-            <Icon name="sparkles" size={32} />
-            <p>Начните диалог, отправив сообщение</p>
-          </div>
-        ) : (
-          messages.map(message => (
-            <React.Fragment key={message.id}>
-              {message.role === 'user' ? (
-                <UserMessage message={message} />
-              ) : null}
-              {message.role === 'assistant' && (
-                <AssistantMessage
-                  message={message}
-                  isStreaming={Boolean(
-                    state.isStreaming && message.isOptimistic
-                  )}
-                  run={
-                    activeRun?.assistantMessageId === message.id
-                      ? activeRun
-                      : undefined
-                  }
-                />
-              )}
-            </React.Fragment>
-          ))
-        )}
+        <div ref={contentRef} className={styles.messagesContent}>
+          {messages.length === 0 && !current?.loading && !current?.error ? (
+            <div className={styles.noMessages}>
+              <Icon name="sparkles" size={32} />
+              <p>Начните диалог, отправив сообщение</p>
+            </div>
+          ) : (
+            messages.map(message => (
+              <React.Fragment key={message.id}>
+                {message.role === 'user' ? (
+                  <UserMessage message={message} />
+                ) : null}
+                {message.role === 'assistant' && (
+                  <AssistantMessage
+                    message={message}
+                    isStreaming={Boolean(
+                      state.isStreaming &&
+                        activeRun?.assistantMessageId === message.id
+                    )}
+                    run={
+                      activeRun?.assistantMessageId === message.id
+                        ? activeRun
+                        : undefined
+                    }
+                  />
+                )}
+              </React.Fragment>
+            ))
+          )}
 
-        {/* Error message */}
-        {streamError && (
-          <div className={styles.errorBanner}>
-            <Icon name="x" size={16} />
-            <span>{streamError}</span>
-          </div>
-        )}
+          {current?.loading && <p role="status">Загрузка истории…</p>}
+          {current?.error && (
+            <div className={styles.errorBanner} role="alert">
+              <span>Не удалось загрузить историю: {current.error}</span>
+              <button type="button" onClick={() => void loadMessages(chatId)}>
+                Повторить
+              </button>
+            </div>
+          )}
+
+          {/* Error message */}
+          {streamError && (
+            <div className={styles.errorBanner}>
+              <Icon name="x" size={16} />
+              <span>{streamError}</span>
+            </div>
+          )}
+        </div>
       </div>
       {hasUnread && (
         <button
           type="button"
           className={styles.jumpToLatest}
-          onClick={() => {
-            scrollToBottom(true);
-            setHasUnread(false);
-          }}
+          onClick={scrollToBottom}
           aria-label="Перейти к новым сообщениям"
         >
           <Icon name="arrow-down" size={14} />
@@ -433,6 +424,7 @@ export default function Chat() {
           </div>
         ) : (
           <ChatComposer
+            key={chatId}
             onSend={handleSend}
             disabled={busy && !state.isStreaming}
             isStreaming={state.isStreaming}
@@ -441,6 +433,7 @@ export default function Chat() {
                 ?.content
             }
             onStop={() => {
+              submissionRef.current?.abort();
               abortStream();
               setBusy(false);
             }}

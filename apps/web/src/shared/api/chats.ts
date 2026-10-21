@@ -5,8 +5,6 @@ import type {
   ChatCreateRequest,
   ChatUpdateRequest,
   ChatTagsUpdateRequest,
-  ChatMessageCreateRequest,
-  ChatMessageResponse,
   ChatMessage,
   ChatAttachment,
   ChatUploadPolicy,
@@ -78,30 +76,6 @@ export async function getPausedRun(chatId: string) {
   );
 }
 
-export async function sendMessage(
-  chat_id: string,
-  body: ChatMessageCreateRequest
-) {
-  return apiRequest<ChatMessageResponse>(`/chats/${chat_id}/messages`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-    idempotent: true,
-  });
-}
-
-export async function issueConfirmationToken(
-  chatId: string,
-  operationFingerprint: string
-) {
-  return apiRequest<{ token: string; expires_at: string }>(
-    `/chats/${chatId}/confirm`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ operation_fingerprint: operationFingerprint }),
-    }
-  );
-}
-
 export async function renameChat(chat_id: string, name: string) {
   const body: ChatUpdateRequest = { name };
   return apiRequest<Chat>(`/chats/${chat_id}`, {
@@ -149,7 +123,7 @@ export async function resumeRunStream(
   runId: string,
   action: 'confirm' | 'cancel' | 'input' | 'answer',
   input?: string | boolean,
-  signal?: AbortSignal,
+  signal?: globalThis.AbortSignal,
   pauseId?: string | null,
   hasInteraction = false
 ): Promise<Response> {
@@ -168,31 +142,21 @@ export async function resumeRunStream(
   });
 }
 
-/** Chat agent info for UI selection */
-export interface ChatAgent {
-  slug: string;
-  name: string;
-  description?: string;
-  has_rag: boolean;
-  has_collections: boolean;
-  tools: string[];
-}
-
-/** Get list of available agents for chat */
-export async function listChatAgents() {
-  return apiRequest<{ agents: ChatAgent[] }>('/chats/agents');
-}
-
 export async function getChatUploadPolicy() {
   return apiRequest<ChatUploadPolicy>('/chats/uploads/policy');
 }
 
-export async function uploadChatAttachment(chatId: string, file: File) {
+export async function uploadChatAttachment(
+  chatId: string,
+  file: File,
+  signal?: globalThis.AbortSignal
+) {
   const form = new FormData();
   form.append('file', file);
   return apiRequest<ChatAttachment>(`/chats/${chatId}/uploads`, {
     method: 'POST',
     body: form,
+    signal,
     headers: {},
   });
 }

@@ -31,7 +31,15 @@ export interface ChatTimelineMessage {
   content: string;
   createdAt: string;
   isOptimistic?: boolean;
+  outcome?: 'cancelled' | 'interrupted' | 'failed';
   meta?: ChatMessageMeta;
+}
+
+export interface ChatHistory {
+  items: ChatTimelineMessage[];
+  loading: boolean;
+  loaded?: boolean;
+  error?: string;
 }
 
 export interface ChatRuntimeProgress {

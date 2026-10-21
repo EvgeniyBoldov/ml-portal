@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { ConfirmationPrompt } from './ConfirmationPrompt';
 
@@ -13,6 +14,41 @@ const item = {
 };
 
 describe('ConfirmationPrompt', () => {
+  it('activates the focused button with Enter without globally confirming', async () => {
+    const user = userEvent.setup();
+    const confirm = vi.fn();
+    const reject = vi.fn();
+    const cancel = vi.fn();
+    render(
+      <>
+        <button type="button">Другой элемент страницы</button>
+        <ConfirmationPrompt
+          item={item}
+          onConfirm={confirm}
+          onReject={reject}
+          onCancel={cancel}
+        />
+      </>
+    );
+    screen.getByRole('button', { name: 'Другой элемент страницы' }).focus();
+    await user.keyboard('{Enter}');
+    expect(confirm).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(cancel).not.toHaveBeenCalled();
+    screen.getByRole('button', { name: 'Нет' }).focus();
+    await user.keyboard('{Enter}');
+    expect(reject).toHaveBeenCalledOnce();
+    expect(confirm).not.toHaveBeenCalled();
+    screen.getByRole('button', { name: 'Отменить' }).focus();
+    await user.keyboard('{Enter}');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(confirm).not.toHaveBeenCalled();
+    screen.getByRole('button', { name: 'Подтвердить' }).focus();
+    await user.keyboard('{Enter}');
+    expect(confirm).toHaveBeenCalledOnce();
+    await user.keyboard('{Escape}');
+    expect(cancel).toHaveBeenCalledTimes(2);
+  });
   it('returns a negative boolean answer separately from cancelling the run', () => {
     const reject = vi.fn();
     const cancel = vi.fn();

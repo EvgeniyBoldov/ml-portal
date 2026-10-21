@@ -14,9 +14,6 @@ import {
   resumeRunStream,
 } from '@/shared/api/chats';
 
-vi.mock('@shared/api/hooks/useChats', () => ({
-  useChats: () => ({ data: { items: [] } }),
-}));
 vi.mock('@/shared/api/streamAuth', () => ({ fetchStreamWithAuth: vi.fn() }));
 vi.mock('@/shared/api/chats', () => ({
   listMessages: vi.fn(),
@@ -81,6 +78,65 @@ beforeEach(() => {
 });
 
 describe('chat streaming', () => {
+  it('loads every history page through to the latest answer and de-duplicates message IDs', async () => {
+    const { result } = setup();
+    vi.mocked(listMessages)
+      .mockResolvedValueOnce({
+        items: Array.from({ length: 100 }, (_, i) => ({
+          id: `message-${i}`,
+          chat_id: 'chat',
+          role: 'user',
+          content: `Текст ${i}`,
+        })),
+        next_cursor: 'cursor-100',
+        limit: 100,
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'message-99',
+            chat_id: 'chat',
+            role: 'user',
+            content: 'Текст 99',
+          },
+          {
+            id: 'latest',
+            chat_id: 'chat',
+            role: 'assistant',
+            content: 'Самый свежий ответ',
+          },
+        ],
+        next_cursor: null,
+        limit: 100,
+      });
+    await act(async () => {
+      await result.current.actions.loadMessages('chat');
+    });
+    expect(listMessages).toHaveBeenNthCalledWith(1, 'chat', 100, undefined);
+    expect(listMessages).toHaveBeenNthCalledWith(2, 'chat', 100, 'cursor-100');
+    expect(result.current.state.messagesByChat.chat.items).toHaveLength(101);
+    expect(result.current.state.messagesByChat.chat.items.at(-1)?.content).toBe(
+      'Самый свежий ответ'
+    );
+  });
+
+  it('reports a repeated cursor instead of looping or replacing history with an incomplete page', async () => {
+    const { result } = setup();
+    vi.mocked(listMessages).mockResolvedValue({
+      items: [],
+      next_cursor: 'same-cursor',
+      limit: 100,
+    });
+    await act(async () => {
+      await result.current.actions.loadMessages('chat');
+    });
+    expect(listMessages).toHaveBeenCalledTimes(2);
+    expect(result.current.state.messagesByChat.chat.error).toContain(
+      'продолжение истории'
+    );
+    expect(result.current.state.messagesByChat.chat.loading).toBe(false);
+  });
+
   it('works without crypto.randomUUID on an HTTP development origin', async () => {
     vi.stubGlobal('crypto', {});
     try {
@@ -103,7 +159,6 @@ describe('chat streaming', () => {
         await result.current.actions.sendMessageStream(
           'chat',
           'Запрос',
-          false,
           vi.fn(),
           onError
         );
@@ -126,7 +181,6 @@ describe('chat streaming', () => {
       await result.current.actions.sendMessageStream(
         'chat',
         'Запрос',
-        false,
         vi.fn(),
         vi.fn()
       );
@@ -184,7 +238,6 @@ describe('chat streaming', () => {
       await result.current.actions.sendMessageStream(
         'chat',
         'Запрос',
-        false,
         vi.fn(),
         vi.fn()
       );
@@ -219,7 +272,6 @@ describe('chat streaming', () => {
       await result.current.actions.sendMessageStream(
         'chat',
         'Запрос',
-        false,
         vi.fn(),
         vi.fn()
       );
@@ -257,7 +309,6 @@ describe('chat streaming', () => {
       await result.current.actions.sendMessageStream(
         'chat',
         'Запрос',
-        false,
         vi.fn(),
         onError
       );
@@ -267,6 +318,9 @@ describe('chat streaming', () => {
     );
     expect(result.current.state.messagesByChat.chat.items.at(-1)?.content).toBe(
       'Начало ответа'
+    );
+    expect(result.current.state.messagesByChat.chat.items.at(-1)?.outcome).toBe(
+      'interrupted'
     );
     expect(result.current.state.isStreaming).toBe(false);
   });
@@ -281,7 +335,6 @@ describe('chat streaming', () => {
       pending = result.current.actions.sendMessageStream(
         'chat',
         'Запрос',
-        false,
         vi.fn(),
         vi.fn()
       );
@@ -291,7 +344,6 @@ describe('chat streaming', () => {
       await result.current.actions.sendMessageStream(
         'chat',
         'Дубль',
-        false,
         vi.fn(),
         onError
       );
@@ -301,6 +353,9 @@ describe('chat streaming', () => {
     });
     expect(result.current.state.messagesByChat.chat.items.at(-1)?.content).toBe(
       'Последние символы'
+    );
+    expect(result.current.state.messagesByChat.chat.items.at(-1)?.outcome).toBe(
+      'cancelled'
     );
     expect(vi.mocked(fetchStreamWithAuth)).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledWith(
@@ -326,7 +381,6 @@ describe('chat streaming', () => {
       pending = result.current.actions.sendMessageStream(
         'chat',
         'Запрос',
-        false,
         vi.fn(),
         vi.fn()
       );
@@ -363,7 +417,6 @@ describe('chat streaming', () => {
       await result.current.actions.sendMessageStream(
         'chat',
         'Запрос',
-        false,
         vi.fn(),
         vi.fn()
       );
@@ -416,7 +469,6 @@ describe('chat streaming', () => {
       await result.current.actions.sendMessageStream(
         'chat',
         'Запрос',
-        false,
         vi.fn(),
         vi.fn()
       );

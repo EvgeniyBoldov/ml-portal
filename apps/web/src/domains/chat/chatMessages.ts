@@ -58,6 +58,7 @@ export function toRenderableMessage(
   message: ChatMessage
 ): ChatTimelineMessage | null {
   if (message.role !== 'user' && message.role !== 'assistant') return null;
+  const status = message.meta?.runtime_status;
   return {
     id: message.id,
     role: message.role,
@@ -66,6 +67,7 @@ export function toRenderableMessage(
         ? message.content
         : String(message.content ?? ''),
     createdAt: message.created_at ?? new Date().toISOString(),
+    outcome: status === 'cancelled' || status === 'failed' ? status : undefined,
     meta: toMessageMeta(message.meta),
   };
 }

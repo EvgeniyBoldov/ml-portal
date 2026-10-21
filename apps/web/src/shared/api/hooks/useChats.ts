@@ -1,8 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as chatsApi from '@shared/api/chats';
 import { qk } from '@shared/api/keys';
-import type { Chat, ChatMessageCreateRequest, ChatMessageResponse } from '@shared/api/types';
-import type { ChatAgent } from '@shared/api/chats';
+import type { Chat } from '@shared/api/types';
 
 /**
  * Hook for fetching chat list
@@ -13,18 +12,6 @@ export function useChats(searchQuery?: string) {
     queryKey: qk.chats.list(searchQuery),
     queryFn: () => chatsApi.listChats({ q: searchQuery, limit: 100 }),
     staleTime: 30_000, // 30s
-  });
-}
-
-/**
- * Hook for fetching chat messages
- */
-export function useChatMessages(chatId: string | undefined, limit = 50) {
-  return useQuery({
-    queryKey: chatId ? qk.chats.messages(chatId) : ['chats', 'messages', 'undefined'],
-    queryFn: () => chatsApi.listMessages(chatId!, limit),
-    enabled: !!chatId,
-    staleTime: 10_000, // 10s for messages (more dynamic)
   });
 }
 
@@ -80,27 +67,6 @@ export function useDeleteChat() {
 }
 
 /**
- * Hook for sending message to chat
- */
-export function useSendMessage() {
-  const queryClient = useQueryClient();
-
-  return useMutation<
-    ChatMessageResponse,
-    Error,
-    { chatId: string; body: ChatMessageCreateRequest }
-  >({
-    mutationFn: ({ chatId, body }) => chatsApi.sendMessage(chatId, body),
-    onSuccess: (_message, { chatId }) => {
-      // Invalidate messages to refetch
-      queryClient.invalidateQueries({ queryKey: qk.chats.messages(chatId) });
-      // Update last_message_at in list
-      queryClient.invalidateQueries({ queryKey: ['chats', 'list'] });
-    },
-  });
-}
-
-/**
  * Hook for renaming chat
  */
 export function useRenameChat() {
@@ -108,7 +74,7 @@ export function useRenameChat() {
 
   return useMutation<Chat, Error, { chatId: string; name: string }>({
     mutationFn: ({ chatId, name }) => chatsApi.renameChat(chatId, name),
-    onSuccess: (_chat, { chatId }) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chats', 'list'] });
     },
   });
@@ -126,24 +92,8 @@ export function useUpdateChatTags() {
     { chatId: string; tags: string[] }
   >({
     mutationFn: ({ chatId, tags }) => chatsApi.updateChatTags(chatId, tags),
-    onSuccess: (_result, { chatId }) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chats', 'list'] });
     },
   });
 }
-
-/**
- * Hook for fetching available chat agents
- */
-export function useChatAgents() {
-  return useQuery({
-    queryKey: qk.agents.list(),
-    queryFn: async () => {
-      const result = await chatsApi.listChatAgents();
-      return result.agents;
-    },
-    staleTime: 60_000, // 1 minute - agents don't change often
-  });
-}
-
-export type { ChatAgent };

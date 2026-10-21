@@ -33,20 +33,6 @@ export function ConfirmationPrompt({
     confirmRef.current?.focus();
   }, []);
 
-  React.useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        if (!disabled) onCancel();
-      } else if (event.key === 'Enter') {
-        event.preventDefault();
-        if (!disabled) onConfirm();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [disabled, onCancel, onConfirm]);
-
   const riskClass =
     item.riskLevel === 'destructive'
       ? styles.riskDanger
@@ -55,7 +41,16 @@ export function ConfirmationPrompt({
         : styles.riskSafe;
 
   return (
-    <div className={styles.card}>
+    <div
+      className={styles.card}
+      onKeyDown={event => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!disabled) onCancel();
+        }
+      }}
+    >
       <div className={styles.header}>
         <div className={styles.title}>
           {item.question || 'Подтвердите действие'}

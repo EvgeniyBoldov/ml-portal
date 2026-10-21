@@ -11,7 +11,7 @@ interface Attachment {
 interface ChatComposerProps {
   onSend: (
     message: string,
-    options: { agentSlug?: string; attachments?: File[] }
+    options: { attachments?: File[] }
   ) => void | boolean | Promise<void | boolean>;
   onStop?: () => void;
   isStreaming?: boolean;
@@ -67,7 +67,7 @@ export function ChatComposer({
   useEffect(() => {
     const onClickOutside = (event: MouseEvent) => {
       if (!menuRef.current) return;
-      if (!menuRef.current.contains(event.target as Node)) {
+      if (!menuRef.current.contains(event.target as globalThis.Node)) {
         setShowMenu(false);
       }
     };
@@ -269,6 +269,7 @@ export function ChatComposer({
               <span className={styles.attachmentName}>{att.file.name}</span>
               <button
                 className={styles.attachmentRemove}
+                aria-label={`Удалить вложение ${att.file.name}`}
                 onClick={() => removeAttachment(att.id)}
                 type="button"
                 disabled={locked}
@@ -290,6 +291,7 @@ export function ChatComposer({
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder || 'Напишите сообщение...'}
+          aria-label="Сообщение"
           disabled={locked}
           rows={1}
         />
