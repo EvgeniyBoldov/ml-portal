@@ -1,7 +1,7 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { collectionsApi } from '@/shared/api/collections';
+import { memoryScopesApi } from '@/shared/api/memoryScopes';
 import { qk } from '@/shared/api/keys';
 import Checkbox from '@/shared/ui/Checkbox';
 import Button from '@/shared/ui/Button';
@@ -26,8 +26,8 @@ export function MemoryScopePicker({
   inheritedKeys = [],
 }: MemoryScopePickerProps) {
   const catalog = useQuery({
-    queryKey: qk.collections.memoryScopeCatalog(),
-    queryFn: collectionsApi.getMemoryScopeCatalog,
+    queryKey: qk.memory.scopeCatalog(),
+    queryFn: memoryScopesApi.list,
     staleTime: 30_000,
     gcTime: 5 * 60_000,
     retry: 1,

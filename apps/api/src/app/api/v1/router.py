@@ -18,6 +18,7 @@ from app.api.v1.routers import chat as chat_router
 from app.api.v1.routers import profile as profile_router
 from app.api.v1.routers.rag import router as rag_router
 from app.api.v1.routers.collections import router as collections_router
+from app.api.v1.routers.memory_scopes import router as memory_scopes_router
 from app.api.v1.routers.admin import router as admin_router
 from app.api.v1.routers.files import router as files_router
 from app.api.v1.routers.internal_mcp_credentials import router as internal_mcp_credentials_router
@@ -45,6 +46,7 @@ api_v1.include_router(rag_router, prefix="/rag", tags=["rag"])
 
 # Collections endpoints (dynamic data collections)
 api_v1.include_router(collections_router, prefix="/collections", tags=["collections"])
+api_v1.include_router(memory_scopes_router)
 
 # Profile endpoints (user profile and API tokens)
 api_v1.include_router(profile_router.router, tags=["profile"])

@@ -34,8 +34,8 @@ import { buildFileDownloadUrl } from '@shared/api/files';
 import { summarizeTemplateSchema } from '@shared/lib/templateSchemaSummary';
 import TemplateStatusModal from './TemplateStatusModal';
 import GlossaryCollectionView from './GlossaryCollectionView';
-import ProjectMemoryCollectionView from './ProjectMemoryCollectionView';
-import GlobalMemoryCollectionView from './GlobalMemoryCollectionView';
+import { memoryScopesApi } from '@/shared/api/memoryScopes';
+import { CollectionLoadError } from '../components/CollectionLoadError';
 import styles from './CollectionDataPage.module.css';
 
 const PAGE_SIZES = [25, 50, 100];
@@ -108,16 +108,17 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
   const isReadOnly = Boolean(collection.is_readonly);
 
   React.useEffect(() => {
+    if (searchQuery.trim() === debouncedSearch) return;
     const timer = setTimeout(() => {
-      setDebouncedSearch(searchQuery);
+      setDebouncedSearch(searchQuery.trim());
       setPage(1);
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, debouncedSearch]);
 
   const offset = (page - 1) * pageSize;
-  const { data: dataResult, isLoading: dataLoading, refetch } = useQuery({
-    queryKey: qk.collections.data(slug, { limit: pageSize, offset }),
+  const { data: dataResult, isLoading: dataLoading, isError: dataError, refetch } = useQuery({
+    queryKey: qk.collections.data(slug, { limit: pageSize, offset, search: debouncedSearch || undefined }),
     queryFn: () =>
       collectionsApi.getData(slug, {
         limit: pageSize,
@@ -127,7 +128,7 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
     enabled: !!slug,
   });
 
-  const rows = dataResult?.items ?? [];
+  const rows = useMemo(() => dataResult?.items ?? [], [dataResult?.items]);
   const total = dataResult?.total ?? 0;
   const totalPages = Math.ceil(total / pageSize);
 
@@ -163,7 +164,8 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
   const handleSelectRow = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set<string>(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }, []);
@@ -299,7 +301,7 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
       <CollectionHeader collection={collection} total={total} right={headerRight} />
 
       <div className={styles.tableContainer}>
-        {dataLoading ? (
+        {dataError ? <CollectionLoadError onRetry={() => void refetch()} /> : dataLoading ? (
           <div className={styles.loading}>
             <Skeleton width="100%" height={300} />
           </div>
@@ -383,19 +385,19 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
             {total.toLocaleString()}
           </div>
           <div className={styles.paginationControls}>
-            <button className={styles.paginationBtn} onClick={() => setPage(1)} disabled={page === 1}>
+            <button className={styles.paginationBtn} aria-label="Первая страница" onClick={() => setPage(1)} disabled={page === 1}>
               <Icon name="chevrons-left" size={16} />
             </button>
-            <button className={styles.paginationBtn} onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+            <button className={styles.paginationBtn} aria-label="Предыдущая страница" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
               <Icon name="chevron-left" size={16} />
             </button>
             <span style={{ margin: '0 8px', fontSize: 13 }}>
               Страница {page} из {totalPages}
             </span>
-            <button className={styles.paginationBtn} onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+            <button className={styles.paginationBtn} aria-label="Следующая страница" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
               <Icon name="chevron-right" size={16} />
             </button>
-            <button className={styles.paginationBtn} onClick={() => setPage(totalPages)} disabled={page === totalPages}>
+            <button className={styles.paginationBtn} aria-label="Последняя страница" onClick={() => setPage(totalPages)} disabled={page === totalPages}>
               <Icon name="chevrons-right" size={16} />
             </button>
           </div>
@@ -482,7 +484,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [uploadMemoryPolicy, setUploadMemoryPolicy] = useState<'collection' | 'enabled' | 'disabled'>('collection');
   const [uploadScope, setUploadScope] = useState('company');
   const memoryScopesQuery = useQuery({
-    queryKey: qk.collections.memoryScopeCatalog(), queryFn: collectionsApi.getMemoryScopeCatalog,
+    queryKey: qk.memory.scopeCatalog(), queryFn: memoryScopesApi.list,
     staleTime: 30_000, gcTime: 5 * 60_000, retry: 1,
   });
   const [uploading, setUploading] = useState(false);
@@ -492,12 +494,13 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const collectionId = collection.id;
 
   useEffect(() => {
+    if (searchQuery.trim() === debouncedSearchQuery) return;
     const timer = setTimeout(() => {
       setDebouncedSearchQuery(searchQuery.trim());
       setPage(1);
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, debouncedSearchQuery]);
 
   const { data: uploadPolicy } = useQuery({
     queryKey: ['collections', 'document-upload-policy'],
@@ -570,7 +573,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       .map(f => ({ name: f.name, label: f.description || f.name }));
   }, [collection.fields]);
 
-  const { data: docsData, isLoading: docsLoading } = useQuery({
+  const { data: docsData, isLoading: docsLoading, isError: docsError, refetch: refetchDocs } = useQuery({
     queryKey: qk.collections.documents(collectionId, { page, size: pageSize, status: statusFilter, query: debouncedSearchQuery }),
     queryFn: () => {
       const params: NonNullable<Parameters<typeof collectionsApi.listDocuments>[1]> & { query?: string } = {
@@ -580,7 +583,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       return collectionsApi.listDocuments(collectionId, params);
     },
     refetchInterval: query => query.state.data?.items.some(doc =>
-      ['pending', 'queued', 'running', 'completed'].includes(doc.memory?.extraction_status ?? '')
+      ['pending', 'queued', 'running'].includes(doc.memory?.extraction_status ?? '')
     ) ? 5000 : false,
     enabled: !!collectionId,
   });
@@ -597,10 +600,12 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     }, 500);
   }, [queryClient, collectionId]);
 
-  const documents = docsData?.items ?? [];
+  const documents = useMemo(() => docsData?.items ?? [], [docsData?.items]);
   const totalDocs = docsData?.total ?? 0;
   const totalDocumentPages = Math.max(1, Math.ceil(totalDocs / pageSize));
-  useEffect(() => { if (page > totalDocumentPages) setPage(totalDocumentPages); }, [page, totalDocumentPages]);
+  useEffect(() => {
+    if (docsData && page > totalDocumentPages) setPage(totalDocumentPages);
+  }, [docsData, page, totalDocumentPages]);
 
   // Stats
   const stats = docsData?.stats ?? { total: totalDocs, ready: 0, processing: 0, failed: 0, uploaded: 0 };
@@ -643,7 +648,8 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
 
   const handleSelect = (id: string) => {
     const s = new Set(selectedIds);
-    s.has(id) ? s.delete(id) : s.add(id);
+    if (s.has(id)) s.delete(id);
+    else s.add(id);
     setSelectedIds(s);
   };
 
@@ -656,9 +662,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   // Conditional bulk action visibility
   const canBulkIngest = selectedDocs.length > 0 && selectedDocs.some(
     d => (d.agg_status || 'uploaded') !== 'ready'
-  );
-  const canBulkArchive = selectedDocs.length > 0 && selectedDocs.every(
-    d => d.status === 'active' || d.status === 'ready'
   );
   const canBulkDelete = selectedDocs.length > 0;
 
@@ -988,7 +991,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
           </div>
         )}
 
-        {docsLoading ? (
+        {docsError ? <CollectionLoadError onRetry={() => void refetchDocs()} /> : docsLoading ? (
           <div className={styles.docLoading}>
             <div className={styles.spinner} />
             <span>Загрузка документов...</span>
@@ -1126,11 +1129,11 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         <div className={styles.pagination}>
           <div className={styles.paginationInfo}>Показано {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalDocs)} из {totalDocs.toLocaleString()}</div>
           <div className={styles.paginationControls}>
-            <button className={styles.paginationBtn} onClick={() => setPage(1)} disabled={page === 1}><Icon name="chevrons-left" size={16} /></button>
-            <button className={styles.paginationBtn} onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1}><Icon name="chevron-left" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Первая страница" onClick={() => setPage(1)} disabled={page === 1}><Icon name="chevrons-left" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Предыдущая страница" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1}><Icon name="chevron-left" size={16} /></button>
             <span style={{ margin: '0 8px', fontSize: 13 }}>Страница {page} из {totalDocumentPages}</span>
-            <button className={styles.paginationBtn} onClick={() => setPage((value) => Math.min(totalDocumentPages, value + 1))} disabled={page >= totalDocumentPages}><Icon name="chevron-right" size={16} /></button>
-            <button className={styles.paginationBtn} onClick={() => setPage(totalDocumentPages)} disabled={page >= totalDocumentPages}><Icon name="chevrons-right" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Следующая страница" onClick={() => setPage((value) => Math.min(totalDocumentPages, value + 1))} disabled={page >= totalDocumentPages}><Icon name="chevron-right" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Последняя страница" onClick={() => setPage(totalDocumentPages)} disabled={page >= totalDocumentPages}><Icon name="chevrons-right" size={16} /></button>
           </div>
           <div className={styles.pageSize}><span>Показывать:</span><select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>{PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></div>
         </div>
@@ -1346,16 +1349,17 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   const collectionId = collection.id;
 
   useEffect(() => {
+    if (searchQuery.trim() === debouncedSearchQuery) return;
     const timer = setTimeout(() => {
       setDebouncedSearchQuery(searchQuery.trim());
       setPage(1);
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, debouncedSearchQuery]);
 
   const templateQueryKey = useMemo(() => ['collections', 'templates', collectionId, { page, size: pageSize, query: debouncedSearchQuery }] as const, [collectionId, page, pageSize, debouncedSearchQuery]);
 
-  const { data: templatesData, isLoading: templatesLoading } = useQuery({
+  const { data: templatesData, isLoading: templatesLoading, isError: templatesError, refetch: refetchTemplates } = useQuery({
     queryKey: templateQueryKey,
     queryFn: () => collectionsApi.listTemplates(collectionId, { page, size: pageSize, query: debouncedSearchQuery || undefined }),
     enabled: !!collectionId,
@@ -1367,7 +1371,9 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
 
   const filteredTemplates = templates;
   const totalPages = Math.max(1, Math.ceil(totalTemplates / pageSize));
-  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  useEffect(() => {
+    if (templatesData && page > totalPages) setPage(totalPages);
+  }, [templatesData, page, totalPages]);
 
   const invalidateTemplates = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
@@ -1440,7 +1446,8 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   const handleSelectRow = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }, []);
@@ -1578,7 +1585,7 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
       <CollectionHeader collection={collection} total={totalTemplates} right={headerRight} />
 
       <div className={styles.tableContainer}>
-        {templatesLoading ? (
+        {templatesError ? <CollectionLoadError onRetry={() => void refetchTemplates()} /> : templatesLoading ? (
           <div className={styles.loading}>
             <Skeleton width="100%" height={300} />
           </div>
@@ -1683,11 +1690,11 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
         <div className={styles.pagination}>
           <div className={styles.paginationInfo}>Показано {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalTemplates)} из {totalTemplates.toLocaleString()}</div>
           <div className={styles.paginationControls}>
-            <button className={styles.paginationBtn} onClick={() => setPage(1)} disabled={page === 1}><Icon name="chevrons-left" size={16} /></button>
-            <button className={styles.paginationBtn} onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1}><Icon name="chevron-left" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Первая страница" onClick={() => setPage(1)} disabled={page === 1}><Icon name="chevrons-left" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Предыдущая страница" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1}><Icon name="chevron-left" size={16} /></button>
             <span style={{ margin: '0 8px', fontSize: 13 }}>Страница {page} из {totalPages}</span>
-            <button className={styles.paginationBtn} onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page === totalPages}><Icon name="chevron-right" size={16} /></button>
-            <button className={styles.paginationBtn} onClick={() => setPage(totalPages)} disabled={page === totalPages}><Icon name="chevrons-right" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Следующая страница" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page === totalPages}><Icon name="chevron-right" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Последняя страница" onClick={() => setPage(totalPages)} disabled={page === totalPages}><Icon name="chevrons-right" size={16} /></button>
           </div>
           <div className={styles.pageSize}><span>Показывать:</span><select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>{PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></div>
         </div>
@@ -1788,19 +1795,11 @@ export default function CollectionDataPage() {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
 
-  const { data: collection, isLoading: collectionLoading } = useQuery({
+  const { data: collection, isLoading: collectionLoading, error: collectionError, refetch: refetchCollection } = useQuery({
     queryKey: ['collections', 'detail', slug],
     queryFn: () => collectionsApi.getBySlug(slug!),
-    enabled: !!slug && slug !== 'project-memory' && slug !== 'global-memory' && slug !== 'glossary',
+    enabled: !!slug && slug !== 'glossary',
   });
-
-  if (slug === 'project-memory') {
-    return <ProjectMemoryCollectionView />;
-  }
-
-  if (slug === 'global-memory') {
-    return <GlobalMemoryCollectionView />;
-  }
 
   if (slug === 'glossary') {
     return <GlossaryCollectionView />;
@@ -1817,6 +1816,9 @@ export default function CollectionDataPage() {
   }
 
   if (!collection) {
+    if (collectionError && !(collectionError instanceof ApiError && collectionError.status === 404)) {
+      return <CollectionLoadError onRetry={() => void refetchCollection()} />;
+    }
     return (
       <div className={styles.page}>
         <div className={styles.emptyState}>

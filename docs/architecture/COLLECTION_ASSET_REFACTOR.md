@@ -12,6 +12,16 @@ Supported collection types are `table`, `document`, `template`, `sql`, and
 Remote SQL and API collections resolve their data instance and configured MCP
 provider chain.
 
+The user catalogue lists persisted collections only. The glossary is a separate
+read-only catalogue; legacy Project Memory and Global Memory views are removed.
+HippoRAG document operations and the shared memory scope catalogue remain active.
+
+Public metadata, data, upload, export, document lifecycle, template and SSE routes
+apply the same effective collection permissions. An explicit collection deny
+returns 404 before reading or mutating its contents. Membership checks use active
+database memberships rather than cached token ordering; membership alone never
+overrides the effective collection policy.
+
 ## Runtime resolution
 
 The runtime resolves a public `collection_slug` to an active collection, checks

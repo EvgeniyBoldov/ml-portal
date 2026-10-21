@@ -80,13 +80,13 @@ async def stream_collection_aggregate_status(
     if not settings.REDIS_URL:
         raise HTTPException(status_code=503, detail="Redis is not available")
 
-    await _resolve_document_collection(collection_id, session, user)
+    collection = await _resolve_document_collection(collection_id, session, user)
     # DI session is only needed for the access check above.
     # Close it explicitly before handing off to the long-lived generator.
     await session.close()
 
     is_admin = user.role == "admin"
-    tenant_id = None if is_admin else (uuid.UUID(user.tenant_ids[0]) if user.tenant_ids else None)
+    tenant_id = None if is_admin else collection.tenant_id
     cid_str = str(collection_id)
     _RESYNC_INTERVAL = 60  # seconds
     _session_factory = get_session_factory()
@@ -179,7 +179,7 @@ async def stream_document_status(
     if not settings.REDIS_URL:
         raise HTTPException(status_code=503, detail="Redis is not available")
 
-    await _resolve_document_collection(collection_id, session, user)
+    await _resolve_collection_and_doc(collection_id, str(doc_id), session, user)
     # DI session only needed for access check — close before long-lived generator.
     await session.close()
 

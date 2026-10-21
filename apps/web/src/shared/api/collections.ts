@@ -155,74 +155,6 @@ export interface CollectionListResponse {
   has_more?: boolean;
 }
 
-export interface ProjectMemoryProject {
-  key: string;
-  name: string;
-  aliases: string[];
-  status_counts: Record<string, number>;
-  updated_at: string | null;
-}
-
-export interface ProjectCatalogItem {
-  key: string;
-  name: string;
-  aliases: string[];
-}
-
-export interface MemoryScopeCatalogItem {
-  id: string;
-  scope_type: 'project' | 'team';
-  key: string;
-  name: string;
-  aliases: string[];
-  is_all: boolean;
-}
-
-export interface ProjectMemoryOverviewResponse {
-  projects: ProjectMemoryProject[];
-  total: number;
-  limit?: number;
-  offset?: number;
-}
-
-export interface ProjectMemoryItem {
-  id: string;
-  subject: string;
-  value: string;
-  content: Record<string, unknown>;
-  kind: string;
-  status: string;
-  observed_at: string;
-  last_verified_at: string;
-  applicability: Record<string, unknown>;
-  source_count: number;
-  evidence_section_ids: string[];
-}
-
-export interface ProjectMemoryProjectDetailResponse {
-  project: ProjectMemoryProject;
-  items: ProjectMemoryItem[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-}
-
-export interface GlobalMemoryOverviewResponse {
-  items: ProjectMemoryItem[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-export interface ProjectMemoryEvidencePreview {
-  document_id: string;
-  section_id: string;
-  label: string;
-  start_offset: number;
-  end_offset: number;
-  excerpt: string;
-}
-
 export interface GlossaryCatalogTerm {
   canonical_term: string;
   aliases: string[];
@@ -817,46 +749,6 @@ export const collectionsApi = {
   getBySlug: async (slug: string): Promise<Collection> => {
     const collection = await apiRequest<Collection>(`/collections/${slug}`);
     return toFrontendCollection(collection);
-  },
-
-  getProjectMemoryOverview: async (params?: { query?: string; state?: string }): Promise<ProjectMemoryOverviewResponse> => {
-    const search = new URLSearchParams();
-    if (params?.query) search.set('query', params.query);
-    if (params?.state) search.set('state', params.state);
-    return apiRequest<ProjectMemoryOverviewResponse>(`/collections/project-memory${search.toString() ? `?${search}` : ''}`);
-  },
-
-  getProjectCatalog: async (): Promise<ProjectCatalogItem[]> =>
-    apiRequest<ProjectCatalogItem[]>('/collections/project-memory/catalog'),
-
-  getMemoryScopeCatalog: async (): Promise<MemoryScopeCatalogItem[]> =>
-    apiRequest<MemoryScopeCatalogItem[]>('/collections/project-memory/scope-catalog'),
-
-  getProjectMemoryProject: async (
-    projectKey: string,
-    params?: { query?: string; item_type?: string; state?: string; limit?: number; offset?: number },
-  ): Promise<ProjectMemoryProjectDetailResponse> =>
-    apiRequest<ProjectMemoryProjectDetailResponse>(`/collections/project-memory/projects/${encodeURIComponent(projectKey)}${(() => {
-      const search = new URLSearchParams();
-      if (params?.query) search.set('query', params.query);
-      if (params?.item_type) search.set('item_type', params.item_type);
-      if (params?.state) search.set('state', params.state);
-      if (params?.limit !== undefined) search.set('limit', String(params.limit));
-      if (params?.offset !== undefined) search.set('offset', String(params.offset));
-      return search.toString() ? `?${search}` : '';
-    })()}`),
-
-  getProjectMemoryEvidence: async (itemId: string, sectionId: string): Promise<ProjectMemoryEvidencePreview> =>
-    apiRequest<ProjectMemoryEvidencePreview>(`/collections/project-memory/items/${encodeURIComponent(itemId)}/evidence/${encodeURIComponent(sectionId)}`),
-
-  getGlobalMemoryOverview: async (params?: { query?: string; item_type?: string; state?: string; limit?: number; offset?: number }): Promise<GlobalMemoryOverviewResponse> => {
-    const search = new URLSearchParams();
-    if (params?.query) search.set('query', params.query);
-    if (params?.item_type) search.set('item_type', params.item_type);
-    if (params?.state) search.set('state', params.state);
-    if (params?.limit !== undefined) search.set('limit', String(params.limit));
-    if (params?.offset !== undefined) search.set('offset', String(params.offset));
-    return apiRequest<GlobalMemoryOverviewResponse>(`/collections/global-memory${search.toString() ? `?${search}` : ''}`);
   },
 
   getGlossaryOverview: async (params?: { query?: string; limit?: number; offset?: number }): Promise<GlossaryOverviewResponse> => {

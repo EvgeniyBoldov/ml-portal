@@ -169,12 +169,9 @@ async def _resolve_template_collection(
     user: UserCtx,
 ) -> Collection:
     from app.services.collection_service import CollectionService
+    from .upload_shared import _resolve_collection
     service = CollectionService(session)
-    collection = await service.get_by_id(collection_id)
-    if not collection:
-        raise HTTPException(status_code=404, detail="Collection not found")
-    if str(collection.tenant_id) not in {str(t) for t in user.tenant_ids}:
-        raise HTTPException(status_code=403, detail="Access denied")
+    collection = await _resolve_collection(collection_id, session, user)
     if collection.collection_type != CollectionType.TEMPLATE.value:
         raise HTTPException(status_code=400, detail="Collection is not a template collection")
     await service.ensure_contract_fields_present(collection, ensure_vector_infra=False)

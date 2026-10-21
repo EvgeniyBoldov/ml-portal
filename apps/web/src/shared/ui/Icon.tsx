@@ -86,6 +86,16 @@ const icons: Record<string, React.FC<{ size?: number; className?: string }>> = {
       <path d="m9 18 6-6-6-6" />
     </svg>
   ),
+  'chevrons-left': ({ size = 16, className }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m11 17-5-5 5-5M18 17l-5-5 5-5" />
+    </svg>
+  ),
+  'chevrons-right': ({ size = 16, className }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m6 17 5-5-5-5M13 17l5-5-5-5" />
+    </svg>
+  ),
   filter: ({ size = 16, className }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M4 5h16" />

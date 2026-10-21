@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_uow, get_current_user, resolve_active_user_tenant_ids
 from app.core.security import UserCtx
 from app.core.logging import get_logger
+from app.models.collection import Collection
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.services.collection_service import CollectionService
 from app.services.permission_service import PermissionService
@@ -72,6 +73,25 @@ async def _resolve_user_tenants(
     return await resolve_active_user_tenant_ids(session, user)
 
 
+async def require_collection_permission(
+    session: AsyncSession,
+    user: UserCtx,
+    collection: Collection,
+) -> None:
+    """Apply the same effective collection policy to metadata and data paths."""
+    resolver = RuntimeRbacResolver(PermissionService(session))
+    permissions = await _resolve_collection_permissions(
+        resolver=resolver,
+        user=user,
+        tenant_id=collection.tenant_id,
+    )
+    if not resolver.is_collection_allowed(
+        effective_permissions=permissions,
+        collection_slug=collection.slug,
+    ):
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+
 async def _resolve_requested_tenant_id(
     session: AsyncSession,
     user: UserCtx,
@@ -86,7 +106,7 @@ async def _resolve_requested_tenant_id(
     user_tenant_ids = await _resolve_user_tenants(session, user)
 
     if tenant_id:
-        if user.role != "admin" and user_tenant_ids and tenant_id not in user_tenant_ids:
+        if user.role != "admin" and tenant_id not in user_tenant_ids:
             raise HTTPException(status_code=403, detail="Access denied")
         return tenant_id
 
@@ -162,22 +182,12 @@ async def get_collection(
     """Get a collection by slug inside the resolved tenant scope."""
     service = CollectionService(session)
     resolved_tenant_id = await _resolve_requested_tenant_id(session, user, tenant_id)
-    resolver = RuntimeRbacResolver(PermissionService(session))
-    effective_permissions = await _resolve_collection_permissions(
-        resolver=resolver,
-        user=user,
-        tenant_id=resolved_tenant_id,
-    )
     collection = await service.get_by_slug(slug)
 
     if not collection:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
     if getattr(collection, "tenant_id", None) != resolved_tenant_id:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
-    if not resolver.is_collection_allowed(
-        effective_permissions=effective_permissions,
-        collection_slug=str(getattr(collection, "slug", "") or ""),
-    ):
-        raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
+    await require_collection_permission(session, user, collection)
 
     return await _build_collection_response(service, collection)

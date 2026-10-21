@@ -1,6 +1,6 @@
 /**
  * CollectionsListPage - List of available collections for data management
- * 
+ *
  * Uses shared UI components: AdminPage, DataTable, Badge
  */
 import { useState, useMemo } from 'react';
@@ -9,62 +9,21 @@ import { useQuery } from '@tanstack/react-query';
 
 import { collectionsApi, type Collection } from '@/shared/api/collections';
 import { qk } from '@/shared/api/keys';
-import { 
+import {
   AdminPage,
-  DataTable, 
+  DataTable,
   Badge,
+  Button,
   type DataTableColumn,
 } from '@/shared/ui';
+import { CollectionLoadError } from '../components/CollectionLoadError';
 import styles from './CollectionsListPage.module.css';
-
-interface ProjectMemoryCollectionRow {
-  id: 'project-memory';
-  slug: 'project-memory';
-  name: 'Project Memory';
-  collection_type: 'memory';
-  is_active: true;
-  total_rows: number;
-  created_at?: string;
-  updated_at?: string;
-}
-
-interface GlossaryCollectionRow {
-  id: 'glossary';
-  slug: 'glossary';
-  name: 'Глоссарий';
-  collection_type: 'memory';
-  is_active: true;
-  total_rows: number;
-  created_at?: string;
-  updated_at?: string;
-}
-
-interface GlobalMemoryCollectionRow {
-  id: 'global-memory';
-  slug: 'global-memory';
-  name: 'Глобальная память';
-  collection_type: 'memory';
-  is_active: true;
-  total_rows: number;
-  created_at?: string;
-  updated_at?: string;
-}
-
-type CollectionCatalogRow = Collection | ProjectMemoryCollectionRow | GlossaryCollectionRow | GlobalMemoryCollectionRow;
-
-function isProjectMemoryCollection(row: CollectionCatalogRow): row is ProjectMemoryCollectionRow {
-  return row.slug === 'project-memory';
-}
-
-function isGlossaryCollection(row: CollectionCatalogRow): row is GlossaryCollectionRow {
-  return row.slug === 'glossary';
-}
 
 export default function CollectionsListPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: qk.collections.appList({ active_only: true }),
     queryFn: () => collectionsApi.list(true),
     // A collection can be created or reconfigured in the admin surface while
@@ -72,73 +31,13 @@ export default function CollectionsListPage() {
     refetchOnMount: 'always',
   });
 
-  const { data: projectMemory } = useQuery({
-    queryKey: qk.collections.projectMemoryOverview(),
-    queryFn: () => collectionsApi.getProjectMemoryOverview(),
-    refetchOnMount: 'always',
-  });
-
-  const { data: glossary } = useQuery({
-    queryKey: qk.collections.glossaryOverview(),
-    queryFn: () => collectionsApi.getGlossaryOverview(),
-    refetchOnMount: 'always',
-  });
-
-  const { data: globalMemory } = useQuery({
-    queryKey: ['collections', 'global-memory', 'overview'],
-    queryFn: () => collectionsApi.getGlobalMemoryOverview({ limit: 1 }),
-    refetchOnMount: 'always',
-  });
-
-  const collections = useMemo<CollectionCatalogRow[]>(() => {
-    const latestUpdate = projectMemory?.projects.reduce<string | undefined>(
-      (latest, project) => {
-        if (!project.updated_at || (latest && latest >= project.updated_at)) return latest;
-        return project.updated_at;
-      },
-      undefined,
-    );
-    return [
-      {
-        id: 'project-memory',
-        slug: 'project-memory',
-        name: 'Project Memory',
-        collection_type: 'memory',
-        is_active: true,
-        total_rows: projectMemory?.total ?? 0,
-        updated_at: latestUpdate,
-      },
-      {
-        id: 'glossary',
-        slug: 'glossary',
-        name: 'Глоссарий',
-        collection_type: 'memory',
-        is_active: true,
-        total_rows: glossary?.total ?? 0,
-        updated_at: glossary?.entries.reduce<string | undefined>(
-          (latest, entry) => !latest || latest < entry.updated_at ? entry.updated_at : latest,
-          undefined,
-        ),
-      },
-      {
-        id: 'global-memory',
-        slug: 'global-memory',
-        name: 'Глобальная память',
-        collection_type: 'memory',
-        is_active: true,
-        total_rows: globalMemory?.total ?? 0,
-      },
-      ...(data?.items ?? []),
-    ];
-  }, [data?.items, glossary, globalMemory, projectMemory]);
+  const collections = useMemo(() => data?.items ?? [], [data?.items]);
 
   const filteredCollections = useMemo(() => {
     if (!search.trim()) return collections;
     const q = search.toLowerCase();
     return collections.filter(
-      c =>
-        c.name.toLowerCase().includes(q) ||
-        c.slug.toLowerCase().includes(q)
+      c => c.name.toLowerCase().includes(q) || c.slug.toLowerCase().includes(q)
     );
   }, [collections, search]);
 
@@ -157,7 +56,7 @@ export default function CollectionsListPage() {
     }
   };
 
-  const columns: DataTableColumn<CollectionCatalogRow>[] = [
+  const columns: DataTableColumn<Collection>[] = [
     {
       key: 'name',
       label: 'НАЗВАНИЕ',
@@ -166,12 +65,14 @@ export default function CollectionsListPage() {
       filter: {
         kind: 'text',
         placeholder: 'Название или slug',
-        getValue: (row) => `${row.name ?? ''} ${row.slug ?? ''}`,
+        getValue: row => `${row.name ?? ''} ${row.slug ?? ''}`,
       },
-      render: (row) => (
+      render: row => (
         <div>
           <div style={{ fontWeight: 600 }}>{row.name}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{row.slug}</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+            {row.slug}
+          </div>
         </div>
       ),
     },
@@ -189,16 +90,13 @@ export default function CollectionsListPage() {
           { value: 'sql', label: 'SQL' },
           { value: 'api', label: 'API' },
           { value: 'template', label: 'Шаблоны' },
-          { value: 'memory', label: 'Память' },
         ],
-        getValue: (row) => row.collection_type,
+        getValue: row => row.collection_type,
       },
-      render: (row) => (
+      render: row => (
         <Badge
           className={
-          row.collection_type === 'memory'
-              ? styles['type-memory']
-              : row.collection_type === 'document'
+            row.collection_type === 'document'
               ? styles['type-document']
               : row.collection_type === 'sql'
                 ? styles['type-sql']
@@ -207,17 +105,15 @@ export default function CollectionsListPage() {
                   : styles['type-table']
           }
         >
-          {row.collection_type === 'memory'
-            ? 'Память'
-            : row.collection_type === 'document'
-              ? 'Документы'
-              : row.collection_type === 'sql'
-                ? 'SQL'
-                : row.collection_type === 'api'
-                  ? 'API'
-                  : row.collection_type === 'template'
-                    ? 'Шаблоны'
-                    : 'Таблица'}
+          {row.collection_type === 'document'
+            ? 'Документы'
+            : row.collection_type === 'sql'
+              ? 'SQL'
+              : row.collection_type === 'api'
+                ? 'API'
+                : row.collection_type === 'template'
+                  ? 'Шаблоны'
+                  : 'Таблица'}
         </Badge>
       ),
     },
@@ -233,11 +129,13 @@ export default function CollectionsListPage() {
           { value: 'true', label: 'Активна' },
           { value: 'false', label: 'Неактивна' },
         ],
-        getValue: (row) => String(row.is_active),
+        getValue: row => String(row.is_active),
       },
-      render: (row) => (
+      render: row => (
         <Badge
-          className={row.is_active ? styles['status-active'] : styles['status-inactive']}
+          className={
+            row.is_active ? styles['status-active'] : styles['status-inactive']
+          }
         >
           {row.is_active ? 'Активна' : 'Неактивна'}
         </Badge>
@@ -252,15 +150,9 @@ export default function CollectionsListPage() {
       filter: {
         kind: 'text',
         placeholder: 'Кол-во',
-        getValue: (row) => row.total_rows,
+        getValue: row => row.total_rows,
       },
-      render: (row) => isProjectMemoryCollection(row)
-        ? `${row.total_rows.toLocaleString()} фактов`
-        : isGlossaryCollection(row)
-          ? `${row.total_rows.toLocaleString()} терминов`
-          : row.slug === 'global-memory'
-            ? `${row.total_rows.toLocaleString()} фактов`
-          : row.total_rows?.toLocaleString() ?? '0',
+      render: row => row.total_rows?.toLocaleString() ?? '0',
     },
     {
       key: 'created_at',
@@ -271,9 +163,9 @@ export default function CollectionsListPage() {
         kind: 'date-range',
         fromPlaceholder: 'От',
         toPlaceholder: 'До',
-        getValue: (row) => row.created_at,
+        getValue: row => row.created_at,
       },
-      render: (row) => (
+      render: row => (
         <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>
           {formatDate(row.created_at)}
         </span>
@@ -288,9 +180,9 @@ export default function CollectionsListPage() {
         kind: 'date-range',
         fromPlaceholder: 'От',
         toPlaceholder: 'До',
-        getValue: (row) => row.updated_at,
+        getValue: row => row.updated_at,
       },
-      render: (row) => (
+      render: row => (
         <span style={{ fontSize: '0.8125rem', color: 'var(--muted)' }}>
           {formatDate(row.updated_at)}
         </span>
@@ -302,20 +194,32 @@ export default function CollectionsListPage() {
     <AdminPage
       title="Коллекции данных"
       subtitle="Структурированные данные для AI агентов"
+      controls={
+        <Button
+          variant="outline"
+          onClick={() => navigate('/gpt/collections/glossary')}
+        >
+          Глоссарий
+        </Button>
+      }
       searchValue={search}
       onSearchChange={setSearch}
       searchPlaceholder="Поиск коллекций..."
     >
-      <DataTable
-        columns={columns}
-        data={filteredCollections}
-        keyField="id"
-        loading={isLoading}
-        emptyText="Коллекции не найдены"
-        paginated
-        pageSize={20}
-        onRowClick={(row) => navigate(`/gpt/collections/${row.slug}`)}
-      />
+      {isError ? (
+        <CollectionLoadError onRetry={() => void refetch()} />
+      ) : (
+        <DataTable
+          columns={columns}
+          data={filteredCollections}
+          keyField="id"
+          loading={isLoading}
+          emptyText="Коллекции не найдены"
+          paginated
+          pageSize={20}
+          onRowClick={row => navigate(`/gpt/collections/${row.slug}`)}
+        />
+      )}
     </AdminPage>
   );
 }

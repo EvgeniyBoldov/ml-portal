@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { collectionsApi } from '@/shared/api/collections';
+import { memoryScopesApi } from '@/shared/api/memoryScopes';
 import { apiRequest } from '@/shared/api/http';
 import { ProfileMemoryScopes } from './ProfileMemoryScopes';
 
@@ -43,9 +43,7 @@ const catalog = [
 
 describe('Profile memory scopes', () => {
   beforeEach(() => {
-    vi.spyOn(collectionsApi, 'getMemoryScopeCatalog').mockResolvedValue(
-      catalog
-    );
+    vi.spyOn(memoryScopesApi, 'list').mockResolvedValue(catalog);
     vi.mocked(apiRequest).mockResolvedValue({
       memory_scope_keys: ['ops', 'nims'],
     });
@@ -65,10 +63,7 @@ describe('Profile memory scopes', () => {
     });
     render(
       <QueryClientProvider client={queryClient}>
-        <ProfileMemoryScopes
-          scopeKeys={scopeKeys}
-          tenantScopeKeys={['ops']}
-        />
+        <ProfileMemoryScopes scopeKeys={scopeKeys} tenantScopeKeys={['ops']} />
       </QueryClientProvider>
     );
   }
@@ -80,7 +75,9 @@ describe('Profile memory scopes', () => {
       name: 'Инфраструктура (ops)',
     });
     expect(team).not.toBeChecked();
-    expect(screen.getByText('Проекты тенанта: Инфраструктура')).toBeInTheDocument();
+    expect(
+      screen.getByText('Проекты тенанта: Инфраструктура')
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('group', { name: 'Команды' })
     ).not.toBeInTheDocument();
@@ -103,7 +100,9 @@ describe('Profile memory scopes', () => {
   it('lets the user clear their selection to restore tenant inheritance', async () => {
     const user = userEvent.setup();
     renderPanel(['nims']);
-    await user.click(await screen.findByRole('checkbox', { name: 'NIMS (nims)' }));
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'NIMS (nims)' })
+    );
     await user.click(screen.getByRole('button', { name: 'Сохранить скоупы' }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenCalledWith('/profile/memory-scopes', {

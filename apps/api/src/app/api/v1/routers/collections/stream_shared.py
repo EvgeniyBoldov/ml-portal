@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import UserCtx
 from app.models.rag_ingest import Source, DocumentCollectionMembership
+from .upload_shared import _resolve_collection
 
 
 @dataclass
@@ -83,19 +84,9 @@ async def _resolve_document_collection(
     session: AsyncSession,
     user: UserCtx,
 ):
-    from app.services.collection_service import CollectionService
-
-    svc = CollectionService(session)
-    collection = await svc.get_by_id(collection_id)
-    if not collection:
-        raise HTTPException(status_code=404, detail="Collection not found")
+    collection = await _resolve_collection(collection_id, session, user)
     if collection.collection_type != "document":
         raise HTTPException(status_code=400, detail="Not a document collection")
-
-    if user.role != "admin":
-        user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
-        if not user_tenant_id or str(collection.tenant_id) != user_tenant_id:
-            raise HTTPException(status_code=403, detail="Access denied")
 
     return collection
 

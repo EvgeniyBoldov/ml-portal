@@ -8,6 +8,14 @@ import pytest
 
 from app.api.v1.routers.collections import upload_shared
 from app.models.collection import CollectionType
+from app.api.v1.routers.collections import crud
+from app.services.permission_service import EffectivePermissions
+
+
+@pytest.fixture(autouse=True)
+def allowed_permissions(monkeypatch):
+    monkeypatch.setattr(crud, "_resolve_collection_permissions", AsyncMock(
+        return_value=EffectivePermissions(default_collection_allow=True)))
 
 
 @pytest.mark.asyncio

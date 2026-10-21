@@ -9,10 +9,11 @@ import uuid
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, resolve_active_user_tenant_ids
+from app.api.deps import resolve_active_user_tenant_ids
 from app.core.security import UserCtx
 from app.models.collection import CollectionType
 from app.services.collection_service import CollectionService
+from .crud import require_collection_permission
 
 
 async def _resolve_user_tenants(
@@ -30,7 +31,7 @@ async def _resolve_requested_tenant_id(
     user_tenant_ids = await _resolve_user_tenants(session, user)
 
     if tenant_id:
-        if user.role != "admin" and user_tenant_ids and tenant_id not in user_tenant_ids:
+        if user.role != "admin" and tenant_id not in user_tenant_ids:
             raise HTTPException(status_code=403, detail="Access denied")
         return tenant_id
 
@@ -54,6 +55,7 @@ async def _resolve_table_collection_by_slug(
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
     if getattr(collection, "tenant_id", None) != resolved_tenant_id:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
+    await require_collection_permission(session, user, collection)
     if collection.collection_type not in {
         CollectionType.TABLE.value,
         CollectionType.SQL.value,
@@ -77,8 +79,10 @@ async def _resolve_collection(
         raise HTTPException(status_code=404, detail="Collection not found")
 
     if user.role != "admin":
-        user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
-        if not user_tenant_id or str(collection.tenant_id) != user_tenant_id:
-            raise HTTPException(status_code=403, detail="Access denied")
+        tenant_ids = await _resolve_user_tenants(session, user)
+        if collection.tenant_id not in tenant_ids:
+            raise HTTPException(status_code=404, detail="Collection not found")
+
+    await require_collection_permission(session, user, collection)
 
     return collection

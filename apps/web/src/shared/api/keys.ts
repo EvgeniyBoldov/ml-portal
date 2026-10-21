@@ -45,10 +45,25 @@ export const qk = {
       candidate: (id: string) => ['admin', 'memory', 'candidate', id] as const,
       item: (id: string) => ['admin', 'memory', 'item', id] as const,
       scopes: () => ['admin', 'memory', 'scopes'] as const,
-      longMemoryDocuments: (params?: { query?: string; scope_key?: string; status?: string; limit?: number; offset?: number }) =>
-        ['admin', 'memory', 'long-memory', 'documents', params] as const,
-      longMemoryDocument: (id: string) => ['admin', 'memory', 'long-memory', 'documents', id] as const,
-      longMemoryDocumentTriples: (id: string, offset: number) => ['admin', 'memory', 'long-memory', 'documents', id, 'triples', offset] as const,
+      longMemoryDocuments: (params?: {
+        query?: string;
+        scope_key?: string;
+        status?: string;
+        limit?: number;
+        offset?: number;
+      }) => ['admin', 'memory', 'long-memory', 'documents', params] as const,
+      longMemoryDocument: (id: string) =>
+        ['admin', 'memory', 'long-memory', 'documents', id] as const,
+      longMemoryDocumentTriples: (id: string, offset: number) =>
+        [
+          'admin',
+          'memory',
+          'long-memory',
+          'documents',
+          id,
+          'triples',
+          offset,
+        ] as const,
       termCatalog: () => ['admin', 'memory', 'term-catalog'] as const,
       review: () => ['admin', 'memory', 'staging-review'] as const,
       candidateEvidence: (id: string) =>
@@ -203,9 +218,11 @@ export const qk = {
     runPlans: (runId: string, status?: string) =>
       ['plans', 'run', runId, status ?? 'all'] as const,
   },
+  memory: {
+    scopeCatalog: () => ['memory', 'scope-catalog'] as const,
+  },
   collections: {
     all: () => ['collections'] as const,
-    memoryScopeCatalog: () => ['collections', 'memory-scope-catalog'] as const,
     appList: (params?: { active_only?: boolean }) =>
       ['collections', 'app-list', params] as const,
     adminList: (params?: {
@@ -232,13 +249,6 @@ export const qk = {
       id: string,
       params?: { page?: number; size?: number; status?: string; query?: string }
     ) => ['collections', 'documents', id, params] as const,
-    projectMemoryOverview: (params?: Record<string, unknown>) =>
-      ['collections', 'project-memory', 'overview', params] as const,
-    projectMemoryProject: (
-      projectKey: string,
-      params?: Record<string, unknown>
-    ) =>
-      ['collections', 'project-memory', 'project', projectKey, params] as const,
     glossaryAll: () => ['collections', 'glossary', 'overview'] as const,
     glossaryOverview: (params?: Record<string, unknown>) =>
       ['collections', 'glossary', 'overview', params] as const,

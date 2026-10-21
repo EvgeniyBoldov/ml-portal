@@ -9,6 +9,7 @@ import pytest
 from app.core.exceptions import CollectionNotFoundError, NotDocumentCollectionError
 from app.models.collection import CollectionType
 from app.services.collection_document_ingest_service import CollectionDocumentUploadService
+from app.models.memory_scope import DocumentMemoryScope
 
 
 class _FakeCollectionService:
@@ -19,8 +20,16 @@ class _FakeCollectionService:
         return {"status": "uploaded", "details": {"persist": persist}}
 
 
+@pytest.fixture
+def memory_scope(monkeypatch):
+    scope = SimpleNamespace(id=uuid4(), key="company")
+    resolver = AsyncMock(return_value=[scope])
+    monkeypatch.setattr("app.services.collection_document_ingest_service.resolve_memory_scopes", resolver)
+    return scope, resolver
+
+
 @pytest.mark.asyncio
-async def test_upload_document_happy_path(monkeypatch):
+async def test_upload_document_happy_path(monkeypatch, memory_scope):
     session = MagicMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
@@ -69,10 +78,15 @@ async def test_upload_document_happy_path(monkeypatch):
     assert result["row_id"]
     session.add.assert_called()
     session.flush.assert_awaited()
+    scope, resolver = memory_scope
+    resolver.assert_awaited_once_with(session, ["company"])
+    bindings = [call.args[0] for call in session.add.call_args_list if isinstance(call.args[0], DocumentMemoryScope)]
+    assert len(bindings) == 1
+    assert bindings[0].scope_id == scope.id
 
 
 @pytest.mark.asyncio
-async def test_upload_document_cleans_up_s3_on_failure(monkeypatch):
+async def test_upload_document_cleans_up_s3_on_failure(monkeypatch, memory_scope):
     session = MagicMock()
     session.add = MagicMock()
     session.flush = AsyncMock()

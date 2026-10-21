@@ -1,5 +1,6 @@
 """Explicit memory focus preferences; these never grant access permissions."""
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -10,3 +11,13 @@ MemoryScopeKeys = Annotated[list[MemoryScopeKey], Field(max_length=60)]
 class MemoryScopePreferences(BaseModel):
     model_config = ConfigDict(extra="forbid")
     memory_scope_keys: MemoryScopeKeys = Field(default_factory=list)
+
+
+class MemoryScopeCatalogItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    scope_type: str
+    key: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    is_all: bool

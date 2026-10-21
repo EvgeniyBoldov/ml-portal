@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { collectionsApi } from '@/shared/api/collections';
+import { memoryScopesApi } from '@/shared/api/memoryScopes';
 import { apiRequest } from '@/shared/api/http';
 import type { ChatContextInspection } from '@/shared/api/chats';
 import { ChatMemoryScopes } from './ChatMemoryScopes';
@@ -30,7 +30,7 @@ afterEach(() => {
 
 describe('Chat memory scope override', () => {
   it('replaces the inherited set and can restore inheritance with an explicit null', async () => {
-    vi.spyOn(collectionsApi, 'getMemoryScopeCatalog').mockResolvedValue([
+    vi.spyOn(memoryScopesApi, 'list').mockResolvedValue([
       {
         id: '1',
         key: 'company',
