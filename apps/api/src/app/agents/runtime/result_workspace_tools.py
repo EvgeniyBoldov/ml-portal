@@ -38,7 +38,11 @@ class LoadArgs(DescribeArgs):
 
 class SQLArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    sql: str = Field(min_length=1)
+    sql: str = Field(min_length=1, description=(
+        "Project only needed fields to reduce oversized records. For nested JSON use "
+        "column->'object'->>'name': -> retains JSONB, ->> returns text and must be last. "
+        "jsonb_object_keys(column) discovers object keys. SELECT column copies the same "
+        "large object; saving it under a new result_id does not reduce its size."))
 
 
 class AggregateArgs(DescribeArgs):

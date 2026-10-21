@@ -404,6 +404,37 @@ class TestChatTurnOrchestrator:
 
 
 @pytest.mark.asyncio
+async def test_partial_final_preserves_failed_turn_and_answer(orchestrator):
+    turn_id = uuid4()
+    orchestrator.turn_service.start_turn.return_value = SimpleNamespace(id=turn_id)
+    orchestrator.persistence_service.create_assistant_message.return_value = SimpleNamespace(
+        message_id="partial-answer", created_at="2026-01-01T12:00:01Z")
+    orchestrator.context_service.load_chat_context.return_value = []
+
+    async def run(**kwargs):
+        yield {"type": "final_content", "content": "Получена только часть данных.",
+               "sources": [], "stop_reason": "failed"}
+
+    events = [event async for event in orchestrator.execute_turn(
+        chat=SimpleNamespace(tenant_id=None, name="Chat"), chat_id="chat-1", user_id="user-1",
+        content="hello", artifact_ids=[], attachment_meta=[], attachment_contexts=[],
+        idempotency_key=None, model=None, agent_slug=None, continuation_meta=None,
+        persist_user_message=False, run_with_router=run, store_idempotency=AsyncMock(),
+        bind_attachments=AsyncMock())]
+
+    orchestrator.turn_service.complete_turn.assert_not_awaited()
+    orchestrator.turn_service.attach_assistant_message.assert_awaited_once_with(turn_id, "partial-answer")
+    orchestrator.turn_service.fail_turn.assert_awaited_once_with(turn_id, error_message="runtime_execution_failed")
+    meta = orchestrator.persistence_service.create_assistant_message.await_args.kwargs["extra_meta"]
+    assert meta["runtime_status"] == "failed"
+    final = next(event for event in events if event["type"] == "final")
+    assert final["content"] == "Получена только часть данных."
+    assert final["stop_reason"] == "failed"
+    assert events[-1] == {"type": "status", "stage": "failed"}
+    assert not any(event["type"] == "error" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_finalization_failure_rolls_back_and_never_emits_final(orchestrator):
     turn_id = uuid4()
     orchestrator.context_service.load_chat_context.return_value = []

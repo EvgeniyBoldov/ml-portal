@@ -1405,6 +1405,12 @@ class AgentToolRuntime(BaseRuntime):
             except ValueError:
                 typed_error_code = None
         stored_result = result.metadata.get("stored_result") if result.success else None
+        result_text = self.tools.format_result_for_context(
+            result,
+            operation_slug=operation_call.tool_name,
+            evidence_call_id=operation_call.id if result.success else None,
+            stored_result=stored_result if isinstance(stored_result, dict) else None,
+        )
         event_result_id = (
             stored_result.get("result_id") if isinstance(stored_result, dict)
             else result.data.get("source_result_id") if operation_call.tool_name == "result.analyze" and isinstance(result.data, dict)
@@ -1420,6 +1426,11 @@ class AgentToolRuntime(BaseRuntime):
             else result.data.get("source_complete") if operation_call.tool_name == "result.analyze" and isinstance(result.data, dict)
             else None
         )
+        if isinstance(stored_result, dict):
+            # Storage eligibility is not model delivery: descriptor overhead
+            # may have forced a pointer even for an initially small payload.
+            context_meta = json.loads(result_text).get("_runtime_result", {})
+            event_inline_complete = context_meta.get("inline_complete", False)
         safe_result_projection = ({
             "result_id": stored_result.get("result_id"),
             "sql_ref": stored_result.get("sql_ref"),
@@ -1427,7 +1438,7 @@ class AgentToolRuntime(BaseRuntime):
             "payload_chars": stored_result.get("payload_chars"),
             "observed_schema": stored_result.get("observed_schema", {}),
             "row_count": stored_result.get("row_count"),
-            "inline_complete": stored_result.get("inline_complete"),
+            "inline_complete": event_inline_complete,
             "source_total": stored_result.get("source_total"),
             "source_complete": stored_result.get("source_complete"),
             "revision": stored_result.get("revision", 1),
@@ -1549,12 +1560,6 @@ class AgentToolRuntime(BaseRuntime):
             "retryable": result.metadata.get("retryable"),
         })
         all_sources.extend(sources)
-        result_text = self.tools.format_result_for_context(
-            result,
-            operation_slug=operation_call.tool_name,
-            evidence_call_id=operation_call.id if result.success else None,
-            stored_result=stored_result if isinstance(stored_result, dict) else None,
-        )
         if operation_call.tool_name == "memory.search" and result.success and isinstance(raw_output, dict):
             result_text = json.dumps({**search_receipt({"arguments": operation_call.arguments, "result": raw_output}),
                                       "evidence_call_id": operation_call.id,

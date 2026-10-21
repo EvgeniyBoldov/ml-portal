@@ -971,7 +971,7 @@ class RuntimePipeline:
             else:
                 # Synthesis already emitted its concrete safe error. Other
                 # graph failures still need one transport-level error.
-                if not runtime_state.final_error:
+                if not runtime_state.final_error and not runtime_state.final_answer:
                     yield await emitter.emit(
                         RuntimeEvent.error(
                             "Runtime execution failed",
@@ -988,7 +988,7 @@ class RuntimePipeline:
                         ),
                         phase=OrchestrationPhase.PIPELINE,
                     )
-            if await_background_tail:
+            if await_background_tail or planning_outcome.kind == GraphPlanningOutcomeKind.FAILED:
                 yield await emitter.emit(
                     RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
                     phase=OrchestrationPhase.PIPELINE,

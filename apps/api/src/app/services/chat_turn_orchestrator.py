@@ -241,6 +241,7 @@ class ChatTurnOrchestrator:
             yield {"type": "error", "error": llm_error["user_message"], "code": llm_error["code"]}
 
         if assistant_content and not llm_error:
+            execution_failed = final_stop_reason == "failed"
             try:
                 assistant_message = await self.persistence_service.create_assistant_message(
                     chat_id=chat_id,
@@ -270,10 +271,14 @@ class ChatTurnOrchestrator:
                         assistant_message.message_id,
                     )
 
-                await self.turn_service.complete_turn(
-                    turn_id,
-                    assistant_message_id=assistant_message.message_id,
-                )
+                if execution_failed:
+                    await self.turn_service.attach_assistant_message(turn_id, assistant_message.message_id)
+                    await self.turn_service.fail_turn(turn_id, error_message="runtime_execution_failed")
+                else:
+                    await self.turn_service.complete_turn(
+                        turn_id,
+                        assistant_message_id=assistant_message.message_id,
+                    )
                 # The optional worker must observe the same committed deterministic
                 # context and assistant message as the immediately following turn.
                 await self.turn_service.session.commit()
@@ -291,7 +296,7 @@ class ChatTurnOrchestrator:
                 chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
                 recent_dialogue=llm_messages, user_message_id=user_message_id, assistant_content=assistant_content,
                 assistant_message_id=str(assistant_message.message_id), run_id=last_run_id,
-                terminal_state="completed",
+                terminal_state="failed" if execution_failed else "completed",
             )
             turn.transition(TurnPhase.FINAL_PERSISTED)
             yield {
@@ -301,9 +306,13 @@ class ChatTurnOrchestrator:
                 "created_at": assistant_message.created_at,
                 "sources": rag_sources,
                 "attachments": final_attachments,
+                **({"stop_reason": final_stop_reason} if final_stop_reason else {}),
             }
-            turn.transition(TurnPhase.COMPLETED)
-            yield {"type": "status", "stage": "completed"}
+            if execution_failed:
+                turn.force_error()
+            else:
+                turn.transition(TurnPhase.COMPLETED)
+            yield {"type": "status", "stage": "failed" if execution_failed else "completed"}
             terminal_event_emitted = True
         elif not llm_error and not run_paused:
             turn.force_error()

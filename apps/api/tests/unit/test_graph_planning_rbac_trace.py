@@ -7,6 +7,7 @@ import pytest
 from app.runtime.events import RuntimeEvent
 from app.runtime.orchestrator import OrchestratorEvent
 from app.runtime.stages.graph_planning_stage import GraphPlanningStage
+from app.runtime.turn_state import RuntimeTurnState
 
 
 @pytest.mark.asyncio
@@ -22,7 +23,7 @@ async def test_planner_iteration_logs_its_rbac_snapshot():
     plan = SimpleNamespace(id=uuid4(), status="active", goal="show collections")
     store = SimpleNamespace(get_by_run=AsyncMock(return_value=plan), snapshot=AsyncMock(return_value={"status": "completed"}))
     stage = GraphPlanningStage(orchestrator=SimpleNamespace(run=run), store=store, max_steps=1)
-    state = SimpleNamespace(run_id=run_id, attachment_contexts=[], deleted_artifact_ids=set())
+    state = RuntimeTurnState(run_id=run_id)
     request = SimpleNamespace(chat_id=None, sandbox_overrides={}, messages=[], model=None)
     ctx = SimpleNamespace(extra={})
 
@@ -57,7 +58,7 @@ async def test_resume_restores_saved_scope_origin_and_memory_instead_of_new_turn
     plan = SimpleNamespace(id=uuid4(), status="active", goal="saved goal")
     store = SimpleNamespace(get_by_run=AsyncMock(return_value=plan), snapshot=AsyncMock(return_value=saved))
     stage = GraphPlanningStage(orchestrator=SimpleNamespace(run=run), store=store, max_steps=1)
-    state = SimpleNamespace(run_id=uuid4(), attachment_contexts=[], deleted_artifact_ids=set())
+    state = RuntimeTurnState(run_id=uuid4())
     request = SimpleNamespace(chat_id=None, sandbox_overrides={}, messages=[], model=None)
     ctx = SimpleNamespace(extra={"project_context": {"effective_scope_keys": ["project.b"],
                                                      "source": "user_default", "suppress_project_default": False}})

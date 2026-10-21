@@ -267,14 +267,8 @@ class GraphPlanningStage:
                 planner_kwargs={**planner_kwargs, "logging_level": self._orchestrator.logging_level},
             ):
                 yield PhasedEvent(event, OrchestrationPhase.SYNTHESIS)
-            # Execution remains failed in the plan audit. The user-facing turn
-            # completes with the partial answer, without resurrecting the plan.
-            if runtime_state.final_answer:
-                self.outcome = GraphPlanningOutcome(
-                    kind=GraphPlanningOutcomeKind.COMPLETED,
-                    stop_reason=PipelineStopReason.COMPLETED,
-                )
-                return
+            # Delivering a partial answer does not change execution success.
+            # The pipeline and chat persistence must retain the failed outcome.
         if status == "completed":
             self.outcome = GraphPlanningOutcome(
                 kind=GraphPlanningOutcomeKind.COMPLETED,

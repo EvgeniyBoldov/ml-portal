@@ -53,16 +53,20 @@ async def test_synthesizer_uses_separate_budget_and_completed_evidence():
     class Synth:
         async def stream(self, **kwargs):
             assert kwargs['budget_registry'] is not expired
+            assert kwargs['ctx'] is tool_context
             assert kwargs['synthesis_context']['execution_summary']['partial']
             kwargs['runtime_state'].final_answer = 'Частичный ответ'
             yield RuntimeEvent.final('Частичный ответ', run_id=str(state.run_id))
     expired = object()
+    tool_context = object()
     events = [event async for event in stream_partial_answer(synthesizer=Synth(), plan=plan,
-        runtime_state=state, failure_code='iteration_limit_exceeded', planner_kwargs={'budget_registry': expired})]
+        runtime_state=state, failure_code='iteration_limit_exceeded',
+        planner_kwargs={'budget_registry': expired, 'ctx': tool_context})]
     assert events[-1].type == RuntimeEventType.FINAL
     assert state.final_answer.startswith('Частичный ответ')
     assert 'лимит' in state.final_answer
     assert events[-1].data['content'] == state.final_answer
+    assert events[-1].data['stop_reason'] == 'failed'
     assert state.final_error is None
 
 
@@ -76,6 +80,7 @@ async def test_failed_finalizer_returns_safe_answer_without_partial_stream_or_er
     events = [event async for event in stream_partial_answer(synthesizer=Synth(), plan=plan,
         runtime_state=state, failure_code='operation_timeout', planner_kwargs={})]
     assert [event.type for event in events] == [RuntimeEventType.FINAL]
+    assert events[-1].data['stop_reason'] == 'failed'
     assert 'времени' in state.final_answer
     assert 'private' not in state.final_answer
 
@@ -110,13 +115,16 @@ async def test_finalizer_has_bounded_timeout(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('failure', ['planner', 'iterations', 'tasks'])
-async def test_planning_stage_finalizes_failed_execution_and_keeps_plan_diagnostics(failure):
+async def test_planning_stage_finalizes_failed_execution_and_keeps_plan_diagnostics(failure, monkeypatch):
+    from unittest.mock import AsyncMock
     from app.agents.context import ToolContext
-    from app.runtime.contracts import PipelineRequest
+    from app.runtime.contracts import PipelineRequest, PipelineStopReason
     from app.runtime.orchestrator import GraphOrchestrator
     from app.runtime.orchestrator_contracts import IterationProposal, PlannedTask, TerminalKind
     from app.runtime.stages.graph_planning_stage import GraphPlanningStage, GraphPlanningOutcomeKind
     from tests.unit.test_graph_orchestrator_iteration_grouping import AsyncMemoryStore, Executor
+    monkeypatch.setattr('app.runtime.datastore_context.load_result_catalog',
+                        AsyncMock(return_value=([], 'available')))
     class Store(AsyncMemoryStore):
         async def get_by_run(self, run):
             return SimpleNamespace(id=self.plan['id'], goal='goal', status='draft')
@@ -143,7 +151,8 @@ async def test_planning_stage_finalizes_failed_execution_and_keeps_plan_diagnost
         ctx=ToolContext(user_id=user, tenant_id=tenant), user_id=user, tenant_id=tenant,
         available_agents=[{'slug': 'research'}], platform_config={},
         runtime_limits={'task_attempts': 1} if failure == 'tasks' else {})]
-    assert stage.outcome.kind == GraphPlanningOutcomeKind.COMPLETED
+    assert stage.outcome.kind == GraphPlanningOutcomeKind.FAILED
+    assert stage.outcome.stop_reason == PipelineStopReason.FAILED
     assert state.final_answer.startswith('Полезный частичный ответ')
     snapshot = await store.snapshot(store.plan['id'])
     assert snapshot['status'] == 'failed'

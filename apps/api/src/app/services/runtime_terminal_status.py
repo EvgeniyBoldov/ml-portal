@@ -76,6 +76,8 @@ def continuation_terminal_from_event(event: Dict[str, Any]) -> Optional[Tuple[Co
     if event_type == "run_paused":
         return ContinuationTerminalStatus.PAUSED, str(event.get("reason") or "")
     if event_type == "final":
+        if event.get("stop_reason") == RunTerminalStatus.FAILED.value:
+            return ContinuationTerminalStatus.ERROR, None
         return ContinuationTerminalStatus.COMPLETED, None
     return None
 

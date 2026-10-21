@@ -55,3 +55,11 @@ def test_continuation_terminal_and_api_status_mapping():
     assert completed == ContinuationTerminalStatus.COMPLETED
     assert completed_err is None
     assert continuation_api_status_from_terminal(completed) == ContinuationApiStatus.RESUMED_COMPLETED
+
+
+def test_partial_final_keeps_failed_status_on_continuation_boundary():
+    failed, error = continuation_terminal_from_event(
+        {"type": "final", "message_id": "partial", "stop_reason": "failed"})
+    assert failed == ContinuationTerminalStatus.ERROR
+    assert error is None
+    assert continuation_api_status_from_terminal(failed) == ContinuationApiStatus.RESUMED_WITH_ERROR

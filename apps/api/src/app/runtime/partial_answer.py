@@ -92,13 +92,14 @@ async def stream_partial_answer(*, synthesizer: Any, plan: dict[str, Any],
         notices = list(dict.fromkeys(item["message"] for item in context["limitations"]))
         if failure_code == "initial_planning_failed" and not context.get("completed_task_reports"):
             runtime_state.final_answer = "\n".join(notices)
-            yield RuntimeEvent.final(runtime_state.final_answer, sources=[], run_id=str(plan["root_run_id"]), attachments=[])
+            yield RuntimeEvent.final(runtime_state.final_answer, sources=[], run_id=str(plan["root_run_id"]), attachments=[], stop_reason="failed")
             return
         reserve = BudgetRegistry(run_limits=RunLimits(llm_calls=1, retries=0, wall_time_ms=timeout * 1000))
         buffered: list[RuntimeEvent] = []
         async with asyncio.timeout(timeout):
             async for event in synthesizer.stream(
                 runtime_state=runtime_state, run_id=UUID(str(plan["root_run_id"])), synthesis_context=context,
+                ctx=planner_kwargs.get("ctx"),
                 model=planner_kwargs.get("model"), platform_config=planner_kwargs.get("platform_config"),
                 sandbox_overrides=planner_kwargs.get("sandbox_overrides"),
                 logging_level=planner_kwargs.get("logging_level"), budget_registry=reserve,
@@ -118,6 +119,7 @@ async def stream_partial_answer(*, synthesizer: Any, plan: dict[str, Any],
             for event in buffered:
                 if event.type == RuntimeEventType.FINAL:
                     event.data["content"] = runtime_state.final_answer
+                    event.data["stop_reason"] = "failed"
                 yield event
             return
     except TimeoutError:
@@ -127,4 +129,4 @@ async def stream_partial_answer(*, synthesizer: Any, plan: dict[str, Any],
         logger.exception("Partial answer synthesis failed")
     runtime_state.final_error = None
     runtime_state.final_answer = "\n".join(dict.fromkeys(notices))
-    yield RuntimeEvent.final(runtime_state.final_answer, sources=[], run_id=str(plan["root_run_id"]), attachments=[])
+    yield RuntimeEvent.final(runtime_state.final_answer, sources=[], run_id=str(plan["root_run_id"]), attachments=[], stop_reason="failed")

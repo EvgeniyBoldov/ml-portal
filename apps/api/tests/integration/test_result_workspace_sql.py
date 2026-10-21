@@ -53,6 +53,36 @@ async def save(workspace, scope, *, call="first", items=None, total=3, next_page
 
 
 @pytest.mark.asyncio
+async def test_oversized_nested_record_can_be_projected_and_delivered_to_model(workspace_pg):
+    import json
+    from app.agents.context import ToolResult
+    from app.agents.runtime.tools import OperationExecutionFacade
+
+    workspace, scope, _ = workspace_pg
+    fields = {"name": "Настройка сети", "description": "Работы " * 80,
+              "status": {"name": "Open"}, "type": {"name": "Task"},
+              "comments": None, "history": "я" * 5000}
+    saved, _ = await workspace.save_source(payload={"fields": fields}, source_tool="external.get_record",
+        arguments={}, operation="external.get_record", call_id="source", task_id="read",
+        agent_execution_id="agent", **scope)
+    read = await workspace.read(result_id=saved["result_id"], fields=["fields"], **scope)
+    assert read["record_too_large"] and read["value"] == []
+    output = await ToolResultStore().execute_sql(
+        sql=("SELECT fields->>'name' AS name, fields->>'description' AS description, "
+             "fields->'status'->>'name' AS status, fields->'type'->>'name' AS type, "
+             f"fields->'comments' AS comments FROM {saved['sql_ref']}"),
+        call_id="projection", task_id="read", agent_execution_id="agent", **scope)
+    stored = output.pop("_stored_result")
+    rendered = OperationExecutionFacade.format_result_for_context(ToolResult.ok(output), stored_result=stored)
+    view = json.loads(rendered)
+    assert view["rows"] == [{"name": fields["name"], "description": fields["description"],
+                              "status": "Open", "type": "Task", "comments": None}]
+    assert view["_runtime_result"]["inline_complete"]
+    assert not view["_runtime_result"]["source_complete"]
+    assert len(rendered.encode()) <= get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3
+
+
+@pytest.mark.asyncio
 async def test_datastore_inventory_uses_real_catalog_provenance_and_scope(workspace_pg):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock

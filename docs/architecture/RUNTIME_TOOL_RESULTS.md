@@ -186,8 +186,17 @@ fields/SQL columns and valid JSON samples. Samples are examples, never coverage
 proofs. Oversized sample records are omitted rather than sliced into invalid JSON.
 Descriptions explain how to read, analyze, or fetch source pages next. Internal
 pagination arguments are not shown to the model. The column schema has priority
-over samples and SQL lineage in the context budget. Inline data is not duplicated
-as a sample. Catalog and tool descriptors both expose the same column contract,
+over samples and SQL lineage in the context budget. Complete inline values take
+priority over optional descriptor metadata: if the combined reply exceeds the
+budget, runtime retries presentation with a compact identity/completeness
+descriptor. SQL replies then include complete rows without duplicating their
+schema, samples and lineage. If values still cannot fit, the model receives only
+a stored reference, never a clipped record. `tool_result.result_inline_complete`
+and its safe payload's `inline_complete` report this actual model presentation,
+rather than the store's preliminary eligibility. Storage `delivery=stored|direct`
+is a separate property from model `delivery=inline|stored`.
+Inline data is not duplicated as a sample. Catalog and tool descriptors both
+expose the same column contract,
 and nested fields can be inspected with result.read before using JSON operators.
 
 Presentation uses `TOOL_RESULTS_CONTEXT_TOKENS` with a conservative byte-based

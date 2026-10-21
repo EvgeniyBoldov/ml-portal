@@ -203,6 +203,39 @@ def test_small_inline_result_keeps_all_columns_before_sample():
     assert "result.read" in meta["hint"] and "->>" in meta["hint"]
 
 
+def test_sql_values_take_priority_over_repeated_metadata_in_context(monkeypatch):
+    from app.core import config
+    from types import SimpleNamespace
+    monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(TOOL_RESULTS_CONTEXT_TOKENS=1200))
+    rows = [{"summary": "Настройка сети", "description": "Работы " * 80,
+             "status": "Open", "issue_type": "Task", "comments": None}]
+    schema, sample, *_ = _profile_rows(rows)
+    saved = {"result_id": str(uuid4()), "sql_ref": "result_" + "a" * 32,
+             "call_id": "call", "row_count": 1, "inline_complete": True,
+             "source_complete": False, "observed_schema": schema,
+             "sample": sample, "schema_complete": True, "sample_complete": True,
+             "query_sql": "SELECT " + "jsonb_extract_path_text(fields, 'description') AS description " * 8,
+             "source_result_ids": [str(uuid4())], "dataset_meta": {"has_next": False}}
+    payload = {**saved, "rows": rows, "query_result_stored": True, "query_complete": True}
+    rendered = OperationExecutionFacade.format_result_for_context(ToolResult.ok(payload), stored_result=saved)
+    view = json.loads(rendered)
+    assert len(rendered.encode()) <= 3600
+    assert view["rows"] == rows
+    assert view["_runtime_result"]["delivery"] == "inline"
+    assert view["_runtime_result"]["source_complete"] is False
+
+
+def test_oversized_values_remain_explicitly_stored_without_partial_data():
+    saved = {"result_id": str(uuid4()), "sql_ref": "result_big", "row_count": 1,
+             "inline_complete": True, "source_complete": True, "observed_schema": {}}
+    rows = [{"body": "я" * 10000}]
+    view = json.loads(OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok({"rows": rows, "query_result_stored": True}), stored_result=saved))
+    assert view["_runtime_result"]["delivery"] == "stored"
+    assert not view["_runtime_result"]["inline_complete"]
+    assert "rows" not in view
+
+
 def test_search_adapter_extracts_rows_and_retains_partial_errors():
     args = {"q": "router", "object_types": ["dcim.device", "dcim.site"], "limit": 1}
     raw = {"results": [{"object_type": "dcim.device", "count": 2,

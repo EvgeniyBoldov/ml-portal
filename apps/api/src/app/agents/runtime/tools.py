@@ -796,6 +796,31 @@ class OperationExecutionFacade:
                     raw_output = descriptor
                 rendered = _json.dumps(raw_output, ensure_ascii=False, default=str)
                 if len(rendered.encode()) > get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3:
+                    # SQL replies repeat lineage, schema and samples already in
+                    # the descriptor. Reserve space for complete values before
+                    # falling back to a pointer; otherwise even a tiny query
+                    # can keep producing unreadable datasets indefinitely.
+                    inline_payload = result.data
+                    if (isinstance(inline_payload, dict)
+                            and inline_payload.get("query_result_stored") is True
+                            and isinstance(inline_payload.get("rows"), list)
+                            and len(inline_payload["rows"]) == stored_result.get("row_count")):
+                        inline_payload = {"rows": inline_payload["rows"]}
+                    compact_meta = {key: runtime_meta[key] for key in (
+                        "result_id", "sql_ref", "revision", "row_count",
+                        "source_complete", "source_total", "has_more", "source_state",
+                        "source_errors", "searched_types",
+                    ) if key in runtime_meta}
+                    compact_meta.update(delivery="inline", inline_complete=True)
+                    compact_output = {"_runtime_result": compact_meta, "data": inline_payload}
+                    if isinstance(inline_payload, dict):
+                        compact_output = {**inline_payload, "_runtime_result": compact_meta}
+                    if evidence_call_id:
+                        compact_output["evidence_call_id"] = evidence_call_id
+                    compact_rendered = _json.dumps(compact_output, ensure_ascii=False, default=str)
+                    if (stored_result.get("inline_complete")
+                            and len(compact_rendered.encode()) <= get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3):
+                        return compact_rendered
                     descriptor["_runtime_result"]["delivery"] = "stored"
                     descriptor["_runtime_result"]["inline_complete"] = False
                     descriptor["_runtime_result"]["hint"] = "Full data saved; use result.read or result.sql to access it. result.load fetches source pages."
