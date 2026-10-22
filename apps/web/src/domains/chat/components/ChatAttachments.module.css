@@ -1,5 +1,149 @@
-.list { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
-.attachment { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-hover); color: var(--text); font-size: 12px; text-decoration: none; }
-.attachment:hover { background: var(--panel); }
-.attachment:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
-.attachment span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.attachment {
+  --file-accent: var(--text-secondary);
+  --file-tint: var(--bg-hover);
+
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: min(240px, 100%);
+  min-width: 0;
+  min-height: 58px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.attachment:hover {
+  border-color: color-mix(in srgb, var(--file-accent) 45%, var(--border-color));
+  background: var(--file-tint);
+}
+
+.attachment:focus-visible {
+  outline: 2px solid var(--file-accent);
+  outline-offset: 2px;
+}
+
+.word {
+  --file-accent: #4b78c2;
+  --file-tint: color-mix(in srgb, var(--file-accent) 8%, var(--bg-primary));
+}
+
+.sheet {
+  --file-accent: #25805a;
+  --file-tint: color-mix(in srgb, var(--file-accent) 8%, var(--bg-primary));
+}
+
+.slides {
+  --file-accent: #c66a36;
+  --file-tint: color-mix(in srgb, var(--file-accent) 8%, var(--bg-primary));
+}
+
+.pdf {
+  --file-accent: #c64c4c;
+  --file-tint: color-mix(in srgb, var(--file-accent) 8%, var(--bg-primary));
+}
+
+.image {
+  --file-accent: #8a65bd;
+  --file-tint: color-mix(in srgb, var(--file-accent) 8%, var(--bg-primary));
+}
+
+.text {
+  --file-accent: var(--text-secondary);
+  --file-tint: var(--bg-hover);
+}
+
+.fileIcon {
+  position: relative;
+  display: grid;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 40px;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--file-accent) 12%, var(--bg-primary));
+  color: var(--file-accent);
+}
+
+.fileIcon > span {
+  position: absolute;
+  right: -3px;
+  bottom: 1px;
+  max-width: 31px;
+  overflow: hidden;
+  padding: 1px 3px;
+  border: 1px solid var(--bg-primary);
+  border-radius: 4px;
+  background: var(--file-accent);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+}
+
+.fileInfo {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.fileName {
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileSize {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.2;
+}
+
+.sourceLabel {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.2;
+}
+
+.sourceGen {
+  border: 1px solid color-mix(in srgb, #25805a 30%, var(--border-color));
+  background: color-mix(in srgb, #25805a 10%, var(--bg-primary));
+  color: #25805a;
+}
+
+.sourceRAG {
+  border: 1px solid color-mix(in srgb, #4b78c2 30%, var(--border-color));
+  background: color-mix(in srgb, #4b78c2 10%, var(--bg-primary));
+  color: #4b78c2;
+}
+
+.sourceTempl {
+  border: 1px solid
+    color-mix(in srgb, var(--text-secondary) 30%, var(--border-color));
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}

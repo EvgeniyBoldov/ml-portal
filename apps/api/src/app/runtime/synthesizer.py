@@ -564,6 +564,7 @@ class Synthesizer:
                 "download_url": f"/api/v1/files/{artifact_id}/download",
                 "content_type": att.get("content_type") or "",
                 "size_bytes": att.get("size_bytes"),
+                **({"artifact": att["artifact"]} if isinstance(att.get("artifact"), dict) else {}),
             })
         return result
 

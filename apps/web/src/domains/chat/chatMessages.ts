@@ -15,6 +15,26 @@ export function toAttachments(value: unknown): ChatAttachmentRef[] {
       typeof raw.artifact_id === 'string' ? raw.artifact_id : '';
     const fileName = typeof raw.file_name === 'string' ? raw.file_name : '';
     if (!artifactId || !fileName) return [];
+    const artifact =
+      raw.artifact && typeof raw.artifact === 'object'
+        ? (raw.artifact as Record<string, unknown>)
+        : undefined;
+    const origin =
+      artifact?.origin && typeof artifact.origin === 'object'
+        ? (artifact.origin as Record<string, unknown>)
+        : raw.origin && typeof raw.origin === 'object'
+          ? (raw.origin as Record<string, unknown>)
+          : undefined;
+    const sourceType = origin?.source_type;
+    const originKind = origin?.kind;
+    const sourceLabel =
+      originKind === 'rag_document'
+        ? 'RAG'
+        : sourceType === 'template_file'
+          ? 'Templ'
+          : originKind === 'agent_generated' || raw.role === 'generated'
+            ? 'Gen'
+            : undefined;
     return [
       {
         artifactId,
@@ -25,6 +45,7 @@ export function toAttachments(value: unknown): ChatAttachmentRef[] {
           typeof raw.content_type === 'string' ? raw.content_type : undefined,
         sizeBytes:
           typeof raw.size_bytes === 'number' ? raw.size_bytes : undefined,
+        sourceLabel,
       },
     ];
   });

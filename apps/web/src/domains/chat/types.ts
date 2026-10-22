@@ -6,6 +6,7 @@ export interface ChatAttachmentRef {
   downloadUrl?: string;
   contentType?: string;
   sizeBytes?: number;
+  sourceLabel?: 'Gen' | 'RAG' | 'Templ';
 }
 
 export interface ChatRagSource {
