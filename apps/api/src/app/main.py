@@ -1,6 +1,8 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_v1
+from app.api.deps import require_admin
+from app.core.security import UserCtx
 from app.core.db import lifespan
 from app.core.exceptions import install_exception_handlers
 from app.core.middleware import (
@@ -50,8 +52,8 @@ async def version():
     return {"version": "0.0.0", "build_time": "", "git_commit": ""}
 
 @app.get("/metrics")
-async def metrics():
-    """Prometheus metrics endpoint"""
+async def metrics(_admin: UserCtx = Depends(require_admin)):
+    """Admin-authenticated Prometheus metrics endpoint."""
     from app.core.prometheus_metrics import get_metrics_text, record_db_pool_stats
     from app.core.db import get_pool_stats
     from fastapi.responses import Response

@@ -5,6 +5,7 @@
  * 1. Промпт — prompt parts (identity, mission, scope, rules, tool_use_rules, output_format, examples)
  * 2. Выполнение — safety knobs + заметки
  */
+import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   EntityPageV2,
@@ -19,6 +20,7 @@ import {
 } from '@/shared/ui/GridLayout';
 import { getVersionStatusPresentation, useVersionLifecycleActions } from '@/shared/hooks/useVersionLifecycleActions';
 import { useAgentVersionEditor } from '@/shared/api/hooks';
+import { Textarea, ConfirmDialog } from '@/shared/ui';
 
 /* ─── Field configs ─── */
 
@@ -193,6 +195,35 @@ const SAFETY_FIELDS: FieldConfig[] = [
       />
     ),
   },
+  {
+    key: 'supports_dynamic_contracts',
+    type: 'boolean',
+    label: 'Разрешить динамические контракты',
+    description: 'Разрешает компилятору принимать проверенные динамические контракты задач.',
+  },
+  {
+    key: 'requires_fresh_retrieval',
+    type: 'boolean',
+    label: 'Требовать свежий поиск',
+    description: 'Каждая задача должна получать свежие данные через инструменты.',
+  },
+  {
+    key: 'task_contracts_json',
+    type: 'custom',
+    label: 'Task contracts (JSON)',
+    description: 'Массив опубликованных именованных контрактов задач.',
+    render: (value, editable, onChange) => (
+      <Textarea
+        id="agent-task-contracts-json"
+        aria-label="Task contracts (JSON)"
+        rows={10}
+        value={String(value ?? '[]')}
+        disabled={!editable}
+        onChange={(event) => onChange(event.target.value)}
+        spellCheck={false}
+      />
+    ),
+  },
 ];
 
 const NOTES_FIELDS: FieldConfig[] = [
@@ -225,6 +256,7 @@ const META_FIELDS: FieldConfig[] = [
 
 export function AgentVersionPage() {
   const { id, version: versionParam } = useParams<{ id: string; version: string }>();
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const {
     mode, isCreate, versionNumber, saving, isLoading,
@@ -233,6 +265,7 @@ export function AgentVersionPage() {
     activateMutation: publishMutation,
     deactivateMutation: archiveMutation,
     setRecommendedMutation,
+    deleteMutation,
     onActivate: onPublish,
     onDeactivate: onArchive,
     onSetRecommended,
@@ -255,7 +288,7 @@ export function AgentVersionPage() {
     { key: 'tags', label: 'Tags', description: 'Теги для категоризации' },
   ];
 
-  const handleAIGenerate = (filledFields: Record<string, any>) => {
+  const handleAIGenerate = (filledFields: Record<string, unknown>) => {
     // Заполнить форму сгенерированными данными
     Object.entries(filledFields).forEach(([field, value]) => {
       handleFieldChange(field, value);
@@ -277,6 +310,9 @@ export function AgentVersionPage() {
     never_do: existingVersion?.never_do ?? '',
     allowed_ops: existingVersion?.allowed_ops ?? '',
     tags: existingVersion?.tags ?? [],
+    task_contracts_json: JSON.stringify(existingVersion?.task_contracts ?? [], null, 2),
+    supports_dynamic_contracts: existingVersion?.supports_dynamic_contracts ?? true,
+    requires_fresh_retrieval: existingVersion?.requires_fresh_retrieval ?? false,
     notes: existingVersion?.notes ?? '',
   };
 
@@ -304,16 +340,19 @@ export function AgentVersionPage() {
       onSetPrimary: onSetRecommended,
       onArchive,
       onClone: onDuplicate,
+      onDelete: () => setShowDeleteConfirm(true),
     },
     loading: { 
       publish: publishMutation.isPending,
       primary: setRecommendedMutation.isPending,
       archive: archiveMutation.isPending,
+      delete: deleteMutation.isPending,
     },
   });
 
   // ─── Render ───
   return (
+    <>
     <EntityPageV2
       title={isCreate ? 'Новая версия' : `Версия ${versionNumber}`}
       mode={mode}
@@ -401,6 +440,17 @@ export function AgentVersionPage() {
       </Tab>
 
     </EntityPageV2>
+    <ConfirmDialog
+      open={showDeleteConfirm}
+      title="Удалить версию?"
+      message={`Версия ${versionNumber} будет удалена без возможности восстановления.`}
+      confirmLabel="Удалить"
+      cancelLabel="Отмена"
+      confirmLoading={deleteMutation.isPending}
+      onCancel={() => setShowDeleteConfirm(false)}
+      onConfirm={() => deleteMutation.mutate()}
+    />
+    </>
   );
 }
 

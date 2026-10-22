@@ -26,8 +26,6 @@ app = Celery(
         "app.workers.tasks_rag_model_reconcile",
         # RAG stale reindex batch tasks
         "app.workers.tasks_rag_reindex",
-        # Vector index consistency audit tasks
-        "app.workers.tasks_vector_index_audit",
         # Health monitoring tasks (new)
         "app.workers.tasks_health",
         # Cleanup tasks for retention policies
@@ -99,26 +97,6 @@ def build_default_beat_schedule() -> dict:
             "task": "app.workers.tasks_rag_ingest.reconcile.reconcile_rag_ingest_outbox",
             "schedule": 60.0,
         },
-        "memory-index-reconcile": {
-            "task": "app.workers.tasks_memory.reconcile_memory_index",
-            "schedule": 900.0,  # 15 minutes
-        },
-        "memory-freshness-refresh": {
-            "task": "app.workers.tasks_memory.refresh_memory_freshness",
-            "schedule": 86400.0,
-        },
-        "memory-document-contract-reextract": {
-            "task": "app.workers.tasks_memory.reextract_stale_document_memory",
-            "schedule": 300.0,
-        },
-        "shadow-memory-conflict-reconcile": {
-            "task": "app.workers.tasks_shadow_document_memory.reconcile_shadow_memory_conflicts",
-            "schedule": 900.0,
-        },
-        "collection-vector-index-audit": {
-            "task": "app.workers.tasks_vector_index_audit.audit_collection_vector_indexes",
-            "schedule": 3600.0,  # 1 hour
-        },
         # LDAP sync (daily at 03:30 UTC by default, configurable via AUTH_LDAP_SYNC_CRON)
         "ldap-users-sync": {
             "task": "app.workers.tasks_ldap_sync.sync_ldap_users",
@@ -172,6 +150,9 @@ def get_effective_beat_schedule() -> dict:
 
 # Определение очередей с приоритетами
 app.conf.task_queues = (
+    # Celery's default route is used by generic/manual tasks without a route.
+    # Keep a consumer for that queue so such tasks cannot remain stranded.
+    Queue('celery', routing_key='celery', priority=0),
     # Критический приоритет - чат
     Queue('chat_critical', routing_key='chat_critical', priority=10),
     
@@ -240,26 +221,23 @@ app.conf.task_routes = {
     "app.workers.tasks_ldap_sync.sync_ldap_users": {"queue": "maintenance.default", "priority": 2},
     "app.workers.tasks_ldap_sync.ldap_health_check": {"queue": "health", "priority": 3},
     "app.workers.tasks_cleanup.cleanup_expired_sandbox_sessions": {"queue": "cleanup_low", "priority": 1},
+    "app.workers.tasks_cleanup.cleanup_expired_runtime_tool_results": {"queue": "cleanup_low", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_expired_tool_payloads": {"queue": "cleanup_low", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_orphaned_chat_attachments": {"queue": "cleanup_low", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_expired_file_data_indexes": {"queue": "cleanup_low", "priority": 1},
+    "app.workers.tasks_cleanup.expire_chat_context_items": {"queue": "cleanup_low", "priority": 1},
     
     # Memory writeback tasks
     "app.workers.tasks_memory.finalize_memory": {"queue": "memory", "priority": 1},
-    "app.workers.tasks_memory.reconcile_memory_index": {"queue": "maintenance.default", "priority": 1},
-    "app.workers.tasks_memory.refresh_memory_freshness": {"queue": "maintenance.default", "priority": 1},
-    "app.workers.tasks_memory.reextract_stale_document_memory": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_memory.reconcile_collection_memory_policy": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_shadow_document_memory.shadow_study_rag_document": {"queue": "memory", "priority": 1},
     "app.workers.tasks_shadow_document_memory.hipporag_study_rag_document": {"queue": "memory", "priority": 1},
     "app.workers.tasks_shadow_document_memory.study_shadow_document_sections": {"queue": "memory", "priority": 1},
     "app.workers.tasks_shadow_document_memory.finalize_shadow_document_study": {"queue": "memory", "priority": 1},
-    "app.workers.tasks_shadow_document_memory.reconcile_shadow_memory_conflicts": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_cleanup.cleanup_deprecated_entities": {"queue": "cleanup_low", "priority": 1},
 
     # Reindex tasks
     "app.workers.tasks_rag_reindex.reconcile_stale_rag_reindex": {"queue": "maintenance.default", "priority": 1},
-    "app.workers.tasks_vector_index_audit.audit_collection_vector_indexes": {"queue": "maintenance.default", "priority": 1},
 }
 
 app.conf.update(

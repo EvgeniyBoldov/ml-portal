@@ -2,13 +2,13 @@
 Users endpoints for API v1
 """
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.deps import db_session, db_uow, get_current_user, require_admin
+from app.api.deps import db_session, db_uow, require_admin
 from app.repositories.users_repo import AsyncUsersRepository
 from app.services.users_service import AsyncUsersService
 from app.schemas.common import ProblemDetails
-from app.schemas.users import UserResponse
+from app.schemas.users import UserCreate, UserListResponse, UserPasswordUpdate, UserResponse, UserUpdate
 
 router = APIRouter(tags=["users"])
 
@@ -21,16 +21,21 @@ async def _user_response(user, repo: AsyncUsersRepository) -> dict:
         "email": user.email,
         "full_name": getattr(user, "full_name", None),
         "role": user.role,
+        "is_admin": bool(user.is_admin),
         "memory_scope_keys": list(user.memory_scope_keys or []),
         "is_active": getattr(user, "is_active", True),
         "auth_provider": getattr(user, "auth_provider", "local"),
+        "deactivated_reason": getattr(user, "deactivated_reason", None),
         "tenant_id": str(default_tid) if default_tid else None,
         "lifecycle_status": getattr(user, "lifecycle_status", "active"),
+        "deprecated_at": getattr(user, "deprecated_at", None),
+        "retention_days": getattr(user, "retention_days", None),
         "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else "",
         "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
+        "last_login_at": user.last_login_at.isoformat() if getattr(user, "last_login_at", None) else None,
     }
 
-@router.get("")
+@router.get("", response_model=UserListResponse)
 async def list_users(
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = None,
@@ -53,20 +58,23 @@ async def list_users(
     )
     items = []
     for u in users:
-        try:
-            default_tid = await repo.get_default_tenant(u.id)
-        except Exception:
-            default_tid = None
+        default_tid = await repo.get_default_tenant(u.id)
         items.append({
             "id": u.id,
             "login": u.login,
             "email": u.email,
             "role": u.role,
+            "is_admin": bool(u.is_admin),
             "is_active": getattr(u, "is_active", True),
+            "auth_provider": getattr(u, "auth_provider", "local"),
+            "deactivated_reason": getattr(u, "deactivated_reason", None),
             "tenant_id": default_tid,
             "lifecycle_status": getattr(u, "lifecycle_status", "active"),
+            "deprecated_at": getattr(u, "deprecated_at", None),
+            "retention_days": getattr(u, "retention_days", None),
             "created_at": u.created_at.isoformat() if getattr(u, "created_at", None) else "",
             "updated_at": getattr(u, "updated_at", None).isoformat() if getattr(u, "updated_at", None) else None,
+            "last_login_at": getattr(u, "last_login_at", None).isoformat() if getattr(u, "last_login_at", None) else None,
         })
     return {
         "users": items,
@@ -75,72 +83,29 @@ async def list_users(
         "total": total,
     }
 
-@router.post("")
+@router.post("", response_model=UserResponse)
 async def create_user(
-    user_data: dict,
+    user_data: UserCreate,
     session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
-    """Create user (admin only) - DEBUG only"""
-    from app.core.config import get_settings
-    
-    # Only allow in DEBUG mode
-    s = get_settings()
-    if not s.DEBUG:
-        raise HTTPException(
-            status_code=403, 
-            detail=ProblemDetails(
-                title="Debug Endpoint Disabled",
-                status=403,
-                detail="User creation only available in debug mode"
-            ).model_dump()
-        )
-    
+    """Create a local user (admin only). LDAP users are provisioned on login."""
     repo = AsyncUsersRepository(session)
     service = AsyncUsersService(repo)
     
     # Extract user data
-    login = user_data.get("login")
-    email = user_data.get("email")
-    role = user_data.get("role", "reader")
-    password = user_data.get("password")
-    tenant_ids = user_data.get("tenant_ids", [])
-    
-    if not login:
-        raise HTTPException(
-            status_code=422, 
-            detail=ProblemDetails(
-                title="Validation Error",
-                status=422,
-                detail="login_required"
-            ).model_dump()
-        )
-    
-    if not email:
-        raise HTTPException(
-            status_code=422, 
-            detail=ProblemDetails(
-                title="Validation Error",
-                status=422,
-                detail="email_required"
-            ).model_dump()
-        )
-    
     try:
-        user = await service.create_user(login, email, password, role, tenant_ids,
-                                         memory_scope_keys=user_data.get("memory_scope_keys", []))
-        return {
-            "user": {
-                "id": user.id,
-                "login": user.login,
-                "email": user.email,
-                "role": user.role,
-                "memory_scope_keys": list(user.memory_scope_keys or []),
-                "is_active": getattr(user, "is_active", True),
-                "created_at": user.created_at.isoformat() if getattr(user, "created_at", None) else "",
-                "updated_at": user.updated_at.isoformat() if getattr(user, "updated_at", None) else None,
-            }
-        }
+        user = await service.create_user(
+            login=user_data.login,
+            email=user_data.email,
+            password=user_data.password,
+            role=user_data.role.value,
+            tenant_id=user_data.tenant_id,
+            is_active=user_data.is_active,
+            memory_scope_keys=user_data.memory_scope_keys,
+            is_admin=user_data.is_admin or user_data.role.value == "admin",
+        )
+        return await _user_response(user, repo)
     except ValueError as e:
         if "duplicate" in str(e).lower() or "already exists" in str(e).lower():
             raise HTTPException(
@@ -185,7 +150,7 @@ async def get_user(
 @router.patch("/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: str,
-    user_data: dict,
+    user_data: UserUpdate,
     session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
@@ -205,9 +170,14 @@ async def update_user(
         )
     
     try:
-        updated_user = await service.update_user(user_id, user_data)
+        updated_user = await service.update_user(user_id, user_data.model_dump(exclude_unset=True))
         return await _user_response(updated_user, repo)
     except ValueError as e:
+        if str(e) == "last_admin":
+            raise HTTPException(
+                status_code=409,
+                detail=ProblemDetails(title="Conflict", status=409, detail="last_admin").model_dump(),
+            ) from e
         raise HTTPException(
             status_code=400, 
             detail=ProblemDetails(
@@ -220,7 +190,7 @@ async def update_user(
 @router.post("/{user_id}/password")
 async def set_user_password(
     user_id: str,
-    body: dict,
+    body: UserPasswordUpdate,
     session: AsyncSession = Depends(db_uow),
     admin_user = Depends(require_admin),
 ):
@@ -246,54 +216,5 @@ async def set_user_password(
             ).model_dump(),
         )
 
-    new_password = body.get("new_password", "")
-    if not new_password or len(new_password) < 8:
-        raise HTTPException(
-            status_code=422,
-            detail=ProblemDetails(
-                title="Validation Error",
-                status=422,
-                detail="password_too_short",
-            ).model_dump(),
-        )
-
-    await service.update_user(user_id, {"password": new_password})
+    await service.update_user(user_id, {"password": body.new_password})
     return {"ok": True}
-
-
-@router.delete("/{user_id}")
-async def delete_user(
-    user_id: str,
-    session: AsyncSession = Depends(db_uow),
-    admin_user = Depends(require_admin),
-):
-    """Delete user (admin only)"""
-    repo = AsyncUsersRepository(session)
-    service = AsyncUsersService(repo)
-    
-    user = await repo.get_by_id(user_id)
-    if not user:
-        raise HTTPException(
-            status_code=404, 
-            detail=ProblemDetails(
-                title="Not Found",
-                status=404,
-                detail="not_found"
-            ).model_dump()
-        )
-    
-    try:
-        await service.delete_user(user_id)
-    except ValueError as exc:
-        if str(exc) == "last_admin":
-            raise HTTPException(
-                status_code=409,
-                detail=ProblemDetails(
-                    title="Conflict",
-                    status=409,
-                    detail="last_admin",
-                ).model_dump(),
-            ) from exc
-        raise
-    from fastapi import Response
-    return Response(status_code=204)

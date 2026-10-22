@@ -466,7 +466,20 @@ def _graph(body: ExtractRequest, *, identity: str, embedding_only: bool, allow_b
         except Exception:
             hippo.close()
             raise
-        (root / "ready").write_text(identity)
+        # Optional dashboard metadata must not prevent a usable graph from
+        # being published. Existing generations retain their publication time.
+        statistics_path = root / f"statistics-{uuid4().hex}.tmp"
+        try:
+            statistics_path.write_text(json.dumps({"nodes": int(hippo.graph.vcount()), "edges": int(hippo.graph.ecount())}))
+            os.replace(statistics_path, root / "statistics.json")
+        except (OSError, TypeError, ValueError):
+            logger.warning("Could not save graph statistics index=%s", identity)
+            try:
+                statistics_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if not (root / "ready").exists():
+            (root / "ready").write_text(identity)
         # Bound resident graphs; derived indexes remain on the worker volume.
         with CACHE_LOCK:
             if len(ENGINES) >= 8:
@@ -676,9 +689,13 @@ def corpus_documents(connection) -> list[Document]:
 
 
 def document_scopes(document: Document) -> list[str]:
-    values = document.metadata.get("scope_slugs")
+    return metadata_scopes(document.metadata)
+
+
+def metadata_scopes(metadata: dict[str, Any]) -> list[str]:
+    values = metadata.get("scope_slugs")
     if values is None:
-        values = [document.metadata.get("scope_slug") or "company"]
+        values = [metadata.get("scope_slug") or "company"]
     return list(dict.fromkeys(values))
 
 
@@ -909,6 +926,36 @@ def document_operation_route(operation_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail="Operation not found")
     return record
+
+
+@router.get("/corpus/statistics")
+def corpus_statistics_route():
+    """Read immutable index metadata without loading graphs or invoking models."""
+    from datetime import datetime, timezone
+
+    with corpus_connection() as connection:
+        indexes = list(connection.execute("SELECT scope_slug,identity FROM scope_indexes"))
+        counts: dict[str, int] = {}
+        unavailable = operations.unavailable_documents()
+        for document_id, metadata in connection.execute("SELECT id,metadata FROM documents"):
+            if document_id in unavailable:
+                continue
+            for slug in metadata_scopes(json.loads(metadata)):
+                counts[slug] = counts.get(slug, 0) + 1
+    scopes = []
+    for slug, identity in indexes:
+        root = DATA / "portal-indexes" / identity
+        ready = root / "ready"
+        statistics: dict[str, Any] = {}
+        try:
+            statistics = json.loads((root / "statistics.json").read_text())
+        except (OSError, ValueError):
+            pass
+        scopes.append({"scope_slug": slug, "documents": counts.get(slug, 0),
+            "status": "ready" if ready.exists() else "absent",
+            "nodes": statistics.get("nodes"), "edges": statistics.get("edges"),
+            "indexed_at": datetime.fromtimestamp(ready.stat().st_mtime, timezone.utc).isoformat() if ready.exists() else None})
+    return {"scopes": scopes}
 
 
 @router.get("/documents/{document_id}")

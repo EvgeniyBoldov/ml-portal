@@ -10,20 +10,7 @@ import { useVersionEditor } from '@/shared/hooks/useVersionEditor';
 import { agentsApi, type Agent, type AgentDetail, type AgentCreate, type AgentUpdate, type AgentVersion, type AgentVersionCreate } from '@/shared/api/agents';
 import { qk } from '@/shared/api/keys';
 import type { QueryKey } from '@tanstack/react-query';
-
-function toNullableString(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed.length ? trimmed : null;
-}
-
-function toNullableStringArray(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  const normalized = value
-    .map((item) => (typeof item === 'string' ? item.trim() : ''))
-    .filter((item) => item.length > 0);
-  return normalized.length ? normalized : null;
-}
+import { buildAgentVersionPayload, type AgentVersionFormData } from '@/shared/api/agentVersionForm';
 
 /* ─── List Hook ─── */
 export function useAgentList(includeDeprecated = false) {
@@ -90,7 +77,7 @@ export function useAgentVersionEditor(agentId: string, versionParam: string | un
   const [searchParams] = useSearchParams();
   const fromVersionParam = searchParams.get('from');
 
-  return useVersionEditor<AgentDetail, AgentVersion, AgentVersionCreate>({
+  return useVersionEditor<AgentDetail, AgentVersion, AgentVersionFormData, AgentVersionCreate>({
     slug: agentId,
     versionParam,
     fromVersionParam,
@@ -122,26 +109,13 @@ export function useAgentVersionEditor(agentId: string, versionParam: string | un
       never_do: version?.never_do ?? '',
       allowed_ops: version?.allowed_ops ?? '',
       tags: version?.tags ?? [],
+      task_contracts_json: JSON.stringify(version?.task_contracts ?? [], null, 2),
+      supports_dynamic_contracts: version?.supports_dynamic_contracts ?? true,
+      requires_fresh_retrieval: version?.requires_fresh_retrieval ?? false,
       notes: version?.notes ?? '',
     }),
-    buildCreatePayload: (formData, sourceVersion) => ({
-      identity: toNullableString(formData.identity),
-      mission: toNullableString(formData.mission),
-      scope: toNullableString(formData.scope),
-      planner_short_info: toNullableString(formData.planner_short_info),
-      rules: toNullableString(formData.rules),
-      tool_use_rules: toNullableString(formData.tool_use_rules),
-      output_format: toNullableString(formData.output_format),
-      examples:
-        typeof formData.examples === 'string'
-          ? toNullableString(formData.examples)
-          : (formData.examples ? JSON.stringify(formData.examples) : null),
-      never_do: toNullableString(formData.never_do),
-      allowed_ops: toNullableString(formData.allowed_ops),
-      tags: toNullableStringArray(formData.tags),
-      notes: toNullableString(formData.notes),
-      parent_version_id: sourceVersion?.id,
-    }),
+    buildCreatePayload: (formData, sourceVersion) =>
+      buildAgentVersionPayload(formData, sourceVersion?.id),
     basePath: '/admin/agents',
     messages: {
       created: 'Версия агента создана',

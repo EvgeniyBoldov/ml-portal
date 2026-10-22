@@ -57,9 +57,7 @@ export function MemoryScopePicker({
           {readOnly ? (
             <p>
               {value
-                .map(
-                  key => scopes.find(scope => scope.key === key)?.name ?? key
-                )
+                .map(key => scopes.find(scope => scope.key === key)?.name ?? key)
                 .join(', ') || 'Не выбраны'}
             </p>
           ) : (
@@ -86,14 +84,10 @@ export function MemoryScopePicker({
                   checked
                   disabled={disabled}
                   description="Проект больше недоступен — снимите выбор"
-                  onChange={() =>
-                    onChange(value.filter(selected => selected !== key))
-                  }
+                  onChange={() => onChange(value.filter(selected => selected !== key))}
                 />
               ))}
-              {!scopes.length && (
-                <p className={styles.hint}>Нет доступных проектов</p>
-              )}
+              {!scopes.length && <p className={styles.hint}>Нет доступных проектов</p>}
             </>
           )}
           {inheritedKeys.length > 0 && (

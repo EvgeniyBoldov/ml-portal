@@ -23,6 +23,11 @@
 
 Lifecycle статусы используются для soft/hard delete процесса (`active` / `deprecated`) и фоновой GC очистки по retention TTL.
 
+`Users.is_admin` grants access to the platform admin application. Tenant administrator
+and data editor assignments belong to `UserTenants`: tenant administrators manage
+their tenant, while data editors receive tenant data editing permissions. A user
+may belong to one tenant and a tenant may have multiple administrators.
+
 ### Agents & Prompts
 
 ```
@@ -107,6 +112,13 @@ Lifecycle статусы используются для soft/hard delete про
 ```
 
 ### Permissions & Credentials
+
+RBAC rules bind one resource and effect (`allow` / `deny`) to exactly one owner:
+platform, tenant, or user. Admins can change a rule's level and owner together;
+the selected level determines which owner field is set. The database already
+stores these fields and enforces one owner per rule, so changing the binding does
+not require a schema migration. A rule must remain unique for its resulting
+owner and resource.
 
 PermissionSet and CredentialSet are still scope-aware, but scope is mainly used for control and rollout, not for forcing every tool/instance to be tenant-exclusive.
 

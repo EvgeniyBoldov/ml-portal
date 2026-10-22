@@ -21,6 +21,7 @@ from app.runtime.orchestrator_contracts import (
 from app.runtime.interaction import InteractionRequired, RuntimeInteraction, InteractionQuestion, InteractionRequester, interaction_history
 from app.runtime.plan_store import PlanValidationError
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
+from app.runtime.phase_limits import stream_synthesis_with_deadline
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
 from app.runtime.memory.tool_ledger import canonical_operation_name, document_search_evidence_document_ids
 from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, project_memory_context, task_scope, scope_selection_changes
@@ -447,41 +448,80 @@ class GraphOrchestrator:
 
     @staticmethod
     def _compact_ledger(ledger: Dict[str, Any], max_chars: int) -> Dict[str, Any]:
-        """Preserve graph state while bounding model context deterministically."""
-        def compact(value: Any, *, depth: int = 0) -> Any:
+        """Reduce planner detail while preserving every task's disposition."""
+        if max_chars < 1:
+            raise ValueError("planner ledger max_chars must be positive")
+
+        # These lists carry the graph's state. In particular, dropping a task
+        # here makes it impossible for the planner to resolve it on the next
+        # iteration. Other lists are descriptive payloads and can be sampled.
+        structural_lists = {
+            "tasks", "iterations", "needs", "bindings", "resolutions",
+            "depends_on", "replacement_task_ids", "output_keys",
+        }
+
+        def compact(value: Any, *, depth: int = 0, key: str | None = None) -> Any:
             if isinstance(value, str):
                 return value if len(value) <= 1_024 else value[:1_024] + "…[truncated]"
             if isinstance(value, list):
-                items = [compact(item, depth=depth + 1) for item in value[:40]]
-                if len(value) > 40:
+                preserve_all = key in structural_lists
+                selected = value if preserve_all else value[:40]
+                items = [compact(item, depth=depth + 1) for item in selected]
+                if not preserve_all and len(value) > 40:
                     items.append({"_truncated_items": len(value) - 40})
                 return items
             if isinstance(value, dict):
                 if depth > 8:
                     return {"_truncated": "nested value omitted"}
-                return {str(key): compact(item, depth=depth + 1) for key, item in list(value.items())[:80]}
+                return {str(child_key): compact(item, depth=depth + 1, key=str(child_key))
+                        for child_key, item in list(value.items())[:80]}
             return value
 
+        def size(value: Dict[str, Any]) -> int:
+            return len(json.dumps(value, ensure_ascii=False, default=str))
+
         bounded = compact(ledger)
-        # A few huge result values can still exceed the global limit.  Keep
-        # their state/description but externalize their payload from planner
-        # context instead of failing the whole plan.
+        if size(bounded) <= max_chars:
+            return bounded
+
+        # Outputs and evidence payloads are available in the task journal. Keep
+        # compact status and failure information in the planner's context.
         for task in bounded.get("tasks", []):
-            if len(json.dumps(bounded, ensure_ascii=False, default=str)) <= max_chars:
-                break
             result = task.get("result") if isinstance(task, dict) else None
-            if isinstance(result, dict) and (result.get("outputs") or result.get("structured_response")):
-                result.pop("outputs", None)
-                result["structured_response"] = {"_truncated": "output retained in task journal"}
-        if len(json.dumps(bounded, ensure_ascii=False, default=str)) > max_chars:
-            bounded["tasks"] = [
-                {key: task.get(key) for key in ("task_id", "iteration_id", "status", "attempts", "result")}
-                for task in bounded.get("tasks", [])
-            ]
-            for task in bounded["tasks"]:
-                if isinstance(task.get("result"), dict):
-                    task["result"].pop("outputs", None)
-                    task["result"]["structured_response"] = {"_truncated": "see task journal"}
+            if isinstance(result, dict):
+                for key in ("outputs", "structured_response", "attachments", "sources", "evidence", "receipts"):
+                    if result.get(key):
+                        result[key] = {"_truncated": "details retained in task journal"}
+        if size(bounded) <= max_chars:
+            return bounded
+
+        # Preserve one compact record per task so resolutions remain complete.
+        # Keep only result fields useful for recovery and final reporting.
+        minimal_tasks = []
+        for task in bounded.get("tasks", []):
+            if not isinstance(task, dict):
+                continue
+            result = task.get("result") if isinstance(task.get("result"), dict) else {}
+            result_summary = {
+                key: result[key] for key in ("reason_code", "answer", "limitation", "completion")
+                if result.get(key) is not None
+            }
+            minimal_tasks.append({
+                key: task[key] for key in ("task_id", "iteration_id", "status", "attempts", "intent", "executor")
+                if key in task
+            } | ({"result": result_summary} if result_summary else {}))
+        bounded = {
+            "plan_status": bounded.get("plan_status"),
+            "iterations": bounded.get("iterations", []),
+            "tasks": minimal_tasks,
+            "needs": bounded.get("needs", []),
+            "bindings": bounded.get("bindings", []),
+            "resolutions": bounded.get("resolutions", []),
+        }
+        if size(bounded) > max_chars:
+            raise ValueError(
+                f"planner execution ledger structural state exceeds max_chars={max_chars}"
+            )
         return bounded
 
     @staticmethod
@@ -940,19 +980,29 @@ class GraphOrchestrator:
                 try:
                     context_limit = int(planner_kwargs.get("synthesis_context_max_chars") or 120_000)
                     runtime_state = planner_kwargs.get("runtime_state")
+                    synthesis_snapshot = await self.store.snapshot(plan_id)
+                    synthesis_iteration = next(
+                        (item for item in synthesis_snapshot.get("iterations", [])
+                         if str(item.get("id")) == str(iteration.id if hasattr(iteration, "id") else iteration["id"])),
+                        {},
+                    )
+                    synthesis_brief = synthesis_iteration.get("synthesis_brief") or {}
+                    run_context = None
+                    if getattr(runtime_state, "run_context", None) is not None:
+                        run_context = runtime_state.run_context.projection(
+                            scope_keys=list((planner_kwargs.get("scope_context") or {}).get("keys") or []),
+                            evidence_refs=synthesis_brief.get("evidence_refs") or [],
+                            message_refs=synthesis_brief.get("message_refs") or [],
+                        )
                     context = SynthesisContextBuilder(max_chars=context_limit).build(
-                        plan=await self.store.snapshot(plan_id),
+                        plan=synthesis_snapshot,
                         iteration_id=str(iteration.id if hasattr(iteration, "id") else iteration["id"]),
                         deleted_artifact_ids=list(getattr(runtime_state, "deleted_artifact_ids", []) or []),
-                    )
-                    if getattr(runtime_state, "run_context", None) is not None:
-                        context["run_context"] = runtime_state.run_context.projection(
-                            scope_keys=list((planner_kwargs.get("scope_context") or {}).get("keys") or []),
-                            evidence_refs=(context.get("synthesis_brief") or {}).get("evidence_refs") or [],
-                            message_refs=(context.get("synthesis_brief") or {}).get("message_refs") or [])
-                    context["limitations"].extend(
-                        {"message": item["message"]}
-                        for item in getattr(runtime_state, "execution_limitations", []) if item.get("message")
+                        run_context=run_context,
+                        runtime_limitations=[
+                            {"message": item["message"]}
+                            for item in getattr(runtime_state, "execution_limitations", []) if item.get("message")
+                        ],
                     )
                 except (TypeError, ValueError, SynthesisContextError) as exc:
                     await fail("synthesis_context_invalid", exc)
@@ -960,11 +1010,21 @@ class GraphOrchestrator:
                     return
                 snapshot = await self.store.snapshot(plan_id)
                 try:
-                    async for event in self.synthesizer.stream(runtime_state=runtime_state, run_id=UUID(str(snapshot["root_run_id"])), synthesis_context=context, ctx=planner_kwargs.get("ctx"),
-                                                               model=planner_kwargs.get("model"), platform_config=planner_kwargs.get("platform_config"),
-                                                               sandbox_overrides=planner_kwargs.get("sandbox_overrides"), logging_level=self.logging_level,
-                                                               budget_registry=planner_kwargs.get("budget_registry"), budget_resolver=planner_kwargs.get("budget_resolver")):
+                    async for event in stream_synthesis_with_deadline(
+                        self.synthesizer,
+                        runtime_state=runtime_state, run_id=UUID(str(snapshot["root_run_id"])),
+                        synthesis_context=context, ctx=planner_kwargs.get("ctx"),
+                        model=planner_kwargs.get("model"), platform_config=planner_kwargs.get("platform_config"),
+                        logging_level=self.logging_level,
+                        sandbox_overrides=planner_kwargs.get("sandbox_overrides"),
+                        budget_registry=planner_kwargs.get("budget_registry"),
+                        budget_resolver=planner_kwargs.get("budget_resolver"),
+                    ):
                         yield OrchestratorEvent(type="_runtime_event", runtime_event=event)
+                except TimeoutError as exc:
+                    await fail("synthesizer_phase_timeout", exc)
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesizer_phase_timeout")
+                    return
                 except Exception as exc:
                     await fail("synthesis_failed", exc)
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesis_failed")

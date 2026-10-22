@@ -19,7 +19,9 @@ export type StageState =
   | 'running'
   | 'ok'
   | 'error'
+  | 'cancelled'
   | 'skipped'
+  | 'unknown'
   | 'pending';
 
 export const STAGE_ORDER: StageKey[] = [

@@ -16,6 +16,9 @@ class UserCtx:
     role: str = "reader"
     tenant_ids: List[str] | None = None
     scopes: List[str] | None = None
+    is_admin: bool = False
+    tenant_admin_ids: List[str] | None = None
+    data_editor_tenant_ids: List[str] | None = None
 
 def hash_password(password: str) -> str:
     pepper = (get_settings().PASSWORD_PEPPER or "")
@@ -47,7 +50,15 @@ def _get_verification_key() -> str:
         return s.JWT_PUBLIC_KEY
     return s.JWT_SECRET
 
-def create_access_token(user_id: str, email: str, role: str, tenant_ids: List[str], scopes: List[str]) -> str:
+def create_access_token(
+    user_id: str,
+    email: str,
+    role: str,
+    tenant_ids: List[str],
+    scopes: List[str],
+    *,
+    family_id: str | None = None,
+) -> str:
     """Create JWT access token with RSA (production) or HS256 (dev)"""
     s = get_settings()
     now = int(time.time())
@@ -65,12 +76,19 @@ def create_access_token(user_id: str, email: str, role: str, tenant_ids: List[st
         "jti": str(uuid.uuid4()),
         "type": "access"
     }
+    if family_id:
+        payload["family_id"] = family_id
     
     headers = {"kid": s.JWT_KID} if s.JWT_KID else None
     signing_key = _get_signing_key()
     return jwt.encode(payload, signing_key, algorithm=s.JWT_ALGORITHM, headers=headers)
 
-def create_refresh_token(user_id: str) -> str:
+def create_refresh_token(
+    user_id: str,
+    *,
+    jti: str | None = None,
+    family_id: str | None = None,
+) -> str:
     """Create JWT refresh token with RSA (production) or HS256 (dev)"""
     s = get_settings()
     now = int(time.time())
@@ -81,7 +99,8 @@ def create_refresh_token(user_id: str) -> str:
         "aud": s.JWT_AUDIENCE,
         "iat": now,
         "exp": now + (s.JWT_REFRESH_TTL_DAYS * 24 * 60 * 60),
-        "jti": str(uuid.uuid4()),
+        "jti": jti or str(uuid.uuid4()),
+        "family_id": family_id or str(uuid.uuid4()),
         "type": "refresh"
     }
     

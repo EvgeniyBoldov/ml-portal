@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -376,29 +376,34 @@ async def list_all_collections(
     tenant_id: uuid.UUID | None = None,
     is_active: bool | None = None,
     include_deprecated: bool = False,
+    search: str | None = None,
     session: AsyncSession = Depends(db_uow),
     admin_user=Depends(require_admin),
 ):
+    filters = []
+    if tenant_id:
+        filters.append(Collection.tenant_id == tenant_id)
+    if is_active is not None:
+        filters.append(Collection.is_active == is_active)
+    normalized_search = str(search or "").strip()
+    if normalized_search:
+        pattern = f"%{normalized_search}%"
+        filters.append(Collection.name.ilike(pattern) | Collection.slug.ilike(pattern))
+    if not include_deprecated:
+        filters.append(Collection.lifecycle_status != "deprecated")
+
+    total = await session.scalar(
+        select(func.count(Collection.id)).where(*filters)
+    ) or 0
     query = select(Collection).options(
         selectinload(Collection.schema),
         selectinload(Collection.current_version),
         selectinload(Collection.data_instance),
-    )
-    if tenant_id:
-        query = query.where(Collection.tenant_id == tenant_id)
-    if is_active is not None:
-        query = query.where(Collection.is_active == is_active)
-    if not include_deprecated:
-        query = query.where(Collection.lifecycle_status != "deprecated")
-    query = query.order_by(Collection.created_at.desc())
+    ).where(*filters).order_by(Collection.created_at.desc(), Collection.id.desc())
+    query = query.offset((page - 1) * size).limit(size)
 
     result = await session.execute(query)
-    all_collections = list(result.scalars().all())
-
-    total = len(all_collections)
-    start_idx = (page - 1) * size
-    end_idx = start_idx + size
-    items = all_collections[start_idx:end_idx]
+    items = list(result.scalars().all())
 
     response_items = []
     service = CollectionService(session)
@@ -410,7 +415,7 @@ async def list_all_collections(
         total=total,
         page=page,
         size=size,
-        has_more=end_idx < total,
+        has_more=(page * size) < total,
     )
 
 
@@ -628,6 +633,9 @@ async def update_collection(
         name=body.name if "name" in body.model_fields_set else _UNSET,
         is_active=body.is_active if "is_active" in body.model_fields_set else _UNSET,
         memory_enabled=body.memory_enabled if "memory_enabled" in body.model_fields_set else _UNSET,
+        vector_config=(
+            body.vector_config.model_dump() if body.vector_config is not None else None
+        ) if "vector_config" in body.model_fields_set else _UNSET,
         table_name=body.table_name if "table_name" in body.model_fields_set else _UNSET,
         table_schema=body.table_schema if "table_schema" in body.model_fields_set else _UNSET,
         schema_ops=[op.model_dump() for op in body.schema_ops],

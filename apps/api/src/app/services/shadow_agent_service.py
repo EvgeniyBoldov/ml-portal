@@ -91,6 +91,10 @@ class ShadowAgentService:
             run_id=str(run_id), agent_slug=agent.slug, agent_version_id=str(version.id),
             agent_version=version.version,
         ), phase=OrchestrationPhase.PIPELINE)
+        await agent_journal.emit(RuntimeEvent.agent_start(
+            agent_execution_id=str(execution_id), parent_entity_type="run",
+            parent_entity_id=str(run_id), agent_slug=agent.slug, task_id=task.task_id,
+        ), phase=OrchestrationPhase.AGENT)
         try:
             receipt = await self.executor.execute_attempt(
                 request=task, runtime_state=state, messages=[], ctx=ctx,

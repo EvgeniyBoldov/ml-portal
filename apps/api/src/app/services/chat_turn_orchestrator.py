@@ -13,7 +13,6 @@ from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_turn_state import ChatTurnState, TurnPhase
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
-from app.runtime.contracts import ExecutionMode
 
 logger = get_logger(__name__)
 
@@ -41,12 +40,9 @@ class ChatTurnOrchestrator:
         content: str,
         artifact_ids: list[str],
         confirmation_tokens: Optional[list[str]] = None,
-        execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         attachment_meta: list[dict[str, Any]],
         attachment_contexts: list[dict[str, Any]],
         idempotency_key: Optional[str],
-        model: Optional[str],
-        agent_slug: Optional[str],
         continuation_meta: Optional[Dict[str, Any]],
         persist_user_message: bool,
         run_with_router,
@@ -80,77 +76,83 @@ class ChatTurnOrchestrator:
             turn_id = persisted_turn.id  # cache scalar to survive ORM expiry
 
         user_message_id: Optional[str] = None
-        if persist_user_message:
-            yield {"type": "status", "stage": "saving_user_message"}
-            user_meta = {"attachments": attachment_meta} if attachment_meta else None
-            user_message = await self.persistence_service.create_user_message(
-                chat_id=chat_id,
-                content=content,
-                meta=user_meta,
-            )
-            user_message_id = user_message.message_id  # cache scalar to survive ORM expiry
-            user_message_created_at = user_message.created_at
-            if artifact_ids:
-                await bind_attachments(
+        try:
+            if persist_user_message:
+                yield {"type": "status", "stage": "saving_user_message"}
+                user_meta = {"attachments": attachment_meta} if attachment_meta else None
+                user_message = await self.persistence_service.create_user_message(
                     chat_id=chat_id,
-                    owner_id=user_id,
-                    artifact_ids=artifact_ids,
-                    message_id=user_message_id,
+                    content=content,
+                    meta=user_meta,
                 )
-            if not resumed_turn_id:
-                await self.turn_service.attach_user_message(turn_id, user_message_id)
-            # Persist the request/turn before a potentially long stream. The
-            # terminal assistant, turn status and deterministic context share
-            # a later transaction boundary.
+                user_message_id = user_message.message_id  # cache scalar to survive ORM expiry
+                user_message_created_at = user_message.created_at
+                if artifact_ids:
+                    await bind_attachments(
+                        chat_id=chat_id,
+                        owner_id=user_id,
+                        artifact_ids=artifact_ids,
+                        message_id=user_message_id,
+                    )
+                if not resumed_turn_id:
+                    await self.turn_service.attach_user_message(turn_id, user_message_id)
+                # Persist the request/turn before a potentially long stream. The
+                # terminal assistant, turn status and deterministic context share
+                # a later transaction boundary.
+                await self.turn_service.session.commit()
+                turn.transition(TurnPhase.USER_PERSISTED)
+                yield {
+                    "type": "user_message",
+                    "message_id": user_message_id,
+                    "created_at": user_message_created_at,
+                }
+            else:
+                turn.transition(TurnPhase.USER_PERSISTED)
+
+            turn.transition(TurnPhase.CONTEXT_LOADED)
+            yield {"type": "status", "stage": "loading_context"}
+            # RuntimePipeline builds cross-turn memory from the new Fact/Summary
+            # stores. Injecting legacy chat summary duplicates context.
+            # An explicit empty preloaded value is meaningful for a new chat.
+            context = (
+                list(preloaded_context)
+                if preloaded_context is not None
+                else await self.context_service.load_chat_context(chat_id, limit=get_settings().CHAT_CONTEXT_HISTORY_LIMIT)
+            )
+            # Keep the pre-turn history immutable for the runtime input.
+            llm_messages = [*context, {"role": "user", "content": str(content)}]
+            loaded_snapshot = preloaded_context_snapshot or await self.context_service.load_snapshot(
+                chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id,
+            )
+            context_snapshot = loaded_snapshot if isinstance(loaded_snapshot, ChatContextSnapshot) else ChatContextSnapshot(chat_id=chat_id)
+
+            post_final_tail_ready = asyncio.Event()
+            tool_ctx = ToolContext(
+                tenant_id=tenant_id or "",
+                user_id=user_id,
+                chat_id=chat_id,
+                request_id=idempotency_key or str(uuid.uuid4()),
+                extra={
+                    "continuation_meta": continuation_meta or {},
+                    "confirmation_tokens": list(confirmation_tokens or []),
+                    "chat_post_final_tail_ready": post_final_tail_ready,
+                },
+            )
+
+            turn.transition(TurnPhase.EXECUTION_STARTED)
+            yield {"type": "status", "stage": "agent_running"}
+        except (asyncio.CancelledError, GeneratorExit):
+            import anyio
+            with anyio.CancelScope(shield=True):
+                await self.turn_service.session.rollback()
+                await self.turn_service.cancel_turn(turn_id, error_message="Client disconnected during chat setup")
+                await self.turn_service.session.commit()
+            raise
+        except Exception:
+            await self.turn_service.session.rollback()
+            await self.turn_service.fail_turn(turn_id, error_message="Chat context preparation failed")
             await self.turn_service.session.commit()
-            turn.transition(TurnPhase.USER_PERSISTED)
-            yield {
-                "type": "user_message",
-                "message_id": user_message_id,
-                "created_at": user_message_created_at,
-            }
-        else:
-            turn.transition(TurnPhase.USER_PERSISTED)
-
-        turn.transition(TurnPhase.CONTEXT_LOADED)
-        yield {"type": "status", "stage": "loading_context"}
-        # RuntimePipeline already builds its own cross-turn memory from the
-        # new Fact/Summary stores. Injecting legacy chat summary here duplicates
-        # context and inflates token usage.
-        # ``[]`` is a meaningful preloaded value for a new chat.  Treating it
-        # as absent reloads context after the user message has been persisted,
-        # which makes the first turn look like a subsequent one and prevents
-        # automatic title generation.
-        context = (
-            list(preloaded_context)
-            if preloaded_context is not None
-            else await self.context_service.load_chat_context(chat_id, limit=get_settings().CHAT_CONTEXT_HISTORY_LIMIT)
-        )
-        # Do not mutate ``context``: it represents history before this turn
-        # and is used as the runtime's pre-turn history.
-        llm_messages = [*context, {"role": "user", "content": str(content)}]
-        loaded_snapshot = preloaded_context_snapshot or await self.context_service.load_snapshot(
-            chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id,
-        )
-        context_snapshot = loaded_snapshot if isinstance(loaded_snapshot, ChatContextSnapshot) else ChatContextSnapshot(chat_id=chat_id)
-
-        post_final_tail_ready = asyncio.Event()
-        tool_ctx = ToolContext(
-            tenant_id=tenant_id or "",
-            user_id=user_id,
-            chat_id=chat_id,
-            request_id=idempotency_key or str(uuid.uuid4()),
-            extra={
-                "continuation_meta": continuation_meta or {},
-                "confirmation_tokens": list(confirmation_tokens or []),
-                # Runtime's detached post-FINAL tail must not race the
-                # assistant-message transaction below.
-                "chat_post_final_tail_ready": post_final_tail_ready,
-            },
-        )
-
-        turn.transition(TurnPhase.EXECUTION_STARTED)
-        yield {"type": "status", "stage": "agent_running"}
+            raise
 
         assistant_content = ""
         rag_sources = []
@@ -168,15 +170,12 @@ class ChatTurnOrchestrator:
 
         try:
             async for event_data in run_with_router(
-                agent_slug=agent_slug,
                 user_id=user_id,
                 tenant_id=tenant_id or "",
                 llm_messages=llm_messages,
                 attachment_contexts=[item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item) for item in (attachment_contexts or [])],
                 tool_ctx=tool_ctx,
-                model=model,
                 content=content,
-                execution_mode=execution_mode,
                 runtime_run_id=runtime_run_id,
                 chat_turn_id=str(turn_id),
                 expected_context_revision=context_snapshot.revision,
@@ -269,6 +268,9 @@ class ChatTurnOrchestrator:
                         idempotency_key,
                         user_message_id,
                         assistant_message.message_id,
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        request_hash=self.turn_service.build_request_hash(hash_payload),
                     )
 
                 if execution_failed:

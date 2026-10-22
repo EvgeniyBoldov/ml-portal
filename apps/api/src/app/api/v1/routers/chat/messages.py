@@ -35,7 +35,6 @@ from app.services.chat_context_service import ChatContextService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeValidationError
 from app.agents.runtime.confirmation import get_confirmation_service
-from app.runtime.contracts import ExecutionMode
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -204,11 +203,7 @@ async def send_message_stream(
 ) -> StreamingResponse:
     """Send a message to a chat with SSE streaming."""
     content = body.content
-    model = body.model
-    agent_slug = body.agent_slug
     artifact_ids = body.artifact_ids or []
-    confirmation_tokens = body.confirmation_tokens or []
-    execution_mode = ExecutionMode(body.execution_mode or ExecutionMode.NORMAL.value)
 
     if not content:
         raise HTTPException(status_code=400, detail="Content is required")
@@ -234,11 +229,7 @@ async def send_message_stream(
                 tenant_id=chat_ctx.tenant_id,
                 content=content,
                 artifact_ids=artifact_ids,
-                confirmation_tokens=confirmation_tokens,
-                execution_mode=execution_mode,
                 idempotency_key=idempotency_key,
-                model=model,
-                agent_slug=agent_slug,
             ):
                 try:
                     sse_text = map_service_event_to_sse(event)
@@ -312,10 +303,14 @@ async def resume_run(
         raise HTTPException(status_code=404, detail="Paused run not found")
     if str(turn.user_id) != str(current_user.id):
         raise HTTPException(status_code=404, detail="Paused run not found")
-    tenant_ids = current_user.tenant_ids or []
-    if not tenant_ids:
-        raise HTTPException(status_code=403, detail="No tenant scope available")
-    tenant_uuid_val = uuid.UUID(str(tenant_ids[0]))
+    if not turn.chat_id:
+        raise HTTPException(status_code=404, detail="Paused run not found")
+    chat_ctx = await resolve_chat_context(
+        chat_id=str(turn.chat_id),
+        session=session,
+        current_user=current_user,
+    )
+    tenant_uuid_val = uuid.UUID(chat_ctx.tenant_id)
     paused_action = turn.paused_action
     paused_context = turn.paused_context
 
@@ -406,13 +401,6 @@ async def resume_run(
     await turn_service.resume_turn(turn.id)
     await session.commit()
 
-    if not turn.chat_id:
-        # No chat_id - can't stream, return error SSE
-        async def _no_chat_gen() -> AsyncGenerator[str, None]:
-            yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error="Run has no chat_id", code="missing_chat"))
-            yield format_chat_sse_done()
-        return StreamingResponse(_no_chat_gen(), media_type="text/event-stream")
-
     resume_content = build_resume_content(
         action=body.action.value,
         user_input=normalized_input,
@@ -440,8 +428,6 @@ async def resume_run(
                 content=resume_content,
                 artifact_ids=[],
                 idempotency_key=None,
-                model=None,
-                agent_slug=None,
                 continuation_meta={
                     "resume_checkpoint": checkpoint,
                     "resumed_from_run_id": run_id,

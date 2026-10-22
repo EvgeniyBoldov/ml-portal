@@ -23,6 +23,7 @@ Documents below describe current behavior and contracts.
 ## Architecture
 - [Data Model](architecture/DATA_MODEL.md)
 - [Agent Runtime](architecture/AGENT_RUNTIME.md)
+- [Authentication and Sessions](architecture/AUTHENTICATION.md)
 - [ADR: TurnPreflight Routing](architecture/ADR_TURN_PREFLIGHT_ROUTING.md)
 - [Flows](architecture/FLOWS.md)
 - [Collection Asset Refactor](architecture/COLLECTION_ASSET_REFACTOR.md)
@@ -40,6 +41,7 @@ Documents below describe current behavior and contracts.
 
 ## Development Rules
 - [Repository Guidelines](../AGENTS.md) — руководство для участников и coding agents; команды, границы архитектуры и ссылки на правила
+- [Testing](TESTING.md) — уровни тестов, размещение и обычный цикл проверки
 - [Backend Rules](backend/RULES.md)
 - [Backend Patterns](backend/PATTERNS.md)
 - [Tool Developer Guide](backend/TOOL_DEVELOPER_GUIDE.md)

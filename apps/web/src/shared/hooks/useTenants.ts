@@ -1,34 +1,34 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { tenantApi, type Tenant } from '@shared/api/tenant';
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { qk } from '@shared/api/keys';
+import { tenantApi } from '@shared/api/tenant';
 
-export function useTenants(includeDeprecated = false) {
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+const TENANTS_PAGE_SIZE = 100;
 
-  const loadTenants = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await tenantApi.getTenants({ size: 100, include_deprecated: includeDeprecated });
-      setTenants(response.items);
-    } catch (err) {
-      console.error('Failed to load tenants:', err);
-      setError('Failed to load tenants');
-    } finally {
-      setLoading(false);
-    }
-  }, [includeDeprecated]);
+export function useTenants(includeDeprecated = false, search?: string) {
+  const query = useInfiniteQuery({
+    queryKey: qk.admin.tenants.list({
+      size: TENANTS_PAGE_SIZE,
+      search: search?.trim() || undefined,
+      include_deprecated: includeDeprecated,
+    }),
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) => tenantApi.getTenants({
+      page: pageParam,
+      size: TENANTS_PAGE_SIZE,
+      search: search?.trim() || undefined,
+      include_deprecated: includeDeprecated,
+    }),
+    getNextPageParam: lastPage => lastPage.has_more ? lastPage.page + 1 : undefined,
+    staleTime: 60_000,
+  });
 
-  const hasFetchedRef = useRef(false);
-
-  useEffect(() => {
-    if (hasFetchedRef.current) {
-      return;
-    }
-    hasFetchedRef.current = true;
-    loadTenants();
-  }, [loadTenants]);
-
-  return { tenants, loading, error, refetch: loadTenants };
+  return {
+    tenants: query.data?.pages.flatMap(page => page.items) ?? [],
+    loading: query.isLoading,
+    error: query.error,
+    refetch: query.refetch,
+    hasNextPage: query.hasNextPage,
+    fetchNextPage: query.fetchNextPage,
+    isFetchingNextPage: query.isFetchingNextPage,
+  };
 }

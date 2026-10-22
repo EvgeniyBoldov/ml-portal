@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 import inspect
 
-from sqlalchemy import String, delete, func, select
+from sqlalchemy import String, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent import Agent
@@ -20,6 +20,8 @@ from app.models.memory import MemoryClaim, MemoryItem
 from app.models.memory_scope import (
     DocumentMemoryScope, MemoryCandidateScope, MemoryClaimScope, MemoryScope,
 )
+from app.models.model_registry import Model
+from app.models.rag_ingest import Source
 from app.services.agent_service import AgentService
 from app.services.chats_service import ChatsService
 from app.services.collection_service import CollectionService
@@ -231,6 +233,8 @@ class LifecycleAdminService:
             return False
         if kind == "tenant" and bool(getattr(entity, "is_platform_default", False)):
             raise ValueError("cannot_delete_default_tenant")
+        if kind == "user":
+            await self._assert_user_not_last_active_admin(entity_id)
         if getattr(entity, "lifecycle_status", "active") == "deprecated":
             if kind == root_kind and entity_id == root_id:
                 entity.delete_cascade = delete_cascade
@@ -632,6 +636,13 @@ class LifecycleAdminService:
             )).scalars().all())
             candidate_count = await self._count(select(func.count()).select_from(MemoryCandidateScope).where(MemoryCandidateScope.scope_id == entity_id))
             document_hint_count = await self._count(select(func.count()).select_from(DocumentMemoryScope).where(DocumentMemoryScope.scope_id == entity_id))
+            unscoped_document_ids = list((await self.session.scalars(select(
+                DocumentMemoryScope.document_id,
+            ).where(DocumentMemoryScope.scope_id == entity_id))).all())
+            if document_hint_count:
+                encoder_id = await self.session.scalar(select(Model.id).where(Model.use_for_long_memory.is_(True)))
+                if encoder_id is None:
+                    raise ValueError("long_memory_encoder_not_configured")
             retained_claim_ids = set((await self.session.execute(
                 select(MemoryClaimScope.claim_id).join(MemoryScope, MemoryScope.id == MemoryClaimScope.scope_id)
                 .where(MemoryClaimScope.claim_id.in_(claim_ids), MemoryClaimScope.scope_id != entity_id,
@@ -647,6 +658,12 @@ class LifecycleAdminService:
                 await self.session.execute(delete(MemoryClaimScope).where(
                     MemoryClaimScope.claim_id.in_(claim_ids), MemoryClaimScope.scope_id == entity_id,
                 ))
+            await self.session.execute(update(Users).where(
+                Users.memory_scope_keys.any(scope.key),
+            ).values(memory_scope_keys=func.array_remove(Users.memory_scope_keys, scope.key)))
+            await self.session.execute(update(Tenants).where(
+                Tenants.memory_scope_keys.any(scope.key),
+            ).values(memory_scope_keys=func.array_remove(Tenants.memory_scope_keys, scope.key)))
             if claims_to_delete:
                 await self.session.execute(delete(MemoryClaim).where(MemoryClaim.id.in_(claims_to_delete)))
             if cascade:
@@ -661,9 +678,33 @@ class LifecycleAdminService:
                 await self.session.execute(delete(MemoryCandidateScope).where(MemoryCandidateScope.scope_id == entity_id))
                 await self.session.execute(delete(DocumentMemoryScope).where(DocumentMemoryScope.scope_id == entity_id))
             await self.session.delete(scope)
+            if document_hint_count:
+                # DocumentMemoryScope rows are applicability links, not RAG
+                # ownership. Keep documents and explicitly mark unbound ones so
+                # LongMemory does not fall back to the default company scope.
+                still_scoped = set((await self.session.scalars(select(
+                    DocumentMemoryScope.document_id,
+                ).where(DocumentMemoryScope.document_id.in_(unscoped_document_ids)))).all())
+                sources = list((await self.session.scalars(select(Source).where(
+                    Source.id.in_(unscoped_document_ids),
+                ))).all())
+                for source in sources:
+                    source_meta = dict(source.meta or {})
+                    memory_meta = dict(source_meta.get("memory") or {})
+                    if source.id in still_scoped:
+                        memory_meta.pop("scope_unassigned", None)
+                    else:
+                        memory_meta["scope_unassigned"] = True
+                    source_meta["memory"] = memory_meta
+                    source.meta = source_meta
+                from app.repositories.long_memory_config_repository import LongMemoryConfigRepository
+
+                await LongMemoryConfigRepository(self.session).request_reindex(encoder_id)
             await self.session.flush()
             return LifecycleReport(kind=kind, entity_id=str(entity_id), mode="hard", lifecycle_status="deleted",
-                                   details={"claims_deleted": len(claims_to_delete), "claims_retained_for_other_scopes": len(retained_claim_ids)}, migrated={},
+                                   details={"claims_deleted": len(claims_to_delete), "claims_retained_for_other_scopes": len(retained_claim_ids),
+                                            "documents_preserved": document_hint_count,
+                                            "long_memory_reindex_queued": bool(document_hint_count)}, migrated={},
                                    cascaded={"memory_claims": len(claims_to_delete), "memory_items": deleted_items,
                                              "memory_candidates": candidate_count, "document_scope_hints": document_hint_count},
                                    set_null={}, rbac_rules_removed=0, renamed=[], restored={})
@@ -696,11 +737,11 @@ class LifecycleAdminService:
             .where(MemoryClaimScope.scope_id == scope_id), resource_type="memory_claims", limit=limit,
         )
         candidates = await self._sample_entities(
-            select(MemoryCandidateScope.candidate_id, MemoryCandidateScope.candidate_id.cast(String)).where(MemoryCandidateScope.scope_id == scope_id),
+            select(MemoryCandidateScope.candidate_id).where(MemoryCandidateScope.scope_id == scope_id),
             resource_type="memory_candidates", limit=limit,
         )
         documents = await self._sample_entities(
-            select(DocumentMemoryScope.document_id, DocumentMemoryScope.document_id.cast(String)).where(DocumentMemoryScope.scope_id == scope_id),
+            select(DocumentMemoryScope.document_id).where(DocumentMemoryScope.scope_id == scope_id),
             resource_type="document_scope_hints", limit=limit,
         )
         item_count = int((await self.session.execute(
@@ -718,7 +759,7 @@ class LifecycleAdminService:
             asdict(DependencyEntry("memory_claims", claim_count, "cascade_delete", will_be="cascade_deleted", entities=claims)),
             asdict(DependencyEntry("memory_items", item_count, "cascade_delete_when_unreferenced", will_be="cascade_deleted", entities=items)),
             asdict(DependencyEntry("memory_candidates", candidate_count, "remove_scope_binding", will_be="cascade_deleted", entities=candidates)),
-            asdict(DependencyEntry("document_scope_hints", document_count, "remove_scope_binding", will_be="cascade_deleted", entities=documents)),
+            asdict(DependencyEntry("document_scope_hints", document_count, "remove_scope_binding", will_be="set_null", entities=documents)),
         ]
 
     async def _deprecate_scope_memory(self, scope_id: uuid.UUID, *, actor_id: uuid.UUID | None,
@@ -1109,7 +1150,7 @@ class LifecycleAdminService:
         target_user = await self.session.get(Users, user_id)
         if target_user is None:
             return False
-        if target_user.role != "admin":
+        if not target_user.is_admin:
             return False
         if not bool(getattr(target_user, "is_active", True)):
             return False
@@ -1119,7 +1160,7 @@ class LifecycleAdminService:
         count_active_admins = await self._count(
             select(func.count())
             .select_from(Users)
-            .where(Users.role == "admin")
+            .where(Users.is_admin.is_(True))
             .where(Users.is_active.is_(True))
             .where(Users.lifecycle_status == "active")
         )

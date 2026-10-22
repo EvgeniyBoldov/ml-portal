@@ -2,7 +2,7 @@
 Snapshot builders for SSE status streams.
 
 build_collection_snapshot  — lightweight per-doc agg_status list for the collection page.
-build_document_snapshot    — full StatusGraphResponse dict for the status modal.
+build_document_status_graph — full StatusGraphResponse dict shared by HTTP and SSE.
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ async def build_collection_snapshot(
     return items
 
 
-async def build_document_snapshot(
+async def build_document_status_graph(
     session: AsyncSession,
     doc_id: UUID,
     repo_factory: Any,
@@ -87,6 +87,7 @@ async def build_document_snapshot(
 
         status_manager = RAGStatusManager(session, repo_factory)
         target_models = await status_manager._get_target_models(doc_id)
+        ingest_policy = await status_manager.get_ingest_policy(doc_id)
 
         agg_status, agg_details = calculate_aggregate_status(
             doc_id=doc_id,
@@ -94,6 +95,7 @@ async def build_document_snapshot(
             embedding_nodes=embedding_nodes,
             target_models=target_models,
             index_nodes=index_nodes,
+            archived=bool(ingest_policy["archived"]),
         )
 
         pipeline_stages = []
@@ -193,8 +195,6 @@ async def build_document_snapshot(
                 )
 
         clean_details = {k: v for k, v in agg_details.items() if k != "pipeline"}
-        ingest_policy = await status_manager.get_ingest_policy(doc_id)
-
         graph = StatusGraphResponse(
             doc_id=str(doc_id),
             pipeline=pipeline_stages,

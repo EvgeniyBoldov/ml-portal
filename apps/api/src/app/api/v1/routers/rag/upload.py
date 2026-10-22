@@ -2,7 +2,7 @@
 RAG Upload endpoints.
 """
 from __future__ import annotations
-from typing import Any, Optional
+from typing import Optional
 import uuid
 import json
 
@@ -13,9 +13,6 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import db_uow, get_current_user, get_redis_client
 from app.core.security import UserCtx
 from app.core.logging import get_logger
-from app.core.config import get_settings
-from app.core.s3_links import S3ContentType
-from app.adapters.s3_client import s3_manager, PresignOptions
 from app.repositories.factory import get_async_repository_factory, AsyncRepositoryFactory
 
 logger = get_logger(__name__)
@@ -49,7 +46,13 @@ async def upload_rag_file(
     
     from app.models.tenant import Tenants
     from sqlalchemy import select
-    tenant_check = await session.execute(select(Tenants.id).where(Tenants.id == tenant_id))
+    tenant_check = await session.execute(
+        select(Tenants.id).where(
+            Tenants.id == tenant_id,
+            Tenants.is_active.is_(True),
+            Tenants.lifecycle_status != "deprecated",
+        )
+    )
     if not tenant_check.scalar_one_or_none():
         logger.error(f"Tenant {tenant_id} not found in database for user {user.id}")
         raise HTTPException(
@@ -98,20 +101,3 @@ async def upload_rag_file(
     except Exception as e:
         logger.error(f"Upload failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
-
-
-@router.post("/upload/presign")
-def presign_rag_upload(body: dict[str, Any]) -> dict:
-    """Generate presigned URL for upload"""
-    doc_id = body.get("document_id")
-    if not doc_id:
-        raise HTTPException(status_code=400, detail="document_id is required")
-    content_type = body.get("content_type", S3ContentType.OCTET)
-    key = f"docs/{doc_id}"
-    s = get_settings()
-    url = s3_manager.generate_presigned_url(
-        bucket=s.S3_BUCKET_RAG,
-        key=key,
-        options=PresignOptions(operation="put", expiry_seconds=3600, content_type=content_type),
-    )
-    return {"presigned_url": url, "bucket": s.S3_BUCKET_RAG, "key": key, "content_type": content_type, "expires_in": 3600}

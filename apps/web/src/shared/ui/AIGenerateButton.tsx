@@ -12,7 +12,7 @@ interface AIGenerateButtonProps {
   entityId: string;
   description: string;
   availableFields: Array<{ key: string; label: string; description?: string }>;
-  onFieldsFilled: (fields: Record<string, any>) => void;
+  onFieldsFilled: (fields: Record<string, unknown>) => void;
   context?: Record<string, any>;
   disabled?: boolean;
   variant?: 'primary' | 'outline' | 'ghost';

@@ -108,7 +108,11 @@ clarification; the runtime reattaches it to that continuation.
 ### Chat stream and continuation
 
 `POST /api/v1/chats/{chat_id}/messages` accepts a non-empty `content` string
-and optional `artifact_ids`, then returns `text/event-stream`. Public events are
+and optional `artifact_ids`, then returns `text/event-stream`. These are the
+only accepted request fields. Model selection, agent routing and document
+retrieval are controlled by runtime configuration and routing. The legacy
+chat model/agent catalogs and direct LLM proxy are not part of the chat API.
+Public events are
 `user_message`, `status`, `delta`, `pause`, `final`, `cached`, `error`, and the
 terminal `done` event. `final` carries the complete answer plus `sources` and
 `attachments`; clients treat it as authoritative even when they also rendered

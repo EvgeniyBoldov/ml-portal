@@ -5,7 +5,7 @@ import { qk } from '@/shared/api/keys';
 import { discoveredToolsApi } from '@/shared/api/discoveredTools';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { Block } from '@/shared/ui/GridLayout';
-import { Input } from '@/shared/ui';
+import { Button, Input } from '@/shared/ui';
 
 const DESCRIPTION_FIELDS = [
   { key: 'slug', type: 'code' as const, label: 'Slug', editable: false },
@@ -30,7 +30,7 @@ export function DiscoveredToolViewPage() {
   const [editing, setEditing] = useState(false);
   const [riskLevel, setRiskLevel] = useState('');
 
-  const { data: tool, isLoading } = useQuery({
+  const { data: tool, isLoading, isError, refetch } = useQuery({
     queryKey: qk.discoveredTools.detail(id || ''),
     queryFn: () => discoveredToolsApi.get(id || ''),
     enabled: Boolean(id),
@@ -61,7 +61,13 @@ export function DiscoveredToolViewPage() {
         loading={isLoading}
         backPath="/admin/tools"
       >
-        <></>
+        {isError && (
+          <Tab title="Ошибка загрузки" layout="full">
+            <p role="alert">
+              Не удалось загрузить инструмент. <Button variant="outline" onClick={() => void refetch()}>Повторить</Button>
+            </p>
+          </Tab>
+        )}
       </EntityPageV2>
     );
   }
@@ -91,6 +97,9 @@ export function DiscoveredToolViewPage() {
       onCancel={() => setEditing(false)}
       onSave={() => updateMutation.mutate()}
     >
+      {updateMutation.isError && (
+        <p role="alert">Не удалось сохранить уровень риска. Проверьте введённое значение и попробуйте снова.</p>
+      )}
       <Tab title="Описание" layout="grid" id="description">
         <Block
           title="Описание"

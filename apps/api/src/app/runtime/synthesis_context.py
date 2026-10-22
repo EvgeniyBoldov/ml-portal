@@ -42,6 +42,8 @@ class SynthesisContextBuilder:
     def build(
         self, *, plan: Dict[str, Any], iteration_id: str,
         deleted_artifact_ids: list[str] | None = None,
+        run_context: Dict[str, Any] | None = None,
+        runtime_limitations: list[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         iteration = next((item for item in plan.get("iterations", []) if item.get("id") == iteration_id), None)
         if not isinstance(iteration, dict) or not isinstance(iteration.get("synthesis_brief"), dict):
@@ -109,6 +111,9 @@ class SynthesisContextBuilder:
         context["execution_context"] = memory_execution_context(
             list((plan.get("scope_context") or {}).get("keys") or []), revision=int((plan.get("scope_context") or {}).get("revision") or 0),
         )
+        if run_context is not None:
+            context["run_context"] = run_context
+        context["limitations"].extend(runtime_limitations or [])
         # A memory-only answer receives the original passages. The model's
         # normal context-window check handles overflow without losing evidence.
         return context if memory_context else self._compact_to_limit(context)
@@ -118,18 +123,24 @@ class SynthesisContextBuilder:
         if len(json.dumps(context, ensure_ascii=False, default=str)) <= self._max_chars:
             return context
 
-        def compact(value: Any, depth: int = 0) -> Any:
+        def compact(value: Any, depth: int = 0, key: str | None = None) -> Any:
             if isinstance(value, str):
                 return value if len(value) <= 1_024 else value[:1_024] + "…[truncated]"
             if isinstance(value, list):
-                result = [compact(item, depth + 1) for item in value[:40]]
-                if len(value) > 40:
+                preserve_all = key in {
+                    "completed_task_reports", "limitations", "resolution_decisions",
+                    "plan_outline", "evidence", "conversation_materials", "unavailable_material_refs",
+                }
+                selected = value if preserve_all else value[:40]
+                result = [compact(item, depth + 1) for item in selected]
+                if not preserve_all and len(value) > 40:
                     result.append({"_truncated_items": len(value) - 40})
                 return result
             if isinstance(value, dict):
                 if depth > 8:
                     return {"_truncated": "nested value omitted"}
-                return {str(key): compact(item, depth + 1) for key, item in list(value.items())[:80]}
+                return {str(child_key): compact(item, depth + 1, str(child_key))
+                        for child_key, item in list(value.items())[:80]}
             return value
 
         bounded = compact(context)
@@ -154,6 +165,17 @@ class SynthesisContextBuilder:
                 {key: report.get(key) for key in ("task_id", "intent", "status", "completion", "answer")}
                 for report in bounded.get("completed_task_reports", []) if isinstance(report, dict)
             ]
+        if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
+            for report in bounded.get("completed_task_reports", []):
+                if not isinstance(report, dict):
+                    continue
+                for key in ("intent", "answer"):
+                    if isinstance(report.get(key), str) and len(report[key]) > 256:
+                        report[key] = report[key][:256] + "…[truncated]"
+            for limitation in bounded.get("limitations", []):
+                if isinstance(limitation, dict) and isinstance(limitation.get("message"), str):
+                    if len(limitation["message"]) > 512:
+                        limitation["message"] = limitation["message"][:512] + "…[truncated]"
         if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
             raise SynthesisContextError("synthesis context exceeds configured size after compaction")
         return bounded

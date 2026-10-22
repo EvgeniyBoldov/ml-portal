@@ -49,6 +49,7 @@ async def test_file_read_returns_text_for_docx(monkeypatch):
 
     session = AsyncMock()
     session.add = MagicMock()
+    session.get = AsyncMock(return_value=None)
     monkeypatch.setattr("app.repositories.artifact_representation_repository.ArtifactRepresentationRepository.find", AsyncMock(return_value=None))
     monkeypatch.setattr("app.adapters.s3_client.s3_manager.upload_fileobj", AsyncMock(return_value=True))
     monkeypatch.setattr("app.services.document_extraction_service.DocumentExtractionService._extract_docling", AsyncMock(side_effect=ValueError("offline unit test")))
@@ -80,6 +81,14 @@ async def test_file_read_returns_text_for_docx(monkeypatch):
     monkeypatch.setattr(
         "app.services.chat_artifact_reference_service.ChatArtifactReferenceService.resolve",
         AsyncMock(return_value=resolved),
+    )
+    monkeypatch.setattr(
+        "app.services.chat_artifact_reference_service.ChatArtifactReferenceService.get_reference",
+        AsyncMock(return_value=SimpleNamespace(id=uuid4(), metadata_snapshot={})),
+    )
+    monkeypatch.setattr(
+        "app.services.chat_artifact_reference_service.ChatArtifactReferenceService.manifest",
+        lambda _self, _reference: {"artifact_id": "test-artifact"},
     )
     monkeypatch.setattr("app.adapters.s3_client.s3_manager.get_object", AsyncMock(return_value=data))
 
@@ -132,6 +141,13 @@ async def test_file_generate_supports_docx(monkeypatch):
     monkeypatch.setattr(
         "app.services.file_generation_service.FileGenerationService",
         lambda _session: service_instance,
+    )
+    monkeypatch.setattr(
+        "app.services.chat_artifact_reference_service.ChatArtifactReferenceService",
+        lambda _session: SimpleNamespace(
+            get_reference=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
+            manifest=lambda _reference: {"artifact_id": "generated-artifact"},
+        ),
     )
 
     tool = FileGenerateTool()

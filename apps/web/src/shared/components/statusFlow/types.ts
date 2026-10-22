@@ -3,7 +3,10 @@ export type FlowStatus =
   | 'queued'
   | 'processing'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'cancelled'
+  | 'skipped'
+  | 'unknown';
 
 export interface FlowNode {
   key: string;

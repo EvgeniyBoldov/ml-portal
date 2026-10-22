@@ -1,54 +1,38 @@
-import React, { useEffect, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-
-import { apiRequest } from '@/shared/api/http';
-import { qk } from '@/shared/api/keys';
-import Button from '@/shared/ui/Button';
-import { MemoryScopePicker } from '@/shared/ui/MemoryScopePicker/MemoryScopePicker';
-import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
+import { useEffect, useState } from 'react';
+import { MemoryScopeSelect } from '@/shared/ui/MemoryScopeSelect/MemoryScopeSelect';
+import styles from './ProfileMemoryScopes.module.css';
 
 export function ProfileMemoryScopes({
   scopeKeys,
   tenantScopeKeys,
+  hasTenant,
+  editable = false,
+  onChange,
 }: {
   scopeKeys: string[];
   tenantScopeKeys: string[];
+  hasTenant: boolean;
+  editable?: boolean;
+  onChange?: (scopeKeys: string[]) => void;
 }) {
   const [selected, setSelected] = useState(scopeKeys);
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
+
   useEffect(() => setSelected(scopeKeys), [scopeKeys]);
-  const save = useMutation({
-    mutationFn: () =>
-      apiRequest('/profile/memory-scopes', {
-        method: 'PUT',
-        body: JSON.stringify({ memory_scope_keys: selected }),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: qk.profile.all() });
-      void queryClient.invalidateQueries({ queryKey: qk.chats.all() });
-      showSuccess('Скоупы сохранены');
-    },
-    onError: (error: Error) => showError(error.message),
-  });
-  const hasChanges =
-    [...selected].sort().join('|') !== [...scopeKeys].sort().join('|');
+
   return (
-    <>
-      <MemoryScopePicker
-        value={selected}
-        onChange={setSelected}
-        disabled={save.isPending}
-        inheritedKeys={tenantScopeKeys}
-        description="Выбранные проекты добавляются к проектам тенанта. В чате можно заменить весь набор своим выбором."
+    <div>
+      <h2>Скоупы памяти чатов</h2>
+      <p className={styles.hint}>Личные скоупы и скоупы тенанта управляются отдельно.</p>
+      <label>Мои скоупы</label>
+      <MemoryScopeSelect
+        value={[...new Set(selected)]}
+        disabled={!editable}
+        onChange={keys => { setSelected(keys); onChange?.(keys); }}
       />
-      <Button
-        onClick={() => save.mutate()}
-        disabled={!hasChanges || save.isPending}
-      >
-        {save.isPending ? 'Сохранение…' : 'Сохранить скоупы'}
-      </Button>
-    </>
+      {hasTenant && <>
+        <label>Скоупы тенанта</label>
+        <MemoryScopeSelect value={tenantScopeKeys} readOnly onChange={() => undefined} />
+      </>}
+    </div>
   );
 }

@@ -7,7 +7,7 @@ from __future__ import annotations
 from app.core.logging import get_logger
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, update
+from sqlalchemy import select, update, func, or_
 from app.models.tenant import Tenants
 import uuid
 
@@ -49,6 +49,37 @@ class AsyncTenantsRepository:
         )
         return result.scalars().all()
 
+    async def list_page(
+        self,
+        *,
+        page: int,
+        size: int,
+        search: str | None = None,
+        is_active: bool | None = None,
+        include_deprecated: bool = False,
+    ) -> tuple[List[Tenants], int]:
+        filters = []
+        if search:
+            term = f"%{search.strip()}%"
+            filters.append(or_(Tenants.name.ilike(term), Tenants.description.ilike(term)))
+        if is_active is not None:
+            filters.append(Tenants.is_active.is_(is_active))
+        if not include_deprecated:
+            filters.append(Tenants.lifecycle_status != "deprecated")
+
+        count_result = await self.session.execute(
+            select(func.count()).select_from(Tenants).where(*filters)
+        )
+        total = int(count_result.scalar_one())
+        page_result = await self.session.execute(
+            select(Tenants)
+            .where(*filters)
+            .order_by(Tenants.name, Tenants.id)
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        return page_result.scalars().all(), total
+
     async def create(self, name: str, is_active: bool = True, **kwargs) -> Tenants:
         """Create a new tenant"""
         tenant = Tenants(
@@ -64,8 +95,8 @@ class AsyncTenantsRepository:
 
     async def update(self, tenant_id: uuid.UUID, **kwargs) -> Optional[Tenants]:
         """Update tenant with any fields"""
-        # Remove None values
-        update_data = {k: v for k, v in kwargs.items() if v is not None}
+        # The service only passes explicitly supplied fields; None clears nullable columns.
+        update_data = kwargs
 
         if not update_data:
             return await self.get_by_id(tenant_id)
@@ -91,16 +122,6 @@ class AsyncTenantsRepository:
         )
         await self.session.flush()
         return await self.get_by_id(tenant_id)
-
-    async def delete(self, tenant_id: uuid.UUID) -> bool:
-        """Delete tenant"""
-        tenant = await self.get_by_id(tenant_id)
-        if not tenant:
-            return False
-
-        await self.session.delete(tenant)
-        await self.session.flush()
-        return True
 
     async def get_tenants_by_model(self, model: str) -> List[Tenants]:
         """Get tenants using a specific model as embedding"""

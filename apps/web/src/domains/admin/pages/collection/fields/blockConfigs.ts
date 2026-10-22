@@ -70,6 +70,14 @@ const DATA_CONNECTOR_FIELD: FieldConfig = {
   editable: true,
 };
 
+const MEMORY_POLICY_FIELD: FieldConfig = {
+  key: 'memory_enabled',
+  type: 'boolean',
+  label: 'Извлекать знания в память',
+  description: 'Для загружаемых документов будут извлекаться термины, правила и процедуры в долгоживущую память.',
+  editable: true,
+};
+
 type ConfigStrategyCtx = {
   editableCollectionType: boolean;
   editableDataInstance: boolean;
@@ -82,7 +90,7 @@ const CONFIG_FIELDS_BY_TYPE: Record<CollectionType, ConfigStrategy> = {
   table: () => [
     TABLE_NAME_FIELD,
   ],
-  document: () => [],
+  document: () => [MEMORY_POLICY_FIELD],
   sql: ({ connectorOptions, editableDataInstance }) => [
     { ...DATA_CONNECTOR_FIELD, options: connectorOptions, editable: editableDataInstance },
   ],
@@ -110,16 +118,10 @@ export function buildConfigFieldsByType(
 
 export const VECTOR_FIELDS: FieldConfig[] = [
   {
-    key: 'has_vector_search',
-    type: 'boolean',
-    label: 'Векторный поиск',
-    description: 'Включить векторизацию и семантический поиск',
-  },
-  {
     key: 'chunk_strategy',
     type: 'select',
     label: 'Стратегия чанков',
-    placeholder: 'by_tokens',
+    placeholder: 'by_paragraphs',
     description: 'Как разбивать текст на чанки для векторизации',
     options: [
       { value: 'by_tokens', label: 'По токенам' },
@@ -132,7 +134,7 @@ export const VECTOR_FIELDS: FieldConfig[] = [
     key: 'chunk_size',
     type: 'number',
     label: 'Размер чанка',
-    placeholder: '500',
+    placeholder: '512',
     description: 'Количество токенов в одном чанке',
   },
   {

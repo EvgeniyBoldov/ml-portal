@@ -140,6 +140,7 @@ async def test_operation_router_marks_missing_credentials_in_readiness_and_missi
         collection_type="sql",
         table_schema={"tables": [{"name": "tickets"}]},
         source_contract={},
+        get_business_fields=lambda: [],
         current_version=None,
         current_version_id=None,
         schema_status="ready",

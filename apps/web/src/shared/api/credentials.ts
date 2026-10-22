@@ -29,6 +29,7 @@ export interface ProfileCredentialCreate {
   instance_id: string;
   auth_type: string;
   payload: Record<string, string>;
+  level?: 'user' | 'tenant';
 }
 
 export interface CredentialInstance {
@@ -68,7 +69,8 @@ export const credentialsApi = {
   },
 
   async createProfile(data: ProfileCredentialCreate): Promise<Credential> {
-    return apiRequest('/profile/credentials', {
+    const level = data.level ?? 'user';
+    return apiRequest(`/profile/credentials?level=${level}`, {
       method: 'POST',
       body: JSON.stringify(data),
     });

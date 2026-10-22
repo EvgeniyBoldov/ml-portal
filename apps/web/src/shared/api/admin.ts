@@ -9,16 +9,20 @@ export interface User {
   memory_scope_keys: string[];
   id: string;
   login: string;
+  full_name?: string | null;
   role: 'admin' | 'editor' | 'reader';
-  email?: string;
+  is_admin: boolean;
+  email?: string | null;
   is_active: boolean;
   auth_provider?: string;
-  tenant_id: string;
+  deactivated_reason?: string | null;
+  tenant_id: string | null;
   lifecycle_status?: string;
   deprecated_at?: string | null;
   retention_days?: number;
   created_at: string;
   updated_at: string;
+  last_login_at?: string | null;
 }
 
 export interface OrchestrationSettings {
@@ -143,11 +147,19 @@ export interface SystemLLMRoleUpdate {
   is_active?: boolean | null;
 }
 
+export interface OrchestratorRoleSettingsUpdate extends SystemLLMRoleUpdate {
+  execution_limits: ActorLimits;
+}
+
+export interface OrchestratorRoleSettingsResult {
+  role: SystemLLMRole;
+  execution_limits: ActorLimitsResolution;
+}
+
 // Role-specific update types — all use same schema as SystemLLMRoleUpdate
 // Fields: identity, mission, rules, safety, output_requirements, model, temperature, etc.
 export type PlannerRoleUpdate = SystemLLMRoleUpdate;
 export type TurnPreflightRoleUpdate = SystemLLMRoleUpdate;
-export type MemoryRoleUpdate = SystemLLMRoleUpdate;
 export type SynthesizerRoleUpdate = SystemLLMRoleUpdate;
 export type FactExtractorRoleUpdate = SystemLLMRoleUpdate;
 export type FactCompactorRoleUpdate = SystemLLMRoleUpdate;
@@ -156,33 +168,28 @@ export type DocumentMemoryExtractorRoleUpdate = SystemLLMRoleUpdate;
 export interface UserCreate {
   memory_scope_keys?: string[];
   login: string;
-  email?: string;
+  email?: string | null;
   role: 'admin' | 'editor' | 'reader';
+  is_admin?: boolean;
   is_active?: boolean;
-  password?: string;
-  send_email?: boolean;
-  tenant_ids?: string[];
+  password: string;
+  tenant_id?: string | null;
 }
 
 export interface UserUpdate {
   memory_scope_keys?: string[];
   role?: 'admin' | 'editor' | 'reader';
-  email?: string;
+  is_admin?: boolean;
+  email?: string | null;
   is_active?: boolean;
-  require_password_change?: boolean;
-  tenant_ids?: string[];
+  tenant_id?: string | null;
 }
 
 export interface UserListResponse {
   users: User[];
   has_more: boolean;
-  next_cursor?: string;
-  total?: number;
-}
-
-export interface PasswordChange {
-  new_password?: string;
-  require_change?: boolean;
+  next_cursor?: string | null;
+  total: number;
 }
 
 export interface TokenScope {
@@ -258,6 +265,7 @@ export interface AuditFilters {
 
 export interface Tenant {
   memory_scope_keys: string[];
+  tenant_admin_user_ids: string[];
   id: string;
   name: string;
   description?: string;
@@ -285,15 +293,16 @@ export interface RagReindexBatchResponse {
 }
 
 export type TenantCreate = {
+  memory_scope_keys?: string[];
   name: string;
-  description?: string;
+  description?: string | null;
   is_active?: boolean;
   extra_embed_model?: string | null;
   ocr?: boolean;
   layout?: boolean;
 };
 
-export type TenantUpdate = Partial<TenantCreate>;
+export type TenantUpdate = Partial<TenantCreate> & { is_default?: boolean; tenant_admin_user_ids?: string[] };
 
 // New Model architecture
 export type ModelType = 'llm_chat' | 'embedding' | 'reranker';
@@ -780,9 +789,7 @@ export const adminApi = {
     return apiRequest(`/admin/users/${id}`);
   },
 
-  async createUser(
-    user: UserCreate
-  ): Promise<{ user: User; password?: string }> {
+  async createUser(user: UserCreate): Promise<User> {
     return apiRequest('/admin/users', {
       method: 'POST',
       body: JSON.stringify(user),
@@ -793,22 +800,6 @@ export const adminApi = {
     return apiRequest(`/admin/users/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(user),
-    });
-  },
-
-  async deleteUser(id: string): Promise<void> {
-    return apiRequest(`/admin/users/${id}`, {
-      method: 'DELETE',
-    });
-  },
-
-  async resetUserPassword(
-    id: string,
-    passwordData: PasswordChange
-  ): Promise<{ password?: string }> {
-    return apiRequest(`/admin/users/${id}/password`, {
-      method: 'POST',
-      body: JSON.stringify(passwordData),
     });
   },
 
@@ -974,7 +965,7 @@ export const adminApi = {
   } = {}): Promise<TenantListResponse> {
     const searchParams = new URLSearchParams();
     if (params.page) searchParams.set('page', String(params.page));
-    if (params.size) searchParams.set('size', String(params.size));
+    searchParams.set('size', String(params.size ?? 100));
     if (params.search) searchParams.set('search', params.search);
     if (params.is_active !== undefined) searchParams.set('is_active', String(params.is_active));
     if (params.include_deprecated !== undefined) searchParams.set('include_deprecated', String(params.include_deprecated));
@@ -1286,6 +1277,12 @@ export const systemLLMRolesApi = {
 
   updateActive: (roleType: SystemLLMRoleType, data: SystemLLMRoleUpdate): Promise<SystemLLMRole> =>
     apiRequest(`/admin/system-llm-roles/active/${roleType}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  updateActiveSettings: (roleType: SystemLLMRoleType, data: OrchestratorRoleSettingsUpdate): Promise<OrchestratorRoleSettingsResult> =>
+    apiRequest(`/admin/system-llm-roles/active/${roleType}/settings`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),

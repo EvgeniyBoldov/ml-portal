@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.runtime.contracts import PipelineRequest, PipelineStopReason
-from app.runtime.pipeline import RuntimePipeline
+from app.runtime.pipeline import RuntimePipeline, _run_preflight_phase
 
 
 class _SessionContext:
@@ -19,6 +19,24 @@ class _SessionContext:
 
     async def __aexit__(self, *_args: object) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_preflight_phase_enforces_wall_time_limit() -> None:
+    async def slow_operation() -> str:
+        await asyncio.sleep(0.05)
+        return "done"
+
+    with pytest.raises(TimeoutError):
+        await _run_preflight_phase(5, slow_operation)
+
+
+@pytest.mark.asyncio
+async def test_preflight_phase_without_wall_time_limit_completes() -> None:
+    async def operation() -> str:
+        return "done"
+
+    assert await _run_preflight_phase(None, operation) == "done"
 
 
 @pytest.mark.asyncio

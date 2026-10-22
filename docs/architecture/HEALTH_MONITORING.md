@@ -117,6 +117,11 @@ Beat-расписание активируется при `BEAT=1` в env (см.
 
 ### `GET /api/v1/monitoring/metrics`
 Метрики в Prometheus exposition format. Выполняет свежий `collect_all()` при каждом запросе.
+Требует admin Bearer credential. Для Prometheus используйте PAT из защищённого
+`authorization.credentials_file`; PAT должен иметь срок действия и регулярно
+обновляться. Root endpoint `/metrics` отдаёт отдельные метрики процесса и тоже
+требует admin Bearer credential; production Nginx дополнительно ограничивает
+его private-network allowlist.
 
 ```
 # HELP ml_portal_connectors_total Total number of MCP connectors
@@ -161,7 +166,8 @@ ml_portal_documents_by_status{status="pending"} 3.0
 ```
 
 ### `GET /api/v1/monitoring/health/detailed`
-Readiness probe с актуальными счётчиками из БД.
+Readiness probe с актуальными счётчиками из БД. Требует admin Bearer credential;
+публичным для load balancer остаётся только простой `/health`.
 
 ```json
 {

@@ -31,8 +31,10 @@ from .semantic_memory import router as semantic_memory_router
 from .agent_runs import router as agent_runs_router
 from .memory_jobs import router as memory_jobs_router
 from .long_memory import router as long_memory_router
+from .dashboard import router as dashboard_router
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 
 router.include_router(users_router, prefix="/users", tags=["users"])
 router.include_router(tenants_router, prefix="/tenants", tags=["tenants"])

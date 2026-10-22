@@ -49,8 +49,6 @@ class TestChatTurnOrchestrator:
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
-                model=None,
-                agent_slug=None,
                 continuation_meta={"resumed_from_run_id": "00000000-0000-0000-0000-000000000040"},
                 resumed_turn_id=str(turn_id),
                 persist_user_message=False,
@@ -90,8 +88,6 @@ class TestChatTurnOrchestrator:
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
-                model=None,
-                agent_slug=None,
                 continuation_meta={"resume_checkpoint": {"resume_action": "confirm"}},
                 persist_user_message=False,
                 run_with_router=fake_run_with_router,
@@ -104,6 +100,26 @@ class TestChatTurnOrchestrator:
         orchestrator.persistence_service.create_user_message.assert_not_awaited()
         orchestrator.turn_service.attach_user_message.assert_not_awaited()
         orchestrator.persistence_service.create_assistant_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_during_pre_runtime_setup_cancels_persisted_turn(self, orchestrator: ChatTurnOrchestrator):
+        orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+        orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.cancel_turn = AsyncMock()
+        orchestrator.persistence_service.create_user_message = AsyncMock(
+            return_value=SimpleNamespace(message_id="user-1", created_at="now")
+        )
+        stream = orchestrator.execute_turn(
+            chat=SimpleNamespace(), chat_id="chat-1", user_id="user-1", content="hello",
+            artifact_ids=[], attachment_meta=[], attachment_contexts=[], idempotency_key="idem",
+            continuation_meta=None, persist_user_message=True, run_with_router=AsyncMock(),
+            store_idempotency=AsyncMock(), bind_attachments=AsyncMock(),
+        )
+        while (await anext(stream))["type"] != "user_message":
+            pass
+        await stream.aclose()
+        orchestrator.turn_service.cancel_turn.assert_awaited_once()
+        orchestrator.turn_service.fail_turn.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_execute_turn_emits_final_and_completed(self, orchestrator: ChatTurnOrchestrator):
@@ -138,8 +154,6 @@ class TestChatTurnOrchestrator:
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key="idem-1",
-                model=None,
-                agent_slug=None,
                 continuation_meta=None,
                 persist_user_message=True,
                 run_with_router=fake_run_with_router,
@@ -154,7 +168,10 @@ class TestChatTurnOrchestrator:
         assert events[-1]["stage"] == "completed"
         final_event = next(event for event in events if event["type"] == "final")
         assert final_event["attachments"][0]["artifact_id"] == "artifact-1"
-        store_idempotency.assert_awaited_once_with("idem-1", "user-1", "assistant-1")
+        store_idempotency.assert_awaited_once_with(
+            "idem-1", "user-1", "assistant-1", chat_id="chat-1", user_id="user-1",
+            request_hash="request-hash",
+        )
         orchestrator.turn_service.attach_user_message.assert_awaited_once()
         orchestrator.turn_service.complete_turn.assert_awaited_once()
         orchestrator.persistence_service.create_assistant_message.assert_awaited_once_with(
@@ -191,8 +208,6 @@ class TestChatTurnOrchestrator:
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
-                model=None,
-                agent_slug=None,
                 continuation_meta=None,
                 persist_user_message=True,
                 run_with_router=fake_run_with_router,
@@ -235,8 +250,6 @@ class TestChatTurnOrchestrator:
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
-                model=None,
-                agent_slug=None,
                 continuation_meta=None,
                 persist_user_message=True,
                 run_with_router=fake_run_with_router,
@@ -283,8 +296,6 @@ class TestChatTurnOrchestrator:
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
-                model=None,
-                agent_slug=None,
                 continuation_meta=None,
                 persist_user_message=True,
                 run_with_router=fake_run_with_router,
@@ -335,8 +346,6 @@ class TestChatTurnOrchestrator:
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key="idem-1",
-                model=None,
-                agent_slug=None,
                 continuation_meta=None,
                 persist_user_message=True,
                 run_with_router=fake_run_with_router,
@@ -386,8 +395,6 @@ class TestChatTurnOrchestrator:
                 attachment_meta=[],
                 attachment_contexts=[],
                 idempotency_key=None,
-                model=None,
-                agent_slug=None,
                 continuation_meta=None,
                 persist_user_message=True,
                 run_with_router=fake_run_with_router,
@@ -418,7 +425,7 @@ async def test_partial_final_preserves_failed_turn_and_answer(orchestrator):
     events = [event async for event in orchestrator.execute_turn(
         chat=SimpleNamespace(tenant_id=None, name="Chat"), chat_id="chat-1", user_id="user-1",
         content="hello", artifact_ids=[], attachment_meta=[], attachment_contexts=[],
-        idempotency_key=None, model=None, agent_slug=None, continuation_meta=None,
+        idempotency_key=None, continuation_meta=None,
         persist_user_message=False, run_with_router=run, store_idempotency=AsyncMock(),
         bind_attachments=AsyncMock())]
 
@@ -446,7 +453,7 @@ async def test_finalization_failure_rolls_back_and_never_emits_final(orchestrato
     events = [event async for event in orchestrator.execute_turn(
         chat=SimpleNamespace(name="Test"), chat_id=str(uuid4()), user_id=str(uuid4()), tenant_id=str(uuid4()),
         content="test", artifact_ids=[], attachment_meta=[], attachment_contexts=[], idempotency_key=None,
-        model=None, agent_slug=None, continuation_meta={}, persist_user_message=False,
+        continuation_meta={}, persist_user_message=False,
         resumed_turn_id=str(turn_id), run_with_router=response, store_idempotency=AsyncMock(), bind_attachments=AsyncMock())]
     assert not any(event["type"] == "final" for event in events)
     assert any(event.get("code") == "chat_finalization_failed" for event in events)

@@ -35,9 +35,13 @@ export interface RbacRuleCreate {
 }
 
 export interface RbacRuleUpdate {
+  level?: RbacLevel;
   effect?: RbacEffect;
   resource_type?: ResourceType;
   resource_id?: string;
+  owner_user_id?: string | null;
+  owner_tenant_id?: string | null;
+  owner_platform?: boolean;
 }
 
 export interface CheckAccessRequest {

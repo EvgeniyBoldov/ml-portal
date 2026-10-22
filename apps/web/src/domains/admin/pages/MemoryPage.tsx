@@ -41,7 +41,11 @@ const memoryColumns: DataTableColumn<SemanticMemoryAdminItem>[] = [
 export default function MemoryPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab = ['glossary', 'memory', 'review', 'scopes', 'long-memory'].includes(searchParams.get('tab') ?? '') ? searchParams.get('tab')! : 'glossary';
+  // DEPRECATED: glossary, approved semantic memory, and candidate review remain
+  // in storage/API for historical inspection, but are no longer admin tabs.
+  const deprecatedTabs = ['glossary', 'memory', 'review'];
+  const requestedTab = searchParams.get('tab') ?? '';
+  const initialTab = deprecatedTabs.includes(requestedTab) ? 'scopes' : ['scopes', 'long-memory'].includes(requestedTab) ? requestedTab : 'scopes';
   const [activeTab, setActiveTab] = useState(initialTab);
   const [query, setQuery] = useState('');
   const [memoryScopeType, setMemoryScopeType] = useState('');
@@ -177,11 +181,6 @@ export default function MemoryPage() {
     ...(memoryScopes ?? []).map((scope): ScopeTableRow => ({ kind: 'published', id: `scope:${scope.id}`, scope_type: scope.scope_type, key: scope.key, name: scope.name, aliases: scope.aliases, status: scope.lifecycle_status, scope })),
     ...(scopeProposals ?? []).map((proposal): ScopeTableRow => ({ kind: 'proposal', id: `proposal:${proposal.id}`, scope_type: proposal.scope_type, key: proposal.proposed_key, name: proposal.name, aliases: proposal.aliases, status: proposal.status, proposal })),
   ];
-  const openScopeRow = (row: ScopeTableRow) => {
-    if (row.kind === 'proposal') setScopeProposalEditor(row.proposal);
-    else if (row.scope.lifecycle_status === 'active') openScopeEditor(row.scope);
-  };
-
   return (
     <>
     <EntityPageV2
@@ -198,9 +197,10 @@ export default function MemoryPage() {
           return next;
         }, { replace: true });
       }}
-      headerActions={(activeTab === 'glossary' || activeTab === 'memory') ? <Input aria-label="Поиск в текущей вкладке" placeholder={activeTab === 'glossary' ? 'Поиск терминов' : 'Поиск по памяти'} value={query} onChange={(event) => { setQuery(event.target.value); setMemoryPage(0); setSelectedMemoryIds(new Set()); setSelectedGlossaryIds(new Set()); }} /> : null}
+      headerActions={null}
     >
-      <Tab title="Глоссарий" id="glossary" layout="full">
+      {/* DEPRECATED tabs: glossary, approved semantic memory and review queue are retained in storage/API only. */}
+      {/* <Tab title="Глоссарий" id="glossary" layout="full">
         {glossaryError ? <p role="alert">Не удалось загрузить глоссарий.</p> : <DataTable
           columns={glossaryColumns} data={filteredGlossary} keyField="id" loading={glossaryLoading}
           emptyText="Термины не найдены" paginated pageSize={20} selectable onRowClick={(row) => navigate(`/admin/memory/terms/${row.id}`)}
@@ -228,8 +228,9 @@ export default function MemoryPage() {
           <span>{Math.min(memoryPage * 100 + 1, memory?.total ?? 0)}–{Math.min((memoryPage + 1) * 100, memory?.total ?? 0)} из {memory?.total ?? 0}</span>
           <Button size="sm" variant="outline" disabled={(memoryPage + 1) * 100 >= (memory?.total ?? 0)} onClick={() => { setMemoryPage(memoryPage + 1); setSelectedMemoryIds(new Set()); }}>Далее</Button>
         </div>}
-      </Tab>
-      <Tab title="На проверке" id="review" layout="full">
+      </Tab> */}
+      {/* DEPRECATED: historical candidate review is retained in API/storage only. */}
+      {/* <Tab title="На проверке" id="review" layout="full">
         {review?.some((row) => row.document_access_scope && row.document_access_scope !== 'global') && <p className={styles.reviewHint}>Термины общего глоссария извлекаются только из документов с глобальным доступом. Документы с доступом к коллекции дают кандидаты памяти, но не термины общего глоссария.</p>}
         {reviewError ? <p role="alert">Не удалось загрузить очередь проверки.</p> : <DataTable
           columns={reviewColumns} data={review ?? []} keyField="id"
@@ -240,9 +241,10 @@ export default function MemoryPage() {
           }]} />}
           loading={reviewLoading} emptyText="Кандидатов на проверке нет" paginated pageSize={20}
           onRowClick={(row) => navigate(`/admin/memory/review/${row.id}`)} />}
-      </Tab>
-      <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'project', key: '', name: '', aliases: '', is_all: false, project_type: '' }); setScopeEditor('new'); }}>Создать скоуп</Button>]}>
-        {scopesError || scopeProposalsError ? <p role="alert">Не удалось загрузить скоупы памяти и предложения.</p> : <DataTable columns={scopeColumns({ onReview: setScopeProposalEditor, onEdit: openScopeEditor, onLifecycle: (scope, action) => { setScopeLifecycleAction(action); setScopeToDelete(scope); } })} data={scopeRows} keyField="id" loading={scopesLoading || scopeProposalsLoading} emptyText="Скоупов пока нет" paginated pageSize={20} onRowClick={openScopeRow} />}
+      </Tab> */}
+      <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'project', key: '', name: '', aliases: '', is_all: false, project_type: '' }); setScopeEditor('new'); }}>Создать скоуп</Button>] }>
+        <p role="note">Deprecated: вкладки «Глоссарий», «Память» и «На проверке» выведены из интерфейса. Исторические записи сохранены; актуальные разделы — «Скоупы» и «LongMemory».</p>
+        {scopesError || scopeProposalsError ? <p role="alert">Не удалось загрузить скоупы памяти и предложения.</p> : <DataTable columns={scopeColumns({ onReview: setScopeProposalEditor, onEdit: openScopeEditor, onLifecycle: (scope, action) => { setScopeLifecycleAction(action); setScopeToDelete(scope); } })} data={scopeRows} keyField="id" loading={scopesLoading || scopeProposalsLoading} emptyText="Скоупов пока нет" paginated pageSize={20} />}
       </Tab>
       <Tab title="LongMemory" id="long-memory" layout="full" actions={[<Button key="long-memory-search" variant="outline" onClick={() => setIsLongMemorySearchOpen(true)}>Тестовый поиск</Button>]}>
         <LongMemoryTab />
@@ -254,6 +256,7 @@ export default function MemoryPage() {
         <label className={styles.scopeField}>Slug<Input value={scopeForm.key} disabled={scopeEditor !== 'new'} placeholder="company, nims, dcbox" onChange={(event) => setScopeForm({ ...scopeForm, key: event.target.value })} /></label>
         <label className={styles.scopeField}>Название<Input value={scopeForm.name} onChange={(event) => setScopeForm({ ...scopeForm, name: event.target.value, key: scopeEditor === 'new' ? slugifyScopeName(event.target.value) : scopeForm.key })} /></label>
         <label className={styles.scopeField}>Алиасы<Input value={scopeForm.aliases} placeholder="архитекторы, архитектурная команда" onChange={(event) => setScopeForm({ ...scopeForm, aliases: event.target.value })} /></label>
+        <label className={styles.scopeField}>Тип проекта<Input value={scopeForm.project_type} placeholder="Например, platform" onChange={(event) => setScopeForm({ ...scopeForm, project_type: event.target.value })} /></label>
         {saveScope.isError && <p role="alert">Не удалось сохранить скоуп. Проверьте уникальность slug.</p>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Button variant="outline" onClick={() => setScopeEditor(null)}>Отмена</Button><Button disabled={!scopeForm.key || !scopeForm.name.trim() || saveScope.isPending} onClick={() => saveScope.mutate()}>{saveScope.isPending ? 'Сохраняем…' : 'Сохранить'}</Button></div>
       </div>

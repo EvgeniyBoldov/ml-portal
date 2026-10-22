@@ -438,25 +438,34 @@ def _claim_scopes_apply(
     scopes: list[MemoryScope], project_ids: list[UUID], context_scope_keys: set[str], *, legacy_project_id: UUID | None = None,
     legacy_applicability: dict[str, Any] | None = None,
 ) -> bool:
-    """Use the same branch semantics as SQL and task context projection."""
-    from app.runtime.memory.effective_scope import memory_visible_for_scope
-    keys = set(context_scope_keys)
+    """Match one scope within each type and require every bound type to match."""
+    keys = {str(key).strip().lower() for key in context_scope_keys}
     active = [scope for scope in scopes if getattr(scope, "lifecycle_status", "active") == "active"]
     types = {scope.scope_type for scope in scopes}
     if any(not any(scope.scope_type == type_ for scope in active) for type_ in types):
         return False
-    if project_ids:
-        keys.add("project._legacy_selected")
-    if not any(scope.scope_type == "project" for scope in scopes):
+
+    selected_project_ids = {str(value) for value in project_ids}
+    for scope in active:
+        if scope.scope_type == "project" and scope.project_id is not None:
+            if str(scope.project_id) in selected_project_ids:
+                keys.add(scope.key)
+
+    if "project" not in types:
         required = {str(value) for value in (legacy_applicability or {}).get("project_ids", [])}
         if legacy_project_id is not None:
             required.add(str(legacy_project_id))
-        if required:
-            if not required.intersection(str(value) for value in project_ids):
-                return False
-            keys = {key for key in keys if not key.startswith("project.")}
-    # Legacy Project IDs can select a typed scope without a key in the caller.
-    for scope in active:
-        if scope.scope_type == "project" and scope.project_id in set(project_ids):
-            keys.add(scope.key)
-    return memory_visible_for_scope({"scope_keys": [scope.key for scope in active]}, keys)
+        if required and not required.intersection(selected_project_ids):
+            return False
+
+    for scope_type in types:
+        bound = [scope for scope in active if scope.scope_type == scope_type]
+        selected = {key for key in keys if key.partition(".")[0] == scope_type}
+        if scope_type == "project" and selected_project_ids:
+            selected.add("project._legacy_selected")
+        if any(scope.is_all for scope in bound):
+            if scope_type != "project" or selected_project_ids or "project.all" in selected:
+                continue
+        if not any(scope.key in selected for scope in bound):
+            return False
+    return True

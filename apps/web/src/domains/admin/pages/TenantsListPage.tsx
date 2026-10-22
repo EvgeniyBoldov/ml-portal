@@ -4,13 +4,13 @@
  * Единый стиль с остальными админ-реестрами.
  * Клик по строке → View страница, редактирование через кнопку на View.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTenants } from '@shared/hooks/useTenants';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Button, Input, LifecycleStatusBadge } from '@/shared/ui';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
-import type { Tenant } from '@shared/api/admin';
+import type { Tenant } from '@shared/api/tenant';
 
 export function TenantsListPage() {
   const navigate = useNavigate();
@@ -22,17 +22,14 @@ export function TenantsListPage() {
     return () => clearTimeout(timer);
   }, [q]);
 
-  const { tenants, loading: isLoading, error } = useTenants(true);
-
-  const filteredTenants = useMemo(() => {
-    if (!debouncedQ.trim()) return tenants;
-    const query = debouncedQ.toLowerCase();
-    return tenants.filter((tenant: Tenant) => {
-      const name = tenant.name?.toLowerCase() ?? '';
-      const desc = tenant.description?.toLowerCase() ?? '';
-      return name.includes(query) || desc.includes(query);
-    });
-  }, [tenants, debouncedQ]);
+  const {
+    tenants,
+    loading: isLoading,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useTenants(true, debouncedQ);
 
   const handleRowClick = (tenant: Tenant) => {
     navigate(`/admin/tenants/${tenant.id}`);
@@ -142,7 +139,7 @@ export function TenantsListPage() {
 
         <DataTable
           columns={columns}
-          data={filteredTenants}
+          data={tenants}
           keyField="id"
           loading={isLoading}
           emptyText={`Тенанты не найдены. Нажмите «${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.tenant}» для добавления.`}
@@ -150,6 +147,13 @@ export function TenantsListPage() {
           pageSize={20}
           onRowClick={handleRowClick}
         />
+        {hasNextPage && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
+            <Button variant="outline" disabled={isFetchingNextPage} onClick={() => void fetchNextPage()}>
+              {isFetchingNextPage ? 'Загрузка…' : 'Загрузить ещё'}
+            </Button>
+          </div>
+        )}
       </Tab>
     </EntityPageV2>
   );

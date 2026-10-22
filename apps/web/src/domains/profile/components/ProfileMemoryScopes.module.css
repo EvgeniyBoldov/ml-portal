@@ -1,0 +1,23 @@
+.levelSwitcher {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0 var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.levelSwitcher > span:first-child {
+  margin-right: auto;
+}
+
+.hint {
+  margin: 0 0 var(--sp-3);
+  color: var(--text-secondary);
+}
+
+.actions {
+  margin-top: var(--sp-3);
+}

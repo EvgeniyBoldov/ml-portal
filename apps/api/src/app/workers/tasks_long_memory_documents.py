@@ -91,7 +91,13 @@ async def _execute(operation_id: str) -> dict:
                         raise ValueError("Canonical document is empty")
                     scopes = list((await session.scalars(select(MemoryScope.key).join(
                         DocumentMemoryScope, DocumentMemoryScope.scope_id == MemoryScope.id,
-                    ).where(DocumentMemoryScope.document_id == document.id))).all()) or ["company"]
+                    ).where(DocumentMemoryScope.document_id == document.id))).all())
+                    source = await session.get(Source, document.id)
+                    memory_meta = dict(((source.meta or {}).get("memory") or {})) if source else {}
+                    if memory_meta.get("scope_unassigned"):
+                        scopes = []
+                    elif not scopes:
+                        scopes = ["company"]
                     payload = {"id": str(document.id), "content": text, "metadata": {
                         "document_title": document.title, "filename": document.filename,
                         "canonical_key": canonical_key, "scope_slugs": scopes}}

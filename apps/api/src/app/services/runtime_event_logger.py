@@ -364,6 +364,9 @@ class RuntimeEventLogger:
         parent_entity_id: Optional[str], caused_by_event_id: Optional[UUID], duration_ms: Optional[int],
     ) -> Optional[PersistedRuntimeEvent]:
         event_type = runtime_event.type.value
+        from app.services.platform_usage_service import record_usage, USAGE_EVENTS
+        if event_type in USAGE_EVENTS and self.context.origin in {"chat", "shadow"}:
+            await record_usage(self.context, event_type, dict(runtime_event.data or {}), self._session_factory)
         if not self.should_log(event_type):
             return None
         clean_payload = self._payload(dict(runtime_event.data or {}))

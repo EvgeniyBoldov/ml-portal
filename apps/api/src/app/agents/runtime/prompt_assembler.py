@@ -9,6 +9,7 @@ from app.agents.runtime.prompt_contract import build_prompt_input_schema, build_
 from app.agents.runtime.agent_prompt_renderer import AgentPromptRenderer
 from app.agents.runtime.capability_card_builder import CapabilityCardBuilder
 from app.agents.runtime.policy import PolicyLimits
+from app.services.platform_settings_defaults import PLATFORM_OPERATION_RULES_TEXT
 
 if TYPE_CHECKING:
     from app.agents.contracts import ResolvedDataInstance, ResolvedOperation
@@ -125,21 +126,26 @@ class PromptAssembler:
             platform_config=platform_config,
             sandbox_overrides=sandbox_overrides,
         )
-        # Native function calling carries the operation names, descriptions and
-        # JSON Schemas in the provider's ``tools`` field on every request. Do
-        # not mirror that same contract in the system prompt: it is redundant
-        # and needlessly consumes the context window. The textual contract is
-        # retained for providers using the plaintext tool-call protocol.
-        operations_prompt = (
-            build_tools_prompt(
+        # Native function calling carries operation names, descriptions and
+        # JSON Schemas in the provider's ``tools`` field. Keep the mandatory
+        # usage rules in the system prompt, but avoid duplicating that contract.
+        if operation_schemas and native_tool_calling:
+            rules_text = operations_rules_override or PLATFORM_OPERATION_RULES_TEXT
+            if not operations_rules_override:
+                rules_text = rules_text.replace(
+                    "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА",
+                    self._label(prompt_labels, "mandatory_rules_heading", "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА"),
+                    1,
+                )
+            system_operations_prompt = rules_text
+        operations_prompt = ""
+        if operation_schemas and not native_tool_calling:
+            operations_prompt = build_tools_prompt(
                 operation_schemas,
                 mandatory_rules_text=operations_rules_override,
                 prompt_labels=prompt_labels,
                 prompt_budgets=prompt_budgets,
             )
-            if operation_schemas and not native_tool_calling
-            else ""
-        )
         sections = [
             section
             for section in [

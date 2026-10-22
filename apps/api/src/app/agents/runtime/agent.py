@@ -529,6 +529,7 @@ class AgentToolRuntime(BaseRuntime):
                 tools_payload = build_tools_payload(available_operations) if native_tool_calling else None
                 from app.adapters.impl.llm_context import estimate_request_tokens
                 yield RuntimeEvent.llm_request(
+                    usage_attempt=step + 1,
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
                     model=gen.model,
@@ -591,6 +592,7 @@ class AgentToolRuntime(BaseRuntime):
                         # keep the request entity in its retry state so the
                         # trace does not report a false terminal failure.
                         yield RuntimeEvent.llm_response(
+                            usage_attempt=step + 1,
                             llm_call_id=llm_call_id,
                             logical_llm_call_id=logical_llm_call_id,
                             model=gen.model,
@@ -681,6 +683,7 @@ class AgentToolRuntime(BaseRuntime):
                             type(exc).__name__,
                         )
                     yield RuntimeEvent.llm_response(
+                        usage_attempt=step + 1,
                         llm_call_id=llm_call_id,
                         logical_llm_call_id=logical_llm_call_id,
                         model=gen.model,
@@ -809,9 +812,11 @@ class AgentToolRuntime(BaseRuntime):
                     "actor_entity_id": str(run_session.run_id) if run_session.run_id else None,
                 }, duration_ms=llm_duration, tokens_in=max(0, prompt_tokens), tokens_out=max(0, completion_tokens))
                 yield RuntimeEvent.llm_response(
+                    usage_attempt=step + 1,
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
                     step=step + 1,
+                    token_source="provider" if isinstance(usage, dict) and usage else "estimate",
                     model=gen.model,
                     temperature=gen.temperature,
                     messages=llm_messages,

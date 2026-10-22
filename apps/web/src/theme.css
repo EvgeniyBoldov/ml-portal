@@ -241,6 +241,30 @@ a {
   gap: 8px;
 }
 
+/* Shared scrollbars follow the active theme in pages, sidebars and tables. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+*::-webkit-scrollbar-button {
+  display: none;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: var(--radius-full);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
 /* === Pretty filter buttons (shared for RAG views) === */
 .table th .icon,
 .table th button.icon {

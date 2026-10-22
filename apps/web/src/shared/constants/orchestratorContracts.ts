@@ -163,24 +163,6 @@ export const FACT_EXTRACTOR_INPUT_CONTRACT = {
   required: ['user_message', 'evidence', 'known_facts'],
 };
 
-export const MEMORY_INPUT_CONTRACT = {
-  type: 'object',
-  properties: {
-    request: { type: 'string', description: 'Текущий запрос пользователя' },
-    facts: {
-      type: 'array',
-      description: 'Долговременные факты с индексами для отбора',
-      items: { type: 'object' },
-    },
-    projects: {
-      type: 'array',
-      description: 'Проекты и aliases с индексами для отбора',
-      items: { type: 'object' },
-    },
-  },
-  required: ['request', 'facts', 'projects'],
-};
-
 export const FACT_COMPACTOR_INPUT_CONTRACT = {
   type: 'object',
   properties: {

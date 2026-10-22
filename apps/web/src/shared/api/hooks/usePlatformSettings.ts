@@ -13,14 +13,16 @@ import {
   type ExecutorSettingsUpdate,
   type PlannerRoleUpdate,
   type TurnPreflightRoleUpdate,
-  type MemoryRoleUpdate,
   type SynthesizerRoleUpdate,
   type FactExtractorRoleUpdate,
   type FactCompactorRoleUpdate,
   type DocumentMemoryExtractorRoleUpdate,
   type ActorLimits,
   type ActorLimitsResolution,
+  type OrchestratorRoleSettingsUpdate,
+  type OrchestratorRoleSettingsResult,
   type RuntimeLimits,
+  type SystemLLMRoleType,
 } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
@@ -192,6 +194,23 @@ export function useUpdateOrchestratorExecutionLimits(role?: string) {
   });
 }
 
+export function useUpdateOrchestratorRoleSettings(role: SystemLLMRoleType) {
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+  const showSuccess = useSuccessToast();
+
+  return useMutation({
+    mutationFn: (data: OrchestratorRoleSettingsUpdate): Promise<OrchestratorRoleSettingsResult> =>
+      systemLLMRolesApi.updateActiveSettings(role, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active(role) });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'execution-limits', 'orchestrator', role] });
+      showSuccess('Настройки оркестратора обновлены');
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+}
+
 // === SystemLLMRole Hooks ===
 
 export function useActivePlannerRole() {
@@ -224,15 +243,6 @@ export function useUpdateTurnPreflightRole() {
   });
 }
 
-export function useActiveMemoryRole() {
-  return useQuery({
-    queryKey: qk.admin.systemLlmRoles.active('memory'),
-    queryFn: () => systemLLMRolesApi.getActive('memory'),
-    staleTime: 30_000,
-  });
-}
-
-
 export function useUpdatePlannerRole() {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
@@ -243,21 +253,6 @@ export function useUpdatePlannerRole() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('planner') });
       showSuccess('Настройки Planner обновлены');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-}
-
-export function useUpdateMemoryRole() {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-
-  return useMutation({
-    mutationFn: (data: MemoryRoleUpdate) => systemLLMRolesApi.updateActive('memory', data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('memory') });
-      showSuccess('Настройки Memory обновлены');
     },
     onError: (err: Error) => showError(err.message),
   });

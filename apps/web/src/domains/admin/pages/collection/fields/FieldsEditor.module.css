@@ -1,0 +1,50 @@
+.fieldsEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fieldRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 140px 80px minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.requiredField,
+.searchModes,
+.searchMode {
+  display: flex;
+  align-items: center;
+}
+
+.requiredField {
+  gap: 0.25rem;
+}
+
+.requiredLabel {
+  font-size: 0.875rem;
+}
+
+.searchModes {
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.searchMode {
+  gap: 0.125rem;
+}
+
+@media (max-width: 900px) {
+  .fieldRow {
+    grid-template-columns: minmax(120px, 1fr) 140px 80px auto;
+  }
+
+  .searchModes {
+    grid-column: 1 / -1;
+  }
+}

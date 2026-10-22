@@ -1,0 +1,93 @@
+.chart {
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-5);
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  min-height: var(--sp-6);
+}
+.legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-sm);
+}
+.request-key {
+  background: var(--primary);
+}
+.error-key {
+  background: var(--danger, #dc4444);
+}
+.selection {
+  margin-left: auto;
+}
+.plot {
+  display: flex;
+  min-width: 0;
+  gap: var(--sp-3);
+  margin-top: var(--sp-5);
+}
+.scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: var(--sp-6);
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  padding: var(--sp-1) 0;
+}
+.svg {
+  display: block;
+  flex: 1;
+  width: 0;
+  max-width: 100%;
+  min-width: 0;
+  height: 180px;
+  overflow: visible;
+}
+.grid-line {
+  stroke: var(--border-color);
+  stroke-dasharray: 3 5;
+}
+.bar {
+  fill: var(--primary);
+  opacity: 0.75;
+  transition: opacity var(--transition-fast);
+}
+.error-bar {
+  fill: var(--danger, #dc4444);
+}
+.hit-area {
+  fill: transparent;
+}
+.svg g:hover .bar,
+.svg g:focus .bar {
+  opacity: 1;
+}
+.svg g:focus {
+  outline: 2px solid var(--primary);
+}
+.axis {
+  display: flex;
+  justify-content: space-between;
+  margin-left: calc(var(--sp-6) + var(--sp-3));
+  margin-top: var(--sp-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+@media (max-width: 640px) {
+  .selection {
+    margin-left: 0;
+    width: 100%;
+  }
+}

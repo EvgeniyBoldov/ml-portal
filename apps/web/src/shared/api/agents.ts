@@ -51,6 +51,9 @@ export interface AgentVersionInfo {
   never_do?: string | null;
   allowed_ops?: string | null;
   tags?: string[] | null;
+  task_contracts?: Record<string, unknown>[];
+  supports_dynamic_contracts?: boolean;
+  requires_fresh_retrieval?: boolean;
   // Meta
   parent_version_id?: string | null;
   notes?: string | null;
@@ -79,6 +82,9 @@ export interface AgentVersion {
   never_do?: string | null;
   allowed_ops?: string | null;
   tags?: string[] | null;
+  task_contracts?: Record<string, unknown>[];
+  supports_dynamic_contracts?: boolean;
+  requires_fresh_retrieval?: boolean;
   // Meta
   parent_version_id?: string | null;
   notes?: string | null;
@@ -130,6 +136,9 @@ export interface AgentVersionCreate {
   never_do?: string | null;
   allowed_ops?: string | null;
   tags?: string[] | null;
+  task_contracts?: Record<string, unknown>[];
+  supports_dynamic_contracts?: boolean;
+  requires_fresh_retrieval?: boolean;
   // Meta
   notes?: string | null;
   parent_version_id?: string | null;
@@ -148,6 +157,9 @@ export interface AgentVersionUpdate {
   never_do?: string | null;
   allowed_ops?: string | null;
   tags?: string[] | null;
+  task_contracts?: Record<string, unknown>[];
+  supports_dynamic_contracts?: boolean;
+  requires_fresh_retrieval?: boolean;
   // Meta
   notes?: string | null;
 }

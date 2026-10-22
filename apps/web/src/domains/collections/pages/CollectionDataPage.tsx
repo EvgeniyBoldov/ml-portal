@@ -449,11 +449,11 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
 }
 
 // ─── Document collection view ───────────────────────────────────
-type DocStatusFilter = 'all' | 'ready' | 'processing' | 'failed' | 'uploaded';
+type DocStatusFilter = 'all' | 'ready' | 'processing' | 'partial' | 'failed' | 'uploaded' | 'archived';
 type DocSortKey = 'name' | 'created_at' | 'agg_status';
 type DocSortDir = 'asc' | 'desc';
 
-const PROCESSING_STATUSES = ['processing', 'embedding', 'chunked', 'normalized'];
+const PROCESSING_STATUSES = ['processing', 'queued', 'embedding', 'chunked', 'normalized'];
 
 interface DocumentViewProps {
   collection: Collection;
@@ -589,14 +589,14 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   });
 
   const invalidateDocs = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ['collections', 'documents', collectionId] });
+    void queryClient.invalidateQueries({ queryKey: qk.collections.documentsRoot(collectionId) });
   }, [queryClient, collectionId]);
 
   const debouncedInvalidateDocs = useCallback(() => {
     if (invalidateTimerRef.current) return;
     invalidateTimerRef.current = setTimeout(() => {
       invalidateTimerRef.current = null;
-      void queryClient.invalidateQueries({ queryKey: ['collections', 'documents', collectionId] });
+      void queryClient.invalidateQueries({ queryKey: qk.collections.documentsRoot(collectionId) });
     }, 500);
   }, [queryClient, collectionId]);
 
@@ -608,13 +608,16 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   }, [docsData, page, totalDocumentPages]);
 
   // Stats
-  const stats = docsData?.stats ?? { total: totalDocs, ready: 0, processing: 0, failed: 0, uploaded: 0 };
+  const stats = docsData?.stats ?? { total: totalDocs, ready: 0, processing: 0, partial: 0, failed: 0, uploaded: 0, archived: 0 };
 
   const statCards: { label: string; value: number; color: string; filter: DocStatusFilter }[] = [
     { label: 'Всего', value: stats.total, color: 'neutral', filter: 'all' },
     { label: 'Готово', value: stats.ready, color: 'success', filter: 'ready' },
     { label: 'В обработке', value: stats.processing, color: 'warning', filter: 'processing' },
+    { label: 'Частично готово', value: stats.partial, color: 'warning', filter: 'partial' },
     { label: 'Ошибки', value: stats.failed, color: 'danger', filter: 'failed' },
+    { label: 'Загружено', value: stats.uploaded, color: 'neutral', filter: 'uploaded' },
+    { label: 'В архиве', value: stats.archived, color: 'neutral', filter: 'archived' },
   ];
 
   // Filter & sort
@@ -660,9 +663,10 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   );
 
   // Conditional bulk action visibility
-  const canBulkIngest = selectedDocs.length > 0 && selectedDocs.some(
-    d => (d.agg_status || 'uploaded') !== 'ready'
+  const ingestableDocuments = selectedDocs.filter(d =>
+    ['uploaded', 'failed', 'partial'].includes(d.agg_status || 'uploaded')
   );
+  const canBulkIngest = ingestableDocuments.length > 0;
   const canBulkDelete = selectedDocs.length > 0;
 
   useEffect(() => {
@@ -675,12 +679,12 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         for (const event of events) {
           const payload = event.data as Record<string, unknown> | null;
 
-          // Snapshot: patch React Query cache with current server state
+          // Snapshot repairs visible statuses; refetch also refreshes aggregate counters.
           if (event.type === 'rag.snapshot') {
             const items = (payload?.items as Array<Record<string, unknown>>) ?? [];
             if (items.length > 0) {
               queryClient.setQueriesData<CollectionDocumentsResponse>(
-                { queryKey: ['collections', 'documents', collectionId] },
+                { queryKey: qk.collections.documentsRoot(collectionId) },
                 (old) => {
                   if (!old) return old;
                   const updated = old.items.map((doc) => {
@@ -695,6 +699,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                 },
               );
             }
+            void queryClient.invalidateQueries({ queryKey: qk.collections.documentsRoot(collectionId) });
             continue;
           }
 
@@ -716,7 +721,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         if (needsInvalidate) {
           debouncedInvalidateDocs();
           if (openModalDocIdRef.current) {
-            void queryClient.invalidateQueries({ queryKey: ['collections', 'doc-status', openModalDocIdRef.current] });
+            void queryClient.invalidateQueries({ queryKey: qk.collections.documentStatus(openModalDocIdRef.current) });
           }
         }
       },
@@ -797,10 +802,10 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   };
 
   const handleBulkIngest = async () => {
-    if (selectedIds.size === 0) return;
+    if (ingestableDocuments.length === 0) return;
     try {
       const results = await Promise.allSettled(
-        Array.from(selectedIds).map(id => collectionsApi.startDocIngest(collectionId, id))
+        ingestableDocuments.map(document => collectionsApi.startDocIngest(collectionId, document.id))
       );
       let started = 0;
       let alreadyRunning = 0;
@@ -833,6 +838,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   };
 
   // Single doc actions
+  // DEPRECATED: manual LongMemory extraction is disabled; configured ingestion remains automatic.
   const handleAddMemory = async (doc: CollectionDocument) => {
     setExtractingMemoryIds(ids => new Set(ids).add(doc.id));
     try {
@@ -886,10 +892,13 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     const map: Record<string, { tone: 'success' | 'warn' | 'danger' | 'info' | 'neutral'; label: string }> = {
       ready: { tone: 'success', label: 'Готов' },
       processing: { tone: 'warn', label: 'Обработка' },
+      queued: { tone: 'warn', label: 'В очереди' },
       embedding: { tone: 'warn', label: 'Эмбеддинг' },
       chunked: { tone: 'info', label: 'Разбит' },
       normalized: { tone: 'info', label: 'Нормализован' },
       failed: { tone: 'danger', label: 'Ошибка' },
+      partial: { tone: 'warn', label: 'Частично готов' },
+      archived: { tone: 'neutral', label: 'В архиве' },
       uploaded: { tone: 'neutral', label: 'Загружен' },
     };
     const cfg = map[status] || { tone: 'neutral' as const, label: status };
@@ -1089,7 +1098,8 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                     <td className={styles.muted}>{formatDate(doc.created_at)}</td>
                     <td>
                       <div className={styles.actions}>
-                        <button
+                        {/* DEPRECATED: manual extraction endpoint is blocked; keep historical handler for reference. */}
+                        {/* <button
                           className={styles.actionBtn}
                           onClick={() => handleAddMemory(doc)}
                           disabled={isProc || doc.agg_status === 'archived' || extractingMemoryIds.has(doc.id)
@@ -1098,7 +1108,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                           aria-label="Добавить документ в LongMemory"
                         >
                           <Icon name="sparkles" size={16} />
-                        </button>
+                        </button> */}
                         {isProc ? (
                           <button className={styles.actionBtn} onClick={() => handleCancel(doc)} title="Отменить обработку">
                             <Icon name="x" size={16} />

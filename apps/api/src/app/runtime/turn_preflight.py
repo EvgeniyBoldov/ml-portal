@@ -175,7 +175,16 @@ class TurnPreflight:
         tools = RoleMemoryTools(session=self._session, ctx=ctx)
         descriptors = await tools.descriptors()
         resumed = interaction_from_context((continuation or {}).get("paused_context"))
-        tool_results: list[dict[str, Any]] = list(resumed.checkpoint.get("memory_tool_results") or []) if resumed else []
+        checkpoint_results = list(resumed.checkpoint.get("memory_tool_results") or []) if resumed else []
+        # File contents are an access-controlled read result. A paused
+        # checkpoint can outlive the artifact grant, so require a fresh tool
+        # execution after resume instead of replaying cached content to the LLM.
+        tool_results: list[dict[str, Any]] = [
+            item for item in checkpoint_results
+            if isinstance(item, dict) and item.get("tool") not in {
+                "file.read", "file.data.read", "file.data.search",
+            }
+        ]
         available_artifacts = file_metadata([item.model_dump(mode="json") for item in attachments or []])
         from app.runtime.prompt_projections import preflight_context
         dialogue = list(recent_dialogue or [])

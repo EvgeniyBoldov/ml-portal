@@ -18,9 +18,13 @@ class RbacRuleCreate(BaseModel):
 
 
 class RbacRuleUpdate(BaseModel):
+    level: Optional[str] = Field(None, description="platform | tenant | user")
     effect: Optional[str] = Field(None, description="allow | deny")
     resource_type: Optional[str] = Field(None, description="agent | tool | instance")
     resource_id: Optional[UUID] = None
+    owner_user_id: Optional[UUID] = Field(None, description="User owner when level=user")
+    owner_tenant_id: Optional[UUID] = Field(None, description="Tenant owner when level=tenant")
+    owner_platform: Optional[bool] = Field(None, description="Platform owner when level=platform")
 
 
 class RbacRuleResponse(BaseModel):

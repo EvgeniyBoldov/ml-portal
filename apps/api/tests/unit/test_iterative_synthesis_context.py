@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from app.runtime.synthesis_context import SynthesisContextBuilder
 
 
@@ -43,6 +45,42 @@ def test_synthesis_keeps_rag_artifact_passport_and_exact_passage_provenance():
     assert source["chunk_id"] == "chunk-2"
     assert source["page"] == 3
     assert source["excerpt"] == "Applicable policy passage"
+
+
+def test_synthesis_compaction_keeps_all_task_statuses_and_bounds_final_context():
+    task_ids = [f"task-{index:02d}" for index in range(45)]
+    tasks = {
+        task_id: {
+            "iteration_id": "work", "planned_order": index, "status": "failed",
+            "intent": "Check a source",
+            "result": {"answer": "partial " + ("detail " * 500),
+                       "outputs": {"payload": "x" * 5_000}},
+        }
+        for index, task_id in enumerate(task_ids)
+    }
+    plan = {
+        "goal": "Check all sources",
+        "iterations": [{"id": "final", "sequence": 2, "terminal": "synthesis",
+                        "synthesis_brief": {"user_question": "Check all sources", "purpose": "Report results"}}],
+        "tasks": tasks,
+    }
+    runtime_limitations = [{"message": f"Runtime limitation {index}"} for index in range(45)]
+
+    max_chars = 40_000
+    context = SynthesisContextBuilder(max_chars=max_chars).build(
+        plan=plan,
+        iteration_id="final",
+        run_context={"evidence": [{"id": "selected", "data": {"content": "evidence " * 20_000}}]},
+        runtime_limitations=runtime_limitations,
+    )
+
+    assert len(json.dumps(context, ensure_ascii=False)) <= max_chars
+    assert {report["task_id"] for report in context["completed_task_reports"]} == set(task_ids)
+    assert {item["task_id"] for item in context["limitations"] if "task_id" in item} == set(task_ids)
+    assert {item["message"] for item in context["limitations"] if "message" in item} >= (
+        {"Task did not complete"}
+        | {f"Runtime limitation {index}" for index in range(45)}
+    )
 
 
 def test_synthesis_uses_accepted_partial_output_and_keeps_unresolved_limitation() -> None:

@@ -1,6 +1,6 @@
 import { Button } from '@/shared/ui';
 import type { PublishedMemoryTerm, MemoryCandidateTags, MemoryScopeAdminItem, ShadowMemoryCandidate } from '@/shared/api/admin';
-import MemoryTagPicker from './MemoryTagPicker';
+import MemoryTagPicker from '@/shared/ui/MultiSelectTagPicker/MultiSelectTagPicker';
 import styles from './MemoryReviewDialog.module.css';
 
 type Props = {

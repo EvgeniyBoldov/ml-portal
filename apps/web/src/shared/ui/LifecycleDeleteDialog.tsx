@@ -166,10 +166,10 @@ export default function LifecycleDeleteDialog({
     if (!open) return;
     setError('');
     setAck({});
-    setDeleteNow(false);
+    setDeleteNow(kind === 'memory_scope');
     setRetentionDays(14);
-    setDeleteDependents(false);
-  }, [open]);
+    setDeleteDependents(kind === 'memory_scope');
+  }, [open, kind]);
 
   useEffect(() => {
     if (!open) return;
@@ -231,6 +231,8 @@ export default function LifecycleDeleteDialog({
 
   const confirmLabel = action === 'restore'
     ? 'Восстановить сейчас'
+    : kind === 'memory_scope'
+      ? 'Удалить скоуп и очистить LongMemory'
     : deleteNow
       ? 'Удалить сейчас'
       : 'Пометить на удаление';
@@ -241,6 +243,8 @@ export default function LifecycleDeleteDialog({
   const dialogTitle = action === 'restore' ? `Восстановление: ${entityLabel}` : `Удаление: ${entityLabel}`;
   const dialogMessage = action === 'restore'
     ? 'Проверьте зависимые элементы перед восстановлением.'
+    : kind === 'memory_scope'
+      ? 'Записи LongMemory этого скоупа будут удалены. Документы останутся в коллекциях, но после переиндексации больше не будут индексироваться в LongMemory.'
     : 'Выберите режим удаления и проверьте последствия.';
   const groupTitles = action === 'restore' ? RESTORE_GROUP_TITLE : GROUP_TITLE;
 
@@ -289,7 +293,7 @@ export default function LifecycleDeleteDialog({
       message={dialogMessage}
     >
       <div className={styles.stack}>
-        {action === 'delete' && (
+        {action === 'delete' && kind !== 'memory_scope' && (
           <div className={styles.section}>
             <div className={styles.sectionTitle}>Режим удаления</div>
             <label className={styles.modeCheckbox}>

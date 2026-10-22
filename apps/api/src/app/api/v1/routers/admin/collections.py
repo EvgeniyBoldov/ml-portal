@@ -28,6 +28,7 @@ async def list_all_collections_no_slash(
     tenant_id: uuid.UUID | None = None,
     is_active: bool | None = None,
     include_deprecated: bool = False,
+    search: str | None = None,
     session: AsyncSession = Depends(db_uow),
     admin_user=Depends(require_admin),
 ):
@@ -37,6 +38,7 @@ async def list_all_collections_no_slash(
         tenant_id=tenant_id,
         is_active=is_active,
         include_deprecated=include_deprecated,
+        search=search,
         session=session,
         admin_user=admin_user,
     )

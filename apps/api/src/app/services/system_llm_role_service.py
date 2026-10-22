@@ -11,14 +11,18 @@ from app.core.exceptions import (
     SystemLLMRoleNotFoundError,
     SystemLLMRoleValidationError,
     AppError as SystemLLMRoleError,
+    ConflictError,
 )
 from app.models.system_llm_role import SystemLLMRole, SystemLLMRoleType
+from app.models.execution_limit import ActorExecutionLimitScope
 from app.repositories.system_llm_role_repository import SystemLLMRoleRepository
 from app.schemas.system_llm_roles import (
     SystemLLMRoleCreate, SystemLLMRoleUpdate,
-    PlannerRoleUpdate, MemoryRoleUpdate, SynthesizerRoleUpdate,
+    OrchestratorRoleSettingsUpdate,
+    PlannerRoleUpdate, SynthesizerRoleUpdate,
     FactExtractorRoleUpdate, FactCompactorRoleUpdate,
 )
+from app.services.runtime_limits_service import ActorLimits, ResolvedActorLimits, RuntimeLimitsService
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +70,10 @@ class SystemLLMRoleService:
         
         # Update fields
         update_data = data.model_dump(exclude_unset=True)
+        if update_data.get("is_active") is True:
+            for sibling in await self.repo.get_roles_by_type(role.role_type):
+                if sibling.id != role.id and sibling.is_active:
+                    sibling.is_active = False
         for field, value in update_data.items():
             setattr(role, field, value)
         
@@ -82,6 +90,11 @@ class SystemLLMRoleService:
             role = SystemLLMRole(role_type=role_type, is_active=True)
 
         update_data = data.model_dump(exclude_unset=True)
+        # This endpoint edits the active configuration; activation/deactivation
+        # belongs to the explicit activate action and must not deactivate it.
+        if update_data.get("is_active") is False:
+            raise SystemLLMRoleValidationError("The active role cannot be disabled through its configuration endpoint")
+        update_data.pop("is_active", None)
         for field, value in update_data.items():
             if hasattr(role, field):
                 setattr(role, field, value)
@@ -98,13 +111,30 @@ class SystemLLMRoleService:
         assert role is not None
         return role
 
+    async def update_active_orchestrator_settings(
+        self,
+        role_type: SystemLLMRoleType,
+        data: OrchestratorRoleSettingsUpdate,
+    ) -> tuple[SystemLLMRole, ResolvedActorLimits]:
+        """Persist a role prompt/config and its actor limits in one transaction."""
+        role_data = SystemLLMRoleUpdate.model_validate(
+            data.model_dump(exclude={"execution_limits"}, exclude_unset=True)
+        )
+        role = await self.update_active_role(role_type, role_data)
+        limits = data.execution_limits
+        limit_service = RuntimeLimitsService(self.session)
+        await limit_service.update_actor(
+            ActorExecutionLimitScope.ORCHESTRATOR_ROLE,
+            role_type.value,
+            ActorLimits(**limits.model_dump()),
+            set(limits.model_fields_set),
+        )
+        resolution = await limit_service.resolve_orchestrator(role_type.value)
+        return role, resolution
+
     async def update_planner_role(self, data: PlannerRoleUpdate) -> Optional[SystemLLMRole]:
         """Update the active Planner role."""
         return await self.update_active_role(SystemLLMRoleType.PLANNER, data)
-
-    async def update_memory_role(self, data: MemoryRoleUpdate) -> Optional[SystemLLMRole]:
-        """Update the active Memory role."""
-        return await self.update_active_role(SystemLLMRoleType.MEMORY, data)
 
     async def update_turn_preflight_role(self, data: SystemLLMRoleUpdate) -> Optional[SystemLLMRole]:
         return await self.update_active_role(SystemLLMRoleType.TURN_PREFLIGHT, data)
@@ -123,6 +153,9 @@ class SystemLLMRoleService:
 
     async def delete_role(self, role_id: UUID) -> bool:
         """Delete a role."""
+        role = await self.repo.get_by_id(role_id)
+        if role is not None and role.is_active:
+            raise ConflictError("Activate another role of this type before deleting the active role")
         return await self.repo.delete(role_id)
     
     async def activate_role(self, role_id: UUID) -> SystemLLMRole:

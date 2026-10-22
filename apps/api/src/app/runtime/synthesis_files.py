@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.agents.context import ToolContext
 from app.core.config import get_settings
-from app.agents.operation_router import OperationRouter
 from app.runtime.events import RuntimeEvent
 from app.runtime.llm.structured import StructuredLLMCall
 from app.models.system_llm_role import SystemLLMRoleType
@@ -68,6 +67,8 @@ async def generate_file_answer(
     sandbox_overrides: dict[str, Any] | None, budget_registry: BudgetRegistry | None,
     events: list[RuntimeEvent] | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[RuntimeEvent]]:
+    from app.agents.operation_router import OperationRouter
+
     if ctx is None or not ctx.chat_id or not ctx.user_id or "file.generate" in ctx.denied_tools:
         raise ValueError("File generation is unavailable")
     resolved = await OperationRouter(session).resolve(user_id=ctx.user_id, tenant_id=ctx.tenant_id,

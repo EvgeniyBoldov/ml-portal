@@ -24,6 +24,7 @@ class TenantCreate(TenantBase):
 
 class TenantUpdate(BaseModel):
     memory_scope_keys: MemoryScopeKeys = Field(default_factory=list)
+    tenant_admin_user_ids: Optional[List[uuid.UUID]] = None
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     is_active: Optional[bool] = None
@@ -35,6 +36,7 @@ class TenantUpdate(BaseModel):
     model_config = ConfigDict(extra='ignore')
 
 class Tenant(TenantBase):
+    tenant_admin_user_ids: List[uuid.UUID] = Field(default_factory=list)
     is_default: bool = Field(False, description="Platform default tenant flag")
     embed_models: List[str] = Field(default_factory=list, description="Resolved embedding models (global + optional extra)")
     rerank_model: Optional[str] = Field(None, description="Resolved global rerank model")

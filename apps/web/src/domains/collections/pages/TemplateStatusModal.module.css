@@ -1,0 +1,295 @@
+.modal {
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+}
+
+.modalBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: clip;
+  overflow-y: auto;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.pipelineSection {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: max-content;
+  max-width: 100%;
+}
+
+.detailsSection {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.approvalSection,
+.schemaSection {
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.approvalSection .schemaSection {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.approvalHeading h3,
+.schemaHeader h4 {
+  margin: 0;
+  color: var(--text);
+}
+
+.approvalHeading h3 {
+  font-size: var(--font-size-lg);
+}
+
+.approvalHeading p {
+  margin: 6px 0 0;
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-sm);
+}
+
+.schemaHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.schemaHeader h4 {
+  font-size: var(--font-size-md);
+}
+
+.schemaHeader > span {
+  display: inline-grid;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-xs);
+}
+
+.schemaFields {
+  display: grid;
+  gap: 8px;
+}
+
+.schemaField {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, var(--radius));
+  background: var(--panel);
+}
+
+.schemaFieldSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.schemaFieldSummary::-webkit-details-marker {
+  display: none;
+}
+
+.schemaFieldName {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.schemaBadge {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--primary, #6366f1) 22%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary, #6366f1) 9%, transparent);
+  color: var(--primary, #4f46e5);
+  font-size: var(--font-size-xs);
+}
+
+.tableBadge {
+  border-color: color-mix(in srgb, var(--info, #0ea5e9) 25%, transparent);
+  background: color-mix(in srgb, var(--info, #0ea5e9) 10%, transparent);
+  color: var(--info, #0369a1);
+}
+
+.requiredBadge {
+  border-color: color-mix(in srgb, var(--warning, #d97706) 25%, transparent);
+  background: color-mix(in srgb, var(--warning, #d97706) 10%, transparent);
+  color: var(--warning, #b45309);
+}
+
+.schemaFieldMeta {
+  margin-left: auto;
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-xs);
+}
+
+.schemaChevron {
+  color: var(--text-secondary, var(--muted));
+  transition: transform 120ms ease;
+}
+
+.schemaField[open] .schemaChevron {
+  transform: rotate(180deg);
+}
+
+.schemaFieldBody {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.schemaKey {
+  width: fit-content;
+  margin-top: 10px;
+  padding: 3px 7px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-elevated);
+  color: var(--text-secondary, var(--muted));
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-xs);
+}
+
+.schemaDescription,
+.schemaEmpty {
+  margin: 0;
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.schemaColumns,
+.schemaExamples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.schemaColumn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text);
+  font-size: var(--font-size-xs);
+}
+
+.schemaColumn small {
+  color: var(--text-secondary, var(--muted));
+}
+
+.schemaExamples {
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-xs);
+}
+
+.technicalDetails {
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-xs);
+}
+
+.technicalDetails summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.technicalDetails dl {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+
+.technicalDetails dl > div {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.35fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.technicalDetails dt {
+  font-family: var(--font-mono, monospace);
+}
+
+.technicalDetails dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.descriptionField {
+  display: grid;
+  gap: 8px;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.descriptionField textarea {
+  width: 100%;
+  min-height: 110px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, var(--radius));
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-weight: 400;
+  resize: vertical;
+}
+
+.approvalActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .approvalSection,
+  .schemaSection {
+    padding: 12px;
+  }
+
+  .schemaFieldSummary {
+    flex-wrap: wrap;
+  }
+
+  .schemaFieldMeta {
+    margin-left: 0;
+  }
+
+  .schemaChevron {
+    margin-left: auto;
+  }
+}

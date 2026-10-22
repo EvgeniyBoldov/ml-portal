@@ -8,7 +8,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { MemoryScopePicker } from '@/shared/ui/MemoryScopePicker/MemoryScopePicker';
 import { useUser, useUpdateUser, useCreateUser, useSetUserPassword } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
 import { qk } from '@shared/api/keys';
@@ -22,6 +21,7 @@ import Input from '@/shared/ui/Input';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import type { User, Tenant } from '@shared/api/admin';
 import { CredentialsPanel, FactsPanel } from '@/shared/ui';
+import { MemoryScopeSelect } from '@/shared/ui/MemoryScopeSelect/MemoryScopeSelect';
 
 /* ─── SetPasswordModal ─── */
 
@@ -102,15 +102,10 @@ function SetPasswordModal({
 
 /* ─── Constants ─── */
 
-const ROLES = [
-  { value: 'reader', label: 'Читатель' },
-  { value: 'editor', label: 'Редактор' },
-  { value: 'admin', label: 'Администратор' },
-];
-
 /* ─── Field configs ─── */
 
 const BASE_INFO_FIELDS: Omit<FieldConfig, 'options'>[] = [
+  { key: 'full_name', type: 'text', label: 'Отображаемое имя', editable: false },
   {
     key: 'login',
     type: 'text',
@@ -130,6 +125,20 @@ const BASE_INFO_FIELDS: Omit<FieldConfig, 'options'>[] = [
     type: 'select',
     label: 'Тенант',
     description: 'Основной тенант пользователя',
+  },
+  {
+    key: 'memory_scope_keys',
+    type: 'custom',
+    label: 'Скоупы памяти чатов',
+    description: 'Начальный контекст чатов. Пустой выбор наследует проекты tenant-а.',
+    render: (value, editable, onChange) => (
+      <MemoryScopeSelect
+        value={Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : []}
+        onChange={onChange}
+        readOnly={!editable}
+        disabled={!editable}
+      />
+    ),
   },
 ];
 
@@ -149,17 +158,38 @@ const BASE_INFO_FIELDS_CREATE: Omit<FieldConfig, 'options'>[] = [
     placeholder: 'user@example.com',
   },
   {
+    key: 'password',
+    type: 'password',
+    label: 'Пароль локальной учётной записи',
+    description: 'LDAP-пользователи создаются автоматически при первом входе',
+    required: true,
+    placeholder: 'Минимум 8 символов',
+  },
+  {
     key: 'tenant_id',
     type: 'select',
     label: 'Тенант',
     description: 'Основной тенант пользователя',
   },
-];
-
-const HIDDEN_BASE_INFO_FIELDS: Omit<FieldConfig, 'options'>[] = [
+  {
+    key: 'memory_scope_keys',
+    type: 'custom',
+    label: 'Скоупы памяти чатов',
+    description: 'Начальный контекст чатов. Пустой выбор наследует проекты tenant-а.',
+    render: (value, editable, onChange) => (
+      <MemoryScopeSelect
+        value={Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : []}
+        onChange={onChange}
+        readOnly={!editable}
+        disabled={!editable}
+      />
+    ),
+  },
 ];
 
 const STATUS_FIELDS: FieldConfig[] = [
+  { key: 'account_type', type: 'text', label: 'Тип учётной записи', editable: false },
+  { key: 'deactivated_reason', type: 'text', label: 'Причина отключения', editable: false },
   {
     key: 'is_active',
     type: 'boolean',
@@ -167,11 +197,10 @@ const STATUS_FIELDS: FieldConfig[] = [
     description: 'Пользователь может входить в систему',
   },
   {
-    key: 'role',
-    type: 'select',
-    label: 'Роль',
-    description: 'Уровень доступа пользователя',
-    options: ROLES.map(r => ({ value: r.value, label: r.label })),
+    key: 'is_admin',
+    type: 'boolean',
+    label: 'Администратор платформы',
+    description: 'Даёт доступ к административной панели',
   },
   {
     key: 'lifecycle_status',
@@ -186,6 +215,7 @@ const META_FIELDS: FieldConfig[] = [
   { key: 'id', type: 'code', label: 'ID', editable: false },
   { key: 'created_at', type: 'date', label: 'Создан', editable: false },
   { key: 'updated_at', type: 'date', label: 'Обновлен', editable: false },
+  { key: 'last_login_at', type: 'date', label: 'Последний вход', editable: false },
 ];
 
 /* ─── Component ─── */
@@ -204,10 +234,11 @@ export function UserPage() {
 
   const [formData, setFormData] = useState({
     login: '',
+    full_name: '',
     email: '',
     password: '',
-    role: 'reader' as User['role'],
-    tenant_ids: [] as string[],
+    is_admin: false,
+    tenant_id: '',
     is_active: true,
     memory_scope_keys: [] as string[],
   });
@@ -218,7 +249,7 @@ export function UserPage() {
   const [setPasswordSaving, setSetPasswordSaving] = useState(false);
 
   // ─── Queries ───
-  const { data: user, isLoading, refetch } = useUser(id);
+  const { data: user, isLoading, refetch } = useUser(isNew ? undefined : id);
   const { tenants } = useTenants(true);
 
   // ─── Sync form ←→ API ───
@@ -226,21 +257,16 @@ export function UserPage() {
     if (user) {
       setFormData({
         login: user.login || '',
+        full_name: user.full_name || '',
         email: user.email || '',
         password: '',
-        role: user.role || 'reader',
-        tenant_ids: user.tenant_id ? [user.tenant_id] : [],
+        is_admin: Boolean(user.is_admin),
+        tenant_id: user.tenant_id ?? '',
         is_active: user.is_active,
         memory_scope_keys: user.memory_scope_keys ?? [],
       });
     }
   }, [user]);
-
-  useEffect(() => {
-    if (isNew && tenants?.length && formData.tenant_ids.length === 0) {
-      setFormData(prev => ({ ...prev, tenant_ids: [tenants[0].id] }));
-    }
-  }, [isNew, tenants, formData.tenant_ids]);
 
   // ─── Mutations ───
   const createMutation = useCreateUser();
@@ -248,11 +274,15 @@ export function UserPage() {
   const setPasswordMutation = useSetUserPassword();
 
   // ─── Handlers ───
-  const handleFieldChange = (key: string, value: any) => {
-    if (key === 'tenant_id') {
-      setFormData(prev => ({ ...prev, tenant_ids: value ? [value] : [] }));
-    } else {
-      setFormData(prev => ({ ...prev, [key]: value }));
+  const handleFieldChange = (key: string, value: unknown) => {
+    if (key === 'login' || key === 'email' || key === 'password' || key === 'tenant_id') {
+      setFormData(prev => ({ ...prev, [key]: String(value ?? '') }));
+    } else if (key === 'is_admin' && typeof value === 'boolean') {
+      setFormData(prev => ({ ...prev, is_admin: value }));
+    } else if (key === 'is_active' && typeof value === 'boolean') {
+      setFormData(prev => ({ ...prev, is_active: value }));
+    } else if (key === 'memory_scope_keys' && Array.isArray(value) && value.every(item => typeof item === 'string')) {
+      setFormData(prev => ({ ...prev, memory_scope_keys: value }));
     }
   };
 
@@ -264,10 +294,11 @@ export function UserPage() {
         if (!formData.password.trim()) { showError('Пароль обязателен'); return; }
         await createMutation.mutateAsync({
           login: formData.login,
-          email: formData.email || undefined,
+          email: formData.email || null,
           password: formData.password,
-          role: formData.role,
-          tenant_ids: formData.tenant_ids,
+          role: 'reader',
+          is_admin: formData.is_admin,
+          tenant_id: formData.tenant_id || null,
           is_active: formData.is_active,
           memory_scope_keys: formData.memory_scope_keys,
         });
@@ -277,11 +308,11 @@ export function UserPage() {
         await updateMutation.mutateAsync({
           id: id!,
           data: {
-            email: formData.email || undefined,
-            role: formData.role,
+            email: formData.email || null,
+            is_admin: formData.is_admin,
             is_active: formData.is_active,
             memory_scope_keys: formData.memory_scope_keys,
-            tenant_ids: formData.tenant_ids,
+            tenant_id: formData.tenant_id || null,
           },
         });
         showSuccess('Пользователь обновлён');
@@ -304,10 +335,11 @@ export function UserPage() {
       if (user) {
         setFormData({
           login: user.login || '',
+          full_name: user.full_name || '',
           email: user.email || '',
           password: '',
-          role: user.role || 'reader',
-          tenant_ids: user.tenant_id ? [user.tenant_id] : [],
+          is_admin: Boolean(user.is_admin),
+          tenant_id: user.tenant_id ?? '',
           is_active: user.is_active,
           memory_scope_keys: user.memory_scope_keys ?? [],
         });
@@ -338,23 +370,31 @@ export function UserPage() {
   ];
 
   // ─── Derived data for blocks ───
+  const isLocalAccount = !user || (user.auth_provider ?? 'local') === 'local';
+  const accountType = isLocalAccount ? 'Локальная' : 'LDAP';
   const infoData = (mode === 'edit' || isNew)
-    ? { ...formData, tenant_id: formData.tenant_ids[0] ?? '' }
+    ? formData
     : {
         login: user?.login || '',
+        full_name: user?.full_name || '',
         email: user?.email || '',
         password: '',
         tenant_id: user?.tenant_id || '',
+        memory_scope_keys: user?.memory_scope_keys ?? [],
       };
 
   const statusData = mode === 'edit'
     ? {
         ...formData,
+        account_type: accountType,
+        deactivated_reason: user?.deactivated_reason || '',
         lifecycle_status: user?.lifecycle_status || 'active',
       }
     : {
         is_active: user?.is_active || false,
-        role: user?.role || 'reader',
+        is_admin: Boolean(user?.is_admin),
+        account_type: accountType,
+        deactivated_reason: user?.deactivated_reason || '',
         lifecycle_status: user?.lifecycle_status || 'active',
       };
 
@@ -362,6 +402,7 @@ export function UserPage() {
     id: user?.id || '',
     created_at: user?.created_at || '',
     updated_at: user?.updated_at || '',
+    last_login_at: user?.last_login_at || '',
   };
 
   // Options for selects
@@ -374,14 +415,16 @@ export function UserPage() {
   ];
 
   const infoFields: FieldConfig[] = BASE_INFO_FIELDS.map(f =>
-    f.key === 'tenant_id' ? { ...f, options: tenantOptions } : f as FieldConfig
+    f.key === 'tenant_id'
+      ? { ...f, options: tenantOptions }
+      : f as FieldConfig
   );
 
   const infoFieldsCreate: FieldConfig[] = BASE_INFO_FIELDS_CREATE.map(f =>
-    f.key === 'tenant_id' ? { ...f, options: tenantOptions } : f as FieldConfig
+    f.key === 'tenant_id'
+      ? { ...f, options: tenantOptions }
+      : f as FieldConfig
   );
-
-  const isLocalAccount = !user || (user.auth_provider ?? 'local') === 'local';
 
   // ─── Create mode ───
   if (isNew) {
@@ -406,11 +449,6 @@ export function UserPage() {
               data={infoData}
               editable={true}
               onChange={handleFieldChange}
-              headerActions={
-                <Button size="sm" variant="outline" onClick={() => setShowSetPassword(true)} type="button">
-                  Установить пароль
-                </Button>
-              }
             />
             <Block
               title="Статус и роль"
@@ -418,20 +456,12 @@ export function UserPage() {
               iconVariant="warning"
               width="full"
               fields={STATUS_FIELDS}
-              data={formData}
+              data={{ ...formData, account_type: 'Локальная', deactivated_reason: '' }}
               editable={true}
               onChange={handleFieldChange}
             />
-            <MemoryScopePicker value={formData.memory_scope_keys} onChange={(keys) => handleFieldChange('memory_scope_keys', keys)}
-              description="По умолчанию проекты памяти не выбраны." />
           </Tab>
         </EntityPageV2>
-        <SetPasswordModal
-          open={showSetPassword}
-          onClose={() => setShowSetPassword(false)}
-          onConfirm={(pwd) => { setFormData(prev => ({ ...prev, password: pwd })); setShowSetPassword(false); }}
-          saving={false}
-        />
       </>
     );
   }
@@ -507,15 +537,6 @@ export function UserPage() {
             fields={META_FIELDS}
             data={metaData}
           />
-        </Tab>
-
-        <Tab title="Скоупы" layout="full" id="scopes" actions={buildEntityCrudActions({
-          mode, saving, lifecycleStatus: user?.lifecycle_status,
-          onEdit: handleEdit, onSave: handleSave, onCancel: handleCancel,
-        })}>
-          <MemoryScopePicker value={mode === 'edit' ? formData.memory_scope_keys : user?.memory_scope_keys ?? []}
-            onChange={(keys) => handleFieldChange('memory_scope_keys', keys)} readOnly={mode !== 'edit'} disabled={saving}
-            description="Начальный контекст чатов пользователя. Пустые ветки наследуются из tenant-а." />
         </Tab>
 
         {!isNew && (

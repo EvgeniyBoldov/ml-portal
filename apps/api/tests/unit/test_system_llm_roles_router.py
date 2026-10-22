@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -7,7 +8,14 @@ from uuid import uuid4
 import pytest
 
 from app.api.v1.routers.admin import system_llm_roles as roles_router
-from app.schemas.system_llm_roles import SystemLLMRoleCreate, SystemLLMRoleUpdate
+from app.schemas.runtime_limits import OrchestratorLimitsUpdate
+from app.schemas.system_llm_roles import (
+    OrchestratorRoleSettingsUpdate,
+    SystemLLMRoleCreate,
+    SystemLLMRoleResponse,
+    SystemLLMRoleUpdate,
+)
+from app.services.runtime_limits_service import ActorLimits, ResolvedActorLimits
 
 
 def _router_dependencies(monkeypatch, service):
@@ -65,4 +73,40 @@ async def test_memory_role_update_commits_before_return(monkeypatch):
 
     assert result is role
     service.update_active_role.assert_awaited_once()
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role_type", [
+    "planner", "turn_preflight", "synthesizer", "fact_extractor", "fact_compactor",
+])
+async def test_orchestrator_role_and_limits_share_one_crud_transaction(monkeypatch, role_type):
+    now = datetime.now(timezone.utc)
+    role = SystemLLMRoleResponse(
+        id=uuid4(), role_type=role_type, created_at=now, updated_at=now,
+    )
+    resolution = ResolvedActorLimits(
+        own=ActorLimits(llm_calls_max=4, wall_time_ms_max=120_000),
+        effective=ActorLimits(llm_calls_max=4, wall_time_ms_max=120_000),
+        sources={"llm_calls_max": "entity", "wall_time_ms_max": "entity"},
+    )
+    service = SimpleNamespace(
+        update_active_orchestrator_settings=AsyncMock(return_value=(role, resolution)),
+    )
+    _router_dependencies(monkeypatch, service)
+    session = AsyncMock()
+    payload = OrchestratorRoleSettingsUpdate(
+        model="llm.test",
+        temperature=0.3,
+        execution_limits=OrchestratorLimitsUpdate(llm_calls_max=4, wall_time_ms_max=120_000),
+    )
+
+    result = await roles_router.update_active_orchestrator_settings(
+        role_type, payload, session, SimpleNamespace(),
+    )
+
+    assert result.role is role
+    assert result.execution_limits.own.llm_calls_max == 4
+    assert result.execution_limits.own.wall_time_ms_max == 120_000
+    service.update_active_orchestrator_settings.assert_awaited_once_with(role_type, payload)
     session.commit.assert_awaited_once()

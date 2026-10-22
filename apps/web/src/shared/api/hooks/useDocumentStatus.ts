@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiRequest } from '@shared/api/http';
 import type { StatusGraph, DocStatus } from '@shared/api/types/documentStatus';
 import { adaptStatusGraphToDocStatus } from '@shared/lib/documentStatusAdapter';
+import { qk } from '@shared/api/keys';
 
 export function useDocumentStatus(
   docId: string | undefined,
@@ -13,7 +14,7 @@ export function useDocumentStatus(
 ) {
   return useQuery<StatusGraph, Error, DocStatus>({
     queryKey: statusGraphUrl
-      ? ['collections', 'doc-status', docId]
+      ? qk.collections.documentStatus(docId ?? '')
       : docId
         ? ['document-status', docId]
         : ['document-status', 'undefined'],

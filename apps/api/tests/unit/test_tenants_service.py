@@ -23,10 +23,10 @@ class TestAsyncTenantsService:
         """Mock tenants repository"""
         repo = AsyncMock()
         repo.get_by_id = AsyncMock(return_value=None)
+        repo.get_by_name = AsyncMock(return_value=None)
         repo.list = AsyncMock(return_value=[])
         repo.create = AsyncMock()
         repo.update = AsyncMock()
-        repo.delete = AsyncMock(return_value=True)
         return repo
     
     @pytest.fixture
@@ -150,6 +150,25 @@ class TestListTenants(TestAsyncTenantsService):
         
         mock_tenants_repo.list.assert_called_once_with(limit=50)
 
+    @pytest.mark.asyncio
+    async def test_list_tenants_page_passes_filters_and_enriches_only_page(
+        self, tenants_service, mock_tenants_repo, mock_model_repo,
+        sample_tenant, sample_embed_model, sample_rerank_model
+    ):
+        mock_tenants_repo.list_page.return_value = ([sample_tenant], 201)
+        mock_model_repo.get_global_by_type.side_effect = [sample_embed_model, sample_rerank_model]
+
+        items, total = await tenants_service.list_tenants_page(
+            page=3, size=100, search="operations", is_active=True, include_deprecated=True
+        )
+
+        assert total == 201
+        assert len(items) == 1
+        mock_tenants_repo.list_page.assert_awaited_once_with(
+            page=3, size=100, search="operations", is_active=True, include_deprecated=True
+        )
+        assert mock_model_repo.get_global_by_type.await_count == 2
+
 
 class TestCreateTenant(TestAsyncTenantsService):
     """Test create_tenant method"""
@@ -201,6 +220,18 @@ class TestCreateTenant(TestAsyncTenantsService):
         call_kwargs = mock_tenants_repo.create.call_args.kwargs
         assert "embedding_model_alias" in call_kwargs
         assert "extra_embed_model" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_create_tenant_normalizes_empty_embedding_model_to_null(
+        self, tenants_service, mock_tenants_repo, mock_model_repo,
+        sample_tenant, sample_embed_model, sample_rerank_model
+    ):
+        mock_tenants_repo.create.return_value = sample_tenant
+        mock_model_repo.get_global_by_type.side_effect = [sample_embed_model, sample_rerank_model]
+
+        await tenants_service.create_tenant({"name": "Tenant", "extra_embed_model": ""})
+
+        assert mock_tenants_repo.create.call_args.kwargs["embedding_model_alias"] is None
 
 
 class TestUpdateTenant(TestAsyncTenantsService):
@@ -257,6 +288,43 @@ class TestUpdateTenant(TestAsyncTenantsService):
         assert "embedding_model_alias" in call_kwargs
 
     @pytest.mark.asyncio
+    async def test_update_tenant_clears_embedding_model_when_empty_string_is_sent(
+        self, tenants_service, mock_tenants_repo, mock_model_repo,
+        sample_tenant, sample_embed_model, sample_rerank_model
+    ):
+        sample_tenant.embedding_model_alias = "custom-embed"
+        mock_tenants_repo.get_by_id.return_value = sample_tenant
+        mock_tenants_repo.update.return_value = sample_tenant
+        mock_model_repo.get_global_by_type.side_effect = [sample_embed_model, sample_rerank_model]
+
+        await tenants_service.update_tenant(str(sample_tenant.id), {"extra_embed_model": ""})
+
+        assert mock_tenants_repo.update.call_args.kwargs["embedding_model_alias"] is None
+
+    @pytest.mark.asyncio
+    async def test_update_tenant_rejects_name_owned_by_another_tenant(
+        self, tenants_service, mock_tenants_repo, sample_tenant
+    ):
+        sample_tenant.name = "Current"
+        duplicate = MagicMock()
+        mock_tenants_repo.get_by_id.return_value = sample_tenant
+        mock_tenants_repo.get_by_name.return_value = duplicate
+
+        with pytest.raises(ValueError, match="tenant_name_already_exists"):
+            await tenants_service.update_tenant(str(sample_tenant.id), {"name": "Taken"})
+
+        mock_tenants_repo.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_tenant_rejects_duplicate_name(self, tenants_service, mock_tenants_repo, sample_tenant):
+        mock_tenants_repo.get_by_name.return_value = sample_tenant
+
+        with pytest.raises(ValueError, match="tenant_name_already_exists"):
+            await tenants_service.create_tenant({"name": sample_tenant.name})
+
+        mock_tenants_repo.create.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_update_tenant_set_default_true(
         self, tenants_service, mock_tenants_repo, mock_model_repo,
         sample_tenant, sample_embed_model, sample_rerank_model
@@ -292,28 +360,6 @@ class TestUpdateTenant(TestAsyncTenantsService):
             )
 
         assert str(exc_info.value) == "cannot_unset_default_tenant_directly"
-
-
-class TestDeleteTenant(TestAsyncTenantsService):
-    """Test delete_tenant method"""
-    
-    @pytest.mark.asyncio
-    async def test_delete_tenant_success(self, tenants_service, mock_tenants_repo):
-        """Should delete tenant successfully"""
-        mock_tenants_repo.delete.return_value = True
-        
-        result = await tenants_service.delete_tenant(str(uuid4()))
-        
-        assert result is True
-    
-    @pytest.mark.asyncio
-    async def test_delete_tenant_not_found(self, tenants_service, mock_tenants_repo):
-        """Should return False when tenant not found"""
-        mock_tenants_repo.delete.return_value = False
-        
-        result = await tenants_service.delete_tenant(str(uuid4()))
-        
-        assert result is False
 
 
 class TestValidateTenantModels(TestAsyncTenantsService):

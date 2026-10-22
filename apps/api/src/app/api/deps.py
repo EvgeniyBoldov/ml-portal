@@ -1,5 +1,4 @@
 
-import os
 import uuid as _uuid
 import time
 from dataclasses import dataclass
@@ -85,9 +84,6 @@ async def resolve_active_user_tenant_ids(
             return [tenant_id]
     return tenant_ids
 
-def is_auth_enabled() -> bool:
-    return (os.getenv("AUTH_ENABLED") or "false").lower() in {"1", "true", "yes", "on"}
-
 # Client dependencies
 def get_llm_client_mock():
     """Mock LLM client for testing"""
@@ -141,29 +137,26 @@ async def get_bearer_user(
 
 
 async def get_current_user_optional(request: Request) -> UserCtx | None:
-    """Existing optional development auth for non-critical SSE endpoints."""
-    from app.core.config import get_settings
-    settings = get_settings()
+    """Allow a local-only dev principal; require authentication elsewhere."""
     credentials = await bearer_security(request)
     if request.headers.get("Authorization") or request.cookies.get("access_token"):
+        if not is_local():
+            return await _request_user(request, credentials, allow_cookie=True)
         try:
             return await _request_user(request, credentials, allow_cookie=True)
         except HTTPException:
             return None
-    if settings.ENV == "production":
-        if not request.url.path.endswith(("/api/v1/rag/events", "/rag/events")):
-            return await _request_user(request, credentials, allow_cookie=True)
-        return None
-    return UserCtx(id="dev-user", email="dev@localhost", role="reader", tenant_ids=[], scopes=["read"])
+    if is_local():
+        return UserCtx(id="dev-user", email="dev@localhost", role="reader", tenant_ids=[], scopes=["read"])
+    return await _request_user(request, credentials, allow_cookie=True)
 
 
 async def get_current_user_sse(request: Request) -> UserCtx:
     """Bearer/access cookie auth; retain the existing local SSE query fallback."""
-    from app.core.config import get_settings
     credentials = await bearer_security(request)
     if request.headers.get("Authorization") or request.cookies.get("access_token"):
         return await _request_user(request, credentials, allow_cookie=True)
-    token = request.query_params.get("token") if get_settings().ENV != "production" else None
+    token = request.query_params.get("token") if is_local() else None
     if not token:
         raise HTTPException(401, "Bearer token or access cookie required", headers={"WWW-Authenticate": "Bearer"})
     try:
@@ -174,7 +167,7 @@ async def get_current_user_sse(request: Request) -> UserCtx:
 
 def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
     """Require admin role"""
-    if user.role != "admin":
+    if not (user.is_admin or user.role == "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"

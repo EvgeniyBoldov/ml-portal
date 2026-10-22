@@ -21,3 +21,23 @@ def test_runtime_redactor_redacts_nested_secrets_and_dsn_password():
     assert redacted["nested"]["items"][0]["api_key"] == "***"
     assert "hunter2" not in redacted["text"]
     assert "abc123" not in redacted["text"]
+
+
+def test_runtime_redactor_covers_compound_secret_names_in_keys_and_text():
+    redactor = RuntimeRedactor()
+    payload = {
+        "client_secret": "oauth-secret",
+        "secret_key": "signing-secret",
+        "private_key": "private-material",
+        "x-api-key": "header-key",
+        "details": "client_secret=oauth-secret secret_key=signing-secret private-key=private-material",
+    }
+
+    redacted = redactor.redact(payload)
+
+    assert redacted["client_secret"] == "***"
+    assert redacted["secret_key"] == "***"
+    assert redacted["private_key"] == "***"
+    assert redacted["x-api-key"] == "***"
+    for secret in ("oauth-secret", "signing-secret", "private-material"):
+        assert secret not in redacted["details"]

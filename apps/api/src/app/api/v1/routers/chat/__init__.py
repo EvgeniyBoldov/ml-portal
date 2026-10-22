@@ -4,7 +4,6 @@ Sub-routers:
   chats.py       — CRUD чатов (list, create, update, delete, tags)
   messages.py    — Сообщения + SSE stream + resume run
   attachments.py — Upload, download, policy
-  meta.py        — /models, /agents, /chat (direct LLM)
 """
 from typing import Any, Dict, Optional
 
@@ -16,14 +15,12 @@ from .chats import create_chat as create_chat_core
 from .chats import list_chats as list_chats_core
 from .messages import router as messages_router
 from .attachments import router as attachments_router
-from .meta import router as meta_router
 from .messages import resume_run
 from app.api.deps import db_uow, get_current_user
 from app.core.security import UserCtx
 
 router = APIRouter(tags=["chat"])
 
-router.include_router(meta_router)
 router.include_router(chats_router)
 router.include_router(messages_router)
 router.include_router(attachments_router)

@@ -9,6 +9,7 @@ import pytest
 from app.api import deps
 from app.api.v1.routers.collections import crud as collections_crud
 from app.core.security import UserCtx
+from app.repositories.factory import _extract_tenant_id_from_user
 
 
 class _RowsResult:
@@ -59,3 +60,19 @@ async def test_chat_scope_uses_db_default_not_stale_jwt_order() -> None:
 
     assert context.tenant_id == str(default_tenant)
     assert user.tenant_ids == [str(default_tenant), str(stale_jwt_tenant)]
+
+
+@pytest.mark.asyncio
+async def test_repository_tenant_fallback_filters_inactive_tenants() -> None:
+    user_id = uuid4()
+    active_tenant = uuid4()
+    session = AsyncMock()
+    session.execute.return_value = _ScalarResult(active_tenant)
+    user = UserCtx(id=str(user_id), tenant_ids=[])
+
+    resolved = await _extract_tenant_id_from_user(session, user)
+
+    assert resolved == active_tenant
+    statement = str(session.execute.call_args.args[0])
+    assert "tenants.is_active IS true" in statement
+    assert "tenants.lifecycle_status !=" in statement

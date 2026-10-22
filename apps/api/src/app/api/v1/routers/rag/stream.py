@@ -7,8 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_current_user_sse, db_session, db_uow
+from app.api.deps import (
+    db_session,
+    db_uow,
+    get_current_user,
+    get_current_user_sse,
+    resolve_active_user_tenant_ids,
+)
 from app.core.security import UserCtx
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.sse import format_sse
 from app.services.rag_event_publisher import RAGEventSubscriber
 from app.core.logging import get_logger
@@ -52,6 +59,7 @@ async def _ensure_worker_ready() -> None:
 @router.get("/events")
 async def stream_rag_status(
     user: UserCtx = Depends(get_current_user_sse),
+    session: AsyncSession = Depends(db_session),
     redis = Depends(redis_dependency),
     document_id: str | None = None,
 ):
@@ -99,8 +107,11 @@ async def stream_rag_status(
     
     # Определяем параметры подписки
     is_admin = user.role == 'admin'
-    # Fix: use tenant_ids[0] instead of non-existent tenant_id attribute
-    tenant_id = None if is_admin else (user.tenant_ids[0] if user.tenant_ids else None)
+    tenant_ids = [] if is_admin else await resolve_active_user_tenant_ids(session, user)
+    if not is_admin and not tenant_ids:
+        raise HTTPException(status_code=403, detail="No active tenant membership")
+    tenant_id = None if is_admin else str(tenant_ids[0])
+    await session.close()
     
     async def event_generator() -> AsyncGenerator[str, None]:
         """Генератор SSE событий с heartbeat"""

@@ -18,6 +18,7 @@ from app.core.exceptions import (
     CollectionNotFoundError,
     CollectionAlreadyExistsError as CollectionExistsError,
     InvalidSchemaError,
+    ValidationError as DomainValidationError,
 )
 from app.models.tool_instance import ToolInstance
 from app.core.logging import get_logger
@@ -288,6 +289,10 @@ class CollectionService:
         table_schema: Optional[dict] = None,
         memory_enabled: bool = False,
     ) -> Collection:
+        if memory_enabled and collection_type != CollectionType.DOCUMENT.value:
+            raise DomainValidationError(
+                "memory_enabled is only supported for document collections"
+            )
         collection = await self.lifecycle.create_collection(
             tenant_id=tenant_id,
             slug=slug,
@@ -361,6 +366,7 @@ class CollectionService:
         name: Any = _UNSET,
         is_active: Any = _UNSET,
         memory_enabled: Any = _UNSET,
+        vector_config: Any = _UNSET,
         data_instance_id: Any = _UNSET,
         table_name: Any = _UNSET,
         table_schema: Any = _UNSET,
@@ -378,6 +384,14 @@ class CollectionService:
         lifecycle_status = getattr(collection, "lifecycle_status", None) or "active"
         if lifecycle_status != "active":
             raise ConflictError("deprecated")
+        if (
+            memory_enabled is not _UNSET
+            and memory_enabled
+            and collection.collection_type != CollectionType.DOCUMENT.value
+        ):
+            raise DomainValidationError(
+                "memory_enabled is only supported for document collections"
+            )
 
         if tenant_id is not _UNSET and tenant_id != collection.tenant_id:
             await self._reassign_collection_tenant(collection, tenant_id)
@@ -388,6 +402,16 @@ class CollectionService:
             collection.is_active = is_active
         if memory_enabled is not _UNSET:
             collection.memory_enabled = memory_enabled
+        if vector_config is not _UNSET:
+            if vector_config is None:
+                collection.vector_config = None
+            else:
+                existing_vector_config = (
+                    collection.vector_config
+                    if isinstance(collection.vector_config, dict)
+                    else {}
+                )
+                collection.vector_config = {**existing_vector_config, **vector_config}
         if data_instance_id is not _UNSET:
             if data_instance_id != collection.data_instance_id:
                 raise ConflictError("create a new collection instead")

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.services.rag_status_snapshot import build_collection_snapshot
+from app.services.rag_status_snapshot import build_collection_snapshot, build_document_status_graph
 
 
 def _make_doc(doc_id, name, agg_status, agg_details=None):
@@ -93,3 +93,44 @@ async def test_build_collection_snapshot_falls_back_to_status():
     result = await build_collection_snapshot(session, collection_id)
 
     assert result[0]["agg_status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_document_graph_uses_archive_policy_for_aggregate_status(monkeypatch):
+    from app.services import rag_status_manager, rag_status_snapshot
+
+    status_repo = SimpleNamespace(
+        get_pipeline_nodes=AsyncMock(return_value=[]),
+        get_embedding_nodes=AsyncMock(return_value=[]),
+        get_index_nodes=AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(rag_status_snapshot, "document_memory_nodes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        "app.repositories.rag_status_repo.AsyncRAGStatusRepository",
+        lambda _session: status_repo,
+    )
+
+    class StatusManager:
+        def __init__(self, *_args):
+            pass
+
+        async def _get_target_models(self, _doc_id):
+            return []
+
+        async def get_ingest_policy(self, _doc_id):
+            return {
+                "archived": True,
+                "start_allowed": False,
+                "start_reason": "document_archived",
+                "active_stages": [],
+                "retryable_stages": [],
+                "stoppable_stages": [],
+                "controls": [],
+            }
+
+    monkeypatch.setattr(rag_status_manager, "RAGStatusManager", StatusManager)
+    graph = await build_document_status_graph(AsyncMock(), uuid4(), SimpleNamespace())
+
+    assert graph is not None
+    assert graph["agg_status"] == "archived"
+    assert graph["ingest_policy"]["archived"] is True

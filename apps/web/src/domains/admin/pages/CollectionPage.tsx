@@ -15,6 +15,7 @@ import {
   type CreateCollectionRequest,
   type CollectionField,
   type CollectionType,
+  type VectorConfig,
   type CollectionCapabilityTool,
   type UpdateCollectionRequest,
 } from '@/shared/api';
@@ -26,7 +27,6 @@ import { VersionsBlock } from '@/shared/ui/VersionsBlock';
 import { Button, LifecycleDeleteDialog } from '@/shared/ui';
 import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import { buildEntityCrudActions, composeEntityActions } from '@/shared/ui/EntityPage/entityCrudActions';
-import { Select } from '@/shared/ui/Select';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
 import { SqlCatalogDataTable } from './collection/SqlCatalogDataTable';
 import { SqlDiscoveryModal } from './collection/SqlDiscoveryModal';
@@ -73,7 +73,7 @@ type EditableBackendField = BackendCollectionField & {
 
 function normalizeEditableFields(fields: CollectionField[]): EditableBackendField[] {
   return fields
-    .filter((field) => field.category !== 'specific')
+    .filter((field) => field.category !== 'specific' && field.category !== 'system')
     .map((field) => ({
       name: field.name,
       category: field.category ?? 'user',
@@ -196,16 +196,6 @@ const ACTIVE_VERSION_META_FIELDS: FieldConfig[] = [
   { key: 'updated_at', type: 'date', label: 'Обновлена', editable: false },
 ];
 
-const MEMORY_POLICY_FIELDS: FieldConfig[] = [
-  {
-    key: 'memory_enabled',
-    type: 'boolean',
-    label: 'Извлекать знания в память',
-    description: 'Для загружаемых документов будут извлекаться термины, правила и процедуры в долгоживущую память.',
-    editable: true,
-  },
-];
-
 const TOOL_COLUMNS: DataTableColumn<RuntimeOperationRow>[] = [
   { key: 'operation', label: 'Operation', render: (row) => <code>{row.operation}</code> },
   { key: 'title', label: 'Название', render: (row) => row.title || '—' },
@@ -247,7 +237,7 @@ export function CollectionPage() {
     handleEdit,
     handleCancel,
     handleDelete,
-  } = useEntityEditor<Collection, CreateCollectionRequest, Partial<CreateCollectionRequest>>({
+  } = useEntityEditor<Collection, CreateCollectionRequest, UpdateCollectionRequest>({
     entityType: 'collection',
     entityNameLabel: 'Коллекции',
     entityTypeLabel: 'коллекция',
@@ -256,7 +246,7 @@ export function CollectionPage() {
     api: {
       get: (id) => collectionsApi.getById(id),
       create: (data) => collectionsApi.create(data),
-      update: (id, data) => collectionsApi.update(id, data as any),
+      update: (id, data) => collectionsApi.update(id, data),
       delete: (id) => collectionsApi.delete(id),
     },
     queryKeys: {
@@ -273,8 +263,8 @@ export function CollectionPage() {
       is_active: col?.is_active ?? true,
       memory_enabled: col?.memory_enabled ?? false,
       has_vector_search: col?.has_vector_search ?? false,
-      chunk_strategy: col?.vector_config?.chunk_strategy ?? 'by_tokens',
-      chunk_size: col?.vector_config?.chunk_size ?? 500,
+      chunk_strategy: col?.vector_config?.chunk_strategy ?? 'by_paragraphs',
+      chunk_size: col?.vector_config?.chunk_size ?? 512,
       overlap: col?.vector_config?.overlap ?? 50,
       fields: (
         col?.collection_type === 'sql'
@@ -320,7 +310,7 @@ export function CollectionPage() {
         name: data.name,
         fields,
         data_instance_id: data.data_instance_id || undefined,
-        memory_enabled: data.memory_enabled ?? false,
+        memory_enabled: isDocument ? data.memory_enabled ?? false : false,
         vector_config: needsVectorConfig ? {
           chunk_strategy: data.chunk_strategy ?? 'by_paragraphs',
           chunk_size: data.chunk_size ?? 512,
@@ -334,7 +324,12 @@ export function CollectionPage() {
         tenant_id: data.tenant_id || undefined,
         name: data.name,
         is_active: data.is_active,
-        memory_enabled: data.memory_enabled,
+        memory_enabled: data.collection_type === 'document' ? data.memory_enabled : undefined,
+        vector_config: data.collection_type === 'document' ? {
+          chunk_strategy: data.chunk_strategy as VectorConfig['chunk_strategy'],
+          chunk_size: data.chunk_size,
+          overlap: data.overlap,
+        } : undefined,
         table_name: data.table_name || undefined,
         schema_ops: schemaOps,
       };
@@ -378,8 +373,8 @@ export function CollectionPage() {
     is_active: collection?.is_active ?? true,
     memory_enabled: collection?.memory_enabled ?? false,
     has_vector_search: collection?.has_vector_search ?? false,
-    chunk_strategy: collection?.vector_config?.chunk_strategy ?? 'by_tokens',
-    chunk_size: collection?.vector_config?.chunk_size ?? 500,
+    chunk_strategy: collection?.vector_config?.chunk_strategy ?? 'by_paragraphs',
+    chunk_size: collection?.vector_config?.chunk_size ?? 512,
     overlap: collection?.vector_config?.overlap ?? 50,
     status: collection?.status ?? '',
     status_details: collection?.status_details ?? {},
@@ -465,19 +460,7 @@ export function CollectionPage() {
     return {
       ...field,
       type: 'custom' as const,
-      render: (value: string, editable: boolean, onChange: (v: string) => void) => {
-        if (editable) {
-          return (
-            <Select
-              value={value ?? ''}
-              onChange={(val) => onChange(String(val))}
-              placeholder="Выберите..."
-              options={connectorOptions}
-              disabled={false}
-            />
-          );
-        }
-
+      render: (value: string) => {
         const connectorId = String(value || collection?.data_instance_id || '');
         const connectorName = collection?.data_instance?.name ?? dataConnector?.name ?? '—';
         if (!connectorId || connectorName === '—') return <span>—</span>;
@@ -532,6 +515,9 @@ export function CollectionPage() {
     handleFieldChange(key, value);
     if (key === 'collection_type') {
       const nextType = String(value || 'table') as CollectionType;
+      if (nextType !== 'document') {
+        handleFieldChange('memory_enabled', false);
+      }
       if (nextType === 'document') {
         handleFieldChange('fields', applyCollectionTypeFieldPreset(nextType, (formData.fields ?? []) as CollectionField[]));
         handleFieldChange('has_vector_search', true);
@@ -620,16 +606,6 @@ export function CollectionPage() {
             width="1/2"
             height="stretch"
             fields={configFieldsCreate}
-            data={formData}
-            editable
-            onChange={handleFieldChangeWrapped}
-          />
-          <Block
-            title="Память"
-            icon="file-text"
-            iconVariant="warning"
-            width="1/2"
-            fields={MEMORY_POLICY_FIELDS}
             data={formData}
             editable
             onChange={handleFieldChangeWrapped}
@@ -724,16 +700,6 @@ export function CollectionPage() {
             width="1/2"
             height="stretch"
             fields={configFieldsViewEdit}
-            data={blockData}
-            editable={isEditable}
-            onChange={handleFieldChangeWrapped}
-          />
-          <Block
-            title="Память"
-            icon="file-text"
-            iconVariant="warning"
-            width="1/2"
-            fields={MEMORY_POLICY_FIELDS}
             data={blockData}
             editable={isEditable}
             onChange={handleFieldChangeWrapped}

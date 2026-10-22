@@ -9,7 +9,7 @@ import type {
   FlowSelection,
   FlowStatus,
 } from './types';
-import { getStatusIcon } from './statusFlowUtils';
+import { getStatusIcon, getStatusLabel } from './statusFlowUtils';
 import styles from './StatusFlowView.module.css';
 
 const STATUS_COLORS: Record<FlowStatus, string> = {
@@ -18,6 +18,9 @@ const STATUS_COLORS: Record<FlowStatus, string> = {
   processing: 'var(--primary)',
   completed: 'var(--success)',
   failed: 'var(--danger)',
+  cancelled: 'var(--warning)',
+  skipped: 'var(--muted)',
+  unknown: 'var(--muted)',
 };
 
 function FlowNodeButton({
@@ -49,18 +52,10 @@ function FlowNodeButton({
       <div className={labelClass} title={node.label}>
         {node.label}
       </div>
-      <div className={styles.nodeStatus}>{STATUS_LABELS[node.status]}</div>
+      <div className={styles.nodeStatus}>{getStatusLabel(node.status)}</div>
     </button>
   );
 }
-
-const STATUS_LABELS: Record<FlowStatus, string> = {
-  pending: 'В ожидании',
-  queued: 'В очереди',
-  processing: 'Выполняется',
-  completed: 'Завершено',
-  failed: 'Ошибка',
-};
 
 function FlowConnector({ status }: { status: FlowStatus }) {
   const color = STATUS_COLORS[status];
@@ -303,7 +298,7 @@ export function StatusFlowView({
                 style={{ backgroundColor: STATUS_COLORS[status] }}
               />
               <span className={styles.legendLabel}>
-                {STATUS_LABELS[status]}
+                {getStatusLabel(status)}
               </span>
             </div>
           ))}

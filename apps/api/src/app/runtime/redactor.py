@@ -25,8 +25,23 @@ class RuntimeRedactor:
         "database_url",
     }
 
+    SECRET_KEY_SUFFIXES = (
+        "password",
+        "passwd",
+        "token",
+        "secret",
+        "secretkey",
+        "privatekey",
+        "apikey",
+        "authorization",
+        "cookie",
+    )
+
     _KV_PATTERNS: Iterable[re.Pattern[str]] = (
-        re.compile(r"(?i)\b(password|token|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*([^\s,;]+)"),
+        re.compile(
+            r"(?i)\b([a-z0-9_.-]*(?:password|passwd|token|api[_-]?key|access[_-]?token|"
+            r"secret(?:[_-]?key)?|private[_-]?key)[a-z0-9_.-]*)\s*[:=]\s*([^\s,;]+)"
+        ),
         re.compile(r"(?i)\b(authorization)\s*[:=]\s*(bearer\s+[^\s,;]+)"),
         re.compile(r"(?i)\b(cookie)\s*[:=]\s*([^\n]+)"),
     )
@@ -47,7 +62,8 @@ class RuntimeRedactor:
         for key, raw_value in payload.items():
             key_text = str(key or "").strip()
             key_norm = key_text.lower()
-            if key_norm in self.SECRET_KEYS:
+            compact_key = re.sub(r"[^a-z0-9]", "", key_norm)
+            if key_norm in self.SECRET_KEYS or compact_key.endswith(self.SECRET_KEY_SUFFIXES):
                 result[key_text] = _REDACTED
                 continue
             if key_norm.endswith("_token") or key_norm.endswith("_password"):

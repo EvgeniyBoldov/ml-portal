@@ -121,6 +121,6 @@ def test_operation_contract_has_one_transport_and_no_extra_system_card(native):
     request = SimpleNamespace(prompt="Agent policy", agent_version=None, resolved_data_instances=[])
     bundle = PromptAssembler().assemble(request, policy_limits=PolicyLimits(),
         resolved_operations=[operation], platform_config={"native_tool_calling": native})
-    assert bundle.system_operations_prompt == ""
+    assert ("ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА" in bundle.system_operations_prompt) is native
     assert bundle.system_prompt.count('"properties"') == (0 if native else 1)
     assert bool(bundle.operations_prompt) != native

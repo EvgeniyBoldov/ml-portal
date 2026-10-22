@@ -12,7 +12,6 @@ import { qk } from '@/shared/api/keys';
 import { executionLimitsApi, platformSettingsApi } from '@/shared/api/admin';
 import {
   FACT_EXTRACTOR_INPUT_CONTRACT,
-  MEMORY_INPUT_CONTRACT,
   PLANNER_INPUT_CONTRACT,
   FACT_COMPACTOR_INPUT_CONTRACT,
   SYNTHESIZER_INPUT_CONTRACT,
@@ -240,7 +239,6 @@ function shouldUsePromptEditor(field: SandboxConfigField): boolean {
 function getRouterInputContract(routerId?: string): Record<string, unknown> | null {
   if (!routerId) return null;
   if (routerId === 'planner') return PLANNER_INPUT_CONTRACT as Record<string, unknown>;
-  if (routerId === 'memory') return MEMORY_INPUT_CONTRACT as Record<string, unknown>;
   if (routerId === 'synthesizer') return SYNTHESIZER_INPUT_CONTRACT as Record<string, unknown>;
   if (routerId === 'fact_extractor') return FACT_EXTRACTOR_INPUT_CONTRACT as Record<string, unknown>;
   if (routerId === 'fact_compactor') return FACT_COMPACTOR_INPUT_CONTRACT as Record<string, unknown>;

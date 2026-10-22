@@ -7,7 +7,7 @@ vi.mock('@/shared/api/http', () => ({ apiRequest: vi.fn() }));
 
 it('loads choices from the independent scope API and passes selected project slugs to its caller', async () => {
   vi.mocked(apiRequest).mockResolvedValue([
-    {
+  {
       id: 'scope',
       key: 'company',
       name: 'Компания',
@@ -25,9 +25,7 @@ it('loads choices from the independent scope API and passes selected project slu
       <MemoryScopePicker value={[]} onChange={onChange} />
     </QueryClientProvider>
   );
-  fireEvent.click(
-    await screen.findByRole('checkbox', { name: 'Компания (company)' })
-  );
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Компания (company)' }));
   expect(apiRequest).toHaveBeenCalledWith('/memory/scopes');
   expect(onChange).toHaveBeenCalledWith(['company']);
 });

@@ -6,8 +6,12 @@ from pydantic import Field, ConfigDict, field_validator, ValidationInfo
 
 class Settings(BaseSettings):
     # Environment
-    ENV: str = Field(default="local")
-    DEBUG: bool = Field(default=True)
+    # Default to the locked-down mode. Local development must opt in explicitly.
+    ENV: str = Field(default="production")
+    DEBUG: bool = Field(default=False)
+    DASHBOARD_HEALTH_STALE_SECONDS: int = Field(default=3600, ge=60)
+    DASHBOARD_STALLED_DOCUMENT_SECONDS: int = Field(default=3600, ge=60)
+    DASHBOARD_REPEATED_ERROR_THRESHOLD: int = Field(default=3, ge=2)
 
     MEMORY_SEARCH_BACKEND: str = Field(default="hipporag", pattern="^(hipporag|legacy)$")
     HIPPO_WORKER_URL: str = Field(default="http://hipporag:8080")
@@ -45,7 +49,7 @@ class Settings(BaseSettings):
     JWT_PUBLIC_KEY: str | None = Field(default=None, description="RSA public key (PEM format) for RS256")
     JWT_ISSUER: str = Field(default="urn:ml-portal")
     JWT_AUDIENCE: str = Field(default="urn:ml-portal:api")
-    JWT_ACCESS_TTL_MINUTES: int = Field(default=1440)  # 24 hours for comfortable work
+    JWT_ACCESS_TTL_MINUTES: int = Field(default=15)
     JWT_REFRESH_TTL_DAYS: int = Field(default=30)
     JWT_JWKS_JSON: str | None = Field(default=None, description="Optional JWKS JSON string for key discovery")
     JWT_KID: str | None = Field(default=None, description="Key ID for key rotation")
@@ -264,17 +268,28 @@ class Settings(BaseSettings):
     
     model_config = ConfigDict(
         env_file=".env",
-        case_sensitive=False
+        case_sensitive=False,
+        validate_default=True,
     )
 
     @field_validator("JWT_SECRET")
     @classmethod
     def validate_jwt_secret(cls, v: str, info: ValidationInfo) -> str:
-        """Ensure JWT secret is not default in production"""
+        """Reject development JWT secrets outside explicit local mode."""
         env = info.data.get("ENV", "local")
         if env != "local" and v == "change-me-in-production":
             raise ValueError("JWT_SECRET must be set in non-local environments")
+        if env != "local" and len(v) < 32:
+            raise ValueError("JWT_SECRET must contain at least 32 characters outside local mode")
         return v
+
+    @field_validator("DEBUG")
+    @classmethod
+    def validate_debug_mode(cls, value: bool, info: ValidationInfo) -> bool:
+        """Prevent an omitted production DEBUG setting from enabling debug mode."""
+        if info.data.get("ENV") == "production" and value:
+            raise ValueError("DEBUG must be false when ENV=production")
+        return value
 
     @field_validator("S3_SECRET_KEY")
     @classmethod
@@ -332,4 +347,4 @@ def is_production() -> bool:
 
 def is_local() -> bool:
     """Check if running in local development environment"""
-    return get_settings().ENV == "local"
+    return get_settings().ENV in {"local", "development"}

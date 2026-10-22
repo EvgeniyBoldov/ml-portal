@@ -114,6 +114,13 @@ class HippoRAGService:
         return await self._call(f"documents/{action}", {"operation_id": str(operation_id),
             "document_id": str(document_id), "generation": generation, "document": document}, on_progress=on_progress)
 
+    async def corpus_statistics(self) -> dict[str, Any]:
+        settings = get_settings()
+        async with httpx.AsyncClient(timeout=3) as client:
+            response = await client.get(f"{settings.HIPPO_WORKER_URL.rstrip('/')}/portal/corpus/statistics")
+            response.raise_for_status()
+            return response.json()
+
     async def document_info(self, document_id: UUID) -> dict[str, Any]:
         settings = get_settings()
         async with httpx.AsyncClient(timeout=10) as client:
@@ -143,14 +150,21 @@ class HippoRAGService:
 
     async def reindex_embeddings(self) -> dict[str, Any]:
         from app.models.rag import RAGDocument
+        from app.models.rag_ingest import Source
         from app.models.memory_scope import DocumentMemoryScope, MemoryScope
-        rows = (await self.session.execute(select(RAGDocument.id, MemoryScope.key)
+        rows = (await self.session.execute(select(RAGDocument.id, MemoryScope.key, Source.meta)
             .outerjoin(DocumentMemoryScope, DocumentMemoryScope.document_id == RAGDocument.id)
             .outerjoin(MemoryScope, MemoryScope.id == DocumentMemoryScope.scope_id)
+            .outerjoin(Source, Source.source_id == RAGDocument.id)
             .where(RAGDocument.status != "archived"))).all()
         assignments: dict[str, list[str]] = {}
-        for document_id, key in rows:
-            assignments.setdefault(str(document_id), []).append(key or "company")
+        for document_id, key, source_meta in rows:
+            document_key = str(document_id)
+            memory_meta = dict((source_meta or {}).get("memory") or {})
+            if memory_meta.get("scope_unassigned"):
+                assignments[document_key] = []
+            elif document_key not in assignments or key:
+                assignments.setdefault(document_key, []).append(key or "company")
         return await self._call("corpus/reindex", {"scope_assignments": assignments})
 
     async def search_documents(self, query: str, *, scope_keys: list[str], limit: int = 8) -> dict[str, Any]:

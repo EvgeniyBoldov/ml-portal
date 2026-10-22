@@ -167,6 +167,10 @@ async def test_full_executor_runs_one_llm_call_and_returns_json(invocation, monk
         return event
 
     monkeypatch.setattr(RuntimeEventLogger, "emit", emit)
+    monkeypatch.setattr(
+        "app.runtime.datastore_context.load_result_catalog",
+        AsyncMock(return_value=([], "available")),
+    )
     journal = RuntimeEventLogger(context=RuntimeLogContext(
         run_id=uuid4(), level=RuntimeLoggingLevel.FULL, origin="shadow"))
     monkeypatch.setattr(module.RuntimeEventJournalFactory, "create", Mock(return_value=journal))

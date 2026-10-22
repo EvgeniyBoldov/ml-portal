@@ -8,7 +8,7 @@ from prometheus_client import CollectorRegistry, generate_latest, CONTENT_TYPE_L
 from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily
 from typing import Dict, Any
 
-from app.api.deps import db_session, get_current_user
+from app.api.deps import db_session, get_current_user, require_admin
 from app.core.config import get_settings
 from app.core.ldap_client import LDAPClient
 from app.core.security import UserCtx
@@ -20,7 +20,8 @@ router = APIRouter(prefix="/monitoring", tags=["monitoring"])
 @router.get("/metrics")
 async def get_metrics(
     response: Response,
-    session: AsyncSession = Depends(db_session)
+    session: AsyncSession = Depends(db_session),
+    _admin: UserCtx = Depends(require_admin),
 ) -> Response:
     """
     Prometheus metrics endpoint.
@@ -55,7 +56,8 @@ async def health_check() -> Dict[str, str]:
 
 @router.get("/health/detailed")
 async def detailed_health_check(
-    session: AsyncSession = Depends(db_session)
+    session: AsyncSession = Depends(db_session),
+    _admin: UserCtx = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Detailed health check with system status."""
     collector = MetricsCollector(session)

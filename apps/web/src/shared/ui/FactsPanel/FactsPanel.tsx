@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { factsApi, type Fact, type FactInput, type FactOwner } from '@/shared/api/facts';
 import { qk } from '@/shared/api/keys';
@@ -15,6 +15,8 @@ export type FactsPanelMode = 'profile' | 'admin-user' | 'admin-tenant';
 interface FactsPanelProps {
   mode: FactsPanelMode;
   ownerId?: string;
+  createRequest?: number;
+  hideCreateButton?: boolean;
 }
 
 function FactForm({ initial, onSubmit, saving }: { initial?: Fact; onSubmit: (data: FactInput) => void; saving: boolean }) {
@@ -31,7 +33,7 @@ function FactForm({ initial, onSubmit, saving }: { initial?: Fact; onSubmit: (da
   );
 }
 
-export function FactsPanel({ mode, ownerId }: FactsPanelProps) {
+export function FactsPanel({ mode, ownerId, createRequest, hideCreateButton = false }: FactsPanelProps) {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
@@ -43,6 +45,14 @@ export function FactsPanel({ mode, ownerId }: FactsPanelProps) {
   const [deleting, setDeleting] = useState<Fact | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<Set<string | number>>(new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const previousCreateRequest = useRef(createRequest ?? 0);
+
+  useEffect(() => {
+    if ((createRequest ?? 0) !== previousCreateRequest.current) {
+      previousCreateRequest.current = createRequest ?? 0;
+      setCreating(true);
+    }
+  }, [createRequest]);
 
   const { data = [], isLoading } = useQuery({
     queryKey,
@@ -105,7 +115,7 @@ export function FactsPanel({ mode, ownerId }: FactsPanelProps) {
   ];
   return (
     <div className={styles.container}>
-      <div className={styles.header}><p>{isProfile ? 'Личные и доступные tenant-факты памяти' : 'Подтверждённые факты памяти'}</p><Button onClick={() => setCreating(true)}>Добавить факт</Button></div>
+      <div className={styles.header}><p>{isProfile ? 'Личные и доступные tenant-факты памяти' : 'Подтверждённые факты памяти'}</p>{!hideCreateButton && <Button onClick={() => setCreating(true)}>Добавить факт</Button>}</div>
       <DataTable columns={columns} data={data} keyField="id" loading={isLoading} emptyText="Факты пока отсутствуют"
         selectable selectedKeys={selectedKeys} onSelectionChange={setSelectedKeys}
         bulkActions={<Button size="sm" variant="danger" disabled={!selectedFacts.length || deleteManyMutation.isPending} onClick={() => setConfirmBulkDelete(true)}>Удалить выбранные</Button>} />

@@ -21,6 +21,7 @@ from app.runtime.interaction import interaction_from_context
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.runtime.memory.service import MemorySnapshot
 from app.runtime.memory.execution_context import memory_execution_context
+from app.runtime.phase_limits import iter_with_phase_deadline
 
 
 class GraphPlanningOutcomeKind(str, Enum):
@@ -64,6 +65,7 @@ class GraphPlanningStage:
         orchestrator_id: Optional[str] = None,
         runtime_limits: Optional[Dict[str, int]] = None,
     ) -> AsyncIterator[PhasedEvent]:
+        phase_started_at = asyncio.get_running_loop().time()
         pause_question: Optional[str] = None
         pause_message: Optional[str] = None
         confirmation_context: Optional[Dict[str, Any]] = None
@@ -152,8 +154,8 @@ class GraphPlanningStage:
         planner_entity_id = str(orchestrator_id or run_id)
         budget_registry = ctx.extra.get("runtime_budget_registry")
         budget_resolver = ctx.extra.get("runtime_budget_resolver")
+        planner_limits = None
         if budget_registry is not None:
-            planner_limits = None
             if budget_resolver is not None:
                 planner_limits = await budget_resolver.resolve_orchestrator(
                     "planner", request.sandbox_overrides,
@@ -185,6 +187,12 @@ class GraphPlanningStage:
             "budget_resolver": budget_resolver,
             "planner_budget_entity_id": planner_entity_id,
         }
+        configured_wall_time_ms = getattr(planner_limits, "wall_time_ms", None)
+        planner_wall_time_ms = (
+            None if configured_wall_time_ms is None else max(
+                0, configured_wall_time_ms - int((asyncio.get_running_loop().time() - phase_started_at) * 1000),
+            )
+        )
         if resumed_task_id:
             resume_snapshot = await self._store.snapshot(plan.id)
             resumed_task = dict(resume_snapshot.get("tasks") or {}).get(resumed_task_id, {})
@@ -199,7 +207,7 @@ class GraphPlanningStage:
                 OrchestrationPhase.PLANNER,
             )
         try:
-            async for event in self._orchestrator.run(
+            async for event in iter_with_phase_deadline(self._orchestrator.run(
                 plan_id=plan.id,
                 goal=plan.goal,
                 available_agents=available_agents,
@@ -215,7 +223,7 @@ class GraphPlanningStage:
                     else None
                 ),
                 planner_kwargs=planner_kwargs,
-            ):
+            ), planner_wall_time_ms):
                 runtime_event = event.to_runtime_event()
                 if runtime_event.type == RuntimeEventType.ERROR and runtime_event.data.get("error_code") == "llm_context_window_exceeded":
                     runtime_state.final_error = str(runtime_event.data.get("user_message") or runtime_event.data.get("error"))
@@ -254,6 +262,10 @@ class GraphPlanningStage:
         except asyncio.CancelledError:
             await self._store.cancel_plan(plan.id, reason="orchestrator_cancelled")
             raise
+        except TimeoutError:
+            await self._store.mark_failed(
+                plan.id, "planner_phase_timeout", "Planner exceeded its configured phase time limit",
+            )
         except Exception as exc:
             await self._store.mark_failed(plan.id, "runtime_execution_failed", str(exc))
         snapshot = await self._store.snapshot(plan.id)

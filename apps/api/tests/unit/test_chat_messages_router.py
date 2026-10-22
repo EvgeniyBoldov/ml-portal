@@ -94,7 +94,7 @@ async def test_issue_confirmation_token_rejects_non_owner(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_message_stream_passes_confirmation_tokens(monkeypatch):
+async def test_send_message_stream_uses_frontend_request_contract(monkeypatch):
     chat_id = str(uuid4())
     user_id = str(uuid4())
     tenant_id = str(uuid4())
@@ -119,10 +119,7 @@ async def test_send_message_stream_passes_confirmation_tokens(monkeypatch):
         chat_id=chat_id,
         body=ChatMessageStreamRequest(
             content="hello",
-            execution_mode="thinking",
-            confirmation_tokens=["tok-1", "tok-2"],
             artifact_ids=[str(uuid4())],
-            agent_slug="default",
         ),
         request=request,
         chat_ctx=chat_ctx,
@@ -137,9 +134,12 @@ async def test_send_message_stream_passes_confirmation_tokens(monkeypatch):
         chunks.append(chunk)
 
     stream_kwargs = captured["stream_kwargs"]
-    assert stream_kwargs["confirmation_tokens"] == ["tok-1", "tok-2"]
-    assert str(stream_kwargs["execution_mode"].value) == "thinking"
+    assert stream_kwargs["content"] == "hello"
+    assert len(stream_kwargs["artifact_ids"]) == 1
     assert stream_kwargs["idempotency_key"] == "idem-123"
+    assert "model" not in stream_kwargs
+    assert "agent_slug" not in stream_kwargs
+    assert "execution_mode" not in stream_kwargs
     assert any("event: done" in chunk for chunk in chunks)
 
 
@@ -171,6 +171,11 @@ async def test_resume_run_reuses_paused_chat_turn(monkeypatch):
 
     monkeypatch.setattr(chat_messages, "ChatStreamService", _Service)
     monkeypatch.setattr(chat_messages, "map_service_event_to_sse", lambda _: "event: final\ndata: {}\n\n")
+    monkeypatch.setattr(
+        chat_messages,
+        "resolve_chat_context",
+        AsyncMock(return_value=ChatContext(chat_id=str(chat_id), tenant_id=str(tenant_id), user_id=str(user_id))),
+    )
 
     session = AsyncMock()
     session.execute.side_effect = [
@@ -224,6 +229,11 @@ async def test_resume_run_rejects_stale_pause_id_before_resuming(monkeypatch):
             raise AssertionError("A stale pause must be rejected before streaming")
 
     monkeypatch.setattr(chat_messages, "ChatStreamService", _UnexpectedService)
+    monkeypatch.setattr(
+        chat_messages,
+        "resolve_chat_context",
+        AsyncMock(return_value=ChatContext(chat_id=str(chat_id), tenant_id=str(tenant_id), user_id=str(user_id))),
+    )
     with pytest.raises(HTTPException) as exc:
         await chat_messages.resume_run(
             run_id=str(run_id),
@@ -263,6 +273,11 @@ async def test_resume_preflight_clarify_uses_goal_from_pause_context(monkeypatch
 
     monkeypatch.setattr(chat_messages, "ChatStreamService", _Service)
     monkeypatch.setattr(chat_messages, "map_service_event_to_sse", lambda _: "event: final\ndata: {}\n\n")
+    monkeypatch.setattr(
+        chat_messages,
+        "resolve_chat_context",
+        AsyncMock(return_value=ChatContext(chat_id=str(chat_id), tenant_id=str(tenant_id), user_id=str(user_id))),
+    )
     session = AsyncMock()
     session.execute.side_effect = [_Result(turn), _Result(None), _Result(turn)]
 
@@ -306,6 +321,11 @@ async def test_resume_cancel_terminates_confirmation_without_reentering_runtime(
     # covered independently and must not consume this router fixture's SQL
     # result queue.
     monkeypatch.setattr(chat_messages, "ChatContextService", _ContextService)
+    monkeypatch.setattr(
+        chat_messages,
+        "resolve_chat_context",
+        AsyncMock(return_value=ChatContext(chat_id=str(turn.chat_id), tenant_id=str(tenant_id), user_id=str(user_id))),
+    )
     response = await chat_messages.resume_run(
         run_id=str(run_id),
         body=RuntimeResumeRequest(action=RuntimeResumeAction.CANCEL),

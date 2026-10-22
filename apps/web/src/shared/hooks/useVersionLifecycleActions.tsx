@@ -9,12 +9,14 @@ export interface VersionLifecycleCallbacks {
   onSetPrimary?: () => void;
   onArchive?: () => void;
   onClone?: () => void;
+  onDelete?: () => void;
 }
 
 export interface VersionLifecycleLoadingState {
   publish?: boolean;
   primary?: boolean;
   archive?: boolean;
+  delete?: boolean;
 }
 
 export interface UseVersionLifecycleActionsOptions {
@@ -31,6 +33,11 @@ export function normalizeVersionStatus(status: string | undefined): UnifiedVersi
   if (status === 'published' || status === 'active') return 'published';
   if (status === 'archived') return 'archived';
   return null;
+}
+
+export function canDeleteVersion(status: string | undefined, isPrimary: boolean): boolean {
+  const normalizedStatus = normalizeVersionStatus(status);
+  return !isPrimary && (normalizedStatus === 'archived' || normalizedStatus === 'published');
 }
 
 export function getVersionStatusPresentation(status: string | undefined): {
@@ -115,6 +122,20 @@ export function useVersionLifecycleActions({
         </Button>,
       );
     }
+  }
+
+  if (canDeleteVersion(status, isPrimary) && callbacks.onDelete) {
+    buttons.push(
+      <Button
+        key="delete"
+        variant="danger"
+        onClick={callbacks.onDelete}
+        disabled={loading.delete}
+        loading={loading.delete}
+      >
+        Удалить
+      </Button>,
+    );
   }
 
   if (callbacks.onClone) {

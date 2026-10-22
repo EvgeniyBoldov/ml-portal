@@ -1,9 +1,12 @@
 import { Badge, Button, Checkbox, Input, Select } from '@/shared/ui';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
-import type { CollectionField, CollectionType, SearchMode } from '@/shared/api';
+import type { BackendCollectionField, CollectionField, CollectionType, SearchMode } from '@/shared/api';
 import { DOCUMENT_FULLY_LOCKED_FIELD_NAMES, SQL_SPECIFIC_FIELD_NAMES, TEMPLATE_FULLY_LOCKED_FIELD_NAMES } from './collectionFieldPresets';
+import styles from './FieldsEditor.module.css';
 
-const FIELD_TYPES = ['text', 'integer', 'float', 'boolean', 'datetime', 'date', 'file'] as const;
+const FIELD_TYPES: BackendCollectionField['data_type'][] = [
+  'string', 'text', 'integer', 'float', 'boolean', 'datetime', 'date', 'enum', 'json', 'file',
+];
 const SEARCH_MODES: SearchMode[] = ['exact', 'like', 'range', 'vector'];
 
 const emptyField = (): CollectionField => ({
@@ -43,13 +46,37 @@ export function FieldsEditor({ fields, onChange, collectionType }: FieldsEditorP
   const toggleMode = (i: number, mode: SearchMode) => {
     if (isLocked(fields[i])) return;
     const modes = fields[i].search_modes;
-    update(i, { search_modes: modes.includes(mode) ? modes.filter((m) => m !== mode) : [...modes, mode] });
+    const nextModes = modes.includes(mode)
+      ? modes.filter((currentMode) => currentMode !== mode)
+      : [...modes, mode];
+    update(i, {
+      search_modes: nextModes,
+      filterable: nextModes.includes('exact') || nextModes.includes('like'),
+      sortable: nextModes.includes('range'),
+      used_in_retrieval: nextModes.includes('vector'),
+    });
+  };
+
+  const updateType = (i: number, value: string) => {
+    const dataType = value as BackendCollectionField['data_type'];
+    const field = fields[i];
+    const searchModes = field.search_modes.filter((mode) =>
+      (mode !== 'vector' || dataType === 'text')
+      && (mode !== 'range' || (dataType !== 'file' && dataType !== 'json'))
+    );
+    update(i, {
+      type: dataType,
+      data_type: dataType,
+      search_modes: searchModes,
+      sortable: searchModes.includes('range'),
+      used_in_retrieval: searchModes.includes('vector'),
+    });
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+    <div className={styles.fieldsEditor}>
       {fields.map((f, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 140px 80px 1fr auto', gap: '0.5rem', alignItems: 'center', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+        <div key={f.name || i} className={styles.fieldRow}>
           <Input
             placeholder="название поля"
             value={f.name}
@@ -58,25 +85,29 @@ export function FieldsEditor({ fields, onChange, collectionType }: FieldsEditorP
           />
           <Select
             value={f.type}
-            onChange={(value) => update(i, { type: value as CollectionField['type'] })}
+            onChange={(value) => updateType(i, value)}
             options={FIELD_TYPES.map((t) => ({ value: t, label: t }))}
             disabled={isLocked(f)}
           />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+          <div className={styles.requiredField}>
             <Checkbox
               checked={f.required}
               onChange={(checked) => update(i, { required: checked })}
               disabled={isLocked(f)}
             />
-            <span style={{ fontSize: '0.875rem' }}>Обяз.</span>
+            <span className={styles.requiredLabel}>Обяз.</span>
           </div>
-          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+          <div className={styles.searchModes}>
             {SEARCH_MODES.map((m) => (
-              <div key={m} style={{ display: 'flex', alignItems: 'center', gap: '0.125rem' }}>
+              <div key={m} className={styles.searchMode}>
                 <Checkbox
                   checked={f.search_modes.includes(m)}
                   onChange={() => toggleMode(i, m)}
-                  disabled={isLocked(f)}
+                  disabled={
+                    isLocked(f)
+                    || (m === 'vector' && (f.data_type ?? f.type) !== 'text')
+                    || (m === 'range' && ['file', 'json'].includes(f.data_type ?? f.type ?? ''))
+                  }
                 />
                 <Badge tone="info">{m}</Badge>
               </div>

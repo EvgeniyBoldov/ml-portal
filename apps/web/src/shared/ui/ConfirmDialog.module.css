@@ -1,24 +1,44 @@
 .content {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-lg);
+  gap: var(--space-4);
 }
 
 .message {
   margin: 0;
   color: var(--text);
-  font-size: var(--font-size-base);
+  font-size: var(--text-base);
+}
+
+.message p {
+  margin: 0;
 }
 
 .extra {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-sm);
+  gap: var(--space-3);
 }
 
 .actions {
   display: flex;
   justify-content: flex-end;
-  gap: var(--spacing-lg);
-  padding-top: var(--spacing-xs);
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+.actions > * {
+  min-width: 112px;
+}
+
+@media (max-width: 480px) {
+  .actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .actions > * {
+    width: 100%;
+  }
 }

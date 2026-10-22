@@ -149,11 +149,11 @@ async def test_unresolved_required_scope_cannot_publish_as_global():
 def test_explicit_empty_replace_is_persisted_and_disables_project_default():
     projection = RuntimeOutcomeProjection(run_id="r", chat_id="c", chat_turn_id="t", terminal_state="completed",
         project_context={"scope_selection_explicit": True, "effective_scope_keys": [],
-                         "effective_project_keys": [], "suppress_project_default": True})
+                         "effective_project_keys": [], "suppress_scope_default": True})
     scope = next(op for op in ChatContextReducer().reduce(projection=projection, expected_revision=0) if op.kind == "scope")
     assert scope.payload["scope_keys"] == []
     assert scope.payload["project_keys"] == []
-    assert scope.payload["suppress_project_default"] is True
+    assert scope.payload["suppress_scope_default"] is True
 
 
 def test_partial_project_selection_preserves_effective_team_focus():
@@ -165,15 +165,13 @@ def test_partial_project_selection_preserves_effective_team_focus():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_intent_survives_queue_outage_and_resumes_current_cursor(monkeypatch):
+async def test_legacy_shadow_study_dispatch_is_disabled(monkeypatch):
     import app.workers.tasks_shadow_document_memory as worker
     attempt = NS(id=uuid4(), snapshot_id=uuid4(), next_section=3, status="queued")
     tenant = uuid4()
     db = NS(execute=AsyncMock(return_value=NS(all=lambda: [(attempt, tenant)])))
-    delay = Mock(side_effect=ConnectionError("broker unavailable"))
+    delay = Mock()
     monkeypatch.setattr(worker.study_shadow_document_sections, "delay", delay)
     assert await worker.dispatch_pending_shadow_studies(db) == 0
     assert attempt.status == "queued" and attempt.next_section == 3
-    delay.side_effect = None
-    assert await worker.dispatch_pending_shadow_studies(db) == 1
-    delay.assert_called_with(str(attempt.snapshot_id), str(tenant), str(attempt.id), 3)
+    delay.assert_not_called()

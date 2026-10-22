@@ -3,16 +3,15 @@
  */
 import {
   useQuery,
+  useInfiniteQuery,
   useMutation,
   useQueryClient,
-  type QueryKey,
   keepPreviousData,
 } from '@tanstack/react-query';
 import {
   adminApi,
   type UserCreate,
   type UserUpdate,
-  type UserListResponse,
   type User,
   type TenantCreate,
   type TenantUpdate,
@@ -33,15 +32,15 @@ export interface UseUsersParams {
   is_active?: boolean;
   include_deprecated?: boolean;
   limit?: number;
-  cursor?: string;
 }
 
 export function useUsers(params: UseUsersParams = {}) {
-  return useQuery({
-    queryKey: qk.admin.users.list({ page: params.cursor ? undefined : 1, q: params.query, limit: params.limit }),
-    queryFn: () => adminApi.getUsers(params),
+  return useInfiniteQuery({
+    queryKey: qk.admin.users.list({ q: params.query, limit: params.limit }),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => adminApi.getUsers({ ...params, cursor: pageParam }),
+    getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.next_cursor : undefined,
     staleTime: 60000, // 1 minute for lists
-    placeholderData: keepPreviousData,
   });
 }
 
@@ -99,39 +98,6 @@ export function useUpdateUser() {
 export function useSetUserPassword() {
   return useMutation<{ ok: boolean }, Error, { id: string; newPassword: string }>({
     mutationFn: ({ id, newPassword }) => adminApi.setUserPassword(id, newPassword),
-  });
-}
-
-export function useDeleteUser() {
-  const queryClient = useQueryClient();
-
-  return useMutation<void, Error, string>({
-    mutationFn: (id: string) => adminApi.deleteUser(id),
-    onSuccess: async (_result: void, id: string) => {
-      const queries = queryClient.getQueriesData<UserListResponse>({
-        queryKey: qk.admin.users.all(),
-      }) as Array<[QueryKey, UserListResponse | undefined]>;
-      queries.forEach(([queryKey, data]) => {
-        if (!data) return;
-        queryClient.setQueryData<UserListResponse>(queryKey, {
-          ...data,
-          users: data.users.filter(user => user.id !== id),
-          total:
-            typeof data.total === 'number'
-              ? Math.max(0, data.total - 1)
-              : data.total,
-        });
-      });
-
-      await queryClient.invalidateQueries({
-        queryKey: qk.admin.users.all(),
-        exact: false,
-      });
-      queryClient.removeQueries({
-        queryKey: qk.admin.users.detail(id),
-        exact: true,
-      });
-    },
   });
 }
 

@@ -59,6 +59,7 @@ async def build_collection_response(service: CollectionService, collection) -> C
         ) if collection.data_instance else None,
         last_sync_at=collection.last_sync_at.isoformat() if collection.last_sync_at else None,
         is_active=collection.is_active,
+        memory_enabled=collection.memory_enabled,
         current_version_id=collection.current_version_id,
         current_version=current_version_payload,
         created_at=collection.created_at.isoformat(),

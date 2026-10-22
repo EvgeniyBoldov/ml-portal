@@ -1,5 +1,45 @@
 # Chat contract E2E
 
+## Admin agents E2E
+
+`agent-admin.e2e.ts` drives the real admin UI and API through agent version
+creation, contract editing, publish/current-version operations, and deletion of
+an archived non-current version. It requires a refresh token for a platform
+admin in a JSON file available to the frontend container:
+
+```json
+{ "refresh_token": "..." }
+```
+
+With the development stack running, run it from the frontend container:
+
+```sh
+docker compose exec -T \
+  -e AGENT_E2E_AUTH_FILE=/tmp/agent-e2e-auth.json \
+  -e BASE_URL=http://localhost:5173 \
+  -e CHROMIUM_EXECUTABLE=/usr/bin/chromium \
+  frontend npx playwright test --project=chromium e2e-tests/agent-admin.e2e.ts
+```
+
+The test creates its agent through the real admin endpoint and removes it in a
+`finally` block. It is skipped when `AGENT_E2E_AUTH_FILE` is not set.
+
+## Memory scopes and LongMemory E2E
+
+`memory-scopes.e2e.ts` uses an authenticated platform admin and the real API to
+create, edit, inspect dependencies for, and delete an isolated memory scope. It
+also opens the LongMemory tab and verifies that its documents endpoint loads.
+The test deletes its temporary scope through the UI and has an API cleanup
+fallback. It is skipped when `MEMORY_SCOPE_E2E_AUTH_FILE` is not set.
+
+```sh
+docker compose exec -T \
+  -e MEMORY_SCOPE_E2E_AUTH_FILE=/tmp/memory-scope-e2e-auth.json \
+  -e BASE_URL=http://localhost:5173 \
+  -e CHROMIUM_EXECUTABLE=/usr/bin/chromium \
+  frontend npx playwright test --project=chromium e2e-tests/memory-scopes.e2e.ts
+```
+
 The chat contract suite drives the browser through the test Nginx proxy, the
 production chat routes and services, PostgreSQL, and MinIO. Only
 `RuntimePipeline.execute` is scripted. The PDF attachment scenario invokes the

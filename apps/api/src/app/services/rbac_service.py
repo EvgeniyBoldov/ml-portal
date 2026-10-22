@@ -48,6 +48,12 @@ class RbacService:
         owner_platform: bool = False,
         created_by_user_id: Optional[UUID] = None,
     ) -> RbacRule:
+        self._validate_owner_binding(
+            level=level,
+            owner_user_id=owner_user_id,
+            owner_tenant_id=owner_tenant_id,
+            owner_platform=owner_platform,
+        )
         await self._validate_resource_binding(resource_type, resource_id)
 
         rule = RbacRule(
@@ -69,17 +75,69 @@ class RbacService:
         )
         return result
 
+    @staticmethod
+    def _validate_owner_binding(
+        *,
+        level: str,
+        owner_user_id: Optional[UUID],
+        owner_tenant_id: Optional[UUID],
+        owner_platform: Optional[bool],
+    ) -> None:
+        """Require the owner columns to match the rule's declared level."""
+        if level not in {item.value for item in RbacLevel}:
+            raise ValidationError("invalid_level")
+        if level == RbacLevel.PLATFORM.value:
+            if owner_user_id is not None or owner_tenant_id is not None or owner_platform is not True:
+                raise ValidationError("invalid_owner_for_platform_level")
+            return
+        if level == RbacLevel.TENANT.value:
+            if owner_tenant_id is None or owner_user_id is not None or owner_platform is True:
+                raise ValidationError("tenant_owner_required")
+            return
+        if owner_user_id is None or owner_tenant_id is not None or owner_platform is True:
+            raise ValidationError("user_owner_required")
+
     async def update_rule(
         self,
         rule_id: UUID,
+        level: Optional[str] = None,
         effect: Optional[str] = None,
         resource_type: Optional[str] = None,
         resource_id: Optional[UUID] = None,
+        owner_user_id: Optional[UUID] = None,
+        owner_tenant_id: Optional[UUID] = None,
+        owner_platform: Optional[bool] = None,
     ) -> RbacRule:
-        """Update rule fields."""
+        """Update rule fields and, when requested, its owner scope."""
         rule = await self.get_rule(rule_id)
         if getattr(rule, "lifecycle_status", "active") != "active":
             raise ValidationError("deprecated")
+
+        owner_fields_sent = any(value is not None for value in (owner_user_id, owner_tenant_id, owner_platform))
+        if level is None and owner_fields_sent:
+            raise ValidationError("level_required_when_changing_owner")
+        if level is not None:
+            if level not in {item.value for item in RbacLevel}:
+                raise ValidationError("invalid_level")
+            if level == RbacLevel.PLATFORM.value:
+                if owner_user_id is not None or owner_tenant_id is not None or owner_platform is False:
+                    raise ValidationError("invalid_owner_for_platform_level")
+                rule.owner_user_id = None
+                rule.owner_tenant_id = None
+                rule.owner_platform = True
+            elif level == RbacLevel.TENANT.value:
+                if owner_tenant_id is None or owner_user_id is not None or owner_platform is True:
+                    raise ValidationError("tenant_owner_required")
+                rule.owner_user_id = None
+                rule.owner_tenant_id = owner_tenant_id
+                rule.owner_platform = False
+            else:
+                if owner_user_id is None or owner_tenant_id is not None or owner_platform is True:
+                    raise ValidationError("user_owner_required")
+                rule.owner_user_id = owner_user_id
+                rule.owner_tenant_id = None
+                rule.owner_platform = False
+            rule.level = level
         next_resource_type = resource_type or rule.resource_type
         next_resource_id = resource_id or rule.resource_id
         await self._validate_resource_binding(next_resource_type, next_resource_id)
@@ -90,9 +148,23 @@ class RbacService:
             rule.resource_type = resource_type
         if resource_id is not None:
             rule.resource_id = resource_id
+
+        duplicate_stmt = select(RbacRule.id).where(
+            RbacRule.id != rule.id,
+            RbacRule.level == rule.level,
+            RbacRule.owner_user_id == rule.owner_user_id,
+            RbacRule.owner_tenant_id == rule.owner_tenant_id,
+            RbacRule.owner_platform == rule.owner_platform,
+            RbacRule.resource_type == rule.resource_type,
+            RbacRule.resource_id == rule.resource_id,
+        )
+        duplicate_id = (await self.session.execute(duplicate_stmt)).scalar_one_or_none()
+        if duplicate_id is not None:
+            raise RbacRuleDuplicateError("A rule already exists for this owner and resource")
+
         result = await self.rule_repo.update(rule)
         logger.info(
-            f"Updated RBAC rule {rule_id}: effect={rule.effect}, resource_type={rule.resource_type}, resource_id={rule.resource_id}"
+            f"Updated RBAC rule {rule_id}: level={rule.level}, effect={rule.effect}, resource_type={rule.resource_type}, resource_id={rule.resource_id}"
         )
         return result
 

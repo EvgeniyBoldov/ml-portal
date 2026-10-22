@@ -182,7 +182,6 @@ async def get_sandbox_catalog(
             SystemLLMRole.is_active.is_(True),
             SystemLLMRole.role_type.in_([
                 SystemLLMRoleType.PLANNER.value,
-                SystemLLMRoleType.MEMORY.value,
                 SystemLLMRoleType.TURN_PREFLIGHT.value,
                 SystemLLMRoleType.SYNTHESIZER.value,
                 SystemLLMRoleType.FACT_EXTRACTOR.value,
@@ -233,13 +232,6 @@ async def get_sandbox_catalog(
             description="Оркестратор планирования и маршрутизации",
             config={**_role_snapshot(SystemLLMRoleType.PLANNER.value), "limits": role_limits.get("planner", {})},
             response_contract=build_response_contract(SystemLLMRoleType.PLANNER),
-        ),
-        SandboxCatalogRouterItem(
-            id="memory",
-            name="Memory",
-            description="Подготовка контекста памяти для планера",
-            config=_role_snapshot(SystemLLMRoleType.MEMORY.value),
-            response_contract=build_response_contract(SystemLLMRoleType.MEMORY),
         ),
         SandboxCatalogRouterItem(
             id="synthesizer",

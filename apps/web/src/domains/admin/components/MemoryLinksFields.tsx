@@ -1,6 +1,6 @@
 import type { FieldConfig } from '@/shared/ui/GridLayout';
 import type { MemoryCandidateTags, MemoryScopeAdminItem, PublishedMemoryTerm } from '@/shared/api/admin';
-import MemoryTagPicker from './MemoryTagPicker';
+import MemoryTagPicker from '@/shared/ui/MultiSelectTagPicker/MultiSelectTagPicker';
 import MemoryApplicabilityValue from './MemoryApplicabilityValue';
 
 export function memoryLinksFields({ scopes, terms, value, onChange, pending }: {

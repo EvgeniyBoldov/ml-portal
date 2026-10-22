@@ -138,9 +138,13 @@ async def update_rule(
     service = RbacService(db)
     rule = await service.update_rule(
         rule_id=rule_id,
+        level=data.level,
         effect=data.effect,
         resource_type=data.resource_type,
         resource_id=data.resource_id,
+        owner_user_id=data.owner_user_id,
+        owner_tenant_id=data.owner_tenant_id,
+        owner_platform=data.owner_platform,
     )
     await db.commit()
     return RbacRuleResponse.model_validate(rule)

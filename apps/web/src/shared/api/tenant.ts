@@ -2,54 +2,8 @@
  * Tenant API client
  */
 import { apiRequest } from './http';
-
-// Types
-export interface Tenant {
-  memory_scope_keys: string[];
-  id: string;
-  name: string;
-  description?: string;
-  is_active: boolean;
-  is_default?: boolean;
-  lifecycle_status?: string;
-  deprecated_at?: string | null;
-  retention_days?: number;
-  embed_models?: string[];
-  rerank_model?: string;
-  ocr?: boolean;
-  layout?: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface TenantCreate {
-  memory_scope_keys?: string[];
-  name: string;
-  description?: string;
-  is_active?: boolean;
-  extra_embed_model?: string;
-  ocr?: boolean;
-  layout?: boolean;
-}
-
-export interface TenantUpdate {
-  memory_scope_keys?: string[];
-  name?: string;
-  description?: string;
-  is_active?: boolean;
-  is_default?: boolean;
-  extra_embed_model?: string | null;
-  ocr?: boolean;
-  layout?: boolean;
-}
-
-export interface TenantListResponse {
-  items: Tenant[];
-  total: number;
-  page: number;
-  size: number;
-  has_more: boolean;
-}
+export type { Tenant, TenantCreate, TenantUpdate, TenantListResponse } from './admin';
+import type { Tenant, TenantCreate, TenantUpdate, TenantListResponse } from './admin';
 
 export const tenantApi = {
   // List tenants
@@ -95,10 +49,4 @@ export const tenantApi = {
     });
   },
 
-  // Delete tenant
-  async deleteTenant(id: string): Promise<void> {
-    return apiRequest(`/admin/tenants/${id}`, {
-      method: 'DELETE',
-    });
-  },
 };

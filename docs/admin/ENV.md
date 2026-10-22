@@ -24,8 +24,8 @@ make env
 ## 3. Переменные по группам
 
 ## General
-- `ENV` — окружение (`development`/`production`).
-- `DEBUG` — debug-режим backend.
+- `ENV` — окружение (`local`, `development` или `production`); по умолчанию `production`, режим разработки задаётся явно.
+- `DEBUG` — debug-режим backend; production требует `false`.
 - `LOG_LEVEL` — уровень логирования.
 
 ## Postgres (primary)
@@ -45,7 +45,7 @@ make env
 - `REDIS_URL` — Redis для runtime-хранилищ.
 - `CELERY_BROKER_URL` — брокер Celery.
 - `CELERY_RESULT_BACKEND` — backend результатов Celery.
-- `BEAT` — флаг для планировщика задач (если используется).
+- `BEAT` — `1` включает полное расписание Celery Beat; `0` оставляет только восстановление операций LongMemory.
 
 ## Document extraction
 - `DOCLING_URL` — внутренний URL Docling Serve; основной parser backend для поддерживаемых файлов.

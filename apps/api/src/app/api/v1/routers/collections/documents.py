@@ -75,11 +75,12 @@ async def _queue_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID, ac
     return {"document_id": str(doc_id), "operation_id": str(operation.id), "status": "queued" if operation.status == "pending" else operation.status}
 
 
-@router.post("/{collection_id}/docs/{doc_id}/memory", status_code=202, response_model=LongMemoryDocumentReceipt)
-@router.post("/{collection_id}/docs/{doc_id}/memory/legacy-extract", status_code=202, response_model=LongMemoryDocumentReceipt, deprecated=True)
+@router.post("/{collection_id}/docs/{doc_id}/memory", status_code=410, deprecated=True)
+@router.post("/{collection_id}/docs/{doc_id}/memory/legacy-extract", status_code=410, deprecated=True)
 async def add_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID,
     session: AsyncSession = Depends(db_session), user: UserCtx = Depends(get_current_user)) -> dict[str, Any]:
-    return await _queue_document_memory(collection_id, doc_id, "add", session, user)
+    """DEPRECATED: manual extraction is retired; collection ingestion policy owns indexing."""
+    raise HTTPException(status_code=410, detail="Manual LongMemory extraction is deprecated")
 
 
 @router.delete("/{collection_id}/docs/{doc_id}/memory", status_code=202, response_model=LongMemoryDocumentReceipt)
@@ -234,7 +235,7 @@ async def list_collection_documents(
         )
         aggregate_status = func.coalesce(RAGDocument.agg_status, RAGDocument.status.cast(String))
         if status:
-            if status in {"ready", "failed", "uploaded", "processing"}:
+            if status in {"ready", "failed", "uploaded", "partial", "archived", "processing"}:
                 if status == "processing":
                     base_q = base_q.where(aggregate_status.in_(["processing", "embedding", "chunked", "normalized"]))
                 else:
@@ -270,6 +271,8 @@ async def list_collection_documents(
             "total": sum(status_counts.values()),
             "ready": status_counts.get("ready", 0),
             "failed": status_counts.get("failed", 0),
+            "partial": status_counts.get("partial", 0),
+            "archived": status_counts.get("archived", 0),
             "processing": sum(status_counts.get(key, 0) for key in ("processing", "embedding", "chunked", "normalized")),
             "uploaded": status_counts.get("uploaded", 0),
         }

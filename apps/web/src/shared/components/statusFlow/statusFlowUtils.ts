@@ -2,10 +2,13 @@ import type { FlowGraphModel, FlowNode, FlowSelection, FlowStatus } from './type
 
 const STATUS_PRIORITY: Record<FlowStatus, number> = {
   failed: 0,
-  processing: 1,
-  queued: 2,
-  completed: 3,
-  pending: 4,
+  cancelled: 1,
+  processing: 2,
+  queued: 3,
+  completed: 4,
+  skipped: 5,
+  pending: 6,
+  unknown: 7,
 };
 
 export function getStatusTone(status: FlowStatus): 'neutral' | 'success' | 'warn' | 'danger' {
@@ -17,6 +20,8 @@ export function getStatusTone(status: FlowStatus): 'neutral' | 'success' | 'warn
       return 'warn';
     case 'failed':
       return 'danger';
+    case 'cancelled':
+      return 'warn';
     default:
       return 'neutral';
   }
@@ -31,8 +36,23 @@ export function getStatusIcon(status: FlowStatus): string {
       return 'loader';
     case 'failed':
       return 'x';
+    case 'cancelled':
+      return 'x';
     default:
       return 'clock';
+  }
+}
+
+export function getStatusLabel(status: FlowStatus): string {
+  switch (status) {
+    case 'completed': return 'Завершено';
+    case 'queued': return 'В очереди';
+    case 'processing': return 'Выполняется';
+    case 'failed': return 'Ошибка';
+    case 'cancelled': return 'Остановлено';
+    case 'skipped': return 'Пропущено';
+    case 'unknown': return 'Неизвестно';
+    default: return 'В ожидании';
   }
 }
 
@@ -50,8 +70,15 @@ export function getDisplayStatus(state?: string): FlowStatus {
       return 'failed';
     case 'queued':
       return 'queued';
-    default:
+    case 'cancelled':
+      return 'cancelled';
+    case 'skipped':
+      return 'skipped';
+    case 'pending':
+    case 'idle':
       return 'pending';
+    default:
+      return 'unknown';
   }
 }
 
@@ -83,6 +110,11 @@ export function pickDefaultFlowSelection(model: FlowGraphModel): FlowSelection {
 
   const failedLane = laneItems.find((node) => node.status === 'failed');
   if (failedLane) return { nodeKey: failedLane.key, laneKey: failedLane.laneKey, itemKey: failedLane.key };
+
+  const cancelledPipeline = pipeline.find((node) => node.status === 'cancelled');
+  if (cancelledPipeline) return { nodeKey: cancelledPipeline.key };
+  const cancelledLane = laneItems.find((node) => node.status === 'cancelled');
+  if (cancelledLane) return { nodeKey: cancelledLane.key, laneKey: cancelledLane.laneKey, itemKey: cancelledLane.key };
 
   const activePipeline = [...pipeline].reverse().find((node) => isActive(node.status));
   if (activePipeline) return { nodeKey: activePipeline.key };

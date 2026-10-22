@@ -10,7 +10,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { rbacApi, type RbacEffect, type RbacRule, type ResourceType } from '@/shared/api/rbac';
+import { rbacApi, type RbacEffect, type RbacLevel, type RbacRule, type ResourceType } from '@/shared/api/rbac';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import type { EntityPageMode } from '@/shared/ui';
@@ -27,6 +27,8 @@ export function useRbacRuleEditor() {
   const mode: EntityPageMode = isEditMode ? 'edit' : 'view';
 
   const [effect, setEffect] = useState<RbacEffect>('deny');
+  const [level, setLevel] = useState<RbacLevel>('tenant');
+  const [ownerId, setOwnerId] = useState('');
   const [resourceType, setResourceType] = useState<ResourceType>('agent');
   const [resourceId, setResourceId] = useState('');
   const [saving, setSaving] = useState(false);
@@ -44,6 +46,8 @@ export function useRbacRuleEditor() {
   useEffect(() => {
     if (!rule) return;
     setEffect(rule.effect);
+    setLevel(rule.level);
+    setOwnerId(rule.owner_user_id ?? rule.owner_tenant_id ?? '');
     setResourceType(rule.resource_type);
     setResourceId(rule.resource_id);
   }, [rule]);
@@ -52,9 +56,13 @@ export function useRbacRuleEditor() {
 
   const updateMutation = useMutation({
     mutationFn: () => rbacApi.updateRule(id!, {
+      level,
       effect,
       resource_type: resourceType,
       resource_id: resourceId,
+      owner_user_id: level === 'user' ? ownerId : null,
+      owner_tenant_id: level === 'tenant' ? ownerId : null,
+      owner_platform: level === 'platform',
     }),
     onSuccess: (updated: RbacRule) => {
       queryClient.setQueryData(qk.rbac.detail(id!), updated);
@@ -81,8 +89,8 @@ export function useRbacRuleEditor() {
   const handleEdit = () => setSearchParams({ mode: 'edit' });
 
   const handleSave = async () => {
-    if (!resourceId) {
-      showError('Выберите ресурс');
+    if (!resourceId || (level !== 'platform' && !ownerId)) {
+      showError(!resourceId ? 'Выберите ресурс' : 'Выберите владельца');
       return;
     }
     setSaving(true);
@@ -96,6 +104,8 @@ export function useRbacRuleEditor() {
   const handleCancel = () => {
     if (rule) {
       setEffect(rule.effect);
+      setLevel(rule.level);
+      setOwnerId(rule.owner_user_id ?? rule.owner_tenant_id ?? '');
       setResourceType(rule.resource_type);
       setResourceId(rule.resource_id);
     }
@@ -113,6 +123,10 @@ export function useRbacRuleEditor() {
     mode,
     effect,
     setEffect,
+    level,
+    setLevel,
+    ownerId,
+    setOwnerId,
     resourceType,
     setResourceType,
     resourceId,

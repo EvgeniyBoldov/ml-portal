@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 from app.models.system_llm_role import SystemLLMRoleType
 from app.agents.contracts import ExecutionModeType
+from app.schemas.runtime_limits import ActorLimitsResponse, OrchestratorLimitsUpdate
 
 
 # === Base Schemas ===
@@ -106,10 +107,18 @@ class SystemLLMRoleResponse(SystemLLMRoleBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OrchestratorRoleSettingsUpdate(SystemLLMRoleUpdate):
+    execution_limits: OrchestratorLimitsUpdate
+
+
+class OrchestratorRoleSettingsResponse(BaseModel):
+    role: SystemLLMRoleResponse
+    execution_limits: ActorLimitsResponse
+
+
 # All role-specific PATCH endpoints use SystemLLMRoleUpdate with real DB column
 # names. Aliases keep the public service signatures readable.
 PlannerRoleUpdate = SystemLLMRoleUpdate
-MemoryRoleUpdate = SystemLLMRoleUpdate
 SynthesizerRoleUpdate = SystemLLMRoleUpdate
 FactExtractorRoleUpdate = SystemLLMRoleUpdate
 FactCompactorRoleUpdate = SystemLLMRoleUpdate

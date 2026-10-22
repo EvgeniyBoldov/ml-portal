@@ -39,23 +39,11 @@ class ChatMessage(BaseModel):
         else:
             raise ValueError("Content must be string or dict")
 
-class ChatTurnRequest(BaseModel):
-    response_stream: Optional[bool] = Field(None)
-    use_rag: Optional[bool] = Field(None)
-    rag_params: Optional[Dict[str, Any]] = Field(None)
-    messages: Optional[List[ChatMessage]] = Field(None)
-    temperature: Optional[float] = Field(None)
-    idempotency_key: Optional[str] = Field(None)
-
-
 class ChatMessageStreamRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     content: str = Field(..., min_length=1)
-    use_rag: Optional[bool] = Field(default=None)
-    model: Optional[str] = Field(default=None)
-    agent_slug: Optional[str] = Field(default=None)
-    execution_mode: Optional[Literal["normal", "thinking"]] = Field(default=None)
     artifact_ids: Optional[List[str]] = Field(default=None, description="Chat-scoped artifact IDs")
-    confirmation_tokens: Optional[List[str]] = Field(default=None, description="Confirmation tokens for gated operations")
 
 
 class ChatMemoryScopesUpdate(BaseModel):
@@ -93,15 +81,6 @@ class ChatUploadPolicyResponse(BaseModel):
     max_bytes: int
     allowed_extensions: List[str]
     allowed_content_types_by_extension: Dict[str, List[str]] = Field(default_factory=dict)
-
-
-class ChatTurnResponse(BaseModel):
-    chat_id: Optional[str] = Field(None)
-    message_id: Optional[str] = Field(None)
-    created_at: Optional[datetime] = Field(None)
-    assistant_message: Optional[ChatMessage] = Field(None)
-    usage: Optional[Dict[str, Any]] = Field(None)
-    rag: Optional[Dict[str, Any]] = Field(None)
 
 
 class ChatCreateRequest(BaseModel):

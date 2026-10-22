@@ -65,6 +65,7 @@ async def ensure_default_admin(session_factory: async_sessionmaker[AsyncSession]
                     email=admin_email,
                     password_hash=hash_password(admin_password),
                     role="admin",
+                    is_admin=True,
                     is_active=True,
                 )
                 session.add(admin)
@@ -72,8 +73,9 @@ async def ensure_default_admin(session_factory: async_sessionmaker[AsyncSession]
                 logger.info(f"Created default admin user: {admin_login}")
             else:
                 updated = False
-                if admin.role != "admin":
+                if not admin.is_admin or admin.role != "admin":
                     admin.role = "admin"
+                    admin.is_admin = True
                     updated = True
                 if not admin.is_active:
                     admin.is_active = True

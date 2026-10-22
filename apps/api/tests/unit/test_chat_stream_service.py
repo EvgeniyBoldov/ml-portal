@@ -42,6 +42,17 @@ def service(mock_session, mock_redis, mock_llm_client, chats_repo, messages_repo
 
 
 class TestChatStreamServiceInvariants:
+    def test_idempotency_cache_key_is_scoped_to_chat_and_user(self, service: ChatStreamService):
+        first = service._scoped_idempotency_key(
+            idempotency_key="same", chat_id="chat-a", user_id="user-a",
+        )
+        assert first != service._scoped_idempotency_key(
+            idempotency_key="same", chat_id="chat-b", user_id="user-a",
+        )
+        assert first != service._scoped_idempotency_key(
+            idempotency_key="same", chat_id="chat-a", user_id="user-b",
+        )
+
     def test_extract_attachment_meta_from_messages_collects_history_refs(self, service: ChatStreamService):
         messages = [
             {"role": "user", "content": "first", "meta": {"attachments": [{"id": "att-1"}, {"id": "att-2"}]}},
@@ -186,8 +197,6 @@ class TestChatStreamServiceInvariants:
                 user_id="00000000-0000-0000-0000-000000000020",
                 content="hello",
                 idempotency_key=None,
-                model=None,
-                agent_slug=None,
             )
         ]
 

@@ -7,6 +7,7 @@ import { buildFileDownloadUrl, buildRagDocFileId } from '@shared/api/files';
 import { config } from '@shared/config';
 import { openSSE, SSEMessage } from '@shared/lib/sse';
 import { useDocumentStatus } from '@shared/api/hooks/useDocumentStatus';
+import { qk } from '@shared/api/keys';
 import {
   StatusFlowDetails,
   StatusFlowView,
@@ -76,7 +77,7 @@ export function StatusModalNew({
   const queryKey = React.useMemo(
     () =>
       statusGraphUrl
-        ? ['collections', 'doc-status', docId]
+        ? qk.collections.documentStatus(docId)
         : ['document-status', docId],
     [docId, statusGraphUrl]
   );
@@ -214,7 +215,7 @@ export function StatusModalNew({
     setSelection(nextSelection);
   };
 
-  const handleRestart = async () => {
+  const handleRestart = React.useCallback(async () => {
     if (!selectedRetryStage) return;
     if (!canRetrySelectedStage) {
       showToast('Этот этап сейчас нельзя перезапустить', 'error');
@@ -229,12 +230,18 @@ export function StatusModalNew({
       });
 
       showToast('Перезапуск начат', 'success');
-    } catch (error) {
+    } catch {
       showToast('Ошибка перезапуска', 'error');
     }
-  };
+  }, [
+    canRetrySelectedStage,
+    docId,
+    retryUrlPrefix,
+    selectedRetryStage,
+    showToast,
+  ]);
 
-  const handleStop = async () => {
+  const handleStop = React.useCallback(async () => {
     if (!selectedStopStage || !canStopSelectedStage) {
       showToast('Этот этап сейчас нельзя остановить', 'error');
       return;
@@ -249,9 +256,15 @@ export function StatusModalNew({
     } catch {
       showToast('Ошибка остановки', 'error');
     }
-  };
+  }, [
+    canStopSelectedStage,
+    docId,
+    selectedStopStage,
+    showToast,
+    stopUrlPrefix,
+  ]);
 
-  const handleDownloadOriginal = async () => {
+  const handleDownloadOriginal = React.useCallback(async () => {
     try {
       if (downloadUrlPrefix) {
         const response = await apiRequest<{
@@ -272,12 +285,12 @@ export function StatusModalNew({
         '_blank',
         'noopener,noreferrer'
       );
-    } catch (error) {
+    } catch {
       showToast('Ошибка скачивания', 'error');
     }
-  };
+  }, [docId, downloadUrlPrefix, showToast]);
 
-  const handleDownloadNormalized = async () => {
+  const handleDownloadNormalized = React.useCallback(async () => {
     try {
       if (downloadUrlPrefix) {
         const response = await apiRequest<{
@@ -298,10 +311,10 @@ export function StatusModalNew({
         '_blank',
         'noopener,noreferrer'
       );
-    } catch (error) {
+    } catch {
       showToast('Ошибка скачивания', 'error');
     }
-  };
+  }, [docId, downloadUrlPrefix, showToast]);
 
   const selectedNode = React.useMemo(() => {
     if (!selection.nodeKey) return null;
@@ -409,6 +422,10 @@ export function StatusModalNew({
     memoryUrl,
     memoryCommand,
     docStatus,
+    handleDownloadNormalized,
+    handleDownloadOriginal,
+    handleRestart,
+    handleStop,
   ]);
 
   const metricLabels = React.useMemo(

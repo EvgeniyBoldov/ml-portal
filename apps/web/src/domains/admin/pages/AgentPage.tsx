@@ -17,14 +17,12 @@ import {
   type AgentCreate,
   type AgentUpdate,
   type AgentVersion,
-  type AgentVersionInfo,
   type Collection,
   type Model,
 } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useAgentDetail } from '@/shared/api/hooks/useAgents';
 import { useAgentExecutionLimits, useUpdateAgentExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';
-import type { QueryKey } from '@tanstack/react-query';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
@@ -289,7 +287,7 @@ export function AgentPage() {
     agent?.versions?.find(v => v.id === agent?.current_version_id) ||
     agent?.versions?.find(v => v.status === 'published');
   const { data: currentVersion } = useQuery({
-    queryKey: ['agents', 'version', id!, currentVersionInfo?.version || 1] as QueryKey,
+    queryKey: qk.agents.version(id!, currentVersionInfo?.version || 1),
     queryFn: () => agentsApi.getVersion(id!, currentVersionInfo?.version || 1),
     enabled: !isNew && !!currentVersionInfo,
   });
@@ -302,7 +300,6 @@ export function AgentPage() {
   });
 
   const versions = agent?.versions ?? [];
-  const primaryVersion = agent?.versions?.find((v: AgentVersionInfo) => v.status === 'published') || agent?.versions?.[0];
 
   // ─── Derived data for blocks ───
   const infoData =

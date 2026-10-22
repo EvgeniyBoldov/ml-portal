@@ -21,13 +21,14 @@ import {
   Input,
 } from '@/shared/ui';
 import { formatDomainLabel, formatDomainTone } from '../shared/domainLabels';
+import styles from './DiscoveredToolsPage.module.css';
 
 export function DiscoveredToolsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
 
-  const { data: tools = [], isLoading } = useQuery({
+  const { data: tools = [], isLoading, isError, refetch } = useQuery({
     queryKey: qk.discoveredTools.list({}),
     queryFn: () => discoveredToolsApi.list({}),
     staleTime: 30_000,
@@ -62,8 +63,8 @@ export function DiscoveredToolsPage() {
       },
       render: (row) => (
         <div>
-          <div style={{ fontWeight: 500 }}>{row.slug}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>{row.name}</div>
+          <div className={styles.primaryText}>{row.slug}</div>
+          <div className={styles.secondaryText}>{row.name}</div>
         </div>
       ),
     },
@@ -109,8 +110,8 @@ export function DiscoveredToolsPage() {
       },
       render: (row) => (
         <div>
-          <div style={{ fontWeight: 500 }}>{row.connector_slug || '—'}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>{row.connector_name || '—'}</div>
+          <div className={styles.primaryText}>{row.connector_slug || '—'}</div>
+          <div className={styles.secondaryText}>{row.connector_name || '—'}</div>
         </div>
       ),
     },
@@ -125,7 +126,7 @@ export function DiscoveredToolsPage() {
         getValue: (row) => row.domains,
       },
       render: (row) => (
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <div className={styles.domainList}>
           {row.domains.map((domain) => (
             <Badge key={domain} tone={formatDomainTone(domain)} size="small">
               {formatDomainLabel(domain)}
@@ -162,7 +163,7 @@ export function DiscoveredToolsPage() {
         getValue: (row) => row.description ?? '',
       },
       render: (row) => (
-        <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>
+        <span className={styles.secondaryText}>
           {row.description ? (row.description.length > 80 ? row.description.slice(0, 80) + '…' : row.description) : '—'}
         </span>
       ),
@@ -194,12 +195,20 @@ export function DiscoveredToolsPage() {
         layout="full"
         badge={tools.length}
       >
+        {isError && (
+          <p role="alert">
+            Не удалось загрузить инструменты. <Button variant="outline" onClick={() => void refetch()}>Повторить</Button>
+          </p>
+        )}
+        {rescanMutation.isError && (
+          <p role="alert">Не удалось выполнить сканирование. Проверьте подключение и попробуйте снова.</p>
+        )}
         <DataTable
           columns={columns}
           data={filtered}
           keyField="id"
           loading={isLoading}
-          emptyText="Инструменты не обнаружены. Запустите Rescan."
+          emptyText={isError ? 'Не удалось загрузить инструменты.' : 'Инструменты не обнаружены. Запустите Rescan.'}
           paginated
           pageSizeOptions={[10, 25, 50, 100]}
           onRowClick={(row) => navigate(`/admin/tools/discovered/${row.id}`)}

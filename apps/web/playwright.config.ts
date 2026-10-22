@@ -31,15 +31,21 @@ export default defineConfig({
     /* Take screenshot on failure */
     screenshot: 'only-on-failure',
     
-    /* Record video on failure */
-    video: 'retain-on-failure',
   },
 
   /* Configure projects for major browsers */
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: process.env.CHROMIUM_EXECUTABLE
+          ? {
+              executablePath: process.env.CHROMIUM_EXECUTABLE,
+              args: ['--no-sandbox', '--disable-dev-shm-usage'],
+            }
+          : {},
+      },
     },
 
     {

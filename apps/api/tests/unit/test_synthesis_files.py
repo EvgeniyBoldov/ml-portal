@@ -31,7 +31,7 @@ def setup(monkeypatch):
                 "status": "generated", "attributes": {}}
     monkeypatch.setattr("app.services.chat_artifact_reference_service.ChatArtifactReferenceService",
         lambda _: SimpleNamespace(get_reference=AsyncMock(return_value=object()), manifest=lambda __: passport))
-    monkeypatch.setattr(module, "OperationRouter", lambda _: SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(
+    monkeypatch.setattr("app.agents.operation_router.OperationRouter", lambda _: SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(
         execution_graph={"file.generate": True}, resolved_operations=[]))))
     monkeypatch.setattr("app.services.runtime_run_context_service.RuntimeRunContextService.save", AsyncMock())
     state = SimpleNamespace(run_id=uuid4(), chat_id=uuid4(), user_id=uuid4(), tenant_id=uuid4(), run_context=RunContext())

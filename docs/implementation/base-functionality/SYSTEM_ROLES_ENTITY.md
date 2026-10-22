@@ -19,9 +19,8 @@
   LLM roles do not write directly to durable storage.
 
 Document LongMemory indexing uses the HippoRAG worker's configured model calls.
-The older `memory` preparation role and Semantic Memory extraction/evaluation
-roles remain in configuration/code for legacy paths; they are not part of the
-active root-turn `memory.search` flow.
+Semantic Memory extraction/evaluation roles remain available for legacy review
+operations; they are not part of the active root-turn `memory.search` flow.
 
 ## Shared boundaries
 

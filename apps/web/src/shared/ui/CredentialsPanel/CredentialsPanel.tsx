@@ -8,7 +8,7 @@
  * - platform: platform-level креды
  * - user: user/tenant креды с переключателем
  */
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { credentialsApi, type Credential, type CredentialInstance } from '@/shared/api/credentials';
@@ -16,7 +16,6 @@ import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances'
 import { qk } from '@/shared/api/keys';
 import Button from '../Button';
 import Badge from '../Badge';
-import Toggle from '../Toggle';
 import DataTable, { type DataTableColumn } from '../DataTable/DataTable';
 import ConfirmDialog from '../ConfirmDialog';
 import Modal from '../Modal';
@@ -25,7 +24,7 @@ import Select from '../Select';
 import { useErrorToast, useSuccessToast } from '../Toast';
 import styles from './CredentialsPanel.module.css';
 
-export type CredentialsPanelMode = 'platform' | 'user' | 'readonly-owner';
+export type CredentialsPanelMode = 'platform' | 'user' | 'tenant-admin' | 'readonly-owner';
 
 export interface CredentialsPanelProps {
   mode: CredentialsPanelMode;
@@ -33,6 +32,9 @@ export interface CredentialsPanelProps {
   tenantId?: string;
   ownerUserId?: string;
   ownerTenantId?: string;
+  title?: string;
+  createRequest?: number;
+  hideCreateButton?: boolean;
 }
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
@@ -43,18 +45,18 @@ const AUTH_TYPE_LABELS: Record<string, string> = {
   oauth: 'OAuth 2.0',
 };
 
-export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTenantId }: CredentialsPanelProps) {
+export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTenantId, title, createRequest, hideCreateButton = false }: CredentialsPanelProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 
-  const [isTenantLevel, setIsTenantLevel] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [authType, setAuthType] = useState('token');
   const [payload, setPayload] = useState<Record<string, string>>({ token: '' });
+  const previousCreateRequest = useRef(createRequest ?? 0);
 
   // ─── Queries ───────────────────────────────────────────────────────
 
@@ -63,32 +65,32 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
       return { owner_platform: true };
     }
     if (mode === 'readonly-owner') return {};
-    if (isTenantLevel && tenantId) {
+    if (mode === 'tenant-admin' && tenantId) {
       return { owner_tenant_id: tenantId };
     }
     if (userId) {
       return { owner_user_id: userId };
     }
     return {};
-  }, [mode, isTenantLevel, userId, tenantId]);
+  }, [mode, userId, tenantId]);
 
   const { data: credentials = [], isLoading } = useQuery({
     queryKey: mode === 'readonly-owner'
       ? qk.credentials.list({ owner_user_id: ownerUserId, owner_tenant_id: ownerTenantId, summary: true })
-      : mode === 'user'
-        ? qk.profile.credentials(isTenantLevel ? 'tenant' : 'user')
+      : (mode === 'user' || mode === 'tenant-admin')
+        ? qk.profile.credentials(mode === 'tenant-admin' ? 'tenant' : 'user')
         : qk.credentials.list(listParams),
     queryFn: () => mode === 'readonly-owner'
       ? credentialsApi.listSummary({ owner_user_id: ownerUserId, owner_tenant_id: ownerTenantId })
-      : mode === 'user'
-        ? credentialsApi.listProfile(isTenantLevel ? 'tenant' : 'user')
+      : (mode === 'user' || mode === 'tenant-admin')
+        ? credentialsApi.listProfile(mode === 'tenant-admin' ? 'tenant' : 'user')
         : credentialsApi.list(listParams),
     enabled: mode !== 'readonly-owner' || Boolean(ownerUserId || ownerTenantId),
   });
 
   const { data: allInstances = [] } = useQuery({
-    queryKey: mode === 'user' ? qk.profile.credentialInstances() : qk.toolInstances.list(),
-    queryFn: (): Promise<ToolInstance[] | CredentialInstance[]> => mode === 'user'
+    queryKey: (mode === 'user' || mode === 'tenant-admin') ? qk.profile.credentialInstances() : qk.toolInstances.list(),
+    queryFn: (): Promise<ToolInstance[] | CredentialInstance[]> => (mode === 'user' || mode === 'tenant-admin')
       ? credentialsApi.listProfileInstances()
       : toolInstancesApi.list(),
   });
@@ -121,15 +123,25 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
     setCreateOpen(true);
   };
 
+  useEffect(() => {
+    if ((createRequest ?? 0) !== previousCreateRequest.current) {
+      previousCreateRequest.current = createRequest ?? 0;
+      openCreate();
+    }
+  // The request is an event counter; openCreate uses the current instance options.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createRequest]);
+
   const createMutation = useMutation({
     mutationFn: () => credentialsApi.createProfile({
       instance_id: selectedInstanceId,
       auth_type: authType,
       payload,
+      level: mode === 'tenant-admin' ? 'tenant' : 'user',
     }),
     onSuccess: () => {
       showSuccess('Credential создан');
-      queryClient.invalidateQueries({ queryKey: qk.profile.credentials('user') });
+      queryClient.invalidateQueries({ queryKey: qk.profile.credentials(mode === 'tenant-admin' ? 'tenant' : 'user') });
       setCreateOpen(false);
     },
     onError: () => showError('Не удалось создать credential'),
@@ -138,14 +150,14 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
   // ─── Mutations ─────────────────────────────────────────────────────
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => mode === 'user'
-      ? credentialsApi.deleteProfile(id, isTenantLevel ? 'tenant' : 'user')
+    mutationFn: (id: string) => (mode === 'user' || mode === 'tenant-admin')
+      ? credentialsApi.deleteProfile(id, mode === 'tenant-admin' ? 'tenant' : 'user')
       : credentialsApi.delete(id),
     onSuccess: () => {
       showSuccess('Credential удалён');
       queryClient.invalidateQueries({ queryKey: qk.credentials.all() });
-      if (mode === 'user') {
-        queryClient.invalidateQueries({ queryKey: qk.profile.credentials(isTenantLevel ? 'tenant' : 'user') });
+      if (mode === 'user' || mode === 'tenant-admin') {
+        queryClient.invalidateQueries({ queryKey: qk.profile.credentials(mode === 'tenant-admin' ? 'tenant' : 'user') });
       }
       setConfirmDeleteId(null);
     },
@@ -209,19 +221,16 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
         )
       ),
     },
-  ], [instanceMap, navigate, mode, isTenantLevel]);
+  ], [instanceMap, navigate, mode]);
 
   return (
     <div className={styles.container}>
-      {/* Level switcher for user mode */}
-      {mode === 'user' && tenantId && (
-        <div className={styles.levelSwitcher}>
-          <span className={styles.levelLabel}>Уровень:</span>
-          <Badge tone={isTenantLevel ? 'neutral' : 'info'} size="small">Мои</Badge>
-          <Toggle checked={isTenantLevel} onChange={setIsTenantLevel} />
-          <Badge tone={isTenantLevel ? 'info' : 'neutral'} size="small">Тенант</Badge>
-        </div>
-      )}
+      {title && <div className={styles.panelHeader}>
+        <h2 className={styles.panelTitle}>{title}</h2>
+        {(mode === 'user' || mode === 'tenant-admin') && !hideCreateButton && (
+          <Button onClick={openCreate} disabled={!instanceOptions.length}>Добавить credential</Button>
+        )}
+      </div>}
 
       {/* Table */}
       <DataTable<Credential>
@@ -233,7 +242,7 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
         onRowClick={mode === 'readonly-owner' || mode === 'user' ? undefined : (cred: Credential) => navigate(`/admin/credentials/${cred.id}`)}
       />
 
-      {mode === 'user' && !isTenantLevel && (
+      {(mode === 'user' || mode === 'tenant-admin') && !title && !hideCreateButton && (
         <Button onClick={openCreate} disabled={!instanceOptions.length}>Добавить credential</Button>
       )}
 

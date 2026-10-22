@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@shared/api/http';
 import { qk } from '@/shared/api/keys';
 import { ProfileMemoryScopes } from '../components/ProfileMemoryScopes';
+import { ProfileTenantManagement } from '../components/ProfileTenantManagement';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
 import Select from '@shared/ui/Select';
@@ -22,6 +23,9 @@ interface Profile {
   login: string;
   email: string | null;
   role: string;
+  auth_provider: string;
+  is_admin: boolean;
+  is_tenant_admin: boolean;
   created_at: string;
   tenants: string[];
   memory_scope_keys: string[];
@@ -78,6 +82,8 @@ const getRoleLabel = (role: string) => {
       return 'Администратор';
     case 'editor':
       return 'Редактор';
+    case 'tenant_admin':
+      return 'Администратор тенанта';
     case 'reader':
       return 'Читатель';
     default:
@@ -122,9 +128,18 @@ export default function ProfilePage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [revealPassword, setRevealPassword] = useState(false);
-  const [activeTab, setActiveTab] = useState<'info' | 'credentials' | 'facts'>(
+  const [activeTab, setActiveTab] = useState<'info' | 'credentials' | 'tenant-management' | 'facts'>(
     'info'
   );
+  const [editingScopes, setEditingScopes] = useState(false);
+  const [scopeDraft, setScopeDraft] = useState<string[]>([]);
+  const [credentialCreateRequest, setCredentialCreateRequest] = useState(0);
+  const [factCreateRequest, setFactCreateRequest] = useState(0);
+  const [tenantCredentialCreateRequest, setTenantCredentialCreateRequest] = useState(0);
+  const [tenantEditRequest, setTenantEditRequest] = useState(0);
+  const [tenantSaveRequest, setTenantSaveRequest] = useState(0);
+  const [tenantCancelRequest, setTenantCancelRequest] = useState(0);
+  const [tenantEditing, setTenantEditing] = useState(false);
 
   // Fetch profile
   const { data: profile, isLoading: profileLoading } = useQuery({
@@ -216,6 +231,19 @@ export default function ProfilePage() {
     },
   });
 
+  const saveScopes = useMutation({
+    mutationFn: () => apiRequest('/profile/memory-scopes', {
+      method: 'PUT', body: JSON.stringify({ memory_scope_keys: scopeDraft }),
+    }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.profile.all() });
+      void queryClient.invalidateQueries({ queryKey: qk.chats.all() });
+      setEditingScopes(false);
+      showSuccess('Личные скоупы сохранены');
+    },
+    onError: (error: Error) => showError(error.message),
+  });
+
   const handleCreateToken = () => {
     if (!newTokenName.trim()) return;
     createToken.mutate({
@@ -262,6 +290,22 @@ export default function ProfilePage() {
     });
   };
 
+  const startScopeEdit = () => {
+    setScopeDraft(profile?.memory_scope_keys ?? []);
+    setEditingScopes(true);
+  };
+
+  const cancelScopeEdit = () => {
+    setScopeDraft(profile?.memory_scope_keys ?? []);
+    setEditingScopes(false);
+  };
+
+  const selectTab = (tab: 'info' | 'credentials' | 'tenant-management' | 'facts') => {
+    setEditingScopes(false);
+    setTenantEditing(false);
+    setActiveTab(tab);
+  };
+
   if (profileLoading) {
     return <div className={styles.loading}>Загрузка...</div>;
   }
@@ -270,15 +314,33 @@ export default function ProfilePage() {
     <div className={styles.page}>
       <div className={styles.header}>
         <h1 className={styles.title}>Личный кабинет</h1>
-        <Button variant="outline" onClick={() => setShowPasswordModal(true)}>
-          Установить пароль
-        </Button>
+        <div className={styles.headerActions}>
+          {activeTab === 'info' && <>
+            {editingScopes ? <>
+              <Button variant="outline" onClick={cancelScopeEdit} disabled={saveScopes.isPending}>Отмена</Button>
+              <Button variant="primary" onClick={() => saveScopes.mutate()} disabled={saveScopes.isPending}>{saveScopes.isPending ? 'Сохранение…' : 'Сохранить'}</Button>
+            </> : <Button variant="primary" onClick={startScopeEdit}>Редактировать</Button>}
+            {profile?.auth_provider === 'local' && <Button variant="outline" onClick={() => setShowPasswordModal(true)}>Сменить пароль</Button>}
+          </>}
+          {activeTab === 'credentials' && <>
+            <Button variant="primary" onClick={() => setCredentialCreateRequest(value => value + 1)}>Добавить credential</Button>
+            <Button variant="primary" onClick={() => setShowCreateModal(true)}>Создать токен</Button>
+          </>}
+          {activeTab === 'tenant-management' && profile?.is_tenant_admin && <>
+            <Button variant="primary" onClick={() => setTenantCredentialCreateRequest(value => value + 1)}>Добавить credential</Button>
+            {tenantEditing ? <>
+              <Button variant="outline" onClick={() => setTenantCancelRequest(value => value + 1)}>Отмена</Button>
+              <Button variant="primary" onClick={() => setTenantSaveRequest(value => value + 1)}>Сохранить</Button>
+            </> : <Button variant="primary" onClick={() => setTenantEditRequest(value => value + 1)}>Редактировать</Button>}
+          </>}
+          {activeTab === 'facts' && <Button onClick={() => setFactCreateRequest(value => value + 1)}>Добавить факт</Button>}
+        </div>
       </div>
 
       <nav className={styles.tabs} aria-label="Разделы личного кабинета">
         <button
           className={activeTab === 'info' ? styles.activeTab : styles.tab}
-          onClick={() => setActiveTab('info')}
+          onClick={() => selectTab('info')}
           type="button"
         >
           Информация
@@ -287,14 +349,19 @@ export default function ProfilePage() {
           className={
             activeTab === 'credentials' ? styles.activeTab : styles.tab
           }
-          onClick={() => setActiveTab('credentials')}
+          onClick={() => selectTab('credentials')}
           type="button"
         >
           Credentials
         </button>
+        {profile?.is_tenant_admin && <button
+          className={activeTab === 'tenant-management' ? styles.activeTab : styles.tab}
+          onClick={() => selectTab('tenant-management')}
+          type="button"
+        >Управление тенантом</button>}
         <button
           className={activeTab === 'facts' ? styles.activeTab : styles.tab}
-          onClick={() => setActiveTab('facts')}
+          onClick={() => selectTab('facts')}
           type="button"
         >
           Факты
@@ -351,14 +418,47 @@ export default function ProfilePage() {
               <ProfileMemoryScopes
                 scopeKeys={profile.memory_scope_keys ?? []}
                 tenantScopeKeys={profile.tenant_memory_scope_keys ?? []}
+                hasTenant={Boolean(profile.tenants?.length)}
+                editable={editingScopes}
+                onChange={setScopeDraft}
               />
             </section>
           )}
         </>
       )}
 
+      {/* Credentials Section */}
+      {activeTab === 'credentials' && (
+        <>
+          <section className={styles.section}>
+            <h2 className={styles.sectionTitle}>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+              </svg>
+              Мои Credentials
+            </h2>
+            <p className={styles.sectionDescription}>
+              Ваши персональные учётные данные для подключения к инструментам.
+              Credentials шифруются и используются при выполнении запросов.
+            </p>
+            <CredentialsPanel
+              mode="user"
+              userId={profile?.id}
+              tenantId={profile?.tenants?.[0]}
+              createRequest={credentialCreateRequest}
+              hideCreateButton
+            />
+          </section>
+        </>
+      )}
+
       {/* API Tokens Section */}
-      {activeTab === 'info' && (
+      {activeTab === 'credentials' && (
         <>
           <section className={styles.section}>
             <div className={styles.sectionHeader}>
@@ -374,9 +474,6 @@ export default function ProfilePage() {
                 </svg>
                 API Токены
               </h2>
-              <Button onClick={() => setShowCreateModal(true)}>
-                + Создать токен
-              </Button>
             </div>
 
             <p className={styles.sectionDescription}>
@@ -392,9 +489,6 @@ export default function ProfilePage() {
             ) : tokens.length === 0 ? (
               <div className={styles.emptyState}>
                 <p>У вас пока нет API токенов</p>
-                <Button onClick={() => setShowCreateModal(true)}>
-                  Создать первый токен
-                </Button>
               </div>
             ) : (
               <div className={styles.tokensList}>
@@ -472,123 +566,21 @@ export default function ProfilePage() {
         </>
       )}
 
-      {/* Credentials Section */}
-      {activeTab === 'credentials' && (
-        <>
-          <section className={styles.section}>
-            <h2 className={styles.sectionTitle}>
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
-              </svg>
-              Мои Credentials
-            </h2>
-            <p className={styles.sectionDescription}>
-              Ваши персональные учётные данные для подключения к инструментам.
-              Credentials шифруются и используются при выполнении запросов.
-            </p>
-            <CredentialsPanel
-              mode="user"
-              userId={profile?.id}
-              tenantId={profile?.tenants?.[0]}
-            />
-          </section>
-        </>
+      {activeTab === 'tenant-management' && profile?.is_tenant_admin && profile.tenants?.[0] && (
+        <ProfileTenantManagement
+          tenantId={profile.tenants[0]}
+          editRequest={tenantEditRequest}
+          saveRequest={tenantSaveRequest}
+          cancelRequest={tenantCancelRequest}
+          credentialCreateRequest={tenantCredentialCreateRequest}
+          onEditingChange={setTenantEditing}
+        />
       )}
 
       {/* Facts Section */}
       {activeTab === 'facts' && (
         <>
-          <FactsPanel mode="profile" />
-          {/*
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <h2 className={styles.sectionTitle}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 11l3 3L22 4" />
-              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-            </svg>
-            Факты памяти
-          </h2>
-          <Button
-            variant="outline"
-            onClick={createFact}
-          >
-            Добавить факт
-          </Button>
-          <Button
-            variant="danger"
-            disabled={selectedFactIds.length === 0 || deleteFacts.isPending}
-            onClick={handleDeleteSelectedFacts}
-          >
-            {deleteFacts.isPending ? 'Удаление...' : `Удалить выбранные (${selectedFactIds.length})`}
-          </Button>
-        </div>
-
-        <p className={styles.sectionDescription}>
-          Пользовательские факты, сохраненные системой памяти. Выберите строки и удалите лишние.
-        </p>
-
-        {factsLoading ? (
-          <div className={styles.loading}>Загрузка фактов...</div>
-        ) : facts.length === 0 ? (
-          <div className={styles.emptyState}>
-            <p>Факты пока отсутствуют</p>
-          </div>
-        ) : (
-          <div className={styles.factsTableWrap}>
-            <table className={styles.factsTable}>
-              <thead>
-                <tr>
-                  <th className={styles.checkboxCell}>
-                    <input
-                      type="checkbox"
-                      checked={allFactsSelected}
-                      onChange={(e) => toggleSelectAllFacts(e.target.checked)}
-                      aria-label="Выбрать все факты"
-                    />
-                  </th>
-                  <th>Subject</th>
-                  <th>Значение</th>
-                  <th>Scope</th>
-                  <th>Источник</th>
-                  <th>Обновлено</th>
-                  <th aria-label="Действия" />
-                </tr>
-              </thead>
-              <tbody>
-                {facts.map((fact) => (
-                  <tr key={fact.id}>
-                    <td className={styles.checkboxCell}>
-                      <input
-                        type="checkbox"
-                        checked={selectedFactIds.includes(fact.id)}
-                        onChange={(e) => toggleFactSelection(fact.id, e.target.checked)}
-                        aria-label={`Выбрать факт ${fact.subject}`}
-                      />
-                    </td>
-                    <td className={styles.subjectCell}>{fact.subject}</td>
-                    <td className={styles.valueCell}>{fact.value}</td>
-                    <td>{fact.scope}</td>
-                    <td>{fact.source}</td>
-                    <td>{formatDate(fact.observed_at)}</td>
-                    <td>
-                      <Button variant="secondary" size="sm" onClick={() => editFact(fact)} disabled={updateFact.isPending}>
-                        Изменить
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-      */}
+          <FactsPanel mode="profile" createRequest={factCreateRequest} hideCreateButton />
         </>
       )}
 

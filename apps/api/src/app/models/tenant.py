@@ -1,6 +1,6 @@
 
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Boolean, ForeignKey, DateTime, func, ARRAY
+from sqlalchemy import String, Boolean, ForeignKey, DateTime, func, ARRAY, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime
@@ -31,3 +31,6 @@ class UserTenants(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"))
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_tenant_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    is_data_editor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_tenants_single_tenant_per_user"),)

@@ -41,7 +41,7 @@ export default function LongMemoryTab() {
     {
       key: 'scope_keys', label: 'SCOPE',
       filter: { kind: 'select', placeholder: 'Все scope', options: activeScopes.map((scope) => ({ value: scope.key, label: scope.key })) },
-      render: (row) => row.scope_keys.length ? row.scope_keys.join(', ') : '—',
+      render: (row) => row.scope_keys.length ? row.scope_keys.join(', ') : 'Без скоупа',
     },
     {
       key: 'status', label: 'СТАТУС', width: 180,

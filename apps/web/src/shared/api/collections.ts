@@ -30,7 +30,7 @@ export interface BackendCollectionField {
 
 export interface CollectionField extends Partial<BackendCollectionField> {
   name: string;
-  type?: 'text' | 'integer' | 'float' | 'boolean' | 'datetime' | 'date' | 'file';
+  type?: BackendCollectionField['data_type'];
   required: boolean;
   search_modes: SearchMode[];
   description?: string;
@@ -212,7 +212,7 @@ export interface UpdateCollectionRequest {
   name?: string;
   is_active?: boolean;
   memory_enabled?: boolean;
-  data_instance_id?: string | null;
+  vector_config?: VectorConfig | null;
   table_name?: string | null;
   table_schema?: Record<string, unknown> | null;
   schema_ops?: SchemaOperation[];
@@ -360,7 +360,7 @@ export interface CollectionDocumentsResponse {
   page: number;
   size: number;
   has_more: boolean;
-  stats?: { total: number; ready: number; processing: number; failed: number; uploaded: number };
+  stats?: { total: number; ready: number; processing: number; partial: number; failed: number; uploaded: number; archived: number };
 }
 
 export interface CollectionReindexResponse {
@@ -417,10 +417,10 @@ function inferSearchModes(field: BackendCollectionField): SearchMode[] {
       modes.push('exact');
     }
   }
-  if (field.sortable) {
+  if (field.sortable && field.data_type !== 'file' && field.data_type !== 'json') {
     modes.push('range');
   }
-  if (field.used_in_retrieval) {
+  if (field.used_in_retrieval && field.data_type === 'text') {
     modes.push('vector');
   }
   return Array.from(new Set(modes));
@@ -446,12 +446,7 @@ function toFrontendField(field: CollectionField | BackendCollectionField): Colle
   const normalized = field as BackendCollectionField;
   return {
     ...normalized,
-    type:
-      normalized.data_type === 'string' ||
-      normalized.data_type === 'json' ||
-      normalized.data_type === 'enum'
-        ? 'text'
-        : normalized.data_type,
+    type: normalized.data_type,
     search_modes:
       'search_modes' in field && Array.isArray((field as CollectionField).search_modes)
         ? (field as CollectionField).search_modes
@@ -479,6 +474,7 @@ export const collectionsApi = {
     tenant_id?: string;
     is_active?: boolean;
     include_deprecated?: boolean;
+    search?: string;
   }): Promise<CollectionListResponse> => {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', String(params.page));
@@ -488,6 +484,7 @@ export const collectionsApi = {
       searchParams.set('is_active', String(params.is_active));
     if (params?.include_deprecated !== undefined)
       searchParams.set('include_deprecated', String(params.include_deprecated));
+    if (params?.search?.trim()) searchParams.set('search', params.search.trim());
 
     const query = searchParams.toString();
     const response = await apiRequest<CollectionListResponse>(
@@ -915,6 +912,7 @@ export const collectionsApi = {
   },
 
   // Document status & ingest (scoped to collection, not RAG)
+  /** @deprecated Manual LongMemory extraction is retired; the server returns HTTP 410. */
   addDocumentToMemory: async (collectionId: string, docId: string): Promise<{ status: string; operation_id: string }> => {
     return apiRequest(`/collections/${collectionId}/docs/${docId}/memory`, { method: 'POST' });
   },

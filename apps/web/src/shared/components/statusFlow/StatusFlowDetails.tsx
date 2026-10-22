@@ -5,7 +5,7 @@ import Button from '@shared/ui/Button';
 import { Icon } from '@shared/ui/Icon';
 
 import type { FlowDetailAction, FlowDetailItem, FlowNode, FlowStatus } from './types';
-import { getStatusTone } from './statusFlowUtils';
+import { getStatusLabel, getStatusTone } from './statusFlowUtils';
 import styles from './StatusFlowDetails.module.css';
 
 function formatDuration(startedAt?: string | null, finishedAt?: string | null): string {
@@ -85,7 +85,7 @@ export function StatusFlowDetails({
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <h3 className={styles.title}>{node.label}</h3>
-          <Badge tone={getStatusTone(node.status as FlowStatus)}>{statusLabel || node.status}</Badge>
+          <Badge tone={getStatusTone(node.status as FlowStatus)}>{statusLabel || getStatusLabel(node.status as FlowStatus)}</Badge>
         </div>
         {node.version ? <span className={styles.version}>v{node.version}</span> : null}
       </div>

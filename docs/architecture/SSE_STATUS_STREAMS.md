@@ -11,6 +11,15 @@ Two dedicated SSE endpoints deliver real-time document status updates:
 | `GET /{collection_id}/status/events` | Aggregated statuses for collection page | `rag:agg:admin` / `rag:agg:tenant:{id}` |
 | `GET /{collection_id}/docs/{doc_id}/status/events` | Per-document detailed steps for status modal | `rag:doc:{doc_id}` |
 
+The collection document aggregate status is one of `uploaded`, `processing`,
+`ready`, `partial`, `failed`, or `archived`. Individual stage nodes use
+`pending`, `queued`, `processing`, `completed`, `failed`, or `cancelled`;
+`skipped` is used for intentionally bypassed work. The UI preserves stopped
+and unknown values as distinct states rather than presenting them as pending.
+HTTP status-graph endpoints and document SSE snapshots share
+`build_document_status_graph` so both expose the same stages, model lanes,
+LongMemory nodes, aggregate status, and ingest controls.
+
 ---
 
 ## Redis Channels
@@ -119,10 +128,11 @@ Sent once on connect. Frontend sets query data via `queryClient.setQueryData(que
 
 ## Authentication
 
-SSE connections authenticate via **httpOnly cookie** `access_token` only.
+SSE connections authenticate with the `Authorization: Bearer` header or the
+**httpOnly cookie** `access_token`.
 
 - Browser sends cookie automatically with `EventSource` + `withCredentials: true`
-- No token in URL query params
+- URL query-token fallback is restricted to local development; deployed environments reject it
 - `get_current_user_sse` dependency reads from `Authorization` header or `access_token` cookie
 
 ---
@@ -146,7 +156,7 @@ SSE connections authenticate via **httpOnly cookie** `access_token` only.
 
 ### CollectionDataPage
 - Creates `SSEClient` on mount, tears down on unmount
-- `snapshot` events → `queryClient.setQueriesData` (patch `agg_status` per doc, no refetch)
+- `snapshot` events → patch visible row statuses and invalidate collection document queries so status counters also resynchronize
 - `aggregate_update`, `document_archived/unarchived`, `document_added/deleted` → `queryClient.invalidateQueries`
 
 ### StatusModalNew

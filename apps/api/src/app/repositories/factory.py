@@ -218,8 +218,13 @@ async def _extract_tenant_id_from_user(session: AsyncSession, user: UserCtx) -> 
 
     tenant_result = await session.execute(
         select(UserTenants.tenant_id)
-        .where(UserTenants.user_id == user_id)
-        .order_by(UserTenants.is_default.desc())
+        .join(Tenants, Tenants.id == UserTenants.tenant_id)
+        .where(
+            UserTenants.user_id == user_id,
+            Tenants.is_active.is_(True),
+            Tenants.lifecycle_status != "deprecated",
+        )
+        .order_by(UserTenants.is_default.desc(), Tenants.created_at.asc())
         .limit(1)
     )
     mapped_tenant_id = tenant_result.scalar_one_or_none()
@@ -231,7 +236,10 @@ async def _extract_tenant_id_from_user(session: AsyncSession, user: UserCtx) -> 
     if is_local():
         fallback_result = await session.execute(
             select(Tenants.id)
-            .where(Tenants.is_active.is_(True))
+            .where(
+                Tenants.is_active.is_(True),
+                Tenants.lifecycle_status != "deprecated",
+            )
             .order_by(Tenants.created_at.asc())
             .limit(1)
         )

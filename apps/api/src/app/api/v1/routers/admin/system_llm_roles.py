@@ -1,6 +1,7 @@
 """
 Admin API router for SystemLLMRole management.
 """
+from dataclasses import asdict
 from typing import List
 from uuid import UUID
 
@@ -15,7 +16,9 @@ from app.services.system_llm_role_service import (
 )
 from app.schemas.system_llm_roles import (
     SystemLLMRoleCreate, SystemLLMRoleUpdate, SystemLLMRoleResponse,
+    OrchestratorRoleSettingsUpdate, OrchestratorRoleSettingsResponse,
 )
+from app.schemas.runtime_limits import ActorLimitsResponse, ActorLimitsUpdate
 from app.services.system_llm_role_contracts import build_response_contract
 
 router = APIRouter(prefix="/system-llm-roles", tags=["system-llm-roles"])
@@ -83,6 +86,27 @@ async def update_active_role(
     role = await service.update_active_role(role_type, data)
     await session.commit()
     return _serialize_role(role)
+
+
+@router.patch("/active/{role_type}/settings", response_model=OrchestratorRoleSettingsResponse)
+async def update_active_orchestrator_settings(
+    role_type: SystemLLMRoleType,
+    data: OrchestratorRoleSettingsUpdate,
+    session: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Atomically update an orchestrator role and its execution limits."""
+    service = SystemLLMRoleService(session)
+    role, limits = await service.update_active_orchestrator_settings(role_type, data)
+    await session.commit()
+    return OrchestratorRoleSettingsResponse(
+        role=_serialize_role(role),
+        execution_limits=ActorLimitsResponse(
+            own=ActorLimitsUpdate(**asdict(limits.own)),
+            effective=ActorLimitsUpdate(**asdict(limits.effective)),
+            sources=dict(limits.sources),
+        ),
+    )
 
 
 @router.post("", response_model=SystemLLMRoleResponse)

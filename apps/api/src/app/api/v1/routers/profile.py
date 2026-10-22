@@ -14,7 +14,7 @@ from app.core.security import verify_password, hash_password
 from app.core.security import UserCtx
 from app.core.crypto import get_crypto_service
 from app.models.user import Users
-from app.models.tenant import UserTenants
+from app.models.tenant import UserTenants, Tenants
 from app.models.api_token import ApiToken
 from app.services.personal_access_token_service import PersonalAccessTokenService
 from app.models.credential_set import Credential
@@ -39,11 +39,14 @@ class ProfileResponse(BaseModel):
     login: str
     email: Optional[str]
     role: str
+    auth_provider: str = "local"
+    is_admin: bool = False
     created_at: datetime
     tenants: List[str] = []
     memory_scope_keys: List[str] = Field(default_factory=list)
     tenant_memory_scope_keys: List[str] = Field(default_factory=list)
     effective_memory_scope_keys: List[str] = Field(default_factory=list)
+    is_tenant_admin: bool = False
 
 
 class ApiTokenCreate(BaseModel):
@@ -131,6 +134,23 @@ class ProfilePasswordChangeRequest(BaseModel):
     new_password: str
 
 
+class TenantManagementUpdate(BaseModel):
+    data_editor_user_ids: List[UUID] | None = None
+    memory_scope_keys: List[str] | None = None
+
+
+async def _managed_tenant(session: AsyncSession, current_user: UserCtx):
+    tenant_id = UUID(current_user.tenant_ids[0]) if current_user.tenant_ids else None
+    if tenant_id is None:
+        raise HTTPException(status_code=403, detail="Tenant membership required")
+    membership = await session.scalar(select(UserTenants).where(
+        UserTenants.user_id == UUID(current_user.id), UserTenants.tenant_id == tenant_id,
+    ))
+    if membership is None or not membership.is_tenant_admin:
+        raise HTTPException(status_code=403, detail="Tenant administrator access required")
+    return tenant_id
+
+
 async def get_user_from_db(user_ctx: UserCtx) -> Users:
     """Get full user object from database"""
     session_factory = get_session_factory()
@@ -152,6 +172,9 @@ async def get_profile(current_user: UserCtx = Depends(get_current_user), session
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     default_tenant_id = await repo.get_default_tenant(user.id)
+    membership = await session.scalar(select(UserTenants).where(
+        UserTenants.user_id == user.id, UserTenants.tenant_id == default_tenant_id,
+    )) if default_tenant_id else None
     tenant = await AsyncTenantsRepository(session).get_by_id(default_tenant_id) if default_tenant_id else None
     context = await MemoryScopePreferencesService(session).resolve_context(
         user_id=user.id, tenant_id=default_tenant_id, chat_context={},
@@ -160,12 +183,15 @@ async def get_profile(current_user: UserCtx = Depends(get_current_user), session
         id=str(user.id),
         login=user.login,
         email=user.email,
-        role=user.role,
+        role=("admin" if user.is_admin else ("tenant_admin" if membership and membership.is_tenant_admin else ("editor" if membership and membership.is_data_editor else "reader"))),
+        auth_provider=getattr(user, "auth_provider", "local"),
+        is_admin=bool(user.is_admin),
         created_at=user.created_at,
         tenants=current_user.tenant_ids or [],
         memory_scope_keys=list(user.memory_scope_keys or []),
         tenant_memory_scope_keys=list(tenant.memory_scope_keys or []) if tenant else [],
         effective_memory_scope_keys=context.keys,
+        is_tenant_admin=bool(membership and membership.is_tenant_admin),
     )
 
 
@@ -179,6 +205,41 @@ async def set_memory_scopes(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return MemoryScopePreferences(memory_scope_keys=keys)
+
+
+@router.get("/tenant-management")
+async def get_tenant_management(current_user: UserCtx = Depends(get_current_user), session: AsyncSession = Depends(db_session)):
+    tenant_id = await _managed_tenant(session, current_user)
+    tenant = await session.get(Tenants, tenant_id)
+    rows = (await session.execute(
+        select(UserTenants, Users).join(Users, Users.id == UserTenants.user_id)
+        .where(UserTenants.tenant_id == tenant_id).order_by(Users.login)
+    )).all()
+    return {
+        "tenant_id": str(tenant_id),
+        "memory_scope_keys": list(tenant.memory_scope_keys or []),
+        "data_editors": [{"id": str(user.id), "login": user.login, "full_name": user.full_name, "is_data_editor": membership.is_data_editor} for membership, user in rows],
+    }
+
+
+@router.put("/tenant-management")
+async def update_tenant_management(payload: TenantManagementUpdate, current_user: UserCtx = Depends(get_current_user), session: AsyncSession = Depends(db_uow)):
+    tenant_id = await _managed_tenant(session, current_user)
+    tenant = await session.get(Tenants, tenant_id)
+    if payload.memory_scope_keys is not None:
+        try:
+            tenant.memory_scope_keys = await MemoryScopePreferencesService(session).validate_keys(payload.memory_scope_keys)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if payload.data_editor_user_ids is not None:
+        memberships = (await session.execute(select(UserTenants).where(UserTenants.tenant_id == tenant_id))).scalars().all()
+        membership_by_user = {row.user_id: row for row in memberships}
+        requested = set(payload.data_editor_user_ids)
+        if not requested.issubset(membership_by_user):
+            raise HTTPException(status_code=422, detail="Editors must belong to the tenant")
+        for user_id, membership in membership_by_user.items():
+            membership.is_data_editor = user_id in requested
+    return {"tenant_id": str(tenant_id), "memory_scope_keys": list(tenant.memory_scope_keys or [])}
 
 
 def _token_response(token: ApiToken) -> ApiTokenResponse:
@@ -201,8 +262,13 @@ async def create_token(
     session: AsyncSession = Depends(db_uow),
 ):
     """Create a personal Bearer token; return its secret only once."""
-    token, raw = await PersonalAccessTokenService(session).create(
-        user_id=UUID(current_user.id), name=data.name.strip(), expires_days=data.expires_days)
+    try:
+        token, raw = await PersonalAccessTokenService(session).create(
+            user_id=UUID(current_user.id), name=data.name.strip(), expires_days=data.expires_days)
+    except ValueError as exc:
+        if str(exc) == "personal_access_tokens_disabled":
+            raise HTTPException(status_code=403, detail="Personal API tokens are disabled") from exc
+        raise
     return ApiTokenCreatedResponse(**_token_response(token).model_dump(), token=raw)
 
 
@@ -415,9 +481,7 @@ async def list_user_credentials(level: str = "user", current_user: UserCtx = Dep
     async with session_factory() as session:
         owner_filter = Credential.owner_user_id == UUID(current_user.id)
         if level == "tenant":
-            tenant_id = UUID(current_user.tenant_ids[0]) if current_user.tenant_ids else None
-            if tenant_id is None:
-                return []
+            tenant_id = await _managed_tenant(session, current_user)
             owner_filter = Credential.owner_tenant_id == tenant_id
         result = await session.execute(select(Credential, ToolInstance).join(ToolInstance, Credential.instance_id == ToolInstance.id).where(owner_filter, Credential.is_active == True).order_by(Credential.created_at.desc()))
         rows = result.all()
@@ -450,6 +514,7 @@ async def list_credential_instances(current_user: UserCtx = Depends(get_current_
 @router.post("/credentials", response_model=CredentialResponse, status_code=status.HTTP_201_CREATED)
 async def create_user_credential(
     data: CredentialCreate,
+    level: str = "user",
     current_user: UserCtx = Depends(get_current_user)
 ):
     """Create user credential for a tool instance"""
@@ -457,6 +522,9 @@ async def create_user_credential(
     
     session_factory = get_session_factory()
     async with session_factory() as session:
+        if level not in {"user", "tenant"}:
+            raise HTTPException(status_code=422, detail="Invalid credential level")
+        tenant_id = await _managed_tenant(session, current_user) if level == "tenant" else None
         # Verify tool instance exists and is active
         result = await session.execute(
             select(ToolInstance).where(
@@ -476,7 +544,8 @@ async def create_user_credential(
         
         credential = Credential(
             instance_id=data.instance_id,
-            owner_user_id=UUID(current_user.id),
+            owner_user_id=UUID(current_user.id) if tenant_id is None else None,
+            owner_tenant_id=tenant_id,
             owner_platform=False,
             auth_type=data.auth_type,
             encrypted_payload=encrypted,
@@ -506,10 +575,10 @@ async def delete_user_credential(
     async with session_factory() as session:
         owner_filter = Credential.owner_user_id == UUID(current_user.id)
         if level == "tenant":
-            tenant_id = UUID(current_user.tenant_ids[0]) if current_user.tenant_ids else None
-            if tenant_id is None:
-                raise HTTPException(status_code=404, detail="Credential not found")
+            tenant_id = await _managed_tenant(session, current_user)
             owner_filter = Credential.owner_tenant_id == tenant_id
+        elif level != "user":
+            raise HTTPException(status_code=422, detail="Invalid credential level")
         result = await session.execute(select(Credential).where(Credential.id == credential_id, owner_filter))
         credential = result.scalar_one_or_none()
         

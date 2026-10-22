@@ -1,6 +1,7 @@
 import { Badge } from '@/shared/ui';
 import type { CollectionField } from '@/shared/api';
 import type { DataTableColumn } from '@/shared/ui/DataTable/DataTable';
+import styles from './fieldColumns.module.css';
 
 export const collectionFieldColumns: DataTableColumn<CollectionField>[] = [
   { key: 'name', label: 'Название', render: (f) => <code>{f.name}</code> },
@@ -18,7 +19,7 @@ export const collectionFieldColumns: DataTableColumn<CollectionField>[] = [
     key: 'search_modes',
     label: 'Поиск',
     render: (f) => (
-      <span style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+      <span className={styles.searchModes}>
         {f.search_modes.map((m) => <Badge key={m} tone="info">{m}</Badge>)}
       </span>
     ),

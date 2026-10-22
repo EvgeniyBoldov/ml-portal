@@ -20,25 +20,22 @@ def _request(**overrides):
     return PlanRequest(context=context, plan_id=uuid4(), run_id=uuid4())
 
 
-def test_graph_planner_input_builder_uses_only_iteration_contract():
+def test_graph_planner_input_builder_uses_the_current_ledger_payload():
     payload = PlannerInputBuilder().build_graph_request(_request())
 
     assert set(payload) == {
         "goal", "trigger", "execution_ledger", "datastore", "memory_context", "task_brief",
-        "available_agents", "iteration_contract",
-        "scope_context", "planner_search_results", "execution_context",
+        "available_agents", "scope_context",
     }
     assert payload["trigger"] == "task_outcome"
     assert payload["execution_ledger"]["tasks"][0]["task_id"] == "inspect"
-    assert payload["iteration_contract"]["terminal"] == ["planner", "synthesis"]
-    assert payload["execution_context"]["scope_keys"] == []
+    assert payload["scope_context"] == {}
 
 
-def test_planner_receives_execution_context_as_an_application_fact():
+def test_planner_receives_current_scope_context():
     payload = PlannerInputBuilder().build_graph_request(_request(scope_context={
         "keys": ["company", "a"], "revision": 3}))
-    assert payload["execution_context"]["scope_keys"] == ["company", "a"]
-    assert payload["execution_context"]["revision"] == 3
+    assert payload["scope_context"] == {"keys": ["company", "a"], "revision": 3}
 
 
 def test_graph_planner_input_builder_exposes_fresh_retrieval_capability():

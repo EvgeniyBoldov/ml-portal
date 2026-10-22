@@ -14,7 +14,6 @@ from app.schemas.periodic_tasks import (
     PeriodicTaskToggleRequest,
 )
 from app.services.periodic_task_service import PeriodicTaskService
-from app.services.periodic_task_sync_service import PeriodicTaskSyncService
 
 router = APIRouter(tags=["periodic-tasks"])
 
@@ -26,8 +25,6 @@ async def list_periodic_tasks(
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
 ): 
-    await PeriodicTaskSyncService(db).sync_from_beat()
-    await db.commit()
     service = PeriodicTaskService(db)
     items = await service.list_tasks(category=category, is_enabled=is_enabled)
     return PeriodicTaskListResponse(items=[PeriodicTaskItem.model_validate(item) for item in items], total=len(items))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 import pytest
@@ -60,6 +61,52 @@ async def test_empty_synthesis_iteration_ends_without_checkpoint_task() -> None:
     assert store.inner.get(store.plan["id"])["tasks"] == {}
     trace_iteration_id = events[0]["runtime_event"].data["entity_id"]
     assert store.inner.get(store.plan["id"])["iterations"][0]["id"] == trace_iteration_id
+
+
+@pytest.mark.asyncio
+async def test_planned_synthesis_bounds_context_after_selected_run_materials_are_added() -> None:
+    from app.runtime.run_context import RunContext
+    from app.runtime.events import RuntimeEvent
+
+    class SelectedMaterialPlanner:
+        async def plan(self, *, request, **kwargs):
+            return IterationProposal(tasks=[], terminal=TerminalKind.SYNTHESIS, synthesis_brief=SynthesisBrief(
+                user_question="goal", planned_work="use selected evidence", purpose="answer",
+                answer_requirements="Use the source", evidence_refs=[source_id],
+            ))
+
+    class CapturingSynthesizer:
+        received_context = None
+
+        async def stream(self, *, runtime_state, run_id, synthesis_context, **kwargs):
+            self.received_context = synthesis_context
+            runtime_state.final_answer = "answer"
+            yield RuntimeEvent.final("answer", run_id=str(run_id))
+
+    run_context = RunContext(original_request="goal")
+    source_id = run_context.add_evidence("file.read", {}, {"content": "selected source " * 20_000})
+
+    class RuntimeState:
+        def __init__(self):
+            self.final_answer = None
+            self.deleted_artifact_ids = []
+            self.execution_limitations = [{"message": "runtime limitation " * 2_000}]
+            self.run_context = run_context
+
+    store = AsyncMemoryStore()
+    synthesizer = CapturingSynthesizer()
+    events = [event async for event in GraphOrchestrator(
+        store=store, planner=SelectedMaterialPlanner(), executor=Executor(), synthesizer=synthesizer,
+    ).run(
+        plan_id=store.plan["id"], goal="goal", available_agents=[],
+        planner_kwargs={"runtime_state": RuntimeState(), "synthesis_context_max_chars": 4_000},
+    )]
+
+    context = synthesizer.received_context
+    assert len(json.dumps(context, ensure_ascii=False, default=str)) <= 4_000
+    assert context["run_context"]["evidence"][0]["id"] == source_id
+    assert context["limitations"][0]["message"].startswith("runtime limitation")
+    assert events[-1]["status"] == "completed"
 
 
 @pytest.mark.asyncio

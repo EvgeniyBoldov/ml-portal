@@ -42,17 +42,15 @@ def test_discovery_merges_partial_x_runtime_with_defaults() -> None:
     assert discovered.credential_scope == "auto"
 
 
-def test_discovery_rejects_invalid_risk_level() -> None:
-    with pytest.raises(MCPDiscoveryValidationError, match="invalid x-runtime.risk_level"):
-        parse_discovered_operation(
-            tool_name="jira.delete",
-            description="Delete issue",
-            input_schema={
-                "type": "object",
-                "x-runtime": {"risk_level": "banana"},
-            },
-            output_schema=None,
-        )
+def test_unknown_risk_level_is_preserved_as_reported_and_runs_restrictively() -> None:
+    discovered = parse_discovered_operation(
+        tool_name="jira.delete",
+        description="Delete issue",
+        input_schema={"type": "object", "x-runtime": {"risk_level": "banana"}},
+        output_schema=None,
+    )
+    assert discovered.reported_risk_level == "banana"
+    assert discovered.risk_level == "destructive"
 
 
 def test_discovery_rejects_invalid_credential_scope() -> None:

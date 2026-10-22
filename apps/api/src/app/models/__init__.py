@@ -21,6 +21,7 @@ from .tool_release import ToolBackendRelease, ToolRelease, ToolReleaseStatus
 from .agent import Agent
 from .agent_version import AgentVersion, AgentVersionStatus
 from .api_token import ApiToken
+from .auth_refresh_session import AuthRefreshSession
 from .collection import (
     Collection,
     CollectionSchema,
@@ -39,6 +40,7 @@ from .orchestration_settings import OrchestrationSettings
 from .system_llm_role import SystemLLMRole, SystemLLMRoleType, RetryBackoffType
 from .chat_summary import ChatSummary
 from .chat_turn import ChatTurn
+from .platform_usage import PlatformUsage, PlatformUsageCoverage
 from .chat_memory import ChatMemoryItem
 from .chat_context_head import ChatContextHead
 from .sandbox import SandboxSession, SandboxOverride, SandboxRun
@@ -109,6 +111,7 @@ __all__ = [
     "AgentVersion",
     "AgentVersionStatus",
     "ApiToken",
+    "AuthRefreshSession",
     "Collection",
     "CollectionSchema",
     "CollectionVersion",

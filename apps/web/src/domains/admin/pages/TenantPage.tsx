@@ -7,9 +7,8 @@
  */
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useTenant, useModels } from '@shared/api/hooks/useAdmin';
-import { tenantApi } from '@shared/api/tenant';
+import { useQueryClient } from '@tanstack/react-query';
+import { useTenant, useModels, useCreateTenant, useUpdateTenant, useUsers } from '@shared/api/hooks/useAdmin';
 import { qk } from '@shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
@@ -20,9 +19,10 @@ import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import type { Tenant, TenantCreate, TenantUpdate } from '@shared/api/tenant';
 import { CredentialsPanel, FactsPanel } from '@/shared/ui';
-import { MemoryScopePicker } from '@/shared/ui/MemoryScopePicker/MemoryScopePicker';
+import { MemoryScopeSelect } from '@/shared/ui/MemoryScopeSelect/MemoryScopeSelect';
+import MultiSelectTagPicker from '@/shared/ui/MultiSelectTagPicker/MultiSelectTagPicker';
 
-type TenantFormData = Partial<TenantCreate & { is_default?: boolean }>;
+type TenantFormData = Partial<TenantCreate & { is_default?: boolean; tenant_admin_user_ids?: string[] }>;
 
 /* ─── Field configs ─── */
 
@@ -99,6 +99,7 @@ export function TenantPage() {
     ocr: false,
     layout: false,
     memory_scope_keys: [],
+    tenant_admin_user_ids: [],
   });
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -107,6 +108,11 @@ export function TenantPage() {
   // ─── Queries ───
   const { data: tenant, isLoading, refetch } = useTenant(id);
   const { data: modelsData } = useModels({ size: 100 });
+  const usersQuery = useUsers({ limit: 100, include_deprecated: false });
+  useEffect(() => {
+    if (usersQuery.hasNextPage) void usersQuery.fetchNextPage();
+  }, [usersQuery.hasNextPage, usersQuery.fetchNextPage]);
+  const tenantUsers = (usersQuery.data?.pages.flatMap(page => page.users) ?? []).filter(user => user.tenant_id === id);
 
   // ─── Sync form ←→ API ───
   useEffect(() => {
@@ -120,45 +126,57 @@ export function TenantPage() {
         ocr: tenant.ocr || false,
         layout: tenant.layout || false,
         memory_scope_keys: tenant.memory_scope_keys ?? [],
+        tenant_admin_user_ids: tenant.tenant_admin_user_ids ?? [],
       });
     }
   }, [tenant]);
 
   // ─── Mutations ───
-  const createMutation = useMutation({
-    mutationFn: (data: TenantCreate) => tenantApi.createTenant(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.tenants.all() });
-      showSuccess('Тенант создан');
-      navigate('/admin/tenants');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (data: TenantUpdate) => tenantApi.updateTenant(id!, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.tenants.all() });
-      queryClient.invalidateQueries({ queryKey: qk.admin.tenants.detail(id!) });
-      showSuccess('Тенант обновлён');
-      setSearchParams({});
-      refetch();
-    },
-    onError: (err: Error) => showError(err.message),
-  });
+  const createMutation = useCreateTenant();
+  const updateMutation = useUpdateTenant();
 
   // ─── Handlers ───
-  const handleFieldChange = (key: string, value: any) => {
-    setFormData(prev => ({ ...prev, [key]: value }));
+  const handleFieldChange = (key: string, value: unknown) => {
+    setFormData(prev => ({ ...prev, [key]: value }) as TenantFormData);
   };
 
   const handleSave = async () => {
+    if (!formData.name?.trim()) {
+      showError('Название тенанта обязательно');
+      return;
+    }
     setSaving(true);
     try {
       if (isNew) {
-        await createMutation.mutateAsync(formData as TenantCreate);
+        await createMutation.mutateAsync({
+          name: formData.name?.trim() ?? '',
+          description: formData.description?.trim() || null,
+          is_active: formData.is_active,
+          extra_embed_model: formData.extra_embed_model || null,
+          ocr: formData.ocr,
+          layout: formData.layout,
+          memory_scope_keys: formData.memory_scope_keys ?? [],
+        });
+        showSuccess('Тенант создан');
+        navigate('/admin/tenants');
       } else {
-        await updateMutation.mutateAsync(formData as TenantUpdate);
+        await updateMutation.mutateAsync({
+          id: id!,
+          data: {
+            name: formData.name?.trim(),
+            description: formData.description?.trim() || null,
+            is_active: formData.is_active,
+            is_default: formData.is_default,
+            extra_embed_model: formData.extra_embed_model || null,
+            ocr: formData.ocr,
+            layout: formData.layout,
+            memory_scope_keys: formData.memory_scope_keys ?? [],
+            tenant_admin_user_ids: formData.tenant_admin_user_ids ?? [],
+          },
+        });
+        showSuccess('Тенант обновлён');
+        setSearchParams({});
+        refetch();
       }
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Ошибка сохранения');
@@ -201,6 +219,7 @@ export function TenantPage() {
     name: tenant?.name || '',
     description: tenant?.description || '',
     is_default: Boolean(tenant?.is_default),
+    memory_scope_keys: tenant?.memory_scope_keys ?? [],
   };
 
   const embeddingData = mode === 'edit' ? formData : {
@@ -243,6 +262,35 @@ export function TenantPage() {
       label: 'Default tenant',
       description: 'Платформенный тенант по умолчанию',
     },
+    {
+      key: 'memory_scope_keys',
+      type: 'custom',
+      label: 'Скоупы памяти чатов',
+      description: 'Наследуются пользователями без собственного выбора. Пустой список оставляет поведение по умолчанию.',
+      render: (value, editable, onChange) => (
+        <MemoryScopeSelect
+          value={Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : []}
+          onChange={onChange}
+          readOnly={!editable}
+          disabled={saving}
+        />
+      ),
+    },
+    {
+      key: 'tenant_admin_user_ids',
+      type: 'custom',
+      label: 'Администраторы тенанта',
+      description: 'Выберите пользователей этого тенанта, которые смогут управлять его редакторами, скоупами и credentials.',
+      render: (value, editable, onChange) => (
+        <MultiSelectTagPicker
+          label="Администраторы тенанта"
+          options={tenantUsers.map(user => ({ value: user.id, label: user.full_name ? `${user.full_name} (${user.login})` : user.login }))}
+          value={Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []}
+          disabled={!editable || saving}
+          onChange={onChange}
+        />
+      ),
+    },
   ];
   const infoFieldsCreate: FieldConfig[] = infoFieldsWithStatus.filter((f) => f.key !== 'is_default');
   const embeddingFieldsFull: FieldConfig[] = [
@@ -284,8 +332,6 @@ export function TenantPage() {
             editable={true}
             onChange={handleFieldChange}
           />
-          <MemoryScopePicker value={formData.memory_scope_keys ?? []} onChange={(keys) => handleFieldChange('memory_scope_keys', keys)}
-            description="Начальный контекст для пользователей tenant-а. По умолчанию проекты памяти не выбраны." />
         </Tab>
       </EntityPageV2>
     );
@@ -355,15 +401,6 @@ export function TenantPage() {
             fields={META_FIELDS}
             data={metaData}
           />
-        </Tab>
-
-        <Tab title="Скоупы" layout="full" id="scopes" actions={buildEntityCrudActions({
-          mode, saving, lifecycleStatus: tenant?.lifecycle_status,
-          onEdit: handleEdit, onSave: handleSave, onCancel: handleCancel,
-        })}>
-          <MemoryScopePicker value={mode === 'edit' ? formData.memory_scope_keys ?? [] : tenant?.memory_scope_keys ?? []}
-            onChange={(keys) => handleFieldChange('memory_scope_keys', keys)} readOnly={mode !== 'edit'} disabled={saving}
-            description="Наследуются пользователями без собственного выбора. По умолчанию проекты памяти не выбраны." />
         </Tab>
 
         {!isNew && (

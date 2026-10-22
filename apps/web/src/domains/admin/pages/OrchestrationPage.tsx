@@ -4,21 +4,14 @@ import type { ActorLimits, Model, ResponseContract, SystemLLMRole, SystemLLMRole
 import { useModels } from '@/shared/api/hooks/useAdmin';
 import {
   useActiveFactExtractorRole,
-  useActiveMemoryRole,
   useActivePlannerRole,
   useActiveTurnPreflightRole,
   useActiveFactCompactorRole,
   useActiveDocumentMemoryExtractorRole,
   useActiveSynthesizerRole,
   useOrchestratorExecutionLimits,
-  useUpdateFactExtractorRole,
-  useUpdateMemoryRole,
-  useUpdateOrchestratorExecutionLimits,
-  useUpdatePlannerRole,
-  useUpdateTurnPreflightRole,
-  useUpdateFactCompactorRole,
+  useUpdateOrchestratorRoleSettings,
   useUpdateDocumentMemoryExtractorRole,
-  useUpdateSynthesizerRole,
 } from '@/shared/api/hooks/usePlatformSettings';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, EntityPageV2, Input, Tab } from '@/shared/ui';
@@ -26,7 +19,6 @@ import type { GridFieldConfig as FieldConfig } from '@/shared/ui';
 import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor/ContractAwareEditor';
 import {
   FACT_EXTRACTOR_INPUT_CONTRACT,
-  MEMORY_INPUT_CONTRACT,
   PLANNER_INPUT_CONTRACT,
   TURN_PREFLIGHT_INPUT_CONTRACT,
   FACT_COMPACTOR_INPUT_CONTRACT,
@@ -47,7 +39,7 @@ const DEFAULT_ROLE_FORM: RoleFormData = {
   examples: [],
   extras: {},
   model: '',
-  temperature: 0.2,
+  temperature: null,
 };
 
 const DOCUMENT_PROMPT_KEYS = {
@@ -76,12 +68,12 @@ const DOCUMENT_MEMORY_PROMPT_FIELDS: FieldConfig[] = [
 ];
 
 const ORCHESTRATOR_LIMIT_FIELDS: FieldConfig[] = [
-  { key: 'llm_calls_max', label: 'LLM-вызовы' },
-  { key: 'wall_time_ms_max', label: 'Время LLM-вызовов (мс)' },
+  { key: 'llm_calls_max', label: 'LLM-вызовы', description: 'Максимум запросов к модели в фазе. Настройка сохраняется сейчас; runtime начнёт её применять отдельным этапом.' },
+  { key: 'wall_time_ms_max', label: 'Таймаут фазы (мс)', description: 'Максимальная длительность фазы. Таймаут одного запроса и размер контекста настраиваются у модели. Настройка пока только сохраняется.' },
 ].map((field) => ({
   ...field,
   type: 'custom',
-  description: 'Пустое поле наследует общие настройки оркестраторов.',
+  description: field.description,
   render: (value, editable, onChange) => editable ? (
     <Input type="number" min={1} step={1} value={value == null ? '' : String(value)}
       onChange={(event) => onChange(event.target.value === '' ? null : Number(event.target.value))} />
@@ -156,7 +148,15 @@ const roleFields = (
     ),
   },
   { key: 'model', label: 'Модель', type: 'select', options: modelOptions, description: labels.model },
-  { key: 'temperature', label: 'Temperature', type: 'number' },
+  {
+    key: 'temperature', label: 'Temperature', type: 'custom',
+    description: 'От 0 до 2. Пустое значение оставляет температуру на усмотрение модели.',
+    render: (value, editable, onChange) => editable ? (
+      <Input aria-label="Temperature" type="number" min={0} max={2} step="any"
+        value={value == null ? '' : String(value)}
+        onChange={(event) => onChange(event.target.value === '' ? null : Number(event.target.value))} />
+    ) : <span>{value == null ? 'По умолчанию модели' : String(value)}</span>,
+  },
   { key: 'examples', label: 'Примеры', type: 'json', rows: 8, description: 'Примеры добавляются в промпт. Массив объектов с input, output и необязательным description. Пустой массив допустим.' },
 ];
 
@@ -170,7 +170,7 @@ function mapRoleToFields(role?: SystemLLMRole): RoleFormData {
     examples: role?.examples ?? DEFAULT_ROLE_FORM.examples,
     extras: role?.extras ?? DEFAULT_ROLE_FORM.extras,
     model: role?.model ?? DEFAULT_ROLE_FORM.model,
-    temperature: role?.temperature ?? DEFAULT_ROLE_FORM.temperature,
+    temperature: role?.temperature ?? null,
   };
 }
 
@@ -205,6 +205,7 @@ export function OrchestrationPage() {
   const [plannerLimitsForm, setPlannerLimitsForm] = useState<Record<string, unknown>>({});
   const [preflightMode, setPreflightMode] = useState<'view' | 'edit'>('view');
   const [preflightForm, setPreflightForm] = useState<RoleFormData>(DEFAULT_ROLE_FORM);
+  const [preflightLimitsForm, setPreflightLimitsForm] = useState<Record<string, unknown>>({});
 
   const [synthMode, setSynthMode] = useState<'view' | 'edit'>('view');
   const [synthForm, setSynthForm] = useState<RoleFormData>(DEFAULT_ROLE_FORM);
@@ -212,12 +213,11 @@ export function OrchestrationPage() {
 
   const [factMode, setFactMode] = useState<'view' | 'edit'>('view');
   const [factForm, setFactForm] = useState<RoleFormData>(DEFAULT_ROLE_FORM);
-
-  const [memoryMode, setMemoryMode] = useState<'view' | 'edit'>('view');
-  const [memoryForm, setMemoryForm] = useState<RoleFormData>(DEFAULT_ROLE_FORM);
+  const [factLimitsForm, setFactLimitsForm] = useState<Record<string, unknown>>({});
 
   const [compactMode, setCompactMode] = useState<'view' | 'edit'>('view');
   const [compactForm, setCompactForm] = useState<RoleFormData>(DEFAULT_ROLE_FORM);
+  const [compactLimitsForm, setCompactLimitsForm] = useState<Record<string, unknown>>({});
 
   const [documentStudyMode, setDocumentStudyMode] = useState<'view' | 'edit'>('view');
   const [documentStudyForm, setDocumentStudyForm] = useState<DocumentMemoryRoleForm>(DEFAULT_DOCUMENT_MEMORY_ROLE_FORM);
@@ -226,23 +226,21 @@ export function OrchestrationPage() {
   const { data: preflightRole, isLoading: preflightLoading } = useActiveTurnPreflightRole();
   const { data: synthesizerRole, isLoading: synthesizerLoading } = useActiveSynthesizerRole();
   const { data: factExtractorRole, isLoading: factExtractorLoading } = useActiveFactExtractorRole();
-  const { data: memoryRole, isLoading: memoryLoading } = useActiveMemoryRole();
   const { data: factCompactorRole, isLoading: factCompactorLoading } = useActiveFactCompactorRole();
   const { data: documentStudyRole, isLoading: documentStudyLoading } = useActiveDocumentMemoryExtractorRole();
 
   const { data: plannerLimits, isLoading: plannerLimitsLoading } = useOrchestratorExecutionLimits('planner');
+  const { data: preflightLimits, isLoading: preflightLimitsLoading } = useOrchestratorExecutionLimits('turn_preflight');
   const { data: synthLimits, isLoading: synthLimitsLoading } = useOrchestratorExecutionLimits('synthesizer');
+  const { data: factLimits, isLoading: factLimitsLoading } = useOrchestratorExecutionLimits('fact_extractor');
+  const { data: compactLimits, isLoading: compactLimitsLoading } = useOrchestratorExecutionLimits('fact_compactor');
 
-  const updatePlannerRole = useUpdatePlannerRole();
-  const updatePreflightRole = useUpdateTurnPreflightRole();
-  const updateSynthesizerRole = useUpdateSynthesizerRole();
-  const updateFactExtractorRole = useUpdateFactExtractorRole();
-  const updateMemoryRole = useUpdateMemoryRole();
-  const updateFactCompactorRole = useUpdateFactCompactorRole();
+  const updatePlannerSettings = useUpdateOrchestratorRoleSettings('planner');
+  const updatePreflightSettings = useUpdateOrchestratorRoleSettings('turn_preflight');
+  const updateSynthesizerSettings = useUpdateOrchestratorRoleSettings('synthesizer');
+  const updateFactExtractorSettings = useUpdateOrchestratorRoleSettings('fact_extractor');
+  const updateFactCompactorSettings = useUpdateOrchestratorRoleSettings('fact_compactor');
   const updateDocumentStudyRole = useUpdateDocumentMemoryExtractorRole();
-
-  const updatePlannerLimits = useUpdateOrchestratorExecutionLimits('planner');
-  const updateSynthLimits = useUpdateOrchestratorExecutionLimits('synthesizer');
 
   const { data: modelsData, isLoading: modelsLoading } = useModels({ type: 'llm_chat', enabled_only: true });
 
@@ -283,14 +281,6 @@ export function OrchestrationPage() {
     outputRequirements: 'Требования к структуре и качеству извлекаемых фактов.',
     model: 'LLM-модель fact extractor.',
   }, factExtractorRole?.response_contract ?? null, FACT_EXTRACTOR_INPUT_CONTRACT), [modelOptions, factExtractorRole?.response_contract]);
-  const resolvedMemoryFields = useMemo(() => roleFields(modelOptions, {
-    identity: 'Роль подготовки памяти перед планированием.',
-    mission: 'Отбор фактов и проектов, полезных для текущего запроса.',
-    rules: 'Правила выбора только существующих индексов facts и projects. Контракт фиксирует JSON-результат.',
-    safety: 'Ограничения на чувствительные данные в контексте памяти.',
-    outputRequirements: 'Фиксированный JSON-контракт: fact_indexes, project_indexes и ambiguities.',
-    model: 'LLM-модель preparation memory.',
-  }, memoryRole?.response_contract ?? null, MEMORY_INPUT_CONTRACT), [modelOptions, memoryRole?.response_contract]);
   const resolvedFactCompactorFields = useMemo(() => roleFields(modelOptions, {
     identity: 'Роль компактора подтверждённых фактов.',
     mission: 'Нормализация и объединение кандидатов фактов перед сохранением.',
@@ -320,7 +310,7 @@ export function OrchestrationPage() {
           layout="grid"
           actions={buildEntityCrudActions({
             mode: plannerMode,
-            saving: updatePlannerRole.isPending || updatePlannerLimits.isPending,
+            saving: updatePlannerSettings.isPending,
             tone: 'default',
             labels: { edit: 'Изменить' },
             onEdit: () => {
@@ -329,17 +319,17 @@ export function OrchestrationPage() {
               setPlannerMode('edit');
             },
             onSave: async () => {
-              await Promise.all([
-                updatePlannerRole.mutateAsync(plannerForm),
-                updatePlannerLimits.mutateAsync(toLimitsUpdate(plannerLimitsForm)),
-              ]);
+              await updatePlannerSettings.mutateAsync({
+                ...plannerForm,
+                execution_limits: toLimitsUpdate(plannerLimitsForm),
+              });
               setPlannerMode('view');
             },
             onCancel: () => { setPlannerMode('view'); setPlannerForm(DEFAULT_ROLE_FORM); setPlannerLimitsForm({}); },
           })}
         >
           <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={resolvedPlannerFields.filter((f) => ['identity', 'mission', 'rules', 'safety'].includes(f.key))} data={plannerMode === 'edit' ? plannerForm : mapRoleToFields(plannerRole)} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => setPlannerForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={[...resolvedPlannerFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key)), ...ORCHESTRATOR_LIMIT_FIELDS]} data={plannerMode === 'edit' ? { ...plannerForm, ...plannerLimitsForm } : { ...mapRoleToFields(plannerRole), ...plannerLimits?.effective }} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => { if (ORCHESTRATOR_LIMIT_FIELDS.some((field) => field.key === k)) setPlannerLimitsForm((p) => ({ ...p, [k]: v })); else setPlannerForm((p) => ({ ...p, [k]: v })); } : undefined} />
+          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={[...resolvedPlannerFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key)), ...ORCHESTRATOR_LIMIT_FIELDS]} data={plannerMode === 'edit' ? { ...plannerForm, ...plannerLimitsForm } : { ...mapRoleToFields(plannerRole), ...plannerLimits?.own }} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => { if (ORCHESTRATOR_LIMIT_FIELDS.some((field) => field.key === k)) setPlannerLimitsForm((p) => ({ ...p, [k]: v })); else setPlannerForm((p) => ({ ...p, [k]: v })); } : undefined} />
           <Block title="Критерии ответа" icon="code" iconVariant="warning" width="full" fields={resolvedPlannerFields.filter((f) => f.key === 'output_requirements')} data={plannerMode === 'edit' ? plannerForm : mapRoleToFields(plannerRole)} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => setPlannerForm((p) => ({ ...p, [k]: v })) : undefined} />
           <Block title="Примеры" icon="code" iconVariant="info" width="full" fields={resolvedPlannerFields.filter((f) => ROLE_AUXILIARY_KEYS.includes(f.key))} data={plannerMode === 'edit' ? plannerForm : mapRoleToFields(plannerRole)} editable={plannerMode === 'edit'} onChange={plannerMode === 'edit' ? (k, v) => setPlannerForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
@@ -349,16 +339,19 @@ export function OrchestrationPage() {
           layout="grid"
           actions={buildEntityCrudActions({
             mode: preflightMode,
-            saving: updatePreflightRole.isPending,
+            saving: updatePreflightSettings.isPending,
             tone: 'default',
             labels: { edit: 'Изменить' },
-            onEdit: () => { setPreflightForm(mapRoleToFields(preflightRole)); setPreflightMode('edit'); },
-            onSave: async () => { await updatePreflightRole.mutateAsync(preflightForm); setPreflightMode('view'); },
-            onCancel: () => { setPreflightMode('view'); setPreflightForm(DEFAULT_ROLE_FORM); },
+            onEdit: () => { setPreflightForm(mapRoleToFields(preflightRole)); setPreflightLimitsForm({ ...(preflightLimits?.own || {}) }); setPreflightMode('edit'); },
+            onSave: async () => {
+              await updatePreflightSettings.mutateAsync({ ...preflightForm, execution_limits: toLimitsUpdate(preflightLimitsForm) });
+              setPreflightMode('view');
+            },
+            onCancel: () => { setPreflightMode('view'); setPreflightForm(DEFAULT_ROLE_FORM); setPreflightLimitsForm({}); },
           })}
         >
           <Block title="Правила маршрутизации" icon="shield" iconVariant="primary" width="2/3" fields={resolvedPreflightFields.filter((f) => ['identity', 'mission', 'rules', 'safety'].includes(f.key))} data={preflightMode === 'edit' ? preflightForm : mapRoleToFields(preflightRole)} editable={preflightMode === 'edit'} onChange={preflightMode === 'edit' ? (k, v) => setPreflightForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={resolvedPreflightFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key))} data={preflightMode === 'edit' ? preflightForm : mapRoleToFields(preflightRole)} editable={preflightMode === 'edit'} onChange={preflightMode === 'edit' ? (k, v) => setPreflightForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={[...resolvedPreflightFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key)), ...ORCHESTRATOR_LIMIT_FIELDS]} data={preflightMode === 'edit' ? { ...preflightForm, ...preflightLimitsForm } : { ...mapRoleToFields(preflightRole), ...preflightLimits?.own }} editable={preflightMode === 'edit'} onChange={preflightMode === 'edit' ? (k, v) => { if (ORCHESTRATOR_LIMIT_FIELDS.some((field) => field.key === k)) setPreflightLimitsForm((p) => ({ ...p, [k]: v })); else setPreflightForm((p) => ({ ...p, [k]: v })); } : undefined} />
           <Block title="Контракт ответа" icon="code" iconVariant="warning" width="full" fields={resolvedPreflightFields.filter((f) => f.key === 'output_requirements')} data={preflightMode === 'edit' ? preflightForm : mapRoleToFields(preflightRole)} editable={preflightMode === 'edit'} onChange={preflightMode === 'edit' ? (k, v) => setPreflightForm((p) => ({ ...p, [k]: v })) : undefined} />
           <Block title="Примеры" icon="code" iconVariant="info" width="full" fields={resolvedPreflightFields.filter((f) => ROLE_AUXILIARY_KEYS.includes(f.key))} data={preflightMode === 'edit' ? preflightForm : mapRoleToFields(preflightRole)} editable={preflightMode === 'edit'} onChange={preflightMode === 'edit' ? (k, v) => setPreflightForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
@@ -368,22 +361,22 @@ export function OrchestrationPage() {
           layout="grid"
           actions={buildEntityCrudActions({
             mode: synthMode,
-            saving: updateSynthesizerRole.isPending || updateSynthLimits.isPending,
+            saving: updateSynthesizerSettings.isPending,
             tone: 'default',
             labels: { edit: 'Изменить' },
             onEdit: () => { setSynthForm(mapRoleToFields(synthesizerRole)); setSynthLimitsForm({ ...(synthLimits?.own || {}) }); setSynthMode('edit'); },
             onSave: async () => {
-              await Promise.all([
-                updateSynthesizerRole.mutateAsync(synthForm),
-                updateSynthLimits.mutateAsync(toLimitsUpdate(synthLimitsForm)),
-              ]);
+              await updateSynthesizerSettings.mutateAsync({
+                ...synthForm,
+                execution_limits: toLimitsUpdate(synthLimitsForm),
+              });
               setSynthMode('view');
             },
             onCancel: () => { setSynthMode('view'); setSynthForm(DEFAULT_ROLE_FORM); setSynthLimitsForm({}); },
           })}
         >
           <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={resolvedSynthesizerFields.filter((f) => f.key === 'identity' || f.key === 'mission' || f.key === 'rules' || f.key === 'safety')} data={synthMode === 'edit' ? synthForm : mapRoleToFields(synthesizerRole)} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => setSynthForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={[...resolvedSynthesizerFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key)), ...ORCHESTRATOR_LIMIT_FIELDS]} data={synthMode === 'edit' ? { ...synthForm, ...synthLimitsForm } : { ...mapRoleToFields(synthesizerRole), ...synthLimits?.effective }} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => { if (ORCHESTRATOR_LIMIT_FIELDS.some((field) => field.key === k)) setSynthLimitsForm((p) => ({ ...p, [k]: v })); else setSynthForm((p) => ({ ...p, [k]: v })); } : undefined} />
+          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={[...resolvedSynthesizerFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key)), ...ORCHESTRATOR_LIMIT_FIELDS]} data={synthMode === 'edit' ? { ...synthForm, ...synthLimitsForm } : { ...mapRoleToFields(synthesizerRole), ...synthLimits?.own }} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => { if (ORCHESTRATOR_LIMIT_FIELDS.some((field) => field.key === k)) setSynthLimitsForm((p) => ({ ...p, [k]: v })); else setSynthForm((p) => ({ ...p, [k]: v })); } : undefined} />
           <Block title="Критерии ответа" icon="code" iconVariant="warning" width="full" fields={resolvedSynthesizerFields.filter((f) => f.key === 'output_requirements')} data={synthMode === 'edit' ? synthForm : mapRoleToFields(synthesizerRole)} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => setSynthForm((p) => ({ ...p, [k]: v })) : undefined} />
           <Block title="Примеры" icon="code" iconVariant="info" width="full" fields={resolvedSynthesizerFields.filter((f) => ROLE_AUXILIARY_KEYS.includes(f.key))} data={synthMode === 'edit' ? synthForm : mapRoleToFields(synthesizerRole)} editable={synthMode === 'edit'} onChange={synthMode === 'edit' ? (k, v) => setSynthForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
@@ -393,43 +386,21 @@ export function OrchestrationPage() {
           layout="grid"
           actions={buildEntityCrudActions({
             mode: factMode,
-            saving: updateFactExtractorRole.isPending,
+            saving: updateFactExtractorSettings.isPending,
             tone: 'default',
             labels: { edit: 'Изменить' },
-            onEdit: () => { setFactForm(mapRoleToFields(factExtractorRole)); setFactMode('edit'); },
+            onEdit: () => { setFactForm(mapRoleToFields(factExtractorRole)); setFactLimitsForm({ ...(factLimits?.own || {}) }); setFactMode('edit'); },
             onSave: async () => {
-              await updateFactExtractorRole.mutateAsync(factForm);
+              await updateFactExtractorSettings.mutateAsync({ ...factForm, execution_limits: toLimitsUpdate(factLimitsForm) });
               setFactMode('view');
             },
-            onCancel: () => { setFactMode('view'); setFactForm(DEFAULT_ROLE_FORM); },
+            onCancel: () => { setFactMode('view'); setFactForm(DEFAULT_ROLE_FORM); setFactLimitsForm({}); },
           })}
         >
           <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={resolvedFactExtractorFields.filter((f) => f.key === 'identity' || f.key === 'mission' || f.key === 'rules' || f.key === 'safety')} data={factMode === 'edit' ? factForm : mapRoleToFields(factExtractorRole)} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={[...resolvedFactExtractorFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key)), FACT_POLICY_FIELD]} data={factMode === 'edit' ? factForm : mapRoleToFields(factExtractorRole)} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={[...resolvedFactExtractorFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key)), ...ORCHESTRATOR_LIMIT_FIELDS, FACT_POLICY_FIELD]} data={factMode === 'edit' ? { ...factForm, ...factLimitsForm } : { ...mapRoleToFields(factExtractorRole), ...factLimits?.own }} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => { if (ORCHESTRATOR_LIMIT_FIELDS.some((field) => field.key === k)) setFactLimitsForm((p) => ({ ...p, [k]: v })); else setFactForm((p) => ({ ...p, [k]: v })); } : undefined} />
           <Block title="Критерии ответа" icon="code" iconVariant="warning" width="full" fields={resolvedFactExtractorFields.filter((f) => f.key === 'output_requirements')} data={factMode === 'edit' ? factForm : mapRoleToFields(factExtractorRole)} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactForm((p) => ({ ...p, [k]: v })) : undefined} />
           <Block title="Примеры" icon="code" iconVariant="info" width="full" fields={resolvedFactExtractorFields.filter((f) => ROLE_AUXILIARY_KEYS.includes(f.key))} data={factMode === 'edit' ? factForm : mapRoleToFields(factExtractorRole)} editable={factMode === 'edit'} onChange={factMode === 'edit' ? (k, v) => setFactForm((p) => ({ ...p, [k]: v })) : undefined} />
-        </Tab>
-
-        <Tab
-          title="Подбор контекста памяти"
-          layout="grid"
-          actions={buildEntityCrudActions({
-            mode: memoryMode,
-            saving: updateMemoryRole.isPending,
-            tone: 'default',
-            labels: { edit: 'Изменить' },
-            onEdit: () => { setMemoryForm(mapRoleToFields(memoryRole)); setMemoryMode('edit'); },
-            onSave: async () => {
-              await updateMemoryRole.mutateAsync(memoryForm);
-              setMemoryMode('view');
-            },
-            onCancel: () => { setMemoryMode('view'); setMemoryForm(DEFAULT_ROLE_FORM); },
-          })}
-        >
-          <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={resolvedMemoryFields.filter((f) => f.key === 'identity' || f.key === 'mission' || f.key === 'rules' || f.key === 'safety')} data={memoryMode === 'edit' ? memoryForm : mapRoleToFields(memoryRole)} editable={memoryMode === 'edit'} onChange={memoryMode === 'edit' ? (k, v) => setMemoryForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={resolvedMemoryFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key))} data={memoryMode === 'edit' ? memoryForm : mapRoleToFields(memoryRole)} editable={memoryMode === 'edit'} onChange={memoryMode === 'edit' ? (k, v) => setMemoryForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Требования к ответу" icon="code" iconVariant="warning" width="full" fields={resolvedMemoryFields.filter((f) => f.key === 'output_requirements')} data={memoryMode === 'edit' ? memoryForm : mapRoleToFields(memoryRole)} editable={memoryMode === 'edit'} onChange={memoryMode === 'edit' ? (k, v) => setMemoryForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Примеры" icon="code" iconVariant="info" width="full" fields={resolvedMemoryFields.filter((f) => ROLE_AUXILIARY_KEYS.includes(f.key))} data={memoryMode === 'edit' ? memoryForm : mapRoleToFields(memoryRole)} editable={memoryMode === 'edit'} onChange={memoryMode === 'edit' ? (k, v) => setMemoryForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
 
         <Tab
@@ -437,25 +408,28 @@ export function OrchestrationPage() {
           layout="grid"
           actions={buildEntityCrudActions({
             mode: compactMode,
-            saving: updateFactCompactorRole.isPending,
+            saving: updateFactCompactorSettings.isPending,
             tone: 'default',
             labels: { edit: 'Изменить' },
-            onEdit: () => { setCompactForm(mapRoleToFields(factCompactorRole)); setCompactMode('edit'); },
+            onEdit: () => { setCompactForm(mapRoleToFields(factCompactorRole)); setCompactLimitsForm({ ...(compactLimits?.own || {}) }); setCompactMode('edit'); },
             onSave: async () => {
-              await updateFactCompactorRole.mutateAsync(compactForm);
+              await updateFactCompactorSettings.mutateAsync({ ...compactForm, execution_limits: toLimitsUpdate(compactLimitsForm) });
               setCompactMode('view');
             },
-            onCancel: () => { setCompactMode('view'); setCompactForm(DEFAULT_ROLE_FORM); },
+            onCancel: () => { setCompactMode('view'); setCompactForm(DEFAULT_ROLE_FORM); setCompactLimitsForm({}); },
           })}
         >
+          {/* Статус: используется после хода для проверки и нормализации подтверждённых user/tenant facts. */}
           <Block title="Правила" icon="shield" iconVariant="primary" width="2/3" fields={resolvedFactCompactorFields.filter((f) => f.key === 'identity' || f.key === 'mission' || f.key === 'rules' || f.key === 'safety')} data={compactMode === 'edit' ? compactForm : mapRoleToFields(factCompactorRole)} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactForm((p) => ({ ...p, [k]: v })) : undefined} />
-          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={resolvedFactCompactorFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key))} data={compactMode === 'edit' ? compactForm : mapRoleToFields(factCompactorRole)} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactForm((p) => ({ ...p, [k]: v })) : undefined} />
+          <Block title="Параметры" icon="settings" iconVariant="info" width="1/3" fields={[...resolvedFactCompactorFields.filter((f) => ROLE_PARAM_KEYS.includes(f.key)), ...ORCHESTRATOR_LIMIT_FIELDS]} data={compactMode === 'edit' ? { ...compactForm, ...compactLimitsForm } : { ...mapRoleToFields(factCompactorRole), ...compactLimits?.own }} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => { if (ORCHESTRATOR_LIMIT_FIELDS.some((field) => field.key === k)) setCompactLimitsForm((p) => ({ ...p, [k]: v })); else setCompactForm((p) => ({ ...p, [k]: v })); } : undefined} />
           <Block title="Критерии ответа" icon="code" iconVariant="warning" width="full" fields={resolvedFactCompactorFields.filter((f) => f.key === 'output_requirements')} data={compactMode === 'edit' ? compactForm : mapRoleToFields(factCompactorRole)} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactForm((p) => ({ ...p, [k]: v })) : undefined} />
           <Block title="Примеры" icon="code" iconVariant="info" width="full" fields={resolvedFactCompactorFields.filter((f) => ROLE_AUXILIARY_KEYS.includes(f.key))} data={compactMode === 'edit' ? compactForm : mapRoleToFields(factCompactorRole)} editable={compactMode === 'edit'} onChange={compactMode === 'edit' ? (k, v) => setCompactForm((p) => ({ ...p, [k]: v })) : undefined} />
         </Tab>
 
+        {/* DEPRECATED: this role serves only the legacy shadow document study/review pipeline. */}
         <Tab
           title="Изучатель документов"
+          hidden
           layout="grid"
           actions={buildEntityCrudActions({
             mode: documentStudyMode,
@@ -475,7 +449,7 @@ export function OrchestrationPage() {
         </Tab>
       </EntityPageV2>
 
-      {(modelsLoading || plannerLoading || preflightLoading || synthesizerLoading || factExtractorLoading || memoryLoading || factCompactorLoading || documentStudyLoading || plannerLimitsLoading || synthLimitsLoading) && (
+      {(modelsLoading || plannerLoading || preflightLoading || synthesizerLoading || factExtractorLoading || factCompactorLoading || documentStudyLoading || plannerLimitsLoading || preflightLimitsLoading || synthLimitsLoading || factLimitsLoading || compactLimitsLoading) && (
         <div>Загрузка настроек оркестрации…</div>
       )}
     </>

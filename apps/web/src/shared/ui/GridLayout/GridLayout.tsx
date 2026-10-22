@@ -491,6 +491,7 @@ function FieldEditor({ field, value, editable, onChange }: FieldEditorProps) {
           onChange={(newTags: string[]) => onChange(newTags)}
           disabled={isDisabled}
           placeholder={field.placeholder}
+          options={field.options}
         />
       );
     }

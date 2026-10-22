@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any, List, AsyncGenerator
 from datetime import datetime, timezone
 import asyncio
 import uuid
+import hashlib
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
@@ -19,7 +20,6 @@ from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesR
 from app.core.http.clients import LLMClientProtocol
 from app.agents import ToolContext
 from app.runtime import PipelineRequest, RuntimeEvent, RuntimeEventType, RuntimePipeline
-from app.runtime.contracts import ExecutionMode
 from app.agents.execution_preflight import AgentUnavailableError
 from app.core.logging import get_logger
 from app.core.config import get_settings
@@ -29,7 +29,7 @@ from app.services.chat_context_contracts import ChatContextSnapshot
 from app.services.chat_event_mapper import ChatEventMapper
 from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_turn_orchestrator import ChatTurnOrchestrator
-from app.services.chat_turn_service import ChatTurnService
+from app.services.chat_turn_service import ChatTurnIdempotencyError, ChatTurnService
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
@@ -85,10 +85,22 @@ class ChatStreamService:
     async def check_idempotency(
         self,
         idempotency_key: str,
-        chat_id: str
+        chat_id: str,
+        user_id: str,
+        request_hash: str,
     ) -> Optional[Dict[str, str]]:
         """Check if request with this idempotency key was already processed"""
-        return await self.idempotency.get_cached_result(idempotency_key)
+        cached = await self.idempotency.get_cached_result(self._scoped_idempotency_key(
+            idempotency_key=idempotency_key, chat_id=chat_id, user_id=user_id,
+        ))
+        if cached and cached.get("request_hash") != request_hash:
+            return {"state": "conflict"}
+        return cached
+
+    @staticmethod
+    def _scoped_idempotency_key(*, idempotency_key: str, chat_id: str, user_id: str) -> str:
+        scope = f"{user_id}:{chat_id}:{idempotency_key}"
+        return hashlib.sha256(scope.encode("utf-8")).hexdigest()
 
     async def check_turn_idempotency(
         self,
@@ -136,12 +148,22 @@ class ChatStreamService:
         idempotency_key: str,
         user_message_id: str,
         assistant_message_id: str,
+        *,
+        chat_id: str,
+        user_id: str,
+        request_hash: str,
         ttl_hours: int = 24
     ) -> None:
         """Store idempotency result"""
-        await self.idempotency.cache_result(idempotency_key, {
+        scoped_key = self._scoped_idempotency_key(
+            idempotency_key=idempotency_key, chat_id=chat_id, user_id=user_id,
+        )
+        await self.idempotency.cache_result(scoped_key, {
             "user_message_id": user_message_id,
             "assistant_message_id": assistant_message_id,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "request_hash": request_hash,
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
     
@@ -153,10 +175,7 @@ class ChatStreamService:
         tenant_id: Optional[str] = None,
         artifact_ids: Optional[list[str]] = None,
         confirmation_tokens: Optional[list[str]] = None,
-        execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         idempotency_key: Optional[str] = None,
-        model: Optional[str] = None,
-        agent_slug: Optional[str] = None,
         continuation_meta: Optional[Dict[str, Any]] = None,
         resumed_turn_id: Optional[str] = None,
         persist_user_message: bool = True,
@@ -198,8 +217,16 @@ class ChatStreamService:
                 }
                 return
 
-            cached = await self.check_idempotency(idempotency_key, chat_id)
+            hash_payload = content if not artifact_ids else f"{content}||artifacts:{','.join(sorted(artifact_ids))}"
+            request_hash = self.chat_turn_service.build_request_hash(hash_payload)
+            cached = await self.check_idempotency(idempotency_key, chat_id, user_id, request_hash)
             if cached:
+                if cached.get("state") == "conflict":
+                    yield _safe_stream_error(
+                        "idempotency_conflict",
+                        "Idempotency key was already used with different request payload",
+                    )
+                    return
                 logger.info(
                     "chat_idempotency_hit",
                     extra={
@@ -289,12 +316,9 @@ class ChatStreamService:
                 content=content,
                 artifact_ids=artifact_ids,
                 confirmation_tokens=confirmation_tokens or [],
-                execution_mode=execution_mode,
                 attachment_meta=attachment_meta,
                 attachment_contexts=attachment_contexts,
                 idempotency_key=idempotency_key,
-                model=model,
-                agent_slug=agent_slug,
                 continuation_meta=continuation_meta,
                 resumed_turn_id=resumed_turn_id,
                 persist_user_message=persist_user_message,
@@ -306,6 +330,13 @@ class ChatStreamService:
             ):
                 yield event
 
+        except ChatTurnIdempotencyError as e:
+            code = "idempotency_conflict" if e.conflict else "idempotency_processing"
+            message = (
+                "Idempotency key was already used with different request payload"
+                if e.conflict else "Request with this idempotency key is already in progress"
+            )
+            yield _safe_stream_error(code, message)
         except Exception as e:
             logger.error(f"Error in send_message_stream: {e}", exc_info=True)
             if resumed_turn_id:
@@ -330,14 +361,11 @@ class ChatStreamService:
     
     async def _run_with_router(
         self,
-        agent_slug: str,
         user_id: str,
         tenant_id: str,
         llm_messages: List[Dict[str, str]],
         tool_ctx: ToolContext,
-        model: Optional[str],
         content: str,
-        execution_mode: ExecutionMode = ExecutionMode.NORMAL,
         attachment_contexts: Optional[list[dict[str, Any]]] = None,
         runtime_run_id: Optional[str] = None,
         chat_turn_id: Optional[str] = None,
@@ -370,12 +398,9 @@ class ChatStreamService:
                 tenant_id=tenant_id,
                 messages=llm_messages,
                 attachments=list(attachment_contexts or []),
-                agent_slug=agent_slug,
-                model=model,
                 continuation_meta=(tool_ctx.extra or {}).get("continuation_meta", {}) if hasattr(tool_ctx, "extra") else {},
                 confirmation_tokens=list((tool_ctx.extra or {}).get("confirmation_tokens") or []),
                 await_background_tail=False,
-                execution_mode=execution_mode,
             )
 
             # Subscribe before the pipeline can emit RUN_START. The tail bus is

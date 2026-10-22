@@ -90,6 +90,8 @@ async def delete_entity(
             raise HTTPException(status_code=409, detail="last_admin") from exc
         if str(exc) == "memory_scope_has_dependencies":
             raise HTTPException(status_code=409, detail="memory_scope_has_dependencies") from exc
+        if str(exc) == "long_memory_encoder_not_configured":
+            raise HTTPException(status_code=409, detail="Для очистки LongMemory сначала настройте embedding-модель") from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {

@@ -2,7 +2,7 @@ import React from 'react';
 
 import { Icon } from '@shared/ui/Icon';
 
-import { getStatusIcon } from './statusFlowUtils';
+import { getStatusIcon, getStatusLabel } from './statusFlowUtils';
 import type {
   FlowGraphModel,
   FlowLane,
@@ -18,14 +18,9 @@ const STATUS_COLORS: Record<FlowStatus, string> = {
   processing: 'var(--primary)',
   completed: 'var(--success)',
   failed: 'var(--danger)',
-};
-
-const STATUS_LABELS: Record<FlowStatus, string> = {
-  pending: 'В ожидании',
-  queued: 'В очереди',
-  processing: 'Выполняется',
-  completed: 'Завершено',
-  failed: 'Ошибка',
+  cancelled: 'var(--warning)',
+  skipped: 'var(--muted)',
+  unknown: 'var(--muted)',
 };
 
 interface PositionedEdge {
@@ -75,7 +70,7 @@ function NodeCard({
         { '--status-color': STATUS_COLORS[node.status] } as React.CSSProperties
       }
       title={node.label}
-      aria-label={`${node.label}: ${STATUS_LABELS[node.status]}`}
+      aria-label={`${node.label}: ${getStatusLabel(node.status)}`}
       aria-pressed={selected}
       onClick={onClick}
     >
@@ -86,7 +81,7 @@ function NodeCard({
         <Icon name={getStatusIcon(node.status)} size={20} />
       </span>
       <span className={styles.nodeLabel}>{node.label}</span>
-      <span className={styles.nodeStatus}>{STATUS_LABELS[node.status]}</span>
+      <span className={styles.nodeStatus}>{getStatusLabel(node.status)}</span>
     </button>
   );
 }
@@ -434,7 +429,7 @@ export function DocumentDAGView({
                   className={styles.legendDot}
                   style={{ backgroundColor: STATUS_COLORS[status] }}
                 />
-                <span>{STATUS_LABELS[status]}</span>
+                <span>{getStatusLabel(status)}</span>
               </div>
             ))}
           </div>

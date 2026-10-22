@@ -154,27 +154,29 @@ root-owned controller применяет конкретный commit как immu
 
 ### Контейнер `beat`
 
-Расписание периодических задач выполняется в отдельном контейнере `beat` (Celery Beat), добавленном в `docker-compose.yml`. Он запускается той же точкой входа, что и `worker`, но с командой `celery beat`:
+Расписание периодических задач выполняется в отдельном контейнере `beat` (Celery Beat), добавленном в `docker-compose.yml`. При `BEAT=1` запустите его командой `make dev-beat-up`; целевой контейнер включён в профиль `scheduler`:
 
 ```bash
+make dev-beat-up
 docker compose logs --tail=200 beat
 ```
 
-Beat активирует расписание только при наличии переменной окружения `BEAT=1`. Проверить, что планировщик работает:
+Проверить, что Beat публикует задачи по расписанию:
 
 ```bash
-docker compose exec beat celery -A app.celery_app inspect scheduled
+docker compose logs --since=5m beat | rg 'Scheduler: Sending due task'
 ```
 
-Задачи выполняются воркерами из очереди `health` (приоритет 3). Убедитесь, что `worker` запущен и слушает эту очередь.
+Задачи маршрутизируются в разные очереди. Убедитесь, что `worker` запущен и слушает очереди, заданные в `celery_app.py`.
 
 ### Подключение к мониторингу
 
 | Endpoint | Назначение |
 |---|---|
 | `GET /api/v1/monitoring/health` | Liveness probe — без обращения к БД |
-| `GET /api/v1/monitoring/health/detailed` | Readiness probe — счётчики коннекторов и моделей |
-| `GET /api/v1/monitoring/metrics` | Prometheus scrape endpoint |
+| `GET /api/v1/monitoring/health/detailed` | Admin-only readiness probe — счётчики коннекторов и моделей |
+| `GET /api/v1/monitoring/metrics` | Admin-only Prometheus scrape endpoint |
+| `GET /metrics` | Admin-only process metrics; дополнительно ограничен Nginx по IP |
 
 Пример scrape-конфига для Prometheus:
 
@@ -185,13 +187,16 @@ scrape_configs:
       - targets: ['api:8000']
     metrics_path: /api/v1/monitoring/metrics
     scrape_interval: 60s
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/ml_portal_metrics_pat
 ```
 
 Без Prometheus метрики можно читать напрямую:
 
 ```bash
-curl http://localhost:8000/api/v1/monitoring/metrics
-curl http://localhost:8000/api/v1/monitoring/health/detailed
+curl --header "Authorization: Bearer $ML_PORTAL_ADMIN_PAT" http://localhost:8000/api/v1/monitoring/metrics
+curl --header "Authorization: Bearer $ML_PORTAL_ADMIN_PAT" http://localhost:8000/api/v1/monitoring/health/detailed
 ```
 
 Подробная документация по всей системе мониторинга: `docs/architecture/HEALTH_MONITORING.md`.

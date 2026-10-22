@@ -195,28 +195,30 @@ class TestCreateUser(TestAsyncUsersService):
         assert "email already exists" in str(exc_info.value).lower()
     
     @pytest.mark.asyncio
-    async def test_create_user_with_tenants(self, users_service, mock_users_repo):
-        """Should add user to specified tenants"""
+    async def test_create_user_with_tenant(self, users_service, mock_users_repo):
+        """Should create a single default tenant membership."""
         created_user = MagicMock()
         created_user.id = uuid4()
         mock_users_repo.create.return_value = created_user
         
-        tenant_ids = [str(uuid4()), str(uuid4())]
+        tenant_id = uuid4()
+        mock_users_repo.session.get.return_value = MagicMock(
+            is_active=True, lifecycle_status="active"
+        )
         
         await users_service.create_user(
             login="tenantuser",
             email="tenant@example.com",
             password="password",
             role="reader",
-            tenant_ids=tenant_ids
+            tenant_id=tenant_id,
+            is_active=False,
         )
         
-        # Should call add_to_tenant for each tenant
-        assert mock_users_repo.add_to_tenant.call_count == 2
-        
-        # First tenant should be default
-        first_call = mock_users_repo.add_to_tenant.call_args_list[0]
-        assert first_call.kwargs.get("is_default") is True or first_call.args[-1] is True
+        mock_users_repo.add_to_tenant.assert_awaited_once_with(
+            created_user.id, tenant_id, is_default=True
+        )
+        assert mock_users_repo.create.call_args.kwargs["is_active"] is False
 
 
 class TestUpdateUser(TestAsyncUsersService):
@@ -306,12 +308,15 @@ class TestUpdateUser(TestAsyncUsersService):
         assert "taken" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_update_user_tenant_ids_sets_selected_default(self, users_service, mock_users_repo, sample_user):
-        """Should keep memberships in sync and set default tenant to the first selected tenant."""
+    async def test_update_user_tenant_replaces_membership(self, users_service, mock_users_repo, sample_user):
+        """Should reconcile legacy memberships to the selected single tenant."""
         mock_users_repo.get_by_id.return_value = sample_user
 
         current_tenant_id = uuid4()
         selected_tenant_id = uuid4()
+        mock_users_repo.session.get.return_value = MagicMock(
+            is_active=True, lifecycle_status="active"
+        )
 
         execute_result = MagicMock()
         execute_result.fetchall.return_value = [(current_tenant_id,)]
@@ -319,36 +324,12 @@ class TestUpdateUser(TestAsyncUsersService):
 
         await users_service.update_user(
             str(sample_user.id),
-            {"tenant_ids": [str(selected_tenant_id)]}
+            {"tenant_id": selected_tenant_id}
         )
 
         mock_users_repo.remove_from_tenant.assert_awaited_once()
         mock_users_repo.add_to_tenant.assert_awaited_once()
-        mock_users_repo.set_default_tenant.assert_awaited_once_with(sample_user.id, selected_tenant_id)
-
-
-class TestDeleteUser(TestAsyncUsersService):
-    """Test user deletion"""
-    
-    @pytest.mark.asyncio
-    async def test_delete_user_success(self, users_service, mock_users_repo, sample_user):
-        """Should delete existing user"""
-        mock_users_repo.get_by_id.return_value = sample_user
-        
-        await users_service.delete_user(str(sample_user.id))
-        
-        mock_users_repo.session.delete.assert_called_once_with(sample_user)
-        mock_users_repo.session.flush.assert_called()
-    
-    @pytest.mark.asyncio
-    async def test_delete_user_not_found(self, users_service, mock_users_repo):
-        """Should raise ValueError for non-existent user"""
-        mock_users_repo.get_by_id.return_value = None
-        
-        with pytest.raises(ValueError) as exc_info:
-            await users_service.delete_user(str(uuid4()))
-        
-        assert "not found" in str(exc_info.value).lower()
+        mock_users_repo.set_default_tenant.assert_not_awaited()
 
 
 class TestGetUserById(TestAsyncUsersService):

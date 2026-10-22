@@ -15,7 +15,7 @@ import asyncio
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +25,7 @@ from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.runtime.assembler import PipelineAssembler
-from app.runtime.budgets import BudgetRegistry, BudgetResolver
+from app.runtime.budgets import BudgetExceededError, BudgetRegistry, BudgetResolver
 from app.runtime.contracts import ExecutionMode, PipelineRequest, PipelineStopReason
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot, serialize_limits
 from app.runtime.envelope import PhasedEvent
@@ -51,6 +51,7 @@ from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdent
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
+from app.runtime.phase_limits import stream_synthesis_with_deadline
 from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction, interaction_from_context, require_interaction_allowed
 from app.runtime.input_builders import compact_memory_tool_records
 from app.services.agent_service import AgentService
@@ -67,6 +68,15 @@ from app.runtime.context_outcome import RuntimeOutcomeProjector
 # Memory writeback runs via Celery (single canonical execution mode).
 RUNTIME_MEMORY_INLINE = False
 logger = get_logger(__name__)
+
+
+async def _run_preflight_phase(
+    wall_time_ms: int | None,
+    operation: Callable[[], Awaitable[Any]],
+) -> Any:
+    timeout_s = wall_time_ms / 1000 if wall_time_ms else None
+    async with asyncio.timeout(timeout_s):
+        return await operation()
 
 
 async def _base_scope_context(session, *, chat_context: dict[str, Any], user_id: UUID, tenant_id: UUID) -> EffectiveScopeContext:
@@ -526,6 +536,16 @@ class RuntimePipeline:
         budget_resolver = BudgetResolver(self._session)
         run_limits_v2 = await budget_resolver.resolve_run(platform.config, request.sandbox_overrides)
         planner_limits = await budget_resolver.resolve_orchestrator("planner", request.sandbox_overrides)
+        preflight_limits = await budget_resolver.resolve_orchestrator("turn_preflight", request.sandbox_overrides)
+        budget_registry = BudgetRegistry(run_limits=run_limits_v2)
+        budget_registry.register(
+            entity_type="run", entity_id=run_id_str, parent_entity_id=None,
+            limits=run_limits_v2.as_entity_limits(),
+        )
+        budget_registry.register(
+            entity_type="orchestrator", entity_id=_turn_preflight_orchestrator_id(run_id_str),
+            parent_entity_id=run_id_str, role="turn_preflight", limits=preflight_limits,
+        )
 
         run_context_snapshot = compact_snapshot(
             inputs={
@@ -608,40 +628,78 @@ class RuntimePipeline:
                     orchestrator_id=preflight_id,
                     run_id=run_id_str,
                     role="turn_preflight",
+                    limits=serialize_limits(preflight_limits),
                 ),
                 phase=OrchestrationPhase.PREFLIGHT,
             )
+            preflight_started_at = asyncio.get_running_loop().time()
+            preflight_budget_payload = budget_registry.emit_snapshot(preflight_id, reason="init") or {}
+            yield await emitter.emit(RuntimeEvent.budget_snapshot(
+                entity_type="orchestrator", entity_id=preflight_id, parent_entity_id=run_id_str,
+                own=preflight_budget_payload.get("own", {}), limits=preflight_budget_payload.get("limits"),
+                delta={}, reason="init", at_ms=preflight_budget_payload.get("at_ms"),
+            ), phase=OrchestrationPhase.PREFLIGHT)
             try:
-                lookup = dict(resuming_interaction.checkpoint.get("mechanical_lookup") or {}) if resuming_interaction else await MechanicalLookupService(self._session).lookup(
-                    request_text=effective_user_query, tenant_id=tenant_id,
-                )
-                decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
-                    user_request=effective_goal if resuming_interaction else effective_user_query,
-                    mechanical_lookup=lookup,
-                    ctx=ctx,
-                    facts_context=turn_mem.planner_memory_context,
-                    project_context=turn_mem.project_context,
-                    chat_context=chat_context,
-                    recent_dialogue=recent_dialogue,
-                    attachments=list(request.attachments or []),
-                    continuation=continuation_state,
-                    chat_id=chat_id,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    sandbox_overrides=request.sandbox_overrides,
-                    trace_parent_entity_id=preflight_id,
-                    event_sink=lambda event: emitter.emit(event, phase=OrchestrationPhase.PREFLIGHT),
-                )
+                async def prepare_preflight() -> tuple[dict[str, Any], TurnPreflightDecision]:
+                    lookup = dict(resuming_interaction.checkpoint.get("mechanical_lookup") or {}) if resuming_interaction else await MechanicalLookupService(self._session).lookup(
+                        request_text=effective_user_query, tenant_id=tenant_id,
+                    )
+                    decision = await TurnPreflight(session=self._session, llm_client=self._assembler._llm_client).decide(
+                        user_request=effective_goal if resuming_interaction else effective_user_query,
+                        mechanical_lookup=lookup,
+                        ctx=ctx,
+                        facts_context=turn_mem.planner_memory_context,
+                        project_context=turn_mem.project_context,
+                        chat_context=chat_context,
+                        recent_dialogue=recent_dialogue,
+                        attachments=list(request.attachments or []),
+                        continuation=continuation_state,
+                        chat_id=chat_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        sandbox_overrides=request.sandbox_overrides,
+                        trace_parent_entity_id=preflight_id,
+                        event_sink=lambda event: emitter.emit(event, phase=OrchestrationPhase.PREFLIGHT),
+                        budget_registry=budget_registry,
+                        budget_entity_id=preflight_id,
+                    )
+                    return lookup, decision
+
+                lookup, decision = await _run_preflight_phase(preflight_limits.wall_time_ms, prepare_preflight)
             except Exception as exc:  # conservative compatibility fallback
                 logger.error("TurnPreflight unavailable; planner route is blocked: %s", exc)
+                await self._session.rollback()
+                preflight_budget_payload = budget_registry.emit_snapshot(preflight_id, reason="failed") or {}
+                yield await emitter.emit(RuntimeEvent.budget_snapshot(
+                    entity_type="orchestrator", entity_id=preflight_id, parent_entity_id=run_id_str,
+                    own=preflight_budget_payload.get("own", {}), limits=preflight_budget_payload.get("limits"),
+                    delta={}, reason="failed", at_ms=preflight_budget_payload.get("at_ms"),
+                ), phase=OrchestrationPhase.PREFLIGHT)
                 yield await emitter.emit(
                     RuntimeEvent.orchestrator_end(
                         orchestrator_id=preflight_id, run_id=run_id_str, status="failed",
+                        duration_ms=int((asyncio.get_running_loop().time() - preflight_started_at) * 1000),
                     ),
                     phase=OrchestrationPhase.PREFLIGHT,
                 )
                 from app.runtime.orchestrator import _context_failure_event
-                context_failure = _context_failure_event(exc)
+                if isinstance(exc, BudgetExceededError):
+                    context_failure = RuntimeEvent.error(
+                        str(exc), recoverable=False, retryable=False,
+                        error_code="budget_exceeded",
+                        user_message="Достигнут лимит TurnPreflight. Сузьте запрос или увеличьте лимит роли.",
+                        source="runtime_budget",
+                    )
+                elif isinstance(exc, TimeoutError):
+                    context_failure = RuntimeEvent.error(
+                        "TurnPreflight exceeded its phase time limit",
+                        recoverable=False, retryable=True,
+                        error_code="orchestrator_phase_timeout",
+                        user_message="TurnPreflight превысил лимит времени; планировщик не запускался. Повторите запрос позже.",
+                        source="runtime_budget",
+                    )
+                else:
+                    context_failure = _context_failure_event(exc)
                 if context_failure is not None:
                     runtime_state.final_error = str(context_failure.data.get("user_message"))
                     context_failure.data.update(parent_entity_type="orchestrator", parent_entity_id=preflight_id)
@@ -724,11 +782,18 @@ class RuntimePipeline:
 
 
         if not resume_graph:
+            preflight_budget_payload = budget_registry.emit_snapshot(preflight_id, reason=decision.route) or {}
+            yield await emitter.emit(RuntimeEvent.budget_snapshot(
+                entity_type="orchestrator", entity_id=preflight_id, parent_entity_id=run_id_str,
+                own=preflight_budget_payload.get("own", {}), limits=preflight_budget_payload.get("limits"),
+                delta={}, reason=decision.route, at_ms=preflight_budget_payload.get("at_ms"),
+            ), phase=OrchestrationPhase.PREFLIGHT)
             yield await emitter.emit(
                 RuntimeEvent.orchestrator_end(
                     orchestrator_id=preflight_id,
                     run_id=run_id_str,
                     status=decision.route,
+                    duration_ms=int((asyncio.get_running_loop().time() - preflight_started_at) * 1000),
                 ),
                 phase=OrchestrationPhase.PREFLIGHT,
             )
@@ -791,12 +856,60 @@ class RuntimePipeline:
                 "scope_context": effective_scope_context.model_payload(),
                 "execution_context": turn_mem.project_context["execution_context"],
             }
-            async for event in self._assembler.synthesizer.stream(
-                runtime_state=runtime_state, run_id=run_id, synthesis_context=direct_context, ctx=ctx,
-                model=request.model, platform_config=platform.config,
-                sandbox_overrides=request.sandbox_overrides, logging_level=run_logging_level,
-            ):
-                yield await emitter.emit(event, phase=OrchestrationPhase.SYNTHESIS)
+            synthesis_id: str | None = None
+            try:
+                async for event in stream_synthesis_with_deadline(
+                    self._assembler.synthesizer,
+                    runtime_state=runtime_state, run_id=run_id, synthesis_context=direct_context, ctx=ctx,
+                    model=request.model, platform_config=platform.config,
+                    logging_level=run_logging_level,
+                    sandbox_overrides=request.sandbox_overrides,
+                    budget_registry=budget_registry,
+                    budget_resolver=budget_resolver,
+                ):
+                    if event.type == RuntimeEventType.SYNTHESIS_START:
+                        synthesis_id = str(event.data.get("synthesis_id") or "") or None
+                    yield await emitter.emit(event, phase=OrchestrationPhase.SYNTHESIS)
+            except TimeoutError:
+                runtime_state.final_answer = None
+                runtime_state.final_error = "Synthesizer exceeded its phase time limit"
+                yield await emitter.emit(RuntimeEvent.error(
+                    runtime_state.final_error, recoverable=False, retryable=True,
+                    error_code="orchestrator_phase_timeout",
+                    user_message="Синтезатор превысил лимит времени фазы. Повторите запрос позже.",
+                    source="runtime_budget", parent_entity_type="run", parent_entity_id=run_id_str,
+                ), phase=OrchestrationPhase.SYNTHESIS)
+                if synthesis_id:
+                    yield await emitter.emit(RuntimeEvent.synthesis_end(
+                        synthesis_id=synthesis_id, run_id=run_id_str, status="failed",
+                    ), phase=OrchestrationPhase.SYNTHESIS)
+            except BudgetExceededError as exc:
+                runtime_state.final_answer = None
+                runtime_state.final_error = str(exc)
+                yield await emitter.emit(RuntimeEvent.error(
+                    str(exc), recoverable=False, retryable=False,
+                    error_code="budget_exceeded",
+                    user_message="Достигнут лимит синтезатора. Сузьте запрос или увеличьте лимит роли.",
+                    source="runtime_budget", parent_entity_type="run", parent_entity_id=run_id_str,
+                ), phase=OrchestrationPhase.SYNTHESIS)
+                if synthesis_id:
+                    yield await emitter.emit(RuntimeEvent.synthesis_end(
+                        synthesis_id=synthesis_id, run_id=run_id_str, status="failed",
+                    ), phase=OrchestrationPhase.SYNTHESIS)
+            except Exception:
+                logger.exception("Direct synthesis failed", extra={"run_id": run_id_str})
+                runtime_state.final_answer = None
+                runtime_state.final_error = "Direct synthesis failed"
+                yield await emitter.emit(RuntimeEvent.error(
+                    runtime_state.final_error, recoverable=True, retryable=True,
+                    error_code="synthesis_failed",
+                    user_message="Не удалось подготовить ответ. Повторите запрос позже.",
+                    source="synthesizer", parent_entity_type="run", parent_entity_id=run_id_str,
+                ), phase=OrchestrationPhase.SYNTHESIS)
+                if synthesis_id:
+                    yield await emitter.emit(RuntimeEvent.synthesis_end(
+                        synthesis_id=synthesis_id, run_id=run_id_str, status="failed",
+                    ), phase=OrchestrationPhase.SYNTHESIS)
             if runtime_state.final_answer:
                 await_background_tail = bool(getattr(request, "await_background_tail", True))
                 if await_background_tail:
@@ -879,14 +992,6 @@ class RuntimePipeline:
                 phase=OrchestrationPhase.PLANNER,
             )
 
-        # Per-entity budget registry
-        budget_registry = BudgetRegistry(run_limits=run_limits_v2)
-        budget_registry.register(
-            entity_type="run",
-            entity_id=run_id_str,
-            parent_entity_id=None,
-            limits=run_limits_v2.as_entity_limits(),
-        )
         ctx.extra["runtime_budget_registry"] = budget_registry
         ctx.extra["runtime_budget_resolver"] = budget_resolver
         run_budget_payload = budget_registry.emit_snapshot(run_id_str, reason="init") or {}

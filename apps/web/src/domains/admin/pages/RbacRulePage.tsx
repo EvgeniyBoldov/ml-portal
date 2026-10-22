@@ -8,6 +8,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/shared/api/admin';
+import { tenantApi } from '@/shared/api/tenant';
 import { agentsApi } from '@/shared/api/agents';
 import collectionsApi from '@/shared/api/collections';
 import { rbacApi, type RbacEffect } from '@/shared/api/rbac';
@@ -25,7 +26,6 @@ import {
   RBAC_LEVEL_LABELS,
   RBAC_LEVEL_TONES,
   RBAC_RESOURCE_TYPE_LABELS,
-  formatRbacOwnerLabel,
   formatRbacResourceLabel,
 } from '../shared/rbacLabels';
 
@@ -67,6 +67,10 @@ export function RbacRulePage() {
     mode,
     effect,
     setEffect,
+    level,
+    setLevel,
+    ownerId,
+    setOwnerId,
     resourceType,
     setResourceType,
     resourceId,
@@ -142,14 +146,6 @@ export function RbacRulePage() {
     if (ruleOwner?.tenant_id) return ownerTenant?.name || ruleOwner.name;
     return ruleOwner?.name || '—';
   }, [rule, currentRule, ownerTenant?.name, ownerUser?.login, ruleOwner]);
-
-  const ownerMeta = useMemo(() => {
-    if (!rule && !currentRule) return null;
-    if (ruleOwner?.user_id && ownerTenant?.name) {
-      return `Тенант: ${ownerTenant.name}`;
-    }
-    return null;
-  }, [rule, currentRule, ownerTenant?.name, ruleOwner?.user_id]);
 
   const layers = useMemo<InheritanceLayer[]>(() => {
     if (!rule && !currentRule) return [];
@@ -248,6 +244,38 @@ export function RbacRulePage() {
     staleTime: 30_000,
   });
 
+  const { data: usersData } = useQuery({
+    queryKey: qk.admin.users.list({ limit: 100 }),
+    queryFn: () => adminApi.getUsers({ limit: 100 }),
+    enabled: mode === 'edit' && level === 'user',
+    staleTime: 60_000,
+  });
+
+  const { data: tenantsData } = useQuery({
+    queryKey: qk.admin.tenants.list(),
+    queryFn: () => tenantApi.getTenants({ size: 100 }),
+    enabled: mode === 'edit' && level === 'tenant',
+    staleTime: 60_000,
+  });
+
+  const ownerOptions = useMemo(() => {
+    if (level === 'user') {
+      const options = (usersData?.users ?? []).map((user) => ({ value: user.id, label: user.login }));
+      if (rule?.owner_user_id && !options.some((option) => option.value === rule.owner_user_id)) {
+        options.unshift({ value: rule.owner_user_id, label: ownerUser?.login ?? 'Текущий пользователь' });
+      }
+      return options;
+    }
+    if (level === 'tenant') {
+      const options = (tenantsData?.items ?? []).map((tenant) => ({ value: tenant.id, label: tenant.name }));
+      if (rule?.owner_tenant_id && !options.some((option) => option.value === rule.owner_tenant_id)) {
+        options.unshift({ value: rule.owner_tenant_id, label: ownerTenant?.name ?? 'Текущий тенант' });
+      }
+      return options;
+    }
+    return [];
+  }, [level, usersData, tenantsData, rule?.owner_user_id, rule?.owner_tenant_id, ownerUser?.login, ownerTenant?.name]);
+
   const resourceTypeOptions = [
     { value: 'agent', label: 'Агенты' },
     { value: 'instance', label: 'Данные' },
@@ -308,16 +336,39 @@ export function RbacRulePage() {
             icon="user"
             iconVariant="info"
             width="1/2"
-            headerActions={rule ? <Badge tone={RBAC_LEVEL_TONES[rule.level]}>{RBAC_LEVEL_LABELS[rule.level]}</Badge> : undefined}
           >
             <div style={{ display: 'grid', gap: 12 }}>
-              <div>
-                <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Владелец</div>
-                <div style={{ fontWeight: 500 }}>{ownerLabel || '—'}</div>
-                {ownerMeta && (
-                  <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 2 }}>{ownerMeta}</div>
-                )}
-              </div>
+              {mode === 'edit' && (
+                <div>
+                  <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Уровень доступа</div>
+                  <Select
+                    value={level}
+                    onChange={(value) => {
+                      setLevel(value as typeof level);
+                      setOwnerId('');
+                    }}
+                    options={[
+                      { value: 'platform', label: 'Платформа' },
+                      { value: 'tenant', label: 'Тенант' },
+                      { value: 'user', label: 'Пользователь' },
+                    ]}
+                  />
+                </div>
+              )}
+              {mode === 'edit' && level !== 'platform' && (
+                <div>
+                  <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Владелец уровня</div>
+                  <Select value={ownerId} onChange={setOwnerId} options={ownerOptions} placeholder="Выберите владельца" />
+                </div>
+              )}
+              {mode === 'view' && (
+                <div>
+                  <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>На кого действует</div>
+                  <Badge tone={RBAC_LEVEL_TONES[rule?.level ?? 'tenant']}>
+                    {RBAC_LEVEL_LABELS[rule?.level ?? 'tenant']}: {rule?.level === 'platform' ? 'Все' : ownerLabel || '—'}
+                  </Badge>
+                </div>
+              )}
               <div>
                 <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginBottom: 4 }}>Создано</div>
                 <div>{rule?.created_at ? new Date(rule.created_at).toLocaleString('ru-RU') : '—'}</div>

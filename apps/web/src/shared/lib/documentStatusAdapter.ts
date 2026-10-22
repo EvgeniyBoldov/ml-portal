@@ -20,12 +20,14 @@ const mapState = (s: string | undefined): StageState => {
     case 'processing':
       return 'running';
     case 'cancelled':
+      return 'cancelled';
+    case 'skipped':
       return 'skipped';
     case 'queued':
     case 'pending':
       return s as StageState;
     default:
-      return 'idle';
+      return 'unknown';
   }
 };
 

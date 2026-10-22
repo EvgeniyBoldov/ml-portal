@@ -8,9 +8,10 @@ from app.repositories.tenants_repo import AsyncTenantsRepository
 from app.repositories.model_registry_repo import AsyncModelRegistryRepository
 from app.models.model_registry import ModelType, ModelStatus
 from app.core.logging import get_logger
-from app.services.rbac_cleanup_service import RbacCleanupService
-from app.services.tenant_migration_service import TenantMigrationService
 from app.services.memory_scope_preferences_service import MemoryScopePreferencesService
+from app.models.tenant import UserTenants
+from sqlalchemy import select
+import inspect
 import uuid
 
 logger = get_logger(__name__)
@@ -51,25 +52,64 @@ class AsyncTenantsService:
         for t in tenants:
             results.append(await self._build_tenant_response(t))
         return results
+
+    async def list_tenants_page(
+        self,
+        *,
+        page: int,
+        size: int,
+        search: str | None = None,
+        is_active: bool | None = None,
+        include_deprecated: bool = False,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        tenants, total = await self.repo.list_page(
+            page=page,
+            size=size,
+            search=search,
+            is_active=is_active,
+            include_deprecated=include_deprecated,
+        )
+        global_embed = await self.model_repo.get_global_by_type(ModelType.EMBEDDING)
+        global_rerank = await self.model_repo.get_global_by_type(ModelType.RERANKER)
+        items = [
+            await self._build_tenant_response(
+                tenant,
+                global_embed=global_embed,
+                global_rerank=global_rerank,
+            )
+            for tenant in tenants
+        ]
+        return items, total
     
     async def create_tenant(self, tenant_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create new tenant"""
         # Validate required fields
         if not tenant_data.get("name"):
             raise ValueError("Tenant name is required")
+        if await self.repo.get_by_name(tenant_data["name"]):
+            raise ValueError("tenant_name_already_exists")
+        admin_user_ids = tenant_data.pop("tenant_admin_user_ids", [])
         tenant_data["memory_scope_keys"] = await MemoryScopePreferencesService(self.session).validate_keys(
             tenant_data.get("memory_scope_keys", []),
         )
         
         # Map extra_embed_model to embedding_model_alias for backward compatibility
         if "extra_embed_model" in tenant_data:
-            tenant_data["embedding_model_alias"] = tenant_data.pop("extra_embed_model")
+            tenant_data["embedding_model_alias"] = tenant_data.pop("extra_embed_model") or None
             
         # Validate models if provided
         if "embedding_model_alias" in tenant_data:
             await self.validate_tenant_models(tenant_data.get("embedding_model_alias"))
         
         tenant = await self.repo.create(**tenant_data)
+        if admin_user_ids:
+            memberships = (await self.session.execute(select(UserTenants).where(
+                UserTenants.tenant_id == tenant.id, UserTenants.user_id.in_(admin_user_ids),
+            ))).scalars().all()
+            for membership in memberships:
+                membership.is_tenant_admin = True
+            if len(memberships) != len(set(admin_user_ids)):
+                raise ValueError("tenant_admins_must_belong_to_tenant")
         self._enqueue_tenant_reconcile(str(tenant.id))
         return await self._build_tenant_response(tenant)
     
@@ -80,20 +120,33 @@ class AsyncTenantsService:
             return None
         if getattr(existing, "lifecycle_status", "active") != "active":
             raise ValueError("deprecated")
+        if update_data.get("name") and update_data["name"] != existing.name:
+            duplicate = await self.repo.get_by_name(update_data["name"])
+            if duplicate:
+                raise ValueError("tenant_name_already_exists")
         prev_alias = getattr(existing, "embedding_model_alias", None) if existing else None
         if "memory_scope_keys" in update_data:
             update_data["memory_scope_keys"] = await MemoryScopePreferencesService(self.session).validate_keys(update_data["memory_scope_keys"])
+        admin_user_ids = update_data.pop("tenant_admin_user_ids", None)
         default_flag = update_data.pop("is_default", None)
 
         # Map extra_embed_model to embedding_model_alias for backward compatibility
         if "extra_embed_model" in update_data:
-            update_data["embedding_model_alias"] = update_data.pop("extra_embed_model")
+            update_data["embedding_model_alias"] = update_data.pop("extra_embed_model") or None
             
         # Validate models if provided
         if "embedding_model_alias" in update_data:
             await self.validate_tenant_models(update_data.get("embedding_model_alias"))
         
         tenant_uuid = uuid.UUID(tenant_id)
+        if admin_user_ids is not None:
+            memberships = (await self.session.execute(select(UserTenants).where(UserTenants.tenant_id == tenant_uuid))).scalars().all()
+            requested = set(admin_user_ids)
+            by_user = {membership.user_id: membership for membership in memberships}
+            if not requested.issubset(by_user):
+                raise ValueError("tenant_admins_must_belong_to_tenant")
+            for user_id, membership in by_user.items():
+                membership.is_tenant_admin = user_id in requested
         tenant = await self.repo.update(tenant_uuid, **update_data)
         if not tenant:
             return None
@@ -110,30 +163,6 @@ class AsyncTenantsService:
             self._enqueue_tenant_reconcile(str(tenant.id))
 
         return await self._build_tenant_response(tenant)
-    
-    async def delete_tenant(self, tenant_id: str) -> bool:
-        """Delete tenant with migration to platform-default tenant."""
-        tenant_uuid = uuid.UUID(tenant_id)
-        tenant = await self.repo.get_by_id(tenant_uuid)
-        if not tenant:
-            # Backward-compat for older paths/tests that relied on direct repository deletion.
-            return await self.repo.delete(tenant_uuid)
-        if getattr(tenant, "is_platform_default", False):
-            raise ValueError("cannot_delete_default_tenant")
-
-        default_tenant = await self.repo.get_platform_default()
-        if not default_tenant:
-            raise ValueError("platform_default_tenant_not_found")
-
-        migration = TenantMigrationService(self.session)
-        await migration.migrate_tenant_data(
-            from_tenant_id=tenant_uuid,
-            to_tenant_id=default_tenant.id,
-        )
-
-        rbac_cleanup = RbacCleanupService(self.session)
-        await rbac_cleanup.remove_rules_for_owner(owner_tenant_id=tenant_uuid)
-        return await self.repo.delete(tenant_uuid)
     
     async def validate_tenant_models(self, embedding_model_alias: Optional[str]) -> None:
         """Validate tenant's extra embedding model"""
@@ -217,8 +246,21 @@ class AsyncTenantsService:
                 "global": True,
             }
 
+        admin_result = await self.session.execute(
+            select(UserTenants.user_id).where(
+                UserTenants.tenant_id == tenant.id, UserTenants.is_tenant_admin.is_(True),
+            )
+        )
+        admin_scalars = admin_result.scalars()
+        if inspect.isawaitable(admin_scalars):
+            admin_scalars = await admin_scalars
+        tenant_admin_user_ids = admin_scalars.all()
+        if inspect.isawaitable(tenant_admin_user_ids):
+            tenant_admin_user_ids = await tenant_admin_user_ids
+
         return {
             "id": str(tenant.id),
+            "tenant_admin_user_ids": [str(user_id) for user_id in tenant_admin_user_ids],
             "memory_scope_keys": list(getattr(tenant, "memory_scope_keys", None) or []),
             "name": tenant.name,
             "description": tenant.description,

@@ -36,6 +36,7 @@ export const qk = {
   },
   admin: {
     all: () => ['admin'] as const,
+    dashboard: (days: 1 | 7 | 30) => ['admin', 'dashboard', days] as const,
     glossary: {
       all: () => ['admin', 'glossary'] as const,
       detail: (id: string) => ['admin', 'glossary', id] as const,
@@ -79,7 +80,7 @@ export const qk = {
     },
     tenants: {
       all: () => ['admin', 'tenants'] as const,
-      list: (params?: { page?: number }) =>
+      list: (params?: { page?: number; size?: number; search?: string; include_deprecated?: boolean; is_active?: boolean }) =>
         ['admin', 'tenants', 'list', params] as const,
       detail: (id: string) => ['admin', 'tenants', id] as const,
       facts: (id: string) => ['admin', 'tenants', id, 'facts'] as const,
@@ -185,6 +186,7 @@ export const qk = {
     credentials: (level: 'user' | 'tenant') =>
       ['profile', 'credentials', level] as const,
     credentialInstances: () => ['profile', 'credential-instances'] as const,
+    tenantManagement: (tenantId: string) => ['profile', 'tenant-management', tenantId] as const,
   },
   rbac: {
     all: () => ['rbac'] as const,
@@ -230,6 +232,8 @@ export const qk = {
       size?: number;
       tenant_id?: string;
       is_active?: boolean;
+      include_deprecated?: boolean;
+      search?: string;
     }) => ['collections', 'admin-list', params] as const,
     presets: () => ['collections', 'type-presets'] as const,
     detail: (slug: string) => ['collections', 'detail', slug] as const,
@@ -245,10 +249,14 @@ export const qk = {
         tenant_id?: string;
       }
     ) => ['collections', 'data', slug, params] as const,
+    documentsRoot: (id: string) => ['collections', 'documents', id] as const,
     documents: (
       id: string,
       params?: { page?: number; size?: number; status?: string; query?: string }
     ) => ['collections', 'documents', id, params] as const,
+    documentStatus: (id: string) => ['collections', 'doc-status', id] as const,
+    templateStatus: (collectionId: string, rowId: string) =>
+      ['collections', 'template-status', collectionId, rowId] as const,
     glossaryAll: () => ['collections', 'glossary', 'overview'] as const,
     glossaryOverview: (params?: Record<string, unknown>) =>
       ['collections', 'glossary', 'overview', params] as const,

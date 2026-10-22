@@ -60,7 +60,7 @@ class CreateCollectionRequest(BaseModel):
     memory_enabled: bool = False
 
     @model_validator(mode="after")
-    def validate_name_chars(self) -> "CreateCollectionRequest":
+    def validate_create_request(self) -> "CreateCollectionRequest":
         normalized_name = str(self.name or "").strip()
         if not normalized_name:
             raise ValueError("name is required")
@@ -69,6 +69,8 @@ class CreateCollectionRequest(BaseModel):
         self.name = normalized_name
         if self.slug is not None:
             self.slug = str(self.slug).strip().lower()
+        if self.memory_enabled and self.collection_type != CollectionType.DOCUMENT.value:
+            raise ValueError("memory_enabled is only supported for document collections")
         return self
 
 
@@ -110,6 +112,7 @@ class UpdateCollectionRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     is_active: Optional[bool] = None
     memory_enabled: Optional[bool] = None
+    vector_config: Optional[VectorConfigSchema] = None
     table_name: Optional[str] = None
     table_schema: Optional[dict] = None
     schema_ops: List[SchemaOperation] = Field(default_factory=list)
@@ -126,7 +129,15 @@ class UpdateCollectionRequest(BaseModel):
 
         has_metadata_patch = bool(
             self.model_fields_set
-            & {"tenant_id", "name", "is_active", "table_name", "table_schema"}
+            & {
+                "tenant_id",
+                "name",
+                "is_active",
+                "memory_enabled",
+                "vector_config",
+                "table_name",
+                "table_schema",
+            }
         )
         if not has_metadata_patch and not self.schema_ops:
             raise ValueError("At least one mutable collection property or schema operation is required")
@@ -171,6 +182,7 @@ class CollectionResponse(BaseModel):
     last_sync_at: Optional[str] = None
     
     is_active: bool
+    memory_enabled: bool = False
     current_version_id: Optional[uuid.UUID] = None
     current_version: Optional["CollectionVersionResponse"] = None
     created_at: str

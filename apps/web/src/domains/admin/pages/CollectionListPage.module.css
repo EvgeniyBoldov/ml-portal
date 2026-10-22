@@ -1,0 +1,20 @@
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.slug {
+  font-weight: 500;
+}
+
+.name {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.fieldBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}

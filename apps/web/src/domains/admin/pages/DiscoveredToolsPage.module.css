@@ -1,0 +1,14 @@
+.primaryText {
+  font-weight: 500;
+}
+
+.secondaryText {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.domainList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}

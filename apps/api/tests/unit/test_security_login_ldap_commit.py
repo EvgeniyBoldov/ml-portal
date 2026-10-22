@@ -8,8 +8,10 @@ from app.api.v1.routers.security import LoginRequest, login
 
 
 @pytest.mark.asyncio
-async def test_login_commits_when_ldap_user_provisioned():
+@pytest.mark.parametrize("email", ["ldap@example.com", None])
+async def test_login_commits_when_ldap_user_provisioned(email):
     session = AsyncMock()
+    session.add = MagicMock()
     session.execute = AsyncMock(return_value=SimpleNamespace(fetchall=lambda: []))
     session.commit = AsyncMock()
 
@@ -24,7 +26,7 @@ async def test_login_commits_when_ldap_user_provisioned():
 
     user = SimpleNamespace(
         id="11111111-1111-1111-1111-111111111111",
-        email="ldap@example.com",
+        email=email,
         role="reader",
         login="ldap-user",
     )
@@ -46,7 +48,7 @@ async def test_login_commits_when_ldap_user_provisioned():
     ):
         result = await login(payload=payload, response=response, session=session, _rl=None)
 
-    session.commit.assert_awaited_once()
-    assert result.user.email == "ldap@example.com"
+    assert session.commit.await_count == 2
+    assert result.user.email == email
     assert result.access_token == "access"
-    assert result.refresh_token == "refresh"
+    assert "refresh_token" not in result.model_dump()

@@ -60,6 +60,27 @@ def test_full_payload_drops_debug_tracebacks() -> None:
     assert logger._payload({"safe": "ok", "debug": {"traceback": "private"}}) == {"safe": "ok"}
 
 
+def test_full_payload_redacts_compound_credential_keys_before_persistence() -> None:
+    logger = _logger(RuntimeLoggingLevel.FULL)
+    payload = {
+        "request": {
+            "client_secret": "oauth-secret",
+            "secret_key": "signing-secret",
+            "private_key": "private-material",
+            "x-api-key": "header-key",
+        },
+    }
+
+    safe_payload = logger._payload(payload)
+
+    assert safe_payload["request"] == {
+        "client_secret": "***",
+        "secret_key": "***",
+        "private_key": "***",
+        "x-api-key": "***",
+    }
+
+
 def test_worker_context_round_trip() -> None:
     context = RuntimeLogContext(
         run_id=uuid4(), level=RuntimeLoggingLevel.FULL, origin="sandbox",

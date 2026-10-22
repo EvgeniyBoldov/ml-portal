@@ -1,16 +1,13 @@
 /**
- * CollectionsListPage - Admin page for listing Collections
- * 
- * Uses EntityPageV2 + DataTable pattern like PoliciesListPage.
- * Data flows: API types → filtered data → DataTable.
- * No mappers, no intermediate interfaces.
+ * CollectionListPage - Admin page for listing collections.
+ * Uses EntityPageV2 and DataTable with server-side search and pagination.
  *
  * Features:
  * - Search and filtering
  * - Status and metadata display
  * - Row navigation to collection details
  */
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { 
@@ -28,15 +25,28 @@ import { collectionsApi, type Collection } from '@/shared/api/collections';
 import { adminApi } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
+import styles from './CollectionListPage.module.css';
 
 export function CollectionListPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const [search, setSearch] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   const { data, isLoading } = useQuery({
-    queryKey: qk.collections.adminList({ page: 1, size: 100, is_active: undefined }),
-    queryFn: () => collectionsApi.listAll({ size: 100, include_deprecated: true }),
+    queryKey: qk.collections.adminList({
+      page: currentPage,
+      size: pageSize,
+      include_deprecated: true,
+      search: search.trim(),
+    }),
+    queryFn: () => collectionsApi.listAll({
+      page: currentPage,
+      size: pageSize,
+      include_deprecated: true,
+      search: search.trim(),
+    }),
   });
 
   const collections = data?.items ?? [];
@@ -54,25 +64,15 @@ export function CollectionListPage() {
     },
   });
 
-  const filteredCollections = useMemo(() => {
-    if (!search.trim()) return collections;
-    const q = search.toLowerCase();
-    return collections.filter((c: Collection) =>
-      c.name.toLowerCase().includes(q) ||
-      c.slug.toLowerCase().includes(q)
-    );
-  }, [collections, search]);
-
   const columns: DataTableColumn<Collection>[] = [
     {
       key: 'slug',
       label: 'SLUG / ИМЯ',
       width: 250,
-      sortable: true,
       render: (row) => (
         <div>
-          <div style={{ fontWeight: 500 }}>{row.slug}</div>
-          <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>{row.name}</div>
+          <div className={styles.slug}>{row.slug}</div>
+          <div className={styles.name}>{row.name}</div>
         </div>
       ),
     },
@@ -105,7 +105,7 @@ export function CollectionListPage() {
       render: (row) => {
         const fields = row.fields ?? [];
         return (
-          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+          <div className={styles.fieldBadges}>
             {fields.slice(0, 3).map(f => (
               <Badge key={f.name} tone="neutral">{f.name}</Badge>
             ))}
@@ -149,11 +149,14 @@ export function CollectionListPage() {
       title="Коллекции"
       mode="view"
       headerActions={
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div className={styles.headerActions}>
           <Input
             placeholder="Поиск коллекций..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setCurrentPage(1);
+            }}
           />
           <Button
             variant="outline"
@@ -173,12 +176,21 @@ export function CollectionListPage() {
       <Tab title="Коллекции" layout="full">
         <DataTable
           columns={columns}
-          data={filteredCollections}
+          data={collections}
           keyField="id"
           loading={isLoading}
           emptyText="Коллекции не найдены"
           paginated
-          pageSize={20}
+          serverPaginated
+          pageSize={pageSize}
+          currentPage={currentPage}
+          totalItems={data?.total ?? 0}
+          pageSizeOptions={[20, 50, 100]}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setCurrentPage(1);
+          }}
           onRowClick={(row) => navigate(`/admin/collections/${row.id}`)}
         />
       </Tab>

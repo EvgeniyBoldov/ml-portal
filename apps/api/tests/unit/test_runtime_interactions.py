@@ -189,6 +189,7 @@ def test_interaction_policy_can_deny_an_agent_without_changing_continuation_cont
 @pytest.mark.parametrize("value", ["Альфа", True, False])
 async def test_chat_resume_uses_same_typed_contract_for_text_and_boolean(monkeypatch, value):
     from app.api.v1.routers.chat import messages
+    from app.api.deps import ChatContext
     from app.core.security import UserCtx
     user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4()
     interaction = question(stage="turn_preflight", response_type="text" if isinstance(value, str) else "boolean")
@@ -207,6 +208,9 @@ async def test_chat_resume_uses_same_typed_contract_for_text_and_boolean(monkeyp
             captured.update(kwargs)
             yield {"type": "final", "message_id": str(uuid4()), "content": "done"}
     monkeypatch.setattr(messages, "ChatStreamService", Service)
+    monkeypatch.setattr(messages, "resolve_chat_context", AsyncMock(return_value=ChatContext(
+        chat_id=str(turn.chat_id), tenant_id=str(tenant_id), user_id=str(user_id),
+    )))
     response = await messages.resume_run(run_id=str(run_id), body=RuntimeResumeRequest(
         action="answer", pause_id=interaction.id, response=value), session=session,
         current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]), _rl=None)
@@ -252,6 +256,10 @@ async def test_real_pipeline_resumes_saved_requester_without_calling_preflight(m
     preflight = AsyncMock(side_effect=AssertionError("A response to planner/agent must not be re-routed"))
     monkeypatch.setattr(module.TurnPreflight, "decide", preflight)
     monkeypatch.setattr(module, "MechanicalLookupService", Mock(side_effect=AssertionError("Do not restart lookup")))
+    monkeypatch.setattr(
+        "app.runtime.datastore_context.load_result_catalog",
+        AsyncMock(return_value=([], "available")),
+    )
     monkeypatch.setattr(module, "SystemLLMRoleService", lambda session: SimpleNamespace(get_role_config=AsyncMock(side_effect=RuntimeError("No role config in test"))))
     monkeypatch.setattr(module, "BudgetResolver", lambda session: SimpleNamespace(resolve_run=AsyncMock(return_value=RunLimits(iterations=5)),
         resolve_orchestrator=AsyncMock(return_value=EntityLimits())))

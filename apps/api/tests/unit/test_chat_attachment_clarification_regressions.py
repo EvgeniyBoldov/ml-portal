@@ -64,7 +64,9 @@ def test_agent_receives_only_attachment_metadata_and_must_read_contents():
     assert "ATTACHMENT_7391" not in message
     assert '"kind": "rag_document"' in message
     assert "Quarterly report" in message
-    assert "file.read(artifact_id)" in message
+    # Tool availability is supplied by the agent contract, not duplicated in
+    # the task text. This projection only carries safe attachment metadata.
+    assert "file.read" not in message
 
 
 def test_repeating_inherited_task_scopes_requires_no_new_scope_rationale():

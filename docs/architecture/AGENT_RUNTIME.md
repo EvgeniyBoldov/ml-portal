@@ -38,9 +38,14 @@ catalogs and explicit planner selection; the chat selector also excludes them.
 `POST /api/v1/agents/shadow/invoke` requires `Authorization: Bearer <token>`.
 The shared Bearer authentication dependency accepts a JWT access token or a
 personal API token created under `/api/v1/profile/tokens`. Refresh tokens and
-cookies are not machine API credentials. Personal tokens resolve the current
-active owner, role and active tenant memberships from the database; revocation
-and expiry take effect on the next request. Existing RBAC remains authoritative.
+cookies are not machine API credentials. Both credential types resolve the
+current active user, role and active tenant memberships from the database;
+account deactivation and role changes take effect on the next request. Personal
+token revocation and expiry also take effect on the next request. Existing RBAC
+remains authoritative. `PAT_ENABLED=false` disables both PAT issuance and
+authentication. Browser refresh tokens rotate once and are backed by revocable
+server-side session families; logout and replay revoke the family, including
+its access tokens. See [Authentication and Sessions](AUTHENTICATION.md).
 Request: `{"agent":"agent_slug","data":{}}`.
 Successful response: `{"agent":"agent_slug","result":{}}` (application/json).
 Both envelopes reject extra fields and require JSON objects for data/result;
@@ -436,19 +441,20 @@ scopes decide detail from their own logging level.
 
 ### Применимость настроек вкладок оркестрации
 
-Админка показывает только параметры, читаемые текущими путями исполнения. `null` в actor override означает наследование default класса оркестраторов, а не отсутствие поддержки поля. В режиме просмотра показаны effective limits, в редактировании — собственные nullable значения. Очистка числового поля сохраняет `null`.
+Админка сохраняет настройки роли и actor limits через один CRUD-запрос и одну транзакцию. `null` в actor override означает отсутствие собственного значения и наследование default класса при последующем подключении runtime. TurnPreflight, planner и synthesizer подключены к per-orchestrator лимиту LLM-вызовов. Wall-time каждого из этих этапов применяется как общий deadline; превышение отменяет активную async-операцию. Прямой и плановый synthesis используют один budget ledger и ограничения роли synthesizer. Очистка числового поля сохраняет `null`.
+
+Владелец настроек LLM разделён так: роль выбирает deployment (`model`) и задаёт поведенческую `temperature`; каталог deployment хранит транспортные `request_timeout_s`, `max_retries` и контекстное окно. `wall_time_ms_max` — сохраняемый лимит длительности фазы, а не таймаут одного запроса. Таймаут запроса и размер контекста настраиваются у модели и не дублируются в форме роли.
 
 | Вкладка | Редактируемые поля промпта | Настройки в «Параметры» |
 |---------|----------------------------|-------------------------|
 | Планировщик | identity, mission, safety, examples | model, temperature, llm_calls_max, wall_time_ms_max |
-| Маршрутизатор запроса | пять частей промпта, examples | model, temperature |
+| Маршрутизатор запроса | пять частей промпта, examples | model, temperature, llm_calls_max, wall_time_ms_max |
 | Синтезатор ответа | пять частей промпта, examples | model, temperature, llm_calls_max, wall_time_ms_max |
-| Экстрактор фактов | пять частей промпта, examples | model, temperature, политика отбора фактов в extras |
-| Подбор контекста памяти | пять частей промпта, examples | model, temperature |
-| Нормализатор фактов | пять частей промпта, examples | model, temperature |
-| Изучатель документов | три промпта этапов из extras | model, temperature |
+| Экстрактор фактов | пять частей промпта, examples | model, temperature, политика отбора фактов в extras, llm_calls_max, wall_time_ms_max |
+| Нормализатор фактов | пять частей промпта, examples | model, temperature, llm_calls_max, wall_time_ms_max |
+| Изучатель документов | deprecated; hidden from admin UI, retained for legacy shadow study/review endpoints | model, temperature |
 
-`examples` — рабочий массив примеров с `input`, `output` и необязательным `description`; пустой массив допустим. Общий редактор произвольного `extras` скрыт: runtime читает только политику экстрактора (`max_facts_per_turn`, `max_subject_len`, `max_value_len`, `max_value_words`, `confidence_min`) и три промпта этапов изучателя документов. Остальные роли не читают extras. У изучателя документов общий промпт и examples заменяются промптом конкретного этапа. Planner сохраняет все секции БД и sandbox overrides; rules и output_requirements доступны в редакторе. Runtime добавляет только неизменяемую механику iteration и схему Pydantic. Рекомендуемые редактируемые промпты находятся в services/orchestration_prompts.py; planner применяется явно оператором, не перезаписывается bootstrap при старте.
+`examples` — рабочий массив примеров с `input`, `output` и необязательным `description`; пустой массив допустим. Общий редактор произвольного `extras` скрыт: runtime читает только политику экстрактора (`max_facts_per_turn`, `max_subject_len`, `max_value_len`, `max_value_words`, `confidence_min`). Подборщик памяти и изучатель документов не входят в активный root-turn flow. Planner сохраняет все секции БД и sandbox overrides; rules и output_requirements доступны в редакторе. Runtime добавляет только неизменяемую механику iteration и схему Pydantic. Рекомендуемые редактируемые промпты находятся в services/orchestration_prompts.py; planner применяется явно оператором, не перезаписывается bootstrap при старте.
 
 Alias выбранного deployment сохраняется до коннектора: одинаковое provider model name у нескольких записей не должно менять выбранные credentials и окно.
 

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -56,6 +56,7 @@ class ChatTurn(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
+        UniqueConstraint("chat_id", "user_id", "idempotency_key", name="uq_chat_turns_chat_user_idempotency"),
         Index("ix_chat_turns_chat_id_started_at", "chat_id", "started_at"),
         Index("ix_chat_turns_user_id", "user_id"),
         Index("ix_chat_turns_idempotency_key", "idempotency_key"),

@@ -6,12 +6,19 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.chat_turn import ChatTurn
 
 logger = get_logger(__name__)
+
+
+class ChatTurnIdempotencyError(RuntimeError):
+    def __init__(self, *, conflict: bool) -> None:
+        self.conflict = conflict
+        super().__init__("idempotency_conflict" if conflict else "idempotency_processing")
 
 
 class ChatTurnService:
@@ -43,7 +50,20 @@ class ChatTurnService:
             status="started",
         )
         self.session.add(turn)
-        await self.session.flush()
+        try:
+            await self.session.flush()
+        except IntegrityError:
+            if not idempotency_key:
+                raise
+            await self.session.rollback()
+            existing = await self.get_latest_by_idempotency_key(
+                chat_id=chat_id, user_id=user_id, idempotency_key=idempotency_key,
+            )
+            if existing is None:
+                raise
+            raise ChatTurnIdempotencyError(
+                conflict=bool(request_hash and existing.request_hash and request_hash != existing.request_hash),
+            ) from None
         return turn
 
     async def attach_user_message(self, turn_id: str | uuid.UUID, message_id: str | uuid.UUID) -> Optional[ChatTurn]:

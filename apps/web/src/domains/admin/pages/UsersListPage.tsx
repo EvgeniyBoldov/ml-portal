@@ -3,19 +3,13 @@
  */
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { User, UserListResponse } from '@shared/api/admin';
+import type { User } from '@shared/api/admin';
 import { useUsers } from '@shared/api/hooks/useAdmin';
 import { useTenants } from '@shared/hooks/useTenants';
 import type { Tenant } from '@shared/api/tenant';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Button, Input, LifecycleStatusBadge } from '@/shared/ui';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
-
-const ROLE_CONFIG: Record<string, { label: string; tone: 'danger' | 'warn' | 'info' | 'neutral' }> = {
-  admin: { label: 'Админ', tone: 'danger' },
-  editor: { label: 'Редактор', tone: 'warn' },
-  reader: { label: 'Читатель', tone: 'neutral' },
-};
 
 export function UsersListPage() {
   const navigate = useNavigate();
@@ -36,13 +30,13 @@ export function UsersListPage() {
     [debouncedQ]
   );
 
-  const { data, isLoading, error } = useUsers(queryParams);
+  const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } = useUsers(queryParams);
   const { tenants = [] } = useTenants(true);
 
-  const users = (data as UserListResponse | undefined)?.users ?? [];
+  const users = data?.pages.flatMap(page => page.users) ?? [];
 
   const getTenantName = React.useCallback(
-    (tenantId: string | undefined) => {
+    (tenantId: string | null | undefined) => {
       if (!tenantId || !tenants) return null;
       const tenant = tenants.find((t: Tenant) => t.id === tenantId);
       return tenant?.name || null;
@@ -73,28 +67,31 @@ export function UsersListPage() {
       ),
     },
     {
-      key: 'role',
-      label: 'РОЛЬ',
+      key: 'is_admin',
+      label: 'ДОСТУП К АДМИНКЕ',
       width: 100,
       sortable: true,
       filter: {
         kind: 'select',
-        placeholder: 'Все роли',
+        placeholder: 'Любой доступ',
         options: [
-          { value: 'admin', label: 'Админ' },
-          { value: 'editor', label: 'Редактор' },
-          { value: 'reader', label: 'Читатель' },
+          { value: 'true', label: 'Администратор' },
+          { value: 'false', label: 'Пользователь' },
         ],
-        getValue: (user) => user.role,
+        getValue: (user) => String(user.is_admin),
       },
-      render: (user) => {
-        const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.reader;
-        return (
-          <Badge tone={roleConfig.tone}>
-            {roleConfig.label}
-          </Badge>
-        );
-      },
+      render: (user) => <Badge tone={user.is_admin ? 'danger' : 'neutral'}>{user.is_admin ? 'Администратор' : 'Пользователь'}</Badge>,
+    },
+    {
+      key: 'auth_provider',
+      label: 'ТИП',
+      width: 100,
+      sortable: true,
+      render: (user) => (
+        <Badge tone={user.auth_provider === 'ldap' ? 'info' : 'neutral'}>
+          {user.auth_provider === 'ldap' ? 'LDAP' : 'Локальная'}
+        </Badge>
+      ),
     },
     {
       key: 'tenant_id',
@@ -154,6 +151,16 @@ export function UsersListPage() {
         </span>
       ),
     },
+    {
+      key: 'last_login_at',
+      label: 'ПОСЛЕДНИЙ ВХОД',
+      width: 150,
+      render: (user) => (
+        <span style={{ color: 'var(--muted)' }}>
+          {user.last_login_at ? new Date(user.last_login_at).toLocaleString('ru-RU') : '—'}
+        </span>
+      ),
+    },
   ];
 
   return (
@@ -195,6 +202,13 @@ export function UsersListPage() {
           pageSize={20}
           onRowClick={handleRowClick}
         />
+        {hasNextPage && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
+            <Button variant="outline" disabled={isFetchingNextPage} onClick={() => void fetchNextPage()}>
+              {isFetchingNextPage ? 'Загрузка…' : 'Загрузить ещё'}
+            </Button>
+          </div>
+        )}
       </Tab>
     </EntityPageV2>
   );

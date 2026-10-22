@@ -17,13 +17,21 @@ import CollectionDataPage from './CollectionDataPage';
 vi.mock('@shared/ui/Toast', () => ({
   useToast: () => ({ showToast: vi.fn() }),
 }));
-vi.mock('@shared/lib/sse', () => ({
-  SSEClient: class {
+vi.mock('@shared/lib/sse', () => {
+  class MockSSEClient {
+    static clients: Array<{ onMessage: (events: Array<{ type: string; data: unknown; timestamp: number }>) => void }> = [];
+    constructor(options: { onMessage: (events: Array<{ type: string; data: unknown; timestamp: number }>) => void }) {
+      MockSSEClient.clients.push(options);
+    }
     connect = vi.fn();
     disconnect = vi.fn();
-  },
-  openSSE: () => ({ disconnect: vi.fn() }),
-}));
+  }
+  return {
+    SSEClient: MockSSEClient,
+    getSseClients: () => MockSSEClient.clients,
+    openSSE: () => ({ disconnect: vi.fn() }),
+  };
+});
 vi.mock('@/shared/api/http', () => ({
   apiRequest: vi.fn(async (path: string) =>
     path === '/memory/scopes' ? [] : {}
@@ -216,6 +224,37 @@ it('does not report an unavailable API as a missing collection', async () => {
     'Не удалось загрузить'
   );
   expect(screen.queryByText('Коллекция не найдена')).not.toBeInTheDocument();
+});
+
+it('refreshes aggregate counts after a collection SSE snapshot', async () => {
+  const listDocuments = vi.spyOn(collectionsApi, 'listDocuments')
+    .mockResolvedValueOnce({
+      items: [doc('document-1')], total: 1, page: 1, size: 50, has_more: false,
+      stats: { total: 1, ready: 1, processing: 0, partial: 0, failed: 0, uploaded: 0, archived: 0 },
+    })
+    .mockResolvedValue({
+      items: [{ ...doc('document-1'), agg_status: 'partial' }], total: 1, page: 1, size: 50, has_more: false,
+      stats: { total: 1, ready: 0, processing: 0, partial: 1, failed: 0, uploaded: 0, archived: 0 },
+    });
+  setup('document');
+  await screen.findByText('document-1');
+  await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(1));
+
+  const sseModule = await import('@shared/lib/sse') as unknown as {
+    getSseClients: () => Array<{
+      onMessage: (events: Array<{ type: string; data: unknown; timestamp: number }>) => void;
+    }>;
+  };
+  const client = sseModule.getSseClients().at(-1);
+  expect(client).toBeDefined();
+  client?.onMessage([{
+    type: 'rag.snapshot',
+    data: { items: [{ document_id: 'document-1', agg_status: 'partial' }] },
+    timestamp: Date.now(),
+  }]);
+
+  await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole('button', { name: /1 Частично готово/i })).toBeInTheDocument();
 });
 
 it.each(['completed', 'running'])(

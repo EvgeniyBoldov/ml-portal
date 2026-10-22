@@ -1,11 +1,15 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
 import pytest
 
 from app.runtime.input_builders import PlannerInputBuilder
+from app.runtime.budgets import BudgetExceededError, BudgetRegistry, EntityLimits, RunLimits
+from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import PlanRequest, PlannerContext
 from app.runtime.turn_preflight import TurnPreflight, TurnPreflightDecision
+from app.services.runtime_limits_service import ModelCallLimits
 
 
 def test_planner_payload_preserves_full_preflight_task_brief() -> None:
@@ -41,6 +45,171 @@ async def test_preflight_uses_shared_db_prompt_builder() -> None:
     assert "system_prompt" not in kwargs
     assert kwargs["schema"] is TurnPreflightDecision
     assert kwargs["payload"]["user_request"] == "Проверь статус"
+
+
+@pytest.mark.asyncio
+async def test_preflight_handoff_reaches_planner_payload_with_only_selected_materials(monkeypatch) -> None:
+    """Exercise the assembled request and the planner's final LLM payload."""
+    from app.runtime.memory.role_tools import RoleMemoryTools
+    from app.runtime.orchestrator import GraphOrchestrator
+    from app.runtime.planner.graph_planner import GraphPlanner
+    from app.runtime.run_context import RunContext
+
+    run_id, plan_id = uuid4(), uuid4()
+    run_context = RunContext(
+        original_request="Проверь статус этого сервера по переписке и источнику",
+        goal="Проверить статус сервера alpha",
+        recent_dialogue=[
+            {"message_id": "selected-message", "role": "user", "content": "сервер alpha", "truncated": False},
+            {"message_id": "unselected-message", "role": "assistant", "content": "Старый ответ", "truncated": False},
+        ],
+    )
+    selected_file = run_context.add_evidence(
+        "file.read", {"artifact_id": "file-1"}, {"success": True, "content": "STATUS=healthy"},
+    )
+    unselected_file = run_context.add_evidence(
+        "file.read", {"artifact_id": "file-2"}, {"success": True, "content": "PRIVATE_UNSELECTED_CONTENT"},
+    )
+    history = run_context.add_evidence("chat.history.read", {}, {"messages": [
+        {"message_id": "selected-message", "role": "user", "content": "сервер alpha", "truncated": False},
+    ]})
+    memory_search = run_context.add_evidence("memory.search", {"query": "status"}, {"groups": [
+        {"scope_slug": "project.alpha", "items": [{"text": "alpha memory"}]},
+        {"scope_slug": "project.beta", "items": [{"text": "beta memory"}]},
+    ]})
+    run_context.task_brief = {
+        "goal": "Проверить статус сервера alpha",
+        "project_hints": ["alpha"],
+        "direction": "Проверить актуальный источник",
+        "expected_result": "Подтверждённый статус",
+        "constraints": ["Не опираться на старые ответы"],
+        "evidence_refs": [selected_file, history, memory_search],
+        "message_refs": ["selected-message"],
+    }
+    runtime_state = SimpleNamespace(
+        run_context=run_context,
+        attachment_contexts=[],
+        deleted_artifact_ids=[],
+    )
+    ctx = SimpleNamespace(extra={"runtime_turn_state": runtime_state})
+
+    orchestrator = object.__new__(GraphOrchestrator)
+    orchestrator.store = SimpleNamespace(snapshot=AsyncMock(return_value={
+        "root_run_id": str(run_id), "tasks": {}, "memory_context": [],
+        "scope_context": {"keys": ["project.alpha"], "revision": 4},
+    }))
+    monkeypatch.setattr(
+        "app.runtime.datastore_context.load_result_catalog",
+        AsyncMock(return_value=([], "available")),
+    )
+    request = await orchestrator._planner_request(
+        plan_id=plan_id,
+        goal=run_context.goal,
+        trigger="initial",
+        available_agents=[],
+        available_artifacts=[],
+        planner_kwargs={"runtime_state": runtime_state, "ctx": ctx},
+    )
+
+    assert request.context.goal == run_context.goal
+    assert request.context.scope_context == {"keys": ["project.alpha"], "revision": 4}
+    assert request.context.task_brief["constraints"] == ["Не опираться на старые ответы"]
+    assert unselected_file not in request.context.task_brief["evidence_refs"]
+
+    planner = object.__new__(GraphPlanner)
+    planner._session = object()
+    planner._input_builder = PlannerInputBuilder()
+    planner._llm = SimpleNamespace(
+        role_service=SimpleNamespace(get_role_config=AsyncMock(return_value={})),
+        _compile_role_prompt=Mock(return_value="planner prompt"),
+        invoke=AsyncMock(return_value=SimpleNamespace(
+            value=SimpleNamespace(
+                kind="proposal", proposal=object(),
+                to_runtime_proposal=lambda *, goal: {"goal": goal},
+            ),
+        )),
+    )
+    monkeypatch.setattr(RoleMemoryTools, "descriptors", AsyncMock(return_value=[]))
+
+    result = await planner.plan(request=request, ctx=ctx, planner_iteration_trace_id="iteration-1")
+
+    assert result == {"goal": run_context.goal}
+    payload = planner._llm.invoke.await_args.kwargs["payload"]
+    assert payload["goal"] == run_context.goal
+    assert payload["scope_context"] == {"keys": ["project.alpha"], "revision": 4}
+    assert payload["task_brief"]["constraints"] == ["Не опираться на старые ответы"]
+    assert payload["run_context"]["original_request"] == run_context.original_request
+    assert [item["tool"] for item in payload["run_context"]["evidence"]] == ["file.read", "memory.search"]
+    assert payload["run_context"]["evidence"][0]["id"] == selected_file
+    memory_groups = payload["run_context"]["evidence"][1]["data"]["groups"]
+    assert [item["scope_slug"] for item in memory_groups] == ["project.alpha"]
+    assert [item["message_id"] for item in payload["run_context"]["conversation_materials"]] == ["selected-message"]
+    assert "PRIVATE_UNSELECTED_CONTENT" not in str(payload)
+    assert "Старый ответ" not in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_preflight_does_not_replay_file_content_from_resume_checkpoint(monkeypatch) -> None:
+    from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction
+    from app.runtime.memory.role_tools import RoleMemoryTools
+
+    preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
+    preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(value=TurnPreflightDecision.model_validate({
+        "route": "planner", "task_brief": {
+            "goal": "Проверь файл", "direction": "Проверить источник", "expected_result": "Отчёт",
+        },
+    })))
+    interaction = RuntimeInteraction.create(
+        InteractionQuestion(question="Какой формат?"),
+        InteractionRequester(stage="turn_preflight", entity_id="preflight"),
+        checkpoint={"memory_tool_results": [{
+            "tool": "file.read", "arguments": {"artifact_id": "revoked"},
+            "result": {"success": True, "content": "секретное содержимое"},
+        }, {
+            "tool": "memory.search", "arguments": {"query": "keep"},
+            "result": {"success": True, "items": []},
+        }]},
+    )
+    monkeypatch.setattr(RoleMemoryTools, "descriptors", AsyncMock(return_value=[]))
+    await preflight.decide(
+        user_request="Проверь файл", mechanical_lookup={},
+        continuation={"paused_context": {"interaction": interaction.model_dump(mode="json")}},
+    )
+    results = preflight._llm.invoke.await_args.kwargs["payload"]["memory_tool_results"]
+    assert [item["tool"] for item in results] == ["memory.search"]
+
+
+@pytest.mark.asyncio
+async def test_preflight_llm_call_limit_stops_followup_decision(monkeypatch) -> None:
+    from app.runtime.memory.role_tools import RoleMemoryTools
+
+    client = AsyncMock()
+    client.chat = AsyncMock(return_value={"choices": [{"message": {"content": (
+        '{"route":"tool_call","tool_call":{"tool":"memory.search","arguments":{"query":"test"}}}'
+    )}}]})
+    preflight = TurnPreflight(session=AsyncMock(), llm_client=client)
+    preflight._llm.role_service.get_role_config = AsyncMock(return_value={
+        "role_type": "turn_preflight", "model": "test-model", "identity": "test",
+    })
+    preflight._llm.limits_service.resolve_model = AsyncMock(return_value=ModelCallLimits(
+        request_timeout_s=1, max_retries=0,
+    ))
+    monkeypatch.setattr(RoleMemoryTools, "descriptors", AsyncMock(return_value=[{
+        "tool": "memory.search", "description": "search", "input_schema": {},
+    }]))
+    monkeypatch.setattr(RoleMemoryTools, "execute", AsyncMock(return_value={"success": True, "items": []}))
+    registry = BudgetRegistry(run_limits=RunLimits())
+    registry.register(entity_type="orchestrator", entity_id="preflight", parent_entity_id="run",
+                      role="turn_preflight", limits=EntityLimits(llm_calls=1))
+
+    with pytest.raises(BudgetExceededError, match="llm_calls"):
+        await preflight.decide(
+            user_request="Найди данные", mechanical_lookup={},
+            budget_registry=registry, budget_entity_id="preflight",
+        )
+
+    assert client.chat.await_count == 1
+    assert registry.get("preflight").own["llm_calls"] == 1
 
 
 @pytest.mark.asyncio
