@@ -193,3 +193,4 @@ review/
 
 # Local agent instructions
 AGENTS.md
+.codex/
