@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
@@ -18,7 +19,6 @@ VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() == "true"
 ML_INFERENCE_CA_BUNDLE = (os.environ.get("ML_INFERENCE_CA_BUNDLE") or "").strip()
 REQUEST_TIMEOUT_SECONDS = int(os.environ.get("ML_INFERENCE_TIMEOUT_SECONDS", "30"))
 BROKER_TIMEOUT_SECONDS = int(os.environ.get("MCP_SECRET_BROKER_TIMEOUT_SECONDS", "10"))
-MAX_MODELS_PER_PAGE = int(os.environ.get("ML_INFERENCE_MAX_MODELS_PER_PAGE", "100"))
 MAX_RESPONSE_BYTES = int(os.environ.get("ML_INFERENCE_MAX_RESPONSE_BYTES", "262144"))
 MODELS_PATH = os.environ.get("ML_INFERENCE_MODELS_PATH", "/v1/models")
 PREDICT_PATH = os.environ.get("ML_INFERENCE_PREDICT_PATH", "/v1/responses")
@@ -90,19 +90,14 @@ async def _resolve_runtime_access(arguments: dict[str, Any]) -> tuple[str, dict[
     return _extract_base_url({}, arguments), {}
 
 
-def _limit(value: Any) -> int:
-    try:
-        requested = int(value or 20)
-    except (TypeError, ValueError):
-        requested = 20
-    return max(1, min(requested, MAX_MODELS_PER_PAGE))
-
-
 def _path_for_model(model_id: str) -> str:
     normalized = str(model_id or "").strip()
-    if not normalized:
-        raise ValueError("model_id is required")
-    return f"{MODELS_PATH.rstrip('/')}/{quote(normalized, safe='')}"
+    # Keep this in sync with ResponseRequest.model in ML-Inference-Service.
+    # Its path parameter cannot represent slashes, and deployment names are
+    # restricted to this identifier alphabet.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}", normalized):
+        raise ValueError("model_id must be a valid deployed model identifier")
+    return f"{MODELS_PATH.rstrip('/')}/{quote(normalized, safe='._-')}"
 
 
 def _assert_bounded(data: Any) -> Any:
@@ -116,10 +111,28 @@ def _validate_info_response(data: Any, *, model_id: str | None) -> dict[str, Any
     if not isinstance(data, dict):
         raise ValueError("ML inference facade returned an invalid model info response")
     if model_id:
-        if not isinstance(data.get("id"), str) or not isinstance(data.get("input_schema"), dict):
+        deployment = data.get("deployment")
+        if (
+            data.get("object") != "model"
+            or not isinstance(data.get("id"), str)
+            or not isinstance(data.get("input_schema"), dict)
+            or not isinstance(data.get("output_schema"), dict)
+            or not isinstance(deployment, dict)
+            or not isinstance(deployment.get("version"), str)
+        ):
             raise ValueError("ML inference facade returned an invalid detailed model card")
-    elif data.get("object") != "list" or not isinstance(data.get("data"), list):
-        raise ValueError("ML inference facade returned an invalid model catalog")
+    else:
+        models = data.get("data")
+        if data.get("object") != "list" or not isinstance(models, list):
+            raise ValueError("ML inference facade returned an invalid model catalog")
+        for model in models:
+            if (
+                not isinstance(model, dict)
+                or not isinstance(model.get("id"), str)
+                or not isinstance(model.get("input_schema"), dict)
+                or not isinstance(model.get("output_schema"), dict)
+            ):
+                raise ValueError("ML inference facade returned a model without input/output contracts")
     return data
 
 
@@ -168,22 +181,56 @@ TOOLS = [
     {
         "name": "model.info",
         "description": (
-            "List ML prediction capabilities, or inspect one by model_id. Use before prediction to learn "
-            "the model's purpose, applicability, required input schema, output semantics, version and quality metadata."
+            "List active ML models with their input_schema and output_schema contracts, or inspect one by model_id "
+            "to get its description and deployed version. Use the returned input_schema to construct model.predict inputs."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "model_id": {"type": "string", "description": "Optional stable model identifier. Omit to list available models."},
-                "limit": {"type": "integer", "default": 20, "description": "Maximum models for a catalog page."},
-                "cursor": {"type": "string", "description": "Opaque cursor from a previous catalog response."},
+                "model_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$",
+                    "description": "Optional stable model identifier. Omit to list available models.",
+                },
             },
         },
         "outputSchema": {
             "type": "object",
             "oneOf": [
-                {"required": ["object", "data"]},
-                {"required": ["id", "object", "input_schema", "output_schema", "deployment"]},
+                {
+                    "required": ["object", "data"],
+                    "properties": {
+                        "object": {"const": "list"},
+                        "data": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["id", "input_schema", "output_schema", "version"],
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "input_schema": {"type": "object"},
+                                    "output_schema": {"type": "object"},
+                                    "version": {"type": "string"},
+                                    "deployment": {"type": ["object", "null"]},
+                                },
+                            },
+                        },
+                    },
+                },
+                {
+                    "required": ["id", "object", "input_schema", "output_schema", "deployment"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "object": {"const": "model"},
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                        "deployment": {
+                            "type": "object",
+                            "required": ["version", "status"],
+                            "properties": {"version": {"type": "string"}, "status": {"type": "string"}},
+                        },
+                    },
+                },
             ],
         },
         "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
@@ -191,14 +238,20 @@ TOOLS = [
     {
         "name": "model.predict",
         "description": (
-            "Run one registered ML model on validated input data. Use model.info first. "
-            "A model prediction is a bounded statistical signal and must be interpreted with returned warnings and applicability metadata."
+            "Run one registered ML model by its model_id, passing inputs as JSON that conforms to the input_schema from model.info. "
+            "The facade selects the active deployed version."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "model_id": {"type": "string", "description": "Stable identifier returned by model.info."},
-                "inputs": {"type": "object", "description": "Model input that conforms to the input_schema returned by model.info."},
+                "model_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$",
+                    "description": "Stable identifier returned by model.info.",
+                },
+                # ML-Inference-Service accepts input: Any. Keep the tool
+                # contract open and let the model's input_schema define shape.
+                "inputs": {"description": "JSON input conforming to input_schema returned by model.info."},
             },
             "required": ["model_id", "inputs"],
         },
@@ -263,20 +316,17 @@ async def mcp_root(
                     base_url=base_url, auth_headers=auth_headers, method="GET", path=_path_for_model(str(model_id))
                 ), model_id=str(model_id).strip())
             else:
-                request_params: dict[str, Any] = {"limit": _limit(arguments.get("limit"))}
-                cursor = arguments.get("cursor")
-                if isinstance(cursor, str) and cursor.strip():
-                    request_params["cursor"] = cursor.strip()
                 data = _validate_info_response(await _facade_request(
-                    base_url=base_url, auth_headers=auth_headers, method="GET", path=MODELS_PATH, params=request_params
+                    base_url=base_url, auth_headers=auth_headers, method="GET", path=MODELS_PATH
                 ), model_id=None)
         elif tool_name == "model.predict":
             model_id = str(arguments.get("model_id") or "").strip()
-            inputs = arguments.get("inputs")
+            if "inputs" not in arguments:
+                raise ValueError("inputs is required")
             if not model_id:
                 raise ValueError("model_id is required")
-            if not isinstance(inputs, dict):
-                raise ValueError("inputs must be an object")
+            _path_for_model(model_id)
+            inputs = arguments["inputs"]
             body: dict[str, Any] = {"model": model_id, "input": inputs}
             data = _validate_predict_response(await _facade_request(
                 base_url=base_url, auth_headers=auth_headers, method="POST", path=PREDICT_PATH, body=body

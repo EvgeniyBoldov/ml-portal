@@ -254,12 +254,13 @@ services:
   ml-inference-mcp:
     image: ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/mcp-ml-inference:${APP_IMAGE_TAG:?APP_IMAGE_TAG is required}
     <<: *restart
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - PORT=8080
       - VERIFY_SSL=${ML_INFERENCE_VERIFY_SSL:-true}
       - ML_INFERENCE_CA_BUNDLE=${ML_INFERENCE_CA_BUNDLE:-}
       - ML_INFERENCE_TIMEOUT_SECONDS=${ML_INFERENCE_TIMEOUT_SECONDS:-30}
-      - ML_INFERENCE_MAX_MODELS_PER_PAGE=${ML_INFERENCE_MAX_MODELS_PER_PAGE:-100}
       - ML_INFERENCE_MAX_RESPONSE_BYTES=${ML_INFERENCE_MAX_RESPONSE_BYTES:-262144}
       - MCP_SECRET_BROKER_TIMEOUT_SECONDS=${MCP_SECRET_BROKER_TIMEOUT_SECONDS:-10}
 
