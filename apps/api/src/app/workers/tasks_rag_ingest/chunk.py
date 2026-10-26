@@ -52,9 +52,11 @@ async def _resolve_chunk_config(
 
     # 3. Merge: source > tenant > hardcoded defaults
     profile_str = src_profile or t_profile
-    profile = _PROFILE_MAP.get(profile_str, _DEFAULT_PROFILE) if profile_str else _DEFAULT_PROFILE
-    chunk_size = src_size or t_size or _DEFAULT_CHUNK_SIZE
-    overlap = src_overlap or t_overlap or _DEFAULT_OVERLAP
+    if profile_str and profile_str not in _PROFILE_MAP:
+        raise ValueError(f"Unsupported chunking profile: {profile_str}")
+    profile = _PROFILE_MAP[profile_str] if profile_str else _DEFAULT_PROFILE
+    chunk_size = src_size if src_size is not None else (t_size if t_size is not None else _DEFAULT_CHUNK_SIZE)
+    overlap = src_overlap if src_overlap is not None else (t_overlap if t_overlap is not None else _DEFAULT_OVERLAP)
 
     logger.debug(
         f"Chunk config for {ctx.source_id}: profile={profile.value}, "
@@ -97,31 +99,16 @@ def chunk_document(
         if not source:
             raise ValueError(f"Source {source_id} not found")
 
-        # 2. Check idempotency
-        cached = await ctx.check_idempotency(s3_key_field="chunks_key")
-        if cached:
-            logger.info(f"Chunk cached for {source_id}")
-            await ctx.set_completed(metrics={"status": "already_processed", "cached": True})
-            await ctx.session.commit()
-            return ChunkResult(
-                source_id=source_id,
-                chunks_key=cached["chunks_key"],
-                chunk_count=cached.get("chunk_count", 0),
-            )
-
         # 3. Read Canonical Document
         if not canonical_key:
             raise ValueError(f"No canonical_key provided for source {source_id}")
 
+        await ctx.session.commit()
         canonical_doc = json.loads(await ctx.s3_get(canonical_key))
         text = canonical_doc.get("text", "")
         collection_meta = normalize_document_source_meta(source.meta).get("collection") or {}
         retrieval_fields = collection_meta.get("retrieval_fields") or {}
-        if retrieval_fields:
-            retrieval_prefix = "\n".join(
-                f"{key}: {value}" for key, value in retrieval_fields.items()
-            )
-            text = f"{retrieval_prefix}\n\n{text}" if text else retrieval_prefix
+        retrieval_prefix = "\n".join(f"{key}: {value}" for key, value in retrieval_fields.items())
 
         if not text:
             logger.warning(f"Empty text in canonical doc for {source_id}")
@@ -136,11 +123,12 @@ def chunk_document(
             chunks_data = []
             for i, rc in enumerate(raw_chunks):
                 chunk_id = generate_chunk_id(ctx.source_id, rc["start_pos"], rc["end_pos"])
+                chunk_text = f"{retrieval_prefix}\n\n{rc['text']}" if retrieval_prefix else rc["text"]
                 payload = create_chunk_payload(
                     tenant_id=ctx.tenant_id,
                     document_id=ctx.source_id,
                     chunk_id=chunk_id,
-                    text=rc["text"],
+                    text=chunk_text,
                     start_pos=rc["start_pos"],
                     end_pos=rc["end_pos"],
                     metadata=canonical_doc.get("metadata"),
@@ -148,23 +136,24 @@ def chunk_document(
                 payload["index"] = i
                 chunks_data.append(payload)
 
-        # 5. Save to DB (bulk insert)
-        chunk_repo = AsyncChunkRepository(ctx.session, ctx.tenant_id)
-        await chunk_repo.delete_by_document_id(ctx.source_id)
+        if not chunks_data:
+            raise ValueError(f"No text chunks were produced for {source_id}; refusing to continue to embedding")
 
-        if chunks_data:
-            await chunk_repo.create_batch(chunks_data)
-
-        # 6. Upload Chunks Dump to S3 (JSONL)
+        # Upload the immutable artifact before opening the write transaction.
         chunks_jsonl = "\n".join(json.dumps(c, ensure_ascii=False) for c in chunks_data)
-        chunks_checksum = calculate_text_checksum(text + str(len(chunks_data)))
+        chunks_checksum = calculate_text_checksum(chunks_jsonl)
         chunks_key = get_chunks_path(ctx.tenant_id, ctx.source_id, chunks_checksum)
-
+        await ctx.session.commit()
         await ctx.s3_put(
             key=chunks_key,
             content=chunks_jsonl.encode("utf-8"),
             content_type="application/x-ndjson",
         )
+
+        # 5. Save canonical chunks to DB after all network work has finished.
+        chunk_repo = AsyncChunkRepository(ctx.session, ctx.tenant_id)
+        await chunk_repo.delete_by_document_id(ctx.source_id)
+        await chunk_repo.create_batch(chunks_data)
 
         # Update Source meta with chunks_key for reindexing capability
         source.meta = upsert_document_artifact(
@@ -190,7 +179,6 @@ def chunk_document(
             "chunks_key": chunks_key,
             "chunk_count": len(chunks_data),
         })
-        await ctx.session.commit()
 
         return ChunkResult(source_id=source_id, chunks_key=chunks_key, chunk_count=len(chunks_data))
 

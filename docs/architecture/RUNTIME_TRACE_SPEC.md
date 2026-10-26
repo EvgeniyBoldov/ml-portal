@@ -24,15 +24,23 @@ Every row has an event `id`, `run_id`, monotonic `sequence`, `event_type`,
 The canonical sandbox presentation hierarchy is:
 
 ```text
-run → turn_preflight → LLM call
-                     ├→ synthesis_run → final_answer_marker
-                     ├→ memory_recall → turn_preflight → LLM call
-                     ├→ interaction
-                     └→ planner orchestrator → planner_iteration → planner LLM call
-                                                        ├→ task → attempt
-                                                        ├→ step → agent_execution → LLM/tool/interaction/error/snapshot
-                                                        └→ checkpoint
+run → route_policy → turn_preflight → LLM call
+                                  ├→ synthesis_run → final_answer_marker
+                                  ├→ memory_recall → turn_preflight → LLM call
+                                  ├→ interaction
+                                  └→ planner orchestrator → planner_iteration → planner LLM call
+                                                                ├→ task → attempt
+                                                                ├→ step → agent_execution → LLM/tool/interaction/error/snapshot
+                                                                └→ checkpoint
 ```
+
+`route_policy` is a distinct pre-LLM recommendation entity. It records a
+recommendation id, match status, rule/signals, an optional route/source hint and
+a bounded explanation. Start metadata contains query/goal lengths and a query
+hash rather than copying the dialogue. The policy entity always ends before
+TurnPreflight starts for a new implicit turn; matched and unmatched outcomes
+both proceed to TurnPreflight. A policy match is not a final route and never
+creates a planner brief.
 
 `iteration` is the operator-facing trace entity for one planner decision
 and its execution wave. A planned `task` is the canonical executor node: it is
@@ -135,10 +143,24 @@ change a declared synthesis hand-off to `effective_next=planner`; the frontend
 must update that checkpoint only from this event, not directly from an agent
 error. Independent tasks may still run between the error and the decision.
 
-`turn_preflight` is a root routing entity. Its terminal event carries only the
-safe route and bounded brief/request metadata; `recall` is a separate child and
-the second TurnPreflight invocation has the same root parent. A `clarify`
-decision owns a root interaction and never creates a plan, task or agent.
+`turn_preflight` is the final root routing entity for new implicit turns,
+regardless of the root policy match. Its LLM input includes the typed
+recommendation and the same bounded, provenance-bearing dialogue used for
+reference resolution. Its terminal event carries only the safe route and
+bounded brief/request metadata; `recall` is a separate child and the second
+TurnPreflight invocation has the same root parent. A `clarify` decision owns a
+root interaction and never creates a plan, task or agent.
+`preflight_route_decision` records proposed and effective routes, the linked
+policy recommendation id, policy disposition (`accepted`, `modified`,
+`rejected`, or `not_applicable`) and a reason code on the TurnPreflight
+orchestrator. Root recommendations are recorded on their own `route_policy`
+entity. The legacy `memory_scope_selected.route` remains the effective route
+only. Older journal rows with `route_policy_decision.route` remain legacy
+records; absence of a TurnPreflight node in such a run is not repaired by the
+frontend. Sandbox agent execution also emits `sandbox_override_snapshot`;
+its configured publication/semantic overrides and effective resolved
+operations are separate, while `suppressed_publication` explains configured
+false values that correctly produced no operation.
 
 Agent execution preflight is represented by `preflight_started`, terminal
 `preflight_completed`/`preflight_failed`, and a redacted capability/RBAC/limit
@@ -146,12 +168,15 @@ snapshot. An agent-triggered extraction has `extraction_started`, terminal
 `extraction_completed`/`extraction_failed`, and is a child of its `tool_call`.
 Standalone RAG ingest events are not runtime journal children.
 
-The synthesizer owns a `synthesis_run`. Its final operator result is the
-`final_answer_marker` whose parent is that synthesis run; the following
-transport `final` frame is not a second journal result. This also applies to
-verbatim and agent-result short-circuits. Frontend projection follows these
-explicit parent links only and must not select nearby plan, extraction or final
-events by sequence range.
+The synthesizer owns a `synthesis_run`. Its final operator result is one
+`final_answer_marker` event with `entity_type=run`, `entity_id=<run_id>`, and
+`parent_entity_type=synthesis_run`, `parent_entity_id=<synthesis_id>`. Its safe
+payload contains `status=completed`, `producer`, `content`, `sources`, and
+`attachments`. The following transport `final` frame is not persisted as a
+second journal result. This also applies to direct preflight synthesis and
+file delivery. Nested agent `final` frames remain transport-only and are not
+run results. Frontend projection follows these explicit parent links only and
+must not select nearby plan, extraction or final events by sequence range.
 
 ## Levels
 
@@ -297,6 +322,14 @@ the actual task data, alongside `task_id`, `intent`, `instructions`, and `goal`.
 Both the executor task tab and its containing step show the saved input object,
 including an explicitly empty object. Standalone shadow runs need no persisted
 plan or extra journal event to display their input. The journal remains unchanged.
+
+Planner executor inspectors expose a `Вход` tab from the owning planner
+orchestrator's `context_snapshot.inputs` (`goal` and the normalized `task_brief`).
+The exact serialized planner LLM request, including execution ledger and the
+RBAC-filtered available-agent catalog, remains available on that call's request
+view. The `route_policy` inspector shows the advisory recommendation before
+TurnPreflight; TurnPreflight's decision inspector shows the final route and
+whether it accepted, modified or rejected the recommendation.
 
 The result projection reads the owned `final` event when `agent_end` contains
 only lifecycle metadata. A protocol-v2 completion is displayed through its

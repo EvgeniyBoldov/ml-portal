@@ -88,7 +88,10 @@ export function toRenderableMessage(
         ? message.content
         : String(message.content ?? ''),
     createdAt: message.created_at ?? new Date().toISOString(),
-    outcome: status === 'cancelled' || status === 'failed' ? status : undefined,
+    outcome: status === 'cancelled' || status === 'failed' || status === 'partial' ? status : undefined,
+    errorCode: typeof message.meta?.runtime_error_code === 'string'
+      ? message.meta.runtime_error_code
+      : undefined,
     meta: toMessageMeta(message.meta),
   };
 }

@@ -31,6 +31,7 @@ from app.services.permission_service import EffectivePermissions, PermissionServ
 from app.services.tool_instance_service import ToolInstanceService
 from app.services.collection_tool_resolver import CollectionToolResolver
 from app.services.collection.status_snapshot_service import CollectionStatusSnapshotService
+from app.services.sandbox_override_resolver import SandboxToolOverrides
 from app.core.config import get_settings
 
 logger = get_logger(__name__)
@@ -90,6 +91,7 @@ class OperationRouter:
         default_collection_allow: bool = True,
         collection_ids: Optional[Iterable[str]] = None,
         system_operation_slugs: Optional[set[str]] = None,
+        sandbox_tool_overrides: Optional[SandboxToolOverrides] = None,
     ) -> OperationResolveResult:
         if effective_permissions is None:
             effective_permissions = await self.runtime_rbac_resolver.resolve_effective_permissions(
@@ -160,6 +162,7 @@ class OperationRouter:
                 effective_permissions=effective_permissions,
                 user_id=user_id,
                 tenant_id=tenant_id,
+                sandbox_tool_overrides=sandbox_tool_overrides,
             )
             logger.debug("preflight_collection_stage_completed", extra={**collection_log_context, "stage": "operation_resolution", "duration_ms": int((monotonic() - collection_started) * 1000), "operations_count": len(operations)})
             readiness = self.collection_readiness_builder.build(
@@ -213,6 +216,7 @@ class OperationRouter:
             user_id=user_id,
             tenant_id=tenant_id,
             operation_slugs=system_operation_slugs,
+            sandbox_tool_overrides=sandbox_tool_overrides,
         )
 
         attach_published_operation_summaries(
@@ -232,6 +236,7 @@ class OperationRouter:
         user_id: UUID,
         tenant_id: UUID,
         operation_slugs: Optional[set[str]] = None,
+        sandbox_tool_overrides: Optional[SandboxToolOverrides] = None,
     ) -> None:
         """Load global system tools and append to resolved operations."""
         from types import SimpleNamespace
@@ -269,6 +274,7 @@ class OperationRouter:
                 tenant_id=tenant_id,
                 seen_operation_slugs=seen_operation_slugs,
                 resolve_execution_credentials=self.operation_resolver._resolve_execution_credentials,
+                sandbox_tool_overrides=sandbox_tool_overrides,
             )
             if built is None:
                 continue

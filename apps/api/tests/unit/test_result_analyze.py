@@ -116,8 +116,17 @@ async def test_sql_query_uses_exact_saved_result_names_and_persists_output(monke
         def mappings(self) -> FakeQueryResult:
             return self
 
-        def __iter__(self):
-            return iter([{"count": 1}])
+        def __aiter__(self):
+            async def rows():
+                yield {"count": 1}
+            return rows()
+
+    class StreamManager:
+        async def __aenter__(self) -> FakeQueryResult:
+            return FakeQueryResult()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
 
     class FakeConnection:
         def __init__(self) -> None:
@@ -130,6 +139,13 @@ async def test_sql_query_uses_exact_saved_result_names_and_persists_output(monke
                 self.query = rendered
                 self.params = params or {}
             return FakeQueryResult()
+
+        def stream(self, statement: object, params: dict | None = None) -> StreamManager:
+            rendered = str(statement)
+            if "_agent_query AS" in rendered:
+                self.query = rendered
+                self.params = params or {}
+            return StreamManager()
 
     connection = FakeConnection()
 

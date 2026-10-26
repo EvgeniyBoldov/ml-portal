@@ -67,6 +67,9 @@ class RoleMemoryTools:
         self._execution_ctx: ToolContext | None = None
         self._executor = DirectOperationExecutor()
 
+    async def aclose(self) -> None:
+        await self._executor.aclose()
+
     async def descriptors(self) -> list[dict[str, Any]]:
         if self._ctx is None:
             return []
@@ -82,6 +85,14 @@ class RoleMemoryTools:
                 collection_ids=[], system_operation_slugs=allowed,
             )
             resolved.execution_graph.filter_by_operation_slugs(allowed)
+            # Root roles do not have a resumable operation confirmation
+            # protocol. Never expose operations whose policy requires one.
+            confirmation_required = {
+                name for operation in resolved.resolved_operations
+                if operation.requires_confirmation
+                for name in (operation.operation_slug, operation.operation)
+            }
+            resolved.execution_graph.filter_by_operation_slugs(allowed - confirmation_required)
             extra = dict(self._ctx.extra)
             deps = replace(self._ctx.get_runtime_deps(), execution_graph=resolved.execution_graph,
                            resolved_operations=resolved.resolved_operations)
@@ -162,6 +173,7 @@ class RoleMemoryTools:
             data.update(error_code=f"{error_prefix}_cancelled", error="Чтение контекста отменено")
             raise
         finally:
+            await self._executor.aclose()
             duration_ms = int((monotonic() - started) * 1000)
             logger.info("memory_search_finished tool=%s call_id=%s status=%s duration_ms=%s",
                         call.tool, call_id, status, duration_ms,

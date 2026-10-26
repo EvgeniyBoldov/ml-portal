@@ -36,7 +36,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -48,6 +48,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
@@ -187,6 +188,26 @@ class Fact(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
+
+
+class MemoryFinalizeOutbox(Base):
+    """Durable handoff for asynchronous chat memory writeback."""
+
+    __tablename__ = "memory_finalize_outbox"
+    __table_args__ = (
+        Index("ix_memory_finalize_outbox_dispatch", "status", "available_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    runtime_run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    chat_turn_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", server_default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
 class FactObservation(Base):

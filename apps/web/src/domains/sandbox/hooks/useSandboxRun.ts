@@ -18,6 +18,7 @@ import {
   replayRuntimeJournal,
   type SandboxTraceState,
 } from '../traceState';
+import { projectTraceRun } from '../traceProjection';
 
 type RunStatus =
   | 'idle'
@@ -368,13 +369,22 @@ export function useSandboxRun(sessionId: string) {
       if (!runId) return;
       try {
         const detail = await sandboxApi.getRunDetail(sessionId, runId);
+        const trace = replayRuntimeJournal(detail.events);
+        const runView = projectTraceRun(trace);
         setActiveRun(prev =>
           prev.runId === runId
-            ? {
+            ? (() => {
+                const validStatuses: RunStatus[] = ['idle', 'running', 'completed', 'cancelled', 'error', 'waiting_confirmation', 'waiting_input'];
+                const status: RunStatus = runView.status === 'failed' ? 'error'
+                  : validStatuses.includes(runView.status as RunStatus) ? runView.status as RunStatus : prev.status;
+                return {
                 ...prev,
-                trace: replayRuntimeJournal(detail.events),
-                finalContent: prev.finalContent,
-              }
+                trace,
+                status,
+                error: runView.status === 'failed' ? runView.error ?? prev.error ?? null : null,
+                finalContent: runView.finalContent,
+                };
+              })()
             : prev
         );
       } catch {
@@ -468,7 +478,7 @@ export function useSandboxRun(sessionId: string) {
         void followMemoryTrace(runId);
       } catch (error) {
         if ((error as Error).name !== 'AbortError')
-          setActiveRun(prev => ({ ...prev, status: 'error' }));
+          setActiveRun(prev => ({ ...prev, status: 'error', error: (error as Error).message || 'Не удалось выполнить запуск' }));
       } finally {
         invalidate(branchId);
       }

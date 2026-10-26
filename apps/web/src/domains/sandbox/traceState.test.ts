@@ -96,6 +96,22 @@ describe('sandbox trace state', () => {
     expect(state.entitiesByKey['tool_call:tool-1'].status).toBe('failed');
   });
 
+  it('keeps a non-terminal LLM response running until a terminal outcome arrives', () => {
+    let state = emptySandboxTrace();
+    state = applyRuntimeJournalEvent(state, event(1, 'llm_request', 'llm_call', 'call-1'));
+    state = applyRuntimeJournalEvent(state, {
+      ...event(2, 'llm_response', 'llm_call', 'call-1'),
+      payload: { terminal: false, status: 'completed' },
+    });
+    expect(state.entitiesByKey['llm_call:call-1'].status).toBe('running');
+
+    state = applyRuntimeJournalEvent(state, {
+      ...event(3, 'llm_response', 'llm_call', 'call-1'),
+      payload: { terminal: true, status: 'completed' },
+    });
+    expect(state.entitiesByKey['llm_call:call-1'].status).toBe('completed');
+  });
+
   it('uses lifecycle statuses for planned tasks and checkpoints', () => {
     let state = emptySandboxTrace();
     state = applyRuntimeJournalEvent(state, {
@@ -271,7 +287,9 @@ describe('sandbox trace state', () => {
     const [stage] = projectTraceStages(state);
     const executor = stage.executorRuns[0];
     expect(executor.entity.status).toBe('running');
-    expect(executor.metrics).toMatchObject({ calls: 1, failedCalls: 0, retries: 1 });
+    expect(executor.metrics.calls).toBe(0);
+    expect(executor.metrics.failedCalls).toBe(0);
+    expect(executor.metrics.retries).toBeUndefined();
     expect(executor.calls[0].attempts).toHaveLength(2);
     expect(executor.calls[0].response).toBeUndefined();
     expect(executor.calls[0].retryEvents.map((item) => item.event_type)).toEqual(['protocol_retry']);
@@ -292,7 +310,8 @@ describe('sandbox trace state', () => {
     state = applyRuntimeJournalEvent(state, { ...event(9, 'llm_response', 'llm_call', 'llm-native', ['agent_execution', 'agent-1']), payload: { logical_llm_call_id: 'logical-1', content: 'готово' } });
 
     const executor = projectTraceStages(state)[0].executorRuns[0];
-    expect(executor.entity.status).not.toBe('running');
+    expect(executor.entity.status).toBe('running');
+    expect(executor.info.status).toBe('running');
     expect(executor.calls).toHaveLength(1);
     expect(executor.calls[0]).toMatchObject({ logicalLlmCallId: 'logical-1' });
     expect(executor.calls[0].entity.id).toBe('llm-native');

@@ -300,6 +300,7 @@ class StructuredLLMCall:
                     {
                         "entity_type": "llm_call",
                         "entity_id": llm_call_id,
+                        "llm_call_id": llm_call_id,
                         "logical_llm_call_id": logical_llm_call_id,
                         **trace_identity,
                         "agent_slug": role_key,

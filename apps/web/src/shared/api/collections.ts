@@ -240,7 +240,7 @@ export interface UploadDocumentRequest {
   source?: string;
   scope?: string;
   tags?: string[];
-  meta_fields?: Record<string, string>;
+  meta_fields?: Record<string, unknown>;
   auto_ingest?: boolean;
   memory_enabled?: boolean;
   memory_scope_keys?: string[];

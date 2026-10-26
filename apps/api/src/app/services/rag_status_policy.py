@@ -37,6 +37,7 @@ VALID_TRANSITIONS: Dict[StageStatus, Set[StageStatus]] = {
         StageStatus.CANCELLED,
     },
     StageStatus.PROCESSING: {
+        StageStatus.PROCESSING,
         StageStatus.COMPLETED,
         StageStatus.FAILED,
         StageStatus.CANCELLED,

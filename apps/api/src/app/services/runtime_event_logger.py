@@ -60,13 +60,14 @@ _BRIEF_EVENTS = frozenset({
     "task_failed", "attempt_started", "attempt_succeeded", "attempt_failed",
     "checkpoint_planned", "checkpoint_decided",
     "attempt_retry_scheduled", "preflight_snapshot", "rbac_snapshot", "limits_snapshot",
-    "preflight_started", "preflight_completed", "preflight_failed",
-    "budget_snapshot", "budget_consumed", "budget_rejected", "intent", "final", "error",
+    "preflight_started", "preflight_completed", "preflight_failed", "preflight_route_decision",
+    "sandbox_override_snapshot",
+    "budget_snapshot", "budget_consumed", "budget_rejected", "intent", "final_answer_marker", "error",
     "waiting_input", "confirmation_required", "question_answer", "protocol_retry",
     "extraction_started", "extraction_completed", "extraction_failed",
 })
 
-_NEVER_PERSIST_EVENTS = frozenset({"delta", "stop"})
+_NEVER_PERSIST_EVENTS = frozenset({"delta", "final", "stop"})
 
 
 @dataclass(frozen=True)

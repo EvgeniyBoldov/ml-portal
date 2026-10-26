@@ -159,6 +159,22 @@ def test_fact_extractor_records_safe_validation_decisions() -> None:
     assert result.decisions[1].compact_view()["candidate_ids"] == ["extractor:2"]
 
 
+def test_fact_extractor_does_not_accept_subject_mention_as_value_evidence() -> None:
+    result = FactExtractor._to_dtos_with_decisions(
+        _LLMFactOutput(facts=[_LLMFactCandidate(
+            scope="user", subject="email", value="invented@example.invalid", confidence=1.0,
+        )]),
+        user_message="Какой у меня email?",
+        evidence=[FactEvidence(
+            source_id="user_message", source_type="user_message", source_ref="turn-1",
+            text="Какой у меня email?",
+        )],
+        user_id=uuid4(), tenant_id=None, chat_id=None,
+    )
+    assert result.facts == []
+    assert result.decisions[0].reason_code == "evidence_not_matched"
+
+
 @pytest.mark.asyncio
 async def test_fact_extractor_drops_user_scope_without_user_id(extractor):
     """A user-scoped fact with no user_id is nonsense — drop it."""

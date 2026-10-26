@@ -11,6 +11,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.events import RuntimeEvent
 from app.runtime.interaction import InteractionQuestion, interaction_from_context
+from app.runtime.root_route_policy import RootRouteRecommendation
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import SynthesisBrief
 from app.services.memory_scope_catalog import resolve_memory_scopes
@@ -82,6 +83,7 @@ class TurnPreflightDecision(BaseModel):
     task_brief: Optional[TaskBrief] = None
     tool_call: Optional[MemoryToolCall] = None
     _memory_tool_results: list[dict[str, Any]] = PrivateAttr(default_factory=list)
+    _proposed_route: Optional[str] = PrivateAttr(default=None)
     clarification: Optional[Clarification] = None
     memory_candidates: list[MemoryCandidate] = Field(default_factory=list)
     scope_selection: ScopeSelection = Field(default_factory=ScopeSelection)
@@ -151,6 +153,7 @@ class TurnPreflight:
         recent_dialogue: list[dict[str, Any]] | None = None,
         attachments: list[AttachmentContext] | None = None,
         continuation: dict[str, Any] | None = None,
+        routing_recommendation: RootRouteRecommendation | None = None,
         ctx: ToolContext | None = None,
         chat_id: UUID | None = None,
         tenant_id: UUID | None = None,
@@ -207,6 +210,10 @@ class TurnPreflight:
                     "project_context": prompt_project,
                     "chat_context": prompt_chat,
                     "recent_dialogue": dialogue,
+                    "routing_recommendation": (
+                        routing_recommendation.model_dump(mode="json")
+                        if routing_recommendation is not None else None
+                    ),
                     "datastore": build_datastore(files=available_artifacts),
                     "continuation": continuation or {},
                     "available_tools": [{key: value for key, value in descriptor.items() if key != "input_schema"}
@@ -229,6 +236,7 @@ class TurnPreflight:
                 budget_entity_id=budget_entity_id,
             )
             decision = result.value
+            decision._proposed_route = decision.route
             if (decision.route == "clarify" and len(available_artifacts) == 1
                     and re.search(r"прикреп|загруз|attach|upload", decision.clarification.question, re.IGNORECASE)):
                 decision = TurnPreflightDecision(route="tool_call", tool_call=MemoryToolCall(
@@ -278,6 +286,7 @@ class TurnPreflight:
         if tool_results and decision.route == "synthesis" and (keys or selection.mode == "replace") and set(keys) != current_keys:
             routed = self._planner_handoff(user_request, decision, selection=selection,
                 reason="Найденные фрагменты относятся к прежним scope. Выполни поиск в выбранных scope перед ответом.")
+            routed._proposed_route = decision._proposed_route
             routed._memory_tool_results = tool_results
             return routed
         # Durable user facts are persisted by MemoryWriter after the final
@@ -285,11 +294,12 @@ class TurnPreflight:
         # claim that it has written memory. Keep an explicit "remember as a
         # fact" request on the direct path even if a best-effort model routes
         # it to tool_call or planner.
-        if self._is_explicit_fact_memory_write(user_request):
+        if self._is_explicit_fact_memory_write(user_request) and not self._has_non_memory_intent(user_request):
             routed = self._memory_write_synthesis_decision(
                 user_request=user_request,
                 memory_candidates=decision.memory_candidates,
             ).model_copy(update={"scope_selection": selection})
+            routed._proposed_route = decision._proposed_route
             routed._memory_tool_results = tool_results
             return routed
         if decision.route == "clarify" and not str(decision.clarification.direct_answer_reason or "").strip():
@@ -307,6 +317,7 @@ class TurnPreflight:
                 scope_selection=selection,
             )
             routed._memory_tool_results = tool_results
+            routed._proposed_route = decision._proposed_route
             return routed
         if decision.route == "planner" and decision.task_brief is not None:
             assignee = self._self_jira_assignee(user_request, facts_context or [])
@@ -359,6 +370,8 @@ class TurnPreflight:
             }),
         )
         routed._memory_tool_results = decision.memory_tool_results
+        routed._proposed_route = decision._proposed_route
+        routed._reroute_reason = reason
         return routed
 
     @staticmethod
@@ -420,6 +433,18 @@ class TurnPreflight:
         return bool(re.search(
             r"(?:запомни(?:те)?|сохрани(?:те)?|remember|save)"
             r".{0,100}(?:как\s+факт|as\s+a\s+fact)",
+            text,
+        ))
+
+    @staticmethod
+    def _has_non_memory_intent(user_request: str) -> bool:
+        text = " ".join((user_request or "").lower().split())
+        text = re.sub(
+            r"(?:запомни(?:те)?|сохрани(?:те)?|remember|save).{0,120}(?:как\s+факт|as\s+a\s+fact)",
+            " ", text,
+        )
+        return bool(re.search(
+            r"(?:покажи|найди|проверь|создай|удали|обнови|отправь|получи|сравни|выполни|\bshow\b|\bfind\b|\bcheck\b|\bcreate\b|\bdelete\b|\bupdate\b|\bsend\b|\bfetch\b|\bcompare\b)",
             text,
         ))
 

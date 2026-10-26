@@ -51,6 +51,11 @@ class DirectOperationExecutor:
             getattr(settings, "MCP_ALLOW_RAW_CREDENTIAL_FALLBACK", False)
         )
 
+    async def aclose(self) -> None:
+        clients, self._clients = list(self._clients.values()), {}
+        self._mcp_sessions.clear()
+        await asyncio.gather(*(client.aclose() for client in clients), return_exceptions=True)
+
     async def execute(self, operation_call: ToolCall, ctx: ToolContext) -> ToolResult:
         binding, target = self._resolve_target_binding(operation_call.tool_name, ctx)
         if not target:
@@ -142,7 +147,8 @@ class DirectOperationExecutor:
         if not provider_url:
             raise ValueError(f"MCP provider URL missing for '{target.operation_slug}'")
 
-        session_id = await self._mcp_initialize(provider_url, timeout_s=target.timeout_s)
+        timeout = target.timeout_s or float(ctx.extra.get("runtime_operation_timeout_s") or 300)
+        session_id = await self._mcp_initialize(provider_url, timeout_s=timeout)
         payload = {
             "jsonrpc": "2.0",
             "id": 2,
@@ -152,7 +158,6 @@ class DirectOperationExecutor:
                 "arguments": call.arguments,
             },
         }
-        timeout = target.timeout_s or 30
         client = await self._get_client(provider_url, timeout)
         headers = {
             "Content-Type": "application/json",
@@ -166,21 +171,12 @@ class DirectOperationExecutor:
             payload=payload,
             timeout_s=timeout,
             ctx=ctx,
+            allow_retries=False,
         )
         if response.status_code in {400, 401, 403, 410}:
+            # The result of a tools/call request must never be replayed
+            # implicitly. Reinitialize only before a future operation.
             self._mcp_sessions.pop(provider_url, None)
-            session_id = await self._mcp_initialize_fresh(provider_url, timeout_s=target.timeout_s)
-            async with self._mcp_session_lock:
-                self._mcp_sessions[provider_url] = (session_id, time.monotonic() + self._mcp_session_ttl_s)
-            headers["mcp-session-id"] = session_id
-            response, attempts = await self._post_with_retry(
-                client=client,
-                provider_url=provider_url,
-                headers=headers,
-                payload=payload,
-                timeout_s=timeout,
-                ctx=ctx,
-            )
         if response.status_code >= 400:
             raise ValueError(
                 f"MCP tool call failed with HTTP {response.status_code} after {attempts} attempts"
@@ -446,8 +442,11 @@ class DirectOperationExecutor:
         payload: Dict[str, Any],
         timeout_s: int,
         ctx: Optional[ToolContext] = None,
+        allow_retries: bool = True,
     ) -> tuple[httpx.Response, int]:
-        max_attempts = self._http_max_retries + 1
+        # A tools/call POST may have committed a write even when the response
+        # is lost. Callers must opt in only when the request is idempotent.
+        max_attempts = (self._http_max_retries if allow_retries else 0) + 1
         last_response: Optional[httpx.Response] = None
         last_exception: Optional[Exception] = None
 

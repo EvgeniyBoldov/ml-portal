@@ -81,7 +81,7 @@ function isWaitingForRetry(call: TraceCall): boolean {
   return Boolean(
     lastResponse
     && lastRetry
-    && lastRetry.sequence > lastResponse.sequence
+    && lastRetry.sequence > call.response!.sequence
     && lastResponse.payload.retryable === true,
   );
 }
@@ -102,7 +102,18 @@ export function callPresentation(call: TraceCall): CallPresentation {
     linkedToolCalls: call.linkedToolCalls,
   };
 
-  if (call.kind === 'error') return { ...base, status: 'error' };
+  if (call.kind === 'error') {
+    const payload = call.request.payload;
+    return { ...base, status: 'error', error: {
+      name: textField(payload.error_type) ?? textField(payload.error_code) ?? 'Ошибка выполнения',
+      code: textField(payload.error_code),
+      message: textField(payload.safe_message) ?? textField(payload.user_message) ?? textField(payload.message) ?? textField(payload.error),
+      statusCode: numberField(payload.status_code),
+      providerCode: textField(payload.provider_code),
+      retryable: typeof payload.retryable === 'boolean' ? payload.retryable : undefined,
+      retryAfterMs: numberField(payload.retry_after_ms),
+    } };
+  }
   if (!response) return { ...base, status: call.retryEvents.length ? 'waiting_retry' : 'running' };
 
   if (call.kind === 'llm') {
@@ -116,21 +127,23 @@ export function callPresentation(call: TraceCall): CallPresentation {
     const failed = !waitingRetry && (response.status === 'failed'
       || responseStatus === 'error'
       || (emptyResponse && !hasToolOutcome));
-    const tokensIn = numberField(response.tokens_in);
-    const tokensOut = numberField(response.tokens_out);
+    const terminal = call.response?.payload.terminal;
+    const usage = response.usage && typeof response.usage === 'object' ? response.usage as Record<string, unknown> : {};
+    const tokensIn = numberField(response.tokens_in) ?? numberField(usage.prompt_tokens) ?? numberField(usage.input_tokens);
+    const tokensOut = numberField(response.tokens_out) ?? numberField(usage.completion_tokens) ?? numberField(usage.output_tokens);
     return {
       ...base,
-      status: waitingRetry ? 'waiting_retry' : failed ? 'error' : 'ok',
+      status: waitingRetry ? 'waiting_retry' : failed ? 'error' : terminal === false || response.status === 'running' ? 'running' : 'ok',
       outcome,
       error: failed || waitingRetry ? errorForLlm(response, emptyResponse) : undefined,
       tokensIn,
       tokensOut,
-      tokensTotal: numberField(response.tokens_total) ?? (tokensIn !== undefined && tokensOut !== undefined ? tokensIn + tokensOut : undefined),
+      tokensTotal: numberField(response.tokens_total) ?? numberField(usage.total_tokens) ?? (tokensIn !== undefined && tokensOut !== undefined ? tokensIn + tokensOut : undefined),
     };
   }
 
   if (call.kind === 'tool') {
-    if (call.retryEvents.length && call.retryEvents[call.retryEvents.length - 1].sequence > Number(response.sequence)) {
+    if (call.retryEvents.length && call.retryEvents[call.retryEvents.length - 1].sequence > call.response!.sequence) {
       return { ...base, status: 'waiting_retry' };
     }
     const failed = toolResult(response).success === false;

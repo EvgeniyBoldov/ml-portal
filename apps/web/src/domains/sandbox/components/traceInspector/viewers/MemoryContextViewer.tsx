@@ -90,7 +90,7 @@ export function MemoryContextViewer({
       ) : null}
       <div className={styles.summary}>
         <InspectorStatus
-          label={context.fallback ? 'Fallback без памяти' : 'Подготовлен'}
+          label={context.fallback ? 'Fallback без памяти' : context.scopeCandidates ? 'Результат поиска' : 'Подготовлен'}
           tone={context.fallback ? 'warn' : 'success'}
         />
         {counts
@@ -101,6 +101,12 @@ export function MemoryContextViewer({
             </span>
           ))}
       </div>
+      {context.scopeCandidates ? <InspectorSection title={`Кандидаты области${context.truncated ? ' · список сокращён' : ''}`}>
+        <InspectorTextBlock text={JSON.stringify(context.scopeCandidates, null, 2)} />
+      </InspectorSection> : null}
+      {context.scopeAmbiguities?.length ? <InspectorSection title="Неоднозначность области">
+        <InspectorTextBlock text={JSON.stringify(context.scopeAmbiguities, null, 2)} />
+      </InspectorSection> : null}
       {groups
         .filter(group => group.items.length > 0 || group.status)
         .map(group => (

@@ -89,6 +89,7 @@ class IngestStageContext:
     start_time: float = field(default_factory=time.monotonic)
 
     long_memory_operation_ids: list[str] = field(default_factory=list)
+    pending_idempotency: list[tuple[str, Dict[str, Any], int]] = field(default_factory=list)
 
     # ── helpers ──────────────────────────────────────────
 
@@ -116,6 +117,9 @@ class IngestStageContext:
         )
         await self.session.flush()
         await self._update_stage_run(status="processing", celery_task_id=self.celery_task_id)
+        # Persist the visible status before doing network or model work so a
+        # stop request does not wait on this stage's long transaction.
+        await self.session.commit()
 
     async def set_completed(self, metrics: Optional[Dict[str, Any]] = None) -> None:
         """Mark current stage as COMPLETED with optional metrics."""
@@ -138,7 +142,9 @@ class IngestStageContext:
         )
         await self._update_stage_run(status="failed", error=error[:500])
         if self.run_id is not None:
-            from app.models.rag_ingest import RAGIngestRun, RAGIngestStageOutbox
+            from app.models.rag_ingest import (
+                RAGIngestRun, RAGIngestStageOutbox, RAGIngestStageRun,
+            )
             command = (await self.session.execute(
                 select(RAGIngestStageOutbox).where(
                     RAGIngestStageOutbox.run_id == self.run_id,
@@ -148,13 +154,81 @@ class IngestStageContext:
             if command:
                 command.status = "failed"
                 command.last_error = error[:500]
+
+            # A shared pipeline failure prevents every later stage. A model
+            # branch failure only cancels that model's corresponding index;
+            # sibling embedding/index branches can still finish.
+            run = (await self.session.execute(
+                select(RAGIngestRun).where(RAGIngestRun.id == self.run_id)
+            )).scalar_one_or_none()
+            if self.stage_name in {"extract", "normalize", "chunk"}:
+                pending = (await self.session.execute(
+                    select(RAGIngestStageOutbox).where(
+                        RAGIngestStageOutbox.run_id == self.run_id,
+                        RAGIngestStageOutbox.status.in_(["pending", "dispatched"]),
+                        RAGIngestStageOutbox.stage_key != self.stage_name,
+                    )
+                )).scalars().all()
+                for item in pending:
+                    item.status = "cancelled"
+                later = (await self.session.execute(
+                    select(RAGIngestStageRun).where(
+                        RAGIngestStageRun.run_id == self.run_id,
+                        RAGIngestStageRun.stage_key != self.stage_name,
+                        RAGIngestStageRun.status.notin_(["completed", "failed", "cancelled"]),
+                    )
+                )).scalars().all()
+                for item in later:
+                    previous_status = item.status
+                    item.status = "cancelled"
+                    item.finished_at = datetime.now(timezone.utc)
+                    if previous_status in {"pending", "queued", "processing"}:
+                        await self.status_manager.transition_stage(
+                            self.source_id, item.stage_key, StageStatus.CANCELLED,
+                        )
+                if run and run.status in {"queued", "running"}:
+                    run.status = "failed"
+                    run.error_short = error[:500]
+                    run.finished_at = datetime.now(timezone.utc)
+            elif self.stage_name.startswith("embed."):
+                index_key = f"index.{self.stage_name.split('.', 1)[1]}"
+                index_command = (await self.session.execute(
+                    select(RAGIngestStageOutbox).where(
+                        RAGIngestStageOutbox.run_id == self.run_id,
+                        RAGIngestStageOutbox.stage_key == index_key,
+                    )
+                )).scalar_one_or_none()
+                if index_command and index_command.status in {"pending", "dispatched"}:
+                    index_command.status = "cancelled"
+                index_run = (await self.session.execute(
+                    select(RAGIngestStageRun).where(
+                        RAGIngestStageRun.run_id == self.run_id,
+                        RAGIngestStageRun.stage_key == index_key,
+                    )
+                )).scalar_one_or_none()
+                if index_run and index_run.status in {"pending", "queued"}:
+                    index_run.status = "cancelled"
+                    index_run.finished_at = datetime.now(timezone.utc)
+                await self.status_manager.transition_stage(
+                    self.source_id, index_key, StageStatus.CANCELLED,
+                )
+
             run = (await self.session.execute(
                 select(RAGIngestRun).where(RAGIngestRun.id == self.run_id)
             )).scalar_one_or_none()
             if run and run.status in {"queued", "running"}:
-                run.status = "failed"
-                run.error_short = error[:500]
-                run.finished_at = datetime.now(timezone.utc)
+                if self.stage_name.startswith(("embed.", "index.")):
+                    run.error_short = error[:500]
+                states = (await self.session.execute(
+                    select(RAGIngestStageRun.status).where(
+                        RAGIngestStageRun.run_id == self.run_id
+                    )
+                )).scalars().all()
+                terminal = {"completed", "failed", "cancelled"}
+                if states and all(state in terminal for state in states):
+                    run.status = "failed" if any(state == "failed" for state in states) else "completed"
+                    run.error_short = error[:500] if run.status == "failed" else None
+                    run.finished_at = datetime.now(timezone.utc)
                 await self.session.flush()
 
     async def is_current_generation(self) -> bool:
@@ -220,14 +294,28 @@ class IngestStageContext:
             states = (await self.session.execute(
                 select(RAGIngestStageRun.status).where(RAGIngestStageRun.run_id == self.run_id)
             )).scalars().all()
-            if states and all(state == "completed" for state in states):
+            terminal = {"completed", "failed", "cancelled"}
+            if states and all(state in terminal for state in states):
                 run = (await self.session.execute(
                     select(RAGIngestRun).where(RAGIngestRun.id == self.run_id)
                 )).scalar_one_or_none()
                 if run and run.status in {"queued", "running"}:
-                    run.status = "completed"
+                    run.status = "failed" if any(state == "failed" for state in states) else "completed"
                     run.finished_at = datetime.now(timezone.utc)
         return command_ids
+
+    async def completed_result(self) -> Dict[str, Any] | None:
+        """Return the durable result when Celery redelivers a finished stage."""
+        if self.run_id is None:
+            return None
+        from app.models.rag_ingest import RAGIngestStageRun
+        row = await self.session.scalar(select(RAGIngestStageRun).where(
+            RAGIngestStageRun.run_id == self.run_id,
+            RAGIngestStageRun.stage_key == self.stage_name,
+        ))
+        if row and row.status == "completed" and isinstance(row.result_json, dict):
+            return dict(row.result_json)
+        return None
 
     async def _enqueue_next_stages(self, result: Dict[str, Any]) -> list[str]:
         """Append forward-only commands; no Celery canvas carries state."""
@@ -309,10 +397,15 @@ class IngestStageContext:
     # ── idempotency ──────────────────────────────────────
 
     def _idem_key(self, model_alias: Optional[str] = None) -> str:
+        step = self.stage_name
+        if step.startswith("embed."):
+            step = "embed"
+        elif step.startswith("index."):
+            step = "index"
         return get_idempotency_key(
             self.tenant_id,
             self.source_id,
-            self.stage_name.replace("embed.", "embed").replace("index.", "index"),
+            step,
             model_alias,
         )
 
@@ -352,7 +445,7 @@ class IngestStageContext:
     ) -> None:
         """Store result in Redis idempotency cache."""
         idem_key = self._idem_key(model_alias)
-        await self.redis.setex(idem_key, ttl, json.dumps(data))
+        self.pending_idempotency.append((idem_key, data, ttl))
 
     # ── S3 shortcuts ─────────────────────────────────────
 
@@ -360,12 +453,14 @@ class IngestStageContext:
         return await s3_manager.get_object(bucket=self.settings.S3_BUCKET_RAG, key=key)
 
     async def s3_put(self, key: str, content: bytes, content_type: str = "application/octet-stream") -> None:
-        await s3_manager.upload_content_sync(
+        uploaded = await s3_manager.upload_content_sync(
             bucket=self.settings.S3_BUCKET_RAG,
             key=key,
             content=content,
             content_type=content_type,
         )
+        if not uploaded:
+            raise IOError(f"Failed to write RAG artifact to s3://{self.settings.S3_BUCKET_RAG}/{key}")
 
 
 # ── context manager ──────────────────────────────────────
@@ -461,6 +556,9 @@ def run_stage(
             generation=generation,
         ) as ctx:
             try:
+                completed = await ctx.completed_result()
+                if completed is not None:
+                    return completed
                 if not await ctx.is_current_generation():
                     logger.info("Skipping stale RAG stage: run=%s stage=%s source=%s", run_id, stage_name, source_id)
                     await ctx.mark_stale()
@@ -468,8 +566,18 @@ def run_stage(
                     return {"source_id": source_id, "stale": True}
                 result = await execute_fn(ctx)
                 data = result.to_dict() if hasattr(result, "to_dict") else result
+                if not await ctx.is_current_generation():
+                    await ctx.session.rollback()
+                    await ctx.mark_stale()
+                    await ctx.session.commit()
+                    return {"source_id": source_id, "stale": True}
                 command_ids = await ctx.record_result(data)
                 await ctx.session.commit()
+                for key, cache_value, ttl in ctx.pending_idempotency:
+                    try:
+                        await ctx.redis.setex(key, ttl, json.dumps(cache_value))
+                    except Exception:
+                        logger.warning("RAG idempotency cache write failed run=%s stage=%s", run_id, stage_name, exc_info=True)
                 logger.info(
                     "RAG stage result persisted: run=%s stage=%s source=%s fingerprint=%s next_commands=%s",
                     run_id, stage_name, source_id,
@@ -484,7 +592,12 @@ def run_stage(
                         logger.warning("LongMemory broker dispatch deferred to recovery: %s", operation_id, exc_info=True)
                 for command_id in command_ids:
                     from app.workers.tasks_rag_ingest.dispatch import dispatch_rag_ingest_stage_outbox
-                    dispatch_rag_ingest_stage_outbox.delay(command_id)
+                    try:
+                        dispatch_rag_ingest_stage_outbox.delay(command_id)
+                    except Exception:
+                        # The command is committed as pending. Reconciliation
+                        # owns delivery after this best-effort notification.
+                        logger.warning("RAG stage dispatch deferred to recovery command=%s", command_id, exc_info=True)
                 return data
             except Exception as exc:
                 logger.error(
@@ -498,6 +611,11 @@ def run_stage(
                 )
                 stage_error = f"{type(exc).__name__}: {exc}"
                 try:
+                    await ctx.session.rollback()
+                    if not await ctx.is_current_generation():
+                        await ctx.mark_stale()
+                        await ctx.session.commit()
+                        return {"source_id": source_id, "stale": True}
                     await ctx.set_failed(stage_error)
                     await ctx.session.commit()
                 except Exception as status_exc:

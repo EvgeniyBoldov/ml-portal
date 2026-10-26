@@ -77,7 +77,16 @@ export function LlmRequestSnapshotView({ call }: { call: TraceCall }) {
   return <InspectorStack>
     <InspectorFieldGroup>
       {request.maxTokens !== undefined ? <InspectorFieldRow label="Лимит токенов"><InspectorScalar value={request.maxTokens} /></InspectorFieldRow> : null}
+      {request.temperature !== undefined ? <InspectorFieldRow label="Температура"><InspectorScalar value={request.temperature} /></InspectorFieldRow> : null}
+      {request.requestBytes !== undefined ? <InspectorFieldRow label="Размер запроса"><InspectorScalar value={request.requestBytes} /></InspectorFieldRow> : null}
+      {request.inputTokensEstimate !== undefined ? <InspectorFieldRow label="Оценка токенов входа"><InspectorScalar value={request.inputTokensEstimate} /></InspectorFieldRow> : null}
+      {request.responseSchemaBytes !== undefined ? <InspectorFieldRow label="Размер схемы ответа"><InspectorScalar value={request.responseSchemaBytes} /></InspectorFieldRow> : null}
     </InspectorFieldGroup>
+    {request.nativeToolCalls?.length || request.tools?.length || request.responseSchema !== undefined ? <InspectorFieldGroup>
+      {request.tools?.length ? <InspectorFieldRow label="Инструменты модели"><InspectorExpandableValue value={JSON.stringify(request.tools, null, 2)} title="Определения инструментов" /></InspectorFieldRow> : null}
+      {request.nativeToolCalls?.length ? <InspectorFieldRow label="Вызовы модели"><InspectorExpandableValue value={JSON.stringify(request.nativeToolCalls, null, 2)} title="Вызовы инструментов модели" /></InspectorFieldRow> : null}
+      {request.responseSchema !== undefined ? <InspectorFieldRow label="Схема ответа"><InspectorExpandableValue value={JSON.stringify(request.responseSchema, null, 2)} title="Схема ответа" /></InspectorFieldRow> : null}
+    </InspectorFieldGroup> : null}
     <InspectorFieldGroup>
       <InspectorFieldRow label="Контекст вызова">
         {request.messageTranscript

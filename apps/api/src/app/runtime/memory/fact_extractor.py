@@ -374,18 +374,14 @@ class FactExtractor:
     ) -> List[FactEvidence]:
         requested = {item.strip() for item in candidate.evidence_source_ids if item.strip()}
         pool = [item for item in evidence if not requested or item.source_id in requested]
-        value_words = [word for word in value.lower().split() if len(word) > 2]
         matched: List[FactEvidence] = []
         for item in pool:
             haystack = item.text.lower()
-            if value.lower() in haystack or subject.lower() in haystack:
-                matched.append(item)
-                continue
-            if value_words and sum(word in haystack for word in value_words) >= max(1, len(value_words) // 2):
+            if value.lower() in haystack:
                 matched.append(item)
         if matched:
             return matched
-        if user_message and (value.lower() in user_message.lower() or subject.lower() in user_message.lower()):
+        if user_message and value.lower() in user_message.lower():
             return [item for item in evidence if item.source_type == "user_message"][:1]
         return []
 

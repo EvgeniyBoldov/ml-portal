@@ -90,6 +90,22 @@ class BudgetRegistry:
         self.run_limits = run_limits
         self._emit = emit
         self._ledgers: Dict[str, EntityLedger] = {}
+        self._restored_usage: Dict[str, Dict[str, int]] = {}
+
+    def restore_usage(self, usage: object) -> None:
+        if not isinstance(usage, dict):
+            return
+        for entity_id, counters in usage.items():
+            if not isinstance(entity_id, str) or not isinstance(counters, dict):
+                continue
+            self._restored_usage[entity_id] = {
+                str(metric): max(0, int(value))
+                for metric, value in counters.items()
+                if isinstance(value, int) and value >= 0
+            }
+
+    def export_usage(self) -> Dict[str, Dict[str, int]]:
+        return {entity_id: dict(ledger.own) for entity_id, ledger in self._ledgers.items()}
 
     def register(
         self,
@@ -110,6 +126,7 @@ class BudgetRegistry:
             role=role,
             limits=limits,
         )
+        ledger.own.update(self._restored_usage.pop(entity_id, {}))
         self._ledgers[entity_id] = ledger
         return ledger
 

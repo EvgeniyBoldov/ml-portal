@@ -113,4 +113,15 @@ describe('call presentation', () => {
       },
     });
   });
+
+  it('keeps a nonterminal structured response in progress', () => {
+    const request = event(1, 'llm_request', { model: 'qwen' });
+    const response = event(2, 'llm_response', { content: '{"partial":', terminal: false, status: 'running' });
+    const call: TraceCall = {
+      entity: entity('llm-1'), events: [request, response], request, response,
+      retryEvents: [], linkedToolCalls: [], kind: 'llm', title: 'LLM', toolCallCount: 0,
+      info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
+    };
+    expect(callPresentation(call).status).toBe('running');
+  });
 });

@@ -60,8 +60,8 @@ class RuntimeRedactor:
     def _redact_dict(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         result: Dict[str, Any] = {}
         for key, raw_value in payload.items():
-            key_text = str(key or "").strip()
-            key_norm = key_text.lower()
+            key_text = str(key)
+            key_norm = key_text.strip().lower()
             compact_key = re.sub(r"[^a-z0-9]", "", key_norm)
             if key_norm in self.SECRET_KEYS or compact_key.endswith(self.SECRET_KEY_SUFFIXES):
                 result[key_text] = _REDACTED

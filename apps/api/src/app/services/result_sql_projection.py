@@ -16,6 +16,11 @@ def quote_column(name: str) -> str:
 
 def sql_columns(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
     columns: dict[str, dict[str, Any]] = {}
+    has_scalar_records = "$" in schema and schema["$"].get("path_segments") == [] \
+        and "object" not in schema["$"].get("types", [])
+    if has_scalar_records and "value" in schema:
+        raise ValueError("Mixed scalar/object records conflict on the virtual 'value' column")
+    has_object_columns = any(name != "$" for name in schema)
     for name, field in sorted(schema.items()):
         segments = field.get('path_segments')
         if name == '$' and segments == []:
@@ -30,6 +35,11 @@ def sql_columns(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
         columns[name] = {'path': segments, 'type':
             'numeric' if types == {'number'} else 'boolean' if types == {'boolean'} else
             'text' if types == {'string'} else 'jsonb'}
+    if has_scalar_records and has_object_columns:
+        # A heterogeneous root array needs a JSONB root column for primitive
+        # rows; casting every row to the primitive's inferred type would fail
+        # as soon as an object row is projected.
+        columns["value"] = {"path": [], "type": "jsonb"}
     return columns
 
 

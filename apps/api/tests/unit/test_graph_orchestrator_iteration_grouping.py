@@ -49,6 +49,34 @@ class Synthesizer:
         yield RuntimeEvent.final("answer", sources=[], run_id=str(run_id), attachments=[])
 
 
+def test_unresolved_continuation_closes_its_original_task() -> None:
+    latest = GraphOrchestrator._latest_resolutions([
+        {"task_id": "original", "action": "continue_with_tasks", "replacement_task_ids": ["retry"]},
+        {"task_id": "retry", "action": "report_unresolved", "reason": "agent_precheck_failed"},
+    ])
+
+    assert GraphOrchestrator._continuation_is_disposed(
+        latest["original"],
+        prior_tasks={"retry": {"status": "failed"}},
+        latest_resolutions=latest,
+    )
+    assert not GraphOrchestrator._continuation_is_disposed(
+        latest["original"],
+        prior_tasks={"retry": {"status": "failed"}},
+        latest_resolutions={"original": latest["original"]},
+    )
+    nested = GraphOrchestrator._latest_resolutions([
+        {"task_id": "original", "action": "continue_with_tasks", "replacement_task_ids": ["retry-1"]},
+        {"task_id": "retry-1", "action": "continue_with_tasks", "replacement_task_ids": ["retry-2"]},
+        {"task_id": "retry-2", "action": "report_unresolved", "reason": "agent_precheck_failed"},
+    ])
+    assert GraphOrchestrator._continuation_is_disposed(
+        nested["original"],
+        prior_tasks={"retry-1": {"status": "failed"}, "retry-2": {"status": "failed"}},
+        latest_resolutions=nested,
+    )
+
+
 class State:
     final_answer = None
 

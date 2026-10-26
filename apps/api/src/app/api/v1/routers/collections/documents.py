@@ -26,7 +26,7 @@ from app.services.rag_status_manager import RAGStatusManager
 from app.services.status_aggregator import calculate_aggregate_status
 from app.adapters.s3_client import s3_manager
 
-from .upload_shared import _resolve_collection
+from .upload_shared import _resolve_collection, _require_collection_editor
 from .stream_shared import _resolve_document_membership, _stop_pipeline_and_revoke
 
 logger = get_logger(__name__)
@@ -128,8 +128,12 @@ async def upload_collection_document(
     from app.schemas.rag import IngestRequest
     from app.services.rag_event_publisher import RAGEventPublisher
 
-    file_content = await file.read()
     collection = await _resolve_collection(collection_id, session, user)
+    await _require_collection_editor(session, user, collection.tenant_id)
+    settings = get_settings()
+    file_content = await file.read(settings.UPLOAD_MAX_BYTES + 1)
+    if len(file_content) > settings.UPLOAD_MAX_BYTES:
+        raise HTTPException(413, f"Uploaded file exceeds max size of {settings.UPLOAD_MAX_BYTES} bytes")
 
     doc_tags = []
     if tags:
@@ -137,27 +141,32 @@ async def upload_collection_document(
             doc_tags = json.loads(tags)
         except json.JSONDecodeError:
             doc_tags = [t.strip() for t in tags.split(",") if t.strip()]
+        if not isinstance(doc_tags, list) or any(not isinstance(tag, str) for tag in doc_tags):
+            raise HTTPException(422, detail="tags must be a JSON array of strings")
 
     extra_meta: dict = {}
     if meta_fields:
         try:
             extra_meta = json.loads(meta_fields)
-        except json.JSONDecodeError:
-            extra_meta = {}
-    doc_project_keys: list[str] = []
-    if project_keys:
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, detail="meta_fields must be valid JSON") from exc
+        if not isinstance(extra_meta, dict):
+            raise HTTPException(422, detail="meta_fields must be a JSON object")
+    def _parse_scope_keys(raw: str | None, field_name: str) -> list[str]:
+        if not raw:
+            return []
         try:
-            raw_project_keys = json.loads(project_keys)
-            doc_project_keys = [str(value).strip().lower() for value in raw_project_keys if str(value).strip()] if isinstance(raw_project_keys, list) else []
+            values = json.loads(raw)
         except json.JSONDecodeError:
-            doc_project_keys = [value.strip().lower() for value in project_keys.split(",") if value.strip()]
-    doc_memory_scope_keys: list[str] = []
-    if memory_scope_keys:
-        try:
-            raw_scope_keys = json.loads(memory_scope_keys)
-            doc_memory_scope_keys = [str(value).strip().lower() for value in raw_scope_keys if str(value).strip()] if isinstance(raw_scope_keys, list) else []
-        except json.JSONDecodeError:
-            doc_memory_scope_keys = [value.strip().lower() for value in memory_scope_keys.split(",") if value.strip()]
+            if raw.lstrip().startswith(("[", "{")):
+                raise HTTPException(status_code=422, detail=f"{field_name} must be a JSON array of strings")
+            values = [part.strip() for part in raw.split(",") if part.strip()]
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise HTTPException(status_code=422, detail=f"{field_name} must be a JSON array of strings")
+        return list(dict.fromkeys(value.strip().lower() for value in values if value.strip()))
+
+    doc_project_keys = _parse_scope_keys(project_keys, "project_keys")
+    doc_memory_scope_keys = _parse_scope_keys(memory_scope_keys, "memory_scope_keys")
     try:
         selected_scopes = list(dict.fromkeys([*doc_memory_scope_keys, *doc_project_keys]))
         if len(selected_scopes) > 1:
@@ -176,29 +185,52 @@ async def upload_collection_document(
         event_publisher=event_publisher,
     )
 
-    result = await upload_service.upload_document(
-        collection_id=collection_id,
-        file_content=file_content,
-        filename=file.filename or f"upload_{uuid.uuid4()}",
-        user_id=user.id,
-        content_type=file.content_type,
-        title=title,
-        source=source,
-        scope=scope,
-        tags=doc_tags,
-        meta_fields=extra_meta,
-        memory_enabled=memory_enabled,
-        project_keys=doc_project_keys,
-        memory_scope_keys=doc_memory_scope_keys,
-    )
+    result: dict[str, Any] | None = None
+    try:
+        result = await upload_service.upload_document(
+            collection_id=collection_id,
+            file_content=file_content,
+            filename=file.filename or f"upload_{uuid.uuid4()}",
+            user_id=uuid.UUID(str(user.id)),
+            content_type=file.content_type,
+            title=title,
+            source=source,
+            scope=scope,
+            tags=doc_tags,
+            meta_fields=extra_meta,
+            memory_enabled=memory_enabled,
+            project_keys=doc_project_keys,
+            memory_scope_keys=doc_memory_scope_keys,
+        )
 
-    if auto_ingest:
-        status_manager = RAGStatusManager(session, repo_factory, event_publisher)
-        ingest_service = RAGIngestService(session, repo_factory, status_manager)
-        await ingest_service.start_ingest(IngestRequest(document_id=uuid.UUID(result["doc_id"])))
+        if auto_ingest:
+            status_manager = RAGStatusManager(session, repo_factory, event_publisher)
+            ingest_service = RAGIngestService(session, repo_factory, status_manager)
+            await ingest_service.start_ingest(IngestRequest(document_id=uuid.UUID(result["doc_id"])))
 
-    await session.commit()
-    return result
+        await session.commit()
+        return result
+    except Exception:
+        await session.rollback()
+        if result:
+            original_key = (result.get("artifacts") or {}).get("original", {}).get("key")
+            if original_key:
+                persisted = True
+                try:
+                    from app.models.rag import RAGDocument
+                    persisted = await session.scalar(
+                        select(RAGDocument.id).where(RAGDocument.id == uuid.UUID(result["doc_id"]))
+                    ) is not None
+                except Exception:
+                    # Preserve the object when persistence state cannot be
+                    # established; deleting it could break a committed row.
+                    logger.warning("Could not determine upload commit state document=%s", result.get("doc_id"), exc_info=True)
+                if not persisted:
+                    try:
+                        await s3_manager.delete_object(settings.S3_BUCKET_RAG, original_key)
+                    except Exception:
+                        logger.warning("Failed to clean up failed collection upload document=%s", result.get("doc_id"), exc_info=True)
+        raise
 
 
 @router.get("/{collection_id}/documents")

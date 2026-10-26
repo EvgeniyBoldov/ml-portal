@@ -22,6 +22,7 @@ class PdfExtractor(BaseExtractor):
         warnings: List[str] = []
         text = ""
         pages = 0
+        failed_pages = 0
 
         try:
             from pdfminer.high_level import extract_text as pdf_extract_text  # type: ignore
@@ -50,7 +51,10 @@ class PdfExtractor(BaseExtractor):
                     try:
                         text += (p.extract_text() or "") + "\n"
                     except Exception:
+                        failed_pages += 1
                         continue
+                if failed_pages:
+                    warnings.append(f"PDF extraction skipped {failed_pages} page(s)")
                 if not text.strip():
                     warnings.append("PyPDF2 yielded empty text. Consider OCR.")
             except Exception as e2:
@@ -58,5 +62,8 @@ class PdfExtractor(BaseExtractor):
                 text = ""
 
         return ExtractResult(
-            text=text, kind="pdf", meta={"pages": pages}, warnings=warnings
+            text=text,
+            kind="pdf",
+            meta={"pages": pages, "source_complete": failed_pages == 0},
+            warnings=warnings,
         )

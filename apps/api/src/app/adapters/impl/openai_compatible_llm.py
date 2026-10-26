@@ -279,12 +279,20 @@ class OpenAICompatibleLLM:
                 client, request_params, connection.context_window_tokens, effective_timeout_s, options,
             )
             
+            saw_terminal_finish = False
             async for chunk in stream:
                 if getattr(chunk, "usage", None):
                     usage = chunk.usage.model_dump()
+                if chunk.choices and getattr(chunk.choices[0], "finish_reason", None):
+                    finish_reason = chunk.choices[0].finish_reason
+                    if finish_reason not in {"stop", "tool_calls", "function_call"}:
+                        raise RuntimeError(f"LLM stream ended with provider finish reason: {finish_reason}")
+                    saw_terminal_finish = True
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     yield content
+            if not saw_terminal_finish:
+                raise RuntimeError("LLM stream ended before the provider reported completion")
             self._record_call(
                 connector=connector, call_kind="stream", outcome="success",
                 duration_ms=int((time.monotonic() - request_started) * 1000), usage=usage,

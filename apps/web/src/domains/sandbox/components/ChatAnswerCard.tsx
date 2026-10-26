@@ -7,11 +7,12 @@ interface Props {
   text: string;
   isRunning: boolean;
   attachments?: ChatAttachmentRef[];
+  error?: string;
 }
 
-export default function ChatAnswerCard({ text, isRunning, attachments = [] }: Props) {
+export default function ChatAnswerCard({ text, isRunning, attachments = [], error }: Props) {
   const hasContent = text.length > 0;
-  if (!hasContent && !isRunning && attachments.length === 0) return null;
+  if (!hasContent && !isRunning && attachments.length === 0 && !error) return null;
 
   return (
     <article className={`${styles.card} ${isRunning ? styles.streaming : ''}`}>
@@ -34,6 +35,7 @@ export default function ChatAnswerCard({ text, isRunning, attachments = [] }: Pr
         {isRunning && hasContent && <span className={styles.cursor}>▊</span>}
       </div>
       <ChatAttachments attachments={attachments} variant="artifact" />
+      {error && <div className={styles.error}>{error}</div>}
     </article>
   );
 }

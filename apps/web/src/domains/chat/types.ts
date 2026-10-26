@@ -24,6 +24,7 @@ export interface ChatMessageMeta {
   attachments?: ChatAttachmentRef[];
   ragSources?: ChatRagSource[];
   runtimeRunId?: string;
+  deliveryError?: boolean;
 }
 
 export interface ChatTimelineMessage {
@@ -32,7 +33,8 @@ export interface ChatTimelineMessage {
   content: string;
   createdAt: string;
   isOptimistic?: boolean;
-  outcome?: 'cancelled' | 'interrupted' | 'failed';
+  outcome?: 'cancelled' | 'interrupted' | 'failed' | 'partial';
+  errorCode?: string;
   meta?: ChatMessageMeta;
 }
 
@@ -41,6 +43,7 @@ export interface ChatHistory {
   loading: boolean;
   loaded?: boolean;
   error?: string;
+  olderCursor?: string;
 }
 
 export interface ChatRuntimeProgress {

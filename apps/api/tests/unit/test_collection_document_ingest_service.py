@@ -45,7 +45,10 @@ async def test_upload_document_happy_path(monkeypatch, memory_scope):
         table_name="coll_docs",
         fields=[],
         total_rows=0,
+        is_active=True,
+        lifecycle_status="active",
     )
+    session.scalar = AsyncMock(side_effect=[collection, 1])
 
     service = CollectionDocumentUploadService(session=session, repo_factory=repo_factory, event_publisher=None)
 
@@ -102,7 +105,10 @@ async def test_upload_document_cleans_up_s3_on_failure(monkeypatch, memory_scope
         table_name="coll_docs",
         fields=[],
         total_rows=0,
+        is_active=True,
+        lifecycle_status="active",
     )
+    session.scalar = AsyncMock(return_value=collection)
 
     service = CollectionDocumentUploadService(session=session, repo_factory=repo_factory, event_publisher=None)
 

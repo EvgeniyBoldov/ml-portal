@@ -97,6 +97,8 @@ class DocumentExtractionService:
             warnings = list(result.warnings)
             if docling_error:
                 warnings.append(docling_error)
+            if request.profile == "rag_ingest" and result.meta.get("source_complete") is False:
+                raise ValueError("PDF extraction was incomplete; refusing to index a partial document")
             text = result.text or ""
             truncated = False
             if request.profile == "chat_preview" and len(text) > request.max_chars:
@@ -155,14 +157,13 @@ class DocumentExtractionService:
             raise ValueError("Docling returned an invalid response")
         status = str(payload.get("status") or "").lower()
         document = payload.get("document")
-        if status not in {"success", "partial_success"} or not isinstance(document, dict):
+        if status != "success" or not isinstance(document, dict):
             raise ValueError(f"Docling conversion status: {status or 'missing'}")
         text = str(document.get("md_content") or document.get("text_content") or "").strip()
         if not text:
             raise ValueError("Docling returned empty document content")
-        errors = payload.get("errors")
-        warnings = [str(error)[:500] for error in errors] if isinstance(errors, list) else []
-        meta: dict[str, Any] = {"docling_status": status}
+        warnings: list[str] = []
+        meta: dict[str, Any] = {"docling_status": status, "source_complete": True}
         if isinstance(payload.get("processing_time"), (int, float)):
             meta["docling_processing_time"] = payload["processing_time"]
         return ExtractResult(text=text, kind="docling", meta=meta, warnings=warnings)

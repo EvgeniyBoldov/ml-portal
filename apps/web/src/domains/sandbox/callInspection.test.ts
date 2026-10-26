@@ -12,6 +12,11 @@ describe('call inspection projection', () => {
     expect(sanitizeDisplay({ row_id: 'uuid', artifact_id: 'uuid', source: 's3://private', template_schema: { fields: [] }, title: 'Шаблон' })).toEqual({ title: 'Шаблон' });
   });
 
+  it('preserves domain payloads and references in semantic result data', () => {
+    expect(sanitizeDisplay({ data: [{ item_id: 42, content: 'payload', source: 'registry', status: 'ready' }], metadata: { document_id: 7 } }))
+      .toEqual({ data: [{ item_id: 42, content: 'payload', source: 'registry', status: 'ready' }], metadata: { document_id: 7 } });
+  });
+
   it('uses safe tool outcome fields', () => {
     expect(toolResult({ result: { success: false, safe_message: 'Шаблон не готов', data: { row_id: 'uuid' } } })).toMatchObject({
       success: false, message: 'Шаблон не готов', data: { row_id: 'uuid' },

@@ -20,6 +20,7 @@ from app.agents.runtime_graph import (
     RuntimeExecutionGraph,
 )
 from app.core.exceptions import AgentUnavailableError, AppError
+from app.services.sandbox_override_resolver import SandboxToolOverrides
 
 
 def _resolved_instance(*, slug: str, collection_id: str, collection_slug: str) -> ResolvedDataInstance:
@@ -104,6 +105,29 @@ def test_collection_filter_removes_orphan_operations_even_when_instances_unchang
         agent_slug="agent", default_collection_allow=True)
     assert result.resolved_operations == []
     assert not result.execution_graph.bindings
+
+
+@pytest.mark.asyncio
+async def test_execution_preflight_forwards_sandbox_tool_overrides_to_operation_router():
+    preflight = ExecutionPreflight(session=SimpleNamespace())
+    operation_result = SimpleNamespace(resolved_operations=[])
+    preflight.operation_router.resolve = AsyncMock(return_value=operation_result)
+    overrides = SandboxToolOverrides(
+        publication={"discovered-netbox": False},
+        semantics={"discovered-netbox": {"title": "NetBox inventory"}},
+    )
+
+    await preflight._resolve_operations(
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        agent_slug="inventory.netbox",
+        agent=SimpleNamespace(allow_all_collections=True),
+        effective_permissions_override=None,
+        default_collection_allow=True,
+        sandbox_tool_overrides=overrides,
+    )
+
+    assert preflight.operation_router.resolve.await_args.kwargs["sandbox_tool_overrides"] is overrides
 
 
 def _build_preflight(

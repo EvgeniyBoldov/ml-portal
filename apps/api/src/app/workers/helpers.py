@@ -3,6 +3,7 @@ Worker helpers and utilities
 """
 import hashlib
 import json
+import re
 from app.core.logging import get_logger
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
@@ -174,21 +175,66 @@ def chunker(text: str, profile: ChunkProfile = ChunkProfile.BY_TOKENS, **kwargs)
     else:
         raise ValueError(f"Unknown chunking profile: {profile}")
 
-    # All profiles must use monotonically increasing *character* offsets. The
-    # old sentence/paragraph/markdown implementations wrote zero for every
-    # chunk, violating uq_chunks_source_offset and generating colliding IDs.
-    cursor = 0
+    # Chunk profiles normalize whitespace and sentence splitting can remove
+    # punctuation. Match their word sequence back to source spans instead of
+    # searching for the formatted chunk string as a literal substring.
+    token_pattern = r"\S+" if profile == ChunkProfile.BY_TOKENS else r"\w+"
+    source_tokens = [
+        (match.group(), match.start(), match.end())
+        for match in re.finditer(token_pattern, text, flags=re.UNICODE)
+    ]
+    token_cursor = 0
+    char_cursor = 0
     for chunk in chunks:
         value = str(chunk.get("text", ""))
-        start = text.find(value, cursor)
-        if start < 0:
-            # A formatter may have normalized whitespace. Keep a deterministic
-            # non-overlapping range rather than silently reusing offset zero.
-            start = cursor
-        end = start + len(value)
+        words = (
+            value.split()
+            if profile == ChunkProfile.BY_TOKENS
+            else [match.group() for match in re.finditer(r"\w+", value, flags=re.UNICODE)]
+        )
+        if not words:
+            literal_start = text.find(value, char_cursor)
+            if literal_start < 0:
+                raise ValueError("Chunk text cannot be mapped to canonical source offsets")
+            chunk["start_pos"] = literal_start
+            chunk["end_pos"] = literal_start + len(value)
+            token_cursor = next(
+                (index for index, token in enumerate(source_tokens) if token[1] >= literal_start + len(value)),
+                len(source_tokens),
+            )
+            char_cursor = literal_start + 1
+            continue
+        token_start_hint = chunk.get("start_pos") if profile == ChunkProfile.BY_TOKENS else None
+        hinted_tokens = source_tokens[
+            token_start_hint : token_start_hint + len(words)
+        ] if isinstance(token_start_hint, int) else []
+        token_start = token_start_hint if [token[0] for token in hinted_tokens] == words else next(
+            (
+                index
+                for index in range(token_cursor, len(source_tokens) - len(words) + 1)
+                if [token[0] for token in source_tokens[index : index + len(words)]] == words
+            ),
+            None,
+        )
+        if token_start is None:
+            raise ValueError("Chunk text cannot be mapped to canonical source offsets")
+
+        start = source_tokens[token_start][1]
+        last_token = source_tokens[token_start + len(words) - 1]
+        end = last_token[2]
+        while end < len(text) and text[end] in ".!?;:,)]}\"'":
+            end += 1
+
+        # Keep Markdown heading/list markers in the span when the chunk starts
+        # at the first word of that line.
+        line_start = text.rfind("\n", 0, start) + 1
+        if re.fullmatch(r"[ \t]*(?:#{1,6}|[-*+>]+)[ \t]*", text[line_start:start]):
+            start = line_start
+
         chunk["start_pos"] = start
         chunk["end_pos"] = end
-        cursor = max(cursor, end)
+        token_cursor = token_start + (1 if profile == ChunkProfile.BY_TOKENS else len(words))
+        char_cursor = start + 1
     return chunks
 
 

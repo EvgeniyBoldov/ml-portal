@@ -58,6 +58,7 @@ class FinalPayload(BaseModel):
     created_at: Optional[str] = None
     sources: list[dict[str, Any]] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    stop_reason: Optional[str] = None
 
 
 class CachedPayload(BaseModel):

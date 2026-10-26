@@ -308,6 +308,19 @@ class InMemoryPlanStore:
         plan = self.get(plan_id)
         plan["status"] = PlanStatus.FAILED.value
         plan["last_failure"] = {"code": code, "message": message}
+        for task_id, task in plan["tasks"].items():
+            if task.get("status") != TaskStatus.RUNNING.value:
+                continue
+            task["status"] = TaskStatus.FAILED.value
+            task["result"] = {"outcome": TaskOutcome.UNFULFILLABLE.value,
+                              "description": "Task execution was interrupted", "reason_code": code,
+                              "outputs": {}, "limitation": {"code": code,
+                              "message": "Task execution was interrupted.", "action": "none"}}
+            attempts = plan["attempts"].get(task_id, [])
+            if attempts and attempts[-1].get("status") == AttemptStatus.RUNNING.value:
+                attempts[-1].update(status=AttemptStatus.FAILED.value,
+                                    error={"code": code, "message": "Task execution was interrupted"},
+                                    finished_at=_now().isoformat())
         for iteration in plan["iterations"]:
             if iteration["status"] == IterationStatus.ACTIVE.value and iteration["checkpoint_status"] in {"planner_running", "synthesis_running"}:
                 iteration["checkpoint_status"] = "idle"
@@ -620,6 +633,23 @@ class SqlPlanStore:
     async def mark_failed(self, plan_id: UUID, code: str, message: str) -> None:
         plan = await self._plan(plan_id, lock=True)
         plan.status, plan.last_failure = PlanStatus.FAILED.value, {"code": code, "message": message}
+        rows = (await self._session.execute(select(RuntimePlanTask).where(
+            RuntimePlanTask.plan_id == plan_id,
+            RuntimePlanTask.status == TaskStatus.RUNNING.value,
+        ).with_for_update())).scalars().all()
+        for row in rows:
+            row.status = TaskStatus.FAILED.value
+            row.result = {"outcome": TaskOutcome.UNFULFILLABLE.value,
+                          "description": "Task execution was interrupted",
+                          "reason_code": code, "outputs": {},
+                          "limitation": {"code": code, "message": "Task execution was interrupted.", "action": "none"}}
+            attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(
+                RuntimeTaskAttempt.task_row_id == row.id,
+                RuntimeTaskAttempt.attempt_number == row.attempts,
+            ).with_for_update())).scalar_one_or_none()
+            if attempt is not None and attempt.status == AttemptStatus.RUNNING.value:
+                attempt.status, attempt.error, attempt.finished_at = AttemptStatus.FAILED.value, {
+                    "code": code, "message": "Task execution was interrupted"}, _now()
         iteration = await self._active_iteration(plan_id, lock=True)
         if iteration is not None and iteration.checkpoint_status in {"planner_running", "synthesis_running"}:
             iteration.checkpoint_status, iteration.checkpoint_claimed_at = "idle", None
@@ -754,7 +784,9 @@ class SqlPlanStore:
 
     async def next_decision(self, plan_id: UUID) -> SchedulerDecision:
         await self._plan(plan_id, lock=True)
-        return await self._prepared_decision(plan_id)
+        decision = await self._prepared_decision(plan_id)
+        await self._commit()
+        return decision
 
     async def _prepared_decision(self, plan_id: UUID) -> SchedulerDecision:
         """Persist deterministic retry promotion and dependency blocking first."""
@@ -771,13 +803,8 @@ class SqlPlanStore:
             if current["result"] != original["result"]:
                 row.result = current["result"]
         await self._session.flush()
-        if any(
-            current["status"] != before["tasks"][task_id]["status"]
-            or current["next_retry_at"] != before["tasks"][task_id]["next_retry_at"]
-            or current["result"] != before["tasks"][task_id]["result"]
-            for task_id, current in working["tasks"].items()
-        ):
-            await self._commit()
+        # Caller owns the transaction. In claim paths the plan lock must
+        # remain held until the task/checkpoint claim is committed.
         return decision
 
     async def claim_task(self, plan_id: UUID, task_id: str) -> RuntimePlanTask:
@@ -788,6 +815,8 @@ class SqlPlanStore:
         row = (await self._session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id).with_for_update())).scalar_one_or_none()
         if row is None:
             raise TaskNotFoundError(task_id)
+        if row.status not in {TaskStatus.PENDING.value, TaskStatus.WAITING_RETRY.value}:
+            raise PlanValidationError("task is no longer claimable")
         row.status, row.attempts, row.next_retry_at = TaskStatus.RUNNING.value, row.attempts + 1, None
         self._session.add(RuntimeTaskAttempt(task_row_id=row.id, attempt_number=row.attempts))
         await self._session.flush()

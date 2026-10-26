@@ -70,6 +70,9 @@ function terminalStatus(event: RuntimeJournalEvent): string | undefined {
     return success === true ? 'completed' : success === false ? 'failed' : 'unknown';
   }
   if (event.event_type === 'llm_response') {
+    // A non-terminal response is an intermediate provider/protocol update.
+    // It must not close the logical call or its owning executor.
+    if (event.payload.terminal === false) return 'running';
     const declared = stringField(event.payload.status).toLowerCase();
     if (declared === 'running' || declared === 'waiting_retry' || declared === 'failed' || declared === 'completed') {
       return declared;
@@ -85,7 +88,9 @@ function terminalStatus(event: RuntimeJournalEvent): string | undefined {
   // preflight entity itself. Treat the handoff as a completed preflight so
   // the UI does not render the route name as an in-progress status.
   if (event.entity_type === 'orchestrator' && event.event_type === 'orchestrator_end') {
-    return 'completed';
+    const declared = stringField(event.payload.status);
+    return ['failed', 'cancelled', 'canceled', 'aborted', 'paused', 'waiting_input'].includes(declared.toLowerCase())
+      ? declared : 'completed';
   }
   if (event.event_type === 'error') return 'error';
   if (event.event_type.endsWith('_failed')) return 'failed';
@@ -132,7 +137,9 @@ function applyOrderedJournalEvent(state: SandboxTraceState, event: RuntimeJourna
     ...entity,
     parentKey: entity.parentKey ?? parentKey,
     eventIds: insertEventIdBySequence(entity.eventIds, state.eventsById, event),
-    status: terminalStatus(event) ?? entity.status,
+    status: event.sequence >= (entity.eventIds.reduce((max, id) => Math.max(max, state.eventsById[id]?.sequence ?? -1), -1))
+      ? terminalStatus(event) ?? entity.status
+      : entity.status,
     snapshotsByKind: isSnapshot(event.event_type)
       ? { ...entity.snapshotsByKind, [event.event_type]: event.id }
       : entity.snapshotsByKind,

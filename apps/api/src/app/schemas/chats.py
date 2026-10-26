@@ -42,8 +42,15 @@ class ChatMessage(BaseModel):
 class ChatMessageStreamRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
-    content: str = Field(..., min_length=1)
-    artifact_ids: Optional[List[str]] = Field(default=None, description="Chat-scoped artifact IDs")
+    content: str = Field(..., min_length=1, max_length=32_000)
+    artifact_ids: Optional[List[uuid.UUID]] = Field(default=None, max_length=10, description="Chat-scoped artifact IDs")
+
+    @field_validator("content")
+    @classmethod
+    def validate_content_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Content cannot be blank")
+        return value
 
 
 class ChatMemoryScopesUpdate(BaseModel):

@@ -14,10 +14,11 @@ Pipeline dispatch is handled by the caller via RAGIngestService.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+import math
 from typing import Any, Optional, List
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.s3_client import s3_manager
@@ -36,6 +37,7 @@ from app.services.rag_event_publisher import RAGEventPublisher
 from app.services.rag_status_manager import RAGStatusManager
 from app.services.upload_intake_policy import UploadIntakePolicy
 from app.storage.paths import calculate_file_checksum, get_origin_path
+from app.services.collection.ddl import apply_typed_binds
 
 logger = get_logger(__name__)
 
@@ -98,6 +100,18 @@ class CollectionDocumentUploadService:
             raise CollectionDocumentUploadError(f"Failed to upload file to s3://{bucket}/{s3_key}")
 
         try:
+            # Serialize membership creation and the derived counter update.
+            # The original file is already in S3, so this lock covers only DB
+            # work and the following COUNT observes earlier uploads.
+            collection = await self.session.scalar(
+                select(Collection).where(
+                    Collection.id == collection_id,
+                    Collection.tenant_id == self._tenant_id,
+                ).with_for_update().execution_options(populate_existing=True)
+            )
+            if not collection or not collection.is_active or collection.lifecycle_status == "deprecated":
+                raise CollectionNotFoundError(f"Collection {collection_id} is inactive or unavailable")
+
             file_meta = {
                 "s3_key": s3_key,
                 "filename": filename,
@@ -162,13 +176,22 @@ class CollectionDocumentUploadService:
             # Only declared fields are allowed to affect retrieval/prompt
             # context.  Store the exact projection alongside the source so it
             # remains stable even if the dynamic collection row is edited.
+            def _json_safe(value: Any) -> Any:
+                if isinstance(value, (date, datetime)):
+                    return value.isoformat()
+                if isinstance(value, dict):
+                    return {key: _json_safe(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [_json_safe(item) for item in value]
+                return value
+
             collection_fields = {field.get("name"): field for field in (collection.fields or [])}
             retrieval_fields = {
-                name: value for name, value in normalized_meta_fields.items()
+                name: _json_safe(value) for name, value in normalized_meta_fields.items()
                 if collection_fields.get(name, {}).get("used_in_retrieval") and value is not None
             }
             prompt_fields = {
-                name: value for name, value in normalized_meta_fields.items()
+                name: _json_safe(value) for name, value in normalized_meta_fields.items()
                 if collection_fields.get(name, {}).get("used_in_prompt_context") and value is not None
             }
             source_meta["collection"]["retrieval_fields"] = retrieval_fields
@@ -199,7 +222,12 @@ class CollectionDocumentUploadService:
                     embed_models=embed_models,
                 )
 
-            collection.total_rows = (collection.total_rows or 0) + 1
+            collection.total_rows = int(await self.session.scalar(
+                select(func.count()).select_from(DocumentCollectionMembership).where(
+                    DocumentCollectionMembership.collection_id == collection_id,
+                    DocumentCollectionMembership.tenant_id == self._tenant_id,
+                )
+            ) or 0)
             await CollectionService(self.session).sync_collection_status(collection, persist=False)
             await self.session.flush()
         except Exception:
@@ -254,6 +282,8 @@ class CollectionDocumentUploadService:
                     if isinstance(value, bool):
                         raise ValueError()
                     value = float(value)
+                    if not math.isfinite(value):
+                        raise ValueError()
                 elif field_type == FieldType.BOOLEAN.value:
                     if isinstance(value, str):
                         lowered = value.strip().lower()
@@ -269,11 +299,16 @@ class CollectionDocumentUploadService:
                     if field_type == FieldType.ENUM.value and isinstance(allowed, list) and value not in allowed:
                         raise ValueError()
                 elif field_type == FieldType.DATE.value:
-                    value = date.fromisoformat(str(value)).isoformat()
+                    value = date.fromisoformat(str(value))
                 elif field_type == FieldType.DATETIME.value:
-                    value = datetime.fromisoformat(str(value).replace("Z", "+00:00")).isoformat()
+                    value = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=timezone.utc)
                 elif field_type == FieldType.JSON.value and not isinstance(value, (dict, list)):
                     raise ValueError()
+                elif field_type == FieldType.JSON.value:
+                    import json
+                    json.dumps(value, allow_nan=False)
             except (TypeError, ValueError):
                 raise CollectionDocumentUploadError(f"Invalid value for document metadata field '{name}'") from None
             result[name] = value
@@ -288,6 +323,8 @@ class CollectionDocumentUploadService:
             raise NotDocumentCollectionError(
                 f"Collection {collection_id} is not a document collection (type={collection.collection_type})"
             )
+        if not collection.is_active or collection.lifecycle_status == "deprecated":
+            raise CollectionNotFoundError(f"Collection {collection_id} is inactive")
         return collection
 
     async def _upload_to_s3(self, content: bytes, key: str, bucket: str) -> bool:
@@ -335,18 +372,17 @@ class CollectionDocumentUploadService:
         tags: Optional[str],
         meta_fields: Optional[dict] = None,
     ) -> tuple[uuid.UUID, dict]:
-        import json
-
         row_id = uuid.uuid4()
         values = {"id": row_id}
         extra = meta_fields or {}
 
+        typed_fields = []
         for field_def in collection.fields:
             fname = field_def["name"]
             ftype = field_def["data_type"]
 
             if fname == "file" or ftype == FieldType.FILE.value:
-                values[fname] = json.dumps(file_meta)
+                values[fname] = file_meta
             elif fname == "file_name":
                 values[fname] = file_meta.get("filename")
             elif fname == "file_content_type":
@@ -365,10 +401,14 @@ class CollectionDocumentUploadService:
                 values[fname] = extra[fname]
             else:
                 values[fname] = None
+            typed_fields.append(field_def)
 
         columns = ", ".join(values.keys())
         placeholders = ", ".join([f":{k}" for k in values.keys()])
-        insert_sql = text(f"INSERT INTO {collection.table_name} ({columns}) VALUES ({placeholders})")
+        insert_sql = apply_typed_binds(
+            text(f"INSERT INTO {collection.table_name} ({columns}) VALUES ({placeholders})"),
+            typed_fields,
+        )
         await self.session.execute(insert_sql, values)
 
         prefilter: dict = {}

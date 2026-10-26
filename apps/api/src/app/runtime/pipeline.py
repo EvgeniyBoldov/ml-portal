@@ -34,6 +34,7 @@ from app.runtime.entity_ids import (
     memory_component_entity_id as _memory_component_entity_id,
     memory_orchestrator_id as _memory_orchestrator_id,
     planner_orchestrator_id,
+    root_route_policy_id as _root_route_policy_id,
     turn_preflight_orchestrator_id as _turn_preflight_orchestrator_id,
 )
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
@@ -51,6 +52,7 @@ from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdent
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
+from app.runtime.root_route_policy import RootRoutePolicy, RootRouteRecommendation
 from app.runtime.phase_limits import stream_synthesis_with_deadline
 from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction, interaction_from_context, require_interaction_allowed
 from app.runtime.input_builders import compact_memory_tool_records
@@ -68,6 +70,79 @@ from app.runtime.context_outcome import RuntimeOutcomeProjector
 # Memory writeback runs via Celery (single canonical execution mode).
 RUNTIME_MEMORY_INLINE = False
 logger = get_logger(__name__)
+
+
+def _policy_disposition(
+    recommendation: RootRouteRecommendation | None,
+    effective_route: str,
+) -> str:
+    if recommendation is None or recommendation.status != "matched" or not recommendation.route_hint:
+        return "not_applicable"
+    if effective_route == recommendation.route_hint:
+        return "accepted"
+    if effective_route == "tool_call":
+        return "modified"
+    return "rejected"
+
+
+def _policy_route_reason_code(
+    recommendation: RootRouteRecommendation | None,
+    effective_route: str,
+) -> str:
+    if recommendation is None:
+        return "no_policy_recommendation"
+    if recommendation.status == "unmatched":
+        return "policy_unmatched"
+    if effective_route == recommendation.route_hint:
+        return "policy_recommendation_accepted"
+    if effective_route == "tool_call":
+        return "policy_recommendation_modified_by_context"
+    return "policy_recommendation_rejected_by_context"
+
+
+def _sources_from_selected_evidence(run_context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project citations only from evidence explicitly selected for synthesis."""
+    evidence = run_context.get("evidence") if isinstance(run_context, dict) else []
+    sources: dict[str, dict[str, Any]] = {}
+
+    def add(item: Any) -> None:
+        if not isinstance(item, dict):
+            return
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        source_id = str(item.get("source_id") or item.get("document_id") or
+                        item.get("id") or metadata.get("source_id") or "").strip()
+        refs = item.get("source_references") or item.get("sources") or []
+        if source_id:
+            sources.setdefault(source_id, {
+                "source_id": source_id,
+                **({"source_name": item.get("title") or item.get("name") or metadata.get("document_title")}
+                   if item.get("title") or item.get("name") or metadata.get("document_title") else {}),
+                **({"url": item["url"]} if item.get("url") else {}),
+                **({"excerpt": str(item["text"])[:500]} if item.get("text") else {}),
+            })
+        if isinstance(refs, list):
+            for ref in refs:
+                add(ref)
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            if isinstance(value.get("data"), (dict, list)):
+                walk(value["data"])
+            for key in ("hits", "items", "sources"):
+                rows = value.get(key)
+                if isinstance(rows, list):
+                    for row in rows:
+                        add(row)
+            groups = value.get("groups")
+            if isinstance(groups, list):
+                for group in groups:
+                    walk(group)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(evidence or [])
+    return list(sources.values())
 
 
 async def _run_preflight_phase(
@@ -344,6 +419,61 @@ class RuntimePipeline:
         request: PipelineRequest,
         ctx: ToolContext,
     ) -> AsyncGenerator[RuntimeEvent, None]:
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        checkpoint = _extract_resume_checkpoint(request)
+        budget_usage = checkpoint.get("budget_usage") if isinstance(checkpoint, dict) else {}
+        prior_active_wall_ms = int((budget_usage or {}).get("active_wall_time_ms") or 0) if isinstance(budget_usage, dict) else 0
+        platform = await PlatformConfigLoader(self._session).load()
+        run_limits = await BudgetResolver(self._session).resolve_run(
+            platform.config, request.sandbox_overrides,
+        )
+        remaining_wall_ms = max(0, run_limits.wall_time_ms - prior_active_wall_ms) if run_limits.wall_time_ms else None
+        deadline = started_at + remaining_wall_ms / 1000 if remaining_wall_ms is not None else None
+        if deadline is not None:
+            ctx.extra["runtime_deadline_monotonic"] = deadline
+        stream = self._execute_stream(request, ctx).__aiter__()
+        try:
+            while True:
+                try:
+                    if deadline is None:
+                        event = await anext(stream)
+                    else:
+                        remaining = deadline - loop.time()
+                        if remaining <= 0:
+                            raise TimeoutError("runtime run wall-time limit exceeded")
+                        async with asyncio.timeout(remaining):
+                            event = await anext(stream)
+                except StopAsyncIteration:
+                    break
+                except TimeoutError as exc:
+                    yield RuntimeEvent.error(
+                        "Runtime wall-time budget exceeded", recoverable=False,
+                        error_code=RuntimeErrorCode.AGENT_WALL_TIME_EXCEEDED,
+                        retryable=False, user_message="The request exceeded its execution time limit.",
+                        operator_message=str(exc) or "runtime run wall-time limit exceeded", source="runtime",
+                    )
+                    yield RuntimeEvent.stop(PipelineStopReason.BUDGET_EXCEEDED.value)
+                    break
+                if event.type == RuntimeEventType.STOP and isinstance(event.data.get("context"), dict):
+                    registry = ctx.extra.get("runtime_budget_registry")
+                    event.data["context"]["runtime_budget_usage"] = {
+                        "entities": registry.export_usage() if registry is not None else {},
+                        "active_wall_time_ms": prior_active_wall_ms + int((loop.time() - started_at) * 1000),
+                    }
+                yield event
+        finally:
+            await stream.aclose()
+            executor = self._assembler.__dict__.get("agent_executor")
+            close = getattr(executor, "aclose", None)
+            if close is not None:
+                await close()
+
+    async def _execute_stream(
+        self,
+        request: PipelineRequest,
+        ctx: ToolContext,
+    ) -> AsyncGenerator[RuntimeEvent, None]:
         self._apply_sandbox_overrides(request, ctx)
         if request.confirmation_tokens:
             ctx.extra["confirmation_tokens"] = list(request.confirmation_tokens)
@@ -538,6 +668,10 @@ class RuntimePipeline:
         planner_limits = await budget_resolver.resolve_orchestrator("planner", request.sandbox_overrides)
         preflight_limits = await budget_resolver.resolve_orchestrator("turn_preflight", request.sandbox_overrides)
         budget_registry = BudgetRegistry(run_limits=run_limits_v2)
+        saved_budget_usage = resume_checkpoint.get("budget_usage") if isinstance(resume_checkpoint, dict) else None
+        if isinstance(saved_budget_usage, dict):
+            budget_registry.restore_usage(saved_budget_usage.get("entities"))
+        ctx.extra["runtime_budget_registry"] = budget_registry
         budget_registry.register(
             entity_type="run", entity_id=run_id_str, parent_entity_id=None,
             limits=run_limits_v2.as_entity_limits(),
@@ -602,6 +736,46 @@ class RuntimePipeline:
         # Old signed confirmation checkpoints also belong to a saved task.
         resume_graph = (resuming_interaction is not None and resuming_interaction.requester.stage in {"planner", "agent"}) or (
             resuming_interaction is None and continuation_state.get("resume_action") == "confirm")
+        root_route_recommendation = None
+        preflight_started = False
+        recent_dialogue = _recent_dialogue(list(request.messages or []))
+        if not resume_graph:
+            # Keep the same bounded, provenance-bearing dialogue for the root
+            # policy signal and TurnPreflight. The policy itself never resolves
+            # references or creates a task brief.
+            selected_messages = set(runtime_state.run_context.task_brief.get("message_refs") or [])
+            recent_ids = {item.get("message_id") for item in recent_dialogue}
+            runtime_state.run_context.recent_dialogue = [
+                *[item for item in runtime_state.run_context.recent_dialogue
+                  if item.get("message_id") in selected_messages and item.get("message_id") not in recent_ids],
+                *recent_dialogue,
+            ]
+        if not resume_graph and not explicit_slug:
+            policy_id = _root_route_policy_id(run_id_str)
+            root_route_recommendation = RootRoutePolicy.evaluate(
+                effective_user_query,
+                available_agents,
+                recommendation_id=policy_id,
+                effective_goal=effective_goal,
+                recent_dialogue=recent_dialogue,
+            )
+            yield await emitter.emit(RuntimeEvent.route_policy_start(
+                policy_id=policy_id,
+                run_id=run_id_str,
+                recommendation_id=policy_id,
+                current_user_query=effective_user_query,
+                effective_goal=effective_goal,
+                dialogue_message_count=len(recent_dialogue),
+                dialogue_truncated=any(bool(item.get("truncated")) for item in recent_dialogue),
+            ), phase=OrchestrationPhase.PIPELINE)
+            yield await emitter.emit(RuntimeEvent.route_policy_decision(
+                policy_id=policy_id,
+                run_id=run_id_str,
+                **root_route_recommendation.model_dump(mode="json"),
+            ), phase=OrchestrationPhase.PIPELINE)
+            yield await emitter.emit(RuntimeEvent.route_policy_end(
+                policy_id=policy_id, run_id=run_id_str,
+            ), phase=OrchestrationPhase.PIPELINE)
         if resume_graph:
             lookup = {}
             decision = TurnPreflightDecision(route="planner", task_brief=TaskBrief.model_validate(runtime_state.run_context.task_brief)
@@ -613,16 +787,7 @@ class RuntimePipeline:
                 requester=resuming_interaction.requester.model_dump(mode="json") if resuming_interaction else None,
                 parent_entity_type="run", parent_entity_id=run_id_str), phase=OrchestrationPhase.PIPELINE)
         else:
-            # A preflight clarification may expose new dialogue messages. Keep
-            # already selected material while refreshing its bounded tail.
-            recent_dialogue = _recent_dialogue(list(request.messages or []))
-            selected_messages = set(runtime_state.run_context.task_brief.get("message_refs") or [])
-            recent_ids = {item.get("message_id") for item in recent_dialogue}
-            runtime_state.run_context.recent_dialogue = [
-                *[item for item in runtime_state.run_context.recent_dialogue
-                  if item.get("message_id") in selected_messages and item.get("message_id") not in recent_ids],
-                *recent_dialogue,
-            ]
+            preflight_started = True
             yield await emitter.emit(
                 RuntimeEvent.orchestrator_start(
                     orchestrator_id=preflight_id,
@@ -654,6 +819,7 @@ class RuntimePipeline:
                         recent_dialogue=recent_dialogue,
                         attachments=list(request.attachments or []),
                         continuation=continuation_state,
+                        routing_recommendation=root_route_recommendation,
                         chat_id=chat_id,
                         tenant_id=tenant_id,
                         user_id=user_id,
@@ -737,6 +903,27 @@ class RuntimePipeline:
 
         effective_scope_context = await _turn_scope_context(self._session, base_scope_context, decision, lookup)
         turn_mem.project_context = _project_context_payload(effective_scope_context, turn_mem.project_context)
+        if not resume_graph:
+            proposed_route = getattr(decision, "_proposed_route", None)
+            route_reason = (
+                "preflight_deterministic" if proposed_route is None
+                else "model_selected" if proposed_route == decision.route
+                else "runtime_reroute"
+            )
+            yield await emitter.emit(RuntimeEvent.preflight_route_decision(
+                preflight_id=preflight_id,
+                run_id=run_id_str,
+                proposed_route=proposed_route,
+                effective_route=decision.route,
+                reason=route_reason,
+                detail=getattr(decision, "_reroute_reason", None),
+                policy_recommendation_id=(
+                    root_route_recommendation.recommendation_id
+                    if root_route_recommendation is not None else None
+                ),
+                policy_disposition=_policy_disposition(root_route_recommendation, decision.route),
+                reason_code=_policy_route_reason_code(root_route_recommendation, decision.route),
+            ), phase=OrchestrationPhase.PREFLIGHT)
         yield await emitter.emit(RuntimeEvent.status(
             "memory_scope_selected", route=decision.route,
             scope_context=effective_scope_context.model_payload(),
@@ -781,7 +968,7 @@ class RuntimePipeline:
                 context=runtime_state.run_context)
 
 
-        if not resume_graph:
+        if preflight_started:
             preflight_budget_payload = budget_registry.emit_snapshot(preflight_id, reason=decision.route) or {}
             yield await emitter.emit(RuntimeEvent.budget_snapshot(
                 entity_type="orchestrator", entity_id=preflight_id, parent_entity_id=run_id_str,
@@ -842,17 +1029,22 @@ class RuntimePipeline:
         if decision.route == "synthesis":
             brief = decision.synthesis_brief
             assert brief is not None
+            selected_run_context = runtime_state.run_context.projection(
+                scope_keys=effective_scope_context.model_payload().get("keys") or [],
+                evidence_refs=brief.synthesis_brief.evidence_refs,
+                message_refs=brief.synthesis_brief.message_refs,
+            )
+            direct_sources = _sources_from_selected_evidence(selected_run_context)
             direct_context = {
                 "user_question": effective_goal if resuming_interaction else effective_user_query,
                 "synthesis_brief": brief.synthesis_brief.model_dump(mode="json"),
                 "direct_answer_draft": brief.answer_draft,
                 "plan_outline": [], "resolution_decisions": [], "completed_task_reports": [],
-                "limitations": [], "artifacts": [item.ref.model_dump(mode="json") for item in runtime_state.attachment_contexts
-                    if item.ref.artifact_id in brief.synthesis_brief.artifact_refs], "sources": [],
+                    "limitations": [], "artifacts": [item.ref.model_dump(mode="json") for item in runtime_state.attachment_contexts
+                    if item.ref.artifact_id in brief.synthesis_brief.artifact_refs], "sources": direct_sources,
                 "memory_context": [],
                 "memory_candidates": turn_mem.preflight_candidates,
-                "run_context": runtime_state.run_context.projection(scope_keys=effective_scope_context.model_payload().get("keys") or [],
-                    evidence_refs=brief.synthesis_brief.evidence_refs, message_refs=brief.synthesis_brief.message_refs),
+                "run_context": selected_run_context,
                 "scope_context": effective_scope_context.model_payload(),
                 "execution_context": turn_mem.project_context["execution_context"],
             }
@@ -1402,29 +1594,6 @@ class RuntimePipeline:
     ) -> None:
         """Complete chat-only tail without coupling it to SSE delivery."""
         tail_error: Exception | None = None
-        if start_event is not None:
-            try:
-                await asyncio.wait_for(start_event.wait(), timeout=60)
-            except TimeoutError:
-                logger.warning(
-                    "chat_runtime_tail_persistence_wait_timed_out",
-                    extra={"run_id": str(runtime_state.run_id), "chat_id": request.chat_id},
-                )
-        if terminal_orchestrator_id is not None:
-            try:
-                await emitter.emit(
-                    RuntimeEvent.orchestrator_end(
-                        orchestrator_id=terminal_orchestrator_id,
-                        run_id=str(runtime_state.run_id),
-                        status="completed",
-                    ),
-                    phase=OrchestrationPhase.PLANNER,
-                )
-            except Exception:
-                logger.exception(
-                    "chat_runtime_tail_orchestrator_end_failed",
-                    extra={"run_id": str(runtime_state.run_id)},
-                )
         if recall_item is not None and recall_tenant_id is not None:
             self._dispatch_memory_evidence_feedback(
                 recall_item=recall_item,
@@ -1801,6 +1970,7 @@ class RuntimePipeline:
                 terminal_reason=stop_reason.value if stop_reason else None,
                 sandbox_overrides=request.sandbox_overrides,
                 runtime_run_id=str(runtime_state.run_id),
+                chat_turn_id=request.chat_turn_id,
                 tail_id=tail_id,
                 stream_key=stream_key,
                 memory_limits=memory_limits,
@@ -1813,7 +1983,54 @@ class RuntimePipeline:
                     else None
                 ),
             )
-            finalize_memory_task.delay(payload.model_dump(mode="json"))
+            from app.models.memory import MemoryFinalizeOutbox
+            outbox_payload = payload.model_dump(mode="json")
+            async with session_factory() as outbox_session:
+                existing = (await outbox_session.execute(
+                    select(MemoryFinalizeOutbox).where(
+                        MemoryFinalizeOutbox.runtime_run_id == str(runtime_state.run_id),
+                    ).with_for_update()
+                )).scalar_one_or_none()
+                if existing is None:
+                    outbox_uuid = uuid4()
+                    outbox_row = MemoryFinalizeOutbox(
+                        id=outbox_uuid,
+                        runtime_run_id=str(runtime_state.run_id),
+                        chat_turn_id=UUID(request.chat_turn_id) if request.chat_turn_id else None,
+                        payload=outbox_payload,
+                    )
+                    outbox_session.add(outbox_row)
+                    await outbox_session.commit()
+                    outbox_id = str(outbox_uuid)
+                else:
+                    outbox_id = str(existing.id)
+            # Intent is durable before waiting for assistant persistence. A
+            # periodic dispatcher recovers it after API/broker failures.
+            if start_event is not None:
+                try:
+                    await asyncio.wait_for(start_event.wait(), timeout=60)
+                except TimeoutError:
+                    logger.warning("chat_runtime_tail_persistence_wait_timed_out; outbox remains pending",
+                                   extra={"run_id": str(runtime_state.run_id), "chat_id": request.chat_id})
+                    return
+            if terminal_orchestrator_id is not None:
+                try:
+                    await emitter.emit(RuntimeEvent.orchestrator_end(
+                        orchestrator_id=terminal_orchestrator_id,
+                        run_id=str(runtime_state.run_id), status="completed",
+                    ), phase=OrchestrationPhase.PLANNER)
+                except Exception:
+                    logger.exception("chat_runtime_tail_orchestrator_end_failed",
+                                     extra={"run_id": str(runtime_state.run_id)})
+            async with session_factory() as outbox_session:
+                outbox_row = await outbox_session.get(MemoryFinalizeOutbox, UUID(outbox_id))
+                if outbox_row is not None and outbox_row.status != "completed":
+                    outbox_row.status = "dispatched"
+                    await outbox_session.commit()
+            finalize_memory_task.apply_async(
+                args=[{"outbox_id": outbox_id}],
+                task_id=f"memory-finalize-{outbox_id}",
+            )
             yield await observation_emitter.emit(
                 RuntimeEvent.status(
                     "memory_write_dispatched",

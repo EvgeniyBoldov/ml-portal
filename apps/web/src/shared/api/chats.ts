@@ -49,14 +49,18 @@ export async function createChat(name?: string | null, tags?: string[] | null) {
 export async function listMessages(
   chatId: string,
   limit: number = 50,
-  cursor?: string
+  cursor?: string,
+  options: { tail?: boolean; before?: string } = {}
 ) {
   const qs = new URLSearchParams();
   if (limit) qs.set('limit', String(limit));
   if (cursor) qs.set('cursor', cursor);
+  if (options.tail) qs.set('tail', 'true');
+  if (options.before) qs.set('before', options.before);
   return apiRequest<{
     items: ChatMessage[];
     next_cursor: string | null;
+    previous_cursor?: string | null;
     limit: number;
   }>(`/chats/${chatId}/messages?${qs.toString()}`);
 }

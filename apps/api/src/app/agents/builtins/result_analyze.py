@@ -15,7 +15,7 @@ _INPUT_SCHEMA_V1 = {
     "properties": {
         "result_id": {"type": "string", "minLength": 1, "description": "result_id from a successful tool result in this run."},
         "mode": {"type": "string", "enum": ["overview", "select", "aggregate"], "description": "overview inspects top-level fields; select returns array rows; aggregate counts/groups array rows; project reads object paths; text pages through a string field."},
-        "array_path": {"type": "string", "description": "Required for select and aggregate. Dot path to an array in the stored payload, e.g. fields.subtasks."},
+        "array_path": {"type": "string", "description": "Required for select and aggregate. Dot path to an array, or '$' for a root array saved by the current dataset protocol."},
         "fields": {"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "Optional dot paths projected from each selected array item."},
         "group_by": {"type": "string", "description": "Optional dot path within each array item; used by aggregate."},
         "filter_path": {"type": "string", "description": "Optional dot path within each array item to filter by equals."},
@@ -78,7 +78,7 @@ _OUTPUT_SCHEMA_V1_1 = {
 _INPUT_SCHEMA_V2 = {
     "type": "object",
     "properties": {
-        "sql": {"type": "string", "minLength": 1, "description": "One PostgreSQL SELECT query over the result_<uuid> tables listed in the saved result catalog. JSON values are available in data."},
+    "sql": {"type": "string", "minLength": 1, "description": "One PostgreSQL SELECT query over the result_<uuid> tables listed in the saved result catalog. Use exact top-level columns from result.describe; nested values are JSONB."},
     },
     "required": ["sql"],
     "additionalProperties": False,
@@ -95,6 +95,7 @@ _OUTPUT_SCHEMA_V2 = {
         "query_result_stored": {"type": "boolean"},
         "query_complete": {"type": "boolean"},
         "source_result_ids": {"type": "array", "items": {"type": "string"}},
+        "input_revision": {"type": "integer"},
     },
     "required": ["mode", "result_id", "sql_ref", "row_count", "rows", "query_result_stored"],
 }
@@ -115,7 +116,7 @@ class ResultAnalyzeTool(VersionedTool):
     @tool_version(version="1.0.0", input_schema=_INPUT_SCHEMA_V1, output_schema=_OUTPUT_SCHEMA_V1,
                   description=(
                       "Inspect a successful result from this run. overview needs result_id; "
-                      "select/aggregate also need array_path. select returns a bounded page of array rows "
+                      "select/aggregate also need array_path (use '$' for a saved root array). select returns a bounded page of array rows "
                       "using fields, offset and limit; continue until complete=true. aggregate returns counts "
                       "and optional groups using group_by. This version does not support project or text modes."
                   ))
@@ -128,7 +129,7 @@ class ResultAnalyzeTool(VersionedTool):
                       "overview; project with paths for object/scalar fields; text with text_path and optional "
                       "text_offset/text_limit; select with array_path and optional fields/offset/limit; or "
                       "aggregate with array_path and optional group_by/filter_path/equals. Paths are dot-separated. "
-                      "project cannot return arrays; use select. Page select/text using next_offset until "
+                      "project cannot return arrays; use select. Use '$' as array_path for a saved root array. Page select/text using next_offset until "
                       "complete=true. source_complete describes whether the original result was complete."
                   ))
     async def v1_1_0(self, ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:

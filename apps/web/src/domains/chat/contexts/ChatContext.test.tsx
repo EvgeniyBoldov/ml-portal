@@ -78,20 +78,9 @@ beforeEach(() => {
 });
 
 describe('chat streaming', () => {
-  it('loads every history page through to the latest answer and de-duplicates message IDs', async () => {
+  it('loads the history tail without fetching every earlier page', async () => {
     const { result } = setup();
-    vi.mocked(listMessages)
-      .mockResolvedValueOnce({
-        items: Array.from({ length: 100 }, (_, i) => ({
-          id: `message-${i}`,
-          chat_id: 'chat',
-          role: 'user',
-          content: `Текст ${i}`,
-        })),
-        next_cursor: 'cursor-100',
-        limit: 100,
-      })
-      .mockResolvedValueOnce({
+    vi.mocked(listMessages).mockResolvedValueOnce({
         items: [
           {
             id: 'message-99',
@@ -107,20 +96,22 @@ describe('chat streaming', () => {
           },
         ],
         next_cursor: null,
+        previous_cursor: 'cursor-oldest',
         limit: 100,
       });
     await act(async () => {
       await result.current.actions.loadMessages('chat');
     });
-    expect(listMessages).toHaveBeenNthCalledWith(1, 'chat', 100, undefined);
-    expect(listMessages).toHaveBeenNthCalledWith(2, 'chat', 100, 'cursor-100');
-    expect(result.current.state.messagesByChat.chat.items).toHaveLength(101);
+    expect(listMessages).toHaveBeenCalledTimes(1);
+    expect(listMessages).toHaveBeenCalledWith('chat', 100, undefined, { tail: true });
+    expect(result.current.state.messagesByChat.chat.items).toHaveLength(2);
+    expect(result.current.state.messagesByChat.chat.olderCursor).toBe('cursor-oldest');
     expect(result.current.state.messagesByChat.chat.items.at(-1)?.content).toBe(
       'Самый свежий ответ'
     );
   });
 
-  it('reports a repeated cursor instead of looping or replacing history with an incomplete page', async () => {
+  it('does not loop when loading the history tail', async () => {
     const { result } = setup();
     vi.mocked(listMessages).mockResolvedValue({
       items: [],
@@ -130,10 +121,8 @@ describe('chat streaming', () => {
     await act(async () => {
       await result.current.actions.loadMessages('chat');
     });
-    expect(listMessages).toHaveBeenCalledTimes(2);
-    expect(result.current.state.messagesByChat.chat.error).toContain(
-      'продолжение истории'
-    );
+    expect(listMessages).toHaveBeenCalledTimes(1);
+    expect(result.current.state.messagesByChat.chat.error).toBeUndefined();
     expect(result.current.state.messagesByChat.chat.loading).toBe(false);
   });
 

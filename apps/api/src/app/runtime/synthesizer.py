@@ -248,6 +248,14 @@ class Synthesizer:
                 attachments.extend(created)
                 runtime_state.run_context.delivered_artifacts = attachments
                 runtime_state.final_answer = full
+                yield RuntimeEvent.final_answer_marker(
+                    synthesis_id=synthesis_run_id,
+                    run_id=str(run_id),
+                    content=full,
+                    sources=sources,
+                    attachments=attachments,
+                    producer="synthesizer_file_generation",
+                )
                 yield RuntimeEvent.final(full, sources=sources, run_id=str(run_id), attachments=attachments,
                     entity_type="synthesis_run", entity_id=synthesis_run_id,
                     parent_entity_type="run", parent_entity_id=str(run_id))
@@ -507,16 +515,13 @@ class Synthesizer:
             return
 
         runtime_state.final_answer = full
-        yield RuntimeEvent.status(
-            "final_answer_marker",
-            producer="synthesizer_llm",
-            entity_type="synthesis_run",
-            entity_id=synthesis_run_id,
-            parent_entity_type="run",
-            parent_entity_id=str(run_id),
+        yield RuntimeEvent.final_answer_marker(
+            synthesis_id=synthesis_run_id,
+            run_id=str(run_id),
             content=full,
             sources=sources,
             attachments=attachments,
+            producer="synthesizer_llm",
         )
         runtime_state.run_context.delivered_artifacts = attachments
         yield RuntimeEvent.final(

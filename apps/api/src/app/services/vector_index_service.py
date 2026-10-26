@@ -78,14 +78,19 @@ class VectorIndexService:
 
     @staticmethod
     async def cache_is_current(target: VectorIndexTarget, cached: dict | None, embeddings_key: str,
-                               store: QdrantVectorStore, source_id: str, tenant_id: str) -> bool:
+                               store: QdrantVectorStore, source_id: str, tenant_id: str,
+                               expected_count: int | None = None) -> bool:
         if not cached or cached.get("embedding_fingerprint") != target.fingerprint or cached.get("embeddings_key") != embeddings_key:
+            return False
+        if expected_count is None:
+            expected_count = int(cached.get("indexed_count", 0) or 0)
+        if expected_count <= 0 or cached.get("indexed_count") != expected_count:
             return False
         if not await store.collection_exists(target.collection_name):
             return False
         count = await store.count_by_filter(target.collection_name, {
             "source_id": source_id, "tenant_id": tenant_id, "embedding_fingerprint": target.fingerprint})
-        return count == cached.get("indexed_count")
+        return count == expected_count
 
     @staticmethod
     def merge_filters(*filters: dict | None) -> dict | None:

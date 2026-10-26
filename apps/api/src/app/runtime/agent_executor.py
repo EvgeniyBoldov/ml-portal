@@ -187,6 +187,9 @@ class AgentExecutor:
         # Shared executor instance per pipeline adapter to avoid per-step re-init churn.
         self._operation_executor = DirectOperationExecutor()
 
+    async def aclose(self) -> None:
+        await self._operation_executor.aclose()
+
     async def _prepare_sub_agent_request(
         self,
         *,
@@ -219,6 +222,13 @@ class AgentExecutor:
             "event_sink": ctx.extra.get("runtime_event_logger"),
             "trace_parent_id": lifecycle_agent_execution_id,
         }
+        runtime_overrides = getattr(ctx.get_runtime_deps(), "sandbox_overrides", None) or {}
+        if isinstance(runtime_overrides, dict) and runtime_overrides.get("sandbox_run_id"):
+            from app.services.sandbox_override_resolver import SandboxToolOverrides
+
+            prepare_kwargs["sandbox_tool_overrides"] = SandboxToolOverrides.from_runtime_overrides(
+                runtime_overrides
+            )
         if ctx.extra.get("shadow_execution"):
             prepare_kwargs["enable_operations"] = False
         session_factory = ctx.get_runtime_deps().session_factory
@@ -307,6 +317,35 @@ class AgentExecutor:
             )
             return
 
+        runtime_overrides = getattr(ctx.get_runtime_deps(), "sandbox_overrides", None) or {}
+        if isinstance(runtime_overrides, dict) and runtime_overrides.get("sandbox_run_id"):
+            from app.services.sandbox_override_resolver import SandboxToolOverrides
+
+            tool_overrides = SandboxToolOverrides.from_runtime_overrides(runtime_overrides)
+            effective_operations = []
+            for operation in sub_request.resolved_operations or []:
+                snapshot = dict(getattr(operation, "sandbox_override_snapshot", {}) or {})
+                if snapshot:
+                    effective_operations.append(snapshot)
+            suppressed_publication = {
+                tool_id: "disabled_by_sandbox_override"
+                for tool_id, published in tool_overrides.publication.items()
+                if published is False
+            }
+            event_logger = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
+            logger_context = getattr(event_logger, "context", None)
+            yield RuntimeEvent.sandbox_override_snapshot(
+                agent_execution_id=str(lifecycle_agent_execution_id or task.task_id),
+                configured={
+                    "publication": dict(tool_overrides.publication),
+                    "semantics": dict(tool_overrides.semantics),
+                },
+                effective_operations=effective_operations,
+                suppressed_publication=suppressed_publication,
+                parent_entity_type=getattr(logger_context, "parent_entity_type", None),
+                parent_entity_id=getattr(logger_context, "parent_entity_id", None),
+            )
+
         missing = sub_request.missing_requirements
         if missing and missing.credentials:
             limitation = {"code": "missing_credentials",
@@ -353,7 +392,10 @@ class AgentExecutor:
             from app.runtime.memory.tool_ledger import ToolLedger
             restored = ToolLedger.model_validate(task.resume_checkpoint["tool_ledger"])
             known = {entry.call_id for entry in state.tool_ledger.entries}
-            state.tool_ledger.entries.extend(entry for entry in restored.entries if entry.call_id not in known)
+            state.tool_ledger.entries.extend(
+                entry for entry in restored.entries
+                if entry.call_id not in known and entry.phase_id == task.task_id
+            )
 
 
         # Inject execution deps before any tool-runtime call.
@@ -367,11 +409,13 @@ class AgentExecutor:
         ctx.extra["runtime_tool_ledger"] = state.tool_ledger
         ctx.extra["runtime_task_id"] = task.task_id
         ctx.extra["runtime_task_tool_calls_used"] = max(runtime_state.task_tool_calls_used(task.task_id),
-            len((task.resume_checkpoint.get("tool_ledger") or {}).get("entries") or []))
+            sum(1 for entry in (task.resume_checkpoint.get("tool_ledger") or {}).get("entries", [])
+                if entry.get("phase_id") == task.task_id))
         ctx.extra["runtime_turn_state"] = state
         ctx.extra["runtime_tool_reuse_enabled"] = bool(
             (platform_config or {}).get("runtime_tool_reuse_enabled", True),
         )
+        ctx.extra["runtime_agent_slug"] = agent_slug
         ctx.extra["task_freshness_policy"] = task.freshness_policy.value
         ctx.extra["task_freshness_phase_id"] = task.task_id
         # The terminal declaration is a runtime contract.  It is deliberately
@@ -431,9 +475,12 @@ class AgentExecutor:
         final_retry_after_ms: Optional[int] = None
         success = True
 
+        def task_ledger_entries() -> list[Any]:
+            return [entry for entry in state.tool_ledger.entries if entry.phase_id == task.task_id]
+
         def validate_terminal(raw: str) -> list[str]:
             verified = self._verified_task_result(
-                task=task, ledger_entries=state.tool_ledger.entries[ledger_start:],
+                task=task, ledger_entries=task_ledger_entries(),
                 sources=sub_sources, verified_artifacts=artifacts,
             )
             return self._terminal_validation_errors(raw, task=task, verified=verified)
@@ -599,7 +646,7 @@ class AgentExecutor:
             else:
                 verified = self._verified_task_result(
                     task=task,
-                    ledger_entries=state.tool_ledger.entries[ledger_start:],
+                    ledger_entries=task_ledger_entries(),
                     sources=sub_sources,
                     verified_artifacts=artifacts,
                 )
@@ -765,25 +812,44 @@ class AgentExecutor:
             declaration = ctx.extra.get("agent_execution_result") if isinstance(ctx.extra, dict) else None
             if isinstance(declaration, TaskCompletionDeclaration):
                 terminal_outcome = declaration.completion_claim.value
+        except asyncio.CancelledError:
+            terminal_status, terminal_outcome = "cancelled", "cancelled"
+            raise
         except Exception:
             terminal_status, terminal_outcome = "failed", "failed"
             raise
         finally:
-            if (logger is not root_logger and logger is not None and lifecycle_agent_execution_id
-                    and not ctx.extra.get("shadow_execution")):
-                parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
-                parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None
-                await logger.emit(RuntimeEvent.agent_end(
-                    agent_execution_id=lifecycle_agent_execution_id,
-                    parent_entity_type=parent_type,
-                    parent_entity_id=parent_id,
-                    agent_slug=str(request.executor or "agent"),
-                    status=terminal_status,
-                    outcome=terminal_outcome,
-                    task_id=request.task_id,
-                ), phase=OrchestrationPhase.AGENT)
-            if isinstance(ctx.extra, dict):
-                ctx.extra["runtime_event_logger"] = previous_logger
+            try:
+                if (logger is not root_logger and logger is not None and lifecycle_agent_execution_id
+                        and not ctx.extra.get("shadow_execution")):
+                    parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
+                    parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None
+                    terminal_event = RuntimeEvent.agent_end(
+                        agent_execution_id=lifecycle_agent_execution_id,
+                        parent_entity_type=parent_type,
+                        parent_entity_id=parent_id,
+                        agent_slug=str(request.executor or "agent"),
+                        status=terminal_status,
+                        outcome=terminal_outcome,
+                        task_id=request.task_id,
+                    )
+                    terminal_write = asyncio.create_task(
+                        logger.emit(terminal_event, phase=OrchestrationPhase.AGENT)
+                    )
+                    try:
+                        await asyncio.shield(terminal_write)
+                    except asyncio.CancelledError:
+                        # A second cancellation must not abandon the terminal
+                        # journal write. Wait for the independent writer, then
+                        # let cancellation continue to the caller.
+                        try:
+                            await asyncio.shield(terminal_write)
+                        except Exception:
+                            logger.exception("Failed to persist cancelled agent terminal event")
+                        raise
+            finally:
+                if isinstance(ctx.extra, dict):
+                    ctx.extra["runtime_event_logger"] = previous_logger
         if requested_interaction is not None:
             raise InteractionRequired(requested_interaction)
         failure = ctx.extra.pop("agent_execution_failure", None)

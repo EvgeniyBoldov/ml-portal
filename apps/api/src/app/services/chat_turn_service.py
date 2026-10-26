@@ -5,14 +5,16 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.chat_turn import ChatTurn
+from app.models.chat import Chats
 
 logger = get_logger(__name__)
+CHAT_TURN_LEASE_SECONDS = 15 * 60
 
 
 class ChatTurnIdempotencyError(RuntimeError):
@@ -41,6 +43,51 @@ class ChatTurnService:
         request_hash: Optional[str] = None,
         runtime_run_id: Optional[str | uuid.UUID] = None,
     ) -> ChatTurn:
+        if idempotency_key:
+            existing = await self.get_latest_by_idempotency_key(
+                chat_id=chat_id, user_id=user_id, idempotency_key=idempotency_key,
+            )
+            if existing is not None:
+                await self.session.rollback()
+                raise ChatTurnIdempotencyError(
+                    conflict=bool(request_hash and existing.request_hash and request_hash != existing.request_hash),
+                )
+        # Serialize turn creation per chat. A row lock makes the active-turn
+        # check atomic across API workers, including paused HITL turns.
+        if isinstance(self.session, AsyncSession):
+            chat = (await self.session.execute(
+                select(Chats).where(Chats.id == uuid.UUID(str(chat_id))).with_for_update()
+            )).scalar_one_or_none()
+            if chat is not None:
+                if idempotency_key:
+                    existing = await self.get_latest_by_idempotency_key(
+                        chat_id=chat_id, user_id=user_id, idempotency_key=idempotency_key,
+                    )
+                    if existing is not None:
+                        await self.session.rollback()
+                        raise ChatTurnIdempotencyError(
+                            conflict=bool(request_hash and existing.request_hash and request_hash != existing.request_hash),
+                        )
+                stale_before = datetime.now(timezone.utc).timestamp() - CHAT_TURN_LEASE_SECONDS
+                stale_cutoff = datetime.fromtimestamp(stale_before, timezone.utc)
+                stale_turns = await self.session.execute(select(ChatTurn).where(
+                    ChatTurn.chat_id == uuid.UUID(str(chat_id)),
+                    ChatTurn.status.in_(("started", "resumed")),
+                    ChatTurn.started_at < stale_cutoff,
+                ).with_for_update())
+                for stale_turn in stale_turns.scalars().all():
+                    stale_turn.status = "failed"
+                    stale_turn.error_message = "runtime_lease_expired"
+                    stale_turn.completed_at = datetime.now(timezone.utc)
+                active = await self.session.execute(select(ChatTurn.id).where(
+                    ChatTurn.chat_id == uuid.UUID(str(chat_id)),
+                    or_(ChatTurn.status == "paused", and_(
+                        ChatTurn.status.in_(("started", "resumed")),
+                        ChatTurn.started_at >= stale_cutoff,
+                    )),
+                ).limit(1))
+                if active.scalar_one_or_none() is not None:
+                    raise ChatTurnIdempotencyError(conflict=False)
         turn = ChatTurn(
             chat_id=uuid.UUID(str(chat_id)),
             user_id=uuid.UUID(str(user_id)),
@@ -108,11 +155,13 @@ class ChatTurnService:
         turn = await self.get_by_id(turn_id)
         if not turn:
             return None
-        turn.status = "resumed"
-        turn.pause_status = None
-        turn.paused_action = None
-        turn.paused_context = None
-        turn.paused_at = None
+        if turn.status == "paused":
+            turn.status = "resumed"
+            turn.started_at = datetime.now(timezone.utc)
+            turn.pause_status = None
+            turn.paused_at = None
+        elif turn.status != "resumed":
+            return None
         await self.session.flush()
         return turn
 

@@ -61,12 +61,22 @@ function parseValue(raw: string, type: SandboxConfigFieldType): unknown {
     return raw.trim().toLowerCase() === 'true';
   }
   if (type === 'integer') {
-    return Number.parseInt(raw, 10);
+    if (!/^-?\d+$/.test(raw.trim())) throw new Error('Ожидается целое число');
+    return Number(raw);
   }
   if (type === 'float') {
-    return Number.parseFloat(raw);
+    if (!/^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(raw.trim())) throw new Error('Ожидается число');
+    return Number(raw);
   }
   if (type === 'tags') {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('[')) {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
+        throw new Error('Ожидается список строк');
+      }
+      return parsed;
+    }
     return raw
       .split(',')
       .map((item) => item.trim())
@@ -474,10 +484,10 @@ export function ConfigPanel({
           };
 
     const sourceByKey: Record<string, Record<string, unknown>> = {
-      agent: ({ ...(selectedAgentVersionData ?? {}), limits: agentLimits ?? {} }) as Record<string, unknown>,
+      agent: ({ ...(selectedAgentVersionData ?? {}), agent_limits: agentLimits?.effective ?? {} }) as Record<string, unknown>,
       discovered_tool: selectedToolBase as Record<string, unknown>,
-      router: ({ ...(selectedRouter?.config ?? {}), limits: orchestratorLimits ?? {} }) as Record<string, unknown>,
-      platform: ({ ...(platformSettings ?? {}), limits: platformLimits ?? {} }) as Record<string, unknown>,
+      router: ({ ...(selectedRouter?.config ?? {}), orchestrator_limits: orchestratorLimits?.effective ?? {} }) as Record<string, unknown>,
+      platform: ({ ...(platformSettings ?? {}), runtime_limits: platformLimits ?? {} }) as Record<string, unknown>,
     };
 
     const source = sourceByKey[selectedBlueprint.key] ?? {};
@@ -502,7 +512,7 @@ export function ConfigPanel({
   );
 
   useEffect(() => {
-    setActiveSectionTab(sectionTabs[0]?.id ?? '');
+    setActiveSectionTab((current) => sectionTabs.some((item) => item.id === current) ? current : sectionTabs[0]?.id ?? '');
   }, [sectionTabs]);
 
   useEffect(() => {
@@ -525,13 +535,13 @@ export function ConfigPanel({
 
   useEffect(() => {
     setDrafts({});
-  }, [selectedItem?.id, selectedItem?.type, selectedItem?.versionId, selectedAgentVersionId, selectedToolVersionId, activeParameterTab]);
+  }, [activeBranchId, selectedItem?.id, selectedItem?.type, selectedItem?.versionId, selectedAgentVersionId, selectedToolVersionId, activeParameterTab]);
 
   const getFieldPath = (fieldName: string): string => fieldName;
 
   const getFieldKey = (fieldName: string): string => {
     if (!selectedEntityMeta) return '';
-    return `${selectedEntityMeta.entityType}:${selectedEntityMeta.entityId ?? ''}:${getFieldPath(fieldName)}`;
+    return `${activeBranchId}:${selectedEntityMeta.entityType}:${selectedEntityMeta.entityId ?? ''}:${getFieldPath(fieldName)}`;
   };
 
   const getFieldInputValue = (fieldName: string): string => {
@@ -638,7 +648,7 @@ export function ConfigPanel({
   const handleSaveFieldValue = async (field: SandboxConfigField, rawValue: string): Promise<void> => {
     if (!selectedEntityMeta || !activeBranchId) return;
     if (field.editable === false) return;
-    if (rawValue.trim().length === 0) return;
+    if (rawValue.trim().length === 0 && field.type !== 'tags' && field.type !== 'text') return;
     const key = getFieldKey(field.name);
     let parsedValue: unknown;
     try {

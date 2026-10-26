@@ -158,7 +158,10 @@ function StepCard({ step, onSelect, selectedTargetKey, defaultCallsExpanded }: {
     <div className={styles.stageRow}>
       <button type="button" className={`${styles.stageNumber} ${selectedTargetKey === step.key ? styles.isSelected : ''}`} onClick={() => onSelect?.(withTraceInspectorTabs({ kind: 'step', key: step.key, step, tabs: [] }))}>{step.number || stage.iterationNumber || 1}</button>
       <div className={styles.stage}>
-        <div className={styles.executorList}>{step.executorRuns.map((executor) => <ExecutorRunCard key={executor.entity.key} executor={executor} stage={stage} onSelect={onSelect} selectedTargetKey={selectedTargetKey} defaultCallsExpanded={defaultCallsExpanded} />)}</div>
+        {step.attempts?.length ? step.attempts.map((attempt, index) => <section className={styles.executorList} key={attempt.id} aria-label={`Попытка ${index + 1}`}>
+          <div className={styles.executorType}>Попытка {index + 1}</div>
+          {attempt.steps.flatMap((item) => item.executorRuns).map((executor) => <ExecutorRunCard key={executor.entity.key} executor={executor} stage={stage} onSelect={onSelect} selectedTargetKey={selectedTargetKey} defaultCallsExpanded={defaultCallsExpanded} />)}
+        </section>) : <div className={styles.executorList}>{step.executorRuns.map((executor) => <ExecutorRunCard key={executor.entity.key} executor={executor} stage={stage} onSelect={onSelect} selectedTargetKey={selectedTargetKey} defaultCallsExpanded={defaultCallsExpanded} />)}</div>}
       </div>
     </div>
   );
@@ -175,13 +178,13 @@ export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget
   const stages = useMemo(() => projectTraceStages(trace), [trace]);
   const autoExpandedRunsRef = useRef(new Set<string>());
   const latestProgress = progress[progress.length - 1]?.description;
-  const hasTurnPreflight = stages.some((stage) => stage.kind === 'turn_preflight');
+  const hasRootRouting = stages.some((stage) => stage.kind === 'turn_preflight' || stage.kind === 'route_policy');
   useEffect(() => {
     const runId = trace.runId;
-    if (!hasTurnPreflight || !runId || autoExpandedRunsRef.current.has(runId)) return;
+    if (!hasRootRouting || !runId || autoExpandedRunsRef.current.has(runId)) return;
     autoExpandedRunsRef.current.add(runId);
     setExpanded(true);
-  }, [hasTurnPreflight, trace.runId]);
+  }, [hasRootRouting, trace.runId]);
   useEffect(() => {
     if (!isRunning) return undefined;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);

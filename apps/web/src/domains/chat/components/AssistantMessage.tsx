@@ -24,6 +24,8 @@ export function AssistantMessage({
         ? 'Ответ не завершён'
         : message.outcome === 'failed'
           ? 'Ответ завершён с ошибкой'
+          : message.outcome === 'partial'
+            ? 'Ответ частичный'
           : null;
   const copy = async () => {
     await window.navigator.clipboard.writeText(message.content);

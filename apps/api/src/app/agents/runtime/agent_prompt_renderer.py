@@ -16,6 +16,8 @@ _AGENT_VERSION_PROMPT_FIELDS = (
     "scope",
     "rules",
     "tool_use_rules",
+    "never_do",
+    "allowed_ops",
     "output_format",
     "examples",
 )
@@ -52,6 +54,8 @@ class AgentPromptRenderer:
             "scope": "Scope",
             "rules": "Rules",
             "tool_use_rules": "Tool Use Rules",
+            "never_do": "Safety — never do",
+            "allowed_ops": "Safety — allowed operations",
             "output_format": "Output Format",
             "examples": "Examples",
         }

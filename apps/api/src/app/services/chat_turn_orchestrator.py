@@ -96,6 +96,11 @@ class ChatTurnOrchestrator:
                     )
                 if not resumed_turn_id:
                     await self.turn_service.attach_user_message(turn_id, user_message_id)
+                else:
+                    # Claim the paused turn only once the SSE consumer has
+                    # actually started execution, in the same transaction as
+                    # persisting the resume input.
+                    await self.turn_service.resume_turn(turn_id)
                 # Persist the request/turn before a potentially long stream. The
                 # terminal assistant, turn status and deterministic context share
                 # a later transaction boundary.
@@ -108,6 +113,9 @@ class ChatTurnOrchestrator:
                 }
             else:
                 turn.transition(TurnPhase.USER_PERSISTED)
+                if resumed_turn_id:
+                    await self.turn_service.resume_turn(turn_id)
+                    await self.turn_service.session.commit()
 
             turn.transition(TurnPhase.CONTEXT_LOADED)
             yield {"type": "status", "stage": "loading_context"}
@@ -160,6 +168,7 @@ class ChatTurnOrchestrator:
         llm_error: Optional[dict[str, str]] = None
         runtime_event_types: list[str] = []
         final_stop_reason: Optional[str] = None
+        final_content_received = False
         run_paused = False
         paused_run_id: Optional[str] = None
         last_run_id: Optional[str] = None
@@ -185,11 +194,14 @@ class ChatTurnOrchestrator:
                 runtime_event_types.append(str(event_data.get("type") or "unknown"))
                 if isinstance(event_data.get("run_id"), str):
                     last_run_id = str(event_data.get("run_id"))
+                elif event_data.get("type") == "final_content" and event_data.get("run_id"):
+                    last_run_id = str(event_data["run_id"])
                 if event_data.get("type") == "delta":
                     if turn.phase != TurnPhase.DELTA_STREAMING:
                         turn.transition(TurnPhase.DELTA_STREAMING)
                     assistant_content += event_data.get("content", "")
                 elif event_data.get("type") == "final_content":
+                    final_content_received = True
                     assistant_content = event_data.get("content", assistant_content)
                     rag_sources = event_data.get("sources", [])
                     final_attachments = (
@@ -239,7 +251,7 @@ class ChatTurnOrchestrator:
             await self.turn_service.fail_turn(turn_id, error_message=llm_error["operator_message"])
             yield {"type": "error", "error": llm_error["user_message"], "code": llm_error["code"]}
 
-        if assistant_content and not llm_error:
+        if assistant_content and not llm_error and final_content_received:
             execution_failed = final_stop_reason == "failed"
             try:
                 assistant_message = await self.persistence_service.create_assistant_message(
@@ -263,16 +275,6 @@ class ChatTurnOrchestrator:
                     await bind_attachments(chat_id=chat_id, owner_id=user_id, artifact_ids=output_artifact_ids,
                                            message_id=str(assistant_message.message_id))
 
-                if idempotency_key and user_message_id:
-                    await store_idempotency(
-                        idempotency_key,
-                        user_message_id,
-                        assistant_message.message_id,
-                        chat_id=chat_id,
-                        user_id=user_id,
-                        request_hash=self.turn_service.build_request_hash(hash_payload),
-                    )
-
                 if execution_failed:
                     await self.turn_service.attach_assistant_message(turn_id, assistant_message.message_id)
                     await self.turn_service.fail_turn(turn_id, error_message="runtime_execution_failed")
@@ -284,6 +286,13 @@ class ChatTurnOrchestrator:
                 # The optional worker must observe the same committed deterministic
                 # context and assistant message as the immediately following turn.
                 await self.turn_service.session.commit()
+            except asyncio.CancelledError:
+                import anyio
+                with anyio.CancelScope(shield=True):
+                    await self.turn_service.session.rollback()
+                    await self.turn_service.cancel_turn(turn_id, error_message="Cancelled while saving assistant response")
+                    await self.turn_service.session.commit()
+                raise
             except Exception:
                 logger.exception("chat_turn_finalization_failed", extra={"chat_id": chat_id, "turn_id": str(turn_id)})
                 turn.force_error()
@@ -293,6 +302,18 @@ class ChatTurnOrchestrator:
                 yield {"type": "error", "code": "chat_finalization_failed",
                        "error": "Не удалось сохранить ответ. Повторите запрос."}
                 return
+            # The database commit is authoritative. Cache population is
+            # best-effort and outside the turn-finalization cancellation path.
+            if idempotency_key and user_message_id:
+                try:
+                    await store_idempotency(
+                        idempotency_key, user_message_id, assistant_message.message_id,
+                        chat_id=chat_id, user_id=user_id,
+                        request_hash=self.turn_service.build_request_hash(hash_payload),
+                    )
+                except Exception:
+                    logger.warning("chat_idempotency_cache_write_failed", exc_info=True,
+                                   extra={"chat_id": chat_id, "turn_id": str(turn_id)})
             post_final_tail_ready.set()
             await self._dispatch_context_compaction(
                 chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
@@ -329,6 +350,7 @@ class ChatTurnOrchestrator:
                 },
             )
             await self.turn_service.fail_turn(turn_id, error_message="Empty response from agent")
+            await self.turn_service.session.commit()
             yield {"type": "error", "error": "Empty response from agent"}
             terminal_event_emitted = True
         elif run_paused:

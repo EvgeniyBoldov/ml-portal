@@ -144,7 +144,17 @@ class OperationExecutionFacade:
 
         from app.agents.runtime.result_workspace_tools import WORKSPACE_TOOLS, execute_workspace
         if operation_call.tool_name in WORKSPACE_TOOLS:
-            return await execute_workspace(operation_call, ctx, self, operations, timeout_s), []
+            try:
+                execution = execute_workspace(operation_call, ctx, self, operations, timeout_s)
+                result = await asyncio.wait_for(execution, timeout=timeout_s) if timeout_s is not None else await execution
+                return result, []
+            except asyncio.TimeoutError:
+                message = f"Execution timed out after {timeout_s} seconds"
+                logger.error("Workspace tool %s timed out after %ss", operation_call.tool_name, timeout_s)
+                return ToolResult.fail(message, **build_error_metadata(
+                    error_code=RuntimeErrorCode.OPERATION_TIMEOUT.value,
+                    retryable=True, user_message=message, operator_message=message,
+                    source="tool")), []
 
         reused = self._reuse_policy.maybe_reuse(
             operation_slug=operation_call.tool_name,
@@ -159,7 +169,7 @@ class OperationExecutionFacade:
             )
             return result, sources
 
-        self._ensure_confirmation_if_required(
+        await self._ensure_confirmation_if_required(
             operation=operation,
             operation_call=operation_call,
             ctx=ctx,
@@ -190,8 +200,11 @@ class OperationExecutionFacade:
 
             previous_call_id = ctx.extra.get("runtime_active_tool_call_id")
             previous_tool_slug = ctx.extra.get("runtime_active_tool_slug")
+            previous_timeout = ctx.extra.get("runtime_operation_timeout_s")
             ctx.extra["runtime_active_tool_call_id"] = operation_call.id
             ctx.extra["runtime_active_tool_slug"] = operation_call.tool_name
+            if timeout_s is not None:
+                ctx.extra["runtime_operation_timeout_s"] = timeout_s
             try:
                 if timeout_s is not None:
                     result = await asyncio.wait_for(
@@ -208,6 +221,10 @@ class OperationExecutionFacade:
                     ctx.extra.pop("runtime_active_tool_slug", None)
                 else:
                     ctx.extra["runtime_active_tool_slug"] = previous_tool_slug
+                if previous_timeout is None:
+                    ctx.extra.pop("runtime_operation_timeout_s", None)
+                else:
+                    ctx.extra["runtime_operation_timeout_s"] = previous_timeout
 
             sources: List[dict] = []
             if result.success and result.metadata.get("sources"):
@@ -274,7 +291,7 @@ class OperationExecutionFacade:
                 ),
             ), []
 
-    def _ensure_confirmation_if_required(
+    async def _ensure_confirmation_if_required(
         self,
         *,
         operation: ResolvedOperation,
@@ -317,7 +334,7 @@ class OperationExecutionFacade:
         for token in tokens:
             if not isinstance(token, str) or not token.strip():
                 continue
-            if self._confirmation_service.verify(
+            if await asyncio.to_thread(self._confirmation_service.verify,
                 token=token,
                 user_id=ctx.user_id,
                 chat_id=ctx.chat_id,
@@ -699,6 +716,7 @@ class OperationExecutionFacade:
         domain payload and bypass dataset presentation limits.
         """
         import json as _json
+        from app.services.tool_result_store import _json_dumps_exact
 
         if result.success:
             if result.delivery == "direct":
@@ -707,7 +725,7 @@ class OperationExecutionFacade:
                 output = dict(result.data) if isinstance(result.data, dict) else {"value": result.data}
                 if evidence_call_id:
                     output["evidence_call_id"] = evidence_call_id
-                return _json.dumps(output, ensure_ascii=False, default=str)
+                return _json_dumps_exact(output, ensure_ascii=False, default=str)
             if result.metadata.get("workspace_view") and not stored_result:
                 output = dict(result.data) if isinstance(result.data, dict) else {"value": result.data}
                 from app.core.config import get_settings
@@ -716,19 +734,31 @@ class OperationExecutionFacade:
                 if isinstance(schema, dict):
                     output["observed_schema"] = dict(list(schema.items())[:30])
                     output["schema_complete"] = output.get("schema_complete", True) and len(schema) <= 30
-                while len(_json.dumps(output, ensure_ascii=False, default=str).encode()) > budget and output.get("observed_schema"):
+                while len(_json_dumps_exact(output, ensure_ascii=False, default=str).encode()) > budget and output.get("observed_schema"):
                     output["observed_schema"].pop(next(reversed(output["observed_schema"])))
                     output["schema_complete"] = False
-                while len(_json.dumps(output, ensure_ascii=False, default=str).encode()) > budget and output.get("sql_columns"):
+                while len(_json_dumps_exact(output, ensure_ascii=False, default=str).encode()) > budget and output.get("sql_columns"):
                     output["sql_columns"].pop(next(reversed(output["sql_columns"])))
                     output["schema_returned_columns"] = len(output["sql_columns"])
                     output["schema_page_complete"] = False
                     output["next_schema_offset"] = (output.get("schema_offset", 0) + len(output["sql_columns"])) if output["sql_columns"] else None
                     output["schema_entry_too_large"] = not bool(output["sql_columns"])
-                if len(_json.dumps(output, ensure_ascii=False, default=str).encode()) > budget:
+                if len(_json_dumps_exact(output, ensure_ascii=False, default=str).encode()) > budget:
                     output.pop("sample", None)
                     output["sample_complete"] = False
-                return _json.dumps(output, ensure_ascii=False, default=str)
+                while len(_json_dumps_exact(output, ensure_ascii=False, default=str).encode()) > budget:
+                    removable = next((key for key in ("schema_hint", "schema_query", "observed_schema", "fields")
+                                      if key in output and output[key]), None)
+                    if removable is None:
+                        break
+                    output.pop(removable, None)
+                    output["schema_complete"] = False
+                if len(_json_dumps_exact(output, ensure_ascii=False, default=str).encode()) > budget:
+                    output = {key: output[key] for key in ("result_id", "revision", "row_count",
+                        "source_complete", "schema_complete", "schema_total_columns",
+                        "schema_page_complete", "next_schema_offset", "error", "load_error")
+                        if key in output}
+                return _json_dumps_exact(output, ensure_ascii=False, default=str)
             if stored_result:
                 descriptor = {
                     "_runtime_result": {
@@ -758,9 +788,9 @@ class OperationExecutionFacade:
                 meta = stored_result.get("dataset_meta") or {}
                 runtime_meta["has_more"] = meta.get("has_next")
                 if meta.get("errors"):
-                    runtime_meta["source_errors"] = meta["errors"][:3]
+                    runtime_meta["source_errors"] = [str(item)[:160] for item in meta["errors"][:3]]
                 if meta.get("searched_types"):
-                    runtime_meta["searched_types"] = meta["searched_types"]
+                    runtime_meta["searched_types"] = [str(item)[:100] for item in meta["searched_types"][:20]]
                 runtime_meta["source_state"] = "exhausted" if meta.get("complete") is True else ("more_available" if meta.get("has_next") else "unknown")
                 runtime_meta["hint"] = (
                     "Loaded records saved. sql_columns are source fields, without added storage columns. "
@@ -771,21 +801,27 @@ class OperationExecutionFacade:
                 if not stored_result.get("sql_available", True):
                     runtime_meta["hint"] = "Full data saved. Use result.read for records and result.describe for fields. result.load fetches source pages. Request analysis through needs if computation is required."
                 runtime_meta["sql_example"] = f"SELECT * FROM {stored_result['sql_ref']} LIMIT 5" if stored_result.get("sql_ref") and stored_result.get("sql_available", True) else None
-                if len(_json.dumps(descriptor, ensure_ascii=False, default=str).encode()) > metadata_budget:
+                if len(_json_dumps_exact(descriptor, ensure_ascii=False, default=str).encode()) > metadata_budget:
                     runtime_meta.pop("query_sql", None)
                     runtime_meta.pop("query_sql_complete", None)
-                if len(_json.dumps(descriptor, ensure_ascii=False, default=str).encode()) > metadata_budget:
+                if len(_json_dumps_exact(descriptor, ensure_ascii=False, default=str).encode()) > metadata_budget:
                     runtime_meta.pop("sample", None)
-                runtime_meta.update(schema_page(stored_result.get("observed_schema") or {}, limit=15,
-                    budget=max(32, metadata_budget - len(_json.dumps(descriptor, ensure_ascii=False, default=str).encode()) - 400)))
+                if isinstance(stored_result.get("current_schema"), dict):
+                    runtime_meta.update(stored_result["current_schema"])
+                else:
+                    runtime_meta.update(schema_page(stored_result.get("observed_schema") or {}, limit=15,
+                        budget=max(32, metadata_budget - len(_json_dumps_exact(descriptor, ensure_ascii=False, default=str).encode()) - 400)))
                 if not stored_result.get("inline_complete") and stored_result.get("sample"):
                     candidate = {**runtime_meta, "sample": stored_result["sample"]}
-                    if len(_json.dumps(candidate, ensure_ascii=False, default=str).encode()) < metadata_budget:
+                    if len(_json_dumps_exact(candidate, ensure_ascii=False, default=str).encode()) < metadata_budget:
                         runtime_meta["sample"] = stored_result["sample"]
                 if stored_result.get("inline_complete"):
                     raw_output = result.data
                     if isinstance(raw_output, dict):
                         raw_output = dict(raw_output)
+                        if isinstance(raw_output.get("meta"), dict):
+                            from app.services.result_workspace import _bounded_model_meta
+                            raw_output["meta"] = _bounded_model_meta(raw_output["meta"])
                         raw_output["_runtime_result"] = descriptor["_runtime_result"]
                         if evidence_call_id:
                             raw_output["evidence_call_id"] = evidence_call_id
@@ -794,7 +830,7 @@ class OperationExecutionFacade:
                                       "evidence_call_id": evidence_call_id}
                 else:
                     raw_output = descriptor
-                rendered = _json.dumps(raw_output, ensure_ascii=False, default=str)
+                rendered = _json_dumps_exact(raw_output, ensure_ascii=False, default=str)
                 if len(rendered.encode()) > get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3:
                     # SQL replies repeat lineage, schema and samples already in
                     # the descriptor. Reserve space for complete values before
@@ -817,14 +853,14 @@ class OperationExecutionFacade:
                         compact_output = {**inline_payload, "_runtime_result": compact_meta}
                     if evidence_call_id:
                         compact_output["evidence_call_id"] = evidence_call_id
-                    compact_rendered = _json.dumps(compact_output, ensure_ascii=False, default=str)
+                    compact_rendered = _json_dumps_exact(compact_output, ensure_ascii=False, default=str)
                     if (stored_result.get("inline_complete")
                             and len(compact_rendered.encode()) <= get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3):
                         return compact_rendered
                     descriptor["_runtime_result"]["delivery"] = "stored"
                     descriptor["_runtime_result"]["inline_complete"] = False
                     descriptor["_runtime_result"]["hint"] = "Full data saved; use result.read or result.sql to access it. result.load fetches source pages."
-                    rendered = _json.dumps(descriptor, ensure_ascii=False, default=str)
+                    rendered = _json_dumps_exact(descriptor, ensure_ascii=False, default=str)
                 return rendered
             raw_output = result.data
             canonical_operation = OperationExecutionFacade._canonical_operation_name(operation_slug)
@@ -847,7 +883,7 @@ class OperationExecutionFacade:
                 if evidence_call_id:
                     raw_output["evidence_call_id"] = evidence_call_id
             try:
-                rendered = _json.dumps(raw_output, ensure_ascii=False, default=str)
+                rendered = _json_dumps_exact(raw_output, ensure_ascii=False, default=str)
                 if canonical_operation == "collection.info":
                     # Keep this diagnostic response parseable when a schema is large.
                     while len(rendered) > MAX_TOOL_CONTEXT_CHARS:
@@ -865,10 +901,10 @@ class OperationExecutionFacade:
                             raw_output.pop("remote_objects", None)
                             collection = raw_output.get("collection") or {}
                             collection.pop("usage_rules", None)
-                            rendered = _json.dumps(raw_output, ensure_ascii=False, default=str)
+                            rendered = _json_dumps_exact(raw_output, ensure_ascii=False, default=str)
                             break
                         max(populated, key=len).pop()
-                        rendered = _json.dumps(raw_output, ensure_ascii=False, default=str)
+                        rendered = _json_dumps_exact(raw_output, ensure_ascii=False, default=str)
                     return rendered
                 return rendered[:MAX_TOOL_CONTEXT_CHARS]
             except Exception:
@@ -992,6 +1028,7 @@ class OperationExecutionFacade:
     def format_observation_text(tool_outputs: List[Dict[str, Any]]) -> str:
         """Build observation text from all tool outputs for synthesis."""
         import json as _json
+        from app.services.tool_result_store import _json_dumps_exact
 
         parts = []
         for out in tool_outputs:
@@ -1012,7 +1049,7 @@ class OperationExecutionFacade:
                     data_str = f"📎 {file_name}{size_str} — artifact_id: `{artifact_id}`"
                 else:
                     try:
-                        data_str = _json.dumps(
+                        data_str = _json_dumps_exact(
                             data, ensure_ascii=False, default=str,
                         )[:4000]
                     except Exception:

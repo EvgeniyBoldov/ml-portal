@@ -145,6 +145,46 @@ class QdrantVectorStore:
             points_selector=qm.FilterSelector(filter=query_filter),
         )
 
+    async def delete_document_points_before_generation(
+        self, collection: str, source_id: str, tenant_id: str, generation: int,
+        attempt_id: str,
+    ) -> None:
+        """Delete stale/legacy points without touching a newer generation."""
+        source_match = qm.FieldCondition(key="source_id", match=qm.MatchValue(value=source_id))
+        tenant_match = qm.FieldCondition(key="tenant_id", match=qm.MatchValue(value=tenant_id))
+        stale_generation = qm.FieldCondition(
+            key="ingest_generation", range=qm.Range(lt=int(generation))
+        )
+        legacy_point = qm.IsEmptyCondition(
+            is_empty=qm.PayloadField(key="ingest_generation")
+        )
+        current_generation = qm.FieldCondition(
+            key="ingest_generation", match=qm.MatchValue(value=int(generation))
+        )
+        current_attempt = qm.FieldCondition(
+            key="ingest_attempt_id", match=qm.MatchValue(value=attempt_id)
+        )
+        other_attempt = qm.Filter(
+            must=[current_generation], must_not=[current_attempt],
+        )
+        await self._client.delete(
+            collection_name=collection,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(
+                    must=[source_match, tenant_match],
+                    should=[stale_generation, legacy_point, other_attempt],
+                )
+            ),
+        )
+
+    async def delete_points(self, collection: str, point_ids: Sequence[str]) -> None:
+        if not point_ids:
+            return
+        await self._client.delete(
+            collection_name=collection,
+            points_selector=qm.PointIdsList(points=list(point_ids)),
+        )
+
     async def delete_collection(self, name: str) -> None:
         await self._client.delete_collection(collection_name=name)
 

@@ -213,9 +213,9 @@ class FactCompactor:
                 if not isinstance(raw, dict):
                     continue
                 evidence_text = str(raw.get("text") or "").casefold()
-                if normalized.casefold() in evidence_text:
+                if normalized.casefold() in " ".join(evidence_text.split()):
                     return normalized
-                if words and sum(word in evidence_text for word in words) >= max(1, len(words) // 2):
+                if normalized.casefold() == " ".join(str(candidate.value or "").casefold().split()):
                     return normalized
         return fallback
 

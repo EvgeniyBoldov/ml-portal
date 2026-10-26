@@ -101,6 +101,14 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
         notes.append("inspect available schema metadata when fields are unclear; API sources may have no live observed values")
         return notes
 
+    if canonical == "netbox_get_objects":
+        notes.extend((
+            "object_type selects the NetBox resource; filters are exact API query fields for that resource, not natural-language device categories",
+            "never infer a filter such as device_type=switch from a request for switches; use only filter names and values confirmed by source metadata or prior returned records",
+            "when a semantic device category has no confirmed API filter, list dcim.device without filters and classify using fields actually returned",
+            "after HTTP 400, do not repeat the same arguments; inspect collection.info/filter hints or retry only with corrected or removed filters",
+        ))
+
     input_schema = dict(getattr(op, "input_schema", {}) or {})
     properties = input_schema.get("properties")
     if isinstance(properties, dict) and "filters" in properties:

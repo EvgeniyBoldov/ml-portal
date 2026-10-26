@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-MAX_TOOL_LEDGER_ENTRIES = 120
 REUSE_MAX_AGE_SECONDS = 300  # results older than 5 min are not reused
 MAX_TOOL_PREVIEW_CHARS = 220
 MAX_RESULT_CACHE_CHARS = 24_000
@@ -109,8 +108,6 @@ class ToolLedger(BaseModel):
             duplicate_of_call_id=duplicate_of,
         )
         self.entries.append(entry)
-        if len(self.entries) > MAX_TOOL_LEDGER_ENTRIES:
-            self.entries = self.entries[-MAX_TOOL_LEDGER_ENTRIES:]
         return entry
 
     def register_result(
@@ -180,7 +177,7 @@ class ToolLedger(BaseModel):
                 continue
             if phase_id is not None and entry.phase_id != phase_id:
                 continue
-            if entry.status != "succeeded" or entry.result_data is None:
+            if entry.status != "succeeded" or (entry.result_data is None and not entry.stored_result_id):
                 continue
             finished = entry.finished_at or entry.called_at
             age_seconds = (now - finished).total_seconds()

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 from uuid import UUID
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import Fact, FactObservation, FactScope, FactStatus
@@ -108,9 +108,24 @@ class FactReconciler:
             if owner_id is None:
                 decisions.append(MemoryDecision("fact_compactor", "reconciliation", "rejected", "missing_owner", (candidate,), action=compaction_action))
                 continue
+            # Serialize absent-row inserts and support updates across workers.
+            bind = self._session.get_bind()
+            if bind.dialect.name == "postgresql":
+                lock_key = f"{owner_type}:{owner_id}:{candidate.scope.value}:{candidate.subject}:{_normalized(candidate.value)}"
+                await self._session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtextextended(:slot, 0))"), {"slot": lock_key},
+                )
             existing = await self._find_same(
                 candidate, owner_type=owner_type, owner_id=owner_id,
             )
+            if existing is not None and candidate.observed_at < existing.observed_at:
+                decisions.append(MemoryDecision(
+                    "fact_compactor", "reconciliation", "skipped", "stale_observation",
+                    (candidate,), action=compaction_action, status_before=str(existing.status),
+                    status_after=str(existing.status), support_before=int(existing.support_count or 0),
+                    support_after=int(existing.support_count or 0), support_delta=0,
+                ))
+                continue
             is_new = existing is None
             status_before = existing.status if existing is not None else None
             support_before = int(existing.support_count or 0) if existing is not None else 0
@@ -209,7 +224,7 @@ class FactReconciler:
             Fact.superseded_by.is_(None),
         )
         stmt = stmt.where(Fact.owner_type == owner_type, Fact.owner_id == owner_id)
-        return (await self._session.execute(stmt.limit(1))).scalar_one_or_none()
+        return (await self._session.execute(stmt.limit(1).with_for_update())).scalar_one_or_none()
 
     async def _demote_conflicts(self, inserted: Fact) -> None:
         stmt = update(Fact).where(

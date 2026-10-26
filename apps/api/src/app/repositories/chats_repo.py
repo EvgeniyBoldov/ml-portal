@@ -126,7 +126,9 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
         chat_id: str, 
         limit: int = 100, 
         offset: int = 0,
-        cursor: Optional[str] = None
+        cursor: Optional[str] = None,
+        before_cursor: Optional[str] = None,
+        newest: bool = False,
     ) -> List[ChatMessages]:
         """
         Get messages for a chat with keyset pagination
@@ -142,20 +144,38 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
         )
         
         # Use keyset pagination if cursor provided
-        if cursor:
+        if before_cursor:
             try:
-                cursor_dt = datetime.fromisoformat(cursor.replace('Z', '+00:00'))
-                query = query.where(ChatMessages.created_at > cursor_dt)
+                cursor_time, cursor_id = before_cursor.rsplit("|", 1)
+                cursor_dt = datetime.fromisoformat(cursor_time.replace('Z', '+00:00'))
+                cursor_uuid = uuid.UUID(cursor_id)
+                query = query.where(or_(ChatMessages.created_at < cursor_dt,
+                                        and_(ChatMessages.created_at == cursor_dt, ChatMessages.id < cursor_uuid)))
+            except (ValueError, AttributeError):
+                query = query.offset(offset)
+        elif cursor:
+            try:
+                cursor_time, cursor_id = cursor.rsplit("|", 1)
+                cursor_dt = datetime.fromisoformat(cursor_time.replace('Z', '+00:00'))
+                cursor_uuid = uuid.UUID(cursor_id)
+                query = query.where(or_(ChatMessages.created_at > cursor_dt,
+                                        and_(ChatMessages.created_at == cursor_dt, ChatMessages.id > cursor_uuid)))
             except (ValueError, AttributeError):
                 # Fallback to offset if cursor is invalid
                 query = query.offset(offset)
         else:
             query = query.offset(offset)
         
-        query = query.order_by(asc(ChatMessages.created_at)).limit(limit)
+        if newest or before_cursor:
+            query = query.order_by(desc(ChatMessages.created_at), desc(ChatMessages.id)).limit(limit)
+        else:
+            query = query.order_by(asc(ChatMessages.created_at), asc(ChatMessages.id)).limit(limit)
         
         result = await self.session.execute(query)
-        return list(result.scalars().all())
+        messages = list(result.scalars().all())
+        if newest or before_cursor:
+            messages.reverse()
+        return messages
 
     async def get_recent_chat_messages(
         self,
@@ -166,7 +186,7 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
         query = (
             select(ChatMessages)
             .where(ChatMessages.chat_id == chat_id)
-            .order_by(desc(ChatMessages.created_at))
+            .order_by(desc(ChatMessages.created_at), desc(ChatMessages.id))
             .limit(limit)
         )
         result = await self.session.execute(query)

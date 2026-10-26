@@ -164,7 +164,11 @@ class S3Client:
             )
             
             logger.debug(f"Retrieved object s3://{bucket}/{key}")
-            return response['Body'].read()
+            body = response["Body"]
+            try:
+                return await asyncio.to_thread(body.read)
+            finally:
+                await asyncio.to_thread(body.close)
             
         except ClientError as e:
             logger.error(f"S3 get object error for {key}: {e}")

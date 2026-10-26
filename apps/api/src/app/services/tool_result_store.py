@@ -8,7 +8,7 @@ import math
 from decimal import Decimal
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID, NAMESPACE_URL, uuid5
+from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -19,6 +19,50 @@ _engine: AsyncEngine | None = None
 logger = logging.getLogger(__name__)
 
 
+def _json_dumps_exact(value: Any, **kwargs: Any) -> str:
+    """Serialize Decimal values as JSON numbers without a binary-float round trip."""
+    marker = f"__decimal_{uuid4().hex}_"
+    replacements: dict[str, str] = {}
+
+    def prepare(item: Any) -> Any:
+        if isinstance(item, Decimal):
+            if not item.is_finite():
+                raise ValueError("Non-finite Decimal values are not valid JSON numbers")
+            token = f"{marker}{len(replacements)}__"
+            replacements[token] = str(item)
+            return token
+        if isinstance(item, dict):
+            return {key: prepare(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [prepare(child) for child in item]
+        return item
+
+    encoded = json.dumps(prepare(value), **kwargs)
+    for token, number in replacements.items():
+        encoded = encoded.replace(json.dumps(token), number)
+    return encoded
+
+
+def _json_values_equal(left: Any, right: Any) -> bool:
+    """Compare JSON values numerically, independent of float/JSONB codecs."""
+    def decode(value: Any) -> Any:
+        encoded = _json_dumps_exact(value, ensure_ascii=False, default=str)
+        return json.loads(encoded, parse_float=Decimal, parse_int=Decimal)
+
+    def equivalent(first: Any, second: Any) -> bool:
+        if isinstance(first, bool) or isinstance(second, bool):
+            return isinstance(first, bool) and isinstance(second, bool) and first == second
+        if isinstance(first, Decimal) and isinstance(second, Decimal):
+            return first == second
+        if isinstance(first, dict) and isinstance(second, dict):
+            return first.keys() == second.keys() and all(equivalent(first[key], second[key]) for key in first)
+        if isinstance(first, list) and isinstance(second, list):
+            return len(first) == len(second) and all(equivalent(a, b) for a, b in zip(first, second))
+        return type(first) is type(second) and first == second
+
+    return equivalent(decode(left), decode(right))
+
+
 def get_tool_results_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
@@ -27,6 +71,7 @@ def get_tool_results_engine() -> AsyncEngine:
             pool_pre_ping=True,
             pool_size=5,
             max_overflow=10,
+            json_deserializer=lambda value: json.loads(value, parse_float=Decimal),
         )
     return _engine
 
@@ -65,7 +110,7 @@ class ToolResultStore:
     ) -> dict[str, Any]:
         settings = get_settings()
         try:
-            serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+            serialized = _json_dumps_exact(payload, ensure_ascii=False, separators=(",", ":"), default=str)
         except (TypeError, ValueError) as exc:
             raise ToolResultStoreError("Tool result is not JSON serializable") from exc
         if len(serialized.encode("utf-8")) > settings.TOOL_RESULTS_MAX_PAYLOAD_BYTES:
@@ -105,10 +150,54 @@ class ToolResultStore:
                 arguments = EXCLUDED.arguments,
                 expires_at = EXCLUDED.expires_at,
                 revision = runtime_tool_payloads.revision + 1
+            WHERE runtime_tool_payloads.payload_sha256 = EXCLUDED.payload_sha256
             RETURNING id::text AS result_id, id AS result_uuid, revision
         """)
         try:
             async with get_tool_results_engine().begin() as connection:
+                existing = (await connection.execute(text("""SELECT id::text AS result_id,
+                    id AS result_uuid, operation, payload, payload_sha256, source_total,
+                    source_complete, observed_schema, sample, sample_complete, schema_complete,
+                    row_count, query_sql, source_result_ids, dataset_meta, revision
+                    FROM runtime_tool_payloads WHERE run_id=:run_id AND call_id=:call_id FOR UPDATE"""),
+                    {"run_id": run_id, "call_id": call_id})).mappings().first()
+                if existing is not None:
+                    if existing["operation"] != operation:
+                        raise ToolResultStoreError("Tool call ID is already bound to another operation")
+                    if source_page is None:
+                        if existing["payload_sha256"] != hashlib.sha256(serialized.encode("utf-8")).hexdigest():
+                            raise ToolResultStoreError("Tool call ID was already used for a different result")
+                    else:
+                        saved_page = (await connection.execute(text("""SELECT payload FROM runtime_tool_result_pages
+                            WHERE result_id=:id AND page_key=:key"""),
+                            {"id": existing["result_uuid"], "key": source_page["page_key"]})).scalar_one_or_none()
+                        from app.services.tool_result_protocol import normalize_result
+                        saved_value = (normalize_result(saved_page, source_page["source_tool"],
+                            source_page["arguments"]).value if saved_page is not None else None)
+                        if saved_page is None or not _json_values_equal(saved_value, source_page["value"]):
+                            raise ToolResultStoreError("Tool call ID was already used for a different source page")
+                    current_payload = _json_dumps_exact(existing["payload"], ensure_ascii=False, separators=(",", ":"), default=str)
+                    return {
+                        "result_id": existing["result_id"],
+                        "sql_ref": sql_ref_for_result(existing["result_id"]),
+                        "payload_chars": len(current_payload),
+                        "payload_type": _json_type(existing["payload"]),
+                        "observed_schema": existing["observed_schema"] or {},
+                        "sample": existing["sample"],
+                        "schema_complete": bool(existing["schema_complete"]),
+                        "sample_complete": bool(existing["sample_complete"]),
+                        "row_count": int(existing["row_count"] or 0),
+                        "source_total": existing["source_total"],
+                        "source_complete": bool(existing["source_complete"]),
+                        "inline_complete": not (source_page is not None and int(existing["revision"]) > 1)
+                            and len(current_payload) <= settings.TOOL_RESULTS_INLINE_CONTEXT_CHARS
+                            and len(current_payload.encode("utf-8")) <= settings.TOOL_RESULTS_CONTEXT_TOKENS * 3,
+                        "query_sql": existing["query_sql"],
+                        "source_result_ids": existing["source_result_ids"] or [],
+                        "dataset_meta": existing["dataset_meta"] or {},
+                        "call_id": call_id,
+                        "revision": existing["revision"],
+                    }
                 row = (await connection.execute(statement, {
                     "result_identity": result_identity,
                     "run_id": run_id,
@@ -122,15 +211,15 @@ class ToolResultStore:
                     "payload_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
                     "source_total": (dataset_meta or {}).get("total", _source_total(payload)),
                     "source_complete": _source_complete(payload) if source_complete is None else bool(source_complete),
-                    "observed_schema": json.dumps(observed_schema, ensure_ascii=False),
-                    "sample": json.dumps(sample, ensure_ascii=False, default=str) if sample is not None else None,
+                    "observed_schema": _json_dumps_exact(observed_schema, ensure_ascii=False),
+                    "sample": _json_dumps_exact(sample, ensure_ascii=False, default=str) if sample is not None else None,
                     "sample_complete": sample_complete,
                     "schema_complete": schema_complete,
                     "row_count": len(rows),
                     "query_sql": query_sql,
-                    "source_result_ids": json.dumps(source_result_ids or []),
-                    "dataset_meta": json.dumps(meta),
-                    "arguments": json.dumps(arguments or {}),
+                    "source_result_ids": _json_dumps_exact(source_result_ids or []),
+                    "dataset_meta": _json_dumps_exact(meta, default=str),
+                    "arguments": _json_dumps_exact(arguments or {}, default=str),
                     "expires_at": expires_at,
                 })).mappings().one()
                 await connection.execute(text("DELETE FROM runtime_tool_result_rows WHERE result_id = :result_id"), {
@@ -142,20 +231,20 @@ class ToolResultStore:
                         VALUES (:result_id, :run_id, :ordinal, CAST(:data AS jsonb))
                     """), [
                         {"result_id": row["result_uuid"], "run_id": run_id,
-                         "ordinal": ordinal, "data": json.dumps(value, ensure_ascii=False, default=str)}
+                         "ordinal": ordinal, "data": _json_dumps_exact(value, ensure_ascii=False, default=str)}
                         for ordinal, value in enumerate(rows)
                     ])
                 result_id = row["result_id"]
                 meta["table_schema"] = await inspect_table(connection, result_id=result_id, schema=observed_schema)
                 await connection.execute(text("UPDATE runtime_tool_payloads SET dataset_meta=CAST(:meta AS jsonb) WHERE id=:id"),
-                    {"meta": json.dumps(meta), "id": row["result_uuid"]})
+                    {"meta": _json_dumps_exact(meta, default=str), "id": row["result_uuid"]})
                 if source_page is not None:
                     await connection.execute(text("""INSERT INTO runtime_tool_result_pages
                         (result_id, page_key, call_id, payload, meta)
                         VALUES (:id, :key, :call, CAST(:payload AS jsonb), CAST(:meta AS jsonb))
                         ON CONFLICT DO NOTHING"""), {"id": row["result_uuid"], "key": source_page["page_key"],
-                        "call": call_id, "payload": json.dumps(source_page["payload"], default=str),
-                        "meta": json.dumps(source_page["meta"])})
+                        "call": call_id, "payload": _json_dumps_exact(source_page["payload"], default=str),
+                        "meta": _json_dumps_exact(source_page["meta"])})
                 return {
                     "result_id": result_id,
                     "sql_ref": sql_ref_for_result(result_id),
@@ -223,6 +312,7 @@ class ToolResultStore:
         self, *, sql: str, run_id: str, tenant_id: UUID, user_id: UUID,
         call_id: str, task_id: str | None, agent_execution_id: str | None,
         query_parameters: dict[str, Any] | None = None,
+        expected_revisions: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         """Execute one SQL query over result CTEs and persist its complete output."""
         query = str(sql or "").strip()
@@ -239,6 +329,10 @@ class ToolResultStore:
                 timeout_ms = settings.TOOL_RESULTS_SQL_TIMEOUT_SECONDS * 1000
                 await connection.execute(text(f"SET LOCAL statement_timeout = '{timeout_ms}ms'"))
                 sources = await self.list_for_run(run_id=run_id, tenant_id=tenant_id, user_id=user_id, connection=connection)
+                current_revisions = {item["result_id"]: int(item.get("revision", 1)) for item in sources}
+                for result_id, expected in (expected_revisions or {}).items():
+                    if current_revisions.get(result_id) != expected:
+                        raise ToolResultStoreError("Dataset revision changed; restart pagination from the current result state")
                 from app.services.result_sql_guard import referenced_results
                 query_identifiers = referenced_results(query, {source["sql_ref"] for source in sources})
                 used_sources = [source for source in sources if source["sql_ref"] in query_identifiers]
@@ -270,24 +364,29 @@ class ToolResultStore:
                 settings = get_settings()
                 max_rows = get_settings().TOOL_RESULTS_SQL_MAX_ROWS
                 wrapped_sql = prefix + f"_agent_query AS ({query}) SELECT * FROM _agent_query LIMIT {max_rows + 1}"
-                result = await connection.execute(text(wrapped_sql), params)
-                for row in result.mappings():
-                    item = _json_compatible(dict(row))
-                    result_bytes += len(json.dumps(item, ensure_ascii=False, default=str).encode("utf-8"))
-                    if len(result_rows) >= max_rows or result_bytes > settings.TOOL_RESULTS_MAX_PAYLOAD_BYTES:
-                        raise ToolResultStoreError("SQL result exceeds the configured result limit")
-                    result_rows.append(item)
+                async with connection.stream(text(wrapped_sql), params) as result:
+                    async for row in result.mappings():
+                        item = _json_compatible(dict(row))
+                        result_bytes += len(_json_dumps_exact(item, ensure_ascii=False, default=str).encode("utf-8"))
+                        if len(result_rows) >= max_rows or result_bytes > settings.TOOL_RESULTS_MAX_PAYLOAD_BYTES:
+                            raise ToolResultStoreError("SQL result exceeds the configured result limit")
+                        result_rows.append(item)
         except ToolResultStoreError:
             raise
         except Exception as exc:
             raise ToolResultStoreError(f"SQL query failed: {str(exc).splitlines()[0][:300]}") from exc
 
+        from app.runtime.redactor import RuntimeRedactor
+        redactor = RuntimeRedactor()
+        result_rows = redactor.redact(result_rows)
+        safe_query = redactor.redact(query)
+        safe_parameters = redactor.redact(query_parameters or {})
         saved = await self.save(
             run_id=run_id, call_id=call_id, operation="result.analyze.sql",
             tenant_id=tenant_id, user_id=user_id, task_id=task_id,
             agent_execution_id=agent_execution_id, payload=result_rows,
-            query_sql=query, source_result_ids=source_ids,
-            arguments={"query_parameters": query_parameters or {}},
+            query_sql=safe_query, source_result_ids=source_ids,
+            arguments={"query_parameters": safe_parameters},
             source_complete=all(item["source_complete"] for item in used_sources),
             dataset_meta={"source": "sql", "complete": all(item["source_complete"] for item in used_sources),
                           "has_next": False, "input_revisions": {item["result_id"]: item.get("revision", 1) for item in used_sources}},
@@ -297,7 +396,7 @@ class ToolResultStore:
             "mode": "sql", "result_id": saved["result_id"],
             "source_result_id": saved["result_id"], "sql_ref": saved["sql_ref"],
             "row_count": saved["row_count"], "source_complete": all(item["source_complete"] for item in used_sources),
-            "source_count": len(source_ids), "source_result_ids": source_ids, "query_sql": query,
+            "source_count": len(source_ids), "source_result_ids": source_ids, "query_sql": safe_query,
             "observed_schema": saved["observed_schema"], "sample": saved["sample"],
             "schema_complete": saved["schema_complete"],
             "rows": result_rows[:25], "inline_complete": saved["inline_complete"],
@@ -348,7 +447,7 @@ class ToolResultStore:
             return await self._text(result_id, run_id, tenant_id, user_id,
                                     text_path, text_offset, text_limit, row)
         if not array_path:
-            raise ToolResultStoreError("array_path is required for select and aggregate")
+            raise ToolResultStoreError("array_path is required for select and aggregate; use '$' for a root array")
         filter_active = equals_provided or equals is not None
         if filter_path and not filter_active:
             raise ToolResultStoreError("filter_path requires equals; omit filter_path to analyze all rows")
@@ -515,7 +614,7 @@ class ToolResultStore:
                       array_path: str, fields: list[str], filter_path: str,
                       equals: str | int | float | bool | None, filter_active: bool,
                       offset: int, limit: int) -> dict[str, Any]:
-        path = _path_segments(array_path)
+        path = [] if array_path == "$" else _path_segments(array_path)
         filter_segments = _path_segments(filter_path) if filter_path else []
         count_statement = text("""
             SELECT count(*) AS total
@@ -577,7 +676,7 @@ class ToolResultStore:
     async def _aggregate(self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
                          array_path: str, group_by: str, filter_path: str,
                          equals: str | int | float | bool | None, filter_active: bool) -> dict[str, Any]:
-        path = _path_segments(array_path)
+        path = [] if array_path == "$" else _path_segments(array_path)
         group_segments = _path_segments(group_by) if group_by else []
         filter_segments = _path_segments(filter_path) if filter_path else [""]
         if group_segments:
@@ -609,7 +708,7 @@ class ToolResultStore:
                 group_value = row["group_value"]
                 group = {"value": group_value[:256] if isinstance(group_value, str) else group_value,
                          "count": int(row["count"])}
-                size = len(json.dumps(group, ensure_ascii=False))
+                size = len(_json_dumps_exact(group, ensure_ascii=False).encode("utf-8"))
                 if used + size > size_limit:
                     break
                 projected_groups.append(group)
@@ -699,7 +798,7 @@ def _json_compatible(value: Any) -> Any:
     if isinstance(value, Decimal):
         if value == value.to_integral_value():
             return int(value)
-        return float(value)
+        return value
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, UUID):
@@ -709,6 +808,10 @@ def _json_compatible(value: Any) -> Any:
 
 def _profile_rows(rows: list[Any]) -> tuple[dict[str, Any], Any, bool, bool]:
     """Profile every top-level field without assuming uniform rows."""
+    has_scalar = any(not isinstance(row, dict) for row in rows)
+    object_rows = [row for row in rows if isinstance(row, dict)]
+    if has_scalar and object_rows and any(not row or "value" in row or "$" in row for row in object_rows):
+        raise ValueError("Mixed scalar/object records conflict with a source 'value' or '$' column")
     counts: dict[str, dict[str, Any]] = {}
     schema_complete = True
     sample_complete = True
@@ -769,7 +872,7 @@ def _json_type(value: Any) -> str:
         return "array"
     if isinstance(value, bool):
         return "boolean"
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float, Decimal)):
         return "number"
     return "string"
 

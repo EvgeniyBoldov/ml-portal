@@ -56,6 +56,7 @@ class ConfirmationService:
         self._ttl_seconds = int(getattr(settings, "CONFIRMATION_TTL_SECONDS", 300) or 300)
         env = str(getattr(settings, "ENV", "local") or "local").strip().lower()
         strict_envs = {"production", "prod", "staging"}
+        self._strict_mode = env in strict_envs
         confirmation_secret = str(getattr(settings, "CONFIRMATION_SECRET", "") or "").strip()
         if confirmation_secret:
             secret = confirmation_secret
@@ -125,6 +126,10 @@ class ConfirmationService:
         ttl = max(1, exp_ts - int(time.time()))
         token_key = f"{self._nonce_prefix}{nonce}"
 
+        if self._redis is None and self._strict_mode:
+            logger.error("Shared confirmation nonce store is not configured; rejecting confirmation")
+            return False
+
         if self._redis is not None:
             try:
                 created = self._redis.set(token_key, "1", ex=ttl, nx=True)
@@ -135,7 +140,8 @@ class ConfirmationService:
                 # process-local cache, otherwise cross-process replay is possible.
                 return bool(created)
             except Exception as exc:
-                logger.warning("Failed to write confirmation nonce to Redis: %s", exc)
+                logger.error("Failed to write confirmation nonce to Redis; rejecting confirmation", exc_info=exc)
+                return False
 
         now = time.time()
         expire_at = now + ttl
@@ -143,12 +149,8 @@ class ConfirmationService:
             stale = [k for k, ts in self._fallback_nonce_store.items() if ts <= now]
             for key in stale:
                 self._fallback_nonce_store.pop(key, None)
-            # Enforce size cap: evict oldest entries (lowest expiry) to stay within bound.
-            overflow = len(self._fallback_nonce_store) - MAX_FALLBACK_NONCE_STORE_SIZE + 1
-            if overflow > 0:
-                oldest = sorted(self._fallback_nonce_store, key=lambda k: self._fallback_nonce_store[k])
-                for key in oldest[:overflow]:
-                    self._fallback_nonce_store.pop(key, None)
+            if len(self._fallback_nonce_store) >= MAX_FALLBACK_NONCE_STORE_SIZE:
+                return False
             if token_key in self._fallback_nonce_store:
                 return False
             self._fallback_nonce_store[token_key] = expire_at

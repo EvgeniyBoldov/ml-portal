@@ -4,7 +4,7 @@
 
 Runtime построен как многослойный execution pipeline:
 
-`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> mechanical lookup -> TurnPreflight -> GraphPlanner | Synthesizer`
+`ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> RootRoutePolicy -> mechanical lookup -> TurnPreflight -> GraphPlanner | Synthesizer`
 
 При `GraphPlanner` ветка продолжается через
 `SqlPlanStore -> GraphOrchestrator -> AgentExecutor -> DirectOperationExecutor`
@@ -181,9 +181,23 @@ class ExecutionPreflight:
 эти коллекции согласно effective permissions пользователя и доступным операциям.
 `memory.search` использует scope чата для выбора отдельного графа из единой общей LongMemory. Поиск общий для пользователей портала и не фильтрует документы по ACL, пользователю или tenant. Scope организует поиск по индексам и не задаёт права доступа. Для обычных документных коллекций `ExecutionPreflight` по-прежнему применяет effective permissions.
 
+### RootRoutePolicy
+
+Перед LLM-маршрутизацией `RuntimePipeline` вычисляет ограниченную рекомендацию
+по текущему запросу, эффективной цели, ограниченному диалогу и
+RBAC-фильтрованному каталогу доступных агентов. Она может подсказать planner
+для явного запроса актуальных записей NetBox, если доступен
+`inventory.netbox`, но не выбирает эффективный маршрут и не создаёт `TaskBrief`.
+Каждый новый implicit turn после policy проходит через TurnPreflight независимо
+от совпадения. Planner по-прежнему сам выбирает и создаёт задачу агенту.
+Policy recommendation сохраняется отдельной trace-сущностью перед
+TurnPreflight; итоговый маршрут и его отношение к рекомендации фиксируются
+событием `preflight_route_decision`.
+
 ### TurnPreflight
 
-Root-level системная роль перед planner. После дешёвого code-only lookup
+Root-level системная роль перед planner. После получения advisory
+`routing_recommendation`, bounded диалога и дешёвого code-only lookup
 глоссария, проектов и сущностей она возвращает строгий route: `synthesis`,
 `planner`, `clarify` либо промежуточный `tool_call`. Для `planner` она формирует
 `TaskBrief`, для `synthesis` — `SynthesisBrief`. Может вызывать зарегистрированный
@@ -427,6 +441,8 @@ scopes decide detail from their own logging level.
 | `unavailable` | Агент недоступен | Required tool unavailable, partial=false |
 
 ## Policy Gates и Execution Limits
+
+Runtime v1 claims one graph task at a time. The effective `max_parallel_tasks` value is therefore 1 until a concurrent scheduler with independent claims and sessions is implemented. The run `wall_time_ms_max` is an absolute deadline for the streamed pipeline and cancels an active phase when exceeded.
 
 Единый `RuntimeLimitsService` разрешает ограничения исполнения и параметры транспорта модели:
 

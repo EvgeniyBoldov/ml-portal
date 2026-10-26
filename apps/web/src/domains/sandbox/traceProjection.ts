@@ -5,10 +5,10 @@ import { callPresentation } from './callPresentation';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
 
 export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
-export type TraceStageKind = 'iteration' | 'turn_preflight' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
+export type TraceStageKind = 'iteration' | 'route_policy' | 'turn_preflight' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
 export type TraceStepKind = 'planner_decision' | 'task_execution' | 'memory_selection' | 'memory_write' | 'synthesis';
-export type TraceExecutorKind = 'planner' | 'preflight' | 'agent' | 'memory_selector' | 'fact_extractor' | 'fact_compactor' | 'synthesizer';
-export type TraceInspectorTabId = 'info' | 'plan' | 'task' | 'memory' | 'facts' | 'published' | 'result' | 'prompt' | 'rbac' | 'limits' | 'preflight' | 'request' | 'response' | 'error' | 'raw';
+export type TraceExecutorKind = 'planner' | 'preflight' | 'route_policy' | 'agent' | 'memory_selector' | 'fact_extractor' | 'fact_compactor' | 'synthesizer';
+export type TraceInspectorTabId = 'info' | 'plan' | 'task' | 'input' | 'route_policy' | 'checkpoint' | 'memory' | 'facts' | 'published' | 'result' | 'prompt' | 'rbac' | 'limits' | 'operations' | 'request' | 'response' | 'error' | 'raw';
 
 export interface TraceInspectorTab {
   id: TraceInspectorTabId;
@@ -62,6 +62,9 @@ export interface TraceCallRequest {
   inputTokensEstimate?: number;
   responseSchemaBytes?: number;
   messages: Array<{ role: string; content: ParsedContent }>;
+  nativeToolCalls?: unknown[];
+  tools?: unknown[];
+  responseSchema?: unknown;
   /** Ordered, labelled message transcript for the semantic request tab. */
   messageTranscript?: string;
   toolName?: string;
@@ -106,12 +109,16 @@ export interface TraceExtraction {
 export interface TraceExtractionResult {
   status: 'running' | 'completed' | 'failed';
   fileName?: string;
+  parser?: string;
   contentType?: string;
+  contentKind?: string;
   format?: string;
   profile?: string;
   representation?: string;
   truncated?: boolean;
   warnings: string[];
+  outputChars?: number;
+  durationMs?: number;
   message?: string;
 }
 
@@ -128,14 +135,12 @@ export interface TraceLimitsView {
   rows: TraceLimitRow[];
 }
 
-export type TraceExecutorStatisticKey = 'llm_calls' | 'tool_calls' | 'tokens_total' | 'llm_retries' | 'llm_errors' | 'tool_errors';
+export type TraceExecutorStatisticKey = 'llm_calls' | 'tool_calls' | 'tokens_in' | 'tokens_out' | 'tokens_total' | 'llm_retries' | 'llm_errors' | 'tool_errors';
 
 export interface TraceExecutorStatistic {
   key: TraceExecutorStatisticKey;
   label: string;
   value: number;
-  input?: number;
-  output?: number;
   limit?: TraceLimitRow;
 }
 
@@ -164,6 +169,7 @@ export interface TraceExecutorRun {
   inspectorKey: string;
   start: RuntimeJournalEvent;
   task: string;
+  input?: unknown;
   executorType: string;
   executorName: string;
   executorSlug: string;
@@ -177,13 +183,38 @@ export interface TraceExecutorRun {
   preflight?: TracePreflight;
   /** Normalized turn_preflight routing decision and its input envelope. */
   route?: TraceRoute;
+  routePolicy?: TraceRoutePolicy;
   prompt?: TracePrompt;
   access?: TraceAccessView;
   limits?: TraceLimitsView;
+  toolOverrides?: TraceToolOverrideSnapshot;
+  /** Declared and effective continuation decision for a planner checkpoint. */
+  checkpoint?: TraceCheckpointDecision;
   /** Runtime task presentation bound by the trace projector. */
   taskPresentation?: PlanTaskViewModel;
   /** Selected context produced by the memory-preparation executor. */
   memoryContext?: TraceMemoryContext;
+}
+
+export interface TraceCheckpointDecision {
+  declaredNext?: string;
+  effectiveNext?: string;
+  reason?: string;
+  iterationId?: string;
+  decided: boolean;
+}
+
+export interface TraceToolOverrideSnapshot {
+  configuredPublication: Record<string, boolean>;
+  configuredSemantics: Record<string, unknown>;
+  effectiveOperations: Array<{
+    toolId: string;
+    publicationConfigured?: boolean;
+    publishedEffective?: boolean;
+    configuredSemantics?: unknown;
+    effectiveSemantics?: unknown;
+  }>;
+  suppressedPublication: Array<{ toolId: string; reason?: string }>;
 }
 
 export type TraceResultStatus = 'running' | 'completed' | 'failed' | 'unfulfillable' | 'aborted' | 'paused' | 'waiting' | 'unknown';
@@ -223,7 +254,14 @@ export interface TracePreflight {
 }
 
 export interface TraceRoute {
-  route: string;
+  /** Planner proposal and runtime-selected route are separate journal facts. */
+  proposed?: string;
+  effective?: string;
+  reason?: 'model_selected' | 'runtime_reroute' | 'policy_route';
+  detail?: string;
+  policyRecommendationId?: string;
+  policyDisposition?: 'accepted' | 'modified' | 'rejected' | 'not_applicable';
+  policyReasonCode?: string;
   goal?: string;
   direction?: string;
   expectedResult?: string;
@@ -231,6 +269,23 @@ export interface TraceRoute {
   projectHints: string[];
   constraints: string[];
   input?: unknown;
+}
+
+export interface TraceRoutePolicy {
+  /** Legacy effective route, present only in historical direct-routing events. */
+  route?: string;
+  /** New recommendation status; this is not the selected root route. */
+  status?: 'matched' | 'unmatched';
+  recommendationId?: string;
+  routeHint?: string;
+  matched?: boolean;
+  ruleId?: string;
+  reasonCode?: string;
+  summary?: string;
+  detail?: string;
+  signals: string[];
+  sourceAgent?: string;
+  userRequest?: string;
 }
 
 export interface TraceMemoryFact {
@@ -284,6 +339,9 @@ export interface TraceMemoryContext {
   selectedGlossary: number;
   selectedMemoryItems: number;
   sourceCheckReasons: string[];
+  scopeCandidates?: unknown[];
+  scopeAmbiguities?: unknown[];
+  truncated?: boolean;
   searchScope?: Record<string, unknown>;
 }
 
@@ -309,6 +367,14 @@ export interface TraceStage {
   steps: TraceStep[];
   executorRuns: TraceExecutorRun[];
   metrics: TraceMetrics;
+  failure?: TraceStageFailure;
+  routePolicy?: TraceRoutePolicy;
+}
+
+export interface TraceStageFailure {
+  label: string;
+  code?: string;
+  message?: string;
 }
 
 export interface TraceStep {
@@ -326,7 +392,14 @@ export interface TraceStep {
   /** Runtime/planner task presentation prepared by the trace projection. */
   taskPresentation: PlanTaskViewModel;
   executorRuns: TraceExecutorRun[];
+  /** Explicitly linked runtime attempts for this logical planner task. */
+  attempts?: TraceTaskAttempt[];
   metrics: TraceMetrics;
+}
+
+export interface TraceTaskAttempt {
+  id: string;
+  steps: Array<{ entity: TraceEntity; executorRuns: TraceExecutorRun[] }>;
 }
 
 export type TraceInspectionTarget =
@@ -358,6 +431,7 @@ export interface TraceRunView {
   status: string;
   finalContent: string;
   attachments: TraceAttachment[];
+  sources?: unknown;
   error?: string;
   pause?: { kind: 'input' | 'confirmation'; question?: string; message?: string };
   limits?: TraceLimitsView;
@@ -375,6 +449,7 @@ const limitLabels: Record<string, string> = {
   task_attempts: 'Попытки задач', agent_runs: 'Запуски агентов', llm_calls: 'Вызовы LLM',
   tool_calls: 'Вызовы инструментов', tokens_in: 'Входные токены', tokens_out: 'Выходные токены',
   tokens_total: 'Всего токенов', retries: 'Повторы', wall_time_ms: 'Время выполнения',
+  retries_llm_transport: 'Повторы LLM', retries_invalid_tool: 'Повторы проверки инструмента',
 };
 const limitLabel = (key: string): string => limitLabels[key] ?? key.replace(/_/g, ' ');
 const recordNumber = (value: unknown, key: string): number | undefined => asNumber(asRecord(value)?.[key]);
@@ -386,8 +461,22 @@ function limitsFor(snapshot: unknown): TraceLimitsView | undefined {
   const own = asRecord(value.own) ?? {};
   const limits = asRecord(value.limits ?? value.runtime_limits) ?? {};
   const keys = new Set([...Object.keys(nested), ...Object.keys(own), ...Object.keys(limits)]);
-  const rows = [...keys].map((key): TraceLimitRow => {
+  const rows = [...keys].flatMap((key): TraceLimitRow[] => {
     const metric = asRecord(nested[key]) ?? {};
+    if (key === 'retries' && (metric.llm_transport_used !== undefined || metric.invalid_tool_used !== undefined)) {
+      return ([
+        ['retries_llm_transport', metric.llm_transport_used, metric.limit_per_category, metric.remaining_llm_transport],
+        ['retries_invalid_tool', metric.invalid_tool_used, metric.limit_per_category, metric.remaining_invalid_tool],
+      ] as const).map(([retryKey, rawUsed, rawLimit, rawRemaining]) => {
+        const used = asNumber(rawUsed);
+        const limit = asNumber(rawLimit);
+        const remaining = asNumber(rawRemaining);
+        const status: TraceLimitRow['status'] = limit === undefined ? 'neutral'
+          : (used ?? 0) > limit || remaining === 0 ? 'exceeded'
+            : (used ?? 0) / limit >= 0.8 ? 'warning' : 'ok';
+        return { key: retryKey, label: limitLabel(retryKey), used, limit, remaining, status };
+      }).filter((row) => row.used !== undefined || row.limit !== undefined);
+    }
     const used = recordNumber(metric, 'used') ?? asNumber(own[key]);
     const limit = recordNumber(metric, 'limit') ?? asNumber(limits[key]);
     const remaining = recordNumber(metric, 'remaining') ?? (limit !== undefined && used !== undefined ? Math.max(0, limit - used) : undefined);
@@ -396,16 +485,18 @@ function limitsFor(snapshot: unknown): TraceLimitsView | undefined {
       : (used ?? 0) > limit || remaining === 0
         ? 'exceeded'
         : (used ?? 0) / limit >= 0.8 ? 'warning' : 'ok';
-    return { key, label: limitLabel(key), used, limit, remaining, status };
+    return [{ key, label: limitLabel(key), used, limit, remaining, status }];
   }).filter((row) => row.used !== undefined || row.limit !== undefined)
     .sort((left, right) => left.label.localeCompare(right.label, 'ru'));
   return rows.length ? { rows } : undefined;
 }
 
-const executorLimitOrder = ['wall_time_ms', 'llm_calls', 'tool_calls', 'tokens_total', 'task_attempts', 'agent_steps', 'retries'];
+const executorLimitOrder = ['wall_time_ms', 'llm_calls', 'tool_calls', 'tokens_total', 'task_attempts', 'retries_llm_transport', 'retries_invalid_tool', 'retries'];
 
 function executorLimitsFor(snapshot: unknown): TraceLimitsView | undefined {
-  const rows = limitsFor(snapshot)?.rows ?? [];
+  const rows = (limitsFor(snapshot)?.rows ?? []).map((row) => row.key === 'agent_steps'
+    ? { ...row, key: 'llm_calls', label: limitLabel('llm_calls') }
+    : row);
   const filtered = rows
     .filter((row) => row.limit !== undefined && row.key !== 'tokens_in' && row.key !== 'tokens_out')
     .sort((left, right) => {
@@ -452,7 +543,8 @@ const resultStatusOf = (value: unknown): TraceResultStatus => {
   if (status === 'unfulfillable') return 'unfulfillable';
   if (['aborted', 'cancelled', 'canceled'].includes(status)) return 'aborted';
   if (status === 'paused') return 'paused';
-  if (['waiting', 'waiting_input'].includes(status)) return 'waiting';
+  if (['waiting', 'waiting_input', 'needs_dependency', 'confirmation_required', 'retry_scheduled'].includes(status)) return 'waiting';
+  if (status === 'running' || status === 'in_progress') return 'running';
   return status ? 'running' : 'unknown';
 };
 export const traceResultStatusLabel = (status: TraceResultStatus): string => ({
@@ -488,7 +580,7 @@ const stepKindFor = (stage: TraceStageKind, executor?: TraceExecutorRun): TraceS
 };
 const tab = (id: TraceInspectorTabId, label: string): TraceInspectorTab => ({ id, label });
 const hasResult = (result: TraceExecutorResult): boolean => (
-  result.status !== 'unknown'
+  (result.status !== 'unknown' && result.status !== 'running')
   || result.output !== undefined
   || result.message !== undefined
   || result.operations.total > 0
@@ -499,7 +591,7 @@ const executorSnapshotTabs = (executor: TraceExecutorRun): TraceInspectorTab[] =
   ...(executor.prompt ? [tab('prompt', 'Промпт')] : []),
   ...(executor.access ? [tab('rbac', 'Доступ')] : []),
   ...(executor.limits ? [tab('limits', 'Лимиты')] : []),
-  ...(executor.preflight ? [tab('preflight', 'Проверка')] : []),
+  ...(executor.toolOverrides ? [tab('operations', 'Операции')] : []),
   tab('raw', 'RAW'),
 ];
 const callHasError = (call: TraceCall): boolean => (
@@ -510,21 +602,26 @@ const callHasError = (call: TraceCall): boolean => (
 const isDocumentMemoryExecutor = (executor: TraceExecutorRun): boolean => executor.executorSlug === 'document_memory_extractor';
 const isDocumentMemoryStage = (stage: TraceStage): boolean => stage.executorRuns.some(isDocumentMemoryExecutor);
 export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[] {
+  if (target.kind === 'stage' && target.stage.kind === 'route_policy') return [tab('info', 'Инфо'), tab('route_policy', 'Рекомендация'), tab('raw', 'RAW')];
   if (target.kind === 'stage' && isDocumentMemoryStage(target.stage)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
   if (target.kind === 'step' && isDocumentMemoryStage(target.step.stage)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
-  if (target.kind === 'stage') return [tab('info', 'Инфо'), ...(target.stage.plan ? [tab('plan', 'План')] : []), tab('result', 'Результат'), tab('raw', 'RAW')];
-  if (target.kind === 'step') return [tab('info', 'Инфо'), tab('task', 'Задача'), tab('result', 'Результат'), tab('raw', 'RAW')];
+  if (target.kind === 'stage') return [tab('info', 'Инфо'), ...(target.stage.plan ? [tab('plan', 'План')] : []), ...(target.stage.executorRuns.some((item) => hasResult(item.result)) ? [tab('result', 'Результат')] : []), ...(target.stage.failure ? [tab('error', 'Ошибка')] : []), tab('raw', 'RAW')];
+  if (target.kind === 'step') return [tab('info', 'Инфо'), tab('task', 'Задача'), ...(target.step.executorRuns.some((item) => hasResult(item.result)) ? [tab('result', 'Результат')] : []), tab('raw', 'RAW')];
   if (target.kind === 'executor') {
+    if (target.executor.kind === 'route_policy') return [tab('info', 'Инфо'), tab('route_policy', 'Рекомендация'), tab('raw', 'RAW')];
     if (isDocumentMemoryExecutor(target.executor)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
+    if (target.executor.executorSlug === 'checkpoint') return [tab('info', 'Инфо'), tab('checkpoint', 'Решение'), tab('raw', 'RAW')];
     const primary = target.executor.kind === 'planner'
-      ? target.stage.plan ? [tab('plan', 'План')] : [tab('result', 'Результат')]
+      ? target.stage.plan ? [tab('plan', 'План')] : (hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])
       : target.executor.kind === 'preflight' ? [tab('result', 'Маршрут')]
       : target.executor.kind === 'synthesizer' ? (hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])
         : target.executor.kind === 'memory_selector' ? [tab('task', 'Задача')]
           : target.executor.kind === 'fact_extractor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Кандидаты')] : [])]
               : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Решения')] : []), ...(target.executor.memoryResult?.decisions.some((item) => item.outcome === 'published') ? [tab('published', 'Опубликовано')] : [])]
               : [tab('task', 'Задача'), ...(hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])];
-    return [tab('info', 'Инфо'), ...primary, ...(target.executor.memoryContext ? [tab('memory', 'Память')] : []), ...executorSnapshotTabs(target.executor)];
+    return [tab('info', 'Инфо'), ...primary,
+      ...(target.executor.kind === 'planner' && target.executor.input ? [tab('input', 'Вход')] : []),
+      ...(target.executor.memoryContext ? [tab('memory', 'Память')] : []), ...executorSnapshotTabs(target.executor)];
   }
   if (target.kind === 'error') return [tab('info', 'Инфо'), tab('error', 'Ошибка'), tab('raw', 'RAW')];
   const hasError = callHasError(target.call);
@@ -677,6 +774,7 @@ export function memoryContextFromPayload(payload: Record<string, unknown>): Trac
     return record ? [...stringArray(record[key]), ...metadata(record.result ?? record.memory_context, key)] : [];
   };
   const contextItems = collect(rawContext);
+  const rawMemoryPayload = asRecord(rawContext);
   const context = contextItems.flatMap((item): TraceMemoryContextItem[] => {
     const record = asRecord(item);
     const type = asString(record?.type);
@@ -729,22 +827,29 @@ export function memoryContextFromPayload(payload: Record<string, unknown>): Trac
     context,
     ambiguities: [...new Set([...stringArray(payload.ambiguities), ...metadata(rawContext, 'uncertainties'), ...metadata(rawContext, 'ambiguities')])],
     sourceCheckReasons: [...new Set([...stringArray(payload.source_check_reasons), ...metadata(rawContext, 'rag_reasons')])],
-    searchScope: asRecord(payload.search_scope) ?? undefined,
+    ...(Array.isArray(payload.scope_candidates) ? { scopeCandidates: payload.scope_candidates } : Array.isArray(rawMemoryPayload?.scope_candidates) ? { scopeCandidates: rawMemoryPayload.scope_candidates } : {}),
+    ...(Array.isArray(payload.scope_ambiguities) ? { scopeAmbiguities: payload.scope_ambiguities } : Array.isArray(rawMemoryPayload?.scope_ambiguities) ? { scopeAmbiguities: rawMemoryPayload.scope_ambiguities } : {}),
+    ...((payload.scope_candidates_truncated === true || rawMemoryPayload?.scope_candidates_truncated === true) ? { truncated: true } : {}),
+    ...(asRecord(payload.search_scope) ? { searchScope: asRecord(payload.search_scope) } : {}),
   };
 }
 
 function extractionResultFor(entity: TraceEntity, start: RuntimeJournalEvent | undefined, end: RuntimeJournalEvent | undefined): TraceExtractionResult {
-  const payload = asRecord(end?.payload ?? start?.payload) ?? {};
+  const payload = { ...(asRecord(start?.payload) ?? {}), ...(asRecord(end?.payload) ?? {}) };
   const failed = entity.status === 'failed' || end?.event_type === 'extraction_failed';
   return {
     status: failed ? 'failed' : end ? 'completed' : 'running',
-    fileName: asString(payload.file_name) || undefined,
+    fileName: asString(payload.file_name) || asString(payload.filename) || undefined,
+    parser: asString(payload.parser) || undefined,
     contentType: asString(payload.content_type) || undefined,
+    contentKind: asString(payload.content_kind) || undefined,
     format: asString(payload.format) || undefined,
     profile: asString(payload.profile) || undefined,
     representation: asString(payload.representation) || undefined,
     truncated: typeof payload.truncated === 'boolean' ? payload.truncated : undefined,
     warnings: stringArray(payload.warnings),
+    outputChars: asNumber(payload.output_chars),
+    durationMs: asNumber(payload.duration_ms),
     message: asString(payload.safe_message) || asString(payload.user_message) || asString(payload.message) || asString(payload.error) || undefined,
   };
 }
@@ -780,16 +885,20 @@ function preflightFor(state: SandboxTraceState, executor: TraceEntity): TracePre
     },
     operationsCount: asNumber(payload.operations_count),
     dataInstancesCount: asNumber(payload.data_instances_count),
-    access: accessFor(payload.rbac_audit),
+    // Access decisions have their own inspector tab; do not repeat them in validation.
   };
 }
 
-function routeFor(calls: TraceCall[]): TraceRoute | undefined {
+function routeFor(calls: TraceCall[], ownerEvents: RuntimeJournalEvent[] = []): TraceRoute | undefined {
   const call = [...calls].reverse().find((item) => item.kind === 'llm' && item.response);
-  if (!call?.response) return undefined;
-  const response = asRecord(parseCallContent(llmResponseContent(call.response.payload)).data) ?? {};
+  const response = asRecord(parseCallContent(llmResponseContent(call?.response?.payload ?? {})).data) ?? {};
   const brief = asRecord(response.task_brief) ?? {};
-  const requestMessage = call.request.payload.messages;
+  const routeDecision = [...ownerEvents].reverse().find((event) => event.event_type === 'preflight_route_decision')?.payload;
+  const decision = asRecord(routeDecision) ?? {};
+  const proposed = asString(decision.proposed_route) || undefined;
+  const effective = asString(decision.effective_route) || undefined;
+  if (!call?.response && !routeDecision) return undefined;
+  const requestMessage = call?.request.payload.messages;
   const userMessage = Array.isArray(requestMessage)
     ? requestMessage.map((item) => asRecord(item) ?? {}).find((item) => item.role === 'user')?.content
     : undefined;
@@ -798,9 +907,17 @@ function routeFor(calls: TraceCall[]): TraceRoute | undefined {
     const parsed = parseCallContent(userMessage);
     input = sanitizeDisplay(parsed.data ?? parsed.text);
   }
-  if (!asString(response.route) && Object.keys(brief).length === 0 && input === undefined) return undefined;
+  if (!proposed && !effective && Object.keys(brief).length === 0 && input === undefined) return undefined;
   return {
-    route: asString(response.route) || 'unknown',
+    proposed,
+    effective,
+    reason: ['model_selected', 'runtime_reroute', 'policy_route'].includes(asString(decision.reason))
+      ? asString(decision.reason) as TraceRoute['reason'] : undefined,
+    detail: asString(decision.detail) || undefined,
+    policyRecommendationId: asString(decision.policy_recommendation_id) || undefined,
+    policyDisposition: ['accepted', 'modified', 'rejected', 'not_applicable'].includes(asString(decision.policy_disposition))
+      ? asString(decision.policy_disposition) as TraceRoute['policyDisposition'] : undefined,
+    policyReasonCode: asString(decision.reason_code) || undefined,
     goal: asString(brief.goal),
     direction: asString(brief.direction),
     expectedResult: asString(brief.expected_result),
@@ -836,10 +953,39 @@ function promptFor(events: RuntimeJournalEvent[], calls: TraceCall[]): TraceProm
   return undefined;
 }
 
+function toolOverridesFor(events: RuntimeJournalEvent[]): TraceToolOverrideSnapshot | undefined {
+  const payload = [...events].reverse().find((event) => event.event_type === 'sandbox_override_snapshot')?.payload;
+  if (!payload) return undefined;
+  const configured = asRecord(payload.configured) ?? {};
+  const publication = asRecord(configured.publication) ?? {};
+  const semantics = asRecord(configured.semantics) ?? {};
+  const configuredPublication = Object.fromEntries(Object.entries(publication)
+    .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'));
+  const configuredSemantics = Object.fromEntries(Object.entries(semantics));
+  const effectiveOperations = (Array.isArray(payload.effective_operations) ? payload.effective_operations : [])
+    .flatMap((item): TraceToolOverrideSnapshot['effectiveOperations'] => {
+      const row = asRecord(item) ?? {};
+      const toolId = asString(row.discovered_tool_id);
+      return toolId ? [{
+        toolId,
+        publicationConfigured: typeof row.publication_configured === 'boolean' ? row.publication_configured : undefined,
+        publishedEffective: typeof row.published_effective === 'boolean' ? row.published_effective : undefined,
+        configuredSemantics: row.configured,
+        effectiveSemantics: row.effective,
+      }] : [];
+    });
+  const suppressed = asRecord(payload.suppressed_publication) ?? {};
+  const suppressedPublication = Object.entries(suppressed).flatMap(([toolId, reason]) => toolId
+    ? [{ toolId, reason: asString(reason) || undefined }] : []);
+  if (!Object.keys(configuredPublication).length && !Object.keys(configuredSemantics).length
+    && !effectiveOperations.length && !suppressedPublication.length) return undefined;
+  return { configuredPublication, configuredSemantics, effectiveOperations, suppressedPublication };
+}
+
 function metricsFor(state: SandboxTraceState, entity: TraceEntity): TraceMetrics {
   const events = eventsFor(state, entity);
   const started = startFor(state, entity);
-  const ended = events.find((event) => event.event_type.endsWith('_end') || event.event_type.endsWith('_finished'));
+  const ended = [...events].reverse().find((event) => event.event_type.endsWith('_end') || event.event_type.endsWith('_finished'));
   const elapsedMs = ended?.duration_ms ?? (
     started && ended ? new Date(ended.occurred_at).getTime() - new Date(started.occurred_at).getTime() : undefined
   );
@@ -849,19 +995,24 @@ function metricsFor(state: SandboxTraceState, entity: TraceEntity): TraceMetrics
   let successfulCalls = 0;
   let failedCalls = 0;
   for (const event of events) {
-    const total = asNumber(event.payload.tokens_total) ?? asNumber(event.payload.tokens);
+    const usage = asRecord(event.payload.usage) ?? asRecord(event.payload.token_usage) ?? {};
+    const total = asNumber(event.payload.tokens_total) ?? asNumber(usage.total_tokens) ?? asNumber(event.payload.tokens);
     if (total !== undefined) tokens = Math.max(tokens ?? 0, total);
-    if (event.event_type === 'llm_request' || event.event_type === 'tool_call') calls += 1;
-    if (event.event_type === 'llm_response' && llmResponseStatus(event.payload) !== 'error') successfulCalls += 1;
-    if (event.event_type === 'tool_result' && event.payload.success === true) successfulCalls += 1;
-    if ((event.event_type === 'llm_response' && llmResponseStatus(event.payload) === 'error') || (event.event_type === 'tool_result' && toolResult(event.payload).success === false)) failedCalls += 1;
+    if (event.event_type === 'llm_response' && event.payload.terminal !== false) {
+      calls += 1;
+      if (llmResponseStatus(event.payload) === 'error') failedCalls += 1;
+      else successfulCalls += 1;
+    }
+    if (event.event_type === 'tool_result') {
+      const success = toolResult(event.payload).success;
+      if (success !== undefined) {
+        calls += 1;
+        if (success) successfulCalls += 1;
+        else failedCalls += 1;
+      }
+    }
   }
-  const startSequence = events[0]?.sequence ?? -Infinity;
-  const endSequence = events[events.length - 1]?.sequence ?? Infinity;
-  retries = state.eventIdsBySequence
-    .map((id) => state.eventsById[id])
-    .filter((event) => event.event_type === 'protocol_retry' && event.sequence >= startSequence && event.sequence <= endSequence)
-    .length;
+  retries = events.filter((event) => event.event_type === 'protocol_retry').length;
   return {
     elapsedMs: elapsedMs && elapsedMs > 0 ? elapsedMs : undefined,
     tokens,
@@ -897,12 +1048,12 @@ function numberPayload(payload: Record<string, unknown>, key: string): number | 
 }
 
 function requestViewFor(kind: TraceCallKind, payload: Record<string, unknown>): TraceCallRequest {
-  const messages = Array.isArray(payload.messages)
-    ? payload.messages.map((item) => {
+  const rawMessages = Array.isArray(payload.messages) ? payload.messages : [];
+  const messages = rawMessages
+    .map((item) => {
       const message = asRecord(item) ?? {};
       return { role: asString(message.role) || 'message', content: parseCallContent(message.content ?? message) };
-    })
-    : [];
+    });
   return {
     model: asString(payload.model) || undefined,
     purpose: asString(payload.purpose) ? purposeLabel(payload.purpose) : undefined,
@@ -912,6 +1063,12 @@ function requestViewFor(kind: TraceCallKind, payload: Record<string, unknown>): 
     inputTokensEstimate: numberPayload(payload, 'input_tokens_estimate'),
     responseSchemaBytes: numberPayload(payload, 'response_schema_bytes'),
     messages,
+    nativeToolCalls: messages.flatMap((_message, index) => {
+      const raw = asRecord(rawMessages[index]);
+      return Array.isArray(raw?.tool_calls) ? raw.tool_calls : [];
+    }),
+    tools: Array.isArray(payload.tools) ? payload.tools : undefined,
+    responseSchema: payload.response_schema ?? payload.json_schema,
     messageTranscript: messageTranscript(messages),
     toolName: asString(payload.tool) || asString(payload.tool_slug) || undefined,
     description: asString(payload.description) || asString(payload.intent) || undefined,
@@ -955,8 +1112,8 @@ function responseViewFor(
   const payload = response.payload;
   const content = kind === 'llm' ? llmResponseContent(payload) : undefined;
   const parsed = content === undefined ? undefined : parseCallContent(content);
-  const parsedRecord = parsed?.kind === 'json' ? asRecord(parsed.data) : undefined;
-  const toolCall = parsed?.kind === 'tool_call' && parsedRecord
+  const parsedRecord = parsed?.kind === 'json' || parsed?.kind === 'tool_call' ? asRecord(parsed.data) : undefined;
+  const toolCall = parsed && parsedRecord && ('tool' in parsedRecord || 'arguments' in parsedRecord)
     ? { name: asString(parsedRecord.tool) || 'Операция', arguments: parsedRecord.arguments }
     : undefined;
   const toolResultView = kind === 'tool'
@@ -971,11 +1128,15 @@ function responseViewFor(
       };
     })()
     : undefined;
+  const interactionResponse = kind === 'clarify' || kind === 'confirm'
+    ? payload.response ?? payload.user_answer ?? payload.answer
+    : undefined;
   return {
     resultKind: asString(payload.result_kind) || undefined,
     responseLength: numberPayload(payload, 'response_length'),
     terminal: typeof payload.terminal === 'boolean' ? payload.terminal : undefined,
     content: parsed,
+    ...(interactionResponse !== undefined ? { content: parseCallContent(interactionResponse) } : {}),
     toolCall,
     linkedToolCalls: linkedToolCalls.map((event) => ({
       name: asString(event.payload.tool) || 'Операция',
@@ -992,12 +1153,13 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
   const isError = entity.type === 'error';
   if (!isLlm && !isTool && !isInteraction && !isError) return null;
   const events = eventsFor(state, entity);
-  const request = events.find((event) => (
+  const requestEvents = events.filter((event) => (
     isLlm ? event.event_type === 'llm_request' :
       isTool ? event.event_type === 'tool_call' :
         isError ? event.event_type === 'error' :
           event.event_type === 'waiting_input' || event.event_type === 'confirmation_required' || event.event_type === 'question_answer'
   ));
+  const request = isLlm ? requestEvents[requestEvents.length - 1] : requestEvents[0];
   if (!request) return null;
   // A retry-chain may intentionally reuse one llm_call entity.  The latest
   // response is the terminal state of that user-visible request; selecting
@@ -1020,6 +1182,7 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
       .map((id) => state.eventsById[id])
       .filter((event) => event.event_type === 'protocol_retry'
         && (asString(event.payload.llm_call_id) === entity.id
+          || (isLlm && asString(event.entity_id) === entity.id)
           || (isTool && asString(event.entity_id ?? event.payload.entity_id) === entity.id)))
     : [];
   const linkedToolCalls = isLlm
@@ -1257,7 +1420,7 @@ function executorResultFor(
           && event.parent_entity_type === 'synthesis_run'
           && event.parent_entity_id === entity.id)
         .sort((left, right) => right.sequence - left.sequence)[0]
-    : [...executorEvents].reverse().find(event => event.event_type === 'final');
+    : undefined;
   const error = state.eventIdsBySequence
     .map((id) => state.eventsById[id])
     .find((event) => event?.event_type === 'error' && (
@@ -1267,12 +1430,13 @@ function executorResultFor(
   const endPayload = asRecord(ended?.payload) ?? {};
   const finalPayload = asRecord(final?.payload) ?? {};
   const errorPayload = asRecord(error?.payload) ?? {};
+  const terminalResult = asRecord(endPayload.result) ?? {};
   const memoryOutput = executorSlug === 'document_memory_extractor'
     ? documentMemoryResult(executorEvents)
     : undefined;
   const resultPayload = isSynthesizer && Object.keys(finalPayload).length
-    ? finalPayload : { ...finalPayload, ...endPayload };
-  // FINAL is the runtime's accepted completion, unlike an intermediate LLM response.
+    ? finalPayload : { ...finalPayload, ...terminalResult, ...endPayload };
+  // Run completion is read only from the canonical final_answer_marker above.
   const parsedFinal = !isSynthesizer ? asRecord(parseCallContent(finalPayload.content).data) : undefined;
   const declaration = parsedFinal && ['fulfilled', 'needs', 'unfulfillable'].includes(asString(parsedFinal.completion))
     ? parsedFinal : undefined;
@@ -1281,11 +1445,14 @@ function executorResultFor(
     output = declaration.structured_response !== undefined && declaration.structured_response !== null
       ? declaration.structured_response : declaration.answer ?? declaration.structured_response;
   }
-  const toolCalls = calls.filter((call) => call.kind === 'tool');
+  const toolCalls = calls.filter((call) => call.kind === 'tool' && call.info.status !== 'running' && call.info.status !== 'waiting_retry');
   const succeeded = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === true).length;
   const failed = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === false).length;
   const outcome = resultPayload.outcome ?? resultPayload.completion;
-  const status = resultStatusOf(error ? 'failed' : (outcome ?? resultPayload.status ?? entity.status));
+  const lifecycleStatus = asString(resultPayload.status).toLowerCase();
+  const statusValue = ['failed', 'error', 'aborted', 'cancelled', 'canceled', 'paused', 'waiting', 'waiting_input'].includes(lifecycleStatus)
+    ? resultPayload.status : (outcome ?? resultPayload.status ?? entity.status);
+  const status = resultStatusOf(error ? 'failed' : statusValue);
   return {
     name: executorName,
     status,
@@ -1310,8 +1477,8 @@ function executorInfoFor(
   limits?: TraceLimitsView,
 ): TraceExecutorInfoView {
   const limitByKey = new Map((limits?.rows ?? []).map((row) => [row.key, row]));
-  const llmCalls = calls.filter((call) => call.kind === 'llm');
-  const toolCalls = calls.filter((call) => call.kind === 'tool');
+  const llmCalls = calls.filter((call) => call.kind === 'llm' && call.info.status !== 'running' && call.info.status !== 'waiting_retry');
+  const toolCalls = calls.filter((call) => call.kind === 'tool' && call.info.status !== 'running' && call.info.status !== 'waiting_retry');
   const llmAttempts = llmCalls.flatMap((call) => call.attempts ?? [call]);
   const sum = (values: Array<number | undefined>): number | undefined => {
     const present = values.filter((value): value is number => value !== undefined);
@@ -1321,13 +1488,15 @@ function executorInfoFor(
   const tokensOut = sum(llmAttempts.map((call) => call.info.tokensOut));
   const tokensTotal = sum(llmAttempts.map((call) => call.info.tokensTotal));
   const statistics: TraceExecutorStatistic[] = [];
-  const add = (key: TraceExecutorStatisticKey, label: string, value: number | undefined, extras: Pick<TraceExecutorStatistic, 'input' | 'output'> = {}) => {
+  const add = (key: TraceExecutorStatisticKey, label: string, value: number | undefined) => {
     if (value === undefined || value === 0) return;
-    statistics.push({ key, label, value, ...extras, limit: limitByKey.get(key) });
+    statistics.push({ key, label, value, limit: limitByKey.get(key) });
   };
   add('llm_calls', 'LLM-вызовы', llmCalls.length);
   add('tool_calls', 'Вызовы инструментов', toolCalls.length);
-  add('tokens_total', 'Токены', tokensTotal, { input: tokensIn, output: tokensOut });
+  add('tokens_in', 'Входные токены', tokensIn);
+  add('tokens_out', 'Выходные токены', tokensOut);
+  add('tokens_total', 'Всего токенов', tokensTotal);
   add('llm_retries', 'Повторы LLM', sum(llmCalls.map((call) => call.info.retryCount)));
   add('llm_errors', 'Ошибки LLM', llmCalls.filter((call) => call.info.status === 'error').length);
   add('tool_errors', 'Ошибки инструментов', toolCalls.filter((call) => call.info.status === 'error').length);
@@ -1363,6 +1532,7 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
   const executorEvents = eventsFor(state, entity);
   const baseMetrics = metricsFor(state, entity);
   const callMetrics = calls.reduce((result, call) => {
+    if (call.info.status === 'running' || call.info.status === 'waiting_retry') return result;
     const failed = call.kind === 'error'
       || (call.kind === 'llm' && call.response && llmResponseStatus(call.response.payload) === 'error')
       || (call.kind === 'tool' && call.response && toolResult(call.response.payload).success === false);
@@ -1372,33 +1542,18 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
       failedCalls: result.failedCalls + (failed ? 1 : 0),
     };
   }, { calls: 0, successfulCalls: 0, failedCalls: 0 });
-  const terminalSequence = entity.eventIds
-    .map((id) => state.eventsById[id]?.sequence ?? 0)
-    .reduce((max, sequence) => Math.max(max, sequence), start.sequence);
-  const nextExecutorSequence = iteration?.childKeys
-    .map((key) => state.entitiesByKey[key])
-    .filter((candidate): candidate is TraceEntity => Boolean(candidate) && candidate.key !== entity.key)
-    .map((candidate) => startFor(state, candidate)?.sequence ?? Infinity)
-    .filter((sequence) => sequence > start.sequence)
-    .sort((left, right) => left - right)[0] ?? Infinity;
-  const retryEndSequence = Math.min(
-    terminalSequence > start.sequence ? terminalSequence : state.nextSequence ?? terminalSequence,
-    nextExecutorSequence - 1,
-  );
-  const retriesAfterStart = state.eventIdsBySequence
-    .map((id) => state.eventsById[id])
-    .filter((event) => event.event_type === 'protocol_retry' && event.sequence >= start.sequence && event.sequence <= retryEndSequence)
-    .length;
   const latestCall = calls[calls.length - 1];
+  const terminalCalls = calls.filter((call) => call.info.status !== 'running' && call.info.status !== 'waiting_retry');
   const result = executorResultFor(state, entity, executorName, slug, calls);
-  const projectedEntity = result.status === 'failed' || result.status === 'unfulfillable'
+  const projectedEntity = ['failed', 'unfulfillable', 'aborted', 'paused', 'waiting'].includes(result.status)
     ? { ...entity, status: result.status }
-    : entity.status === 'running' && latestCall && latestCall.info.status !== 'running' && latestCall.info.status !== 'waiting_retry'
+    : entity.status === 'running' && result.status === 'completed' && latestCall && latestCall.info.status !== 'running' && latestCall.info.status !== 'waiting_retry'
       ? { ...entity, status: latestCall.info.status === 'ok' ? 'completed' : 'failed' }
       : entity;
   const metrics = {
     ...baseMetrics,
-    retries: retriesAfterStart || baseMetrics.retries,
+    tokens: terminalCalls.reduce((total, call) => total + (call.info.tokensTotal ?? 0), 0) || baseMetrics.tokens,
+    retries: terminalCalls.reduce((total, call) => total + call.retryEvents.length, 0) || undefined,
     calls: callMetrics.calls ?? baseMetrics.calls,
     successfulCalls: callMetrics.successfulCalls ?? baseMetrics.successfulCalls,
     failedCalls: callMetrics.failedCalls ?? baseMetrics.failedCalls,
@@ -1423,6 +1578,7 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     prompt: promptFor(executorEvents, calls),
     access: accessFor(latestPayload(executorEvents, 'rbac_snapshot')?.rbac) ?? preflightFor(state, entity)?.access,
     limits,
+    toolOverrides: toolOverridesFor(executorEvents),
   };
 }
 
@@ -1489,6 +1645,47 @@ function planForStage(state: SandboxTraceState, iteration: TraceEntity): PlanVie
   return plannerResponse ? projectPlan(llmResponseContent(plannerResponse.payload)) : undefined;
 }
 
+function failureForIteration(state: SandboxTraceState, iteration: TraceEntity): TraceStageFailure | undefined {
+  if (resultStatusOf(iteration.status) !== 'failed') return undefined;
+  const orchestratorKey = iteration.parentKey;
+  if (!orchestratorKey) return undefined;
+  const appliedPlanIds = new Set(state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .filter((event): event is RuntimeJournalEvent => Boolean(event) && event.event_type === 'plan_iteration_applied')
+    .filter((event) => {
+      const appliedIterationId = asString(event.parent_entity_id ?? event.payload.parent_entity_id)
+        || asString(event.payload.iteration_id);
+      const appliedIteration = appliedIterationId
+        ? state.entitiesByKey[`planner_iteration:${appliedIterationId}`]
+        : undefined;
+      return appliedIteration?.parentKey === orchestratorKey;
+    })
+    .map((event) => asString(event.payload.plan_id) || asString(event.entity_id ?? event.payload.entity_id))
+    .filter(Boolean));
+  if (!appliedPlanIds.size) return undefined;
+  const failedPlan = state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .reverse()
+    .find((event) => event.event_type === 'plan_failed'
+      && appliedPlanIds.has(asString(event.entity_id ?? event.payload.entity_id)));
+  if (!failedPlan) return undefined;
+  const code = asString(failedPlan.payload.error_code) || undefined;
+  const codeLabels: Record<string, string> = {
+    planner_checkpoint_failed: 'Не удалось завершить перепланирование',
+    planner_failed: 'Планировщик завершился с ошибкой',
+  };
+  const relatedError = state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .find((event) => event.event_type === 'error'
+      && (event.parent_entity_id === failedPlan.entity_id
+        || asString(event.payload.plan_id) === asString(failedPlan.entity_id)));
+  return {
+    label: code ? codeLabels[code] ?? 'Этап завершился с ошибкой' : 'Этап завершился с ошибкой',
+    code,
+    message: resultMessageFrom(asRecord(relatedError?.payload) ?? {}) || undefined,
+  };
+}
+
 function plannerExecutorFor(state: SandboxTraceState, iteration: TraceEntity): TraceExecutorRun | null {
   const start = startFor(state, iteration);
   if (!start) return null;
@@ -1512,12 +1709,23 @@ function plannerExecutorFor(state: SandboxTraceState, iteration: TraceEntity): T
     ? { ...iteration, status: 'completed' }
     : iteration;
   const result = executorResultFor(state, plannerEntity, 'Планер', 'planner', calls);
-  const metrics = metricsFor(state, iteration);
+  const plannerCalls = calls.flatMap((call) => call.attempts ?? [call]);
+  const plannerMetrics = metricsFor(state, plannerEntity);
+  const metrics: TraceMetrics = {
+    ...plannerMetrics,
+    elapsedMs: plannerCalls.reduce((total, call) => total + (call.info.durationMs ?? 0), 0) || plannerMetrics.elapsedMs,
+    tokens: plannerCalls.reduce((total, call) => total + (call.info.tokensTotal ?? 0), 0) || plannerMetrics.tokens,
+    retries: plannerCalls.reduce((total, call) => total + call.retryEvents.length, 0) || undefined,
+    calls: plannerCalls.length || plannerMetrics.calls,
+    successfulCalls: plannerCalls.filter((call) => call.info.status === 'ok').length || undefined,
+    failedCalls: plannerCalls.filter((call) => call.info.status === 'error').length || undefined,
+  };
   return {
     entity: plannerEntity,
     inspectorKey: `executor:planner:${iteration.key}`,
     start,
     task: 'Принятие решения по плану',
+    input: sanitizeDisplay(asRecord(orchestratorSnapshot?.inputs)),
     executorType: 'PLANNER',
     executorName: 'Планер',
     executorSlug: 'planner',
@@ -1569,21 +1777,31 @@ function plannedTaskExecutorFor(
 }
 
 function checkpointExecutorFor(state: SandboxTraceState, checkpoint: TraceEntity): TraceExecutorRun | null {
-  const start = eventsFor(state, checkpoint).find((event) => event.event_type === 'checkpoint_planned');
+  const checkpointEvents = eventsFor(state, checkpoint);
+  const start = checkpointEvents.find((event) => event.event_type === 'checkpoint_planned');
   if (!start) return null;
-  const latest = eventsFor(state, checkpoint).at(-1)?.payload ?? start.payload;
-  const next = asString(latest.effective_next) || asString(start.payload.declared_next);
+  const decisionEvent = [...checkpointEvents].reverse().find((event) => event.event_type === 'checkpoint_decided');
+  const latest = decisionEvent?.payload ?? start.payload;
+  const declaredNext = asString(latest.declared_next) || asString(start.payload.declared_next) || undefined;
+  const effectiveNext = asString(latest.effective_next) || undefined;
+  const next = effectiveNext || declaredNext;
+  const reason = asString(latest.reason) || undefined;
+  const reasonLabel = reason === 'task_failure' ? 'Предыдущая задача завершилась ошибкой'
+    : reason === 'all_tasks_completed' ? 'Все запланированные задачи завершены'
+      : reason === 'planner_terminal' ? 'Планировщик завершил план'
+        : reason;
   const status = resultStatusOf(checkpoint.status);
   const result: TraceExecutorResult = {
     name: 'Контрольная точка',
     status,
     statusLabel: traceResultStatusLabel(status),
-    output: asString(latest.reason) || undefined,
+    output: reasonLabel,
     operations: { total: 0, succeeded: 0, failed: 0 },
   };
-  const task = next === 'synthesis' ? 'Переход к синтезу ответа'
-    : next === 'planner' ? 'Возврат к планированию'
-      : 'Ожидание решения по следующему шагу';
+  const destination = next === 'synthesis' ? 'Синтез ответа'
+    : next === 'planner' ? 'Повторное планирование'
+      : next || 'не определён';
+  const task = decisionEvent ? `Решение: ${destination}` : `Ожидание решения (планировщик предложил: ${destination})`;
   const executor: TraceExecutorRun = {
     entity: checkpoint,
     inspectorKey: `executor:checkpoint:${checkpoint.key}`,
@@ -1597,6 +1815,13 @@ function checkpointExecutorFor(state: SandboxTraceState, checkpoint: TraceEntity
     result,
     info: executorInfoFor(result, [], undefined),
     metrics: metricsFor(state, checkpoint),
+  };
+  executor.checkpoint = {
+    declaredNext,
+    effectiveNext,
+    reason,
+    iterationId: asString(latest.iteration_id) || asString(start.payload.iteration_id) || undefined,
+    decided: Boolean(decisionEvent),
   };
   executor.taskPresentation = projectPlanTask({
     task_id: `checkpoint-${checkpoint.id}`,
@@ -1615,7 +1840,7 @@ function taskPresentationForExecutor(state: SandboxTraceState, executor: TraceEx
   const snapshot = asRecord(contextEvent?.payload.context_snapshot);
   const taskContext = asRecord(snapshot?.inputs);
   const taskId = asString(payload.task_id) || asString(taskContext?.task_id);
-  const inputs = payload.task_inputs ?? taskContext?.inputs;
+  const inputs = payload.task_inputs ?? taskContext?.inputs ?? taskContext?.dependency_outputs;
   const instructions = asString(payload.instructions) || asString(taskContext?.instructions);
   const intent = asString(payload.intent) || asString(taskContext?.intent);
   const planned = taskId ? plan?.tasks.find((task) => task.taskId === taskId) : undefined;
@@ -1674,6 +1899,49 @@ function taskPresentationForStep(
   }, taskId || executor?.entity.id || 'step-task');
 }
 
+function routePolicyFor(state: SandboxTraceState, entity: TraceEntity): TraceRoutePolicy | undefined {
+  const events = eventsFor(state, entity);
+  const decision = [...events].reverse().find((event) => event.event_type === 'route_policy_decision')?.payload;
+  if (!decision) return undefined;
+  const start = events.find((event) => event.event_type === 'route_policy_start')?.payload;
+  const status = asString(decision.status);
+  return {
+    route: asString(decision.route) || undefined,
+    status: status === 'matched' || status === 'unmatched' ? status : undefined,
+    recommendationId: asString(decision.recommendation_id) || undefined,
+    routeHint: asString(decision.route_hint) || undefined,
+    matched: typeof decision.matched === 'boolean' ? decision.matched : undefined,
+    ruleId: asString(decision.rule_id) || undefined,
+    reasonCode: asString(decision.reason_code) || undefined,
+    summary: asString(decision.summary) || undefined,
+    detail: asString(decision.detail) || undefined,
+    signals: stringArray(decision.signals),
+    sourceAgent: asString(decision.source_agent) || undefined,
+    userRequest: asString(start?.user_request) || undefined,
+  };
+}
+
+function routePolicyExecutorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecutorRun | null {
+  const start = startFor(state, entity);
+  if (!start) return null;
+  const routePolicy = routePolicyFor(state, entity);
+  if (!routePolicy) return null;
+  const status = resultStatusOf(entity.status);
+  const result: TraceExecutorResult = {
+    name: 'Политика маршрутизации', status, statusLabel: traceResultStatusLabel(status),
+    output: routePolicy.routeHint ?? routePolicy.route ?? routePolicy.status,
+    message: routePolicy.summary ?? routePolicy.detail,
+    operations: { total: 0, succeeded: 0, failed: 0 },
+  };
+  const metrics = metricsFor(state, entity);
+  return {
+    entity, inspectorKey: `executor:route-policy:${entity.key}`, start,
+    task: 'Рекомендация для предварительной маршрутизации', executorType: 'POLICY',
+    executorName: 'Рекомендация маршрута', executorSlug: 'root_route_policy', kind: 'route_policy',
+    calls: [], result, info: executorInfoFor(result, [], metrics.elapsedMs), metrics, routePolicy,
+  };
+}
+
 export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
   const plannerStages = Object.values(state.entitiesByKey)
     .filter((entity) => entity.type === 'planner_iteration')
@@ -1700,14 +1968,25 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
       ));
       const plannerExecutor = plannerExecutorFor(state, entity);
       const plan = planForStage(state, entity);
-      const stepForTask = (taskEntity: TraceEntity): TraceEntity | undefined => stepEntities.find((stepEntity) => (
-        eventsFor(state, stepEntity).some((event) => asString(event.payload.task_entity_id) === taskEntity.id)
-      ));
       const plannedTaskSteps = plannedTaskEntities.map((taskEntity) => {
-        const stepEntity = stepForTask(taskEntity);
-        const index = stepEntity ? stepEntities.indexOf(stepEntity) : -1;
-        const executors = index >= 0 ? executorRunsByStep[index] : [];
-        return { taskEntity, stepEntity, executors };
+        const relatedSteps = stepEntities.filter((stepEntity) => (
+          eventsFor(state, stepEntity).some((event) => asString(event.payload.task_entity_id) === taskEntity.id)
+        ));
+        const attempts = new Map<string, TraceTaskAttempt>();
+        relatedSteps.forEach((stepEntity) => {
+          const index = stepEntities.indexOf(stepEntity);
+          const stepEvents = eventsFor(state, stepEntity);
+          const attemptId = stepEvents.map((event) => asString(event.payload.attempt_id)).find(Boolean) || `step:${stepEntity.id}`;
+          const attempt = attempts.get(attemptId) ?? { id: attemptId, steps: [] };
+          attempt.steps.push({ entity: stepEntity, executorRuns: executorRunsByStep[index] ?? [] });
+          attempts.set(attemptId, attempt);
+        });
+        return {
+          taskEntity,
+          relatedSteps,
+          attempts: [...attempts.values()],
+          executors: relatedSteps.flatMap((stepEntity) => executorRunsByStep[stepEntities.indexOf(stepEntity)] ?? []),
+        };
       });
       const plannedTaskExecutors = plannedTaskSteps
         .flatMap(({ taskEntity, executors }) => executors.length ? executors : [plannedTaskExecutorFor(state, taskEntity, plan)])
@@ -1741,6 +2020,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         steps: [],
         executorRuns,
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
+        failure: failureForIteration(state, entity),
       };
       const plannerSteps: TraceStep[] = plannerExecutor ? [{
         key: `${entity.key}:planner-decision`,
@@ -1758,7 +2038,8 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         executorRuns: [plannerExecutor],
         metrics: plannerExecutor.metrics,
       }] : [];
-      const taskSteps: TraceStep[] = plannedTaskSteps.map(({ taskEntity, stepEntity, executors }, index) => {
+      const taskSteps: TraceStep[] = plannedTaskSteps.map(({ taskEntity, relatedSteps, attempts, executors }, index) => {
+        const stepEntity = relatedSteps[0];
         const stepStart = stepEntity ? startFor(state, stepEntity) : undefined;
         const payload = stepStart?.payload ?? eventsFor(state, taskEntity)[0]?.payload ?? {};
         const executor = executors[0] ?? plannedTaskExecutorFor(state, taskEntity, plan);
@@ -1767,7 +2048,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         const objective = planned?.objective || asString(payload.instructions) || asString(payload.objective) || undefined;
         return {
           key: taskEntity.key,
-          entity: stepEntity ?? taskEntity,
+          entity: taskEntity,
           stage,
           number: index + 1 + plannerSteps.length,
           kind: 'task_execution',
@@ -1776,12 +2057,16 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           objective,
           inputs: payload.inputs,
           taskPresentation: planned ?? taskPresentationForStep(payload, title, objective, executor, plan),
-          executorRuns: executor ? [executor] : [],
-          metrics: aggregateMetrics(metricsFor(state, stepEntity ?? taskEntity), executor ? [executor.metrics] : []),
+          executorRuns: executors.length ? executors : executor ? [executor] : [],
+          attempts,
+          metrics: aggregateMetrics(metricsFor(state, taskEntity), [
+            ...relatedSteps.map((step) => metricsFor(state, step)),
+            ...executors.map((item) => item.metrics),
+          ]),
         };
       });
       const unplannedSteps = stepEntities
-        .filter((stepEntity) => !plannedTaskSteps.some((item) => item.stepEntity?.key === stepEntity.key))
+        .filter((stepEntity) => !plannedTaskSteps.some((item) => item.relatedSteps.some((related) => related.key === stepEntity.key)))
         .map((stepEntity, index) => {
         const stepStart = startFor(state, stepEntity);
         const payload = stepStart?.payload ?? {};
@@ -1823,17 +2108,20 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
     .filter((stage): stage is TraceStage => stage !== null)
     .sort((left, right) => left.start.sequence - right.start.sequence);
   const systemStages = Object.values(state.entitiesByKey)
-    .filter((entity) => entity.type === 'orchestrator' || entity.type === 'synthesis_run')
+    .filter((entity) => entity.type === 'orchestrator' || entity.type === 'synthesis_run' || entity.type === 'route_policy')
     .map((entity): TraceStage | null => {
       const start = startFor(state, entity);
       if (!start) return null;
+      const isRoutePolicy = entity.type === 'route_policy';
       const isPreflight = entity.type === 'orchestrator' && asString(start.payload.role) === 'turn_preflight';
       const isMemory = entity.type === 'orchestrator' && asString(start.payload.role) === 'memory';
       const isMemoryPreparation = entity.type === 'orchestrator' && ['memory_preparation', 'memory_recall'].includes(asString(start.payload.role));
       const isSynthesis = entity.type === 'synthesis_run';
       const memoryStage = asString(start.payload.memory_stage);
-      if (!isPreflight && !isMemory && !isMemoryPreparation && !isSynthesis) return null;
-      const executorRuns = isSynthesis
+      if (!isRoutePolicy && !isPreflight && !isMemory && !isMemoryPreparation && !isSynthesis) return null;
+      const executorRuns = isRoutePolicy
+        ? [routePolicyExecutorFor(state, entity)].filter((executor): executor is TraceExecutorRun => Boolean(executor))
+        : isSynthesis
         ? [synthesizerExecutorFor(state, entity)].filter((executor): executor is TraceExecutorRun => Boolean(executor))
         : isPreflight
           ? (() => {
@@ -1853,7 +2141,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
               return [{
                 entity, inspectorKey: `executor:preflight:${entity.key}`, start,
                 task: 'Разбор запроса и выбор маршрута', executorType: 'ОРКЕСТРАТОР', executorName: 'Предварительная маршрутизация',
-                executorSlug: 'turn_preflight', kind: 'preflight', calls, result, route: routeFor(calls),
+                executorSlug: 'turn_preflight', kind: 'preflight', calls, result, route: routeFor(calls, eventsFor(state, entity)),
                 info: executorInfoFor(result, calls, metrics.elapsedMs), metrics,
                 memoryContext: memoryContextFor(eventsFor(state, entity), calls),
                 prompt: promptFor(eventsFor(state, entity), calls),
@@ -1866,9 +2154,9 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           .filter((executor): executor is TraceExecutorRun => Boolean(executor));
       const stage: TraceStage = {
         entity, start, number: plannerStages.length + 1, iterationNumber: plannerStages.length + 1,
-        stepNumber: 0, iterationType: isSynthesis ? 'synthesis' : isPreflight ? 'turn_preflight' : 'memory',
-        kind: isSynthesis ? 'synthesis' : isPreflight ? 'turn_preflight' : isMemoryPreparation ? 'memory_preparation' : 'memory_writeback',
-        label: memoryStage === 'screening' ? 'Скрининг документа'
+        stepNumber: 0, iterationType: isRoutePolicy ? 'route_policy' : isSynthesis ? 'synthesis' : isPreflight ? 'turn_preflight' : 'memory',
+        kind: isRoutePolicy ? 'route_policy' : isSynthesis ? 'synthesis' : isPreflight ? 'turn_preflight' : isMemoryPreparation ? 'memory_preparation' : 'memory_writeback',
+        label: isRoutePolicy ? 'Рекомендация маршрута' : memoryStage === 'screening' ? 'Скрининг документа'
           : memoryStage === 'study_sections' ? 'Извлечение из секций'
             : memoryStage === 'finalize_review' ? 'Финализация и проверка конфликтов'
               : memoryStage === 'reconcile_conflicts' ? 'Повторная проверка конфликтов'
@@ -1877,8 +2165,9 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           : memoryStage === 'study_sections' ? 'Извлечение кандидатов из секций документа'
             : memoryStage === 'finalize_review' ? 'Подготовка кандидатов к админской проверке'
               : memoryStage === 'reconcile_conflicts' ? 'Повторная проверка конфликтов памяти'
-                : isSynthesis ? 'Подготовка финального ответа' : isPreflight ? 'Разбор запроса и выбор маршрута' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
+                : isRoutePolicy ? 'Сигналы для TurnPreflight' : isSynthesis ? 'Подготовка финального ответа' : isPreflight ? 'Разбор запроса и выбор маршрута' : isMemoryPreparation ? 'Отбор контекста для планера' : 'Сохранение фактов и сводки', steps: [], executorRuns,
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
+        routePolicy: isRoutePolicy ? routePolicyFor(state, entity) : undefined,
       };
       if (isMemory || isMemoryPreparation) {
         stage.steps = executorRuns.map((executor, index) => ({
@@ -1933,9 +2222,13 @@ function attachmentList(value: unknown): TraceAttachment[] {
 }
 
 function safeRunError(events: RuntimeJournalEvent[]): string | undefined {
+  const terminalFailure = [...events].reverse().find((event) => event.event_type === 'run_end' || event.event_type === 'run_failed');
+  const failedRun = terminalFailure?.event_type === 'run_failed'
+    || ['failed', 'error'].includes(asString(terminalFailure?.payload.status).toLowerCase());
   for (const event of [...events].reverse()) {
     if (event.event_type !== 'error' && event.event_type !== 'run_failed') continue;
     const payload = event.payload;
+    if (!failedRun && (payload.recoverable === true || payload.retryable === true)) continue;
     const message = asString(payload.safe_message) || asString(payload.user_message) || asString(payload.message) || asString(payload.error);
     if (message) return message;
   }
@@ -1944,40 +2237,44 @@ function safeRunError(events: RuntimeJournalEvent[]): string | undefined {
 
 export function projectTraceRun(state: SandboxTraceState): TraceRunView {
   const events = runEvents(state);
-  let finalContent = '';
-  let attachments: TraceAttachment[] = [];
-  for (const event of [...events].reverse()) {
-    if (event.event_type === 'final' || event.event_type === 'final_content') {
-      if (!finalContent) finalContent = asString(event.payload.content) || asString(event.payload.answer);
-      if (attachments.length === 0) attachments = attachmentList(event.payload.attachments);
-    }
-  }
-  if (!finalContent) {
-    finalContent = events
-      .filter((event) => event.event_type === 'delta')
-      .map((event) => typeof event.payload.content === 'string' ? event.payload.content : '')
-      .join('');
-  }
-  if (attachments.length === 0) {
-    for (const event of [...events].reverse()) {
-      attachments = attachmentList(event.payload.attachments);
-      if (attachments.length > 0) break;
-    }
-  }
-  const waiting = [...events].reverse().find((event) => event.event_type === 'waiting_input' || event.event_type === 'confirmation_required');
+  const runTerminal = [...events].reverse().find((event) => event.event_type === 'run_end' || event.event_type === 'run_failed');
+  const runStatus = asString(runTerminal?.payload.status).toLowerCase();
+  // One journal fact is the accepted answer. SSE `final`, deltas and executor
+  // outputs are transport/intermediate data and cannot backfill run history.
+  const answerMarker = [...events].reverse().find((event) => (
+    event.event_type === 'final_answer_marker'
+    && event.entity_type === 'run'
+    && event.entity_id === state.runId
+    && event.parent_entity_type === 'synthesis_run'
+    && event.payload.status === 'completed'
+  ));
+  // A completed synthesis result remains useful even when a later run-level
+  // terminal event reports partial failure (for example, the planner failed
+  // after a prior task produced enough material). Keep run status/error as a
+  // separate fact instead of erasing the accepted answer.
+  const finalContent = asString(answerMarker?.payload.content);
+  const attachments = attachmentList(answerMarker?.payload.attachments);
+  const sources = answerMarker?.payload.sources;
+  const lastWaiting = [...events].reverse().find((event) => event.event_type === 'waiting_input' || event.event_type === 'confirmation_required');
+  const lastAnswer = [...events].reverse().find((event) => event.event_type === 'question_answer');
+  const waiting = lastWaiting && (!lastAnswer || lastWaiting.sequence > lastAnswer.sequence) ? lastWaiting : undefined;
   const waitingPayload = waiting?.payload;
   const pause = waiting ? {
     kind: waiting.event_type === 'confirmation_required' ? 'confirmation' as const : 'input' as const,
     question: asString(waitingPayload?.question) || undefined,
     message: asString(waitingPayload?.message) || asString(waitingPayload?.summary) || undefined,
   } : undefined;
-  const budgetSnapshot = [...events].reverse().find((event) => event.event_type === 'budget_snapshot' || event.event_type === 'run_budget_snapshot')?.payload;
   const root = state.rootEntityKey ? state.entitiesByKey[state.rootEntityKey] : undefined;
-  const terminal = [...events].reverse().find((event) => event.event_type === 'run_end' || event.event_type === 'run_failed');
+  // Budgets are owned by the run. A nested executor snapshot is not a run budget.
+  const budgetSnapshot = root
+    ? [...eventsFor(state, root)].reverse().find((event) => event.event_type === 'budget_snapshot' || event.event_type === 'run_budget_snapshot')?.payload
+    : undefined;
+  const terminal = runTerminal;
   const status = asString(terminal?.payload.status)
+    || (terminal?.event_type === 'run_failed' ? 'failed' : undefined)
     || (root?.status && root.status !== 'running' ? root.status : undefined)
     || (pause ? (pause.kind === 'input' ? 'waiting_input' : 'waiting_confirmation') : root?.status || 'unknown');
-  return { runId: state.runId, status, finalContent, attachments, error: safeRunError(events), pause, limits: limitsFor(budgetSnapshot) };
+  return { runId: state.runId, status, finalContent, attachments, sources, error: safeRunError(events), pause, limits: limitsFor(budgetSnapshot) };
 }
 
 export function stepFor(stage: TraceStage): TraceStep {

@@ -59,6 +59,11 @@ def build_default_beat_schedule() -> dict:
             "schedule": 30.0,
             "options": {"queue": "memory"},
         },
+        "memory-finalize-outbox-reconcile": {
+            "task": "app.workers.tasks_memory.reconcile_memory_finalize_outbox",
+            "schedule": 30.0,
+            "options": {"queue": "memory"},
+        },
         # New health monitoring tasks
         "mcp-connectors-health-check": {
             "task": "app.workers.tasks_health.probe_mcp_connectors",
@@ -282,7 +287,8 @@ else:
     # with general periodic maintenance disabled.
     app.conf.beat_schedule = {
         "long-memory-embedding-reindex": build_default_beat_schedule()["long-memory-embedding-reindex"],
-        "long-memory-document-operations": build_default_beat_schedule()["long-memory-document-operations"]
+        "long-memory-document-operations": build_default_beat_schedule()["long-memory-document-operations"],
+        "memory-finalize-outbox-reconcile": build_default_beat_schedule()["memory-finalize-outbox-reconcile"],
     }
 
 # Инициализация задач эмбеддингов

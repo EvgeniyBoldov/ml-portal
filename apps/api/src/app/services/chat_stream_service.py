@@ -29,7 +29,7 @@ from app.services.chat_context_contracts import ChatContextSnapshot
 from app.services.chat_event_mapper import ChatEventMapper
 from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_turn_orchestrator import ChatTurnOrchestrator
-from app.services.chat_turn_service import ChatTurnIdempotencyError, ChatTurnService
+from app.services.chat_turn_service import CHAT_TURN_LEASE_SECONDS, ChatTurnIdempotencyError, ChatTurnService
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
@@ -132,6 +132,16 @@ class ChatStreamService:
             return None
 
         if turn.status == "started":
+            lease_seconds = CHAT_TURN_LEASE_SECONDS
+            started_at = turn.started_at
+            if started_at is not None and (datetime.now(timezone.utc) - started_at).total_seconds() > lease_seconds:
+                turn.status = "failed"
+                turn.error_message = "runtime_lease_expired"
+                turn.completed_at = datetime.now(timezone.utc)
+                await self.session.flush()
+                await self.session.commit()
+                return {"state": "terminal", "status": "failed",
+                        "error": "The previous request stopped before completing. Start a new request."}
             return {"state": "processing"}
 
         if turn.status == "completed" and turn.user_message_id and turn.assistant_message_id:
@@ -140,6 +150,23 @@ class ChatStreamService:
                 "user_message_id": str(turn.user_message_id),
                 "assistant_message_id": str(turn.assistant_message_id),
             }
+        if turn.status in {"failed", "cancelled"}:
+            return {"state": "terminal", "status": turn.status,
+                    "error": "The previous request did not complete"}
+        if turn.status == "paused":
+            return {"state": "paused"}
+        if turn.status == "resumed":
+            lease_seconds = CHAT_TURN_LEASE_SECONDS
+            started_at = turn.started_at
+            if started_at is not None and (datetime.now(timezone.utc) - started_at).total_seconds() > lease_seconds:
+                turn.status = "failed"
+                turn.error_message = "runtime_lease_expired"
+                turn.completed_at = datetime.now(timezone.utc)
+                await self.session.flush()
+                await self.session.commit()
+                return {"state": "terminal", "status": "failed",
+                        "error": "The previous request stopped before completing. Start a new request."}
+            return {"state": "processing"}
 
         return None
     
@@ -197,6 +224,13 @@ class ChatStreamService:
 
             if turn_cached and turn_cached.get("state") == "processing":
                 yield _safe_stream_error("idempotency_processing", "Request with this idempotency key is already in progress")
+                return
+
+            if turn_cached and turn_cached.get("state") == "terminal":
+                yield _safe_stream_error("idempotency_previous_attempt_failed", str(turn_cached.get("error") or "Previous request failed"))
+                return
+            if turn_cached and turn_cached.get("state") == "paused":
+                yield _safe_stream_error("idempotency_paused", "This request is paused; continue it through the resume action")
                 return
 
             if turn_cached and turn_cached.get("state") == "completed":
@@ -264,6 +298,13 @@ class ChatStreamService:
                 # Context is an optimization, not a prerequisite for a user
                 # turn. The pipeline receives an explicit empty snapshot.
                 logger.warning("chat_context_snapshot_load_failed", exc_info=True, extra={"chat_id": chat_id})
+                # SQLAlchemy sessions cannot be reused after a failed SQL
+                # statement until their transaction is rolled back.
+                await self.session.rollback()
+                chat = await self.chats_repo.get_chat_by_id(chat_id)
+                if chat is None:
+                    yield _safe_stream_error("chat_not_found", "Chat not found")
+                    return
                 from app.core.prometheus_metrics import chat_context_snapshot_load_total
                 chat_context_snapshot_load_total.labels(status="failed").inc()
                 loaded_snapshot = ChatContextSnapshot(chat_id=chat_id)
@@ -299,6 +340,26 @@ class ChatStreamService:
                 for item in context_snapshot.artifacts
                 if item.artifact_id
             ]
+            # Old messages may retain references after a user deletes an
+            # attachment. Current request attachments were validated above;
+            # stale history references are optional context and must not fail
+            # an otherwise valid turn.
+            optional_context_ids = list(dict.fromkeys([*history_artifact_ids, *snapshot_artifact_ids]))
+            available_history_ids: list[str] = []
+            for historical_id in optional_context_ids:
+                if historical_id in current_artifact_ids:
+                    available_history_ids.append(historical_id)
+                    continue
+                try:
+                    await self.attachment_service.artifact_metadata(
+                        chat_id=chat_id, owner_id=user_id, artifact_ids=[historical_id],
+                    )
+                except ChatAttachmentNotFoundError:
+                    logger.info("Skipping unavailable historical chat attachment", extra={"chat_id": chat_id})
+                else:
+                    available_history_ids.append(historical_id)
+            history_artifact_ids = available_history_ids
+            snapshot_artifact_ids = []
             effective_artifact_ids = list(dict.fromkeys([*history_artifact_ids, *snapshot_artifact_ids, *current_artifact_ids, *artifact_ids]))
             if effective_artifact_ids:
                 attachment_contexts = await self.attachment_service.build_runtime_artifact_contexts(
@@ -426,6 +487,7 @@ class ChatStreamService:
                     final_attachments = event.data.get("attachments", [])
                     return {
                         "type": "final_content",
+                        "run_id": event.data.get("run_id") or str(runtime_run_id),
                         "content": final_content,
                         "sources": final_sources,
                         "attachments": final_attachments,
@@ -503,7 +565,10 @@ class ChatStreamService:
                     *(task for task in (pipeline_task, progress_task, listener_task) if task is not None),
                     return_exceptions=True,
                 )
-                await tail_subscriber.unsubscribe()
+                try:
+                    await tail_subscriber.unsubscribe()
+                except Exception:
+                    logger.warning("chat_runtime_progress_unsubscribe_failed", exc_info=True)
 
         except AgentUnavailableError as e:
             reason_code = str(getattr(e, "reason_code", "") or "").strip() or None

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 AGENT_VERSION_PROMPT_FIELDS = frozenset({
     "identity", "mission", "scope", "rules",
-    "tool_use_rules", "output_format", "examples",
+    "tool_use_rules", "output_format", "examples", "never_do", "allowed_ops",
 })
 AGENT_VERSION_EXEC_FIELDS = frozenset({
     "model", "temperature",
@@ -140,11 +140,10 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                     _field("allowed_ops", "Allowed ops", "allowed_ops", field_type="text"),
                 ],
             ),
-            _section("Tags", [_field("tags", "Tags", "tags", field_type="tags")]),
             _section(
                 "Meta",
                 [
-                    _field("notes", "Notes", "notes", field_type="text"),
+                    _field("notes", "Notes", "notes", field_type="text", editable=False),
                     _field("parent_version_id", "Parent version", "parent_version_id", field_type="text", editable=False),
                 ],
             ),
@@ -198,7 +197,7 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                 "Основное",
                 [
                     _field("published", "Опубликован", "published", field_type="boolean"),
-                    _field("tool_release_id", "Релиз инструмента", "tool_release_id", field_type="select", source_key="current_version_id"),
+                    _field("tool_release_id", "Релиз инструмента", "tool_release_id", field_type="select", editable=False, source_key="current_version_id"),
                     _field("source", "Источник", "source", field_type="text", editable=False),
                     _field("slug", "Slug", "slug", field_type="text", editable=False),
                     _field("name", "Название", "name", field_type="text"),
@@ -213,8 +212,8 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                     _field("risk_level", "Risk level", "risk_level", field_type="select", options=["safe", "write", "destructive"]),
                     _field("idempotent", "Idempotent", "idempotent", field_type="boolean"),
                     _field("requires_confirmation", "Requires confirmation", "requires_confirmation", field_type="boolean"),
-                    _field("credential_scope", "Credential scope", "credential_scope", field_type="select", options=["auto", "user", "platform"]),
-                    _field("examples", "Examples", "examples", field_type="json"),
+                    _field("credential_scope", "Credential scope", "credential_scope", field_type="select", editable=False, options=["auto", "user", "platform"]),
+                    _field("examples", "Examples", "examples", field_type="json", editable=False),
                     _field("input_schema", "Input schema", "input_schema", field_type="json", editable=False),
                     _field("output_schema", "Output schema", "output_schema", field_type="json", editable=False),
                 ],

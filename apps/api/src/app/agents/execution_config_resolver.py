@@ -103,6 +103,9 @@ class ExecutionConfigResolver:
                     platform_config["prompt_labels"] = config.get("prompt_labels")
 
                 agent = exec_request.agent
+                agent_exec_overrides = sandbox_ov.get("agent_exec", {}) if isinstance(sandbox_ov, dict) else {}
+                if not isinstance(agent_exec_overrides, dict):
+                    agent_exec_overrides = {}
                 agent_slug = str(getattr(agent, "slug", "") or "").strip() if agent else ""
                 resolved_limits = await RuntimeLimitsService(session).resolve_agent(
                     agent_slug or "default",
@@ -117,14 +120,16 @@ class ExecutionConfigResolver:
                     policy.max_tool_calls_total = int(limits.tool_calls_max)
 
                 # temperature: Agent -> orchestration default
-                agent_temperature = getattr(agent, "temperature", None) if agent else None
+                agent_temperature = agent_exec_overrides.get("temperature")
+                if agent_temperature is None:
+                    agent_temperature = getattr(agent, "temperature", None) if agent else None
                 if agent_temperature is not None:
                     gen.temperature = agent_temperature
                 else:
                     gen.temperature = config.get("executor_temperature", gen.temperature)
 
                 # model: runtime override -> Agent.model -> orchestration default
-                resolved_model = model
+                resolved_model = agent_exec_overrides.get("model") or model
                 if resolved_model is None and agent:
                     resolved_model = getattr(agent, "model", None)
                 if resolved_model is None:

@@ -63,6 +63,18 @@
   line-height: 1.6;
 }
 
+.error {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--danger, #dc2626);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger, #dc2626) 8%, transparent);
+  color: var(--danger, #b91c1c);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .placeholder {
   color: var(--text-secondary);
   font-style: italic;

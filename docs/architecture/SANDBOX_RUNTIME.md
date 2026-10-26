@@ -42,9 +42,12 @@ Allowed overrides:
 
 Tool-specific rule:
 - tool input/output schemas are read-only in sandbox,
-- they come from `DiscoveredTool` or backend release data,
-- only semantic/runtime fields of effective `ToolRelease` may be overridden in branch state,
-- unpublished `DiscoveredTool` may be temporarily exposed as draft publication candidate in branch state.
+- schemas and executable dispatch remain bound to the active `DiscoveredTool` / provider contract,
+- branch semantic overrides apply to the resolved capability title and description, and may tighten risk, side effects, idempotency and confirmation,
+- risk, side-effect and confirmation overrides may tighten but never weaken the discovered/runtime contract; idempotency can only be disabled,
+- credential scope remains read-only because it changes credential selection,
+- `published=false` removes the capability from that branch's resolved operations; `published=true` cannot add a capability that discovery, canonical publication or access checks did not resolve,
+- ToolRelease selection is read-only until runtime dispatch can safely bind a selected release to an executable implementation. Missing or archived release IDs are therefore not accepted as effective runtime configuration.
 
 ## Resolver Tree Model
 
@@ -94,11 +97,11 @@ disabled as a runtime memory component.
 
 The sandbox may store overrides in branch-scoped persistence, but it should interact with the resolver as a structured tree, not as a flat form over database rows.
 
-For tools, the resolver should treat `published` as an overrideable runtime-safe flag within the sandbox branch overlay:
-- `published=false` means capability stays only in discovery inventory for that branch
-- `published=true` means capability is visible to runtime for that sandbox branch snapshot
+For tools, the resolver treats `published` as a branch-scoped capability filter:
+- `published=false` removes an otherwise-resolved capability from operations in that branch
+- `published=true` preserves an otherwise-resolved capability, subject to discovery, canonical publication and RBAC/access checks
 
-This does not change global publication state in the registry or admin area.
+This does not change global publication state in the registry or admin area. The runtime records configured and effective semantic values on the resolved operation snapshot.
 
 Disallowed changes:
 - routing logic,
@@ -124,7 +127,7 @@ Each tool item should indicate publication state:
 - published
 - draft/unpublished
 
-The right panel should show the selected effective tool release or draft candidate, including the publish toggle and semantic/runtime-safe fields.
+The right panel should show the selected discovered capability, its read-only release inventory, the branch publication toggle and semantic/runtime-safe fields. Release selection stays read-only until runtime can execute that exact release.
 
 Run inspector contract:
 - `memory.search` shows retrieved document passages in its response tab and has
@@ -152,17 +155,23 @@ Run inspector contract:
   `Инфо`, `Задача`, an available `Результат` and applicable snapshot tabs;
   memory/fact executors expose `Память`/`Факты` only when their projection has
   data; synthesizer exposes an available `Результат` and applicable snapshot
-  tabs;
-- specialized snapshot tabs (`Промпт`, `Доступ`, `Лимиты`, `Проверка`) are
+  tabs; a planner checkpoint exposes a dedicated `Решение` tab with declared
+  and effective next route, decision reason and iteration;
+- specialized snapshot tabs (`Промпт`, `Доступ`, `Лимиты`, `Валидация`) are
   data-aware and hidden when their source was not recorded. `RAW` is the stable
   final diagnostic tab for every selectable entity;
 - executor-level `Prompt`, `RBAC`, `Limits` and `Preflight` are separate typed
   tabs. `Prompt` shows the effective system prompt for the execution; the LLM
   request retains the concrete message list for that call;
-- an agent executor's `Инфо` tab is a compact record of work performed
-  (LLM/tool calls, retries, errors and tokens). Its `Лимиты` tab contains only
+- an executor's `Инфо` tab is a compact record of work performed
+  (LLM/tool calls, retries, errors, and separately labelled input, output and
+  total token usage). Its `Лимиты` tab contains only
   locally configured executor limits and their usage; run-wide budgets are not
   repeated for every executor;
+- a failed planner iteration exposes a localized failure summary and the
+  recorded error code when the failed plan is linked to an applied plan from
+  the same orchestrator. The UI does not invent an error message when runtime
+  recorded only a code;
 - access, limits, extraction and memory context are normalized by the trace
   projector before rendering. Their Viewers receive only typed models and do
   not parse journal payloads or reconstruct relations; extraction keeps a
@@ -178,6 +187,28 @@ Run inspector contract:
   bounded limits model. Chat rendering consumes this model; it does not scan
   journal payloads for final content or attachments. RAW remains the diagnostic
   escape hatch for the complete source events.
+- A call response with `terminal=false` remains in progress and must not complete
+  its owning executor. Executor completion comes from its lifecycle/result
+  event, not from the latest successful LLM call. Run-level answer projection
+  ignores intermediate executor finals once the run is failed, cancelled or
+  aborted. A completed canonical `final_answer_marker` remains visible even
+  when the run later ends failed; the chat shows that answer and the run error
+  separately so partial success is preserved without hiding the failure. A
+  resolved `question_answer` also closes the earlier pause state.
+- Retry journal events carry the owning `llm_call_id` and are attached to that
+  call. Stage retry counts aggregate owned events instead of counting every
+  retry that happens to fall between the stage's first and last sequence.
+- Semantic result sanitization removes journal internals and private storage
+  URIs while preserving domain payloads such as `data`, `content`, source
+  references and domain identifiers. Request views retain native tool call
+  definitions and typed response schema details when logged.
+- Extraction result projection merges start and terminal payloads so file and
+  parser metadata survive completion. Interaction response views use the
+  recorded answer payload, including structured answers.
+- Agent version model and temperature overrides are applied by execution config
+  resolution; `never_do` and `allowed_ops` are compiled into the effective
+  prompt. Metadata-only notes are read-only in the sandbox, and tags are not
+  offered as runtime overrides.
 
 ### Trace tab presentation contract
 

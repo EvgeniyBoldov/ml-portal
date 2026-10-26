@@ -96,9 +96,11 @@ def normalize_result(payload: Any, source_tool: str, arguments: dict[str, Any]) 
         more = next_start < total if isinstance(total, int) else None
         if more and not items:
             raise ValueError("Jira returned an empty page without advancing its continuation")
+        nested_complete = all(_nested_jira_records_complete(item) for item in items)
+        complete = (not more and start == 0 and nested_complete) if more is not None else None
         return ResultPage(value=items, meta=ResultMeta(source="jira", total=total,
             has_next=more, next_arguments={**arguments, "start_at": next_start} if more else None,
-            complete=not more and start == 0 if more is not None else None))
+            complete=complete, coverage_incomplete=not nested_complete))
     if source_tool == "execute_sql":
         if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
             raise ValueError("SQL MCP response must contain a rows array")
@@ -106,7 +108,48 @@ def normalize_result(payload: Any, source_tool: str, arguments: dict[str, Any]) 
         return ResultPage(value=payload["rows"], meta=ResultMeta(source="sql",
             total=None if truncated else len(payload["rows"]), has_next=None if truncated else False,
             complete=not truncated, truncated=truncated, columns=payload.get("columns", [])))
+    if source_tool in {"collection_search", "collection.search"}:
+        if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+            raise ValueError("Collection search response must contain a rows array")
+        try:
+            offset = max(0, int(arguments.get("offset") or 0))
+        except (TypeError, ValueError):
+            raise ValueError("Collection search offset must be an integer")
+        total = payload.get("total")
+        has_next = payload.get("has_more")
+        if not isinstance(total, int) or isinstance(total, bool) or total < 0:
+            total = None
+        if not isinstance(has_next, bool):
+            has_next = (offset + len(payload["rows"]) < total) if total is not None else None
+        if has_next and not payload["rows"]:
+            raise ValueError("Collection search returned an empty page without advancing its continuation")
+        complete = (has_next is False and offset == 0 and
+                    (total is None or len(payload["rows"]) >= total))
+        next_arguments = ({**arguments, "offset": offset + len(payload["rows"])}
+                          if has_next else None)
+        return ResultPage(value=payload["rows"], meta=ResultMeta(source="collection", total=total,
+            has_next=has_next, next_arguments=next_arguments,
+            complete=complete, coverage_incomplete=has_next is True))
     # Generic adapters preserve unknown objects, scalars and null as records.
     # Their pagination state is unknown until they publish explicit metadata.
     return ResultPage(value=payload if isinstance(payload, list) else [payload],
                       meta=ResultMeta(source=source_tool, complete=None))
+
+
+def _nested_jira_records_complete(value: Any) -> bool:
+    """Keep the legacy completeness contract for nested Jira collections."""
+    if isinstance(value, dict):
+        for key in ("issues", "comments", "worklogs", "values", "results"):
+            items = value.get(key)
+            total = value.get("total", value.get("count"))
+            if isinstance(items, list) and isinstance(total, int):
+                try:
+                    offset = int(value.get("startAt") or value.get("start_at") or 0)
+                except (TypeError, ValueError):
+                    return False
+                if offset != 0 or total > len(items):
+                    return False
+        return all(_nested_jira_records_complete(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_nested_jira_records_complete(item) for item in value)
+    return True

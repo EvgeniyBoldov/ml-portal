@@ -63,3 +63,28 @@ def test_missing_file_does_not_erase_needs_or_partial_result():
     assert result.outcome.value == "needs_dependency"
     assert result.needs[0].ref == "target"
     assert result.structured_response == {"found": 1}
+
+
+def test_each_required_artifact_needs_a_matching_file():
+    result = reduce(
+        {"completion": "fulfilled"},
+        expected_outputs=[
+            {"key": "report_pdf", "description": "Report", "fulfillment": "artifact", "required": True},
+            {"key": "table_csv", "description": "Table", "fulfillment": "artifact", "required": True},
+        ],
+        verified={"artifacts": [{"artifact_id": "note", "file_name": "note.txt"}]},
+    )
+    assert result.output_states["report_pdf"]["status"] == "missing"
+    assert result.output_states["table_csv"]["status"] == "missing"
+    assert result.reason_code == "required_artifact_missing"
+
+
+def test_artifact_filename_can_match_its_expected_output_key():
+    result = reduce(
+        {"completion": "fulfilled"},
+        expected_outputs=[
+            {"key": "report_pdf", "description": "Report", "fulfillment": "artifact", "required": True},
+        ],
+        verified={"artifacts": [{"artifact_id": "report", "file_name": "report.pdf"}]},
+    )
+    assert result.output_states["report_pdf"]["status"] == "fulfilled"

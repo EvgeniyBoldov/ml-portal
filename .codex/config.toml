@@ -1,0 +1,23 @@
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+
+[agents.architect]
+description = "Архитектор ML Portal и координатор субагентов. Выбирай для системного анализа, проектирования междоменного изменения, декомпозиции задач и интеграции результатов frontend/backend/documentalist/reviewer."
+config_file = "agents/architect.toml"
+
+[agents.frontend]
+description = "Разработчик фронтенда React/TypeScript для ML Portal. Выбирай для задач в apps/web, UI и frontend API-клиенте."
+config_file = "agents/frontend.toml"
+
+[agents.backend]
+description = "Разработчик бэкенда FastAPI/Python для ML Portal. Выбирай для задач в apps/api, runtime, workers, persistence и backend API."
+config_file = "agents/backend.toml"
+
+[agents.documentalist]
+description = "Документалист ML Portal. После реализации читает diff и код, синхронизирует пользовательскую и архитектурную документацию; код не меняет."
+config_file = "agents/documentalist.toml"
+
+[agents.reviewer]
+description = "Read-only ревьювер изменений ML Portal, включая согласованность кода и обновленной документации."
+config_file = "agents/reviewer.toml"

@@ -757,30 +757,77 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   // Upload
   const handleUpload = async () => {
     if (uploadFiles.length === 0) return;
+    const requiredMissing = userDefinedFields.find(
+      field => field.required && (field.data_type === 'boolean'
+        ? uploadMetaFields[field.name] === undefined
+        : !String(uploadMetaFields[field.name] ?? '').trim()),
+    );
+    if (requiredMissing) {
+      const message = `Заполните обязательное поле «${requiredMissing.description || requiredMissing.name}»`;
+      setUploadError(message);
+      showToast(message, 'error');
+      return;
+    }
+    let typedMeta: Record<string, unknown>;
+    try {
+      typedMeta = {};
+      for (const field of userDefinedFields) {
+        const raw = uploadMetaFields[field.name];
+        if (raw === undefined || raw.trim() === '') continue;
+        if (field.data_type === 'boolean') typedMeta[field.name] = raw === 'true';
+        else if (field.data_type === 'integer') {
+          const value = Number(raw);
+          if (!Number.isSafeInteger(value)) throw new Error(`Поле «${field.description || field.name}» должно быть целым числом`);
+          typedMeta[field.name] = value;
+        } else if (field.data_type === 'float') {
+          const value = Number(raw);
+          if (!Number.isFinite(value)) throw new Error(`Поле «${field.description || field.name}» должно быть числом`);
+          typedMeta[field.name] = value;
+        } else if (field.data_type === 'json') {
+          typedMeta[field.name] = JSON.parse(raw);
+        } else typedMeta[field.name] = raw;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Проверьте значения полей';
+      setUploadError(message);
+      showToast(message, 'error');
+      return;
+    }
     setUploading(true);
+    setUploadError(null);
     try {
       const results = await Promise.allSettled(
         uploadFiles.map(file =>
           collectionsApi.uploadDocument(collectionId, {
             file,
-            meta_fields: Object.keys(uploadMetaFields).length > 0 ? uploadMetaFields : undefined,
+            meta_fields: Object.keys(typedMeta).length > 0 ? typedMeta : undefined,
             auto_ingest: true,
             memory_enabled: uploadMemoryPolicy === 'collection' ? undefined : uploadMemoryPolicy === 'enabled',
             memory_scope_keys: [uploadScope],
           })
         )
       );
-      const succeeded = results.filter(r => r.status === 'fulfilled').length;
-      const failed = results.filter(r => r.status === 'rejected').length;
+      const failedFiles = uploadFiles.filter((_, index) => results[index].status === 'rejected');
+      const succeeded = results.length - failedFiles.length;
+      const failed = failedFiles.length;
       if (succeeded > 0) showToast(`Загружено: ${succeeded} файлов`, 'success');
-      if (failed > 0) showToast(`Ошибка загрузки: ${failed} файлов`, 'error');
-      setUploadModalOpen(false);
-      setUploadFiles([]);
-      setUploadMetaFields({});
-      setUploadMemoryPolicy('collection');
-      setUploadError(null);
-      invalidateDocs();
-    } catch {
+      if (failed > 0) {
+        const failedNames = failedFiles.map(file => file.name).join(', ');
+        const message = `Не удалось загрузить ${failed} файлов: ${failedNames}. Неудачные файлы оставлены в списке.`;
+        setUploadError(message);
+        showToast(`Ошибка загрузки: ${failed} файлов`, 'error');
+        setUploadFiles(failedFiles);
+      } else {
+        setUploadModalOpen(false);
+        setUploadFiles([]);
+        setUploadMetaFields({});
+        setUploadMemoryPolicy('collection');
+        setUploadError(null);
+      }
+      if (succeeded > 0) invalidateDocs();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Ошибка загрузки';
+      setUploadError(message);
       showToast('Ошибка загрузки', 'error');
     } finally {
       setUploading(false);

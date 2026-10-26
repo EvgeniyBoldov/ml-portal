@@ -42,7 +42,20 @@ class TaskAttemptResultReducer:
                 states[spec.key] = {"status": "available" if spec.key in outputs else "missing",
                                     "fulfillment": "task_result"}
             elif spec.fulfillment == TaskOutputFulfillment.ARTIFACT:
-                states[spec.key] = {"status": "fulfilled" if attachments else "missing", "fulfillment": "artifact"}
+                matching = []
+                for item in attachments:
+                    key = str(item.get("output_key") or item.get("key") or "").casefold()
+                    filename = str(item.get("file_name") or item.get("filename") or "").casefold()
+                    filename_key = "".join(char for char in filename.rsplit(".", 1)[0] if char.isalnum())
+                    expected_key = "".join(char for char in spec.key.casefold() if char.isalnum())
+                    extension = filename.rsplit(".", 1)[-1] if "." in filename else ""
+                    expected_bases = {expected_key}
+                    if extension and expected_key.endswith(extension):
+                        expected_bases.add(expected_key[:-len(extension)])
+                    if key == spec.key.casefold() or (filename_key and filename_key in expected_bases):
+                        matching.append(item)
+                states[spec.key] = {"status": "fulfilled" if matching else "missing", "fulfillment": "artifact",
+                                    **({"artifact_ids": [str(item["artifact_id"]) for item in matching]} if matching else {})}
         outcome = {AgentExecutionCompletion.FULFILLED: TaskOutcome.COMPLETED,
                    AgentExecutionCompletion.NEEDS: TaskOutcome.NEEDS_DEPENDENCY,
                    AgentExecutionCompletion.UNFULFILLABLE: TaskOutcome.UNFULFILLABLE}[declaration.completion_claim]
@@ -50,7 +63,9 @@ class TaskAttemptResultReducer:
             spec.required and spec.fulfillment == TaskOutputFulfillment.ARTIFACT for spec in request.expected_outputs)
         reason = None
         limitation = declaration.limitation
-        if outcome == TaskOutcome.COMPLETED and file_required and not attachments:
+        missing_required = any(spec.required and spec.fulfillment == TaskOutputFulfillment.ARTIFACT
+                               and states[spec.key]["status"] == "missing" for spec in request.expected_outputs)
+        if outcome == TaskOutcome.COMPLETED and (missing_required or (file_required and not attachments)):
             outcome, reason = TaskOutcome.UNFULFILLABLE, "required_artifact_missing"
             limitation = {"code": reason, "message": "The requested attachment was not created.", "action": "none"}
         return TaskResult(outcome=outcome, completion=declaration.completion_claim,

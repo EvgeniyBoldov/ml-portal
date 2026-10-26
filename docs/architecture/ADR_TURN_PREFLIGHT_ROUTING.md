@@ -2,9 +2,19 @@
 
 ## Status
 
-Accepted — implemented.
+Accepted — implemented with the advisory policy contract in
+[`ADR_ROOT_ROUTE_RECOMMENDATION.md`](ADR_ROOT_ROUTE_RECOMMENDATION.md).
 
 ## Decision
+
+Before invoking the TurnPreflight LLM, `RuntimePipeline` evaluates bounded
+`RootRoutePolicy` signals from the current request, effective goal, bounded
+dialogue and RBAC-filtered available-agent catalog. The policy emits a typed
+recommendation in its own trace entity; it never chooses the effective route,
+constructs a `TaskBrief`, or bypasses TurnPreflight. Every new implicit user
+turn proceeds to TurnPreflight, which receives the recommendation alongside
+the same bounded dialogue and continuation context and decides the final route.
+Planner still chooses and schedules the actual agent task.
 
 `TurnPreflight` is a system LLM role at the root of every user turn. It is a
 request router and normalizer, not an agent executor and not the existing
@@ -39,8 +49,9 @@ request older history if the handoff is insufficient.
 
 ```text
 user message
-  -> mechanical glossary/project lookup
-  -> TurnPreflight
+  -> RootRoutePolicy recommendation (trace entity)
+  -> mechanical glossary/project lookup + bounded dialogue
+  -> TurnPreflight (final root route)
      -> synthesizer
      -> planner -> agents -> synthesizer
      -> memory.search tool -> TurnPreflight -> synthesizer or planner
@@ -97,10 +108,13 @@ was submitted for verification, never that preflight persisted it.
 
 - Simple questions avoid planner and empty agent tasks but still use
   synthesizer for the final user-visible answer.
+- Explicit live NetBox inventory lookups can receive a policy recommendation
+  only when the RBAC-filtered planner catalog contains `inventory.netbox`;
+  TurnPreflight decides whether to accept it using the request and dialogue.
 - Project-memory answers may require one additional TurnPreflight call after
   registered memory search; planning and agent work are still avoided.
-- Planner is no longer the sole root routing decision-maker. It remains the
-  sole producer of persisted `IterationProposal` and the owner of execution
+- TurnPreflight is the sole final root routing decision-maker. Planner remains
+  the sole producer of persisted `IterationProposal` and owner of execution
   recovery decisions.
 - Runtime trace attaches actual `tool_call`/`tool_result` events to preflight
   or planner iteration. No synthetic `memory_selector` agent or `memory_recall`

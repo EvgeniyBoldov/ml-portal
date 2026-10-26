@@ -10,6 +10,7 @@ from app.agents.operation_builder import OperationBuilder
 from app.models.tool_instance import ToolInstance
 from app.models.collection import Collection
 from app.services.permission_service import EffectivePermissions
+from app.services.sandbox_override_resolver import SandboxToolOverrides
 
 
 class RuntimeOperationResolver:
@@ -37,6 +38,7 @@ class RuntimeOperationResolver:
         effective_permissions: Optional[EffectivePermissions] = None,
         user_id: Optional[UUID] = None,
         tenant_id: Optional[UUID] = None,
+        sandbox_tool_overrides: Optional[SandboxToolOverrides] = None,
     ) -> List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]]:
         resolved_runtime_domain = str(
             runtime_domain if runtime_domain is not None else (instance.domain or "")
@@ -62,6 +64,7 @@ class RuntimeOperationResolver:
             tenant_id=tenant_id,
             capability_candidates=capability_candidates,
             resolve_execution_credentials=self._resolve_execution_credentials,
+            sandbox_tool_overrides=sandbox_tool_overrides,
         )
 
     async def _resolve_execution_credentials(

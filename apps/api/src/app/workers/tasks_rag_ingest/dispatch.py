@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from celery import Task
@@ -17,6 +17,20 @@ from app.workers.session_factory import get_worker_session
 
 async def _dispatch(outbox_id: str) -> str | None:
     async with get_worker_session() as session:
+        from app.models.rag import RAGDocument
+        from app.models.rag_ingest import RAGIngestOutbox
+        run_doc_id = await session.scalar(
+            select(RAGIngestRun.doc_id)
+            .join(RAGIngestOutbox, RAGIngestOutbox.run_id == RAGIngestRun.id)
+            .where(RAGIngestOutbox.id == UUID(outbox_id))
+        )
+        if run_doc_id is None:
+            return None
+        document = await session.scalar(
+            select(RAGDocument).where(RAGDocument.id == run_doc_id).with_for_update()
+        )
+        if document is None:
+            return None
         result = await session.execute(
             select(RAGIngestOutbox, RAGIngestRun)
             .join(RAGIngestRun, RAGIngestRun.id == RAGIngestOutbox.run_id)
@@ -27,12 +41,10 @@ async def _dispatch(outbox_id: str) -> str | None:
         if not row:
             return None
         outbox, run = row
-        if outbox.status == "dispatched" or run.status in {"cancelled", "failed", "completed"}:
+        if outbox.status != "pending" or run.status in {"cancelled", "failed", "completed"}:
             return outbox.celery_task_id
 
         # A newer generation wins.  We never dispatch obsolete queued work.
-        from app.models.rag import RAGDocument
-        document = (await session.execute(select(RAGDocument).where(RAGDocument.id == run.doc_id))).scalar_one()
         if int(document.ingest_generation or 0) != run.generation:
             outbox.status = "cancelled"
             run.status = "cancelled"
@@ -74,6 +86,19 @@ def dispatch_rag_ingest_outbox(self: Task, outbox_id: str) -> str | None:
 async def _dispatch_stage(outbox_id: str) -> str | None:
     from app.models.rag_ingest import RAGIngestStageOutbox
     async with get_worker_session() as session:
+        from app.models.rag import RAGDocument
+        run_doc_id = await session.scalar(
+            select(RAGIngestRun.doc_id)
+            .join(RAGIngestStageOutbox, RAGIngestStageOutbox.run_id == RAGIngestRun.id)
+            .where(RAGIngestStageOutbox.id == UUID(outbox_id))
+        )
+        if run_doc_id is None:
+            return None
+        document = await session.scalar(
+            select(RAGDocument).where(RAGDocument.id == run_doc_id).with_for_update()
+        )
+        if document is None:
+            return None
         row = (await session.execute(
             select(RAGIngestStageOutbox, RAGIngestRun)
             .join(RAGIngestRun, RAGIngestRun.id == RAGIngestStageOutbox.run_id)
@@ -83,13 +108,11 @@ async def _dispatch_stage(outbox_id: str) -> str | None:
         if not row:
             return None
         command, run = row
-        if command.status == "dispatched" or (
+        if command.status != "pending" or (
             run.status not in {"queued", "running"} and not (command.stage_key in {"shadow", "hipporag"} and run.status == "completed")
         ):
             return command.celery_task_id
 
-        from app.models.rag import RAGDocument
-        document = (await session.execute(select(RAGDocument).where(RAGDocument.id == run.doc_id))).scalar_one()
         if int(document.ingest_generation or 0) != run.generation:
             command.status = "cancelled"
             run.status = "cancelled"
@@ -123,10 +146,7 @@ async def _dispatch_stage(outbox_id: str) -> str | None:
         else:
             raise ValueError(f"Unsupported RAG ingest stage command: {stage}")
         task_id = str(uuid4())
-        command.status = "dispatched"
-        command.celery_task_id = task_id
         command.attempts = int(command.attempts or 0) + 1
-        command.dispatched_at = datetime.now(timezone.utc)
         # Persist the task id while it is queued, so stop/retry controls can
         # operate before the worker starts the task. The stage itself will
         # publish processing/completed/failed events with metrics.
@@ -139,16 +159,20 @@ async def _dispatch_stage(outbox_id: str) -> str | None:
                 node.celery_task_id = task_id
                 node.updated_at = datetime.now(timezone.utc)
                 await session.flush()
-        await session.commit()
         try:
             task_fn.apply_async(args=task_args, task_id=task_id)
         except Exception as exc:
-            # The command is durable; make it eligible for recovery again.
-            command.status = "pending"
             command.last_error = f"broker publish failed: {type(exc).__name__}: {exc}"[:500]
-            command.celery_task_id = None
+            command.available_at = datetime.now(timezone.utc) + timedelta(
+                seconds=min(300, 2 ** min(int(command.attempts or 1), 8))
+            )
             await session.commit()
             raise
+        command.status = "dispatched"
+        command.celery_task_id = task_id
+        command.dispatched_at = datetime.now(timezone.utc)
+        command.last_error = None
+        await session.commit()
         return task_id
 
 

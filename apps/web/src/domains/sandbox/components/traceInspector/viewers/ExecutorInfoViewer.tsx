@@ -8,9 +8,7 @@ const tone = (status: TraceExecutorInfoView['status']): 'neutral' | 'success' | 
 );
 
 function StatisticValue({ statistic }: { statistic: TraceExecutorStatistic }) {
-  const value = statistic.key === 'tokens_total'
-    ? `${number(statistic.value)}${statistic.input !== undefined || statistic.output !== undefined ? ` · in ${number(statistic.input ?? 0)} / out ${number(statistic.output ?? 0)}` : ''}`
-    : number(statistic.value);
+  const value = number(statistic.value);
   const limit = statistic.limit;
   if (!limit) return <InspectorScalar value={value} />;
   const badgeTone = limit.status === 'exceeded' ? 'danger' : limit.status === 'neutral' ? 'neutral' : 'success';

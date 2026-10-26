@@ -22,6 +22,21 @@ returns 404 before reading or mutating its contents. Membership checks use activ
 database memberships rather than cached token ordering; membership alone never
 overrides the effective collection policy.
 
+Document uploads additionally require a platform administrator, tenant
+administrator, or tenant data editor. The API enforces the configured upload
+size before sending the original to object storage, validates declared metadata
+types, and rejects inactive collections. Failed uploads clean up the original
+artifact when the database transaction has not been committed.
+
+The ingest run and each stage command are durable outbox records. Workers persist
+stage results and the next commands in one database transaction; duplicate
+deliveries return the saved result. Dispatch keeps commands recoverable across
+broker failures, and stop increments the document generation so in-flight work
+cannot complete as the current ingest. Vector indexing accepts an embeddings
+artifact only when it has exactly one valid vector for every canonical chunk.
+Reindex writes generation-scoped points, then removes older points after the new
+index is complete, preserving the previous index when an upload or upsert fails.
+
 ## Runtime resolution
 
 The runtime resolves a public `collection_slug` to an active collection, checks

@@ -21,6 +21,14 @@ def test_netbox_page_is_records_with_internal_continuation():
     assert page.meta.total == 3 and not page.meta.complete
 
 
+def test_local_collection_search_is_normalized_and_keeps_continuation():
+    page = normalize_result({"rows": [{"id": 1}, {"id": 2}], "total": 5,
+        "returned": 2, "has_more": True}, "collection.search", {"offset": 0, "limit": 2})
+    assert page.value == [{"id": 1}, {"id": 2}]
+    assert page.meta.total == 5 and page.meta.complete is False
+    assert page.meta.next_arguments == {"offset": 2, "limit": 2}
+
+
 def test_jira_page_preserves_nulls_and_filters():
     page = normalize_result({"startAt": 20, "total": 22, "issues": [{"key": "X", "fields": {"assignee": None}}]},
         "jira_search_issues", {"jql": "project=X", "start_at": 20})

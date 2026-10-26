@@ -86,3 +86,19 @@ async def _resolve_collection(
     await require_collection_permission(session, user, collection)
 
     return collection
+
+
+async def _require_collection_editor(
+    session: AsyncSession,
+    user: UserCtx,
+    tenant_id: uuid.UUID,
+) -> None:
+    """Collection writes require a platform admin or an editor assignment."""
+    if user.is_admin or user.role == "admin":
+        return
+    tenant = str(tenant_id)
+    if tenant in {str(value) for value in (user.tenant_admin_ids or [])}:
+        return
+    if tenant in {str(value) for value in (user.data_editor_tenant_ids or [])}:
+        return
+    raise HTTPException(status_code=403, detail="Collection editing permission required")

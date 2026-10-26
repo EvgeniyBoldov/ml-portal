@@ -22,11 +22,12 @@ from app.workers.tasks_rag_ingest.stage_results import EmbedResult, IndexResult
 logger = get_logger(__name__)
 
 _INDEX_POINT_NAMESPACE = uuid.UUID("4b32c67e-86c7-4efb-8980-1e0570f31d16")
-_DOC_INDEX_VERSION = "doc-v4-vector-space"
+_DOC_INDEX_VERSION = "doc-v5-generation-fenced"
 
 
-def _build_stable_point_id(tenant_id: str, source_id: str, model_alias: str, chunk_id: str) -> str:
-    raw = f"{tenant_id}:{source_id}:{model_alias}:{chunk_id}"
+def _build_stable_point_id(tenant_id: str, source_id: str, model_alias: str, chunk_id: str,
+                           generation: int | None = None, attempt_id: str = "") -> str:
+    raw = f"{tenant_id}:{source_id}:{model_alias}:{generation or 0}:{attempt_id}:{chunk_id}"
     return str(uuid.uuid5(_INDEX_POINT_NAMESPACE, raw))
 
 
@@ -64,7 +65,8 @@ def index_model(
         current_embeddings_key = embeddings_key
         lock_key = f"lock:index:{source_id}:{model_alias}"
 
-        async with ctx.redis.lock(lock_key, timeout=600, blocking_timeout=5):
+        # Match the one-hour Celery hard limit; the soft limit exits earlier.
+        async with ctx.redis.lock(lock_key, timeout=60 * 60, blocking_timeout=5):
             # 1. Mark processing
             await ctx.set_processing()
 
@@ -121,8 +123,13 @@ def index_model(
             # 4. Fetch Chunks Metadata from DB
             chunks = await chunk_repo.get_by_source_id(ctx.source_id)
             chunk_map = {c.chunk_id: c for c in chunks}
+            if not chunk_map:
+                raise ValueError(f"No canonical chunks found for {source_id}; refusing to mark an empty index ready")
             source = await source_repo.get_by_id(ctx.source_id)
             normalized_meta = normalize_document_source_meta((source.meta or {}) if source else {})
+            canonical_chunks_key = get_document_artifact_key(normalized_meta, "chunks")
+            if not canonical_chunks_key:
+                raise ValueError(f"No canonical chunks artifact is recorded for {source_id}")
             collection_meta = normalized_meta.get("collection") or {}
             raw_prefilter = collection_meta.get("prefilter") or {}
             if not isinstance(raw_prefilter, dict):
@@ -162,15 +169,17 @@ def index_model(
             from app.services.vector_index_service import VectorIndexService
             target = await VectorIndexService(ctx.session).resolve(base_collection_name, model_alias)
             collection_name = target.collection_name
-            if await VectorIndexService.cache_is_current(target, cached, current_embeddings_key,
-                                                         vector_store, source_id, ctx.tenant_id_str):
+            await ctx.session.commit()
+            if await VectorIndexService.cache_is_current(
+                target, cached, current_embeddings_key, vector_store, source_id,
+                ctx.tenant_id_str, expected_count=len(chunk_map),
+            ):
                 await ctx.set_completed(metrics={
                     "status": "already_processed", "cached": True,
                     "embedding_fingerprint": target.fingerprint,
                     "model_version": target.version, "collection": collection_name,
                     "indexed_count": cached.get("indexed_count", 0),
                 })
-                await ctx.session.commit()
                 return IndexResult(source_id=source_id, model_alias=model_alias, indexed_count=cached.get("indexed_count", 0), collection=collection_name)
 
             # Collection context for payload enrichment
@@ -182,18 +191,22 @@ def index_model(
             os.close(fd)
 
             indexed_count = 0
+            upsert_started = False
+            attempt_id = ctx.celery_task_id or str(uuid.uuid4())
             try:
-                await s3_manager.download_file(
+                downloaded = await s3_manager.download_file(
                     bucket=ctx.settings.S3_BUCKET_RAG,
                     key=current_embeddings_key,
                     file_path=tmp_path,
                 )
+                if not downloaded:
+                    raise IOError(f"Failed to download embeddings artifact {current_embeddings_key}")
 
                 batch_size = 100
                 vectors = []
                 payloads = []
                 ids = []
-                collection_ready = False
+                seen_chunk_ids: set[str] = set()
 
                 async def _upsert_with_retry(batch_vectors, batch_payloads, batch_ids) -> None:
                     attempts = 3
@@ -220,30 +233,27 @@ def index_model(
                         if not line:
                             continue
 
-                        try:
-                            record = json.loads(line)
-                        except json.JSONDecodeError:
-                            logger.warning(f"Skipping invalid JSON line in embeddings for {source_id}")
-                            continue
-
-                        chunk_id = record["chunk_id"]
+                        record = json.loads(line)
+                        if not isinstance(record, dict):
+                            raise ValueError("Embedding artifact contains a non-object record")
+                        chunk_id = record.get("chunk_id")
+                        if not isinstance(chunk_id, str) or not chunk_id:
+                            raise ValueError("Embedding artifact contains a missing or invalid chunk_id")
+                        if chunk_id in seen_chunk_ids:
+                            raise ValueError(f"Embedding artifact contains duplicate chunk_id {chunk_id}")
+                        seen_chunk_ids.add(chunk_id)
                         chunk = chunk_map.get(chunk_id)
                         if not chunk:
-                            continue
+                            raise ValueError(f"Embedding artifact references unknown chunk_id {chunk_id}")
 
-                        vector = record["vector"]
-                        canonical_chunks_key = get_document_artifact_key(normalized_meta, "chunks")
-                        if canonical_chunks_key and record.get("chunks_key") != canonical_chunks_key:
+                        vector = record.get("vector")
+                        if record.get("chunks_key") != canonical_chunks_key:
                             raise ValueError("Embedding artifact belongs to another canonical input; rerun embedding")
                         if record.get("embedding_fingerprint") != target.fingerprint:
                             raise ValueError("Embedding artifact belongs to another or unknown vector space; rerun embedding before indexing")
                         from app.adapters.embeddings import validate_embedding_batch
                         validate_embedding_batch([vector], 1, target.dimensions)
                         vectors.append(vector)
-                        vector_dim = len(vector) if isinstance(vector, (list, tuple)) else target.dimensions
-                        if not collection_ready:
-                            await vector_store.ensure_collection(collection_name, vector_dim)
-                            collection_ready = True
 
                         ids.append(
                             _build_stable_point_id(
@@ -251,6 +261,8 @@ def index_model(
                                 source_id=source_id,
                                 model_alias=model_alias,
                                 chunk_id=chunk_id,
+                                generation=ctx.generation,
+                                attempt_id=attempt_id,
                             )
                         )
 
@@ -266,6 +278,8 @@ def index_model(
                             "index_version": _DOC_INDEX_VERSION,
                             "version": target.version,
                             "index_revision": _DOC_INDEX_VERSION,
+                            "ingest_generation": int(ctx.generation or 0),
+                            "ingest_attempt_id": attempt_id,
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                             "tags": [],
                             "text": chunk.meta.get("text", "") if chunk.meta else "",
@@ -288,15 +302,47 @@ def index_model(
                             payload["row_id"] = coll_row_id
 
                         payloads.append(payload)
-
-                        if len(vectors) >= batch_size:
-                            await _upsert_with_retry(vectors, payloads, ids)
-                            indexed_count += len(vectors)
-                            vectors, payloads, ids = [], [], []
-
-                if vectors:
-                    await _upsert_with_retry(vectors, payloads, ids)
-                    indexed_count += len(vectors)
+                if seen_chunk_ids != set(chunk_map):
+                    missing = sorted(set(chunk_map) - seen_chunk_ids)
+                    extra = sorted(seen_chunk_ids - set(chunk_map))
+                    raise ValueError(
+                        f"Embedding artifact is incomplete for {source_id}: "
+                        f"expected={len(chunk_map)} seen={len(seen_chunk_ids)} "
+                        f"missing={missing[:5]} extra={extra[:5]}"
+                    )
+                await vector_store.ensure_collection(collection_name, target.dimensions)
+                # Validate the complete artifact before touching the prior index.
+                # A failed/retried reindex can therefore never leave old points
+                # mixed with a silently truncated new embedding file.
+                for start in range(0, len(vectors), batch_size):
+                    if not await ctx.is_current_generation():
+                        await ctx.session.commit()
+                        raise RuntimeError("Ingest generation changed before vector upsert")
+                    await ctx.session.commit()
+                    end = start + batch_size
+                    upsert_started = True
+                    await _upsert_with_retry(vectors[start:end], payloads[start:end], ids[start:end])
+                    indexed_count += len(vectors[start:end])
+                if not await ctx.is_current_generation():
+                    await ctx.session.commit()
+                    await vector_store.delete_points(collection_name, ids)
+                    raise RuntimeError("Ingest generation changed while vectors were being indexed")
+                await ctx.session.commit()
+                # New generation points are complete before old points are
+                # removed, so a failed reindex keeps the prior index available.
+                await vector_store.delete_document_points_before_generation(
+                    collection_name, source_id, ctx.tenant_id_str,
+                    int(ctx.generation or 0), attempt_id,
+                )
+            except Exception:
+                # Remove only points written by this task attempt. Other runs
+                # may already have published their own points for the source.
+                if upsert_started and await vector_store.collection_exists(collection_name):
+                    try:
+                        await vector_store.delete_points(collection_name, ids)
+                    except Exception:
+                        logger.exception("Failed to clean partial vector index source=%s model=%s", source_id, model_alias)
+                raise
             finally:
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
@@ -313,7 +359,6 @@ def index_model(
                 {"status": "completed", "indexed_count": indexed_count, "embedding_fingerprint": target.fingerprint, "collection": collection_name, "embeddings_key": current_embeddings_key},
                 model_alias=model_alias,
             )
-            await ctx.session.commit()
 
             return IndexResult(
                 source_id=source_id,

@@ -137,6 +137,8 @@ async def list_messages(
     chat_id: str,
     limit: int = Query(50, ge=1, le=1000),
     cursor: Optional[str] = Query(None),
+    before: Optional[str] = Query(None),
+    tail: bool = Query(False),
     chat_ctx: ChatContext = Depends(resolve_chat_context),
     session: AsyncSession = Depends(db_session),
 ):
@@ -155,6 +157,8 @@ async def list_messages(
         chat_id=str(chat_uuid),
         limit=limit,
         cursor=cursor,
+        before_cursor=before,
+        newest=tail,
     )
 
     items = []
@@ -184,10 +188,14 @@ async def list_messages(
         })
 
     next_cursor = None
+    previous_cursor = None
     if len(items) == limit and items:
-        next_cursor = items[-1]["created_at"]
+        if before or tail:
+            previous_cursor = f"{items[0]['created_at']}|{items[0]['id']}"
+        else:
+            next_cursor = f"{items[-1]['created_at']}|{items[-1]['id']}"
 
-    return {"items": items, "next_cursor": next_cursor, "limit": limit}
+    return {"items": items, "next_cursor": next_cursor, "previous_cursor": previous_cursor, "limit": limit}
 
 
 @router.post("/{chat_id}/messages")
@@ -203,12 +211,14 @@ async def send_message_stream(
 ) -> StreamingResponse:
     """Send a message to a chat with SSE streaming."""
     content = body.content
-    artifact_ids = body.artifact_ids or []
+    artifact_ids = [str(item) for item in body.artifact_ids or []]
 
     if not content:
         raise HTTPException(status_code=400, detail="Content is required")
 
     idempotency_key = request.headers.get("Idempotency-Key")
+    if idempotency_key is not None and len(idempotency_key) > 255:
+        raise HTTPException(status_code=400, detail="Idempotency-Key is too long")
 
     repo_factory = AsyncRepositoryFactory(
         session, uuid.UUID(chat_ctx.tenant_id), chat_ctx.user_id,
@@ -398,9 +408,10 @@ async def resume_run(
     # Keep one ChatTurn for the entire paused/resumed lifecycle.  Cancelling
     # this row before continuation made the next request look stale and also
     # created a duplicate ChatTurn for the same runtime run.
-    await turn_service.resume_turn(turn.id)
+    claimed_turn = await turn_service.resume_turn(turn.id)
+    if claimed_turn is None:
+        raise HTTPException(status_code=409, detail="Paused run is no longer available")
     await session.commit()
-
     resume_content = build_resume_content(
         action=body.action.value,
         user_input=normalized_input,

@@ -11,8 +11,35 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.services.tool_result_protocol import ResultPage, normalize_result
 from app.services.tool_result_store import (
-    ToolResultStore, ToolResultStoreError, get_tool_results_engine, _profile_rows,
+    ToolResultStore, ToolResultStoreError, get_tool_results_engine,
+    _json_dumps_exact, _profile_rows,
 )
+
+
+_MODEL_META_FIELDS = {
+    "source", "total", "has_next", "complete", "source_tool", "start_offset",
+    "coverage_incomplete", "continuation_error", "searched_types", "successful_types", "errors",
+    "truncated", "columns", "input_revisions",
+}
+
+
+def _bounded_model_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    """Keep a small, stable source-status projection for model-facing calls."""
+    result: dict[str, Any] = {}
+    for key in _MODEL_META_FIELDS:
+        if key not in meta:
+            continue
+        value = meta[key]
+        if isinstance(value, str):
+            result[key] = value[:300]
+        elif isinstance(value, list):
+            result[key] = [str(item)[:160] for item in value[:20]]
+        elif isinstance(value, dict) and key == "input_revisions":
+            result[key] = {str(name)[:64]: revision for name, revision in list(value.items())[:20]
+                           if isinstance(revision, int)}
+        elif value is None or isinstance(value, (bool, int, float)):
+            result[key] = value
+    return result
 
 
 def page_key(arguments: dict[str, Any]) -> str:
@@ -31,9 +58,13 @@ class ResultWorkspace:
         page = normalized_page(payload, source_tool, arguments)
         meta = page.meta.model_dump()
         meta.update(source_tool=source_tool, start_offset=arguments.get("offset", arguments.get("start_at", 0)))
+        page_bytes = len(_json_dumps_exact({"payload": payload, "meta": meta}, ensure_ascii=False, default=str).encode("utf-8"))
+        if page_bytes > get_settings().TOOL_RESULTS_MAX_PAYLOAD_BYTES:
+            raise ToolResultStoreError("Source page and metadata exceed the configured storage limit")
         descriptor = await ToolResultStore().save(payload=page.value, arguments=arguments,
             dataset_meta=meta, source_complete=page.meta.complete is True,
-            source_page={"page_key": page_key(arguments), "payload": payload, "meta": meta}, **scope)
+            source_page={"page_key": page_key(arguments), "payload": payload, "meta": meta,
+                         "value": page.value, "source_tool": source_tool, "arguments": arguments}, **scope)
         return descriptor, {"value": page.value, "meta": {key: value for key, value in meta.items() if key != "next_arguments"}}
 
     async def state(self, *, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID) -> dict[str, Any]:
@@ -64,7 +95,7 @@ class ResultWorkspace:
         state.pop("sample")
         state.pop("sample_complete")
         # Continuation arguments are an internal execution binding.
-        state["dataset_meta"] = {key: value for key, value in state["dataset_meta"].items() if key not in {"next_arguments", "table_schema"}}
+        state["dataset_meta"] = _bounded_model_meta(state["dataset_meta"])
         settings = get_settings()
         budget = min(settings.TOOL_RESULTS_CONTEXT_TOKENS * 3, 4000) - len(json.dumps(state, default=str).encode()) - 750
         state.update(schema_page(schema, offset=offset, limit=limit, query=query, budget=max(32, budget)))
@@ -120,11 +151,14 @@ class ResultWorkspace:
 
     async def standard_query(self, *, kind: str, columns: list[str] | None = None,
                              q: str = "", offset: int = 0, limit: int = 20,
+                             revision: int | None = None,
                              call_id: str, task_id: str | None, agent_execution_id: str | None,
                              **scope: Any) -> dict[str, Any]:
         from app.services.result_sql_projection import sql_columns, quote_column
         from app.services.tool_result_store import sql_ref_for_result
         state = await self.state(**scope)
+        if revision is not None and revision != state["revision"]:
+            raise ToolResultStoreError("Dataset revision changed; restart pagination from result.describe")
         available = sql_columns(state["observed_schema"])
         for column in columns or []:
             if column not in available:
@@ -144,18 +178,20 @@ class ResultWorkspace:
         elif kind == "find":
             if not q.strip():
                 raise ToolResultStoreError("find requires a nonempty q")
-            # strpos uses literal, case-insensitive text: no SQL or LIKE wildcards.
-            params["workspace_find_q"] = q.casefold()
+            # Search the JSON text representation using its string escaping, so
+            # quotes, backslashes and control characters still match literally.
+            params["workspace_find_q"] = json.dumps(q, ensure_ascii=False)[1:-1]
             selected = ", ".join(quote_column(column) for column in columns) if columns else "*"
-            sql = f"SELECT {selected} FROM {ref} AS _records WHERE strpos(lower(to_jsonb(_records)::text), :workspace_find_q) > 0"
+            sql = f"SELECT {selected} FROM {ref} AS _records WHERE strpos(lower(to_jsonb(_records)::text), lower(:workspace_find_q)) > 0 ORDER BY to_jsonb(_records)::text"
         else:
             raise ToolResultStoreError("Unknown standard query")
         sql += f" LIMIT {limit} OFFSET {offset}"
         output = await ToolResultStore().execute_sql(sql=sql, query_parameters=params, call_id=call_id,
             task_id=task_id, agent_execution_id=agent_execution_id,
+            expected_revisions={scope["result_id"]: state["revision"]},
             **{key: value for key, value in scope.items() if key != "result_id"})
         output.update(operation=kind, input_result_id=scope["result_id"], offset=offset, limit=limit,
-                      page_may_have_more=output["row_count"] == limit)
+                      input_revision=state["revision"], page_may_have_more=output["row_count"] == limit)
         return output
 
     async def append_page(self, *, payload: Any, source_tool: str, arguments: dict[str, Any],
@@ -177,7 +213,7 @@ class ResultWorkspace:
             if row["dataset_meta"].get("next_arguments") != arguments:
                 raise ToolResultStoreError("Page does not match the saved continuation")
             combined = row["payload"] + page.value
-            serialized = json.dumps(combined, ensure_ascii=False, default=str)
+            serialized = _json_dumps_exact(combined, ensure_ascii=False, default=str)
             if len(serialized.encode()) > get_settings().TOOL_RESULTS_MAX_PAYLOAD_BYTES:
                 raise ToolResultStoreError("Dataset storage budget reached; saved pages remain available")
             schema, sample, schema_complete, sample_complete = _profile_rows(combined)
@@ -187,6 +223,19 @@ class ResultWorkspace:
                 meta["total"] = row["dataset_meta"].get("total")
             if page.meta.next_arguments == arguments:
                 raise ToolResultStoreError("Source continuation did not advance")
+            raw_page = _json_dumps_exact({"payload": payload, "meta": page.meta.model_dump()}, default=str)
+            if len(raw_page.encode("utf-8")) > get_settings().TOOL_RESULTS_MAX_PAYLOAD_BYTES:
+                raise ToolResultStoreError("Source page and metadata exceed the configured storage limit")
+            next_arguments = meta.get("next_arguments")
+            if meta.get("has_next") and next_arguments:
+                repeated_page = (await connection.execute(text("""SELECT 1 FROM runtime_tool_result_pages
+                    WHERE result_id=CAST(:result_id AS uuid) AND page_key=:next_key"""),
+                    {"result_id": scope["result_id"], "next_key": page_key(next_arguments)})).scalar_one_or_none()
+                if repeated_page:
+                    meta["has_next"] = True
+                    meta["next_arguments"] = None
+                    meta["coverage_incomplete"] = True
+                    meta["continuation_error"] = "Source continuation cycles to an already loaded page"
             complete = (page.meta.has_next is False and row["dataset_meta"].get("start_offset", 0) == 0
                         and not meta["coverage_incomplete"]
                         and (meta["total"] is None or len(combined) >= meta["total"]))
@@ -196,12 +245,12 @@ class ResultWorkspace:
             await connection.execute(text("""INSERT INTO runtime_tool_result_pages
                 (result_id,page_key,call_id,payload,meta) VALUES
                 (CAST(:result_id AS uuid),:key,:call_id,CAST(:raw AS jsonb),CAST(:meta AS jsonb))"""),
-                {**params, "call_id": call_id, "raw": json.dumps(payload, default=str), "meta": json.dumps(meta)})
+                {**params, "call_id": call_id, "raw": raw_page, "meta": _json_dumps_exact(meta, default=str)})
             for start in range(0, len(page.value), 1000):
                 await connection.execute(text("""INSERT INTO runtime_tool_result_rows
                     (result_id,run_id,ordinal,data) VALUES (CAST(:result_id AS uuid),:run_id,:ordinal,CAST(:data AS jsonb))"""),
                     [{"result_id": scope["result_id"], "run_id": scope["run_id"],
-                      "ordinal": row["row_count"] + index, "data": json.dumps(value, default=str)}
+                      "ordinal": row["row_count"] + index, "data": _json_dumps_exact(value, default=str)}
                      for index, value in enumerate(page.value[start:start+1000], start=start)])
             await connection.execute(text("""UPDATE runtime_tool_payloads SET payload=CAST(:payload AS jsonb),
                 payload_sha256=:sha, dataset_meta=CAST(:meta AS jsonb), row_count=:count,
@@ -209,11 +258,11 @@ class ResultWorkspace:
                 observed_schema=CAST(:schema AS jsonb), sample=CAST(:sample AS jsonb),
                 schema_complete=:schema_complete, sample_complete=:sample_complete
                 WHERE id=CAST(:result_id AS uuid)"""), {**params, "payload": serialized,
-                "sha": hashlib.sha256(serialized.encode()).hexdigest(), "meta": json.dumps(meta),
+                "sha": hashlib.sha256(serialized.encode()).hexdigest(), "meta": _json_dumps_exact(meta, default=str),
                 "count": len(combined), "total": meta["total"], "complete": complete,
-                "schema": json.dumps(schema), "sample": json.dumps(sample),
+                "schema": _json_dumps_exact(schema), "sample": _json_dumps_exact(sample, default=str),
                 "schema_complete": schema_complete, "sample_complete": sample_complete})
             meta["table_schema"] = await inspect_table(connection, result_id=scope["result_id"], schema=schema)
             await connection.execute(text("UPDATE runtime_tool_payloads SET dataset_meta=CAST(:meta AS jsonb) WHERE id=CAST(:result_id AS uuid)"),
-                {"result_id": scope["result_id"], "meta": json.dumps(meta)})
+                {"result_id": scope["result_id"], "meta": _json_dumps_exact(meta, default=str)})
         return {"appended": True, "revision": expected_revision + 1}

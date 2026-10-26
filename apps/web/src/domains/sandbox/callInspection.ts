@@ -5,13 +5,13 @@ export type LlmOutcomeKind = 'tools' | 'answer' | 'clarify' | 'plan' | 'empty' |
 export type LlmOutcome = { kind: LlmOutcomeKind; label: string; count?: number };
 
 const HIDDEN_KEYS = new Set([
-  '_envelope', 'entity_id', 'entity_type', 'parent_entity_id', 'parent_entity_type',
+  '_envelope', 'entity_id', 'entity_type', 'row_id', 'parent_entity_id', 'parent_entity_type',
   'actor_entity_id', 'actor_type', 'agent_execution_id', 'call_id', 'llm_call_id',
-  'planner_iteration_id', 'planner_run_id', 'run_id', 'chat_id', 'storage_uri', 'source',
-  'debug', 'traceback', 'messages', 'content', 'parsed_response', 'response', 'data', 'result',
+  'planner_iteration_id', 'planner_run_id', 'run_id', 'chat_id', 'storage_uri',
+  'debug', 'traceback', 'messages', 'parsed_response', 'response',
   'template_schema', 'runtime_schema', 'schema', 'locator', 'artifact_id',
   '_progress', 'agent_slug', 'structured_input', 'step_kind', 'native_tool_calling',
-  'response_length', 'reused_from_call_id', 'sources', 'user_message', 'operator_message',
+  'response_length', 'reused_from_call_id', 'user_message', 'operator_message',
 ]);
 
 const LABELS: Record<string, string> = {
@@ -54,7 +54,7 @@ export function formatFieldLabel(key: string): string {
 
 export function toDisplayEntries(value: unknown): DisplayEntry[] {
   return Object.entries(asRecord(value))
-    .filter(([key, raw]) => !HIDDEN_KEYS.has(key) && !key.endsWith('_id') && raw !== null && raw !== undefined && raw !== '')
+    .filter(([key, raw]) => !HIDDEN_KEYS.has(key) && raw !== null && raw !== undefined && raw !== '')
     .map(([key, raw]) => ({
       label: formatFieldLabel(key),
       value: key === 'purpose' ? purposeLabel(raw) : key === 'tool' || key === 'operation_slug' ? callDisplayName(String(raw)) : sanitizeDisplay(raw),
@@ -62,11 +62,12 @@ export function toDisplayEntries(value: unknown): DisplayEntry[] {
 }
 
 export function sanitizeDisplay(value: unknown): unknown {
+  if (typeof value === 'string' && /^(s3|https?):\/\//i.test(value)) return '[скрытый адрес источника]';
   if (Array.isArray(value)) return value.map(sanitizeDisplay);
   const source = asRecord(value);
   if (Object.keys(source).length === 0) return value;
   return Object.fromEntries(Object.entries(source)
-    .filter(([key]) => !HIDDEN_KEYS.has(key) && !key.endsWith('_id'))
+    .filter(([key, item]) => !HIDDEN_KEYS.has(key) && !(key === 'source' && typeof item === 'string' && /^(s3|https?):\/\//i.test(item)))
     .map(([key, item]) => [key, sanitizeDisplay(item)]));
 }
 

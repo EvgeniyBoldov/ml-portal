@@ -21,6 +21,7 @@ export default function Chat() {
   const state = useChatMessagesState();
   const {
     loadMessages,
+    loadOlderMessages,
     loadPausedRun,
     setCurrentChat,
     clearPendingState,
@@ -262,6 +263,11 @@ export default function Chat() {
       {/* Messages */}
       <div className={styles.messagesContainer} ref={historyRef}>
         <div ref={contentRef} className={styles.messagesContent}>
+          {current?.olderCursor && (
+            <button type="button" onClick={() => void loadOlderMessages(chatId)} disabled={current.loading}>
+              Загрузить более ранние сообщения
+            </button>
+          )}
           {messages.length === 0 && !current?.loading && !current?.error ? (
             <div className={styles.noMessages}>
               <Icon name="sparkles" size={32} />

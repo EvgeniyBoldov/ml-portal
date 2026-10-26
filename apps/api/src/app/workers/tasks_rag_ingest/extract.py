@@ -99,7 +99,6 @@ def extract_document(
         if cached:
             logger.info(f"Extract cached for {source_id}")
             await ctx.set_completed(metrics={"status": "already_processed", "cached": True})
-            await ctx.session.commit()
             return ExtractResult(
                 source_id=source_id,
                 extracted_key=cached["extracted_key"],
@@ -113,6 +112,7 @@ def extract_document(
         if not origin_key:
             raise ValueError(f"No original artifact key found for source {source_id}")
 
+        await ctx.session.commit()
         file_content = await ctx.s3_get(origin_key)
 
         # 4. Resolve extractor and extract
@@ -138,6 +138,9 @@ def extract_document(
                 "Resolved fallback extractor: source_id=%s filename=%s extractor=%s",
                 source_id, filename, getattr(extractor, "kind", type(extractor).__name__),
             )
+        # Release the DB connection before the potentially long Docling/local
+        # extraction and subsequent object-storage write.
+        await ctx.session.commit()
         shared = await DocumentExtractionService().extract(
             ExtractionRequest(
                 payload=file_content,
@@ -147,7 +150,7 @@ def extract_document(
                 max_bytes=max(len(file_content), 1),
                 fallback_extractor=(
                     extractor
-                    if getattr(extractor, "kind", "") == "pdf(layout-pdfminer)"
+                    if getattr(extractor, "kind", "") in {"pdf(layout)", "pdf(layout-pdfminer)"}
                     else None
                 ),
             )
@@ -212,7 +215,6 @@ def extract_document(
             "checksum": text_checksum,
             "extractor_kind": extractor_kind,
         })
-        await ctx.session.commit()
 
         return ExtractResult(
             source_id=source_id,

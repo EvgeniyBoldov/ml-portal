@@ -9,6 +9,9 @@ export function UserMessage({ message }: { message: ChatTimelineMessage }) {
       <div className={styles.avatar}><Icon name="user" size={20} /></div>
       <div className={styles.content}>
         <div className={styles.header}><span>Вы</span><time>{formatTime(message.createdAt)}</time></div>
+        {message.outcome === 'failed' && (
+          <div role="status" className={styles.outcome}>Не отправлено. Проверьте соединение и отправьте сообщение ещё раз.</div>
+        )}
         {message.content && <div className={styles.userBody}>{message.content}</div>}
         <ChatAttachments attachments={message.meta?.attachments ?? []} variant="user" />
       </div>

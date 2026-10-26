@@ -182,6 +182,12 @@ export default function SandboxSessionPage() {
     });
   };
 
+  const handleSelectBranch = (branchId: string) => {
+    setActiveBranchId(branchId);
+    setSelectedTraceTarget(null);
+    setSelectedTraceState(null);
+  };
+
   const handleCreateBranchFromMessage = async (
     sourceText: string,
     parentRunId?: string | null
@@ -322,7 +328,7 @@ export default function SandboxSessionPage() {
           branches={branches}
           activeBranchId={activeBranchId}
           selectedItem={selectedItem}
-          onSelectBranch={setActiveBranchId}
+          onSelectBranch={handleSelectBranch}
           onSelectItem={item => {
             setSelectedItem(item);
             setSelectedTraceTarget(null);
@@ -354,7 +360,7 @@ export default function SandboxSessionPage() {
           isWaitingInput={sandboxRun.isWaitingInput}
           isReadOnly={isReadOnly}
           isCreatingBranch={forkBranchMutation.isPending}
-          onSelectBranch={setActiveBranchId}
+          onSelectBranch={handleSelectBranch}
           onCreateBranchFromMessage={handleCreateBranchFromMessage}
           onRun={handleRun}
           onResumeInput={text => sandboxRun.resumePausedRun('input', text)}

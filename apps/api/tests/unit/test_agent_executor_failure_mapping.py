@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -11,6 +11,8 @@ from app.runtime.agent_executor import AgentExecutor
 from app.agents.context import ToolContext
 from app.agents.runtime.agent import AgentToolRuntime
 from app.runtime.events import RuntimeEvent
+from app.runtime.events import OrchestrationPhase, RuntimeEventType
+from app.services.runtime_event_logger import RuntimeEventLogger, RuntimeLogContext, RuntimeLoggingLevel
 from app.runtime.orchestrator_contracts import (
     TaskCompletionDeclaration,
     TaskExecutionError,
@@ -210,3 +212,55 @@ async def test_preflight_timeout_uses_dedicated_session(monkeypatch) -> None:
     assert state.entered is True
     assert state.exited is True
     plan_session.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_attempt_persists_one_cancelled_agent_end_and_propagates(monkeypatch) -> None:
+    executor = AgentExecutor(session=SimpleNamespace(scalar=AsyncMock(return_value="full")), llm_client=AsyncMock())
+    run_id = uuid4()
+    root_logger = RuntimeEventLogger(context=RuntimeLogContext(
+        run_id=run_id, level=RuntimeLoggingLevel.NONE, origin="chat",
+    ))
+    recorded: list[RuntimeEvent] = []
+    terminal_write_finished = asyncio.Event()
+
+    async def record_event(self, event, *, phase):
+        assert phase is OrchestrationPhase.AGENT
+        recorded.append(event)
+        if event.type is RuntimeEventType.AGENT_END:
+            await asyncio.sleep(0.01)
+            terminal_write_finished.set()
+        return event
+
+    monkeypatch.setattr(RuntimeEventLogger, "emit", record_event)
+    execute_started = asyncio.Event()
+
+    async def wait_until_cancelled(*, ctx, **_kwargs):
+        execute_started.set()
+        await asyncio.Event().wait()
+        if False:
+            yield RuntimeEvent.status("unreachable")
+
+    executor.execute = wait_until_cancelled  # type: ignore[method-assign]
+    ctx = ToolContext(
+        tenant_id=uuid4(), user_id=uuid4(),
+        extra={"runtime_event_logger": root_logger},
+    )
+    attempt = asyncio.create_task(executor.execute_attempt(
+        request=_request(), runtime_state=SimpleNamespace(register_descendant_logging_level=Mock()), messages=[], ctx=ctx,
+        user_id=ctx.user_id, tenant_id=ctx.tenant_id,
+        lifecycle_agent_execution_id="agent-execution-1",
+        runtime_log_parent={"entity_type": "task", "entity_id": "task-1"},
+    ))
+
+    await asyncio.wait_for(execute_started.wait(), timeout=1)
+    attempt.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await attempt
+
+    terminal_events = [event for event in recorded if event.type is RuntimeEventType.AGENT_END]
+    assert len(terminal_events) == 1
+    assert terminal_events[0].data["status"] == "cancelled"
+    assert terminal_events[0].data["outcome"] == "cancelled"
+    assert terminal_write_finished.is_set()
+    assert ctx.extra["runtime_event_logger"] is root_logger

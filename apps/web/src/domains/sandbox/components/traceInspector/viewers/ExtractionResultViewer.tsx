@@ -12,11 +12,15 @@ export function ExtractionResultViewer({ extraction }: { extraction?: TraceExtra
     <InspectorFieldGroup>
       <InspectorFieldRow label="Статус"><InspectorStatus label={label(result.status)} tone={tone(result.status)} /></InspectorFieldRow>
       {result.fileName ? <InspectorFieldRow label="Файл"><InspectorScalar value={result.fileName} /></InspectorFieldRow> : null}
+      {result.parser ? <InspectorFieldRow label="Парсер"><InspectorScalar value={result.parser} /></InspectorFieldRow> : null}
       {result.contentType ? <InspectorFieldRow label="Тип содержимого"><InspectorScalar value={result.contentType} /></InspectorFieldRow> : null}
+      {result.contentKind ? <InspectorFieldRow label="Тип данных"><InspectorScalar value={result.contentKind} /></InspectorFieldRow> : null}
       {result.format ? <InspectorFieldRow label="Формат"><InspectorScalar value={result.format} /></InspectorFieldRow> : null}
       {result.profile ? <InspectorFieldRow label="Профиль"><InspectorScalar value={result.profile} /></InspectorFieldRow> : null}
       {result.representation ? <InspectorFieldRow label="Представление"><InspectorScalar value={result.representation} /></InspectorFieldRow> : null}
       {result.truncated !== undefined ? <InspectorFieldRow label="Обрезано"><InspectorScalar value={result.truncated ? 'Да' : 'Нет'} /></InspectorFieldRow> : null}
+      {result.outputChars !== undefined ? <InspectorFieldRow label="Символов на выходе"><InspectorScalar value={result.outputChars} /></InspectorFieldRow> : null}
+      {result.durationMs !== undefined ? <InspectorFieldRow label="Длительность"><InspectorScalar value={`${result.durationMs} мс`} /></InspectorFieldRow> : null}
       {result.message ? <InspectorFieldRow label="Сообщение"><InspectorTextBlock text={result.message} /></InspectorFieldRow> : null}
       {result.warnings.length ? <InspectorFieldRow label="Предупреждения"><InspectorTextBlock text={result.warnings.join('\n')} /></InspectorFieldRow> : null}
     </InspectorFieldGroup>

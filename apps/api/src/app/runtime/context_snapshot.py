@@ -30,6 +30,7 @@ def serialize_limits(limits: EntityLimits | RunLimits | Dict[str, Any] | None) -
             "tokens_total": getattr(limits, "tokens_total", None),
             "retries": getattr(limits, "retries", None),
             "wall_time_ms": getattr(limits, "wall_time_ms", None),
+            "max_parallel_tasks": getattr(limits, "max_parallel_tasks", None),
         }
 
     payload = {

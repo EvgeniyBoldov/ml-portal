@@ -19,7 +19,8 @@ class ToolCallReusePolicy:
         if not bool(ctx.extra.get("runtime_tool_reuse_enabled", True)):
             return None
         from app.runtime.memory.tool_ledger import canonical_operation_name
-        if canonical_operation_name(operation_slug).startswith("file.data."):
+        canonical_operation = canonical_operation_name(operation_slug)
+        if canonical_operation == "file.read" or canonical_operation.startswith("file.data."):
             # Access, source revisions and temporary-index readiness must be
             # revalidated even for identical calls within the same turn.
             return None

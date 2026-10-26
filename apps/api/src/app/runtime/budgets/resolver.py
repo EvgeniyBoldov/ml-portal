@@ -31,7 +31,9 @@ class BudgetResolver:
             iterations=_as_optional_int(limits.max_iterations),
             task_attempts=_as_optional_int(limits.max_task_executions),
             wall_time_ms=_as_optional_int(limits.wall_time_ms_max),
-            max_parallel_tasks=_as_optional_int(limits.max_parallel_tasks) or 1,
+            # The current SQL plan store claims one task at a time. Report the
+            # actual supported concurrency so snapshots never imply otherwise.
+            max_parallel_tasks=1,
         )
 
     async def resolve_orchestrator(self, role: str, sandbox_overrides: Optional[Dict[str, Any]] = None) -> EntityLimits:

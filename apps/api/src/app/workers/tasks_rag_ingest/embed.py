@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 from celery import Task
+from sqlalchemy import select
 
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
@@ -49,7 +50,9 @@ def embed_chunks_model(
         # Lock to prevent duplicate embedding of the same model/doc
         lock_key = f"lock:embed:{source_id}:{model_alias}"
 
-        async with ctx.redis.lock(lock_key, timeout=600, blocking_timeout=5):
+        # Celery's soft task limit is 55 minutes; keep the lease alive beyond
+        # that bound so context exit cannot turn completed work into failure.
+        async with ctx.redis.lock(lock_key, timeout=60 * 60, blocking_timeout=5):
             # 1. Mark processing
             await ctx.set_processing()
 
@@ -62,6 +65,7 @@ def embed_chunks_model(
 
             from app.services.vector_index_service import VectorIndexService
             target = await VectorIndexService(ctx.session).resolve("embedding", model_alias)
+            await ctx.session.commit()
             embedding_service = target.embedding_service
             model_info = await asyncio.to_thread(embedding_service.get_model_info)
 
@@ -69,16 +73,6 @@ def embed_chunks_model(
             resolved_chunks_key = chunks_key or get_document_artifact_key(normalized_meta, "chunks")
             if not resolved_chunks_key:
                 raise ValueError(f"No chunks_key provided for source {source_id}")
-            # Cached vectors must match both the encoder and canonical input.
-            cached = await ctx.check_idempotency(model_alias=model_alias, s3_key_field="embeddings_key")
-            if (cached and cached.get("embedding_fingerprint") == target.fingerprint
-                    and cached.get("chunks_key") == resolved_chunks_key):
-                await ctx.set_completed(metrics={"status": "already_processed", "cached": True,
-                    "embedding_fingerprint": target.fingerprint, "model_version": target.version})
-                await ctx.session.commit()
-                return EmbedResult(source_id=source_id, model_alias=model_alias,
-                    embeddings_key=cached["embeddings_key"], count=cached.get("count", 0))
-
             chunks_content = await ctx.s3_get(resolved_chunks_key)
             chunks = [json.loads(line) for line in chunks_content.decode("utf-8").splitlines() if line.strip()]
 
@@ -98,6 +92,7 @@ def embed_chunks_model(
                 model_version=model_info.version,
             )
             await ctx.session.flush()
+            await ctx.session.commit()
 
             # 5. Generate Embeddings (Batch Processing)
             batch_size = 32
@@ -135,6 +130,7 @@ def embed_chunks_model(
                     last_error=None,
                 )
                 await ctx.session.flush()
+                await ctx.session.commit()
 
             # 6. Save Embeddings to S3 (JSONL)
             embeddings_jsonl = "\n".join(json.dumps(e, ensure_ascii=False) for e in embeddings_data)
@@ -154,7 +150,14 @@ def embed_chunks_model(
 
             # Persist embedding artifact key in source.meta so index retry can recover
             # even if Redis idempotency cache was evicted.
-            normalized_meta = normalize_document_source_meta(source.meta if source else None)
+            from app.models.rag_ingest import Source
+            latest_meta = await ctx.session.scalar(
+                select(Source.meta).where(
+                    Source.source_id == ctx.source_id,
+                    Source.tenant_id == ctx.tenant_id,
+                ).with_for_update()
+            )
+            normalized_meta = normalize_document_source_meta(latest_meta)
             embedding_artifacts = dict(normalized_meta.get("embedding_artifacts") or {})
             embedding_artifacts[model_alias] = {
                 "key": embeddings_key,
@@ -195,7 +198,6 @@ def embed_chunks_model(
                 {"status": "completed", "embeddings_key": embeddings_key, "count": len(embeddings_data), "model_version": model_info.version, "embedding_fingerprint": target.fingerprint, "chunks_key": resolved_chunks_key},
                 model_alias=model_alias,
             )
-            await ctx.session.commit()
 
             return EmbedResult(
                 source_id=source_id,

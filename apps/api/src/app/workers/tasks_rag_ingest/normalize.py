@@ -87,13 +87,13 @@ def normalize_document(
         if cached:
             logger.info(f"Normalize cached for {source_id}")
             await ctx.set_completed(metrics={"status": "already_processed", "cached": True})
-            await ctx.session.commit()
             return NormalizeResult(source_id=source_id, canonical_key=cached["canonical_key"])
 
         # 3. Read Extracted Text
         if not extracted_key:
             raise ValueError(f"No extracted_key provided for source {source_id}")
 
+        await ctx.session.commit()
         raw_text = (await ctx.s3_get(extracted_key)).decode("utf-8")
 
         # 4. Normalize
@@ -126,6 +126,7 @@ def normalize_document(
         content_checksum = calculate_text_checksum(normalized_text)
         canonical_key = get_canonical_path(ctx.tenant_id, ctx.source_id, content_checksum)
 
+        await ctx.session.commit()
         await ctx.s3_put(
             key=canonical_key,
             content=canonical_content.encode("utf-8"),
@@ -169,7 +170,6 @@ def normalize_document(
             "canonical_key": canonical_key,
             "checksum": content_checksum,
         })
-        await ctx.session.commit()
 
         return NormalizeResult(source_id=source_id, canonical_key=canonical_key)
 

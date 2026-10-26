@@ -367,11 +367,52 @@ class RAGStatusManager:
                 "task_ids": list[str],  # Celery task ids to revoke
             }
         """
+        # Fence workers that are already doing network/model work. Revoking a
+        # Celery task is best effort; the generation check is the durable stop.
+        document = (await self.session.execute(
+            select(RAGDocument).where(RAGDocument.id == doc_id).with_for_update()
+        )).scalar_one_or_none()
+        if document is not None:
+            document.ingest_generation = int(document.ingest_generation or 0) + 1
+            from app.models.rag_ingest import (
+                RAGIngestRun, RAGIngestOutbox, RAGIngestStageRun, RAGIngestStageOutbox,
+            )
+            now = datetime.now(timezone.utc)
+            runs = (await self.session.execute(
+                select(RAGIngestRun).where(
+                    RAGIngestRun.doc_id == doc_id,
+                    RAGIngestRun.status.in_(["queued", "running"]),
+                ).with_for_update()
+            )).scalars().all()
+            run_ids = [run.id for run in runs]
+            for run in runs:
+                run.status = "cancelled"
+                run.error_short = "stopped by user"
+                run.finished_at = now
+            if run_ids:
+                run_commands = (await self.session.execute(
+                    select(RAGIngestOutbox).where(RAGIngestOutbox.run_id.in_(run_ids))
+                )).scalars().all()
+                stage_commands = (await self.session.execute(
+                    select(RAGIngestStageOutbox).where(RAGIngestStageOutbox.run_id.in_(run_ids))
+                )).scalars().all()
+                stage_runs = (await self.session.execute(
+                    select(RAGIngestStageRun).where(RAGIngestStageRun.run_id.in_(run_ids))
+                )).scalars().all()
+                for command in [*run_commands, *stage_commands]:
+                    if command.status in {"pending", "dispatched"}:
+                        command.status = "cancelled"
+                for stage_run in stage_runs:
+                    if stage_run.status in {"pending", "queued", "processing"}:
+                        stage_run.status = "cancelled"
+                        stage_run.finished_at = now
+
         nodes = await self.status_repo.get_nodes_by_doc_id(doc_id)
         stopped_stages: list[str] = []
         task_ids: list[str] = []
 
         active_statuses = {
+            StageStatus.PENDING.value,
             StageStatus.QUEUED.value,
             StageStatus.PROCESSING.value,
         }
@@ -548,6 +589,12 @@ class RAGStatusManager:
 
     async def _update_aggregate_status(self, doc_id: UUID) -> None:
         """Пересчитать и обновить агрегированный статус документа."""
+        # Serialize aggregate calculations before reading stage nodes. Without
+        # this lock, concurrent model branches can each observe the other as
+        # still running and both persist a stale `processing` projection.
+        await self.session.execute(
+            select(RAGDocument.id).where(RAGDocument.id == doc_id).with_for_update()
+        )
         pipeline_nodes = await self.status_repo.get_pipeline_nodes(doc_id)
         embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
         index_nodes = await self.status_repo.get_index_nodes(doc_id)

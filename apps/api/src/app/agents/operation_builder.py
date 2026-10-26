@@ -13,6 +13,7 @@ from app.core.logging import get_logger
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
 from app.services.permission_service import EffectivePermissions
+from app.services.sandbox_override_resolver import SandboxToolOverrides
 
 logger = get_logger(__name__)
 
@@ -42,6 +43,7 @@ class OperationBuilder:
         tenant_id: Optional[UUID] = None,
         capability_candidates: List[CapabilityCandidate],
         resolve_execution_credentials: Callable[..., Awaitable[Optional[OperationCredentialContext]]],
+        sandbox_tool_overrides: Optional[SandboxToolOverrides] = None,
     ) -> List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]]:
         operations: List[tuple[ResolvedOperation, Optional[OperationCredentialContext]]] = []
         seen_operation_slugs: set[str] = set()
@@ -58,6 +60,7 @@ class OperationBuilder:
                 tenant_id=tenant_id,
                 seen_operation_slugs=seen_operation_slugs,
                 resolve_execution_credentials=resolve_execution_credentials,
+                sandbox_tool_overrides=sandbox_tool_overrides,
             )
             if built is not None:
                 operations.append(built)
@@ -77,6 +80,7 @@ class OperationBuilder:
         tenant_id: Optional[UUID],
         seen_operation_slugs: set[str],
         resolve_execution_credentials: Callable[..., Awaitable[Optional[OperationCredentialContext]]],
+        sandbox_tool_overrides: Optional[SandboxToolOverrides] = None,
     ) -> Optional[tuple[ResolvedOperation, Optional[OperationCredentialContext]]]:
         discovered_tool = capability.discovered_tool
         raw_operation_name = str(getattr(discovered_tool, "slug", "") or "")
@@ -89,6 +93,7 @@ class OperationBuilder:
             provider=provider,
             runtime_domain=runtime_domain,
             context_domains=context_domains,
+            sandbox_tool_overrides=sandbox_tool_overrides,
         )
         if resolution is None:
             return None
@@ -247,6 +252,7 @@ class OperationBuilder:
             raw_tool_slug=raw_operation_name,
             published_domain=resolution.domain,
             result_kind=resolution.result_kind,
+            sandbox_override_snapshot=getattr(resolution, "sandbox_override_snapshot", {}),
             input_schema_summary=[],
             target=target,
         )

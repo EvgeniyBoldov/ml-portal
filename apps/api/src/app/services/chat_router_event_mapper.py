@@ -49,6 +49,7 @@ def map_service_event_to_sse(event: Dict[str, Any]) -> Optional[str]:
             message_id=str(event["message_id"]), created_at=event.get("created_at"),
             content=str(event.get("content") or ""),
             sources=list(event.get("sources") or []), attachments=list(event.get("attachments") or []),
+            stop_reason=event.get("stop_reason"),
         ))
     if event_type == "cached":
         return format_chat_sse(ChatSSEEventType.CACHED, CachedPayload(

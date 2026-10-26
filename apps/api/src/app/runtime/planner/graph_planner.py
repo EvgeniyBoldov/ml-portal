@@ -76,7 +76,13 @@ class GraphPlanner:
             "Runtime saves this planner checkpoint and returns the typed answer to this planner. "
             "Use interaction_answers as additional context for the original goal; do not repeat answered questions."
         )
-        tool_results: list[dict[str, Any]] = list(resumed.get("tool_results") or [])
+        # Checkpointed file reads are an authorization snapshot that may have
+        # become stale while the user was answering. Keep only shared memory
+        # search receipts; file and chat reads must be resolved again.
+        tool_results: list[dict[str, Any]] = [
+            item for item in (resumed.get("tool_results") or [])
+            if isinstance(item, dict) and item.get("tool") == "memory.search"
+        ]
         for _ in range(RoleMemoryTools.MAX_CALLS + 1):
             payload = self._input_builder.build_graph_request(request)
             state = ctx.extra.get("runtime_turn_state") if ctx else None

@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.models.rag_ingest import RAGIngestOutbox, RAGIngestRun, RAGIngestStageRun
 from app.repositories.factory import AsyncRepositoryFactory
@@ -37,8 +38,12 @@ class RAGIngestRunService:
         resume_stage: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> RAGIngestRun:
-        document = await self.repo_factory.get_rag_documents_repository().get_by_id(
-            self.repo_factory.tenant_id, document_id
+        from app.models.rag import RAGDocument
+        document = await self.session.scalar(
+            select(RAGDocument).where(
+                RAGDocument.id == document_id,
+                RAGDocument.tenant_id == self.repo_factory.tenant_id,
+            ).with_for_update()
         )
         if not document:
             raise ValueError(f"Document {document_id} not found")

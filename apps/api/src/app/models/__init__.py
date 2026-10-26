@@ -14,6 +14,7 @@ from .rag_ingest import (
 from .template_analysis_status import TemplateAnalysisStatus
 from .model_registry import ModelRegistry
 from .events import EventOutbox
+from .memory import MemoryFinalizeOutbox
 from .prompt import Prompt, PromptVersion, PromptStatus
 from .tool import Tool
 from .tool_instance import ToolInstance, InstanceKind, InstancePlacement, InstanceDomain
@@ -99,6 +100,7 @@ __all__ = [
     "TemplateAnalysisStatus",
     "ModelRegistry",
     "EventOutbox",
+    "MemoryFinalizeOutbox",
     "Prompt",
     "PromptVersion",
     "PromptStatus",

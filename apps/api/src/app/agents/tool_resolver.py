@@ -16,6 +16,7 @@ from app.agents.operation_publication import PublicationDecision, resolve_public
 from app.core.logging import get_logger
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
+from app.services.sandbox_override_resolver import SandboxToolOverrides
 
 logger = get_logger(__name__)
 
@@ -76,6 +77,7 @@ class ResolvedTool:
     publication: Optional[PublicationDecision] = None
     publication_view: Optional[ToolPublicationView] = None
     prompt_context: Dict[str, Any] = field(default_factory=dict)
+    sandbox_override_snapshot: Dict[str, Any] = field(default_factory=dict)
 
     def to_prompt_context(self) -> Dict[str, Any]:
         return {
@@ -112,6 +114,7 @@ class ToolResolver:
         provider: ToolInstance,
         runtime_domain: str,
         context_domains: Optional[List[str]] = None,
+        sandbox_tool_overrides: Optional[SandboxToolOverrides] = None,
     ) -> Optional[ResolvedTool]:
         raw_operation_name = str(discovered_tool.slug or "").strip()
         if not raw_operation_name:
@@ -130,6 +133,13 @@ class ToolResolver:
             else None
         )
         if is_system and publication is None:
+            return None
+        discovered_tool_id = str(getattr(discovered_tool, "id", "") or "")
+        if (
+            sandbox_tool_overrides is not None
+            and discovered_tool_id
+            and sandbox_tool_overrides.publication.get(discovered_tool_id) is False
+        ):
             return None
         operation_name = publication.canonical_op_slug if publication else raw_operation_name
         title = publication.spec.title if publication else _build_title(
@@ -163,21 +173,39 @@ class ToolResolver:
             getattr(discovered_tool, "risk_level", None),
             discovered_operation.risk_level,
         )
+        configured_semantics = (
+            sandbox_tool_overrides.semantics.get(discovered_tool_id, {})
+            if sandbox_tool_overrides is not None and discovered_tool_id
+            else {}
+        )
+        effective_semantics = _apply_semantic_overrides(
+            configured_semantics,
+            base={
+                "title": title,
+                "description": description,
+                "risk_level": runtime_risk_level,
+                "side_effects": discovered_operation.side_effects,
+                "idempotent": True,
+                "requires_confirmation": discovered_operation.requires_confirmation,
+                "credential_scope": discovered_operation.credential_scope,
+            },
+        )
         return ResolvedTool(
             raw_slug=raw_operation_name,
             operation_name=operation_name,
             published=True,
-            title=title,
-            description=description,
+            title=effective_semantics["title"],
+            description=effective_semantics["description"],
             input_schema=discovered_operation.input_schema,
             output_schema=discovered_operation.output_schema,
             domain=publication.spec.domain if publication else None,
             result_kind=publication.spec.result_kind if publication else None,
             scope_kind=(publication.scope_kind if publication else "collection"),  # type: ignore[arg-type]
-            risk_level=runtime_risk_level,
-            side_effects=discovered_operation.side_effects,
-            requires_confirmation=discovered_operation.requires_confirmation,
-            credential_scope=discovered_operation.credential_scope,
+            risk_level=effective_semantics["risk_level"],
+            side_effects=effective_semantics["side_effects"],
+            idempotent=effective_semantics["idempotent"],
+            requires_confirmation=effective_semantics["requires_confirmation"],
+            credential_scope=effective_semantics["credential_scope"],
             publication=publication,
             publication_view=publication_view,
             prompt_context={
@@ -185,7 +213,49 @@ class ToolResolver:
                 "provider_slug": provider.slug,
                 "runtime_domain": runtime_domain,
             },
+            sandbox_override_snapshot={
+                "discovered_tool_id": discovered_tool_id or None,
+                "configured": dict(configured_semantics),
+                "effective": {
+                    key: effective_semantics[key]
+                    for key in configured_semantics
+                    if key in effective_semantics
+                },
+                "publication_configured": (
+                    sandbox_tool_overrides.publication.get(discovered_tool_id)
+                    if sandbox_tool_overrides is not None and discovered_tool_id in sandbox_tool_overrides.publication
+                    else None
+                ),
+                "published_effective": True,
+            } if configured_semantics or (
+                sandbox_tool_overrides is not None and discovered_tool_id in sandbox_tool_overrides.publication
+            ) else {},
         )
+
+
+_RISK_ORDER = {"safe": 0, "write": 1, "destructive": 2}
+def _apply_semantic_overrides(configured: Dict[str, Any], *, base: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply supported semantic values without weakening runtime safeguards."""
+    effective = dict(base)
+    for key in ("title", "description"):
+        value = configured.get(key)
+        if isinstance(value, str):
+            effective[key] = value
+    for key in ("side_effects", "requires_confirmation"):
+        value = configured.get(key)
+        if isinstance(value, bool):
+            effective[key] = bool(base[key] or value)
+    idempotent = configured.get("idempotent")
+    if isinstance(idempotent, bool):
+        # A sandbox may disable retries for a non-idempotent operation, but
+        # cannot label an operation idempotent when its runtime contract does not.
+        effective["idempotent"] = bool(base["idempotent"] and idempotent)
+    risk = configured.get("risk_level")
+    if isinstance(risk, str) and risk in _RISK_ORDER:
+        # Sandbox edits may tighten the risk label, but cannot downgrade the
+        # discovered/runtime contract and thereby weaken credential checks.
+        effective["risk_level"] = max((base["risk_level"], risk), key=_RISK_ORDER.__getitem__)
+    return effective
 
 
 def _resolve_risk_level(

@@ -133,6 +133,9 @@ class RuntimeResumeCheckpointService:
             "paused_context": paused_context or {},
             "source_context_snapshot": source_snapshot or {},
         }
+        saved_budget_usage = (paused_context or {}).get("runtime_budget_usage") if isinstance(paused_context, dict) else None
+        if isinstance(saved_budget_usage, dict):
+            payload["budget_usage"] = saved_budget_usage
         original_goal = (
             source_inputs.get("goal")
             or source_inputs.get("user_request")

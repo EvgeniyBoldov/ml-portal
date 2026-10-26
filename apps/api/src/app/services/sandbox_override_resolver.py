@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
@@ -27,6 +28,32 @@ from app.services.sandbox_override_blueprints import (
 )
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxToolOverrides:
+    """Typed, immutable tool overrides passed from a captured sandbox snapshot."""
+
+    publication: Dict[str, bool] = field(default_factory=dict)
+    semantics: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    @classmethod
+    def from_runtime_overrides(cls, value: Optional[Dict[str, Any]]) -> "SandboxToolOverrides":
+        payload = value or {}
+        publication = payload.get("tool_publication")
+        semantics = payload.get("discovered_tool_overrides")
+        return cls(
+            publication={
+                str(key): flag
+                for key, flag in (publication.items() if isinstance(publication, dict) else [])
+                if isinstance(flag, bool)
+            },
+            semantics={
+                str(key): dict(fields)
+                for key, fields in (semantics.items() if isinstance(semantics, dict) else [])
+                if isinstance(fields, dict)
+            },
+        )
 
 
 class SandboxOverrideResolver:
@@ -333,6 +360,8 @@ class SandboxOverrideResolver:
             "scope": getattr(agent_version, "scope", None),
             "rules": getattr(agent_version, "rules", None),
             "tool_use_rules": getattr(agent_version, "tool_use_rules", None),
+            "never_do": getattr(agent_version, "never_do", None),
+            "allowed_ops": getattr(agent_version, "allowed_ops", None),
             "output_format": getattr(agent_version, "output_format", None),
             "examples": getattr(agent_version, "examples", None),
         }
@@ -352,6 +381,8 @@ class SandboxOverrideResolver:
             "scope": "Scope",
             "rules": "Rules",
             "tool_use_rules": "Tool Use Rules",
+            "never_do": "Safety — never do",
+            "allowed_ops": "Safety — allowed operations",
             "output_format": "Output Format",
             "examples": "Examples",
         }
@@ -437,7 +468,7 @@ class SandboxOverrideResolver:
         result: Dict[str, Dict[str, Any]] = {}
         for ov in self._iter_overrides("orchestration"):
             field_path = str(ov.get("field_path") or "")
-            key = self._extract_limit_key(field_path, "limits")
+            key = self._extract_limit_key(field_path, "orchestrator_limits")
             if key is None:
                 continue
             role_key = str(ov.get("entity_id") or "").strip().lower()
@@ -455,10 +486,18 @@ class SandboxOverrideResolver:
             entity_id=agent_version_id,
         ):
             field_path = str(ov.get("field_path") or "")
-            key = self._extract_limit_key(field_path, "limits")
+            key = self._extract_limit_key(field_path, "agent_limits")
             if key is None:
                 continue
             result[key] = ov.get("value_json")
+        return result
+
+    def get_runtime_limit_overrides(self) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for ov in self._iter_overrides("orchestration"):
+            key = self._extract_limit_key(str(ov.get("field_path") or ""), "runtime_limits")
+            if key is not None:
+                result[key] = ov.get("value_json")
         return result
 
     # ── Platform settings ────────────────────────────────────────────────
@@ -548,23 +587,6 @@ class SandboxOverrideResolver:
                 entry[field_path] = value
         return result
 
-    def get_discovered_tool_release_overrides(self) -> Dict[str, str]:
-        """Return selected ToolRelease IDs for discovered tools: {discovered_tool_id: tool_release_id}."""
-        result: Dict[str, str] = {}
-        for ov in self._iter_overrides("discovered_tool"):
-            if ov.get("field_path") != "tool_release_id":
-                continue
-            entity_id = ov.get("entity_id")
-            if not entity_id:
-                continue
-            value = ov.get("value_json")
-            if isinstance(value, UUID):
-                result[str(entity_id)] = str(value)
-                continue
-            if isinstance(value, str) and value.strip():
-                result[str(entity_id)] = value.strip()
-        return result
-
     # ── Unified runtime overrides ───────────────────────────────────────
 
     def to_runtime_overrides(
@@ -587,10 +609,10 @@ class SandboxOverrideResolver:
             "platform": self.get_platform_overrides(),
             "platform_limits": self.get_platform_limit_overrides(),
             "orchestrator_limits": self.get_orchestrator_limit_overrides(),
+            "runtime_limits": self.get_runtime_limit_overrides(),
             "logging_level": "full",  # sandbox always full
             "tool_publication": self.get_tool_publication_overrides(),
             "discovered_tool_overrides": self.get_discovered_tool_overrides(),
-            "discovered_tool_release_ids": self.get_discovered_tool_release_overrides(),
             "agent_version_overrides": {
                 str(ov.get("entity_id")): self.get_overrides_for_entity(
                     "agent_version",

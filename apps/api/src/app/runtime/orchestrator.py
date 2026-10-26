@@ -558,6 +558,40 @@ class GraphOrchestrator:
         return latest
 
     @staticmethod
+    def _continuation_is_disposed(
+        resolution: Dict[str, Any],
+        *,
+        prior_tasks: Dict[str, Dict[str, Any]],
+        latest_resolutions: Dict[str, Dict[str, Any]],
+    ) -> bool:
+        """A continued task is closed when every replacement has a terminal disposition.
+
+        A failed continuation can itself be reported unresolved. That must close
+        the original task's ``continue_with_tasks`` resolution too; otherwise a
+        valid terminal planner answer is rejected as leaving its ancestor open.
+        """
+        replacements = [str(item) for item in resolution.get("replacement_task_ids") or []]
+        if not replacements:
+            return False
+        terminal_actions = {"accept_partial", "exclude_from_scope", "report_unresolved"}
+
+        def disposed(task_id: str, visited: set[str]) -> bool:
+            if task_id in visited:
+                return False
+            visited.add(task_id)
+            if (prior_tasks.get(task_id) or {}).get("status") == "completed":
+                return True
+            disposition = latest_resolutions.get(task_id) or {}
+            if disposition.get("action") in terminal_actions:
+                return True
+            if disposition.get("action") != "continue_with_tasks":
+                return False
+            nested = [str(item) for item in disposition.get("replacement_task_ids") or []]
+            return bool(nested) and all(disposed(item, visited.copy()) for item in nested)
+
+        return all(disposed(task_id, set()) for task_id in replacements)
+
+    @staticmethod
     def _compile(proposal: IterationProposal, available_agents: list[dict[str, Any]], ledger: Dict[str, Any],
                  scope_context: dict[str, Any] | None = None) -> IterationProposal:
         agent_catalog = {str(item.get("slug") or ""): item for item in available_agents if isinstance(item, dict)}
@@ -679,18 +713,16 @@ class GraphOrchestrator:
                     raise PlanValidationError(
                         f"non-retryable task contract failure cannot be retried identically: {resolution.task_id}"
                     )
-        def continuation_completed(item: Dict[str, Any]) -> bool:
-            replacements = item.get("replacement_task_ids") or []
-            return bool(replacements) and all(
-                prior_tasks.get(str(task_id), {}).get("status") == "completed"
-                for task_id in replacements
-            )
-
         latest_resolutions = GraphOrchestrator._latest_resolutions(list(ledger.get("resolutions", [])))
         previously_resolved = {
             task_id for task_id, item in latest_resolutions.items()
             if item.get("action") in {"accept_partial", "exclude_from_scope", "report_unresolved"}
-            or (item.get("action") == "continue_with_tasks" and continuation_completed(item))
+            or (
+                item.get("action") == "continue_with_tasks"
+                and GraphOrchestrator._continuation_is_disposed(
+                    item, prior_tasks=prior_tasks, latest_resolutions=latest_resolutions,
+                )
+            )
         }
         unresolved = {
             task_id for task_id, task in prior_tasks.items()
@@ -1163,6 +1195,7 @@ class GraphOrchestrator:
                         # the health of the agent process.
                         status="completed",
                         outcome=result.outcome.value,
+                        result=result.model_dump(mode="json"),
                         plan_id=str(plan_id), iteration_id=iteration_id,
                         task_entity_id=task_entity_id, attempt_id=current_attempt_id,
                         step_id=current_step_id,
@@ -1205,7 +1238,19 @@ class GraphOrchestrator:
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
                     return
                 except TaskExecutionError as exc:
-                    failure = TaskAttemptFailure(code=exc.code, message=str(exc), retryable=exc.retryable, details=exc.details)
+                    # A completed tool call may have changed an external
+                    # system even if a later model/validation step failed.
+                    # Until we can resume from a durable execution checkpoint,
+                    # do not restart that task from its original prompt.
+                    completed_task_calls = any(
+                        entry.phase_id == task_id and entry.status == "succeeded"
+                        for entry in getattr(getattr(planner_kwargs.get("runtime_state"), "tool_ledger", None), "entries", [])
+                    )
+                    retryable = bool(exc.retryable and not completed_task_calls)
+                    failure = TaskAttemptFailure(code=exc.code, message=str(exc), retryable=retryable,
+                                                 details={**(exc.details or {}),
+                                                          **({"retry_suppressed": "task_has_completed_tool_calls"}
+                                                             if completed_task_calls else {})})
                     retry_after_ms = exc.details.get("retry_after_ms") if isinstance(exc.details, dict) else None
                     retry_delay = max(0, int(retry_after_ms) / 1000) if isinstance(retry_after_ms, int) else self.retry_delay_seconds
                     failed_task = await self.store.finish_failure(plan_id, task_id, failure, max_attempts=self.max_attempts, retry_at=datetime.now(timezone.utc) + timedelta(seconds=retry_delay))

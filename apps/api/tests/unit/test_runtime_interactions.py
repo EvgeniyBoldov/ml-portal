@@ -218,7 +218,9 @@ async def test_chat_resume_uses_same_typed_contract_for_text_and_boolean(monkeyp
     checkpoint = captured["continuation_meta"]["resume_checkpoint"]
     assert checkpoint["interaction_response"] == value
     assert checkpoint["interaction"]["requester"]["stage"] == "turn_preflight"
-    assert captured["resumed_turn_id"] == str(turn.id) and turn.status == "resumed"
+    # The turn remains durably paused until the SSE consumer starts; constructing
+    # a StreamingResponse must not consume the only resumable checkpoint.
+    assert captured["resumed_turn_id"] == str(turn.id) and turn.status == "paused"
     assert captured["persist_user_message"] is True
 
 
@@ -338,5 +340,6 @@ async def test_agent_loop_preserves_prior_tool_result_across_question_and_answer
     assert executed == (["test.read"] if question_type == "text" else ["test.read", "test.write"])
     assert any(event.type is RuntimeEventType.FINAL for event in second)
     messages = runtime.llm.call.await_args.kwargs["messages"]
-    assert "observed result" in str(messages) and "Альфа" in str(messages)
+    assert "Альфа" in str(messages)
+    assert any("Previously executed operation result omitted" in str(item.get("content")) for item in messages)
     assert "new unrelated input" not in str(messages)

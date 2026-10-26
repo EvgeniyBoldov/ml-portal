@@ -41,6 +41,7 @@ from app.core.exceptions import AgentUnavailableError, AppError as PreflightErro
 from app.core.logging import get_logger
 from app.models.agent import Agent
 from app.services.permission_service import EffectivePermissions, PermissionService
+from app.services.sandbox_override_resolver import SandboxToolOverrides
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 
 logger = get_logger(__name__)
@@ -134,6 +135,7 @@ class ExecutionPreflight:
         include_routable_agents: bool = True,
         routable_agents_override: Optional[List[Any]] = None,
         effective_permissions_override: Optional[EffectivePermissions] = None,
+        sandbox_tool_overrides: Optional[SandboxToolOverrides] = None,
         event_sink: Optional[Any] = None,
         trace_parent_id: Optional[str] = None,
         enable_operations: bool = True,
@@ -253,6 +255,7 @@ class ExecutionPreflight:
                     agent=agent_result.agent,
                     effective_permissions_override=effective_permissions,
                     default_collection_allow=default_collection_allow,
+                    sandbox_tool_overrides=sandbox_tool_overrides,
                 )
             logger.debug(
                 "preflight_stage_completed",
@@ -445,6 +448,7 @@ class ExecutionPreflight:
         agent: Any,
         effective_permissions_override: Optional[EffectivePermissions],
         default_collection_allow: bool,
+        sandbox_tool_overrides: Optional[SandboxToolOverrides],
     ) -> Any:
         """Step 2: resolve data instances and operations with checked permissions."""
         collection_ids: Optional[set[str]] = None
@@ -459,6 +463,7 @@ class ExecutionPreflight:
             effective_permissions=effective_permissions_override,
             default_collection_allow=default_collection_allow,
             collection_ids=collection_ids,
+            sandbox_tool_overrides=sandbox_tool_overrides,
         )
         return operation_result
 

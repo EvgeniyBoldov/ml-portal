@@ -49,6 +49,8 @@ def test_brief_level_contains_lifecycle_and_snapshots_not_io() -> None:
     assert logger.should_log("llm_response") is False
     assert logger.should_log("delta") is False
     assert logger.should_log("stop") is False
+    assert logger.should_log("final_answer_marker") is True
+    assert logger.should_log("final") is False
 
 
 def test_errors_alias_normalizes_to_error_level() -> None:

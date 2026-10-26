@@ -18,7 +18,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.memory import FactScope, FactSource, MemoryClaim, MemoryItem
+from app.models.memory import FactScope, FactSource, MemoryClaim, MemoryItem, MemoryFinalizeOutbox
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, RAGStatus, Source
 from app.models.collection import Collection
@@ -39,6 +39,8 @@ from app.services.runtime_event_logger import RuntimeEventJournalFactory
 from app.runtime.memory.evidence_feedback import (
     MemoryEvidenceEvaluator, MemoryEvidenceFeedbackService, bounded_document_evidence,
 )
+
+MEMORY_OUTBOX_STALE_MINUTES = 30
 
 
 @shared_task(name="app.workers.tasks_memory.reextract_stale_document_memory", queue="maintenance.default")
@@ -461,6 +463,7 @@ class MemoryFinalizePayload(BaseModel):
     terminal_reason: Optional[str] = None
     sandbox_overrides: Optional[Dict[str, Any]] = None
     runtime_run_id: Optional[str] = None
+    chat_turn_id: Optional[str] = None
     tail_id: Optional[str] = None
     stream_key: Optional[str] = None
     memory_limits: Optional[Dict[str, int]] = None
@@ -563,8 +566,27 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
         Dict with status and component results
     """
     import asyncio
+    outbox_id = str(payload_dict.get("outbox_id") or "")
     
     async def _finalize():
+        nonlocal payload_dict
+        if outbox_id:
+            async with get_worker_session() as outbox_session:
+                row = (await outbox_session.execute(
+                    select(MemoryFinalizeOutbox).where(
+                        MemoryFinalizeOutbox.id == UUID(outbox_id),
+                    ).with_for_update()
+                )).scalar_one_or_none()
+                if row is None:
+                    return {"status": "missing_outbox"}
+                if row.status == "completed":
+                    return {"status": "already_completed"}
+                if row.status == "running" and row.updated_at and row.updated_at > datetime.now(timezone.utc) - timedelta(minutes=MEMORY_OUTBOX_STALE_MINUTES):
+                    return {"status": "already_running"}
+                row.status = "running"
+                row.attempts = int(row.attempts or 0) + 1
+                payload_dict = dict(row.payload)
+                await outbox_session.commit()
         payload = MemoryFinalizePayload.model_validate(payload_dict)
         runtime_logger = None
         if payload.runtime_log_context:
@@ -934,7 +956,7 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                     )
                 )
 
-            return {
+            result = {
                 "status": "ok",
                 "chat_id": payload.chat_id,
                 "turn_number": payload.turn_number,
@@ -942,12 +964,87 @@ def finalize_memory_task(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
                 "failed": failed_components,
                 "degraded": degraded_components,
             }
+            if outbox_id:
+                async with get_worker_session() as outbox_session:
+                    row = (await outbox_session.execute(select(MemoryFinalizeOutbox).where(
+                        MemoryFinalizeOutbox.id == UUID(outbox_id),
+                    ).with_for_update())).scalar_one_or_none()
+                    if row is not None:
+                        row.status = "completed"
+                        row.last_error = None
+                        await outbox_session.commit()
+            return result
     
     try:
         return asyncio.run(_finalize())
     except Exception as exc:
         logger.exception("Memory finalization failed: %s", exc)
+        if outbox_id:
+            async def _release_outbox() -> None:
+                async with get_worker_session() as outbox_session:
+                    row = (await outbox_session.execute(select(MemoryFinalizeOutbox).where(
+                        MemoryFinalizeOutbox.id == UUID(outbox_id),
+                    ).with_for_update())).scalar_one_or_none()
+                    if row is not None and row.status != "completed":
+                        row.status = "pending"
+                        row.available_at = datetime.now(timezone.utc) + timedelta(seconds=60)
+                        row.last_error = str(exc)[:1000]
+                        await outbox_session.commit()
+            try:
+                asyncio.run(_release_outbox())
+            except Exception:
+                logger.exception("Failed to release memory finalization outbox row")
         raise self.retry(exc=exc)
+
+
+@shared_task(name="app.workers.tasks_memory.reconcile_memory_finalize_outbox", queue="memory")
+def reconcile_memory_finalize_outbox(batch_size: int = 100) -> Dict[str, int]:
+    """Redispatch durable memory jobs after broker/API failures."""
+    import asyncio
+
+    async def _dispatch() -> Dict[str, int]:
+        now = datetime.now(timezone.utc)
+        stale = now - timedelta(minutes=MEMORY_OUTBOX_STALE_MINUTES)
+        dispatch_ids: list[str] = []
+        discarded = 0
+        async with get_worker_session() as session:
+            rows = (await session.execute(select(MemoryFinalizeOutbox).where(
+                or_(
+                    (MemoryFinalizeOutbox.status == "pending") & (MemoryFinalizeOutbox.available_at <= now),
+                    (MemoryFinalizeOutbox.status.in_(("dispatched", "running"))) & (MemoryFinalizeOutbox.updated_at < stale),
+                ),
+            ).order_by(MemoryFinalizeOutbox.created_at).limit(batch_size).with_for_update(skip_locked=True))).scalars().all()
+            from app.models.chat_turn import ChatTurn
+            for row in rows:
+                if row.chat_turn_id:
+                    turn = await session.get(ChatTurn, row.chat_turn_id)
+                    if turn is None or turn.status in {"cancelled"}:
+                        row.status = "discarded"
+                        discarded += 1
+                        continue
+                    if turn.status not in {"completed", "failed"} or turn.assistant_message_id is None:
+                        continue
+                row.status = "dispatched"
+                dispatch_ids.append(str(row.id))
+            await session.commit()
+        dispatched = 0
+        for outbox_id in dispatch_ids:
+            try:
+                finalize_memory_task.apply_async(
+                    args=[{"outbox_id": outbox_id}], task_id=f"memory-finalize-{outbox_id}",
+                )
+                dispatched += 1
+            except Exception as exc:
+                async with get_worker_session() as session:
+                    row = await session.get(MemoryFinalizeOutbox, UUID(outbox_id))
+                    if row is not None and row.status != "completed":
+                        row.status = "pending"
+                        row.available_at = now + timedelta(seconds=60)
+                        row.last_error = str(exc)[:1000]
+                        await session.commit()
+        return {"dispatched": dispatched, "discarded": discarded}
+
+    return asyncio.run(_dispatch())
 
 
 @shared_task(

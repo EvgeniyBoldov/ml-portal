@@ -51,6 +51,7 @@ interface ChatState {
 
 interface ChatActions {
   loadMessages: (chatId: string) => Promise<void>;
+  loadOlderMessages: (chatId: string) => Promise<void>;
   setCurrentChat: (chatId: string | null) => void;
   clearPendingState: () => void;
   applyPausedState: (state: ResumePausedState) => void;
@@ -123,34 +124,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }));
     try {
       const chatsApi = await import('@shared/api/chats');
-      const byId = new Map<string, Message>();
-      const cursors = new Set<string>();
-      let cursor: string | undefined;
-      // The API paginates forwards from the oldest message. Read through to
-      // the tail before replacing the transcript, including after a cached turn.
-      do {
-        const resp = await chatsApi.listMessages(chatId, 100, cursor);
-        if (historyRequestsRef.current[chatId] !== requestVersion) return;
-        const page = Array.isArray(resp?.items) ? resp.items : [];
-        page
-          .map(item => toRenderableMessage(item))
-          .filter((item): item is Message => item !== null)
-          .forEach(item => byId.set(item.id, item));
-        cursor = resp?.next_cursor || undefined;
-        if (cursor && cursors.has(cursor))
-          throw new Error('Не удалось загрузить продолжение истории');
-        if (cursor) cursors.add(cursor);
-      } while (cursor);
-      const items = [...byId.values()];
+      const resp = await chatsApi.listMessages(chatId, 100, undefined, { tail: true });
+      if (historyRequestsRef.current[chatId] !== requestVersion) return;
+      const items = (Array.isArray(resp?.items) ? resp.items : [])
+        .map(item => toRenderableMessage(item))
+        .filter((item): item is Message => item !== null);
       setMessagesByChat(prev => {
         // Restore older history while retaining messages received since this
         // request started. A later canonical reload replaces optimistic rows.
         const hasNewStream =
           (historyVersionsRef.current[chatId] || 0) !== streamVersion;
-        const merged = hasNewStream
+        const priorItems = (prev[chatId]?.items || []).filter(item => !item.isOptimistic);
+        const merged = hasNewStream || priorItems.length
           ? [
               ...new Map(
-                [...items, ...(prev[chatId]?.items || [])].map(item => [
+                [...items, ...(hasNewStream ? (prev[chatId]?.items || []) : priorItems)].map(item => [
                   item.id,
                   item,
                 ])
@@ -159,7 +147,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           : items;
         return {
           ...prev,
-          [chatId]: { items: merged, loading: false, loaded: true },
+          [chatId]: { items: merged, loading: false, loaded: true,
+            olderCursor: prev[chatId]?.olderCursor || resp?.previous_cursor || undefined },
         };
       });
     } catch (err: unknown) {
@@ -177,6 +166,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }));
     }
   }, []);
+
+  const loadOlderMessages = useCallback(async (chatId: string) => {
+    const cursor = messagesByChat[chatId]?.olderCursor;
+    if (!cursor || messagesByChat[chatId]?.loading) return;
+    setMessagesByChat(prev => ({ ...prev, [chatId]: { ...prev[chatId], loading: true } }));
+    try {
+      const chatsApi = await import('@shared/api/chats');
+      const response = await chatsApi.listMessages(chatId, 100, undefined, { before: cursor });
+      const older = (response.items || []).map(item => toRenderableMessage(item))
+        .filter((item): item is Message => item !== null);
+      setMessagesByChat(prev => ({
+        ...prev,
+        [chatId]: {
+          ...prev[chatId],
+          items: [...new Map([...older, ...(prev[chatId]?.items || [])].map(item => [item.id, item])).values()],
+          olderCursor: response.previous_cursor || undefined,
+          loading: false,
+          loaded: true,
+        },
+      }));
+    } catch (err: unknown) {
+      setMessagesByChat(prev => ({ ...prev, [chatId]: { ...prev[chatId], loading: false,
+        error: err instanceof Error ? err.message : 'Ошибка загрузки сообщений' } }));
+    }
+  }, [messagesByChat]);
 
   const clearPausedInteraction = useCallback(() => {
     pauseLookupVersionRef.current += 1;
@@ -319,6 +333,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const actionsValue = useMemo<ChatActions>(
     () => ({
       loadMessages,
+      loadOlderMessages,
       setCurrentChat,
       clearPendingState,
       applyPausedState,
@@ -329,6 +344,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }),
     [
       loadMessages,
+      loadOlderMessages,
       setCurrentChat,
       clearPendingState,
       applyPausedState,

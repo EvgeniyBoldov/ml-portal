@@ -11,6 +11,7 @@ assigned its DB sequence — the raw event itself only carries domain data.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -47,6 +48,7 @@ class RuntimeEventType(str, Enum):
     # Lifecycle — synthesis
     SYNTHESIS_START = "synthesis_start"
     SYNTHESIS_END = "synthesis_end"
+    FINAL_ANSWER_MARKER = "final_answer_marker"
     # Progress
     STATUS = "status"
     PROTOCOL_RETRY = "protocol_retry"
@@ -58,6 +60,11 @@ class RuntimeEventType(str, Enum):
     PREFLIGHT_STARTED = "preflight_started"
     PREFLIGHT_COMPLETED = "preflight_completed"
     PREFLIGHT_FAILED = "preflight_failed"
+    PREFLIGHT_ROUTE_DECISION = "preflight_route_decision"
+    ROUTE_POLICY_START = "route_policy_start"
+    ROUTE_POLICY_DECISION = "route_policy_decision"
+    ROUTE_POLICY_END = "route_policy_end"
+    SANDBOX_OVERRIDE_SNAPSHOT = "sandbox_override_snapshot"
     RBAC_SNAPSHOT = "rbac_snapshot"
     LIMITS_SNAPSHOT = "limits_snapshot"
     LLM_REQUEST = "llm_request"
@@ -234,6 +241,145 @@ class RuntimeEvent:
         return cls(RuntimeEventType.SYNTHESIS_START, {
             "entity_id": synthesis_id, "entity_type": "synthesis_run",
             "parent_entity_type": "run", "parent_entity_id": run_id, **extra,
+        })
+
+    @classmethod
+    def final_answer_marker(
+        cls,
+        *,
+        synthesis_id: str,
+        run_id: str,
+        content: str,
+        sources: Optional[List[dict]] = None,
+        attachments: Optional[List[dict]] = None,
+        producer: str = "synthesizer_llm",
+        **extra: Any,
+    ) -> "RuntimeEvent":
+        """Persist the one operator-facing result owned by a synthesis run.
+
+        The matching ``final`` event is a transport frame and is deliberately
+        not a second result in the runtime journal.
+        """
+        return cls(RuntimeEventType.FINAL_ANSWER_MARKER, {
+            "entity_type": "run",
+            "entity_id": run_id,
+            "parent_entity_type": "synthesis_run",
+            "parent_entity_id": synthesis_id,
+            "status": "completed",
+            "producer": producer,
+            "content": content,
+            "sources": sources or [],
+            "attachments": attachments or [],
+            **extra,
+        })
+
+    @classmethod
+    def preflight_route_decision(
+        cls,
+        *,
+        preflight_id: str,
+        run_id: str,
+        proposed_route: Optional[str],
+        effective_route: str,
+        reason: str,
+        detail: Optional[str] = None,
+        policy_recommendation_id: Optional[str] = None,
+        policy_disposition: str = "not_applicable",
+        reason_code: Optional[str] = None,
+    ) -> "RuntimeEvent":
+        payload = {
+            "entity_type": "orchestrator",
+            "entity_id": preflight_id,
+            "parent_entity_type": "run",
+            "parent_entity_id": run_id,
+            "proposed_route": proposed_route,
+            "effective_route": effective_route,
+            "reason": reason,
+            "policy_recommendation_id": policy_recommendation_id,
+            "policy_disposition": policy_disposition,
+            "reason_code": reason_code,
+        }
+        if detail:
+            payload["detail"] = detail
+        return cls(RuntimeEventType.PREFLIGHT_ROUTE_DECISION, payload)
+
+    @classmethod
+    def route_policy_start(
+        cls,
+        *,
+        policy_id: str,
+        run_id: str,
+        recommendation_id: str,
+        current_user_query: str,
+        effective_goal: str,
+        dialogue_message_count: int,
+        dialogue_truncated: bool = False,
+    ) -> "RuntimeEvent":
+        normalized_query = " ".join(current_user_query.split())
+        return cls(RuntimeEventType.ROUTE_POLICY_START, {
+            "entity_type": "route_policy",
+            "entity_id": policy_id,
+            "parent_entity_type": "run",
+            "parent_entity_id": run_id,
+            "recommendation_id": recommendation_id,
+            "current_user_query_chars": len(current_user_query),
+            "current_user_query_hash": hashlib.sha256(normalized_query.encode("utf-8")).hexdigest(),
+            "effective_goal_chars": len(effective_goal),
+            "dialogue_message_count": max(0, int(dialogue_message_count)),
+            "dialogue_truncated": bool(dialogue_truncated),
+        })
+
+    @classmethod
+    def route_policy_decision(
+        cls, *, policy_id: str, run_id: str, recommendation_id: str,
+        status: str, rule_id: Optional[str] = None,
+        route_hint: Optional[str] = None, source_agent_hint: Optional[str] = None,
+        signals: Optional[List[str]] = None, reason_code: str, summary: str,
+    ) -> "RuntimeEvent":
+        return cls(RuntimeEventType.ROUTE_POLICY_DECISION, {
+            "entity_type": "route_policy",
+            "entity_id": policy_id,
+            "parent_entity_type": "run",
+            "parent_entity_id": run_id,
+            "recommendation_id": recommendation_id,
+            "status": status,
+            "rule_id": rule_id,
+            "route_hint": route_hint,
+            "source_agent_hint": source_agent_hint,
+            "signals": signals or [],
+            "reason_code": reason_code,
+            "summary": summary,
+        })
+
+    @classmethod
+    def route_policy_end(cls, *, policy_id: str, run_id: str, status: str = "completed") -> "RuntimeEvent":
+        return cls(RuntimeEventType.ROUTE_POLICY_END, {
+            "entity_type": "route_policy",
+            "entity_id": policy_id,
+            "parent_entity_type": "run",
+            "parent_entity_id": run_id,
+            "status": status,
+        })
+
+    @classmethod
+    def sandbox_override_snapshot(
+        cls,
+        *,
+        agent_execution_id: str,
+        configured: Dict[str, Any],
+        effective_operations: List[dict],
+        suppressed_publication: Dict[str, str],
+        parent_entity_type: Optional[str] = None,
+        parent_entity_id: Optional[str] = None,
+    ) -> "RuntimeEvent":
+        return cls(RuntimeEventType.SANDBOX_OVERRIDE_SNAPSHOT, {
+            "entity_type": "agent_execution",
+            "entity_id": agent_execution_id,
+            "configured": configured,
+            "effective_operations": effective_operations,
+            "suppressed_publication": suppressed_publication,
+            **({"parent_entity_type": parent_entity_type} if parent_entity_type else {}),
+            **({"parent_entity_id": parent_entity_id} if parent_entity_id else {}),
         })
 
     @classmethod

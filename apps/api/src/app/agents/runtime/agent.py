@@ -112,6 +112,30 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
+def _checkpoint_receipt(value: Any) -> dict[str, Any]:
+    """Keep identifiers/status from a completed write without copying its body."""
+    allowed = {"id", "key", "number", "status", "name", "slug", "created_at"}
+    receipt: dict[str, Any] = {}
+
+    def visit(item: Any, depth: int = 0) -> None:
+        if depth > 3 or len(receipt) >= 16:
+            return
+        if isinstance(item, dict):
+            for key, child in item.items():
+                normalized = str(key).lower()
+                if normalized in allowed and isinstance(child, (str, int, float)):
+                    receipt[normalized] = str(child)[:300]
+                elif isinstance(child, dict):
+                    visit(child, depth + 1)
+        elif isinstance(item, list):
+            for child in item[:8]:
+                visit(child, depth + 1)
+
+    visit(value)
+    receipt["_operation_completed"] = True
+    return receipt
+
 MAX_STEPS_WITHOUT_SUCCESSFUL_TOOL_RESULT_DEFAULT = 2
 DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION = PLATFORM_REQUIRED_OPERATION_RETRY_INSTRUCTION
 DEFAULT_INTENT_MESSAGES = PLATFORM_INTENT_MESSAGES
@@ -231,7 +255,16 @@ class AgentToolRuntime(BaseRuntime):
                 "including findings restored from this task's explicit continuation. Search receipts in conversation "
                 "history do not repeat passage text. Use each passage only within its stated scope and applicability."
             )
-        if available_operations:
+        workspace_only = bool(available_operations) and all(
+            item.operation_slug in {"result.describe", "result.read"}
+            for item in available_operations
+        )
+        if workspace_only:
+            system_prompt += (
+                "\n\nLarge task inputs may be saved as temporary datasets. Read them with result.read(result_id, fields, offset) "
+                "using the saved_context.result_id reference. Dataset reads do not call the original service."
+            )
+        elif available_operations:
             system_prompt += (
                 "\n\nSource datasets are saved as temporary results managed by runtime; direct context reads are returned separately. "
                 "delivery=inline includes the complete saved payload; delivery=stored includes only metadata and examples. "
@@ -425,9 +458,58 @@ class AgentToolRuntime(BaseRuntime):
             ledger = ctx.extra.get("runtime_tool_ledger")
             receipts = ledger.model_dump(mode="json") if ledger is not None else {"entries": []}
             receipts["entries"] = [entry for entry in receipts["entries"] if entry.get("status") != "called"]
-            return {"messages": deepcopy(llm_messages), "tool_outputs": deepcopy(loop_state.tool_outputs),
+            for entry in receipts["entries"]:
+                operation = str(entry.get("operation") or "").lower()
+                # Preserve only bounded receipts for side-effecting operations.
+                # Read results are re-fetched through the normal authorization
+                # path after resume.
+                read_operation = (entry.get("result_delivery") == "direct"
+                    or operation.endswith((".read", ".search", ".list", ".get", ".fetch", ".lookup"))
+                    or operation in {"collection.list_documents", "collection.doc_search"})
+                if read_operation or operation.startswith("file.data.") or operation == "memory.search":
+                    entry["result_data"] = None
+                    entry["result_preview"] = None
+                    entry["sources"] = []
+                else:
+                    entry["result_data"] = _checkpoint_receipt(entry.get("result_data"))
+                    entry["result_preview"] = None
+                    entry["sources"] = []
+            safe_messages = []
+            for item in llm_messages:
+                if item.get("role") == "system":
+                    continue
+                message = deepcopy(item)
+                # Tool output content may contain a file read whose access is
+                # revoked before resume. Preserve the call/result sequence so
+                # the agent knows not to repeat it, but never persist its body.
+                if message.get("role") == "tool":
+                    message["content"] = "Operation already executed before the pause; result content is omitted and must be re-read if still authorized."
+                elif message.get("role") == "assistant":
+                    message["content"] = ""
+                elif message.get("role") == "user" and str(message.get("content") or "").startswith("```tool_result"):
+                    message["content"] = "```tool_result\nPreviously executed operation result omitted; re-read only if still authorized.\n```"
+                for _, result_content in operation_results_for_context:
+                    if result_content and str(result_content) in str(message.get("content") or ""):
+                        message["content"] = "Previously executed operation result omitted; re-read only if still authorized."
+                        break
+                safe_messages.append(message)
+            safe_operations = []
+            for item in loop_state.tool_outputs:
+                operation = str(item.get("tool") or "").lower()
+                is_read = (operation.endswith((".read", ".search", ".list", ".get", ".fetch", ".lookup"))
+                    or operation in {"collection.list_documents", "collection.doc_search"})
+                result_data = None if is_read else _checkpoint_receipt(item.get("data"))
+                safe_operations.append({
+                    "tool": item.get("tool"),
+                    "success": bool(item.get("success")),
+                    "data": result_data,
+                    "error": None if item.get("success") else "Operation failed before pause; inspect current state before retrying.",
+                    "error_code": item.get("error_code"),
+                    "retryable": item.get("retryable"),
+                })
+            return {"messages": safe_messages, "tool_outputs": safe_operations,
                     "agent_version_id": str(exec_request.agent_version.id) if exec_request.agent_version is not None else None,
-                    "sources": deepcopy(loop_state.sources), "tool_ledger": receipts}
+                    "sources": [], "tool_ledger": receipts}
 
         loop_state.start_time = time.time()  # Start clock after all setup is complete
         max_steps_without_success = int(
@@ -1068,7 +1150,7 @@ class AgentToolRuntime(BaseRuntime):
                         if ev.type == RuntimeEventType.CONFIRMATION_REQUIRED:
                             checkpoint = interaction_checkpoint()
                             checkpoint["messages"].append({"role": "user", "content": json.dumps({
-                                "completed_operations": operation_results_for_context,
+                                "completed_operations": checkpoint.get("tool_outputs") or [],
                                 "pending_operation": {"tool": operation_call.tool_name, "arguments": operation_call.arguments},
                                 "instruction": "Earlier successful operations have already executed. This pending operation has not executed; user confirmation was requested.",
                             }, ensure_ascii=False, default=str)})
@@ -1092,6 +1174,7 @@ class AgentToolRuntime(BaseRuntime):
                                     RuntimeErrorCode.OPERATION_UNAVAILABLE.value,
                                     RuntimeErrorCode.OPERATION_AMBIGUOUS.value,
                                     RuntimeErrorCode.OPERATION_EXECUTION_FAILED.value,
+                                    "tool_result_store_failed",
                                 }
                                 and new_entry.get("retryable") is False
                             ):
@@ -1332,6 +1415,8 @@ class AgentToolRuntime(BaseRuntime):
             "actor_entity_id": agent_execution_id,
         })
 
+        previous_tool_budget = ctx.extra.get("runtime_tool_call_budget")
+        ctx.extra["runtime_tool_call_budget"] = (operation_calls_total_ref, policy.max_tool_calls_total)
         try:
             effective_timeout_s = self._effective_tool_timeout_s(
                 configured_timeout_ms=policy.tool_timeout_ms,
@@ -1352,6 +1437,11 @@ class AgentToolRuntime(BaseRuntime):
             yield RuntimeEvent(RuntimeEventType.CONFIRMATION_REQUIRED, confirmation_payload)
             await run_session.finish("waiting_confirmation", str(exc))
             return
+        finally:
+            if previous_tool_budget is None:
+                ctx.extra.pop("runtime_tool_call_budget", None)
+            else:
+                ctx.extra["runtime_tool_call_budget"] = previous_tool_budget
 
         redacted_result_data = None
         root_run_id = str(ctx.extra.get("runtime_root_run_id") or "").strip()
@@ -1363,7 +1453,14 @@ class AgentToolRuntime(BaseRuntime):
             try:
                 fresh = await ResultWorkspace().describe(result_id=stored_result["result_id"],
                     run_id=root_run_id, tenant_id=ctx.tenant_id, user_id=ctx.user_id)
-                stored_result = {**stored_result, **fresh, "inline_complete": False,
+                schema_fields = (
+                    "sql_columns", "schema_total_columns", "schema_matched_columns",
+                    "schema_returned_columns", "schema_page_complete", "schema_query",
+                    "schema_offset", "next_schema_offset", "schema_entry_too_large",
+                )
+                stored_result = {**stored_result, **fresh,
+                    "current_schema": {key: fresh[key] for key in schema_fields if key in fresh},
+                    "inline_complete": False,
                     "sql_available": any(op.operation_slug == "result.sql" for op in available_operations)}
                 result.metadata["stored_result"] = stored_result
             except Exception:
@@ -1379,11 +1476,13 @@ class AgentToolRuntime(BaseRuntime):
                     task_id=str(ctx.extra.get("runtime_task_id") or "") or None,
                     agent_execution_id=str(run_session.run_id or "") or None)
                 resolved, _ = self.tools._find_operation(operation_call.tool_name, operation_call.arguments, available_operations)
-                if resolved and resolved.source == "mcp":
+                source_tool = (resolved.target.mcp_tool_name
+                    or resolved.target.handler_slug or resolved.raw_tool_slug or operation_call.tool_name) if resolved else operation_call.tool_name
+                if resolved and (resolved.source == "mcp" or source_tool in {"collection_search", "collection.search"}):
                     from app.services.result_workspace import ResultWorkspace
                     stored_result, redacted_result_data = await ResultWorkspace().save_source(
                         payload=redacted_result_data,
-                        source_tool=resolved.target.mcp_tool_name or resolved.raw_tool_slug or operation_call.tool_name,
+                        source_tool=source_tool,
                         arguments=operation_call.arguments, **scope)
                 else:
                     stored_result = await ToolResultStore().save(payload=redacted_result_data, **scope)

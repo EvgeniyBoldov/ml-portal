@@ -1,7 +1,9 @@
 """Opt-in real PostgreSQL dataset lifecycle in an isolated schema."""
 import importlib.util
+import json
 import os
 from pathlib import Path
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -25,7 +27,8 @@ async def workspace_pg(monkeypatch):
     admin = create_async_engine(url)
     async with admin.begin() as connection:
         await connection.execute(text(f'CREATE SCHEMA "{name}"'))
-    engine = create_async_engine(url, connect_args={"server_settings": {"search_path": name}})
+    engine = create_async_engine(url, connect_args={"server_settings": {"search_path": name}},
+        json_deserializer=lambda value: json.loads(value, parse_float=Decimal))
     def migrate(connection):
         with Operations.context(MigrationContext.configure(connection)):
             for filename in ("0001_tool_payloads.py", "0002_sql_result_rows.py", "0003_result_datasets.py", "0004_virtual_table_rows.py"):
@@ -391,7 +394,8 @@ async def test_single_record_meta_identity_and_standard_queries(workspace_pg):
                                     {"id": saved["result_id"]})).all()
     assert len({value.id for value in values}) == 3
     repeated, _ = await save(workspace, scope, items=[row], total=1, next_page=False)
-    assert repeated["result_id"] == saved["result_id"] and repeated["revision"] == 3
+    assert repeated["result_id"] == saved["result_id"] and repeated["revision"] == 2
+    assert (await workspace.state(**ref))["row_count"] == 3
 
 
 @pytest.mark.asyncio
@@ -480,3 +484,69 @@ async def test_search_append_retains_missing_type_coverage(workspace_pg):
     assert state["row_count"] == 2 and not state["source_complete"]
     assert state["dataset_meta"]["coverage_incomplete"]
     assert state["dataset_meta"]["has_next"] is False
+
+
+@pytest.mark.asyncio
+async def test_decimal_page_append_and_replay_are_exact_and_idempotent(workspace_pg):
+    workspace, scope, _ = workspace_pg
+    args = {"object_type": "dcim.device", "limit": 1}
+    first = {"count": 2, "results": [{"id": 1, "weight": 1.25}],
+             "next": "https://netbox/api/?offset=1&limit=1"}
+    saved, _ = await workspace.save_source(payload=first, source_tool="netbox_get_objects",
+        arguments=args, operation="netbox_get_objects", call_id="decimal-source",
+        task_id="task", agent_execution_id="agent", **scope)
+    state = await workspace.state(result_id=saved["result_id"], **scope)
+    appended = await workspace.append_page(payload={"count": 2,
+        "results": [{"id": 2, "weight": 2.5}], "next": None},
+        source_tool="netbox_get_objects", arguments=state["dataset_meta"]["next_arguments"],
+        expected_revision=1, call_id="decimal-page", result_id=saved["result_id"], **scope)
+    assert appended == {"appended": True, "revision": 2}
+    repeated, _ = await workspace.save_source(payload=first, source_tool="netbox_get_objects",
+        arguments=args, operation="netbox_get_objects", call_id="decimal-source",
+        task_id="task", agent_execution_id="agent", **scope)
+    state = await workspace.state(result_id=saved["result_id"], **scope)
+    assert repeated["revision"] == 2 and state["row_count"] == 2
+    assert (await workspace.read(result_id=saved["result_id"], **scope))["value"] == [
+        {"id": 1, "weight": Decimal("1.25")}, {"id": 2, "weight": Decimal("2.5")}]
+
+
+@pytest.mark.asyncio
+async def test_jira_nested_incompleteness_survives_final_issue_page(workspace_pg):
+    workspace, scope, _ = workspace_pg
+    args = {"jql": "project = NET"}
+    first = {"startAt": 0, "total": 2, "issues": [{"key": "NET-1",
+        "fields": {"comment": {"total": 10, "comments": [{"body": "first"}]}}}]}
+    saved, _ = await workspace.save_source(payload=first, source_tool="jira_search_issues",
+        arguments=args, operation="jira_search_issues", call_id="jira-source",
+        task_id="task", agent_execution_id="agent", **scope)
+    state = await workspace.state(result_id=saved["result_id"], **scope)
+    await workspace.append_page(payload={"startAt": 1, "total": 2, "issues": [{"key": "NET-2",
+        "fields": {"comment": {"total": 1, "comments": [{"body": "complete"}]}}}]},
+        source_tool="jira_search_issues", arguments=state["dataset_meta"]["next_arguments"],
+        expected_revision=1, call_id="jira-page", result_id=saved["result_id"], **scope)
+    state = await workspace.state(result_id=saved["result_id"], **scope)
+    assert state["dataset_meta"]["coverage_incomplete"] is True
+    assert state["source_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_find_escapes_and_mixed_root_rows_preserve_source_values(workspace_pg):
+    workspace, scope, _ = workspace_pg
+    saved = await ToolResultStore().save(payload=[{"path": r"C:\\temp\\report.txt",
+        "quoted": 'say "hello"', "multiline": "first\nsecond"}],
+        call_id="find-escaped", operation="review.source", task_id="task",
+        agent_execution_id="agent", **scope)
+    for index, query in enumerate((r"C:\\temp\\report.txt", 'say "hello"', "first\nsecond")):
+        result = await workspace.standard_query(kind="find", q=query,
+            result_id=saved["result_id"], call_id=f"find-{index}", task_id="task",
+            agent_execution_id="agent", **scope)
+        assert result["row_count"] == 1
+
+    mixed = await ToolResultStore().save(payload=[1, {"name": "object"}],
+        call_id="mixed-root", operation="review.source", task_id="task",
+        agent_execution_id="agent", **scope)
+    queried = await ToolResultStore().execute_sql(
+        sql=f'SELECT value, name FROM {mixed["sql_ref"]} ORDER BY name NULLS FIRST',
+        call_id="mixed-root-query", task_id="task", agent_execution_id="agent", **scope)
+    assert queried["rows"] == [{"value": Decimal("1"), "name": None},
+                                {"value": {"name": "object"}, "name": "object"}]

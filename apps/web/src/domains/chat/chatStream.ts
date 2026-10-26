@@ -17,6 +17,7 @@ export interface ChatStreamFinal {
   createdAt?: string;
   sources: unknown;
   attachments: unknown;
+  stopReason?: string;
 }
 
 export type ChatStreamEvent =
@@ -129,6 +130,10 @@ export async function consumeChatStream(
               : undefined,
           sources: payload.sources,
           attachments: payload.attachments,
+          stopReason:
+            typeof payload.stop_reason === 'string'
+              ? payload.stop_reason
+              : undefined,
         },
       });
     } else if (event === 'pause') {

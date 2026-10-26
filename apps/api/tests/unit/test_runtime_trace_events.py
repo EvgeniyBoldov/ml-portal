@@ -96,3 +96,54 @@ def test_task_and_checkpoint_graph_entities_have_stable_iteration_parents() -> N
     assert task.data["parent_entity_id"] == "iteration-1"
     assert checkpoint.data["entity_id"] == checkpoint.data["checkpoint_id"] == "checkpoint-1"
     assert checkpoint.data["parent_entity_id"] == "iteration-1"
+
+
+def test_final_answer_marker_is_the_run_result_owned_by_synthesis() -> None:
+    event = RuntimeEvent.final_answer_marker(
+        synthesis_id="synthesis-1", run_id="run-1", content="Готово",
+        sources=[{"id": "source-1"}], attachments=[{"artifact_id": "artifact-1"}],
+    )
+
+    assert event.type is RuntimeEventType.FINAL_ANSWER_MARKER
+    assert event.data == {
+        "entity_type": "run", "entity_id": "run-1",
+        "parent_entity_type": "synthesis_run", "parent_entity_id": "synthesis-1",
+        "status": "completed", "producer": "synthesizer_llm", "content": "Готово",
+        "sources": [{"id": "source-1"}], "attachments": [{"artifact_id": "artifact-1"}],
+    }
+
+
+def test_preflight_route_decision_keeps_proposed_and_effective_routes_distinct() -> None:
+    event = RuntimeEvent.preflight_route_decision(
+        preflight_id="preflight-1", run_id="run-1", proposed_route="synthesis",
+        effective_route="planner", reason="runtime_reroute",
+        detail="Текущий инвентарь нужно проверить через операционный источник.",
+    )
+
+    assert event.type is RuntimeEventType.PREFLIGHT_ROUTE_DECISION
+    assert event.data == {
+        "entity_type": "orchestrator", "entity_id": "preflight-1",
+        "parent_entity_type": "run", "parent_entity_id": "run-1",
+        "proposed_route": "synthesis", "effective_route": "planner",
+        "reason": "runtime_reroute",
+        "policy_recommendation_id": None,
+        "policy_disposition": "not_applicable",
+        "reason_code": None,
+        "detail": "Текущий инвентарь нужно проверить через операционный источник.",
+    }
+
+
+def test_sandbox_override_snapshot_preserves_suppression_and_effective_operation() -> None:
+    event = RuntimeEvent.sandbox_override_snapshot(
+        agent_execution_id="agent-1",
+        configured={"publication": {"tool-1": False}, "semantics": {}},
+        effective_operations=[{"discovered_tool_id": "tool-2", "published_effective": True}],
+        suppressed_publication={"tool-1": "disabled_by_sandbox_override"},
+        parent_entity_type="task", parent_entity_id="task-1",
+    )
+
+    assert event.type is RuntimeEventType.SANDBOX_OVERRIDE_SNAPSHOT
+    assert event.data["parent_entity_id"] == "task-1"
+    assert event.data["configured"]["publication"] == {"tool-1": False}
+    assert event.data["suppressed_publication"] == {"tool-1": "disabled_by_sandbox_override"}
+    assert event.data["effective_operations"] == [{"discovered_tool_id": "tool-2", "published_effective": True}]

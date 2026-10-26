@@ -90,8 +90,7 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
   const finalAttachments = runView.attachments;
   const isFailed =
     run.status === 'failed' ||
-    runView.status === 'failed' ||
-    Boolean(runView.error);
+    runView.status === 'failed';
 
   return (
     <div className={styles['conversation-item']}>
@@ -113,13 +112,14 @@ function HistoricalRunItem(props: HistoricalRunItemProps) {
       <div className={styles['answer-row']}>
         {runDetail ? (
           <ChatAnswerCard
-            text={
-              isFailed
-                ? (runDetail.error ?? runView.error ?? 'Ошибка выполнения')
-                : finalContent
-            }
+            text={finalContent || (isFailed
+              ? (runDetail.error ?? runView.error ?? 'Ошибка выполнения')
+              : '')}
             isRunning={false}
             attachments={finalAttachments}
+            error={isFailed && finalContent
+              ? (runDetail.error ?? runView.error ?? 'Выполнение завершилось с ошибкой')
+              : undefined}
           />
         ) : (
           <div className={styles['answer-loading']}>Загрузка ответа...</div>
@@ -236,11 +236,27 @@ export default function RunChat({
   );
 
   const lineageRuns = useMemo(
-    () =>
-      branchRuns
+    () => {
+      const runs = branchRuns
         .filter(run => run.branch_id && lineageBranchIds.has(run.branch_id))
-        .sort((a, b) => a.started_at.localeCompare(b.started_at)),
-    [branchRuns, lineageBranchIds]
+        .sort((a, b) => a.started_at.localeCompare(b.started_at));
+      const runById = new Map(runs.map(run => [run.id, run]));
+      const forkCutoffs = new Map<string, string>();
+      for (let index = 0; index < branchLineage.length - 1; index += 1) {
+        const child = branchLineage[index];
+        const parent = branchLineage[index + 1];
+        if (child.parent_run_id) {
+          const forkRun = runById.get(child.parent_run_id);
+          if (forkRun) forkCutoffs.set(parent.id, forkRun.started_at);
+        }
+      }
+      return runs.filter(run => {
+        if (!run.branch_id) return false;
+        const cutoff = forkCutoffs.get(run.branch_id);
+        return !cutoff || run.started_at <= cutoff;
+      });
+    },
+    [branchRuns, branchLineage, lineageBranchIds]
   );
 
   const historicalRuns = useMemo(
@@ -505,9 +521,9 @@ export default function RunChat({
 
   const activeAssistantMessage = useMemo(() => {
     return String(
-      activeRunView.finalContent || activeRun.finalContent || ''
+      activeRunView.finalContent || (activeRun.status === 'running' ? activeRun.finalContent : '') || ''
     ).trim();
-  }, [activeRunView.finalContent, activeRun.finalContent]);
+  }, [activeRunView.finalContent, activeRun.finalContent, activeRun.status]);
   const showActiveAnswerCard =
     !isPaused &&
     (isRunning ||

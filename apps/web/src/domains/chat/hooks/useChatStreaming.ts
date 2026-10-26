@@ -221,7 +221,8 @@ export function useChatStreaming({
                 id: event.final.messageId,
                 content: event.final.content,
                 isOptimistic: false,
-                outcome: undefined,
+                outcome:
+                  event.final.stopReason === 'failed' ? 'failed' : undefined,
                 ...(event.final.createdAt
                   ? { createdAt: event.final.createdAt }
                   : {}),
@@ -320,6 +321,12 @@ export function useChatStreaming({
           if (!previousRun) removeEmptyAssistant(chatId, assistantId);
         } else {
           clearPendingState();
+          if (!hasOpenedStream && userId) {
+            updateMessage(chatId, userId, {
+              outcome: 'failed',
+              meta: { deliveryError: true },
+            });
+          }
           updateMessage(chatId, assistantId, { outcome: 'interrupted' });
           removeEmptyAssistant(chatId, assistantId);
         }
