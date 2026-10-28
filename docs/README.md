@@ -33,6 +33,7 @@ Documents below describe current behavior and contracts. For a cross-domain tech
 ### Runtime and chat
 - [Agent Runtime](architecture/AGENT_RUNTIME.md)
 - [Runtime Interactions](architecture/RUNTIME_INTERACTIONS.md) — clarification, confirmation and resume contract
+- [Chat Turn Lifecycle](architecture/CHAT_TURN_LIFECYCLE.md) — persisted turn status, runtime stages, per-run SSE and global reconciled status stream
 - [Runtime Tool Results and Data Workspace](architecture/RUNTIME_TOOL_RESULTS.md)
 - [Runtime Trace Specification](architecture/RUNTIME_TRACE_SPEC.md)
 - [Sandbox Trace Architecture Review](architecture/SANDBOX_TRACE_ARCHITECTURE_REVIEW.md) — findings, contract gaps and acceptance criteria for the sandbox trace/inspectors

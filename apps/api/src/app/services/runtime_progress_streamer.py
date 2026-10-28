@@ -34,30 +34,61 @@ class RuntimeProgressStreamer:
         RuntimeEventType.ERROR: "Во время выполнения возникла ошибка",
     }
 
+    _STAGE_BY_KIND = {
+        RuntimeEventType.RUN_START: "preparing",
+        RuntimeEventType.ORCHESTRATOR_START: "planning",
+        RuntimeEventType.PLANNER_ITERATION_START: "planning",
+        RuntimeEventType.PLANNER_ITERATION_END: "planning",
+        RuntimeEventType.PLAN_CREATED: "planning",
+        RuntimeEventType.PLAN_ITERATION_APPLIED: "planning",
+        RuntimeEventType.TASK_PLANNED: "planning",
+        RuntimeEventType.TASK_STARTED: "executing",
+        RuntimeEventType.AGENT_START: "executing",
+        RuntimeEventType.AGENT_END: "executing",
+        RuntimeEventType.TOOL_CALL: "executing",
+        RuntimeEventType.TOOL_RESULT: "executing",
+        RuntimeEventType.EXTRACTION_STARTED: "executing",
+        RuntimeEventType.EXTRACTION_COMPLETED: "executing",
+        RuntimeEventType.SYNTHESIS_START: "synthesizing",
+        RuntimeEventType.SYNTHESIS_END: "synthesizing",
+        RuntimeEventType.FINAL_ANSWER_MARKER: "finalizing",
+    }
+
     def project(self, event: RuntimeEvent, *, run_id: str, phase: OrchestrationPhase) -> Optional[dict[str, Any]]:
         description = self._description(event)
         if description is None:
             return None
         data = event.data
+        outcome = data.get("status")
+        if outcome not in {"completed", "failed", "cancelled", "error"}:
+            outcome = None
         return {
+            # Keep the shared runtime-tail envelope stable for sandbox readers.
+            # Chat consumes the additional normalized stage/activity fields.
             "type": "runtime_progress",
             "run_id": run_id,
             "phase": phase.value,
             "kind": event.type.value,
             "description": description,
-            "entity_type": data.get("entity_type"),
-            "entity_id": data.get("entity_id"),
-            "parent_entity_type": data.get("parent_entity_type"),
-            "parent_entity_id": data.get("parent_entity_id"),
             "status": data.get("status"),
+            "chat_stage": self._stage(event, phase),
+            "action": event.type.value,
+            "outcome": outcome,
         }
 
+    def _stage(self, event: RuntimeEvent, phase: OrchestrationPhase) -> str:
+        explicit = self._STAGE_BY_KIND.get(event.type)
+        if explicit:
+            return explicit
+        return {
+            OrchestrationPhase.PREFLIGHT: "planning",
+            OrchestrationPhase.PLANNER: "planning",
+            OrchestrationPhase.AGENT: "executing",
+            OrchestrationPhase.SYNTHESIS: "synthesizing",
+            OrchestrationPhase.PIPELINE: "executing",
+        }[phase]
+
     def _description(self, event: RuntimeEvent) -> Optional[str]:
-        candidate = event.data.get("progress_description")
-        if not isinstance(candidate, str) and event.type is RuntimeEventType.INTENT:
-            candidate = event.data.get("description")
-        if isinstance(candidate, str):
-            return self._bounded(candidate)
         if event.type is RuntimeEventType.PLANNER_ITERATION_START:
             mode = str(event.data.get("mode") or "").lower()
             iteration_type = str(event.data.get("iteration_type") or "").lower()
@@ -73,24 +104,10 @@ class RuntimeProgressStreamer:
         mechanical = self._MECHANICAL.get(event.type)
         if mechanical is None:
             return None
-        if event.type is RuntimeEventType.AGENT_START and event.data.get("agent_slug"):
-            return f"{mechanical}: {event.data['agent_slug']}"
-        if event.type is RuntimeEventType.TOOL_CALL and event.data.get("tool"):
-            return f"{mechanical}: {event.data['tool']}"
         if event.type is RuntimeEventType.PROTOCOL_RETRY:
-            reason = event.data.get("reason")
             delay = event.data.get("retry_delay_ms")
-            suffix = f" ({reason})" if isinstance(reason, str) and reason else ""
-            if isinstance(delay, int) and delay > 0:
-                suffix += f", повтор через {delay / 1000:g} с"
+            suffix = f", повтор через {delay / 1000:g} с" if isinstance(delay, int) and delay > 0 else ""
             return self._bounded(f"{mechanical}{suffix}")
-        if event.type is RuntimeEventType.TASK_STARTED and event.data.get("intent"):
-            return f"{mechanical}: {event.data['intent']}"
-        if event.type is RuntimeEventType.AGENT_END and isinstance(event.data.get("summary"), str):
-            summary = self._bounded(event.data["summary"])
-            if summary:
-                slug = str(event.data.get("agent_slug") or "агент")
-                return self._bounded(f"{slug}: {summary}")
         return mechanical
 
     def _bounded(self, value: str) -> Optional[str]:

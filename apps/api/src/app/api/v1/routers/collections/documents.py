@@ -61,7 +61,8 @@ async def inspect_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID,
 
 async def _queue_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID, action: Literal["add", "delete"],
                                  session: AsyncSession, user: UserCtx) -> dict[str, str]:
-    await _memory_document(collection_id, doc_id, session, user)
+    collection = await _memory_document(collection_id, doc_id, session, user)
+    await _require_collection_editor(session, user, collection.tenant_id)
     try:
         operation = await LongMemoryDocumentService(session).enqueue(doc_id, action)
     except ValueError as exc:
@@ -75,12 +76,18 @@ async def _queue_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID, ac
     return {"document_id": str(doc_id), "operation_id": str(operation.id), "status": "queued" if operation.status == "pending" else operation.status}
 
 
-@router.post("/{collection_id}/docs/{doc_id}/memory", status_code=410, deprecated=True)
-@router.post("/{collection_id}/docs/{doc_id}/memory/legacy-extract", status_code=410, deprecated=True)
+@router.post("/{collection_id}/docs/{doc_id}/memory", status_code=202, response_model=LongMemoryDocumentReceipt)
 async def add_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID,
     session: AsyncSession = Depends(db_session), user: UserCtx = Depends(get_current_user)) -> dict[str, Any]:
-    """DEPRECATED: manual extraction is retired; collection ingestion policy owns indexing."""
-    raise HTTPException(status_code=410, detail="Manual LongMemory extraction is deprecated")
+    """Add a document with canonical text to LongMemory."""
+    return await _queue_document_memory(collection_id, doc_id, "add", session, user)
+
+
+@router.post("/{collection_id}/docs/{doc_id}/memory/legacy-extract", status_code=410, deprecated=True)
+async def add_document_memory_legacy(collection_id: uuid.UUID, doc_id: uuid.UUID,
+    session: AsyncSession = Depends(db_session), user: UserCtx = Depends(get_current_user)) -> dict[str, Any]:
+    """DEPRECATED: the legacy extraction route has been retired."""
+    raise HTTPException(status_code=410, detail="Legacy LongMemory extraction is deprecated")
 
 
 @router.delete("/{collection_id}/docs/{doc_id}/memory", status_code=202, response_model=LongMemoryDocumentReceipt)

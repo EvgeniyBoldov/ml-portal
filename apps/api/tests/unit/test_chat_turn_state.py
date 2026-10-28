@@ -1,5 +1,5 @@
 """
-Contract tests for Chat Turn State Machine.
+Tests for the in-memory chat execution phase tracker.
 
 Validates:
 - Valid transitions proceed without warning
@@ -99,7 +99,7 @@ class TestHappyPathLifecycle:
         assert turn.transition(TurnPhase.ERROR) is True
         assert turn.is_terminal is True
 
-    def test_paused_lifecycle(self):
+    def test_pause_is_not_a_terminal_lifecycle_status(self):
         turn = ChatTurnState(chat_id="chat-3", request_id="req-3")
 
         assert turn.transition(TurnPhase.USER_PERSISTED) is True
@@ -107,7 +107,13 @@ class TestHappyPathLifecycle:
         assert turn.transition(TurnPhase.EXECUTION_STARTED) is True
         assert turn.transition(TurnPhase.DELTA_STREAMING) is True
         assert turn.transition(TurnPhase.PAUSED) is True
-        assert turn.transition(TurnPhase.COMPLETED) is True
+        assert turn.is_terminal is False
+
+    def test_explicit_cancel_is_terminal(self):
+        turn = ChatTurnState()
+        turn.transition(TurnPhase.USER_PERSISTED)
+        turn.force_cancel()
+        assert turn.phase is TurnPhase.CANCELLED
         assert turn.is_terminal is True
 
     def test_skip_triage(self):

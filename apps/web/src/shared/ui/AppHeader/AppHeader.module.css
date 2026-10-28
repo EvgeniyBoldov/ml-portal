@@ -9,6 +9,10 @@
 .header {
   display: flex;
   align-items: center;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   gap: var(--space-4, 1rem);
   padding: var(--space-3, 0.75rem) var(--space-5, 1.5rem);
   background: var(--panel);
@@ -47,9 +51,20 @@
 }
 
 .center {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   justify-content: center;
+}
+
+.center > * {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.center > * > * {
+  max-width: 100%;
 }
 
 /* Spacer when no center content - pushes right to the end */
@@ -61,6 +76,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-3, 0.75rem);
+  min-width: 0;
 }
 
 .user {

@@ -833,6 +833,7 @@ class RuntimePipeline:
 
                 lookup, decision = await _run_preflight_phase(preflight_limits.wall_time_ms, prepare_preflight)
             except Exception as exc:  # conservative compatibility fallback
+                runtime_state.set_lifecycle_status("failed")
                 logger.error("TurnPreflight unavailable; planner route is blocked: %s", exc)
                 await self._session.rollback()
                 preflight_budget_payload = budget_registry.emit_snapshot(preflight_id, reason="failed") or {}
@@ -1015,6 +1016,10 @@ class RuntimePipeline:
                                   question=clarification.question, context=clarification_context),
                 phase=OrchestrationPhase.PIPELINE,
             )
+            runtime_state.set_lifecycle_status(
+                "waiting_confirmation" if interaction.reason == PipelineStopReason.WAITING_CONFIRMATION.value
+                else "waiting_input"
+            )
             await self._apply_chat_context_outcome(
                 request=request, runtime_state=runtime_state, branch_id=branch_id,
                 terminal_state=interaction.reason, project_context=turn_mem.project_context,
@@ -1103,6 +1108,7 @@ class RuntimePipeline:
                         synthesis_id=synthesis_id, run_id=run_id_str, status="failed",
                     ), phase=OrchestrationPhase.SYNTHESIS)
             if runtime_state.final_answer:
+                runtime_state.set_lifecycle_status("completed")
                 await_background_tail = bool(getattr(request, "await_background_tail", True))
                 if await_background_tail:
                     async for memory_ev in self._finalize_memory(
@@ -1136,6 +1142,7 @@ class RuntimePipeline:
                 )
                 yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="completed"), phase=OrchestrationPhase.PIPELINE)
             else:
+                runtime_state.set_lifecycle_status("failed")
                 yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="failed"), phase=OrchestrationPhase.PIPELINE)
             return
         preflight_task_brief: dict[str, Any] = {}
@@ -1239,6 +1246,9 @@ class RuntimePipeline:
             GraphPlanningOutcomeKind.FAILED,
         ):
             terminal_status = (planning_outcome.stop_reason.value if planning_outcome.stop_reason else "failed")
+            runtime_state.set_lifecycle_status(
+                terminal_status if terminal_status in {"waiting_input", "waiting_confirmation"} else "failed"
+            )
             yield await emitter.emit(
                 RuntimeEvent.orchestrator_end(
                     orchestrator_id=orchestrator_id,
@@ -1303,6 +1313,7 @@ class RuntimePipeline:
         # not publish any further pipeline events; sandbox keeps this tail in
         # its observed lifecycle.
         if await_background_tail:
+            runtime_state.set_lifecycle_status("completed")
             yield await emitter.emit(
                 RuntimeEvent.orchestrator_end(
                     orchestrator_id=orchestrator_id,
@@ -1340,6 +1351,7 @@ class RuntimePipeline:
         else:
             # Chat mode ends the user stream on FINAL. Its post-final work
             # runs with a separate session and can never fail that stream.
+            runtime_state.set_lifecycle_status("completed")
             await self._apply_chat_context_outcome(
                 request=request, runtime_state=runtime_state, branch_id=branch_id,
                 terminal_state="completed", project_context=turn_mem.project_context,

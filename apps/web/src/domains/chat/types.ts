@@ -49,10 +49,10 @@ export interface ChatHistory {
 export interface ChatRuntimeProgress {
   id: string;
   runId: string;
-  phase: string;
-  kind: string;
+  stage: 'preparing' | 'planning' | 'executing' | 'synthesizing' | 'finalizing';
+  action: string;
   description: string;
-  status?: string;
+  outcome?: string;
   createdAt: string;
   // Reserved for future safe runtime projections. These fields must only be
   // populated from the public chat SSE contract, never from a raw trace.
@@ -61,6 +61,10 @@ export interface ChatRuntimeProgress {
   summary?: string;
 }
 
+export type ChatRuntimeProgressSnapshot = Omit<ChatRuntimeProgress, 'id' | 'createdAt' | 'outcome'> & {
+  outcome?: string | null;
+};
+
 export interface ActiveChatRun {
   userMessageId: string;
   assistantMessageId: string;
@@ -68,3 +72,11 @@ export interface ActiveChatRun {
   progress: ChatRuntimeProgress[];
   status: 'running' | 'waiting_confirmation' | 'waiting_input';
 }
+
+export type ChatLifecycleStatus =
+  | 'running'
+  | 'waiting_input'
+  | 'waiting_confirmation'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';

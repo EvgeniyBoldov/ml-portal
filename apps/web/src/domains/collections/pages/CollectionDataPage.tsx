@@ -49,6 +49,11 @@ interface CollectionHeaderProps {
 
 function CollectionHeader({ collection, total, right }: CollectionHeaderProps) {
   const navigate = useNavigate();
+  const countForm = new Intl.PluralRules('ru').select(total);
+  const documentUnit = countForm === 'one' ? 'документ' : countForm === 'few' ? 'документа' : 'документов';
+  const itemCount = collection.collection_type === 'document'
+    ? `${total.toLocaleString()} ${documentUnit}`
+    : `${total.toLocaleString()} записей`;
   return (
     <header className={styles.header}>
       <div className={styles.headerLeft}>
@@ -74,7 +79,7 @@ function CollectionHeader({ collection, total, right }: CollectionHeaderProps) {
                 )}
               </>
             )}
-            <span>{total.toLocaleString()} записей</span>
+            <span>{itemCount}</span>
           </div>
         </div>
       </div>
@@ -455,6 +460,134 @@ type DocSortDir = 'asc' | 'desc';
 
 const PROCESSING_STATUSES = ['processing', 'queued', 'embedding', 'chunked', 'normalized'];
 
+type StatusTone = 'success' | 'warn' | 'danger' | 'info' | 'neutral';
+
+interface LongMemoryPresentation {
+  label: string;
+  tone: StatusTone;
+  summary: string;
+}
+
+function metricValue(metrics: Record<string, unknown> | undefined, key: string): number | null {
+  const value = metrics?.[key];
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(value);
+}
+
+function getLongMemoryPresentation(
+  memory: CollectionDocument['memory'] | undefined
+): LongMemoryPresentation {
+  if (!memory) {
+    return {
+      label: 'Не добавлена', tone: 'neutral', summary: '',
+    };
+  }
+
+  const overall = memory.extraction_status.toLowerCase();
+  const metrics = memory.extraction_metrics;
+  const action = metrics.action;
+  const steps = metrics.steps && typeof metrics.steps === 'object'
+    ? metrics.steps as Record<string, unknown>
+    : {};
+  const extraction = steps.extract && typeof steps.extract === 'object'
+    ? steps.extract as Record<string, unknown>
+    : {};
+  const indexing = steps.index && typeof steps.index === 'object'
+    ? steps.index as Record<string, unknown>
+    : {};
+  const extractionDetails = extraction.metrics && typeof extraction.metrics === 'object'
+    ? extraction.metrics as Record<string, unknown>
+    : {};
+  const extractState = String(extraction.status ?? '');
+  const indexState = String(indexing.status ?? '');
+  const extractFailed = extractState === 'failed';
+  const indexFailed = indexState === 'failed';
+  const extracting = ['running', 'processing'].includes(extractState);
+  const indexingNow = ['running', 'processing'].includes(indexState);
+  const stageQueued = ['queued', 'pending'].includes(extractState) || ['queued', 'pending'].includes(indexState);
+  const extractionComplete = extractState === 'completed';
+  const indexComplete = indexState === 'completed';
+
+  let label = 'Не запускалась';
+  let tone: StatusTone = 'neutral';
+  if (action === 'delete' && ['queued', 'pending'].includes(overall)) {
+    label = 'Удаление в очереди';
+    tone = 'warn';
+  } else if (action === 'delete' && ['running', 'processing'].includes(overall)) {
+    label = 'Удаляется';
+    tone = 'warn';
+  } else if (action === 'delete' && overall === 'failed') {
+    label = 'Ошибка удаления';
+    tone = 'danger';
+  } else if (overall === 'deleted') {
+    label = 'Удалена';
+  } else if (extractFailed) {
+    label = 'Ошибка извлечения';
+    tone = 'danger';
+  } else if (indexFailed) {
+    label = 'Ошибка индексации';
+    tone = 'danger';
+  } else if (extractionComplete && indexComplete) {
+    label = 'Готова';
+    tone = 'success';
+  } else if (extracting || indexingNow || overall === 'running') {
+    label = extracting && indexingNow
+      ? 'Извлечение и индексация'
+      : extracting ? 'Извлекается'
+        : indexingNow ? 'Индексируется' : 'Обрабатывается';
+    tone = 'warn';
+  } else if (stageQueued || overall === 'queued' || overall === 'pending') {
+    label = 'Ожидает обработки';
+    tone = 'warn';
+  } else if (overall === 'failed') {
+    label = 'Ошибка';
+    tone = 'danger';
+  } else if (overall === 'cancelled') {
+    label = 'Остановлена';
+  } else if (overall === 'completed') {
+    label = 'Готовность не подтверждена';
+    tone = 'info';
+  } else if (!memory.effective_enabled) {
+    label = 'Не добавлена';
+  }
+
+  const extractionMetricParts: string[] = [];
+  const facts = metricValue(extractionDetails, 'facts');
+  const passages = metricValue(extractionDetails, 'passages');
+  if (!extractFailed && !indexFailed && !stageQueued && !extracting && !indexingNow) {
+    if (passages !== null) extractionMetricParts.push(`${formatCount(passages)} фрагм.`);
+    else if (facts !== null) extractionMetricParts.push(`${formatCount(facts)} фактов`);
+  }
+  return {
+    label,
+    tone,
+    summary: extractionMetricParts[0] ?? '',
+  };
+}
+
+function formatDocumentSize(sizeBytes: number | null): string {
+  if (sizeBytes === null || !Number.isFinite(sizeBytes) || sizeBytes < 0) return 'Размер не указан';
+  if (sizeBytes < 1024) return `${formatCount(sizeBytes)} Б`;
+  const units = ['КБ', 'МБ', 'ГБ', 'ТБ'];
+  let value = sizeBytes / 1024;
+  let unit = units[0];
+  for (let index = 1; value >= 1024 && index < units.length; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(value)} ${unit}`;
+}
+
+function documentTypeLabel(document: CollectionDocument): string {
+  const extension = document.filename.split('.').pop()?.trim().toUpperCase();
+  return extension && extension !== document.filename.toUpperCase() ? extension : 'Файл';
+}
+
 interface DocumentViewProps {
   collection: Collection;
 }
@@ -477,7 +610,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [sortDir, setSortDir] = useState<DocSortDir>('desc');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [statusModalDocId, setStatusModalDocId] = useState<string | null>(null);
-  const [extractingMemoryIds, setExtractingMemoryIds] = useState<Set<string>>(new Set());
+  const [memoryActionPending, setMemoryActionPending] = useState<'add' | 'delete' | null>(null);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadMetaFields, setUploadMetaFields] = useState<Record<string, string>>({});
@@ -610,8 +743,8 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   // Stats
   const stats = docsData?.stats ?? { total: totalDocs, ready: 0, processing: 0, partial: 0, failed: 0, uploaded: 0, archived: 0 };
 
-  const statCards: { label: string; value: number; color: string; filter: DocStatusFilter }[] = [
-    { label: 'Всего', value: stats.total, color: 'neutral', filter: 'all' },
+  const statCards: { label: string; value: number; color: 'neutral' | 'success' | 'warning' | 'danger'; filter: DocStatusFilter }[] = [
+    { label: 'Все', value: stats.total, color: 'neutral', filter: 'all' },
     { label: 'Готово', value: stats.ready, color: 'success', filter: 'ready' },
     { label: 'В обработке', value: stats.processing, color: 'warning', filter: 'processing' },
     { label: 'Частично готово', value: stats.partial, color: 'warning', filter: 'partial' },
@@ -642,10 +775,10 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   };
 
   const handleSelectAll = () => {
+    const allVisibleSelected = filteredDocuments.length > 0
+      && filteredDocuments.every(document => selectedIds.has(document.id));
     setSelectedIds(
-      selectedIds.size === filteredDocuments.length
-        ? new Set()
-        : new Set(filteredDocuments.map(d => d.id))
+      allVisibleSelected ? new Set() : new Set(filteredDocuments.map(document => document.id))
     );
   };
 
@@ -661,6 +794,10 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     () => documents.filter(d => selectedIds.has(d.id)),
     [documents, selectedIds],
   );
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page, pageSize, statusFilter, debouncedSearchQuery]);
 
   // Conditional bulk action visibility
   const ingestableDocuments = selectedDocs.filter(d =>
@@ -848,6 +985,30 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     }
   };
 
+  const handleBulkMemoryAction = async (action: 'add' | 'delete') => {
+    if (selectedIds.size === 0 || memoryActionPending !== null) return;
+    const documentIds = Array.from(selectedIds);
+    setMemoryActionPending(action);
+    try {
+      const results = await Promise.allSettled(documentIds.map(id => action === 'add'
+        ? collectionsApi.addDocumentToMemory(collectionId, id)
+        : collectionsApi.removeDocumentFromMemory(collectionId, id)));
+      const succeeded = results.filter(result => result.status === 'fulfilled').length;
+      const failedIds = documentIds.filter((_, index) => results[index]?.status === 'rejected');
+      const failed = failedIds.length;
+      const operationLabel = action === 'add' ? 'Добавление в LongMemory' : 'Удаление из LongMemory';
+      showToast(failed === 0
+        ? `${operationLabel} поставлено в очередь: ${succeeded}`
+        : `LongMemory: поставлено в очередь ${succeeded}, ошибок ${failed}`, failed === 0 ? 'success' : 'error');
+      setSelectedIds(new Set(failedIds));
+      if (succeeded > 0) invalidateDocs();
+    } catch {
+      showToast('Не удалось выполнить действие LongMemory', 'error');
+    } finally {
+      setMemoryActionPending(null);
+    }
+  };
+
   const handleBulkIngest = async () => {
     if (ingestableDocuments.length === 0) return;
     try {
@@ -881,56 +1042,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       }
     } catch {
       showToast('Ошибка запуска ингеста', 'error');
-    }
-  };
-
-  // Single doc actions
-  // DEPRECATED: manual LongMemory extraction is disabled; configured ingestion remains automatic.
-  const handleAddMemory = async (doc: CollectionDocument) => {
-    setExtractingMemoryIds(ids => new Set(ids).add(doc.id));
-    try {
-      await collectionsApi.addDocumentToMemory(collectionId, doc.id);
-      showToast('Документ добавляется в LongMemory. Процесс виден в статусе документа.', 'success');
-      invalidateDocs();
-    } catch {
-      showToast('Не удалось запустить извлечение памяти', 'error');
-    } finally {
-      setExtractingMemoryIds(ids => {
-        const next = new Set(ids);
-        next.delete(doc.id);
-        return next;
-      });
-    }
-  };
-
-  const handleDelete = async (doc: CollectionDocument) => {
-    if (!confirm(`Удалить "${doc.name}"? Данные будут удалены из MinIO и БД.`)) return;
-    try {
-      await collectionsApi.deleteDocuments(collectionId, [doc.id]);
-      showToast('Документ удален', 'success');
-      invalidateDocs();
-    } catch {
-      showToast('Ошибка удаления', 'error');
-    }
-  };
-
-  const handleIngest = async (doc: CollectionDocument) => {
-    try {
-      await collectionsApi.startDocIngest(collectionId, doc.id);
-      showToast('Ингест запущен', 'success');
-      invalidateDocs();
-    } catch {
-      showToast('Ошибка запуска ингеста', 'error');
-    }
-  };
-
-  const handleCancel = async (doc: CollectionDocument) => {
-    try {
-      await collectionsApi.stopDocIngest(collectionId, doc.id, 'pipeline');
-      showToast('Обработка отменена', 'success');
-      invalidateDocs();
-    } catch {
-      showToast('Ошибка отмены', 'error');
     }
   };
 
@@ -975,9 +1086,9 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   };
 
   const headerRight = (
-    <Button variant="primary" onClick={() => setUploadModalOpen(true)}>
+      <Button variant="primary" onClick={() => setUploadModalOpen(true)}>
       <Icon name="upload" size={16} />
-      Загрузить
+      Загрузить документы
     </Button>
   );
 
@@ -985,46 +1096,60 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     <>
       <CollectionHeader collection={collection} total={totalDocs} right={headerRight} />
 
-      {/* Stats */}
-      <div className={styles.stats}>
-        {statCards.map(card => (
-          <button
-            key={card.label}
-            className={`${styles.statCard} ${styles[card.color]} ${statusFilter === card.filter ? styles.active : ''}`}
-            onClick={() => { setStatusFilter(card.filter); setPage(1); }}
-          >
-            <span className={styles.statValue}>{card.value}</span>
-            <span className={styles.statLabel}>{card.label}</span>
-          </button>
-        ))}
+      <div className={styles.ragFilters} role="group" aria-label="Фильтры статуса RAG">
+        <span className={styles.ragFiltersLabel}>RAG</span>
+        <div className={styles.ragFilterList}>
+          {statCards.map(card => (
+            <button
+              key={card.label}
+              type="button"
+              className={`${styles.ragFilter} ${card.value > 0 ? styles[card.color] : ''} ${statusFilter === card.filter ? styles.active : ''}`}
+              onClick={() => { setStatusFilter(card.filter); setPage(1); }}
+              disabled={memoryActionPending !== null}
+              aria-pressed={statusFilter === card.filter}
+            >
+              <span>{card.label}</span>
+              <span className={styles.ragFilterCount}>{formatCount(card.value)}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Toolbar */}
       <div className={styles.docToolbar}>
         <div className={styles.docToolbarLeft}>
+          <label className={styles.srOnly} htmlFor="document-search">Поиск по документам</label>
           <Input
+            id="document-search"
             className={styles.search}
             placeholder="Поиск по имени или тегам..."
             value={searchQuery}
+            disabled={memoryActionPending !== null}
             onChange={e => setSearchQuery(e.target.value)}
           />
         </div>
         <div className={styles.docToolbarRight}>
           {selectedIds.size > 0 && (
             <div className={styles.docBulkActions}>
-              <span className={styles.docSelectedCount}>Выбрано: {selectedIds.size}</span>
+              <span className={styles.docSelectedCount}>Выбрано {selectedIds.size}</span>
               {canBulkIngest && (
-                <Button variant="ghost" size="sm" onClick={handleBulkIngest}>
-                  Запустить ингест
+                <Button variant="ghost" size="sm" disabled={memoryActionPending !== null} onClick={handleBulkIngest}>
+                  Запустить обработку
                 </Button>
               )}
+              <Button variant="outline" size="sm" disabled={memoryActionPending !== null} loading={memoryActionPending === 'add'} onClick={() => { void handleBulkMemoryAction('add'); }}>
+                Добавить в LongMemory
+              </Button>
+              <Button variant="outline" size="sm" className={styles.dangerAction} disabled={memoryActionPending !== null} loading={memoryActionPending === 'delete'} onClick={() => { void handleBulkMemoryAction('delete'); }}>
+                Удалить из LongMemory
+              </Button>
               {canBulkDelete && (
-                <Button variant="danger" size="sm" onClick={handleBulkDelete}>
-                  Удалить
+                <Button variant="outline" size="sm" className={styles.dangerAction} disabled={memoryActionPending !== null} onClick={handleBulkDelete}>
+                  Удалить документы
                 </Button>
               )}
-              <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
-                Отменить
+              <Button variant="ghost" size="sm" disabled={memoryActionPending !== null} onClick={() => setSelectedIds(new Set())}>
+                Снять выбор
               </Button>
             </div>
           )}
@@ -1068,112 +1193,132 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
             )}
           </div>
         ) : (
-          <table className={styles.docTable}>
+          <table className={`${styles.docTable} ${styles.documentTable}`}>
+            <colgroup>
+              <col className={styles.documentSelectColumn} />
+              <col className={styles.documentNameColumn} />
+              <col className={styles.ragStatusColumn} />
+              <col className={styles.memoryStatusColumn} />
+              <col className={styles.projectColumn} />
+              {metaFields.map(field => <col key={field.name} className={styles.metadataColumn} />)}
+              <col className={styles.createdColumn} />
+            </colgroup>
             <thead>
               <tr>
                 <th className={styles.checkboxCell}>
                   <input
                     type="checkbox"
-                    checked={selectedIds.size === filteredDocuments.length && filteredDocuments.length > 0}
+                    checked={filteredDocuments.length > 0 && filteredDocuments.every(document => selectedIds.has(document.id))}
+                    disabled={memoryActionPending !== null}
                     onChange={handleSelectAll}
+                    aria-label="Выбрать все документы на странице"
                   />
                 </th>
-                <th className={styles.sortable} onClick={() => handleSort('name')}>
-                  Название
-                  {sortKey === 'name' && <Icon name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={14} />}
+                <th scope="col" className={styles.sortable} aria-sort={sortKey === 'name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                  <button type="button" className={styles.sortHeader} onClick={() => handleSort('name')}>
+                    Документ
+                    {sortKey === 'name' && <Icon name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={14} />}
+                  </button>
                 </th>
-                <th className={styles.sortable} onClick={() => handleSort('agg_status')}>
-                  Статус
-                  {sortKey === 'agg_status' && <Icon name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={14} />}
+                <th scope="col" className={styles.sortable} aria-sort={sortKey === 'agg_status' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                  <button type="button" className={styles.sortHeader} onClick={() => handleSort('agg_status')}>
+                    RAG
+                    {sortKey === 'agg_status' && <Icon name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={14} />}
+                  </button>
                 </th>
-                <th>Размер</th>
-                <th>Semantic Memory</th>
+                <th scope="col">LongMemory</th>
+                <th scope="col">Проект памяти</th>
                 {metaFields.map(f => (
-                  <th key={f.name}>{f.label}</th>
+                  <th scope="col" key={f.name} title={f.label}>{f.label}</th>
                 ))}
-                <th className={styles.sortable} onClick={() => handleSort('created_at')}>
-                  Создан
-                  {sortKey === 'created_at' && <Icon name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={14} />}
+                <th scope="col" className={styles.sortable} aria-sort={sortKey === 'created_at' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                  <button type="button" className={styles.sortHeader} onClick={() => handleSort('created_at')}>
+                    Добавлен
+                    {sortKey === 'created_at' && <Icon name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={14} />}
+                  </button>
                 </th>
-                <th>Действия</th>
               </tr>
             </thead>
             <tbody>
               {filteredDocuments.map(doc => {
-                const isProc = PROCESSING_STATUSES.includes(doc.agg_status || '');
+                const memoryView = getLongMemoryPresentation(doc.memory);
+                const projectKeys = doc.memory?.scope_keys?.length
+                  ? doc.memory.scope_keys
+                  : doc.memory?.project_keys ?? [];
+                const projectNames = projectKeys.map(key =>
+                  memoryScopesQuery.data?.find(scope => scope.key === key)?.name ?? key
+                );
+                const chunkCount = doc.artifacts?.chunks?.chunk_count;
                 return (
                   <tr key={doc.id} className={selectedIds.has(doc.id) ? styles.selected : ''}>
                     <td className={styles.checkboxCell}>
                       <input
                         type="checkbox"
                         checked={selectedIds.has(doc.id)}
+                        disabled={memoryActionPending !== null}
                         onChange={() => handleSelect(doc.id)}
+                        aria-label={`Выбрать документ ${doc.name || doc.filename}`}
                       />
                     </td>
                     <td className={styles.nameCell}>
-                      <button
-                        className={styles.nameButton}
-                        onClick={() => { openModalDocIdRef.current = doc.id; setStatusModalDocId(doc.id); }}
-                      >
-                        {doc.name || 'Без имени'}
-                      </button>
+                      <div className={styles.documentNameRow}>
+                        <button
+                          className={styles.nameButton}
+                          onClick={() => { openModalDocIdRef.current = doc.id; setStatusModalDocId(doc.id); }}
+                          title={doc.name || doc.filename}
+                        >
+                          {doc.name || 'Без имени'}
+                        </button>
+                      </div>
+                      <span className={styles.documentSubline}>
+                        {documentTypeLabel(doc)} · {formatDocumentSize(doc.size_bytes)}
+                      </span>
                     </td>
-                    <td>
+                    <td className={styles.statusCell}>
                       <button
                         className={styles.statusButton}
                         onClick={() => { openModalDocIdRef.current = doc.id; setStatusModalDocId(doc.id); }}
+                        aria-label={`Статус RAG для ${doc.name || doc.filename}: ${doc.agg_status || 'загружен'}`}
                       >
                         {getStatusBadge(doc.agg_status || 'uploaded')}
                       </button>
+                      <span
+                        className={styles.metricLine}
+                        title={typeof chunkCount === 'number' ? `${formatCount(chunkCount)} чанков RAG` : 'Число чанков пока недоступно'}
+                      >
+                        {typeof chunkCount === 'number' ? `${formatCount(chunkCount)} чанков` : 'Чанки: нет данных'}
+                      </span>
                     </td>
-                    <td className={styles.muted}>
-                      {doc.size_bytes ? `${(doc.size_bytes / 1024 / 1024).toFixed(2)} MB` : '—'}
+                    <td className={styles.longMemoryCell}>
+                      <button
+                        type="button"
+                        className={styles.memoryStatusButton}
+                        onClick={() => { openModalDocIdRef.current = doc.id; setStatusModalDocId(doc.id); }}
+                        aria-label={`Статус LongMemory для ${doc.name || doc.filename}: ${memoryView.label}`}
+                      >
+                        <Badge tone={memoryView.tone} size="small">{memoryView.label}</Badge>
+                      </button>
+                      {memoryView.summary && <span className={styles.memorySummary}>{memoryView.summary}</span>}
                     </td>
-                    <td>
-                      {doc.memory ? (
-                        <div style={{ display: 'grid', gap: '0.2rem' }}>
-                          <span>{doc.memory.effective_enabled ? 'Включена' : 'Выключена'} · {doc.memory.policy === 'collection' ? 'наследуется' : 'явная настройка'}</span>
-                          <small>{doc.memory.extraction_status}{(doc.memory.scope_keys ?? doc.memory.project_keys).length ? ` · ${(doc.memory.scope_keys ?? doc.memory.project_keys).join(', ')}` : ''}</small>
+                    <td className={styles.projectCell}>
+                      {projectNames.length > 0 ? (
+                        <div className={styles.projectList}>
+                          {projectNames.map((name, index) => (
+                            <Badge key={`${projectKeys[index]}-${index}`} tone="info" size="small" title={projectKeys[index]}>
+                              {name}
+                            </Badge>
+                          ))}
                         </div>
-                      ) : '—'}
+                      ) : (
+                        <span className={styles.muted}>Не указано</span>
+                      )}
                     </td>
                     {metaFields.map(f => (
-                      <td key={f.name} className={styles.muted}>
+                      <td key={f.name} className={`${styles.muted} ${styles.metadataCell}`} title={renderMetaField(doc.meta_fields?.[f.name])}>
                         {renderMetaField(doc.meta_fields?.[f.name])}
                       </td>
                     ))}
                     <td className={styles.muted}>{formatDate(doc.created_at)}</td>
-                    <td>
-                      <div className={styles.actions}>
-                        {/* DEPRECATED: manual extraction endpoint is blocked; keep historical handler for reference. */}
-                        {/* <button
-                          className={styles.actionBtn}
-                          onClick={() => handleAddMemory(doc)}
-                          disabled={isProc || doc.agg_status === 'archived' || extractingMemoryIds.has(doc.id)
-                            || ['pending', 'queued', 'running', 'completed'].includes(doc.memory?.extraction_status ?? '')}
-                          title="Добавить документ в LongMemory"
-                          aria-label="Добавить документ в LongMemory"
-                        >
-                          <Icon name="sparkles" size={16} />
-                        </button> */}
-                        {isProc ? (
-                          <button className={styles.actionBtn} onClick={() => handleCancel(doc)} title="Отменить обработку">
-                            <Icon name="x" size={16} />
-                          </button>
-                        ) : doc.agg_status !== 'ready' ? (
-                          <button className={styles.actionBtn} onClick={() => handleIngest(doc)} title="Запустить ингест">
-                            <Icon name="play" size={16} />
-                          </button>
-                        ) : null}
-                        <button
-                          className={`${styles.actionBtn} ${styles.danger}`}
-                          onClick={() => handleDelete(doc)}
-                          title="Удалить"
-                        >
-                          <Icon name="trash" size={16} />
-                        </button>
-                      </div>
-                    </td>
                   </tr>
                 );
               })}
@@ -1186,13 +1331,13 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         <div className={styles.pagination}>
           <div className={styles.paginationInfo}>Показано {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalDocs)} из {totalDocs.toLocaleString()}</div>
           <div className={styles.paginationControls}>
-            <button className={styles.paginationBtn} aria-label="Первая страница" onClick={() => setPage(1)} disabled={page === 1}><Icon name="chevrons-left" size={16} /></button>
-            <button className={styles.paginationBtn} aria-label="Предыдущая страница" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1}><Icon name="chevron-left" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Первая страница" onClick={() => setPage(1)} disabled={page === 1 || memoryActionPending !== null}><Icon name="chevrons-left" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Предыдущая страница" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page === 1 || memoryActionPending !== null}><Icon name="chevron-left" size={16} /></button>
             <span style={{ margin: '0 8px', fontSize: 13 }}>Страница {page} из {totalDocumentPages}</span>
-            <button className={styles.paginationBtn} aria-label="Следующая страница" onClick={() => setPage((value) => Math.min(totalDocumentPages, value + 1))} disabled={page >= totalDocumentPages}><Icon name="chevron-right" size={16} /></button>
-            <button className={styles.paginationBtn} aria-label="Последняя страница" onClick={() => setPage(totalDocumentPages)} disabled={page >= totalDocumentPages}><Icon name="chevrons-right" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Следующая страница" onClick={() => setPage((value) => Math.min(totalDocumentPages, value + 1))} disabled={page >= totalDocumentPages || memoryActionPending !== null}><Icon name="chevron-right" size={16} /></button>
+            <button className={styles.paginationBtn} aria-label="Последняя страница" onClick={() => setPage(totalDocumentPages)} disabled={page >= totalDocumentPages || memoryActionPending !== null}><Icon name="chevrons-right" size={16} /></button>
           </div>
-          <div className={styles.pageSize}><span>Показывать:</span><select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>{PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></div>
+          <div className={styles.pageSize}><span>Показывать:</span><select value={pageSize} disabled={memoryActionPending !== null} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>{PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}</select></div>
         </div>
       )}
 
@@ -1362,6 +1507,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
           )}
         </div>
       </Modal>
+
 
       {/* Status Modal — reused from RAG without changes */}
       {statusModalDocId && (

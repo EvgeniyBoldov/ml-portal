@@ -350,7 +350,13 @@ export interface CollectionDocument {
     extraction_status: string;
     extraction_metrics: Record<string, unknown>;
   };
-  artifacts?: Record<string, { key?: string; content_type?: string; format?: string; available?: boolean }>;
+  artifacts?: Record<string, {
+    key?: string;
+    content_type?: string;
+    format?: string;
+    available?: boolean;
+    chunk_count?: number;
+  }>;
   meta_fields: Record<string, unknown>;
 }
 
@@ -912,9 +918,12 @@ export const collectionsApi = {
   },
 
   // Document status & ingest (scoped to collection, not RAG)
-  /** @deprecated Manual LongMemory extraction is retired; the server returns HTTP 410. */
   addDocumentToMemory: async (collectionId: string, docId: string): Promise<{ status: string; operation_id: string }> => {
     return apiRequest(`/collections/${collectionId}/docs/${docId}/memory`, { method: 'POST' });
+  },
+
+  removeDocumentFromMemory: async (collectionId: string, docId: string): Promise<{ status: string; operation_id: string }> => {
+    return apiRequest(`/collections/${collectionId}/docs/${docId}/memory`, { method: 'DELETE' });
   },
 
   getDocStatusGraph: async (collectionId: string, docId: string) => {

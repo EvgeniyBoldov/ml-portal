@@ -9,15 +9,27 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toApiError } from '@/shared/api/errors';
 import { qk } from '@/shared/api/keys';
 import { fetchStreamWithAuth } from '@/shared/api/streamAuth';
-import { generateChatTitle, resumeRunStream } from '@/shared/api/chats';
+import {
+  attachChatRun,
+  generateChatTitle,
+  resumeRunStream,
+  stopChatRun,
+} from '@/shared/api/chats';
 import { idempotencyKey as createIdempotencyKey } from '@/shared/lib/idempotency';
 import { toAttachments, toRagSources } from '../chatMessages';
 import {
   appendRuntimeProgress,
+  ChatStreamFailure,
   consumeChatStream,
   type ChatStreamPause,
 } from '../chatStream';
-import type { ActiveChatRun, ChatHistory, ChatTimelineMessage } from '../types';
+import type {
+  ActiveChatRun,
+  ChatHistory,
+  ChatRuntimeProgress,
+  ChatRuntimeProgressSnapshot,
+  ChatTimelineMessage,
+} from '../types';
 
 type MessagesByChat = Record<string, ChatHistory>;
 interface Options {
@@ -37,6 +49,16 @@ interface Options {
 async function ensureResponse(response: Response) {
   if (response.ok && response.body) return;
   throw await toApiError(response);
+}
+
+function createRuntimeRunId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    return crypto.randomUUID();
+  const suffix = createIdempotencyKey()
+    .replace(/[^a-f0-9]/gi, '')
+    .padEnd(12, '0')
+    .slice(0, 12);
+  return `00000000-0000-4000-8000-${suffix}`;
 }
 
 export function useChatStreaming({
@@ -130,17 +152,10 @@ export function useChatStreaming({
     flushRef.current?.();
     controllerRef.current?.abort();
     controllerRef.current = null;
-    const target = streamTargetRef.current;
     streamTargetRef.current = null;
-    if (target) {
-      updateMessage(target.chatId, target.assistantId, {
-        outcome: 'cancelled',
-      });
-      removeEmptyAssistant(target.chatId, target.assistantId);
-    }
     setIsStreaming(false);
-    clearPendingState();
-  }, [clearPendingState, removeEmptyAssistant, setIsStreaming, updateMessage]);
+    setActiveRun(null);
+  }, [setActiveRun, setIsStreaming]);
 
   const setCurrentChat = useCallback(
     (chatId: string | null) => {
@@ -221,8 +236,7 @@ export function useChatStreaming({
                 id: event.final.messageId,
                 content: event.final.content,
                 isOptimistic: false,
-                outcome:
-                  event.final.stopReason === 'failed' ? 'failed' : undefined,
+                outcome: event.final.status === 'failed' ? 'failed' : undefined,
                 ...(event.final.createdAt
                   ? { createdAt: event.final.createdAt }
                   : {}),
@@ -240,6 +254,27 @@ export function useChatStreaming({
               );
               onChunk(event.final.content);
               refreshTitle(chatId);
+            } else if (event.type === 'run_started') {
+              setActiveRun(current =>
+                current ? { ...current, runId: event.runId, status: 'running' } : current
+              );
+            } else if (event.type === 'state') {
+              const activeStatus = event.status;
+              if (activeStatus === 'running' || activeStatus === 'waiting_input' || activeStatus === 'waiting_confirmation') {
+                setActiveRun(current => current ? {
+                  ...current,
+                  runId: event.runId,
+                  status: activeStatus,
+                  progress: event.activity
+                    ? appendRuntimeProgress(current.progress, event.activity)
+                    : current.progress,
+                } : current);
+              } else {
+                setActiveRun(null);
+              }
+            } else if (event.type === 'cancelled') {
+              updateMessage(chatId, currentAssistantId, { outcome: 'cancelled' });
+              await loadMessages(chatId);
             } else if (event.type === 'user_message' && userId) {
               updateMessage(chatId, userId, {
                 id: event.messageId,
@@ -251,15 +286,15 @@ export function useChatStreaming({
                   ? { ...current, userMessageId: event.messageId }
                   : current
               );
-            } else if (event.type === 'status') {
+            } else if (event.type === 'stage') {
               setActiveRun(current =>
                 current
                   ? {
                       ...current,
-                      runId: event.progress.runId || current.runId,
+                      runId: event.activity.runId || current.runId,
                       progress: appendRuntimeProgress(
                         current.progress,
-                        event.progress
+                        event.activity
                       ),
                     }
                   : current
@@ -315,7 +350,10 @@ export function useChatStreaming({
         return true;
       } catch (error: unknown) {
         if (controllerRef.current !== controller) return false;
-        if (previousRun !== undefined && !hasOpenedStream) {
+        if (error instanceof ChatStreamFailure) {
+          clearPendingState();
+          await loadMessages(chatId);
+        } else if (previousRun !== undefined && !hasOpenedStream) {
           // A rejected continuation leaves the existing pause available to retry.
           setActiveRun(previousRun);
           if (!previousRun) removeEmptyAssistant(chatId, assistantId);
@@ -346,6 +384,7 @@ export function useChatStreaming({
     },
     [
       clearPendingState,
+      loadMessages,
       receiveStream,
       removeEmptyAssistant,
       setActiveRun,
@@ -396,13 +435,15 @@ export function useChatStreaming({
           isOptimistic: true,
         },
       ]);
+      const idempotencyKey = createIdempotencyKey();
+      const runId = createRuntimeRunId();
       setActiveRun({
+        runId,
         userMessageId: userId,
         assistantMessageId: assistantId,
         progress: [],
         status: 'running',
       });
-      const idempotencyKey = createIdempotencyKey();
       return executeStream(
         chatId,
         assistantId,
@@ -412,6 +453,7 @@ export function useChatStreaming({
           fetchStreamWithAuth(`/chats/${chatId}/messages`, {
             signal: controller.signal,
             idempotencyKey,
+            runId,
             body: {
               content: message,
               artifact_ids: artifactIds ?? [],
@@ -470,7 +512,7 @@ export function useChatStreaming({
       setActiveRun({
         userMessageId: activeRun?.userMessageId || '',
         assistantMessageId: assistantId,
-        runId,
+        runId: undefined,
         progress: activeRun?.progress || [],
         status: 'running',
       });
@@ -515,5 +557,58 @@ export function useChatStreaming({
     ]
   );
 
-  return { abortStream, setCurrentChat, sendMessageStream, resumeStream };
+  const attachRun = useCallback(
+    async (
+      chatId: string,
+      runId: string,
+      userMessageId: string | null,
+      activity?: ChatRuntimeProgressSnapshot | null
+    ) => {
+      if (controllerRef.current) abortStream();
+      currentChatRef.current = chatId;
+      const controller = new AbortController();
+      controllerRef.current = controller;
+      const assistantId = `temp-assistant-${runId}`;
+      streamTargetRef.current = { chatId, assistantId };
+      addMessages(chatId, [
+        {
+          id: assistantId,
+          role: 'assistant',
+          content: '',
+          createdAt: new Date().toISOString(),
+          isOptimistic: true,
+        },
+      ]);
+      setActiveRun({
+        userMessageId: userMessageId || '',
+        assistantMessageId: assistantId,
+        runId,
+        progress: activity
+          ? [{ ...activity, outcome: activity.outcome || undefined,
+              id: createIdempotencyKey(), createdAt: new Date().toISOString() }]
+          : [],
+        status: 'running',
+      });
+      setIsStreaming(true);
+      return executeStream(
+        chatId,
+        assistantId,
+        null,
+        controller,
+        () => attachChatRun(chatId, runId, controller.signal),
+        () => {},
+        () => {},
+      );
+    },
+    [abortStream, addMessages, executeStream, setActiveRun, setIsStreaming]
+  );
+
+  const stopRun = useCallback(
+    async (chatId: string, runId: string) => {
+      await stopChatRun(chatId, runId);
+    },
+    []
+  );
+
+  return { abortStream, setCurrentChat, sendMessageStream, resumeStream, attachRun, stopRun };
 }

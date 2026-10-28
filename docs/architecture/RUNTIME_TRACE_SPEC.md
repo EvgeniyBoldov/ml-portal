@@ -209,10 +209,10 @@ hidden chain-of-thought.
 
 `RuntimeProgressStreamer` is attached to `RuntimeEventLogger`; it is not a
 second event system or writer. From every admitted semantic event it may make a
-small redacted progress projection with `run_id`, phase, kind, description and
-status. The description uses a bounded planner/agent intent when present and a
-mechanical fallback otherwise; prompts, reasoning, tool arguments and tool
-results are forbidden.
+small redacted progress projection. Chat adds a stable `chat_stage`, action
+kind, safe bounded description and optional activity outcome to the existing
+shared runtime-tail envelope. The chat description uses fixed safe text;
+prompts, planner text, reasoning, tool arguments and tool results are forbidden.
 
 `RuntimeLogContext` separates `stream_logs` from `stream_progress`:
 
@@ -222,10 +222,12 @@ results are forbidden.
   `error` exposes errors, `brief` lifecycle/intents, and `full` also exposes
   LLM/tool progress.
 
-The shared Redis runtime-tail channel carries `runtime_progress` messages.
-`ChatStreamService` subscribes before a pipeline starts and maps only these
-messages to typed `status/runtime_progress` SSE. It does not replay progress
-after reconnect and does not expose raw tail messages to chat.
+The shared Redis runtime-tail channel keeps its `runtime_progress` envelope for
+sandbox compatibility. `ChatStreamService` subscribes before a pipeline starts
+and maps only safe activity to typed `stage` SSE. Chat stage keys are `preparing`,
+`planning`, `executing`, `synthesizing`, and `finalizing`; an activity outcome
+is not the chat lifecycle status. Chat does not replay progress after reconnect
+and does not expose raw tail messages to chat.
 
 ## Public API transport
 
@@ -245,10 +247,32 @@ writeback is dispatched after finalization and continues independently in the
 same journal; its later facts/summary events are obtained by refreshing the
 run detail, not by holding the answer stream open for `tail_finished`.
 
-Chat SSE is limited to `user_message`, `chat_title`, `status` (only
-`runtime_progress`), `delta`, `pause`, `final`, `cached`, `error`, and `done`.
+Chat SSE separates lifecycle (`state`, `run_started`, `pause`, `final`,
+`cancelled`, `error`) from stage activity (`stage`) and answer rendering
+(`user_message`, `delta`, `cached`). `done` closes the transport and is not a
+lifecycle status. A reattached observer receives `state`, not a second
+`run_started`.
 `pause` is the sole HITL transport frame and carries
 `run_id`, `reason`, `action`, `context`, and `contract_version`.
+
+Chat execution is owned by an in-process `ChatRuntimeRunner` with a fresh DB
+session; the POST/resume SSE response only observes the run through a per-run
+Redis tail channel. Closing the SSE subscriber, including during chat
+navigation, does not cancel the `ChatTurn`. Explicit Stop calls
+`POST /chats/{chat_id}/runs/{run_id}/cancel`, which publishes a run-control
+signal; the runner cancels the execution generator and the turn lifecycle writes
+`cancelled`. Canonical persisted `ChatTurn.status` values are `running`,
+`waiting_input`, `waiting_confirmation`, `completed`, `failed`, and `cancelled`;
+legacy aliases are normalized by migration `0206` and remain readable by the
+new service during rollout. See [Chat Turn Lifecycle](CHAT_TURN_LIFECYCLE.md).
+
+`GET /chats/{chat_id}/active-run` provides the persisted active run identity,
+canonical lifecycle status and latest safe stage snapshot,
+and `GET /chats/{chat_id}/runs/{run_id}/events` attaches a new SSE observer.
+The Redis tail is pub/sub and does not replay deltas emitted before attachment;
+the final frame remains authoritative for complete answer content. The current
+runner is process-local, not a durable worker: API process loss can interrupt
+execution. Celery ownership and durable event replay remain future work.
 
 The terminal `final` frame may carry deduplicated generated-file `attachments`.
 Each attachment contains `artifact_id`, `file_name`, `download_url`,

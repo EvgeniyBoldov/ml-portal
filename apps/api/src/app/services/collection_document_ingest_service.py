@@ -107,7 +107,7 @@ class CollectionDocumentUploadService:
                 select(Collection).where(
                     Collection.id == collection_id,
                     Collection.tenant_id == self._tenant_id,
-                ).with_for_update().execution_options(populate_existing=True)
+                ).with_for_update(of=Collection).execution_options(populate_existing=True)
             )
             if not collection or not collection.is_active or collection.lifecycle_status == "deprecated":
                 raise CollectionNotFoundError(f"Collection {collection_id} is inactive or unavailable")

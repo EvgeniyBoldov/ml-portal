@@ -20,6 +20,10 @@ def _control_channel(run_id: str) -> str:
     return f"runtime:control:{run_id}"
 
 
+def _control_cancel_key(run_id: str) -> str:
+    return f"runtime:control:{run_id}:cancel"
+
+
 class RuntimeTailEventBus:
     """Redis pub/sub bridge for async runtime tail events."""
 
@@ -89,12 +93,20 @@ class RuntimeTailSubscriber:
 
 
 class RuntimeRunControlBus:
-    """Best-effort cross-process control signals for a live runtime run."""
+    """Cross-process control signals for a live runtime run.
 
-    async def publish_cancel(self, run_id: str) -> None:
+    Persisted cancel markers are opt-in because some runtimes reuse run ids
+    across local cancel/resume flows and rely on pub/sub only.
+    """
+
+    async def publish_cancel(self, run_id: str, *, persist_marker: bool = False) -> None:
         settings = get_settings()
         redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         try:
+            # The marker covers subscribe/start races for owners that opt in.
+            # Legacy runtime control remains pub/sub-only by default.
+            if persist_marker:
+                await redis_client.set(_control_cancel_key(run_id), "cancel", ex=60 * 60)
             await redis_client.publish(_control_channel(run_id), "cancel")
         finally:
             await redis_client.aclose()
@@ -103,8 +115,9 @@ class RuntimeRunControlBus:
 class RuntimeRunControlSubscriber:
     """Wait for a cancellation signal without coupling execution to an SSE client."""
 
-    def __init__(self, *, run_id: str) -> None:
+    def __init__(self, *, run_id: str, persist_cancel_marker: bool = False) -> None:
         self._run_id = run_id
+        self._persist_cancel_marker = persist_cancel_marker
         self._redis = None
         self._pubsub = None
 
@@ -118,6 +131,9 @@ class RuntimeRunControlSubscriber:
         if self._pubsub is None:
             await self.subscribe()
         assert self._pubsub is not None
+        assert self._redis is not None
+        if self._persist_cancel_marker and await self._redis.get(_control_cancel_key(self._run_id)) == "cancel":
+            return
         async for message in self._pubsub.listen():
             if message.get("type") != "message":
                 continue
@@ -130,5 +146,7 @@ class RuntimeRunControlSubscriber:
             await self._pubsub.close()
             self._pubsub = None
         if self._redis is not None:
+            if self._persist_cancel_marker:
+                await self._redis.delete(_control_cancel_key(self._run_id))
             await self._redis.aclose()
             self._redis = None

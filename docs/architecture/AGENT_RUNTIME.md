@@ -6,6 +6,17 @@ Runtime построен как многослойный execution pipeline:
 
 `ChatStreamService -> ChatTurnOrchestrator -> RuntimePipeline -> RootRoutePolicy -> mechanical lookup -> TurnPreflight -> GraphPlanner | Synthesizer`
 
+Chat execution is owned by `ChatRuntimeRunner`, not by an SSE response. The
+chat SSE endpoints observe per-run Redis events; disconnecting or switching
+chats closes only that observer. The explicit Stop endpoint publishes a
+run-control signal and cancels the execution generator. Existing persisted
+`ChatTurn` statuses remain the lifecycle source of truth and are not inferred
+from progress events. Its canonical lifecycle values are `running`,
+`waiting_input`, `waiting_confirmation`, `completed`, `failed`, and `cancelled`;
+execution stages and action descriptions travel separately. This API-process
+runner is not durable across process loss and does not replay already-published
+deltas when a client reattaches.
+
 При `GraphPlanner` ветка продолжается через
 `SqlPlanStore -> GraphOrchestrator -> AgentExecutor -> DirectOperationExecutor`
 и завершается Synthesizer. Полное решение зафиксировано в
@@ -426,8 +437,10 @@ explicit task/attempt references to the corresponding executor run.
 The logger is also the only admission point for user-safe execution progress.
 `RuntimeProgressStreamer` projects a bounded intent/fallback description from
 the same canonical event and publishes it through the runtime tail channel.
-Chat consumes only `runtime_progress` projections; deltas remain a separate
-answer-content stream. `stream_logs` and `stream_progress` are independent:
+Chat consumes only safe stage/activity projections; deltas remain a separate
+answer-content stream. Lifecycle state is persisted in `ChatTurn.status` and is
+not inferred from a stage or activity outcome. `stream_logs` and
+`stream_progress` are independent:
 chat root uses `none/false/true`, sandbox uses `full/true/true`, and agent
 scopes decide detail from their own logging level.
 ```

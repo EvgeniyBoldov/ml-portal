@@ -1,6 +1,6 @@
 import { consumeSse } from '@/shared/api/sse';
 import { idempotencyKey } from '@/shared/lib/idempotency';
-import type { ChatRuntimeProgress } from './types';
+import type { ChatLifecycleStatus, ChatRuntimeProgress } from './types';
 
 export interface ChatStreamPause {
   runId: string;
@@ -18,13 +18,24 @@ export interface ChatStreamFinal {
   sources: unknown;
   attachments: unknown;
   stopReason?: string;
+  status: ChatLifecycleStatus;
 }
 
 export type ChatStreamEvent =
+  | { type: 'run_started'; runId: string; status: ChatLifecycleStatus }
+  | {
+      type: 'state';
+      runId: string;
+      status: ChatLifecycleStatus;
+      stage?: ChatRuntimeProgress['stage'];
+      activity?: ChatRuntimeProgress;
+      pauseReason?: string;
+    }
+  | { type: 'cancelled'; runId: string }
   | { type: 'user_message'; messageId: string; createdAt?: string }
   | { type: 'delta'; content: string }
   | { type: 'final'; final: ChatStreamFinal }
-  | { type: 'status'; progress: ChatRuntimeProgress }
+  | { type: 'stage'; activity: ChatRuntimeProgress }
   | { type: 'pause'; pause: ChatStreamPause }
   | { type: 'cached' };
 
@@ -34,6 +45,13 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
+const lifecycleStatuses = new Set<ChatLifecycleStatus>([
+  'running', 'waiting_input', 'waiting_confirmation', 'completed', 'failed', 'cancelled',
+]);
+const executionStages = new Set<ChatRuntimeProgress['stage']>([
+  'preparing', 'planning', 'executing', 'synthesizing', 'finalizing',
+]);
+
 function progressFrom(value: unknown): ChatRuntimeProgress | null {
   const raw = record(value);
   const description =
@@ -42,10 +60,12 @@ function progressFrom(value: unknown): ChatRuntimeProgress | null {
   return {
     id: idempotencyKey(),
     runId: typeof raw.run_id === 'string' ? raw.run_id : '',
-    phase: typeof raw.phase === 'string' ? raw.phase : '',
-    kind: typeof raw.kind === 'string' ? raw.kind : '',
+    stage: executionStages.has(raw.stage as ChatRuntimeProgress['stage'])
+      ? (raw.stage as ChatRuntimeProgress['stage'])
+      : 'preparing',
+    action: typeof raw.action === 'string' ? raw.action : 'runtime_activity',
     description,
-    status: typeof raw.status === 'string' ? raw.status : undefined,
+    outcome: typeof raw.outcome === 'string' ? raw.outcome : undefined,
     createdAt: new Date().toISOString(),
   };
 }
@@ -57,8 +77,8 @@ export function appendRuntimeProgress(
   const last = current.at(-1);
   if (
     last?.description === progress.description &&
-    last.kind === progress.kind &&
-    last.phase === progress.phase &&
+    last.action === progress.action &&
+    last.stage === progress.stage &&
     last.runId === progress.runId
   ) {
     // A repeated title can carry a new explicit outcome. Do not drop it.
@@ -74,7 +94,7 @@ export async function consumeChatStream(
   { allowDoneOnly = false }: { allowDoneOnly?: boolean } = {}
 ) {
   let content = '';
-  let terminal: 'final' | 'pause' | 'cached' | null = null;
+  let terminal: 'final' | 'pause' | 'cached' | 'cancelled' | null = null;
   let hasReceivedDone = false;
   await consumeSse(response, async ({ event, data }) => {
     if (event === 'done' || data === '[DONE]') {
@@ -87,7 +107,7 @@ export async function consumeChatStream(
       return;
     }
     if (
-      !['user_message', 'status', 'final', 'pause', 'cached', 'error'].includes(
+      !['state', 'stage', 'status', 'run_started', 'cancelled', 'user_message', 'final', 'pause', 'cached', 'error'].includes(
         event
       )
     )
@@ -96,10 +116,55 @@ export async function consumeChatStream(
     try {
       payload = record(JSON.parse(data));
     } catch {
+      // Older workers sometimes emitted malformed generic status frames.
+      // Ignore those during rolling upgrades; the typed contract events remain strict.
       if (event === 'status') return;
       throw new Error(`Некорректное событие чата: ${event}`);
     }
-    if (event === 'user_message') {
+    if (event === 'state') {
+      if (typeof payload.run_id === 'string' && lifecycleStatuses.has(payload.status as ChatLifecycleStatus)) {
+        const activity = progressFrom(payload.activity);
+        await onEvent({
+          type: 'state',
+          runId: payload.run_id,
+          status: payload.status as ChatLifecycleStatus,
+          stage: executionStages.has(payload.stage as ChatRuntimeProgress['stage'])
+            ? payload.stage as ChatRuntimeProgress['stage']
+            : activity?.stage,
+          activity: activity || undefined,
+          pauseReason: typeof payload.pause_reason === 'string' ? payload.pause_reason : undefined,
+        });
+      }
+    } else if (event === 'stage') {
+      const activity = progressFrom(payload.activity);
+      if (activity) await onEvent({ type: 'stage', activity });
+    } else if (event === 'status') {
+      // Compatibility with older API workers during rolling deployment.
+      if (payload.stage === 'runtime_progress') {
+        const old = record(payload.progress);
+        const activity = progressFrom({
+          run_id: old.run_id,
+          stage: old.phase === 'planner' || old.phase === 'preflight' ? 'planning'
+            : old.phase === 'agent' || old.phase === 'execution' ? 'executing'
+              : old.phase === 'synthesis' ? 'synthesizing' : 'preparing',
+          action: old.kind,
+          description: old.description,
+          outcome: old.status,
+        });
+        if (activity) await onEvent({ type: 'stage', activity });
+      }
+    } else if (event === 'run_started') {
+      if (typeof payload.run_id === 'string' && lifecycleStatuses.has((payload.status || 'running') as ChatLifecycleStatus))
+        await onEvent({
+          type: 'run_started', runId: payload.run_id,
+          status: (payload.status || 'running') as ChatLifecycleStatus,
+        });
+    } else if (event === 'cancelled') {
+      if (typeof payload.run_id === 'string') {
+        terminal = 'cancelled';
+        await onEvent({ type: 'cancelled', runId: payload.run_id });
+      }
+    } else if (event === 'user_message') {
       if (typeof payload.message_id !== 'string')
         throw new Error('В событии отсутствует ID сообщения');
       await onEvent({
@@ -110,10 +175,6 @@ export async function consumeChatStream(
             ? payload.created_at
             : undefined,
       });
-    } else if (event === 'status') {
-      if (payload.stage !== 'runtime_progress') return;
-      const progress = progressFrom(payload.progress);
-      if (progress) await onEvent({ type: 'status', progress });
     } else if (event === 'final') {
       if (typeof payload.message_id !== 'string')
         throw new Error('В ответе отсутствует ID сообщения');
@@ -134,6 +195,9 @@ export async function consumeChatStream(
             typeof payload.stop_reason === 'string'
               ? payload.stop_reason
               : undefined,
+          status: lifecycleStatuses.has(payload.status as ChatLifecycleStatus)
+            ? payload.status as ChatLifecycleStatus
+            : (payload.stop_reason === 'failed' ? 'failed' : 'completed'),
         },
       });
     } else if (event === 'pause') {
@@ -168,10 +232,11 @@ export async function consumeChatStream(
     } else if (event === 'error') {
       const message =
         typeof payload.error === 'string' ? payload.error : 'Ошибка выполнения';
-      throw new Error(
+      throw new ChatStreamFailure(
         typeof payload.code === 'string' && payload.code
           ? `${payload.code}: ${message}`
-          : message
+          : message,
+        typeof payload.code === 'string' ? payload.code : undefined,
       );
     }
     if (terminal) return false;
@@ -182,4 +247,11 @@ export async function consumeChatStream(
     );
   }
   return terminal;
+}
+
+export class ChatStreamFailure extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+    this.name = 'ChatStreamFailure';
+  }
 }

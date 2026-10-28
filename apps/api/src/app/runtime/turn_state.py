@@ -53,7 +53,11 @@ class RuntimeTurnState(BaseModel):
     used_tool_calls: int = 0
     task_tool_calls: Dict[str, int] = Field(default_factory=dict)
 
-    status: str = "running"
+    # This is a lifecycle projection, not an execution stage or progress event.
+    status: Literal[
+        "running", "waiting_input", "waiting_confirmation",
+        "completed", "failed", "cancelled",
+    ] = "running"
     final_answer: Optional[str] = None
     final_error: Optional[str] = None
     deleted_artifact_ids: List[str] = Field(default_factory=list)
@@ -137,6 +141,15 @@ class RuntimeTurnState(BaseModel):
         self.runtime_facts.append(RuntimeFact(text=text, source=source))
         if len(self.runtime_facts) > MAX_RUNTIME_FACTS:
             self.runtime_facts = self.runtime_facts[-MAX_RUNTIME_FACTS:]
+
+    def set_lifecycle_status(self, status: str) -> None:
+        allowed = {
+            "running", "waiting_input", "waiting_confirmation",
+            "completed", "failed", "cancelled",
+        }
+        if status not in allowed:
+            raise ValueError(f"Invalid runtime turn lifecycle status: {status}")
+        self.status = status  # type: ignore[assignment]
 
     def add_task_result(self, result: Dict[str, Any]) -> None:
         self.task_results.append(dict(result or {}))

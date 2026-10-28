@@ -48,6 +48,14 @@ stale answers and repeated deliveries cannot consume a different question.
 Legacy `input`/`confirm` requests are transport adapters for existing clients;
 new clients send `answer` with a typed `response`.
 
+The Stop button for a currently running chat turn is a separate control request
+to `/chats/{chat_id}/runs/{run_id}/cancel`. Closing or detaching its SSE observer
+does not cancel the run. The existing `cancel` action on a paused interaction
+continues to cancel that paused checkpoint. Persisted chat lifecycle uses the
+canonical statuses `running`, `waiting_input`, `waiting_confirmation`,
+`completed`, `failed`, and `cancelled`. Runtime stages and action descriptions
+are separate transport activity; see [Chat Turn Lifecycle](CHAT_TURN_LIFECYCLE.md).
+
 ## Continuation ownership
 
 | Source | Stored checkpoint | Continuation |

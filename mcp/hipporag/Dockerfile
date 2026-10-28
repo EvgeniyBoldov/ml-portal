@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 ARG BASE_IMAGE=ml-portal-base-ml:latest
 FROM ${BASE_IMAGE}
 USER root
@@ -5,9 +6,11 @@ WORKDIR /worker
 RUN python -m venv --system-site-packages /opt/hippo
 ENV PATH=/opt/hippo/bin:$PATH PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 COPY mcp/hipporag/requirements.txt /worker/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 ARG HIPPO_REVISION=d5c8329422e0a0b834a15874545cb6a74b4f9b26
-RUN pip install --no-cache-dir --no-deps https://github.com/OSU-NLP-Group/HippoRAG/archive/${HIPPO_REVISION}.zip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-deps https://github.com/OSU-NLP-Group/HippoRAG/archive/${HIPPO_REVISION}.zip
 ENV HF_HOME=/tmp/huggingface
 COPY mcp/hipporag/server.py /worker/server.py
 COPY mcp/hipporag/common.py /worker/common.py

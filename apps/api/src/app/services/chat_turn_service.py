@@ -5,16 +5,23 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.chat_turn import ChatTurn
 from app.models.chat import Chats
+from app.core.chat_lifecycle import (
+    ACTIVE_STATUSES,
+    ChatTurnStatus,
+    WAITING_STATUSES,
+    waiting_status_for_pause,
+)
 
 logger = get_logger(__name__)
 CHAT_TURN_LEASE_SECONDS = 15 * 60
+CHAT_TURN_HEARTBEAT_SECONDS = 30
 
 
 class ChatTurnIdempotencyError(RuntimeError):
@@ -72,18 +79,18 @@ class ChatTurnService:
                 stale_cutoff = datetime.fromtimestamp(stale_before, timezone.utc)
                 stale_turns = await self.session.execute(select(ChatTurn).where(
                     ChatTurn.chat_id == uuid.UUID(str(chat_id)),
-                    ChatTurn.status.in_(("started", "resumed")),
-                    ChatTurn.started_at < stale_cutoff,
+                    ChatTurn.status.in_(ACTIVE_STATUSES),
+                    func.coalesce(ChatTurn.heartbeat_at, ChatTurn.started_at) < stale_cutoff,
                 ).with_for_update())
                 for stale_turn in stale_turns.scalars().all():
-                    stale_turn.status = "failed"
+                    stale_turn.status = ChatTurnStatus.FAILED.value
                     stale_turn.error_message = "runtime_lease_expired"
                     stale_turn.completed_at = datetime.now(timezone.utc)
                 active = await self.session.execute(select(ChatTurn.id).where(
                     ChatTurn.chat_id == uuid.UUID(str(chat_id)),
-                    or_(ChatTurn.status == "paused", and_(
-                        ChatTurn.status.in_(("started", "resumed")),
-                        ChatTurn.started_at >= stale_cutoff,
+                    or_(ChatTurn.status.in_(WAITING_STATUSES), and_(
+                        ChatTurn.status.in_(ACTIVE_STATUSES),
+                        func.coalesce(ChatTurn.heartbeat_at, ChatTurn.started_at) >= stale_cutoff,
                     )),
                 ).limit(1))
                 if active.scalar_one_or_none() is not None:
@@ -94,7 +101,8 @@ class ChatTurnService:
             idempotency_key=idempotency_key,
             request_hash=request_hash,
             runtime_run_id=uuid.UUID(str(runtime_run_id)) if runtime_run_id else None,
-            status="started",
+            status=ChatTurnStatus.RUNNING.value,
+            heartbeat_at=datetime.now(timezone.utc),
         )
         self.session.add(turn)
         try:
@@ -143,7 +151,7 @@ class ChatTurnService:
             return None
         if runtime_run_id:
             turn.runtime_run_id = uuid.UUID(str(runtime_run_id))
-        turn.status = "paused"
+        turn.status = waiting_status_for_pause(pause_status)
         turn.pause_status = pause_status
         turn.paused_action = paused_action
         turn.paused_context = paused_context
@@ -155,15 +163,26 @@ class ChatTurnService:
         turn = await self.get_by_id(turn_id)
         if not turn:
             return None
-        if turn.status == "paused":
-            turn.status = "resumed"
+        if turn.status in WAITING_STATUSES:
+            turn.status = ChatTurnStatus.RUNNING.value
             turn.started_at = datetime.now(timezone.utc)
+            turn.heartbeat_at = turn.started_at
             turn.pause_status = None
             turn.paused_at = None
-        elif turn.status != "resumed":
+        elif turn.status not in ACTIVE_STATUSES:
             return None
         await self.session.flush()
         return turn
+
+    async def heartbeat_turn(self, runtime_run_id: str | uuid.UUID) -> Optional[bool]:
+        turn = await self.get_by_runtime_run_id(runtime_run_id)
+        if turn is None:
+            return None
+        if turn.status not in ACTIVE_STATUSES:
+            return False
+        turn.heartbeat_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return True
 
     async def cancel_turn(
         self,
@@ -174,7 +193,11 @@ class ChatTurnService:
         turn = await self.get_by_id(turn_id)
         if not turn:
             return None
-        turn.status = "cancelled"
+        turn.status = ChatTurnStatus.CANCELLED.value
+        turn.pause_status = None
+        turn.paused_action = None
+        turn.paused_context = None
+        turn.paused_at = None
         turn.error_message = error_message
         turn.completed_at = datetime.now(timezone.utc)
         await self.session.flush()
@@ -191,7 +214,7 @@ class ChatTurnService:
             return None
         if assistant_message_id:
             turn.assistant_message_id = uuid.UUID(str(assistant_message_id))
-        turn.status = "completed"
+        turn.status = ChatTurnStatus.COMPLETED.value
         turn.pause_status = None
         turn.paused_action = None
         turn.paused_context = None
@@ -209,7 +232,7 @@ class ChatTurnService:
         turn = await self.get_by_id(turn_id)
         if not turn:
             return None
-        turn.status = "failed"
+        turn.status = ChatTurnStatus.FAILED.value
         turn.pause_status = None
         turn.paused_action = None
         turn.paused_context = None
@@ -263,7 +286,7 @@ class ChatTurnService:
             user_id=user_id,
             idempotency_key=idempotency_key,
         )
-        return bool(turn and turn.status == "started")
+        return bool(turn and turn.status in ACTIVE_STATUSES)
 
     async def has_payload_mismatch(
         self,

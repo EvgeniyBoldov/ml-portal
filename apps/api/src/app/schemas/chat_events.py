@@ -6,10 +6,17 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from app.core.chat_lifecycle import ChatExecutionStage, ChatTurnStatus
+
+ChatLifecycleState = ChatTurnStatus
+
 
 class ChatSSEEventType(str, Enum):
+    STATE = "state"
+    STAGE = "stage"
+    RUN_STARTED = "run_started"
+    CANCELLED = "cancelled"  # compatibility terminal signal; state is authoritative
     USER_MESSAGE = "user_message"
-    STATUS = "status"
     DELTA = "delta"
     PAUSE = "pause"
     FINAL = "final"
@@ -22,19 +29,49 @@ class UserMessagePayload(BaseModel):
     created_at: Optional[str] = None
 
 
+class RunStartedPayload(BaseModel):
+    run_id: str
+    status: ChatLifecycleState = ChatLifecycleState.RUNNING
+
+
+class CancelledPayload(BaseModel):
+    run_id: str
+
+
 class RuntimeProgressPayload(BaseModel):
-    """Bounded, redacted projection from ``RuntimeProgressStreamer``."""
+    """A safe runtime activity under a normalized chat execution stage."""
 
     run_id: str
-    phase: str
-    kind: str
+    stage: ChatExecutionStage
+    action: str
     description: str
-    status: Optional[str] = None
+    outcome: Optional[str] = None
 
 
-class StatusPayload(BaseModel):
-    stage: str = "runtime_progress"
-    progress: RuntimeProgressPayload
+class ChatStatePayload(BaseModel):
+    run_id: str
+    status: ChatLifecycleState
+    stage: Optional[ChatExecutionStage] = None
+    activity: Optional[RuntimeProgressPayload] = None
+    pause_reason: Optional[str] = None
+    user_message_id: Optional[str] = None
+
+
+class ActiveChatRunSnapshot(BaseModel):
+    run_id: str
+    turn_id: str
+    status: ChatLifecycleState
+    user_message_id: Optional[str] = None
+    stage: Optional[ChatExecutionStage] = None
+    activity: Optional[RuntimeProgressPayload] = None
+
+
+class ActiveChatRunResponse(BaseModel):
+    run: Optional[ActiveChatRunSnapshot] = None
+
+
+class StagePayload(BaseModel):
+    activity: RuntimeProgressPayload
 
 
 class DeltaPayload(BaseModel):
@@ -43,6 +80,7 @@ class DeltaPayload(BaseModel):
 
 class PausePayload(BaseModel):
     run_id: str
+    status: ChatLifecycleState
     reason: str
     action: dict[str, Any] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
@@ -59,6 +97,7 @@ class FinalPayload(BaseModel):
     sources: list[dict[str, Any]] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     stop_reason: Optional[str] = None
+    status: ChatLifecycleState = ChatLifecycleState.COMPLETED
 
 
 class CachedPayload(BaseModel):
@@ -70,6 +109,7 @@ class ErrorPayload(BaseModel):
     error: str
     code: Optional[str] = None
     recoverable: Optional[bool] = None
+    status: ChatLifecycleState = ChatLifecycleState.FAILED
 
 
 def format_chat_sse(event_type: ChatSSEEventType, payload: BaseModel) -> str:

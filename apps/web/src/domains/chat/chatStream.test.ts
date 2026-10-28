@@ -21,6 +21,37 @@ function frame(event: string, data: unknown) {
 }
 
 describe('consumeChatStream', () => {
+  it('treats reattach state as a snapshot, not a second run_started event', async () => {
+    const events: ChatStreamEvent[] = [];
+    await consumeChatStream(
+      response(
+        frame('state', {
+          run_id: 'run', status: 'running', stage: 'executing',
+          activity: { run_id: 'run', stage: 'executing', action: 'tool_call', description: 'Выполняю инструмент' },
+        }) + frame('final', { message_id: 'answer', content: 'Готово', status: 'completed' })
+      ),
+      event => { events.push(event); }
+    );
+    expect(events[0]).toMatchObject({
+      type: 'state', runId: 'run', status: 'running', stage: 'executing',
+      activity: { action: 'tool_call', description: 'Выполняю инструмент' },
+    });
+    expect(events.some(event => event.type === 'run_started')).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: 'final', final: { status: 'completed' } });
+  });
+
+  it('parses normalized stage activity separately from lifecycle state', async () => {
+    const events: ChatStreamEvent[] = [];
+    await consumeChatStream(
+      response(frame('stage', { activity: {
+        run_id: 'run', stage: 'planning', action: 'planner_iteration_start',
+        description: 'Формирую план выполнения', outcome: null,
+      } }) + frame('final', { message_id: 'id', content: 'done' })),
+      event => { events.push(event); }
+    );
+    expect(events[0]).toMatchObject({ type: 'stage', activity: { stage: 'planning', action: 'planner_iteration_start' } });
+  });
+
   it('accumulates deltas and uses authoritative final content and metadata', async () => {
     const events: ChatStreamEvent[] = [];
     const terminal = await consumeChatStream(
@@ -146,8 +177,8 @@ describe('appendRuntimeProgress', () => {
     const stage: ChatRuntimeProgress = {
       id: 'first',
       runId: 'run',
-      phase: 'execution',
-      kind: 'task_completed',
+      stage: 'executing',
+      action: 'task_completed',
       description: 'Поиск',
       createdAt: 'now',
     };
@@ -155,9 +186,9 @@ describe('appendRuntimeProgress', () => {
       appendRuntimeProgress([stage], {
         ...stage,
         id: 'next',
-        status: 'completed',
+        outcome: 'completed',
       })
-    ).toEqual([{ ...stage, status: 'completed' }]);
+    ).toEqual([{ ...stage, outcome: 'completed' }]);
   });
 });
 

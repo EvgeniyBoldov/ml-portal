@@ -51,11 +51,14 @@ class ChatTurnOrchestrator:
         preloaded_context: Optional[list[dict[str, Any]]] = None,
         preloaded_context_snapshot: Optional[ChatContextSnapshot] = None,
         resumed_turn_id: Optional[str] = None,
+        requested_runtime_run_id: Optional[str] = None,
+        cancellation_reason: str = "Client disconnected",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         turn = ChatTurnState(chat_id=chat_id, request_id=idempotency_key)
         continuation_run_id = (continuation_meta or {}).get("resumed_from_run_id")
         try:
-            runtime_run_id = str(uuid.UUID(str(continuation_run_id))) if continuation_run_id else str(uuid.uuid4())
+            supplied_run_id = requested_runtime_run_id or continuation_run_id
+            runtime_run_id = str(uuid.UUID(str(supplied_run_id))) if supplied_run_id else str(uuid.uuid4())
         except (TypeError, ValueError):
             runtime_run_id = str(uuid.uuid4())
         hash_payload = content if not artifact_ids else f"{content}||artifacts:{','.join(sorted(artifact_ids))}"
@@ -78,7 +81,10 @@ class ChatTurnOrchestrator:
         user_message_id: Optional[str] = None
         try:
             if persist_user_message:
-                yield {"type": "status", "stage": "saving_user_message"}
+                yield {"type": "stage", "activity": {
+                    "run_id": runtime_run_id, "stage": "preparing",
+                    "action": "saving_user_message", "description": "Сохраняю сообщение",
+                }}
                 user_meta = {"attachments": attachment_meta} if attachment_meta else None
                 user_message = await self.persistence_service.create_user_message(
                     chat_id=chat_id,
@@ -118,7 +124,10 @@ class ChatTurnOrchestrator:
                     await self.turn_service.session.commit()
 
             turn.transition(TurnPhase.CONTEXT_LOADED)
-            yield {"type": "status", "stage": "loading_context"}
+            yield {"type": "stage", "activity": {
+                "run_id": runtime_run_id, "stage": "preparing",
+                "action": "loading_context", "description": "Загружаю контекст",
+            }}
             # RuntimePipeline builds cross-turn memory from the new Fact/Summary
             # stores. Injecting legacy chat summary duplicates context.
             # An explicit empty preloaded value is meaningful for a new chat.
@@ -148,12 +157,18 @@ class ChatTurnOrchestrator:
             )
 
             turn.transition(TurnPhase.EXECUTION_STARTED)
-            yield {"type": "status", "stage": "agent_running"}
+            yield {"type": "stage", "activity": {
+                "run_id": runtime_run_id, "stage": "planning",
+                "action": "routing_request", "description": "Определяю способ выполнения",
+            }}
         except (asyncio.CancelledError, GeneratorExit):
+            turn.force_cancel()
             import anyio
             with anyio.CancelScope(shield=True):
                 await self.turn_service.session.rollback()
-                await self.turn_service.cancel_turn(turn_id, error_message="Client disconnected during chat setup")
+                await self.turn_service.cancel_turn(
+                    turn_id, error_message=f"{cancellation_reason} during chat setup",
+                )
                 await self.turn_service.session.commit()
             raise
         except Exception:
@@ -222,13 +237,13 @@ class ChatTurnOrchestrator:
                         code=str(event_data.get("code") or "runtime_error"),
                         raw_message=str(event_data.get("error") or "Runtime error"),
                     )
-                    terminal_event_emitted = True
 
-                if event_data.get("type") not in ("final_content", "run_paused"):
+                if event_data.get("type") not in ("final_content", "run_paused", "error"):
                     yield event_data
         except (asyncio.CancelledError, GeneratorExit):
-            # Streaming disconnect cancels the ASGI task. Finish the durable
-            # turn under a shield so it does not remain running indefinitely.
+            # The execution owner cancels this generator only after an explicit
+            # Stop. Persist the terminal turn under a shield before unwinding.
+            turn.force_cancel()
             import anyio
             with anyio.CancelScope(shield=True):
                 await self.turn_service.session.rollback()
@@ -238,7 +253,7 @@ class ChatTurnOrchestrator:
                         extra_meta={"runtime_status": "cancelled", "runtime_run_id": last_run_id},
                     )
                     await self.turn_service.attach_assistant_message(turn_id, partial.message_id)
-                await self.turn_service.cancel_turn(turn_id, error_message="Client disconnected")
+                await self.turn_service.cancel_turn(turn_id, error_message=cancellation_reason)
                 await self.turn_service.session.commit()
             raise
         except Exception as runtime_exc:
@@ -254,6 +269,10 @@ class ChatTurnOrchestrator:
         if assistant_content and not llm_error and final_content_received:
             execution_failed = final_stop_reason == "failed"
             try:
+                yield {"type": "stage", "activity": {
+                    "run_id": runtime_run_id, "stage": "finalizing",
+                    "action": "persisting_answer", "description": "Сохраняю ответ",
+                }}
                 assistant_message = await self.persistence_service.create_assistant_message(
                     chat_id=chat_id,
                     content=assistant_content,
@@ -287,10 +306,13 @@ class ChatTurnOrchestrator:
                 # context and assistant message as the immediately following turn.
                 await self.turn_service.session.commit()
             except asyncio.CancelledError:
+                turn.force_cancel()
                 import anyio
                 with anyio.CancelScope(shield=True):
                     await self.turn_service.session.rollback()
-                    await self.turn_service.cancel_turn(turn_id, error_message="Cancelled while saving assistant response")
+                    await self.turn_service.cancel_turn(
+                        turn_id, error_message=f"{cancellation_reason} while saving assistant response",
+                    )
                     await self.turn_service.session.commit()
                 raise
             except Exception:
@@ -322,6 +344,8 @@ class ChatTurnOrchestrator:
                 terminal_state="failed" if execution_failed else "completed",
             )
             turn.transition(TurnPhase.FINAL_PERSISTED)
+            yield {"type": "state", "run_id": runtime_run_id,
+                   "status": "failed" if execution_failed else "completed"}
             yield {
                 "type": "final",
                 "message_id": assistant_message.message_id,
@@ -335,7 +359,6 @@ class ChatTurnOrchestrator:
                 turn.force_error()
             else:
                 turn.transition(TurnPhase.COMPLETED)
-            yield {"type": "status", "stage": "failed" if execution_failed else "completed"}
             terminal_event_emitted = True
         elif not llm_error and not run_paused:
             turn.force_error()
@@ -351,6 +374,7 @@ class ChatTurnOrchestrator:
             )
             await self.turn_service.fail_turn(turn_id, error_message="Empty response from agent")
             await self.turn_service.session.commit()
+            yield {"type": "state", "run_id": runtime_run_id, "status": "failed"}
             yield {"type": "error", "error": "Empty response from agent"}
             terminal_event_emitted = True
         elif run_paused:
@@ -371,6 +395,9 @@ class ChatTurnOrchestrator:
             # frame; a flush alone is rolled back when the streaming request
             # dependency closes its session.
             await self.turn_service.session.commit()
+            yield {"type": "state", "run_id": runtime_run_id,
+                   "status": paused_reason if paused_reason in {"waiting_input", "waiting_confirmation"} else "waiting_input",
+                   "pause_reason": paused_reason or "waiting_input"}
             question = ""
             message = ""
             if isinstance(paused_context, dict):
@@ -400,6 +427,10 @@ class ChatTurnOrchestrator:
             terminal_event_emitted = True
         elif llm_error:
             turn.force_error()
+            yield {"type": "stage", "activity": {
+                "run_id": runtime_run_id, "stage": "finalizing",
+                "action": "persisting_failure", "description": "Сохраняю результат выполнения",
+            }}
             await self.turn_service.fail_turn(turn_id, error_message=llm_error["operator_message"])
             if assistant_content.strip():
                 partial_message = await self.persistence_service.create_assistant_message(
@@ -427,6 +458,7 @@ class ChatTurnOrchestrator:
                 )
                 await self.turn_service.attach_assistant_message(turn_id, failed_message.message_id)
             await self.turn_service.session.commit()
+            yield {"type": "state", "run_id": runtime_run_id, "status": "failed"}
             if not terminal_event_emitted:
                 yield {"type": "error", "error": llm_error["user_message"], "code": llm_error["code"]}
             terminal_event_emitted = True

@@ -5,6 +5,7 @@ type StreamFetchOptions = {
   body: unknown;
   signal?: AbortSignal;
   idempotencyKey?: string;
+  runId?: string;
 };
 
 export async function fetchSseWithAuth(path: string, signal?: AbortSignal): Promise<Response> {
@@ -39,6 +40,7 @@ export async function fetchStreamWithAuth(
     if (options.idempotencyKey) {
       headers['Idempotency-Key'] = options.idempotencyKey;
     }
+    if (options.runId) headers['X-Run-ID'] = options.runId;
     return headers;
   };
 

@@ -1,4 +1,7 @@
 """Messages: list, SSE stream, resume run."""
+import asyncio
+import json
+import time
 import uuid
 from typing import Any, AsyncGenerator, Dict, Optional
 
@@ -17,27 +20,52 @@ from app.api.deps import (
     rate_limit_dependency,
     resolve_chat_context,
 )
+from app.core.db import get_session_factory
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.core.security import UserCtx
 from app.models.chat import Chats
 from app.models.chat_turn import ChatTurn
 from app.repositories.chats_repo import AsyncChatMessagesRepository
-from app.repositories.factory import AsyncRepositoryFactory
-from app.schemas.chat_events import ChatSSEEventType, ErrorPayload, format_chat_sse, format_chat_sse_done
+from app.schemas.chat_events import (
+    ActiveChatRunResponse,
+    ChatSSEEventType,
+    ErrorPayload,
+    format_chat_sse,
+    format_chat_sse_done,
+)
 from app.schemas.chats import ChatContextInspectionResponse, ChatContextResetResponse, ChatMessageStreamRequest, ChatMemoryScopesUpdate
 from app.schemas.confirmations import ConfirmationIssueRequest, ConfirmationIssueResponse
 from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeRequest
 from app.services.chat_router_event_mapper import build_resume_content, map_service_event_to_sse
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
-from app.services.chat_stream_service import ChatStreamService
+from app.services.chat_runtime_runner import (
+    CHAT_RUN_OWNER_TTL_SECONDS,
+    ChatRuntimeCommand,
+    chat_event_stream_key,
+    chat_run_owner_key,
+    read_chat_stage_snapshot,
+    chat_runtime_runner,
+)
+from app.services.runtime_tail_event_bus import RuntimeRunControlBus, RuntimeTailSubscriber
+from app.core.chat_lifecycle import (
+    ACTIVE_STATUSES,
+    WAITING_STATUSES,
+    normalize_chat_turn_status,
+)
 from app.services.chat_context_service import ChatContextService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeCheckpointService
 from app.services.runtime_resume_checkpoint_service import RuntimeResumeValidationError
 from app.agents.runtime.confirmation import get_confirmation_service
+from app.services.chat_status_snapshot import (
+    build_chat_status_snapshot,
+    latest_chat_turns_for_owner,
+)
 
 router = APIRouter()
 logger = get_logger(__name__)
+CHAT_STATUS_POLL_SECONDS = 2.0
+CHAT_STATUS_KEEPALIVE_SECONDS = 15.0
 
 
 @router.get("/{chat_id}/context", response_model=ChatContextInspectionResponse)
@@ -114,7 +142,7 @@ async def get_paused_run(
         .where(
             ChatTurn.chat_id == chat_uuid,
             ChatTurn.user_id == uuid.UUID(str(current_user.id)),
-            ChatTurn.status == "paused",
+            ChatTurn.status.in_(WAITING_STATUSES),
         )
         .order_by(ChatTurn.paused_at.desc(), ChatTurn.started_at.desc())
         .limit(1)
@@ -125,11 +153,214 @@ async def get_paused_run(
 
     paused = RuntimeHitlProtocolService.build_paused_from_stop({
         "run_id": str(turn.runtime_run_id),
-        "reason": str(turn.pause_status or "paused"),
+        "reason": str(turn.pause_status or normalize_chat_turn_status(turn.status)),
         "action": turn.paused_action if isinstance(turn.paused_action, dict) else {},
         "context": turn.paused_context if isinstance(turn.paused_context, dict) else {},
     })
     return {"pause": RuntimeHitlProtocolService.public_pause(paused)}
+
+
+@router.get("/{chat_id}/active-run", response_model=ActiveChatRunResponse)
+async def get_active_chat_run(
+    chat_id: str,
+    chat_ctx: ChatContext = Depends(resolve_chat_context),
+    session: AsyncSession = Depends(db_session),
+    current_user: UserCtx = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+) -> ActiveChatRunResponse:
+    """Return the current persisted run identity without deriving state from SSE."""
+    if str(chat_ctx.chat_id) != str(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    result = await session.execute(
+        select(ChatTurn)
+        .where(
+            ChatTurn.chat_id == uuid.UUID(str(chat_ctx.chat_id)),
+            ChatTurn.user_id == uuid.UUID(str(current_user.id)),
+            ChatTurn.status.in_(ACTIVE_STATUSES),
+        )
+        .order_by(ChatTurn.started_at.desc())
+        .limit(1)
+    )
+    turn = result.scalar_one_or_none()
+    if turn is None or turn.runtime_run_id is None:
+        return ActiveChatRunResponse(run=None)
+    activity = await read_chat_stage_snapshot(redis, str(turn.runtime_run_id))
+    return ActiveChatRunResponse(run={
+        "run_id": str(turn.runtime_run_id),
+        "turn_id": str(turn.id),
+        "status": normalize_chat_turn_status(turn.status, turn.pause_status),
+        "user_message_id": str(turn.user_message_id) if turn.user_message_id else None,
+        "stage": activity.get("stage") if activity else None,
+        "activity": activity,
+    })
+
+
+@router.get("/status-events")
+async def global_chat_status_events(
+    request: Request,
+    current_user: UserCtx = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+) -> StreamingResponse:
+    """Stream the latest persisted lifecycle state for each owned chat.
+
+    This intentionally polls the database instead of relying on Redis Pub/Sub:
+    every initial connection and reconnect begins with an authoritative snapshot,
+    and no lifecycle change can be lost between a status write and publication.
+    """
+    owner_id = uuid.UUID(str(current_user.id))
+    session_factory = get_session_factory()
+
+    async def _gen() -> AsyncGenerator[str, None]:
+        previous_snapshot: str | None = None
+        last_keepalive = time.monotonic()
+        try:
+            while not await request.is_disconnected():
+                try:
+                    async with session_factory() as status_session:
+                        turns = await latest_chat_turns_for_owner(status_session, owner_id=owner_id)
+
+                    stages: dict[str, dict[str, Any]] = {}
+                    for turn in turns:
+                        if not turn.runtime_run_id or normalize_chat_turn_status(
+                            turn.status, turn.pause_status,
+                        ) not in ACTIVE_STATUSES + WAITING_STATUSES:
+                            continue
+                        try:
+                            activity = await read_chat_stage_snapshot(redis, str(turn.runtime_run_id))
+                        except Exception:
+                            activity = None
+                        if activity:
+                            stages[str(turn.runtime_run_id)] = activity
+
+                    snapshot = build_chat_status_snapshot(turns, stages_by_run_id=stages)
+                    serialized = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+                    if serialized != previous_snapshot:
+                        yield f"event: snapshot\ndata: {serialized}\n\n"
+                        previous_snapshot = serialized
+                        last_keepalive = time.monotonic()
+                    elif time.monotonic() - last_keepalive >= CHAT_STATUS_KEEPALIVE_SECONDS:
+                        yield ": keepalive\n\n"
+                        last_keepalive = time.monotonic()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("chat_status_snapshot_failed user_id=%s", owner_id)
+                    if time.monotonic() - last_keepalive >= CHAT_STATUS_KEEPALIVE_SECONDS:
+                        yield ": keepalive\n\n"
+                        last_keepalive = time.monotonic()
+                await asyncio.sleep(CHAT_STATUS_POLL_SECONDS)
+        finally:
+            logger.debug("chat_status_stream_closed user_id=%s", owner_id)
+
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+
+
+@router.get("/{chat_id}/runs/{run_id}/events")
+async def attach_chat_run_events(
+    chat_id: str,
+    run_id: str,
+    chat_ctx: ChatContext = Depends(resolve_chat_context),
+    session: AsyncSession = Depends(db_session),
+    current_user: UserCtx = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+) -> StreamingResponse:
+    """Attach an SSE observer to an existing run; closing it does not cancel work."""
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid run ID") from exc
+    if str(chat_ctx.chat_id) != str(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    subscriber = RuntimeTailSubscriber(
+        stream_key=chat_event_stream_key(str(run_uuid)), redis_client=redis,
+    )
+    await subscriber.subscribe()
+    result = await session.execute(
+        select(ChatTurn).where(
+            ChatTurn.chat_id == uuid.UUID(str(chat_ctx.chat_id)),
+            ChatTurn.user_id == uuid.UUID(str(current_user.id)),
+            ChatTurn.runtime_run_id == run_uuid,
+            ChatTurn.status.in_(ACTIVE_STATUSES),
+        ).limit(1)
+    )
+    turn = result.scalar_one_or_none()
+    if turn is None:
+        await subscriber.unsubscribe()
+        raise HTTPException(status_code=404, detail="Active run not found")
+    activity = await read_chat_stage_snapshot(redis, str(run_uuid))
+    state_frame = map_service_event_to_sse({
+        "type": "state",
+        "run_id": str(run_uuid),
+        "status": normalize_chat_turn_status(turn.status, turn.pause_status),
+        "stage": activity.get("stage") if activity else None,
+        "activity": activity,
+        "pause_reason": turn.pause_status,
+        "user_message_id": str(turn.user_message_id) if turn.user_message_id else None,
+    })
+    await session.close()
+
+    async def _gen() -> AsyncGenerator[str, None]:
+        try:
+            yield state_frame or ""
+            async for event in subscriber.listen():
+                if event.get("type") == "done":
+                    break
+                payload = event.get("event") if event.get("type") == "service_event" else None
+                if isinstance(payload, dict):
+                    sse_text = map_service_event_to_sse(payload)
+                    if sse_text:
+                        yield sse_text
+            yield format_chat_sse_done()
+        finally:
+            await subscriber.unsubscribe()
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+@router.post("/{chat_id}/runs/{run_id}/cancel")
+async def cancel_active_chat_run(
+    chat_id: str,
+    run_id: str,
+    chat_ctx: ChatContext = Depends(resolve_chat_context),
+    session: AsyncSession = Depends(db_session),
+    current_user: UserCtx = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+) -> dict[str, Any]:
+    """Send an explicit Stop command to the execution owner."""
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid run ID") from exc
+    if str(chat_ctx.chat_id) != str(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    result = await session.execute(
+        select(ChatTurn).where(
+            ChatTurn.chat_id == uuid.UUID(str(chat_ctx.chat_id)),
+            ChatTurn.user_id == uuid.UUID(str(current_user.id)),
+            ChatTurn.runtime_run_id == run_uuid,
+            ChatTurn.status.in_(ACTIVE_STATUSES),
+        ).limit(1)
+    )
+    if result.scalar_one_or_none() is None:
+        # The run id is known to the client before runtime setup persists the
+        # ChatTurn. Accept Stop during that short startup window only when the
+        # server-side owner record matches this chat and user.
+        owner_data = await redis.get(chat_run_owner_key(str(run_uuid)))
+        try:
+            owner = json.loads(owner_data) if owner_data else None
+        except (TypeError, ValueError):
+            owner = None
+        if not isinstance(owner, dict) or owner.get("chat_id") != str(chat_ctx.chat_id) or owner.get("user_id") != str(current_user.id):
+            raise HTTPException(status_code=404, detail="Active run not found")
+    try:
+        await RuntimeRunControlBus().publish_cancel(str(run_uuid), persist_marker=True)
+    except Exception as exc:
+        logger.warning("chat_run_cancel_publish_failed run_id=%s", run_uuid, exc_info=True)
+        raise HTTPException(status_code=503, detail="Не удалось передать команду остановки") from exc
+    return {"run_id": str(run_uuid), "accepted": True}
 
 
 @router.get("/{chat_id}/messages")
@@ -220,31 +451,56 @@ async def send_message_stream(
     if idempotency_key is not None and len(idempotency_key) > 255:
         raise HTTPException(status_code=400, detail="Idempotency-Key is too long")
 
-    repo_factory = AsyncRepositoryFactory(
-        session, uuid.UUID(chat_ctx.tenant_id), chat_ctx.user_id,
+    raw_run_id = request.headers.get("X-Run-ID")
+    try:
+        run_uuid = uuid.UUID(raw_run_id) if raw_run_id else uuid.uuid4()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid X-Run-ID") from exc
+    command = ChatRuntimeCommand(
+        run_id=run_uuid,
+        chat_id=uuid.UUID(chat_ctx.chat_id),
+        user_id=uuid.UUID(chat_ctx.user_id),
+        tenant_id=uuid.UUID(chat_ctx.tenant_id),
+        content=content,
+        artifact_ids=artifact_ids,
+        idempotency_key=idempotency_key,
     )
-    service = ChatStreamService(
-        session=session,
-        redis=redis,
-        llm_client=llm,
-        chats_repo=repo_factory.get_chats_repository(),
-        messages_repo=repo_factory.get_chat_messages_repository(),
+    # Register an ACL-bound owner before StreamingResponse starts iterating.
+    # This makes Stop usable immediately after the client receives its run id.
+    await redis.set(
+        chat_run_owner_key(str(run_uuid)),
+        json.dumps({"chat_id": str(chat_ctx.chat_id), "user_id": str(chat_ctx.user_id)}),
+        ex=CHAT_RUN_OWNER_TTL_SECONDS,
     )
 
     async def _gen() -> AsyncGenerator[str, None]:
+        subscriber = RuntimeTailSubscriber(
+            stream_key=chat_event_stream_key(str(run_uuid)), redis_client=redis,
+        )
         try:
-            async for event in service.send_message_stream(
-                chat_id=chat_ctx.chat_id,
-                user_id=chat_ctx.user_id,
-                tenant_id=chat_ctx.tenant_id,
-                content=content,
-                artifact_ids=artifact_ids,
-                idempotency_key=idempotency_key,
-            ):
+            await subscriber.subscribe()
+            await chat_runtime_runner.start(
+                command=command,
+                llm_client=llm,
+                redis_client=redis,
+                session_factory=get_session_factory(),
+            )
+            # Release the request dependency's DB connection while the SSE
+            # observer remains open. Execution owns a separate session.
+            await session.close()
+            yield map_service_event_to_sse({
+                "type": "run_started", "run_id": str(run_uuid), "status": "running",
+            }) or ""
+            async for event in subscriber.listen():
+                if event.get("type") == "done":
+                    break
+                payload = event.get("event") if event.get("type") == "service_event" else None
+                if not isinstance(payload, dict):
+                    continue
                 try:
-                    sse_text = map_service_event_to_sse(event)
+                    sse_text = map_service_event_to_sse(payload)
                 except Exception as exc:
-                    logger.warning("Failed to map chat event to SSE: %s", exc)
+                    logger.warning("Failed to map detached chat event to SSE: %s", exc)
                     sse_text = None
                 if sse_text:
                     yield sse_text
@@ -253,6 +509,8 @@ async def send_message_stream(
             logger.error(f"Error in chat stream: {e}", exc_info=True)
             yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error="Не удалось обработать запрос. Попробуйте позже.", code="chat_stream_failed"))
             yield format_chat_sse_done()
+        finally:
+            await subscriber.unsubscribe()
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
@@ -294,8 +552,6 @@ async def resume_run(
 ) -> StreamingResponse:
     """Resume a paused run (waiting_confirmation or waiting_input) with SSE streaming."""
     from app.services.chat_turn_service import ChatTurnService
-    from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
-
     try:
         run_uuid = uuid.UUID(run_id)
     except ValueError:
@@ -305,7 +561,7 @@ async def resume_run(
     run_result = await session.execute(
         select(ChatTurn).where(
             ChatTurn.runtime_run_id == run_uuid,
-            ChatTurn.status == "paused",
+            ChatTurn.status.in_(WAITING_STATUSES),
         ).with_for_update()
     )
     turn = run_result.scalar_one_or_none()
@@ -354,6 +610,11 @@ async def resume_run(
             )
         await session.commit()
         async def _cancel_gen() -> AsyncGenerator[str, None]:
+            yield map_service_event_to_sse({
+                "type": "state", "run_id": str(run_uuid), "status": "cancelled",
+                "user_message_id": str(turn.user_message_id) if turn.user_message_id else None,
+            }) or ""
+            yield map_service_event_to_sse({"type": "cancelled", "run_id": str(run_uuid)}) or ""
             yield format_chat_sse_done()
         return StreamingResponse(_cancel_gen(), media_type="text/event-stream")
 
@@ -419,36 +680,48 @@ async def resume_run(
         paused_context=paused_context if isinstance(paused_context, dict) else None,
     )
 
-    user_uuid_val = uuid.UUID(str(current_user.id))
-    chats_repo = AsyncChatsRepository(session, tenant_uuid_val, user_uuid_val)
-    messages_repo = AsyncChatMessagesRepository(session, tenant_uuid_val, user_uuid_val)
-    service = ChatStreamService(
-        session=session,
-        redis=get_redis(),
-        llm_client=get_llm_client(),
-        chats_repo=chats_repo,
-        messages_repo=messages_repo,
+    resume_redis = get_redis()
+    resume_llm = get_llm_client()
+    command = ChatRuntimeCommand(
+        run_id=run_uuid,
+        chat_id=uuid.UUID(str(turn.chat_id)),
+        user_id=uuid.UUID(str(current_user.id)),
+        tenant_id=tenant_uuid_val,
+        content=resume_content,
+        artifact_ids=[],
+        continuation_meta={
+            "resume_checkpoint": checkpoint,
+            "resumed_from_run_id": run_id,
+        },
+        resumed_turn_id=uuid.UUID(str(turn.id)),
+        confirmation_tokens=confirmation_tokens,
+        persist_user_message=interaction is not None or body.action is RuntimeResumeAction.INPUT,
     )
+    resume_subscriber = RuntimeTailSubscriber(
+        stream_key=chat_event_stream_key(str(run_uuid)), redis_client=resume_redis,
+    )
+    await resume_subscriber.subscribe()
+    await chat_runtime_runner.start(
+        command=command,
+        llm_client=resume_llm,
+        redis_client=resume_redis,
+        session_factory=get_session_factory(),
+    )
+    await session.close()
 
     async def _resume_gen() -> AsyncGenerator[str, None]:
         try:
-            async for event in service.send_message_stream(
-                chat_id=str(turn.chat_id),
-                user_id=str(current_user.id),
-                tenant_id=str(tenant_uuid_val),
-                content=resume_content,
-                artifact_ids=[],
-                idempotency_key=None,
-                continuation_meta={
-                    "resume_checkpoint": checkpoint,
-                    "resumed_from_run_id": run_id,
-                },
-                resumed_turn_id=str(turn.id),
-                confirmation_tokens=confirmation_tokens,
-                persist_user_message=interaction is not None or body.action is RuntimeResumeAction.INPUT,
-            ):
+            yield map_service_event_to_sse({
+                "type": "run_started", "run_id": str(run_uuid), "status": "running",
+            }) or ""
+            async for event in resume_subscriber.listen():
+                if event.get("type") == "done":
+                    break
+                payload = event.get("event") if event.get("type") == "service_event" else None
+                if not isinstance(payload, dict):
+                    continue
                 try:
-                    sse_text = map_service_event_to_sse(event)
+                    sse_text = map_service_event_to_sse(payload)
                 except Exception as exc:
                     logger.warning("Failed to map resume event to SSE: %s", exc)
                     sse_text = None
@@ -459,5 +732,7 @@ async def resume_run(
             logger.error(f"Error in resume stream: {e}", exc_info=True)
             yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error="Не удалось обработать запрос. Попробуйте позже.", code="chat_stream_failed"))
             yield format_chat_sse_done()
+        finally:
+            await resume_subscriber.unsubscribe()
 
     return StreamingResponse(_resume_gen(), media_type="text/event-stream")

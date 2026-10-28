@@ -207,6 +207,7 @@ export const qk = {
   },
   chats: {
     all: () => ['chats'] as const,
+    statuses: (userId: string) => ['chats', 'statuses', userId] as const,
     list: (q?: string) => ['chats', 'list', q] as const,
     detail: (id: string) => ['chats', 'detail', id] as const,
     messages: (chatId: string) => ['chats', 'messages', chatId] as const,

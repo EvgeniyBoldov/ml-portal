@@ -1,6 +1,8 @@
 .shell {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr auto;
+  min-width: 0;
   min-height: 100dvh;
   min-height: 100vh;
   background: var(--bg);
@@ -110,6 +112,7 @@
 }
 
 .main {
+  min-width: 0;
   padding: var(--space-4) var(--space-5);
   overflow: hidden;
   display: flex;

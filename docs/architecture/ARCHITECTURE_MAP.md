@@ -40,7 +40,7 @@ The diagram is a responsibility map, not an exhaustive deployment topology. The 
 | `apps/api/src/app/api/` | HTTP contracts, request validation, dependencies, authentication and error mapping | [Backend rules](../backend/RULES.md), [authentication](AUTHENTICATION.md) |
 | `apps/api/src/app/services/` | Business logic, orchestration, transaction ownership and application workflows | [Backend patterns](../backend/PATTERNS.md) |
 | `apps/api/src/app/repositories/` | Database query and persistence access; repositories do not commit | [Backend rules](../backend/RULES.md) |
-| `apps/api/src/app/runtime/` and `agents/` | Turn routing, planning, task orchestration, operation execution, memory/context, events and pause/resume | [Agent Runtime](AGENT_RUNTIME.md), [TurnPreflight ADR](ADR_TURN_PREFLIGHT_ROUTING.md) |
+| `apps/api/src/app/runtime/` and `agents/` | Turn routing, planning, task orchestration, operation execution, memory/context, events and pause/resume | [Agent Runtime](AGENT_RUNTIME.md), [Chat Turn Lifecycle](CHAT_TURN_LIFECYCLE.md), [TurnPreflight ADR](ADR_TURN_PREFLIGHT_ROUTING.md) |
 | `apps/api/src/app/workers/` | Background ingestion, indexing, memory and maintenance jobs | [Platform overview](../PLATFORM_OVERVIEW.md), relevant domain contract |
 | `mcp/` | MCP providers and integrations; providers expose capabilities, while runtime resolves access and execution targets | [Flows](FLOWS.md), [MCP credential flow](MCP_CREDENTIAL_FLOW.md) |
 | `infra/`, compose files and `scripts/` | Local and deployed infrastructure, service wiring and operational tooling | [Admin docs](../admin/README.md) |
@@ -109,7 +109,7 @@ Read each owning contract before changing lifecycle, retention, access, or cross
 | Canonical lifecycle and integration flows | [Flows](FLOWS.md) |
 | Authentication and browser/session credentials | [Authentication and Sessions](AUTHENTICATION.md) |
 | Memory and chat context | [Memory](MEMORY.md), [Chat Context Memory](CHAT_CONTEXT_MEMORY.md), [Runtime Memory](RUNTIME_MEMORY.md) |
-| Runtime events, pause/resume and tool results | [Trace Specification](RUNTIME_TRACE_SPEC.md), [Runtime Interactions](RUNTIME_INTERACTIONS.md), [Runtime Tool Results](RUNTIME_TOOL_RESULTS.md) |
+| Chat lifecycle, runtime stages, pause/resume and tool results | [Chat Turn Lifecycle](CHAT_TURN_LIFECYCLE.md), [Trace Specification](RUNTIME_TRACE_SPEC.md), [Runtime Interactions](RUNTIME_INTERACTIONS.md), [Runtime Tool Results](RUNTIME_TOOL_RESULTS.md) |
 | Backend implementation conventions | [Backend Rules](../backend/RULES.md), [Backend Patterns](../backend/PATTERNS.md), [Backend Architecture](../BACKEND_ARCHITECTURE.md) |
 | Frontend implementation conventions | [Frontend Rules](../frontend/RULES.md), [Frontend Patterns](../frontend/PATTERNS.md) |
 | Development and operational procedures | [Testing](../TESTING.md), [Admin documentation](../admin/README.md) |

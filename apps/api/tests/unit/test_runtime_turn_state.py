@@ -26,12 +26,22 @@ def test_runtime_turn_state_snapshot_preserves_runtime_facts():
 
 def test_runtime_turn_state_compact_view_is_serializable():
     state = _state()
-    state.status = "completed"
+    state.set_lifecycle_status("completed")
     state.final_answer = "ready"
     payload = state.compact_view()
     assert payload["status"] == "completed"
     assert payload["final_answer"] == "ready"
     assert "memory_bundle" in payload
+
+
+def test_runtime_turn_state_rejects_execution_stage_as_lifecycle_status():
+    state = _state()
+    try:
+        state.set_lifecycle_status("planning")
+    except ValueError as error:
+        assert "lifecycle status" in str(error)
+    else:
+        raise AssertionError("execution stage was accepted as a lifecycle status")
 
 
 def test_pending_confirmation_call_is_not_counted_as_consumed_tool_work():

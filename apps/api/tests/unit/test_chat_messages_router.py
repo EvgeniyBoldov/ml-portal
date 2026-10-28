@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -37,6 +37,33 @@ def _request_with_headers(headers: dict[str, str]) -> Request:
         return {"type": "http.request", "body": b"", "more_body": False}
 
     return Request(scope, _receive)
+
+
+class _TailSubscriber:
+    def __init__(self, **_kwargs):
+        pass
+
+    async def subscribe(self):
+        pass
+
+    async def listen(self):
+        yield {"type": "done"}
+
+    async def unsubscribe(self):
+        pass
+
+
+def _mock_runtime(monkeypatch, captured: dict[str, object]):
+    async def start(**kwargs):
+        captured["command"] = kwargs["command"]
+        captured["llm_client"] = kwargs["llm_client"]
+        captured["redis_client"] = kwargs["redis_client"]
+        captured["session_factory"] = kwargs["session_factory"]
+
+    monkeypatch.setattr(chat_messages, "RuntimeTailSubscriber", _TailSubscriber)
+    monkeypatch.setattr(chat_messages.chat_runtime_runner, "start", start)
+    monkeypatch.setattr(chat_messages, "get_session_factory", lambda: "session-factory")
+    monkeypatch.setattr(chat_messages, "map_service_event_to_sse", lambda event: f"event: {event['type']}\ndata: {{}}\n\n")
 
 
 @pytest.mark.asyncio
@@ -102,16 +129,7 @@ async def test_send_message_stream_uses_frontend_request_contract(monkeypatch):
 
     captured: dict[str, object] = {}
 
-    class _Service:
-        def __init__(self, **kwargs):
-            captured["init_kwargs"] = kwargs
-
-        async def send_message_stream(self, **kwargs):
-            captured["stream_kwargs"] = kwargs
-            yield {"type": "noop"}
-
-    monkeypatch.setattr(chat_messages, "ChatStreamService", _Service)
-    monkeypatch.setattr(chat_messages, "map_service_event_to_sse", lambda _: "event: status\ndata: {}\n\n")
+    _mock_runtime(monkeypatch, captured)
 
     request = _request_with_headers({"Idempotency-Key": "idem-123"})
 
@@ -133,13 +151,11 @@ async def test_send_message_stream_uses_frontend_request_contract(monkeypatch):
     async for chunk in response.body_iterator:
         chunks.append(chunk)
 
-    stream_kwargs = captured["stream_kwargs"]
-    assert stream_kwargs["content"] == "hello"
-    assert len(stream_kwargs["artifact_ids"]) == 1
-    assert stream_kwargs["idempotency_key"] == "idem-123"
-    assert "model" not in stream_kwargs
-    assert "agent_slug" not in stream_kwargs
-    assert "execution_mode" not in stream_kwargs
+    command = captured["command"]
+    assert command.content == "hello"
+    assert len(command.artifact_ids) == 1
+    assert command.idempotency_key == "idem-123"
+    assert captured["session_factory"] == "session-factory"
     assert any("event: done" in chunk for chunk in chunks)
 
 
@@ -161,21 +177,14 @@ async def test_resume_run_reuses_paused_chat_turn(monkeypatch):
     )
     captured: dict[str, object] = {}
 
-    class _Service:
-        def __init__(self, **kwargs):
-            captured["init_kwargs"] = kwargs
-
-        async def send_message_stream(self, **kwargs):
-            captured["stream_kwargs"] = kwargs
-            yield {"type": "final", "message_id": "assistant-1"}
-
-    monkeypatch.setattr(chat_messages, "ChatStreamService", _Service)
-    monkeypatch.setattr(chat_messages, "map_service_event_to_sse", lambda _: "event: final\ndata: {}\n\n")
+    _mock_runtime(monkeypatch, captured)
     monkeypatch.setattr(
         chat_messages,
         "resolve_chat_context",
         AsyncMock(return_value=ChatContext(chat_id=str(chat_id), tenant_id=str(tenant_id), user_id=str(user_id))),
     )
+    monkeypatch.setattr(chat_messages, "get_redis", lambda: AsyncMock())
+    monkeypatch.setattr(chat_messages, "get_llm_client", lambda: AsyncMock())
 
     session = AsyncMock()
     session.execute.side_effect = [
@@ -199,14 +208,14 @@ async def test_resume_run_reuses_paused_chat_turn(monkeypatch):
     async for chunk in response.body_iterator:
         chunks.append(chunk)
 
-    assert turn.status == "resumed"
-    assert captured["stream_kwargs"]["resumed_turn_id"] == str(turn.id)
-    assert captured["stream_kwargs"]["continuation_meta"]["resumed_from_run_id"] == str(run_id)
-    checkpoint = captured["stream_kwargs"]["continuation_meta"]["resume_checkpoint"]
+    assert turn.status == "running"
+    assert captured["command"].resumed_turn_id == turn.id
+    assert captured["command"].continuation_meta["resumed_from_run_id"] == str(run_id)
+    checkpoint = captured["command"].continuation_meta["resume_checkpoint"]
     assert checkpoint["original_goal"] == "Что мне почитать?"
     assert checkpoint["paused_context"]["question"] == "Какая тема?"
-    assert captured["stream_kwargs"]["content"] == "Сетевая инженерия"
-    assert captured["stream_kwargs"]["persist_user_message"] is True
+    assert "Сетевая инженерия" in captured["command"].content
+    assert captured["command"].persist_user_message is True
     session.commit.assert_awaited_once()
     assert any("event: done" in chunk for chunk in chunks)
 
@@ -224,11 +233,6 @@ async def test_resume_run_rejects_stale_pause_id_before_resuming(monkeypatch):
     session = AsyncMock()
     session.execute.return_value = _Result(turn)
 
-    class _UnexpectedService:
-        def __init__(self, **_kwargs):
-            raise AssertionError("A stale pause must be rejected before streaming")
-
-    monkeypatch.setattr(chat_messages, "ChatStreamService", _UnexpectedService)
     monkeypatch.setattr(
         chat_messages,
         "resolve_chat_context",
@@ -263,16 +267,7 @@ async def test_resume_preflight_clarify_uses_goal_from_pause_context(monkeypatch
     )
     captured: dict[str, object] = {}
 
-    class _Service:
-        def __init__(self, **_kwargs):
-            pass
-
-        async def send_message_stream(self, **kwargs):
-            captured.update(kwargs)
-            yield {"type": "final", "message_id": "assistant-1"}
-
-    monkeypatch.setattr(chat_messages, "ChatStreamService", _Service)
-    monkeypatch.setattr(chat_messages, "map_service_event_to_sse", lambda _: "event: final\ndata: {}\n\n")
+    _mock_runtime(monkeypatch, captured)
     monkeypatch.setattr(
         chat_messages,
         "resolve_chat_context",
@@ -291,7 +286,7 @@ async def test_resume_preflight_clarify_uses_goal_from_pause_context(monkeypatch
     async for _ in response.body_iterator:
         pass
 
-    checkpoint = captured["continuation_meta"]["resume_checkpoint"]
+    checkpoint = captured["command"].continuation_meta["resume_checkpoint"]
     assert checkpoint["original_goal"] == "Обнови glossary"
 
 
@@ -300,16 +295,12 @@ async def test_resume_cancel_terminates_confirmation_without_reentering_runtime(
     user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4()
     turn = SimpleNamespace(
         id=uuid4(), chat_id=uuid4(), user_id=user_id, status="paused",
+        user_message_id=None,
         pause_status="waiting_confirmation", paused_action={}, paused_context={}, paused_at=datetime.now(timezone.utc),
     )
     session = AsyncMock()
     session.execute.side_effect = [_Result(turn), _Result(turn)]
 
-    class _UnexpectedService:
-        def __init__(self, **_kwargs):
-            raise AssertionError("Cancelled confirmation must not start ChatStreamService")
-
-    monkeypatch.setattr(chat_messages, "ChatStreamService", _UnexpectedService)
     class _ContextService:
         def __init__(self, *_args, **_kwargs):
             pass
@@ -389,3 +380,47 @@ async def test_get_paused_run_returns_confirmation_question_from_action():
 
     assert response["pause"]["reason"] == "waiting_confirmation"
     assert response["pause"]["action"]["question"] == "Подтвердить публикацию изменений?"
+
+
+@pytest.mark.asyncio
+async def test_global_chat_status_stream_starts_with_database_snapshot(monkeypatch):
+    owner_id = str(uuid4())
+    request = _request_with_headers({})
+    request.is_disconnected = AsyncMock(side_effect=[False, True])
+    session = AsyncMock()
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _SessionFactory:
+        def __call__(self):
+            return _SessionContext()
+
+    monkeypatch.setattr(chat_messages, "get_session_factory", lambda: _SessionFactory())
+    monkeypatch.setattr(chat_messages, "CHAT_STATUS_POLL_SECONDS", 0)
+    monkeypatch.setattr(
+        chat_messages,
+        "latest_chat_turns_for_owner",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        chat_messages,
+        "read_chat_stage_snapshot",
+        AsyncMock(return_value=None),
+    )
+
+    response = await chat_messages.global_chat_status_events(
+        request=request,
+        current_user=UserCtx(id=owner_id, tenant_ids=[]),
+        redis=AsyncMock(),
+    )
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks == ["event: snapshot\ndata: []\n\n"]
+    chat_messages.latest_chat_turns_for_owner.assert_awaited_once_with(
+        session, owner_id=UUID(owner_id),
+    )

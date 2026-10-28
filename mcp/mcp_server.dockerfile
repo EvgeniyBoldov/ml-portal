@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim
 
 ARG MCP_SERVER_DIR=sql
@@ -8,7 +9,8 @@ WORKDIR /opt/mcp
 # context is shared, but only the selected server's requirements invalidate
 # this layer.
 COPY mcp/${MCP_SERVER_DIR}/requirements.txt /tmp/mcp-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/mcp-requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r /tmp/mcp-requirements.txt
 
 # Copy only this server and the shared helper module. Editing another MCP server
 # no longer invalidates this image's application layer.

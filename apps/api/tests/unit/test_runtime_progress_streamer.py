@@ -1,4 +1,4 @@
-from app.runtime.events import OrchestrationPhase, RuntimeEvent
+from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.services.runtime_progress_streamer import RuntimeProgressStreamer
 
 
@@ -24,3 +24,15 @@ def test_planner_iteration_progress_uses_iteration_mode() -> None:
     assert _description("replan", "replan") == "Перепланирую выполнение"
     assert _description("checkpoint", "checkpoint") == "Определяю следующие шаги"
     assert _description("resume", "execution") == "Выполняю план"
+
+
+def test_projection_keeps_shared_tail_envelope_and_adds_normalized_chat_stage() -> None:
+    event = RuntimeEvent(RuntimeEventType.TASK_STARTED, {"intent": "private task detail"})
+    progress = RuntimeProgressStreamer().project(
+        event, run_id="run-1", phase=OrchestrationPhase.PLANNER,
+    )
+    assert progress is not None
+    assert progress["type"] == "runtime_progress"  # sandbox wire compatibility
+    assert progress["chat_stage"] == "executing"
+    assert progress["action"] == "task_started"
+    assert "private task detail" not in progress["description"]

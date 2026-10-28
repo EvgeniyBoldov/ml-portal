@@ -164,8 +164,10 @@ class TestChatTurnOrchestrator:
 
         event_types = [event["type"] for event in events]
         assert "final" in event_types
-        assert event_types[-1] == "status"
-        assert events[-1]["stage"] == "completed"
+        assert event_types[-1] == "final"
+        state_event = next(event for event in events if event.get("type") == "state")
+        assert state_event["status"] == "completed"
+        assert any(event.get("activity", {}).get("stage") == "finalizing" for event in events if event.get("type") == "stage")
         final_event = next(event for event in events if event["type"] == "final")
         assert final_event["attachments"][0]["artifact_id"] == "artifact-1"
         store_idempotency.assert_awaited_once_with(
@@ -356,7 +358,7 @@ class TestChatTurnOrchestrator:
 
         event_types = [event["type"] for event in events]
         assert "final" not in event_types
-        assert not any(event.get("stage") == "completed" for event in events if event.get("type") == "status")
+        assert not any(event.get("status") == "completed" for event in events if event.get("type") == "state")
         orchestrator.turn_service.complete_turn.assert_not_awaited()
         store_idempotency.assert_not_awaited()
         orchestrator.turn_service.fail_turn.assert_awaited_once()
@@ -437,7 +439,9 @@ async def test_partial_final_preserves_failed_turn_and_answer(orchestrator):
     final = next(event for event in events if event["type"] == "final")
     assert final["content"] == "Получена только часть данных."
     assert final["stop_reason"] == "failed"
-    assert events[-1] == {"type": "status", "stage": "failed"}
+    state_event = next(event for event in events if event.get("type") == "state")
+    assert state_event["status"] == "failed"
+    assert events[-1]["type"] == "final"
     assert not any(event["type"] == "error" for event in events)
 
 

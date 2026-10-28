@@ -131,13 +131,12 @@ describe('chat streaming', () => {
     try {
       const { result } = setup();
       const source = stream();
-      source.write('status', {
-        stage: 'runtime_progress',
-        progress: {
+      source.write('stage', {
+        activity: {
           description: 'Ищу данные',
           run_id: 'run',
-          phase: 'execution',
-          kind: 'intent',
+          stage: 'executing',
+          action: 'intent',
         },
       });
       source.write('final', { message_id: 'answer', content: 'Ответ' });
@@ -314,7 +313,7 @@ describe('chat streaming', () => {
     expect(result.current.state.isStreaming).toBe(false);
   });
 
-  it('blocks a duplicate send and preserves buffered text when stopped', async () => {
+  it('blocks a duplicate send and detaches the observer without marking cancellation', async () => {
     const { result } = setup();
     const source = stream();
     vi.mocked(fetchStreamWithAuth).mockResolvedValue(source.response);
@@ -343,9 +342,8 @@ describe('chat streaming', () => {
     expect(result.current.state.messagesByChat.chat.items.at(-1)?.content).toBe(
       'Последние символы'
     );
-    expect(result.current.state.messagesByChat.chat.items.at(-1)?.outcome).toBe(
-      'cancelled'
-    );
+    expect(result.current.state.messagesByChat.chat.items.at(-1)?.outcome).toBeUndefined();
+    expect(result.current.state.activeRun).toBeNull();
     expect(vi.mocked(fetchStreamWithAuth)).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledWith(
       'Дождитесь завершения текущего ответа'

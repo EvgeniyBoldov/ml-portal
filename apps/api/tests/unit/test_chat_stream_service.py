@@ -203,8 +203,8 @@ class TestChatStreamServiceInvariants:
         event_types = [event["type"] for event in events]
         assert event_types.count("final") == 1
         assert event_types.count("error") == 0
-        assert event_types[-1] == "status"
-        assert events[-1]["stage"] == "completed"
+        assert event_types[-1] == "final"
+        assert any(event.get("type") == "state" and event.get("status") == "completed" for event in events)
 
     @pytest.mark.asyncio
     async def test_empty_response_emits_single_error(self, service: ChatStreamService):

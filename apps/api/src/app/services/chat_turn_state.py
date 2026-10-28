@@ -1,15 +1,13 @@
 """
-Chat Turn State Machine — формальная модель состояний одного чат-тёрна.
+Chat Turn Execution Phase Tracker — in-memory phases одного chat turn.
 
-Гарантирует:
-- Переходы между состояниями валидны
-- Каждый тёрн проходит через canonical lifecycle
-- Невалидные переходы логируются как warning (не crash — graceful degradation)
+Это не persisted lifecycle и не API статус. Authoritative lifecycle хранится
+в ChatTurn.status и нормализуется через chat_turn_status.
 
-Canonical lifecycle:
+Execution progression:
   INIT → USER_PERSISTED → CONTEXT_LOADED → TRIAGE_COMPLETE →
   EXECUTION_STARTED → [DELTA_STREAMING | PAUSED] → FINAL_PERSISTED → COMPLETED
-                                                  ↘ ERROR (from any state)
+                                                  ↘ ERROR / CANCELLED
 
 Usage in ChatStreamService:
     turn = ChatTurnState()
@@ -39,6 +37,7 @@ class TurnPhase(str, Enum):
     FINAL_PERSISTED = "final_persisted"
     COMPLETED = "completed"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 # Valid transitions: from_phase -> set of allowed to_phases
@@ -46,42 +45,50 @@ VALID_TRANSITIONS: Dict[TurnPhase, FrozenSet[TurnPhase]] = {
     TurnPhase.INIT: frozenset({
         TurnPhase.USER_PERSISTED,
         TurnPhase.ERROR,
+        TurnPhase.CANCELLED,
     }),
     TurnPhase.USER_PERSISTED: frozenset({
         TurnPhase.CONTEXT_LOADED,
         TurnPhase.ERROR,
+        TurnPhase.CANCELLED,
     }),
     TurnPhase.CONTEXT_LOADED: frozenset({
         TurnPhase.TRIAGE_COMPLETE,
         TurnPhase.EXECUTION_STARTED,  # skip triage for direct agent
         TurnPhase.ERROR,
+        TurnPhase.CANCELLED,
     }),
     TurnPhase.TRIAGE_COMPLETE: frozenset({
         TurnPhase.EXECUTION_STARTED,
         TurnPhase.ERROR,
+        TurnPhase.CANCELLED,
     }),
     TurnPhase.EXECUTION_STARTED: frozenset({
         TurnPhase.DELTA_STREAMING,
         TurnPhase.PAUSED,
         TurnPhase.FINAL_PERSISTED,  # no-delta short answer
         TurnPhase.ERROR,
+        TurnPhase.CANCELLED,
     }),
     TurnPhase.DELTA_STREAMING: frozenset({
         TurnPhase.DELTA_STREAMING,  # multiple deltas
         TurnPhase.PAUSED,
         TurnPhase.FINAL_PERSISTED,
         TurnPhase.ERROR,
+        TurnPhase.CANCELLED,
     }),
     TurnPhase.PAUSED: frozenset({
-        TurnPhase.COMPLETED,  # stop event is terminal for this turn
         TurnPhase.ERROR,
+        TurnPhase.CANCELLED,
     }),
     TurnPhase.FINAL_PERSISTED: frozenset({
         TurnPhase.COMPLETED,
         TurnPhase.ERROR,
+        TurnPhase.CANCELLED,
     }),
     TurnPhase.COMPLETED: frozenset(),  # terminal
     TurnPhase.ERROR: frozenset(),  # terminal
+    TurnPhase.CANCELLED: frozenset(),  # terminal
 }
 
 
@@ -101,7 +108,7 @@ class ChatTurnState:
 
     @property
     def is_terminal(self) -> bool:
-        return self._phase in (TurnPhase.COMPLETED, TurnPhase.ERROR)
+        return self._phase in (TurnPhase.COMPLETED, TurnPhase.ERROR, TurnPhase.CANCELLED)
 
     def transition(self, to: TurnPhase) -> bool:
         """Attempt a state transition.
@@ -131,6 +138,11 @@ class ChatTurnState:
     def force_error(self) -> None:
         """Force transition to ERROR from any state."""
         self._phase = TurnPhase.ERROR
+
+    def force_cancel(self) -> None:
+        """Force transition to CANCELLED from any non-terminal phase."""
+        if not self.is_terminal:
+            self._phase = TurnPhase.CANCELLED
 
     def __repr__(self) -> str:
         return f"ChatTurnState(phase={self._phase.value}, chat={self._chat_id})"

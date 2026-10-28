@@ -56,6 +56,7 @@ interface ChatActions {
   clearPendingState: () => void;
   applyPausedState: (state: ResumePausedState) => void;
   loadPausedRun: (chatId: string) => Promise<void>;
+  loadActiveRun: (chatId: string) => Promise<void>;
   abortStream: () => void;
   sendMessageStream: (
     chatId: string,
@@ -65,6 +66,7 @@ interface ChatActions {
     artifactIds?: string[],
     attachmentMeta?: unknown[]
   ) => Promise<boolean>;
+  stopRun: (chatId: string, runId: string) => Promise<void>;
   resumeStream: (
     runId: string,
     action: 'confirm' | 'cancel' | 'input' | 'answer',
@@ -315,20 +317,53 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [applyPausedState, clearPausedInteraction]
   );
 
-  const { abortStream, setCurrentChat, sendMessageStream, resumeStream } =
-    useChatStreaming({
-      activeRun,
-      pausedInteractionId,
-      hasInteraction,
-      setActiveRun,
-      setMessagesByChat,
-      setIsStreaming,
-      clearPendingState,
-      clearPausedInteraction,
-      applyPausedState,
-      loadMessages,
-      invalidateHistory,
-    });
+  const {
+    abortStream,
+    setCurrentChat,
+    sendMessageStream,
+    resumeStream,
+    attachRun,
+    stopRun,
+  } = useChatStreaming({
+    activeRun,
+    pausedInteractionId,
+    hasInteraction,
+    setActiveRun,
+    setMessagesByChat,
+    setIsStreaming,
+    clearPendingState,
+    clearPausedInteraction,
+    applyPausedState,
+    loadMessages,
+    invalidateHistory,
+  });
+
+  const loadActiveRun = useCallback(
+    async (chatId: string) => {
+      try {
+        await loadMessages(chatId);
+        const { getActiveChatRun } = await import('@shared/api/chats');
+        const { run } = await getActiveChatRun(chatId);
+        if (run) {
+          const activity = run.activity
+            ? {
+                runId: run.activity.run_id,
+                stage: run.activity.stage,
+                action: run.activity.action,
+                description: run.activity.description,
+                outcome: run.activity.outcome,
+              }
+            : undefined;
+          const attached = await attachRun(chatId, run.run_id, run.user_message_id, activity);
+          if (!attached) await loadMessages(chatId);
+        }
+      } catch (err) {
+        console.warn('Failed to restore active chat run', err);
+        await loadMessages(chatId);
+      }
+    },
+    [attachRun, loadMessages]
+  );
 
   const actionsValue = useMemo<ChatActions>(
     () => ({
@@ -338,9 +373,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       clearPendingState,
       applyPausedState,
       loadPausedRun,
+      loadActiveRun,
       abortStream,
       sendMessageStream,
       resumeStream,
+      stopRun,
     }),
     [
       loadMessages,
@@ -349,9 +386,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       clearPendingState,
       applyPausedState,
       loadPausedRun,
+      loadActiveRun,
       abortStream,
       sendMessageStream,
       resumeStream,
+      stopRun,
     ]
   );
   const messagesStateValue = useMemo(

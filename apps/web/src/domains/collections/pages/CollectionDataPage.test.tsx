@@ -12,6 +12,7 @@ import {
   type Collection,
   type CollectionDocument,
 } from '@/shared/api/collections';
+import { memoryScopesApi } from '@/shared/api/memoryScopes';
 import CollectionDataPage from './CollectionDataPage';
 
 vi.mock('@shared/ui/Toast', () => ({
@@ -310,3 +311,119 @@ it.each(['completed', 'running'])(
     client.clear();
   }
 );
+
+it('shows separate RAG and LongMemory readiness metrics, project membership, and row-menu delete', async () => {
+  const target = {
+    ...doc('network-guide'),
+    name: 'Руководство сети',
+    filename: 'network-guide.pdf',
+    size_bytes: 1_572_864,
+    artifacts: { chunks: { key: 'documents/chunks.ndjson', chunk_count: 42 } },
+    memory: {
+      policy: 'explicit' as const,
+      enabled: true,
+      effective_enabled: true,
+      project_keys: [],
+      scope_keys: ['network'],
+      extraction_status: 'completed',
+      extraction_metrics: {
+        status: 'completed',
+        steps: {
+          extract: {
+            status: 'completed',
+            metrics: { passages: 8, entities: 12, facts: 7, extracted_triples: 9 },
+          },
+          index: { status: 'running', metrics: { scope_edges: 5 } },
+        },
+      },
+    },
+  } satisfies CollectionDocument;
+  vi.spyOn(collectionsApi, 'listDocuments').mockResolvedValue({
+    items: [target], total: 1, page: 1, size: 50, has_more: false,
+  });
+  vi.spyOn(memoryScopesApi, 'list').mockResolvedValue([
+    { id: 'scope-1', scope_type: 'project', key: 'network', name: 'Сеть', aliases: [], is_all: false },
+  ]);
+  const remove = vi.spyOn(collectionsApi, 'deleteDocuments').mockResolvedValue({
+    deleted: 1, collection_id: 'collection-id',
+  });
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+  setup('document');
+
+  expect(await screen.findByText('Руководство сети')).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: 'RAG' })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: 'LongMemory' })).toBeInTheDocument();
+  expect(screen.queryByRole('columnheader', { name: 'Действия' })).not.toBeInTheDocument();
+  expect(screen.getByText('42 чанков')).toBeInTheDocument();
+  expect(screen.getByText('Индексируется')).toBeInTheDocument();
+  expect(screen.getByText(/9 триплетов · 7 фактов · 8 фрагм\./)).toBeInTheDocument();
+  expect(screen.getByText(/Индекс: выполняется · Граф области: 5 связей/)).toBeInTheDocument();
+  expect(screen.getByText('Сеть')).toBeInTheDocument();
+  expect(screen.queryByText(/наследуется|Semantic Memory|семантическая память/i)).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Действия для Руководство сети' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить документ' }));
+  await waitFor(() => expect(remove).toHaveBeenCalledWith('collection-id', ['network-guide']));
+});
+
+it('does not call LongMemory ready when indexing is not confirmed', async () => {
+  const target: CollectionDocument = {
+    ...doc('incomplete-memory'),
+    memory: {
+      policy: 'explicit', enabled: true, effective_enabled: true,
+      project_keys: [], scope_keys: [], extraction_status: 'completed',
+      extraction_metrics: {
+        status: 'completed',
+        steps: { extract: { status: 'completed', metrics: { extracted_triples: 2 } } },
+      },
+    },
+  };
+  vi.spyOn(collectionsApi, 'listDocuments').mockResolvedValue({
+    items: [target], total: 1, page: 1, size: 50, has_more: false,
+  });
+
+  setup('document');
+
+  expect(await screen.findByText('Готовность не подтверждена')).toBeInTheDocument();
+  expect(screen.queryByText('Готова')).not.toBeInTheDocument();
+});
+
+it('distinguishes disabled, queued, extracting, ready, and failed LongMemory states', async () => {
+  const memory = (
+    extractionStatus: string,
+    enabled: boolean,
+    extractStage: string,
+    indexStage: string
+  ): NonNullable<CollectionDocument['memory']> => ({
+    policy: 'explicit', enabled, effective_enabled: enabled,
+    project_keys: [], scope_keys: [], extraction_status: extractionStatus,
+    extraction_metrics: {
+      steps: {
+        extract: { status: extractStage, metrics: {} },
+        index: { status: indexStage, metrics: {} },
+      },
+    },
+  });
+  const items: CollectionDocument[] = [
+    { ...doc('disabled'), memory: memory('completed', false, 'completed', 'completed') },
+    { ...doc('queued'), memory: memory('queued', true, 'queued', 'queued') },
+    { ...doc('extracting'), memory: memory('running', true, 'running', 'queued') },
+    { ...doc('ready'), memory: memory('completed', true, 'completed', 'completed') },
+    { ...doc('extract-error'), memory: memory('failed', true, 'failed', 'queued') },
+    { ...doc('index-error'), memory: memory('failed', true, 'completed', 'failed') },
+  ];
+  vi.spyOn(collectionsApi, 'listDocuments').mockResolvedValue({
+    items, total: items.length, page: 1, size: 50, has_more: false,
+  });
+
+  setup('document');
+
+  expect(await screen.findByText('disabled')).toBeInTheDocument();
+  expect(screen.getByText('Отключена')).toBeInTheDocument();
+  expect(screen.getByText('Ожидает обработки')).toBeInTheDocument();
+  expect(screen.getByText('Извлекается')).toBeInTheDocument();
+  expect(screen.getByText('Готова')).toBeInTheDocument();
+  expect(screen.getByText('Ошибка извлечения')).toBeInTheDocument();
+  expect(screen.getByText('Ошибка индексации')).toBeInTheDocument();
+});

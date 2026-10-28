@@ -23,11 +23,13 @@ export default function Chat() {
     loadMessages,
     loadOlderMessages,
     loadPausedRun,
+    loadActiveRun,
     setCurrentChat,
     clearPendingState,
     sendMessageStream,
     abortStream,
     resumeStream,
+    stopRun,
   } = useChatActions();
   const submissionRef = useRef<AbortController | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -50,7 +52,10 @@ export default function Chat() {
     clearPendingState();
     setClarifyInput('');
     setCurrentChat(chatId || null);
-    if (chatId) void loadPausedRun(chatId);
+    if (chatId) {
+      void loadPausedRun(chatId);
+      void loadActiveRun(chatId);
+    }
     setBusy(false);
     setClarifyBusy(false);
     setStreamError(null);
@@ -59,11 +64,7 @@ export default function Chat() {
       submissionRef.current = null;
       abortStream();
     };
-  }, [chatId, clearPendingState, setCurrentChat, loadPausedRun, abortStream]);
-
-  useEffect(() => {
-    if (chatId && !current?.loaded) void loadMessages(chatId);
-  }, [chatId, current?.loaded, loadMessages]);
+  }, [chatId, clearPendingState, setCurrentChat, loadPausedRun, loadActiveRun, abortStream]);
 
   const handleSend = async (
     message: string,
@@ -440,8 +441,12 @@ export default function Chat() {
             }
             onStop={() => {
               submissionRef.current?.abort();
-              abortStream();
-              setBusy(false);
+              const runId = state.activeRun?.runId;
+              if (chatId && runId) {
+                void stopRun(chatId, runId).catch(error => {
+                  setStreamError(error instanceof Error ? error.message : 'Не удалось остановить выполнение');
+                });
+              }
             }}
             placeholder="Напишите сообщение..."
           />

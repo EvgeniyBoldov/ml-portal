@@ -6,6 +6,7 @@ import { GlobalConfirmDialog } from './providers/GlobalConfirmDialog';
 import { AuthProvider } from './providers/AuthProvider';
 import ErrorBoundary from '@/shared/ui/ErrorBoundary';
 import { ThemeProvider } from './providers/ThemeProvider';
+import { GlobalChatStatusListener } from '@/domains/chat/components/GlobalChatStatusListener';
 
 interface AppProvidersProps {
   children: React.ReactNode;
@@ -28,6 +29,7 @@ export function AppProviders({ children }: AppProvidersProps) {
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <ToastProvider>
+              <GlobalChatStatusListener />
               <GlobalConfirmDialog />
               {children}
             </ToastProvider>

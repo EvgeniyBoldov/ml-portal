@@ -11,7 +11,7 @@ class ChatEventMapper:
     def map_runtime_event(self, event: RuntimeEvent) -> Optional[dict[str, Any]]:
         progress = event.data.get("_progress")
         if isinstance(progress, dict):
-            return {"type": "status", "stage": "runtime_progress", "progress": progress}
+            return {"type": "stage", "activity": progress}
         if event.type is RuntimeEventType.DELTA:
             return {"type": "delta", "content": event.data.get("content", "")}
         if event.type is RuntimeEventType.STOP:

@@ -30,6 +30,12 @@ from app.services.chat_event_mapper import ChatEventMapper
 from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_turn_orchestrator import ChatTurnOrchestrator
 from app.services.chat_turn_service import CHAT_TURN_LEASE_SECONDS, ChatTurnIdempotencyError, ChatTurnService
+from app.core.chat_lifecycle import (
+    ACTIVE_STATUSES,
+    ChatTurnStatus,
+    WAITING_STATUSES,
+    normalize_chat_turn_status,
+)
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
@@ -131,11 +137,12 @@ class ChatStreamService:
         if not turn:
             return None
 
-        if turn.status == "started":
+        lifecycle_status = normalize_chat_turn_status(turn.status, turn.pause_status)
+        if lifecycle_status == ChatTurnStatus.RUNNING.value:
             lease_seconds = CHAT_TURN_LEASE_SECONDS
-            started_at = turn.started_at
-            if started_at is not None and (datetime.now(timezone.utc) - started_at).total_seconds() > lease_seconds:
-                turn.status = "failed"
+            last_heartbeat = getattr(turn, "heartbeat_at", None) or turn.started_at
+            if last_heartbeat is not None and (datetime.now(timezone.utc) - last_heartbeat).total_seconds() > lease_seconds:
+                turn.status = ChatTurnStatus.FAILED.value
                 turn.error_message = "runtime_lease_expired"
                 turn.completed_at = datetime.now(timezone.utc)
                 await self.session.flush()
@@ -144,28 +151,18 @@ class ChatStreamService:
                         "error": "The previous request stopped before completing. Start a new request."}
             return {"state": "processing"}
 
-        if turn.status == "completed" and turn.user_message_id and turn.assistant_message_id:
+        if lifecycle_status == ChatTurnStatus.COMPLETED.value and turn.user_message_id and turn.assistant_message_id:
             return {
                 "state": "completed",
                 "user_message_id": str(turn.user_message_id),
                 "assistant_message_id": str(turn.assistant_message_id),
             }
-        if turn.status in {"failed", "cancelled"}:
-            return {"state": "terminal", "status": turn.status,
+        if lifecycle_status in {ChatTurnStatus.FAILED.value, ChatTurnStatus.CANCELLED.value}:
+            return {"state": "terminal", "status": lifecycle_status,
                     "error": "The previous request did not complete"}
-        if turn.status == "paused":
+        if lifecycle_status in WAITING_STATUSES:
             return {"state": "paused"}
-        if turn.status == "resumed":
-            lease_seconds = CHAT_TURN_LEASE_SECONDS
-            started_at = turn.started_at
-            if started_at is not None and (datetime.now(timezone.utc) - started_at).total_seconds() > lease_seconds:
-                turn.status = "failed"
-                turn.error_message = "runtime_lease_expired"
-                turn.completed_at = datetime.now(timezone.utc)
-                await self.session.flush()
-                await self.session.commit()
-                return {"state": "terminal", "status": "failed",
-                        "error": "The previous request stopped before completing. Start a new request."}
+        if turn.status in ACTIVE_STATUSES:
             return {"state": "processing"}
 
         return None
@@ -206,6 +203,8 @@ class ChatStreamService:
         continuation_meta: Optional[Dict[str, Any]] = None,
         resumed_turn_id: Optional[str] = None,
         persist_user_message: bool = True,
+        runtime_run_id: Optional[str] = None,
+        cancellation_reason: str = "Client disconnected",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Send message and stream response while preserving current chat contract."""
 
@@ -388,6 +387,8 @@ class ChatStreamService:
                 bind_attachments=self.attachment_service.bind_artifacts_to_message,
                 preloaded_context=context,
                 preloaded_context_snapshot=context_snapshot,
+                requested_runtime_run_id=runtime_run_id,
+                cancellation_reason=cancellation_reason,
             ):
                 yield event
 
@@ -473,10 +474,7 @@ class ChatStreamService:
 
             async def _listen_progress() -> None:
                 async for message in tail_subscriber.listen():
-                    if (
-                        message.get("type") == "runtime_progress"
-                        and str(message.get("run_id")) == str(runtime_run_id)
-                    ):
+                    if message.get("type") == "runtime_progress" and str(message.get("run_id")) == str(runtime_run_id):
                         await progress_queue.put(message)
 
             async def _map_pipeline_event(event: RuntimeEvent) -> Optional[dict[str, Any]]:
@@ -514,7 +512,7 @@ class ChatStreamService:
                         "contract_version": paused_payload["contract_version"],
                     }
 
-                # Progress has a single delivery path: the tail subscription.
+                # Runtime stage activity has a single delivery path: the tail subscription.
                 # Direct pipeline delivery would duplicate root progress and
                 # cannot include asynchronous agent-child events.
                 if isinstance(event.data.get("_progress"), dict):
@@ -544,7 +542,13 @@ class ChatStreamService:
                             chat_runtime_progress_forwarded_total.inc()
                         except Exception:
                             pass
-                        yield {"type": "status", "stage": "runtime_progress", "progress": progress}
+                        yield {"type": "stage", "activity": {
+                            "run_id": progress.get("run_id"),
+                            "stage": progress.get("chat_stage") or "preparing",
+                            "action": progress.get("action") or progress.get("kind") or "runtime_activity",
+                            "description": progress.get("description") or "Выполняю запрос",
+                            "outcome": progress.get("outcome"),
+                        }}
                         progress_task = asyncio.create_task(progress_queue.get())
 
                     if pipeline_task in done:

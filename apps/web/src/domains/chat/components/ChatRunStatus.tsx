@@ -24,16 +24,16 @@ function getStatusLabel(status: ActiveChatRun['status']) {
   return 'Выполняется';
 }
 
-function ProgressOutcome({ status }: Pick<ChatRuntimeProgress, 'status'>) {
+function ProgressOutcome({ outcome }: Pick<ChatRuntimeProgress, 'outcome'>) {
   // An older stage is not necessarily successful. Use only explicit outcomes.
-  if (status === 'completed') {
+  if (outcome === 'completed') {
     return (
       <span className={styles.success} role="img" aria-label="Завершено">
         <Icon name="check" size={14} />
       </span>
     );
   }
-  if (status === 'failed' || status === 'error') {
+  if (outcome === 'failed' || outcome === 'error') {
     return (
       <span className={styles.failure} role="img" aria-label="Ошибка">
         <Icon name="x" size={14} />
@@ -83,7 +83,7 @@ export function ChatRunStatus({ run }: { run: ActiveChatRun }) {
                 }
               >
                 <strong>{item.description}</strong>
-                <ProgressOutcome status={item.status} />
+                <ProgressOutcome outcome={item.outcome} />
               </li>
             ))
           ) : (
@@ -100,7 +100,7 @@ export function ChatRunStatus({ run }: { run: ActiveChatRun }) {
             history.map(item => (
               <li key={item.id}>
                 <strong>{item.description}</strong>
-                <ProgressOutcome status={item.status} />
+                <ProgressOutcome outcome={item.outcome} />
               </li>
             ))
           ) : (

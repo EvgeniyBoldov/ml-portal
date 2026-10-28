@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,7 +42,10 @@ class ChatTurn(Base):
     )
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     request_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="started", server_default="started")
+    # Lifecycle contract: running, waiting_input, waiting_confirmation,
+    # completed, failed, cancelled. Legacy started/resumed/paused are read
+    # through chat_turn_status.normalize_chat_turn_status during rollout.
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="running", server_default="running")
     pause_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     paused_action: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     paused_context: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
@@ -50,6 +53,12 @@ class ChatTurn(Base):
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
         nullable=False,
     )
     paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
