@@ -33,12 +33,12 @@
 }
 .row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) 24px 44px;
   align-items: center;
   gap: 4px;
   border-radius: 8px;
   position: relative;
-  height: 48px; /* Фиксированная высота для всех чатов */
+  height: auto;
   min-height: 48px;
   flex-shrink: 0; /* Не сжимается */
 }
@@ -53,6 +53,8 @@
   border: 1px solid var(--primary);
 }
 .item {
+  min-width: 0;
+  overflow: hidden;
   text-align: left;
   padding: 8px 10px;
   border-radius: 8px;
@@ -71,8 +73,44 @@
 .item:hover {
   background: transparent;
 }
+.statusSlot {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--primary);
+}
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: chat-status-spin 800ms linear infinite;
+}
+.unreadDot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+@keyframes chat-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+    border-top-color: var(--primary);
+  }
+}
 .name {
-  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -83,29 +121,36 @@
 .tags {
   display: flex;
   gap: 4px;
-  flex-wrap: wrap;
-  margin-top: 2px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  min-width: 0;
 }
 .tag {
-  font-size: 10px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
   padding: 1px 4px;
   border-radius: 6px;
   border: 1px solid var(--border-color);
   background: var(--bg-hover);
-  color: var(--text);
-  line-height: 1.2;
+  color: var(--text-primary);
+  line-height: 1.4;
 }
 .kebabBtn {
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
+  fill: currentColor;
   border-radius: 8px;
   background: transparent;
   border: none;
   color: var(--muted);
   cursor: pointer;
-  opacity: 0;
+  opacity: 1;
   transition:
     opacity 0.15s ease,
     background-color 0.15s ease,
@@ -118,11 +163,6 @@
 }
 .menu {
   min-width: 160px;
-  background: var(--panel);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
 }
 .menu .item {
   display: block;
@@ -166,4 +206,23 @@
 }
 .undoBtn:hover {
   background: var(--bg-hover);
+}
+
+.row :focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+.row :focus-visible .kebabBtn,
+.row [aria-expanded='true'] .kebabBtn {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.menu .danger {
+  color: var(--danger);
+}
+.fieldLabel {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
 }

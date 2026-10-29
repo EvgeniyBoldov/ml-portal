@@ -224,6 +224,18 @@ services:
     depends_on:
       - api
 
+  # Persistent browser container for visual reviews of the development UI.
+  # From inside this container the app is available at http://nginx/gpt/.
+  chromium-review:
+    image: mcr.microsoft.com/playwright:v1.40.0-jammy
+    init: true
+    working_dir: /workspace
+    volumes:
+      - ./apps/web:/workspace
+    command: ["sleep", "infinity"]
+    depends_on:
+      - frontend
+
   # =============================================================================
   # MCP SERVERS
   # =============================================================================

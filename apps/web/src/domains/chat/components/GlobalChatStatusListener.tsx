@@ -10,6 +10,8 @@ import type {
 import { qk } from '@/shared/api/keys';
 import { useAuth } from '@/shared/hooks/useAuth';
 import { useToast } from '@/shared/ui/Toast';
+import type { Chat, PaginatedResponse } from '@/shared/api/types';
+import { useChatNotificationsStore } from '../model/chatNotifications.store';
 
 const statuses = new Set<ChatLifecycleStatus>([
   'running',
@@ -27,7 +29,9 @@ const stages = new Set<ChatExecutionStage>([
   'finalizing',
 ]);
 
-export function parseChatStatusSnapshot(data: string): ChatStatusSnapshot[] | null {
+export function parseChatStatusSnapshot(
+  data: string
+): ChatStatusSnapshot[] | null {
   try {
     const parsed: unknown = JSON.parse(data);
     if (!Array.isArray(parsed)) return null;
@@ -39,18 +43,21 @@ export function parseChatStatusSnapshot(data: string): ChatStatusSnapshot[] | nu
         typeof item.chat_id !== 'string' ||
         !statuses.has(item.status as ChatLifecycleStatus) ||
         (item.run_id !== null && typeof item.run_id !== 'string')
-      ) return null;
+      )
+        return null;
       result.push({
         chat_id: item.chat_id,
         run_id: item.run_id as string | null,
         status: item.status as ChatLifecycleStatus,
         stage: stages.has(item.stage as ChatExecutionStage)
-          ? item.stage as ChatExecutionStage
+          ? (item.stage as ChatExecutionStage)
           : null,
-        updated_at: typeof item.updated_at === 'string' ? item.updated_at : null,
-        stage_updated_at: typeof item.stage_updated_at === 'string'
-          ? item.stage_updated_at
-          : null,
+        updated_at:
+          typeof item.updated_at === 'string' ? item.updated_at : null,
+        stage_updated_at:
+          typeof item.stage_updated_at === 'string'
+            ? item.stage_updated_at
+            : null,
       });
     }
     return result;
@@ -59,7 +66,7 @@ export function parseChatStatusSnapshot(data: string): ChatStatusSnapshot[] | nu
   }
 }
 
-function delay(ms: number, signal: AbortSignal): Promise<void> {
+function delay(ms: number, signal: globalThis.AbortSignal): Promise<void> {
   return new Promise(resolve => {
     if (signal.aborted) return resolve();
     let timer: number | undefined;
@@ -85,10 +92,14 @@ function notifyCompletedTransitions(
     if (current.status !== 'completed') continue;
     const before = previousByChat.get(current.chat_id);
     if (
-      before &&
-      (before.status === 'running' || before.status === 'waiting_input' ||
-        before.status === 'waiting_confirmation' || before.run_id !== current.run_id)
-    ) notify(current);
+      !before ||
+      before.status === 'running' ||
+      before.status === 'waiting_input' ||
+      before.status === 'waiting_confirmation' ||
+      before.run_id !== current.run_id ||
+      (!current.run_id && before.updated_at !== current.updated_at)
+    )
+      notify(current);
   }
 }
 
@@ -100,9 +111,14 @@ export function GlobalChatStatusListener() {
   const userId = user?.id;
 
   useEffect(() => {
-    if (!isAuthReady || !userId) return;
+    if (!isAuthReady || !userId) {
+      useChatNotificationsStore.getState().reset();
+      return;
+    }
+    useChatNotificationsStore.getState().reset(userId);
     const controller = new AbortController();
     const queryKey = qk.chats.statuses(userId);
+    queryClient.setQueryDefaults(queryKey, { gcTime: Infinity });
     let previous = queryClient.getQueryData<ChatStatusSnapshot[]>(queryKey);
     let retryMs = 1000;
     const notifiedRunIds = new Set<string>();
@@ -111,16 +127,35 @@ export function GlobalChatStatusListener() {
       while (!controller.signal.aborted) {
         try {
           const response = await fetchChatStatusEvents(controller.signal);
-          if (!response.ok) throw new Error(`Chat status stream returned ${response.status}`);
+          if (!response.ok)
+            throw new Error(`Chat status stream returned ${response.status}`);
           await consumeSse(response, ({ event, data }) => {
+            if (controller.signal.aborted) return false;
             if (event !== 'snapshot') return;
             const snapshot = parseChatStatusSnapshot(data);
             if (!snapshot) return;
             notifyCompletedTransitions(previous, snapshot, item => {
-              const notificationKey = `${item.chat_id}:${item.run_id || 'unknown'}`;
+              const notificationKey = `${item.chat_id}:${item.run_id || item.updated_at || 'unknown'}`;
               if (notifiedRunIds.has(notificationKey)) return;
               notifiedRunIds.add(notificationKey);
-              showToast('Ответ в одном из чатов готов', 'success');
+              if (
+                useChatNotificationsStore
+                  .getState()
+                  .receiveCompleted(item.chat_id)
+              ) {
+                const chats = queryClient.getQueryData<PaginatedResponse<Chat>>(
+                  qk.chats.list()
+                );
+                const name = chats?.items.find(
+                  chat => chat.id === item.chat_id
+                )?.name;
+                showToast(
+                  name
+                    ? `Ответ в чате «${name}» готов`
+                    : 'Ответ в другом чате готов',
+                  'success'
+                );
+              }
             });
             previous = snapshot;
             queryClient.setQueryData(queryKey, snapshot);
@@ -137,10 +172,10 @@ export function GlobalChatStatusListener() {
 
     return () => {
       controller.abort();
+      useChatNotificationsStore.getState().reset();
       queryClient.removeQueries({ queryKey });
     };
   }, [isAuthReady, queryClient, showToast, userId]);
 
   return null;
 }
-

@@ -18,6 +18,10 @@ import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
 import { FactsPanel } from '@/shared/ui/FactsPanel/FactsPanel';
 import styles from './ProfilePage.module.css';
 
+type PasswordErrors = Partial<
+  Record<'current' | 'new' | 'confirm' | 'form', string>
+>;
+
 interface Profile {
   id: string;
   login: string;
@@ -83,7 +87,7 @@ const getRoleLabel = (role: string) => {
     case 'editor':
       return 'Редактор';
     case 'tenant_admin':
-      return 'Администратор тенанта';
+      return 'Администратор организации';
     case 'reader':
       return 'Читатель';
     default:
@@ -128,14 +132,16 @@ export default function ProfilePage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [revealPassword, setRevealPassword] = useState(false);
-  const [activeTab, setActiveTab] = useState<'info' | 'credentials' | 'tenant-management' | 'facts'>(
-    'info'
-  );
+  const [passwordErrors, setPasswordErrors] = useState<PasswordErrors>({});
+  const [activeTab, setActiveTab] = useState<
+    'info' | 'credentials' | 'tenant-management' | 'facts'
+  >('info');
   const [editingScopes, setEditingScopes] = useState(false);
   const [scopeDraft, setScopeDraft] = useState<string[]>([]);
   const [credentialCreateRequest, setCredentialCreateRequest] = useState(0);
   const [factCreateRequest, setFactCreateRequest] = useState(0);
-  const [tenantCredentialCreateRequest, setTenantCredentialCreateRequest] = useState(0);
+  const [tenantCredentialCreateRequest, setTenantCredentialCreateRequest] =
+    useState(0);
   const [tenantEditRequest, setTenantEditRequest] = useState(0);
   const [tenantSaveRequest, setTenantSaveRequest] = useState(0);
   const [tenantCancelRequest, setTenantCancelRequest] = useState(0);
@@ -153,7 +159,7 @@ export default function ProfilePage() {
     queryFn: async () => {
       const result = await apiRequest<unknown>('/profile/tokens');
       if (!Array.isArray(result)) {
-        throw new Error('Некорректный формат ответа API токенов');
+        throw new Error('Некорректный формат ответа API-токенов');
       }
       return result as ApiToken[];
     },
@@ -216,25 +222,34 @@ export default function ProfilePage() {
       setNewPassword('');
       setConfirmPassword('');
       setRevealPassword(false);
+      setPasswordErrors({});
     },
     onError: (error: unknown) => {
       const detail = error instanceof Error ? error.message : '';
       if (String(detail).includes('invalid_current_password')) {
-        showError('Текущий пароль указан неверно');
+        setPasswordErrors({ current: 'Текущий пароль указан неверно' });
+        document.getElementById('profile-current-password')?.focus();
         return;
       }
       if (String(detail).includes('password_too_short')) {
-        showError('Новый пароль должен быть не короче 8 символов');
+        setPasswordErrors({
+          new: 'Новый пароль должен быть не короче 8 символов',
+        });
+        document.getElementById('profile-new-password')?.focus();
         return;
       }
-      showError('Не удалось сменить пароль');
+      setPasswordErrors({
+        form: 'Не удалось сменить пароль. Попробуйте ещё раз.',
+      });
     },
   });
 
   const saveScopes = useMutation({
-    mutationFn: () => apiRequest('/profile/memory-scopes', {
-      method: 'PUT', body: JSON.stringify({ memory_scope_keys: scopeDraft }),
-    }),
+    mutationFn: () =>
+      apiRequest('/profile/memory-scopes', {
+        method: 'PUT',
+        body: JSON.stringify({ memory_scope_keys: scopeDraft }),
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: qk.profile.all() });
       void queryClient.invalidateQueries({ queryKey: qk.chats.all() });
@@ -271,17 +286,33 @@ export default function ProfilePage() {
     setCopied(false);
   };
 
+  const handleClosePasswordModal = () => {
+    setShowPasswordModal(false);
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setRevealPassword(false);
+    setPasswordErrors({});
+  };
+
   const handleChangePassword = () => {
-    if (!currentPassword.trim()) {
-      showError('Введите текущий пароль');
-      return;
-    }
-    if (newPassword.length < 8) {
-      showError('Новый пароль должен быть не короче 8 символов');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      showError('Новые пароли не совпадают');
+    const errors: PasswordErrors = {};
+    if (!currentPassword.trim()) errors.current = 'Введите текущий пароль';
+    if (newPassword.length < 8)
+      errors.new = 'Новый пароль должен быть не короче 8 символов';
+    if (!confirmPassword) errors.confirm = 'Повторите новый пароль';
+    else if (newPassword !== confirmPassword)
+      errors.confirm = 'Новые пароли не совпадают';
+    setPasswordErrors(errors);
+    const invalidField = errors.current
+      ? 'current'
+      : errors.new
+        ? 'new'
+        : errors.confirm
+          ? 'confirm'
+          : null;
+    if (invalidField) {
+      document.getElementById(`profile-${invalidField}-password`)?.focus();
       return;
     }
     changePassword.mutate({
@@ -300,7 +331,9 @@ export default function ProfilePage() {
     setEditingScopes(false);
   };
 
-  const selectTab = (tab: 'info' | 'credentials' | 'tenant-management' | 'facts') => {
+  const selectTab = (
+    tab: 'info' | 'credentials' | 'tenant-management' | 'facts'
+  ) => {
     setEditingScopes(false);
     setTenantEditing(false);
     setActiveTab(tab);
@@ -315,25 +348,96 @@ export default function ProfilePage() {
       <div className={styles.header}>
         <h1 className={styles.title}>Личный кабинет</h1>
         <div className={styles.headerActions}>
-          {activeTab === 'info' && <>
-            {editingScopes ? <>
-              <Button variant="outline" onClick={cancelScopeEdit} disabled={saveScopes.isPending}>Отмена</Button>
-              <Button variant="primary" onClick={() => saveScopes.mutate()} disabled={saveScopes.isPending}>{saveScopes.isPending ? 'Сохранение…' : 'Сохранить'}</Button>
-            </> : <Button variant="primary" onClick={startScopeEdit}>Редактировать</Button>}
-            {profile?.auth_provider === 'local' && <Button variant="outline" onClick={() => setShowPasswordModal(true)}>Сменить пароль</Button>}
-          </>}
-          {activeTab === 'credentials' && <>
-            <Button variant="primary" onClick={() => setCredentialCreateRequest(value => value + 1)}>Добавить credential</Button>
-            <Button variant="primary" onClick={() => setShowCreateModal(true)}>Создать токен</Button>
-          </>}
-          {activeTab === 'tenant-management' && profile?.is_tenant_admin && <>
-            <Button variant="primary" onClick={() => setTenantCredentialCreateRequest(value => value + 1)}>Добавить credential</Button>
-            {tenantEditing ? <>
-              <Button variant="outline" onClick={() => setTenantCancelRequest(value => value + 1)}>Отмена</Button>
-              <Button variant="primary" onClick={() => setTenantSaveRequest(value => value + 1)}>Сохранить</Button>
-            </> : <Button variant="primary" onClick={() => setTenantEditRequest(value => value + 1)}>Редактировать</Button>}
-          </>}
-          {activeTab === 'facts' && <Button onClick={() => setFactCreateRequest(value => value + 1)}>Добавить факт</Button>}
+          {activeTab === 'info' && (
+            <>
+              {editingScopes ? (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={cancelScopeEdit}
+                    disabled={saveScopes.isPending}
+                  >
+                    Отмена
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => saveScopes.mutate()}
+                    disabled={saveScopes.isPending}
+                  >
+                    {saveScopes.isPending ? 'Сохранение…' : 'Сохранить'}
+                  </Button>
+                </>
+              ) : (
+                <Button variant="primary" onClick={startScopeEdit}>
+                  Изменить области памяти
+                </Button>
+              )}
+              {profile?.auth_provider === 'local' && (
+                <Button
+                  variant="outline"
+                  onClick={() => setShowPasswordModal(true)}
+                >
+                  Сменить пароль
+                </Button>
+              )}
+            </>
+          )}
+          {activeTab === 'credentials' && (
+            <>
+              <Button
+                variant="primary"
+                onClick={() => setCredentialCreateRequest(value => value + 1)}
+              >
+                Добавить учётные данные
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => setShowCreateModal(true)}
+              >
+                Создать токен
+              </Button>
+            </>
+          )}
+          {activeTab === 'tenant-management' && profile?.is_tenant_admin && (
+            <>
+              <Button
+                variant="primary"
+                onClick={() =>
+                  setTenantCredentialCreateRequest(value => value + 1)
+                }
+              >
+                Добавить учётные данные
+              </Button>
+              {tenantEditing ? (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => setTenantCancelRequest(value => value + 1)}
+                  >
+                    Отмена
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => setTenantSaveRequest(value => value + 1)}
+                  >
+                    Сохранить
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  variant="primary"
+                  onClick={() => setTenantEditRequest(value => value + 1)}
+                >
+                  Редактировать
+                </Button>
+              )}
+            </>
+          )}
+          {activeTab === 'facts' && (
+            <Button onClick={() => setFactCreateRequest(value => value + 1)}>
+              Добавить факт
+            </Button>
+          )}
         </div>
       </div>
 
@@ -352,13 +456,19 @@ export default function ProfilePage() {
           onClick={() => selectTab('credentials')}
           type="button"
         >
-          Credentials
+          Учётные данные
         </button>
-        {profile?.is_tenant_admin && <button
-          className={activeTab === 'tenant-management' ? styles.activeTab : styles.tab}
-          onClick={() => selectTab('tenant-management')}
-          type="button"
-        >Управление тенантом</button>}
+        {profile?.is_tenant_admin && (
+          <button
+            className={
+              activeTab === 'tenant-management' ? styles.activeTab : styles.tab
+            }
+            onClick={() => selectTab('tenant-management')}
+            type="button"
+          >
+            Данные организации
+          </button>
+        )}
         <button
           className={activeTab === 'facts' ? styles.activeTab : styles.tab}
           onClick={() => selectTab('facts')}
@@ -440,11 +550,11 @@ export default function ProfilePage() {
               >
                 <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
               </svg>
-              Мои Credentials
+              Мои учётные данные
             </h2>
             <p className={styles.sectionDescription}>
               Ваши персональные учётные данные для подключения к инструментам.
-              Credentials шифруются и используются при выполнении запросов.
+              Учётные данные шифруются и используются при выполнении запросов.
             </p>
             <CredentialsPanel
               mode="user"
@@ -472,7 +582,7 @@ export default function ProfilePage() {
                   <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                   <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                 </svg>
-                API Токены
+                API-токены
               </h2>
             </div>
 
@@ -488,7 +598,7 @@ export default function ProfilePage() {
               <div className={styles.loading}>Загрузка токенов...</div>
             ) : tokens.length === 0 ? (
               <div className={styles.emptyState}>
-                <p>У вас пока нет API токенов</p>
+                <p>У вас пока нет API-токенов</p>
               </div>
             ) : (
               <div className={styles.tokensList}>
@@ -566,21 +676,27 @@ export default function ProfilePage() {
         </>
       )}
 
-      {activeTab === 'tenant-management' && profile?.is_tenant_admin && profile.tenants?.[0] && (
-        <ProfileTenantManagement
-          tenantId={profile.tenants[0]}
-          editRequest={tenantEditRequest}
-          saveRequest={tenantSaveRequest}
-          cancelRequest={tenantCancelRequest}
-          credentialCreateRequest={tenantCredentialCreateRequest}
-          onEditingChange={setTenantEditing}
-        />
-      )}
+      {activeTab === 'tenant-management' &&
+        profile?.is_tenant_admin &&
+        profile.tenants?.[0] && (
+          <ProfileTenantManagement
+            tenantId={profile.tenants[0]}
+            editRequest={tenantEditRequest}
+            saveRequest={tenantSaveRequest}
+            cancelRequest={tenantCancelRequest}
+            credentialCreateRequest={tenantCredentialCreateRequest}
+            onEditingChange={setTenantEditing}
+          />
+        )}
 
       {/* Facts Section */}
       {activeTab === 'facts' && (
         <>
-          <FactsPanel mode="profile" createRequest={factCreateRequest} hideCreateButton />
+          <FactsPanel
+            mode="profile"
+            createRequest={factCreateRequest}
+            hideCreateButton
+          />
         </>
       )}
 
@@ -628,8 +744,11 @@ export default function ProfilePage() {
         ) : (
           <div className={styles.createForm}>
             <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Название токена</label>
+              <label className={styles.formLabel} htmlFor="profile-token-name">
+                Название токена
+              </label>
               <Input
+                id="profile-token-name"
                 value={newTokenName}
                 onChange={e => setNewTokenName(e.target.value)}
                 placeholder="Например: VS Code Plugin"
@@ -673,36 +792,115 @@ export default function ProfilePage() {
 
       <Modal
         open={showPasswordModal}
-        onClose={() => setShowPasswordModal(false)}
+        onClose={handleClosePasswordModal}
         title="Сменить пароль"
       >
         <div className={styles.createForm}>
           <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Текущий пароль</label>
+            <label
+              className={styles.formLabel}
+              htmlFor="profile-current-password"
+            >
+              Текущий пароль
+            </label>
             <Input
+              id="profile-current-password"
+              aria-invalid={!!passwordErrors.current}
+              aria-describedby={
+                passwordErrors.current
+                  ? 'profile-current-password-error'
+                  : undefined
+              }
               type={revealPassword ? 'text' : 'password'}
               value={currentPassword}
-              onChange={e => setCurrentPassword(e.target.value)}
+              onChange={e => {
+                setCurrentPassword(e.target.value);
+                setPasswordErrors(previous => ({
+                  ...previous,
+                  current: undefined,
+                  form: undefined,
+                }));
+              }}
               autoComplete="current-password"
             />
+            {passwordErrors.current && (
+              <span
+                id="profile-current-password-error"
+                className={styles.formError}
+                role="alert"
+              >
+                {passwordErrors.current}
+              </span>
+            )}
           </div>
           <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Новый пароль</label>
+            <label className={styles.formLabel} htmlFor="profile-new-password">
+              Новый пароль
+            </label>
             <Input
+              id="profile-new-password"
+              aria-invalid={!!passwordErrors.new}
+              aria-describedby={
+                passwordErrors.new ? 'profile-new-password-error' : undefined
+              }
               type={revealPassword ? 'text' : 'password'}
               value={newPassword}
-              onChange={e => setNewPassword(e.target.value)}
+              onChange={e => {
+                setNewPassword(e.target.value);
+                setPasswordErrors(previous => ({
+                  ...previous,
+                  new: undefined,
+                  form: undefined,
+                }));
+              }}
               autoComplete="new-password"
             />
+            {passwordErrors.new && (
+              <span
+                id="profile-new-password-error"
+                className={styles.formError}
+                role="alert"
+              >
+                {passwordErrors.new}
+              </span>
+            )}
           </div>
           <div className={styles.formGroup}>
-            <label className={styles.formLabel}>Повторите новый пароль</label>
+            <label
+              className={styles.formLabel}
+              htmlFor="profile-confirm-password"
+            >
+              Повторите новый пароль
+            </label>
             <Input
+              id="profile-confirm-password"
+              aria-invalid={!!passwordErrors.confirm}
+              aria-describedby={
+                passwordErrors.confirm
+                  ? 'profile-confirm-password-error'
+                  : undefined
+              }
               type={revealPassword ? 'text' : 'password'}
               value={confirmPassword}
-              onChange={e => setConfirmPassword(e.target.value)}
+              onChange={e => {
+                setConfirmPassword(e.target.value);
+                setPasswordErrors(previous => ({
+                  ...previous,
+                  confirm: undefined,
+                  form: undefined,
+                }));
+              }}
               autoComplete="new-password"
             />
+            {passwordErrors.confirm && (
+              <span
+                id="profile-confirm-password-error"
+                className={styles.formError}
+                role="alert"
+              >
+                {passwordErrors.confirm}
+              </span>
+            )}
           </div>
           <div
             className={styles.modalActions}
@@ -720,11 +918,13 @@ export default function ProfilePage() {
               {revealPassword ? 'Скрыть пароль' : 'Показать пароль'}
             </Button>
           </div>
+          {passwordErrors.form && (
+            <p className={styles.formError} role="alert">
+              {passwordErrors.form}
+            </p>
+          )}
           <div className={styles.modalActions}>
-            <Button
-              variant="outline"
-              onClick={() => setShowPasswordModal(false)}
-            >
+            <Button variant="outline" onClick={handleClosePasswordModal}>
               Отмена
             </Button>
             <Button

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import styles from './ChatSidebar.module.css';
 import Button from '@shared/ui/Button';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -14,12 +14,8 @@ import {
 } from '@shared/api/hooks/useChats';
 import { useToast } from '@shared/ui/Toast';
 import { ChatTags } from '@domains/chat/components';
-
-function hueFromString(s: string) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h % 360;
-}
+import { useChatStatuses } from '@shared/api/hooks/useChatStatuses';
+import { useChatNotificationsStore } from '@domains/chat/model/chatNotifications.store';
 
 function KebabIcon() {
   return (
@@ -58,6 +54,31 @@ export default function ChatSidebar() {
   } | null>(null);
 
   const chats = data?.items || [];
+  const statuses = useChatStatuses().data || [];
+  const unreadChatIds = useChatNotificationsStore(state => state.unreadChatIds);
+  const setActiveChat = useChatNotificationsStore(state => state.setActiveChat);
+  useLayoutEffect(() => {
+    setActiveChat(chatId || null);
+    return () => setActiveChat(null);
+  }, [chatId, setActiveChat]);
+  const statusByChatId = new Map(
+    statuses.map(status => [status.chat_id, status.status])
+  );
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [menuSide, setMenuSide] = useState<'top' | 'bottom'>('bottom');
+  const menuTriggerRef = useRef<HTMLElement | null>(null);
+  const isDialogOpen = !!(renameTarget || deleteTarget || editTagsTarget);
+
+  useEffect(() => {
+    if (!isDialogOpen) return;
+    // The shared Modal owns keyboard focus; its opener may be a menu item
+    // removed before mount, so restore the persistent chat action trigger here.
+    return () => menuTriggerRef.current?.focus();
+  }, [isDialogOpen]);
+
+  function closeMenu() {
+    setOpenMenuId(null);
+  }
 
   async function onCreate() {
     try {
@@ -99,77 +120,126 @@ export default function ChatSidebar() {
                   className={styles.item}
                   onClick={() => nav(`/gpt/chat/${chat.id}`)}
                 >
-                  <div className={styles.name}>
+                  <div
+                    className={styles.name}
+                    title={chat.name || 'Без названия'}
+                  >
                     {chat.name || 'Без названия'}
                   </div>
                   {Array.isArray(chat.tags) && chat.tags.length > 0 && (
                     <div className={styles.tags}>
-                      {chat.tags.map(tag => {
-                        const h = hueFromString(tag);
-                        const bg = `hsla(${h}, 70%, 45%, .18)`;
-                        const bd = `hsla(${h}, 70%, 50%, .45)`;
-                        const fg = `hsla(${h}, 80%, 80%, .95)`;
-                        return (
-                          <span
-                            key={tag}
-                            className={styles.tag}
-                            style={{
-                              background: bg,
-                              borderColor: bd,
-                              color: fg,
-                            }}
-                          >
-                            {tag}
-                          </span>
-                        );
-                      })}
+                      {chat.tags.map(tag => (
+                        <span key={tag} className={styles.tag} title={tag}>
+                          {tag}
+                        </span>
+                      ))}
                     </div>
                   )}
                 </button>
+                {(() => {
+                  const isRunning = statusByChatId.get(chat.id) === 'running';
+                  const hasUnread =
+                    chatId !== chat.id && !!unreadChatIds[chat.id];
+                  if (!isRunning && !hasUnread)
+                    return (
+                      <span className={styles.statusSlot} aria-hidden="true" />
+                    );
+                  const label = [
+                    isRunning ? 'Ответ формируется' : '',
+                    hasUnread ? 'Новый ответ' : '',
+                  ]
+                    .filter(Boolean)
+                    .join('. ');
+                  return (
+                    <span
+                      className={styles.statusSlot}
+                      role="img"
+                      aria-label={label}
+                      title={label}
+                    >
+                      {isRunning && (
+                        <span className={styles.spinner} aria-hidden="true" />
+                      )}
+                      {hasUnread && (
+                        <span className={styles.unreadDot} aria-hidden="true" />
+                      )}
+                    </span>
+                  );
+                })()}
                 <Popover
+                  open={openMenuId === chat.id}
+                  ariaLabel={`Действия чата «${chat.name || 'Без названия'}»`}
+                  onOpenChange={isOpen => {
+                    if (isOpen) {
+                      menuTriggerRef.current =
+                        document
+                          .getElementById(`chat-menu-${chat.id}`)
+                          ?.querySelector<HTMLElement>('[role="button"]') ||
+                        null;
+                      const bottom =
+                        menuTriggerRef.current?.getBoundingClientRect()
+                          .bottom || 0;
+                      setMenuSide(
+                        bottom + 160 > window.innerHeight ? 'top' : 'bottom'
+                      );
+                    } else if (
+                      document.activeElement?.closest('[role="menu"]')
+                    ) {
+                      menuTriggerRef.current?.focus();
+                    }
+                    setOpenMenuId(isOpen ? chat.id : null);
+                  }}
+                  id={`chat-menu-${chat.id}`}
                   trigger={
-                    <button className={styles.kebabBtn} aria-label="Меню">
+                    <span className={styles.kebabBtn} aria-hidden="true">
                       <KebabIcon />
-                    </button>
+                    </span>
                   }
                   content={
                     <div className={styles.menu}>
                       <button
                         className={styles.item}
-                        onClick={() =>
+                        role="menuitem"
+                        onClick={() => {
+                          closeMenu();
                           setRenameTarget({
                             id: chat.id,
                             name: chat.name || '',
-                          })
-                        }
+                          });
+                        }}
                       >
                         Переименовать
                       </button>
                       <button
                         className={styles.item}
-                        onClick={() =>
+                        role="menuitem"
+                        onClick={() => {
+                          closeMenu();
                           setEditTagsTarget({
                             id: chat.id,
                             tags: chat.tags || [],
-                          })
-                        }
+                          });
+                        }}
                       >
-                        Теги…
+                        Изменить теги
                       </button>
                       <button
-                        className={styles.item}
-                        onClick={() =>
+                        className={`${styles.item} ${styles.danger}`}
+                        role="menuitem"
+                        onClick={() => {
+                          closeMenu();
                           setDeleteTarget({
                             id: chat.id,
                             name: chat.name || '',
-                          })
-                        }
+                          });
+                        }}
                       >
                         Удалить
                       </button>
                     </div>
                   }
                   align="end"
+                  side={menuSide}
                 />
               </div>
             )
@@ -205,7 +275,11 @@ export default function ChatSidebar() {
           </>
         }
       >
+        <label className={styles.fieldLabel} htmlFor="chat-name">
+          Название чата
+        </label>
         <Input
+          id="chat-name"
           value={renameTarget?.name || ''}
           onChange={e =>
             setRenameTarget(v => (v ? { ...v, name: e.target.value } : v))
@@ -250,6 +324,7 @@ export default function ChatSidebar() {
         <ChatTags
           chatId={editTagsTarget.id}
           tags={editTagsTarget.tags}
+          onClose={() => setEditTagsTarget(null)}
           onTagsChange={async tags => {
             try {
               await updateTagsMutation.mutateAsync({
@@ -258,8 +333,9 @@ export default function ChatSidebar() {
               });
               setEditTagsTarget(null);
               showToast('Теги обновлены', 'success');
-            } catch {
+            } catch (error) {
               showToast('Ошибка обновления тегов', 'error');
+              throw error;
             }
           }}
         />

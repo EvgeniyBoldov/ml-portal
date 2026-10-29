@@ -44,7 +44,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it('lists persisted collections and keeps the glossary reachable without synthetic memory rows or requests', async () => {
+it('lists persisted collections without synthetic memory rows or a glossary action', async () => {
   vi.spyOn(collectionsApi, 'list').mockResolvedValue({
     items: [persisted],
     total: 1,
@@ -54,9 +54,8 @@ it('lists persisted collections and keeps the glossary reachable without synthet
   expect(screen.getAllByRole('row')).toHaveLength(2);
   expect(screen.queryByText('Project Memory')).not.toBeInTheDocument();
   expect(screen.queryByText('Глобальная память')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Глоссарий' })).not.toBeInTheDocument();
   expect(apiRequest).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Глоссарий' }));
-  expect(screen.getByText('Каталог терминов')).toBeInTheDocument();
 });
 
 it('recovers a failed catalogue load through the retry button', async () => {

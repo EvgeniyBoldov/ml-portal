@@ -7,14 +7,22 @@ export default function ChatTags({
   chatId: _chatId,
   tags,
   onTagsChange,
+  onClose,
 }: {
   chatId: string;
   tags: string[];
-  onTagsChange: (tags: string[]) => void;
+  onTagsChange: (tags: string[]) => void | Promise<void>;
+  onClose?: () => void;
 }) {
   const [local, setLocal] = useState<string[]>(tags || []);
   const [open, setOpen] = useState(true);
   const [draft, setDraft] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  function handleClose() {
+    setOpen(false);
+    onClose?.();
+  }
 
   function add() {
     const t = draft.trim();
@@ -30,17 +38,25 @@ export default function ChatTags({
   return (
     <Modal
       open={open}
-      onClose={() => setOpen(false)}
-      title="Теги"
+      onClose={handleClose}
+      title="Изменить теги"
       footer={
         <>
-          <Button variant="ghost" onClick={() => setOpen(false)}>
+          <Button variant="ghost" onClick={handleClose}>
             Закрыть
           </Button>
           <Button
-            onClick={() => {
-              onTagsChange(local);
-              setOpen(false);
+            disabled={isSaving}
+            onClick={async () => {
+              setIsSaving(true);
+              try {
+                await onTagsChange(local);
+                handleClose();
+              } catch {
+                // The caller reports the error; keep the draft available to retry.
+              } finally {
+                setIsSaving(false);
+              }
             }}
           >
             Сохранить
@@ -57,6 +73,7 @@ export default function ChatTags({
         }}
       >
         <Input
+          aria-label="Новый тег"
           value={draft}
           onChange={e => setDraft(e.target.value)}
           placeholder="Новый тег"
@@ -78,6 +95,7 @@ export default function ChatTags({
           >
             {t}{' '}
             <button
+              aria-label={`Удалить тег «${t}»`}
               onClick={() => remove(t)}
               style={{ marginLeft: 6, opacity: 0.7 }}
             >

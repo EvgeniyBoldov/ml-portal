@@ -13,7 +13,6 @@ import {
   AdminPage,
   DataTable,
   Badge,
-  Button,
   type DataTableColumn,
 } from '@/shared/ui';
 import { CollectionLoadError } from '../components/CollectionLoadError';
@@ -194,14 +193,6 @@ export default function CollectionsListPage() {
     <AdminPage
       title="Коллекции данных"
       subtitle="Структурированные данные для AI агентов"
-      controls={
-        <Button
-          variant="outline"
-          onClick={() => navigate('/gpt/collections/glossary')}
-        >
-          Глоссарий
-        </Button>
-      }
       searchValue={search}
       onSearchChange={setSearch}
       searchPlaceholder="Поиск коллекций..."

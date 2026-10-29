@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 
 type PopoverAlign = 'start' | 'end';
 type PopoverSide = 'top' | 'bottom';
@@ -72,13 +78,14 @@ export default function Popover({
 
     const rect = triggerNode.getBoundingClientRect();
     const left = align === 'end' ? rect.right : rect.left;
-    const top = side === 'top' ? rect.top - POPOVER_OFFSET : rect.bottom + POPOVER_OFFSET;
+    const top =
+      side === 'top' ? rect.top - POPOVER_OFFSET : rect.bottom + POPOVER_OFFSET;
 
     setPlacement({
       position: 'fixed',
       left,
       top,
-      transform: align === 'end' ? 'translate3d(-100%, 0, 0)' : 'translate3d(0, 0, 0)',
+      transform: `translate3d(${align === 'end' ? '-100%' : '0'}, ${side === 'top' ? '-100%' : '0'}, 0)`,
     });
   }, [align, anchor, isOpen, side]);
 
@@ -90,7 +97,7 @@ export default function Popover({
     if (!isOpen) return;
 
     const handleOutsideClick = (event: MouseEvent) => {
-      const target = event.target as Node;
+      const target = event.target as globalThis.Node;
       if (
         popoverRef.current?.contains(target) ||
         triggerRef.current?.contains(target)
@@ -151,7 +158,11 @@ export default function Popover({
   }, []);
 
   return (
-    <div ref={triggerRef} id={id} style={{ position: 'relative', display: 'inline-flex' }}>
+    <div
+      ref={triggerRef}
+      id={id}
+      style={{ position: 'relative', display: 'inline-flex' }}
+    >
       {trigger && (
         <div
           role="button"

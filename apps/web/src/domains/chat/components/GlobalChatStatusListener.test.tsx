@@ -1,52 +1,88 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, waitFor } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  auth: { current: { user: { id: 'user-1' }, isAuthReady: true } as {
-    user: { id: string } | null;
-    isAuthReady: boolean;
-  } },
+  auth: {
+    current: { user: { id: 'user-1' }, isAuthReady: true } as {
+      user: { id: string } | null;
+      isAuthReady: boolean;
+    },
+  },
   fetchStatus: vi.fn(),
+  showToast: vi.fn(),
 }));
 
-vi.mock('@/shared/hooks/useAuth', () => ({ useAuth: () => mocks.auth.current }));
-vi.mock('@/shared/ui/Toast', () => ({ useToast: () => ({ showToast: vi.fn() }) }));
-vi.mock('@/shared/api/chats', () => ({ fetchChatStatusEvents: mocks.fetchStatus }));
+vi.mock('@/shared/hooks/useAuth', () => ({
+  useAuth: () => mocks.auth.current,
+}));
+vi.mock('@/shared/ui/Toast', () => ({
+  useToast: () => ({ showToast: mocks.showToast }),
+}));
+vi.mock('@/shared/api/chats', () => ({
+  fetchChatStatusEvents: mocks.fetchStatus,
+}));
 
-import { GlobalChatStatusListener, parseChatStatusSnapshot } from './GlobalChatStatusListener';
+import { useChatNotificationsStore } from '../model/chatNotifications.store';
+import { qk } from '@/shared/api/keys';
+import type { ChatStatusSnapshot } from '@/shared/api/chats';
+
+import {
+  GlobalChatStatusListener,
+  parseChatStatusSnapshot,
+} from './GlobalChatStatusListener';
 
 beforeEach(() => {
   mocks.auth.current = { user: { id: 'user-1' }, isAuthReady: true };
   mocks.fetchStatus.mockReset();
+  mocks.showToast.mockReset();
+  useChatNotificationsStore.setState({ activeChatId: null });
+  useChatNotificationsStore.getState().reset();
 });
 
 describe('parseChatStatusSnapshot', () => {
   it('accepts only the content-free lifecycle fields', () => {
-    expect(parseChatStatusSnapshot(JSON.stringify([{
-      chat_id: 'chat-1',
-      run_id: 'run-1',
-      status: 'running',
-      stage: 'executing',
-      updated_at: '2026-10-27T10:00:00Z',
-      stage_updated_at: '2026-10-27T10:01:00Z',
-      content: 'must not enter the status cache',
-    }]))).toEqual([{
-      chat_id: 'chat-1',
-      run_id: 'run-1',
-      status: 'running',
-      stage: 'executing',
-      updated_at: '2026-10-27T10:00:00Z',
-      stage_updated_at: '2026-10-27T10:01:00Z',
-    }]);
+    expect(
+      parseChatStatusSnapshot(
+        JSON.stringify([
+          {
+            chat_id: 'chat-1',
+            run_id: 'run-1',
+            status: 'running',
+            stage: 'executing',
+            updated_at: '2026-10-27T10:00:00Z',
+            stage_updated_at: '2026-10-27T10:01:00Z',
+            content: 'must not enter the status cache',
+          },
+        ])
+      )
+    ).toEqual([
+      {
+        chat_id: 'chat-1',
+        run_id: 'run-1',
+        status: 'running',
+        stage: 'executing',
+        updated_at: '2026-10-27T10:00:00Z',
+        stage_updated_at: '2026-10-27T10:01:00Z',
+      },
+    ]);
   });
 
   it('rejects malformed or unknown lifecycle states', () => {
     expect(parseChatStatusSnapshot('{')).toBeNull();
-    expect(parseChatStatusSnapshot(JSON.stringify([{
-      chat_id: 'chat-1', run_id: null, status: 'working', stage: null,
-    }]))).toBeNull();
+    expect(
+      parseChatStatusSnapshot(
+        JSON.stringify([
+          {
+            chat_id: 'chat-1',
+            run_id: null,
+            status: 'working',
+            stage: null,
+          },
+        ])
+      )
+    ).toBeNull();
   });
 
   it('reconciles an empty authoritative snapshot', () => {
@@ -54,14 +90,18 @@ describe('parseChatStatusSnapshot', () => {
   });
 
   it('aborts the authenticated stream when the user logs out', async () => {
-    let streamSignal: AbortSignal | undefined;
-    mocks.fetchStatus.mockImplementation((signal?: AbortSignal) => {
+    let streamSignal: globalThis.AbortSignal | undefined;
+    mocks.fetchStatus.mockImplementation((signal?: globalThis.AbortSignal) => {
       streamSignal = signal;
       return new Promise((_resolve, reject) => {
-        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError'))
+        );
       });
     });
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
     const view = render(
       <QueryClientProvider client={queryClient}>
         <GlobalChatStatusListener />
@@ -77,6 +117,146 @@ describe('parseChatStatusSnapshot', () => {
     );
 
     await waitFor(() => expect(streamSignal?.aborted).toBe(true));
+    view.unmount();
+    queryClient.clear();
+  });
+});
+
+describe('completion notifications', () => {
+  function mountStream() {
+    let push: (snapshot: ChatStatusSnapshot[]) => void = () => undefined;
+    mocks.fetchStatus.mockImplementation((signal: globalThis.AbortSignal) => {
+      const stream = new ReadableStream({
+        start(controller) {
+          push = snapshot =>
+            controller.enqueue(
+              new TextEncoder().encode(
+                `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`
+              )
+            );
+          signal.addEventListener('abort', () => controller.close(), {
+            once: true,
+          });
+        },
+      });
+      return Promise.resolve(new Response(stream));
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <GlobalChatStatusListener />
+      </QueryClientProvider>
+    );
+    const emit = async (snapshot: ChatStatusSnapshot[]) => {
+      await act(async () => {
+        push(snapshot);
+      });
+      await waitFor(() =>
+        expect(queryClient.getQueryData(qk.chats.statuses('user-1'))).toEqual(
+          snapshot
+        )
+      );
+    };
+    return { emit, queryClient, view };
+  }
+
+  const status = (
+    chat_id: string,
+    state: ChatStatusSnapshot['status'],
+    run_id = `run-${chat_id}`
+  ): ChatStatusSnapshot => ({
+    chat_id,
+    run_id,
+    status: state,
+    stage: null,
+    updated_at: null,
+    stage_updated_at: null,
+  });
+
+  it('suppresses active-chat notifications and marks only background replies unread once', async () => {
+    const { emit, view, queryClient } = mountStream();
+    useChatNotificationsStore.getState().setActiveChat('active');
+    queryClient.setQueryData(qk.chats.list(), {
+      items: [{ id: 'background', name: 'Планы' }],
+    });
+    await emit([status('active', 'running'), status('background', 'running')]);
+    await emit([
+      status('active', 'completed'),
+      status('background', 'completed'),
+    ]);
+    expect(useChatNotificationsStore.getState().unreadChatIds).toEqual({
+      background: true,
+    });
+    expect(mocks.showToast).toHaveBeenCalledExactlyOnceWith(
+      'Ответ в чате «Планы» готов',
+      'success'
+    );
+    await emit([
+      status('active', 'completed'),
+      status('background', 'completed'),
+    ]);
+    expect(mocks.showToast).toHaveBeenCalledTimes(1);
+    useChatNotificationsStore.getState().setActiveChat('background');
+    expect(useChatNotificationsStore.getState().unreadChatIds).toEqual({});
+    view.unmount();
+    queryClient.clear();
+  });
+
+  it('uses the selected chat at completion after switching during execution', async () => {
+    const { emit, view, queryClient } = mountStream();
+    useChatNotificationsStore.getState().setActiveChat('first');
+    await emit([status('first', 'running'), status('second', 'running')]);
+    useChatNotificationsStore.getState().setActiveChat('second');
+    await emit([status('first', 'completed'), status('second', 'completed')]);
+    expect(useChatNotificationsStore.getState().unreadChatIds).toEqual({
+      first: true,
+    });
+    expect(mocks.showToast).toHaveBeenCalledTimes(1);
+    view.unmount();
+    expect(useChatNotificationsStore.getState().unreadChatIds).toEqual({});
+    queryClient.clear();
+  });
+
+  it('notifies a fast first turn that completes between status polls', async () => {
+    const { emit, view, queryClient } = mountStream();
+    await emit([]);
+    await emit([status('new-chat', 'completed')]);
+    expect(useChatNotificationsStore.getState().unreadChatIds).toEqual({
+      'new-chat': true,
+    });
+    expect(mocks.showToast).toHaveBeenCalledTimes(1);
+    view.unmount();
+    queryClient.clear();
+  });
+
+  it('distinguishes completed turns without a run id by their lifecycle timestamp', async () => {
+    const { emit, view, queryClient } = mountStream();
+    const before = {
+      ...status('no-run', 'completed'),
+      run_id: null,
+      updated_at: '2026-10-28T10:00:00Z',
+    };
+    const after = { ...before, updated_at: '2026-10-28T10:01:00Z' };
+    await emit([before]);
+    await emit([after]);
+    expect(useChatNotificationsStore.getState().unreadChatIds).toEqual({
+      'no-run': true,
+    });
+    expect(mocks.showToast).toHaveBeenCalledTimes(1);
+    await emit([after]);
+    expect(mocks.showToast).toHaveBeenCalledTimes(1);
+    view.unmount();
+    queryClient.clear();
+  });
+
+  it('does not mark historical completed snapshots or failed turns unread', async () => {
+    const { emit, view, queryClient } = mountStream();
+    await emit([status('old', 'completed'), status('failing', 'running')]);
+    await emit([status('old', 'completed'), status('failing', 'failed')]);
+    expect(useChatNotificationsStore.getState().unreadChatIds).toEqual({});
+    expect(mocks.showToast).not.toHaveBeenCalled();
     view.unmount();
     queryClient.clear();
   });

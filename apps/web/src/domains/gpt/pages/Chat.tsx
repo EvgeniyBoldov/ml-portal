@@ -222,7 +222,7 @@ export default function Chat() {
             <Icon name="sparkles" size={48} />
           </div>
           <h2 className={styles.emptyTitle}>
-            Добро пожаловать в ML Portal Chat
+            Добро пожаловать в Почемучку
           </h2>
           <p className={styles.emptyDescription}>
             Выберите существующий чат слева или создайте новый, чтобы начать

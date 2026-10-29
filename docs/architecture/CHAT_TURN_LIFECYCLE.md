@@ -95,8 +95,23 @@ stage snapshot; missing Redis data only removes that optional field.
 
 The frontend opens the stream after authentication, aborts it on logout or
 unmount, retries with bounded backoff, and stores the latest snapshot in a
-user-scoped query cache. A transition to `completed` produces an in-app toast.
-Opening a chat still uses the regular active-run and message-history endpoints;
+user-scoped query cache. The first snapshot seeds the client and does not
+produce historical notifications. After that baseline, a newly observed chat
+already in `completed` state is also treated as a completion, covering turns
+that start and finish between polls. Completion notifications are deduplicated
+per chat and run; when `run_id` is absent, lifecycle `updated_at` is the
+fallback deduplication key. Completion of
+the currently active chat is suppressed; completion in another chat produces
+a toast and marks that chat as unread. The toast uses the chat name from the
+existing chat-list cache when available, with a generic message otherwise.
+Active chat and unread markers are session-local presentation state; entering
+a chat clears its unread marker. Logout or listener teardown clears this
+state. The latest status snapshot is kept separately in the user-scoped query
+cache and remains the source for status presentation. In the chat list, active
+execution uses a spinner and an unread completion uses a separate dot; these
+indicators may coexist. The row layout remains fixed while they appear, and
+the spinner respects the reduced-motion preference. Opening a chat still uses
+the regular active-run and message-history endpoints;
 the global channel is not an answer transport. The database polling interval
 sets the expected upper bound for status update latency while connected.
 
