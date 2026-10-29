@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.collection import Collection
 from app.models.tenant import Tenants, UserTenants
 from app.models.user import Users
 from app.schemas.collections_public import (
@@ -19,6 +21,50 @@ _LOCAL_TYPES = {'table', 'document', 'template'}
 _SECRET_FIELD = re.compile(r'(^_|password|secret|token|authorization|credential|connection|headers?|cookie|api_key)', re.I)
 _IDENTIFIER = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 _FIELD_TYPES = {'string', 'text', 'integer', 'float', 'boolean', 'datetime', 'date', 'enum', 'json', 'file'}
+
+
+@dataclass(frozen=True)
+class CollectionDisplayMetadata:
+    source: PublicCollectionSource
+    description: str | None
+    purpose: str | None
+    version: PublishedCollectionVersion | None
+
+
+def build_collection_display_metadata(collection: Collection) -> CollectionDisplayMetadata:
+    """Build safe display metadata without exposing provider configuration."""
+    raw_type = getattr(collection, 'collection_type', '')
+    collection_type = str(getattr(raw_type, 'value', raw_type) or '')
+    local = collection_type in _LOCAL_TYPES
+
+    version_row = getattr(collection, 'current_version', None)
+    raw_version_status = getattr(version_row, 'status', None)
+    published = (
+        version_row is not None
+        and getattr(raw_version_status, 'value', raw_version_status) == 'published'
+    )
+    version = PublishedCollectionVersion(number=version_row.version) if published else None
+
+    data_instance = getattr(collection, 'data_instance', None)
+    source_name = getattr(data_instance, 'name', None)
+    if source_name is not None:
+        source_name = str(source_name)
+        has_control_chars = any(
+            ord(character) < 32 or ord(character) == 127 for character in source_name
+        )
+        source_name = source_name.strip()
+        if '://' in source_name or has_control_chars:
+            source_name = None
+
+    return CollectionDisplayMetadata(
+        source=PublicCollectionSource(
+            name=source_name or ('Локальное хранилище' if local else 'Внешний источник'),
+            type='local' if local else collection_type,
+        ),
+        description=getattr(version_row, 'data_description', None) if published else None,
+        purpose=getattr(version_row, 'usage_purpose', None) if published else None,
+        version=version,
+    )
 
 
 def safe_public_fields(collection) -> list[PublicCollectionField]:
@@ -133,20 +179,14 @@ class CollectionPublicService:
                 readiness = snapshot['status'] if snapshot.get('status') in {'created', 'discovered', 'ingesting', 'ready', 'degraded', 'error'} else 'unknown'
         elif local:
             readiness = 'created' if active else 'inactive'
-        version = getattr(collection, 'current_version', None)
-        published = version is not None and getattr(getattr(version, 'status', ''), 'value', getattr(version, 'status', '')) == 'published'
-        instance = getattr(collection, 'data_instance', None)
-        source_name = getattr(instance, 'name', None)
-        if source_name and ('://' in source_name or '\n' in source_name):
-            source_name = None
-        source = PublicCollectionSource(name=source_name or ('Локальное хранилище' if local else 'Внешний источник'), type='local' if local else ctype)
+        display = build_collection_display_metadata(collection)
         return PublicCollectionResponse(
             id=collection.id, tenant_id=collection.tenant_id, slug=collection.slug,
             name=collection.name, collection_type=ctype,
-            description=getattr(version, 'data_description', None) if published else None,
-            purpose=getattr(version, 'usage_purpose', None) if published else None,
-            version=PublishedCollectionVersion(number=version.version) if published else None,
-            source=source, locality='local' if local else 'remote',
+            description=display.description,
+            purpose=display.purpose,
+            version=display.version,
+            source=display.source, locality='local' if local else 'remote',
             readiness=PublicCollectionReadiness(status=readiness), count=count,
             fields=safe_public_fields(collection) if caps.view_schema else [],
             capabilities=caps, capability_reasons=reasons,

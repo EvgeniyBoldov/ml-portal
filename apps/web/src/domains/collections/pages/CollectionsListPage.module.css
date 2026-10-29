@@ -13,6 +13,11 @@
   color: var(--text-on-primary, #ffffff) !important;
 }
 
+.type-api {
+  background: var(--info, #0ea5e9) !important;
+  color: var(--text-on-primary, #ffffff) !important;
+}
+
 .type-template {
   background: var(--status-success, #22c55e) !important;
   color: var(--text-on-primary, #ffffff) !important;
@@ -26,4 +31,33 @@
 .status-inactive {
   background: var(--status-warning, #f59e0b) !important;
   color: var(--text-on-primary, #ffffff) !important;
+}
+
+.collection-cell {
+  display: flex;
+  min-width: 0;
+  width: 260px;
+  max-width: 260px;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.collection-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary, var(--text));
+  font-weight: var(--font-weight-semibold, 600);
+  text-overflow: ellipsis;
+}
+
+.collection-slug,
+.collection-source,
+.collection-description {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-xs, 0.75rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

@@ -8,14 +8,20 @@ from typing import List, Optional
 import uuid
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_uow, get_current_user, resolve_active_user_tenant_ids
 from app.core.security import UserCtx
 from app.core.logging import get_logger
 from app.models.collection import Collection
+from app.schemas.collections_public import (
+    PublicCollectionCount,
+    PublicCollectionSource,
+    PublishedCollectionVersion,
+)
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
+from app.services.collection_public_service import build_collection_display_metadata
 from app.services.collection_service import CollectionService
 from app.services.permission_service import PermissionService
 
@@ -28,24 +34,53 @@ async def _build_collection_response(
     service: CollectionService,
     collection,
 ) -> CollectionResponse:
-    if str(getattr(collection, "collection_type", "") or "") == "template":
+    raw_collection_type = getattr(collection, "collection_type", "")
+    collection_type = str(getattr(raw_collection_type, "value", raw_collection_type) or "")
+    is_external = collection_type in {"api", "sql"}
+    if collection_type == "template":
         await service.ensure_contract_fields_present(collection, ensure_vector_infra=False)
-    snapshot = await service.sync_collection_status(collection, persist=False)
-    effective_total_rows = await service.get_effective_total_rows(collection)
+
+    if is_external:
+        status = "unknown"
+        status_details = None
+        effective_total_rows = 0  # Retained for older clients; external count is explicitly unknown below.
+        count = PublicCollectionCount()
+    else:
+        snapshot = await service.sync_collection_status(collection, persist=False)
+        status = snapshot["status"]
+        status_details = snapshot["details"]
+        effective_total_rows = await service.get_effective_total_rows(collection)
+        count_kind, count_unit = {
+            "document": ("documents", "документов"),
+            "template": ("templates", "шаблонов"),
+        }.get(collection_type, ("rows", "строк"))
+        count = PublicCollectionCount(
+            value=effective_total_rows,
+            kind=count_kind,
+            unit=count_unit,
+        )
+
+    display = build_collection_display_metadata(collection)
+
     return CollectionResponse(
         id=collection.id,
-        collection_type=collection.collection_type,
+        collection_type=collection_type,
         slug=collection.slug,
         name=collection.name,
         fields=collection.fields,
-        status=snapshot["status"],
-        status_details=snapshot["details"],
+        status=status,
+        status_details=status_details,
         total_rows=effective_total_rows,
         is_active=collection.is_active,
         memory_enabled=bool(getattr(collection, "memory_enabled", False)),
         has_vector_search=collection.has_vector_search,
         created_at=collection.created_at.isoformat(),
         updated_at=collection.updated_at.isoformat(),
+        source=display.source,
+        description=display.description,
+        purpose=display.purpose,
+        version=display.version,
+        count=count,
     )
 
 
@@ -132,6 +167,11 @@ class CollectionResponse(BaseModel):
     has_vector_search: bool = False
     created_at: str
     updated_at: str
+    source: PublicCollectionSource | None = None
+    description: str | None = None
+    purpose: str | None = None
+    version: PublishedCollectionVersion | None = None
+    count: PublicCollectionCount = Field(default_factory=PublicCollectionCount)
 
     model_config = ConfigDict(from_attributes=True)
 

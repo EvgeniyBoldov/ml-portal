@@ -16,6 +16,32 @@ The user catalogue lists persisted collections only. The glossary is a separate
 read-only catalogue; legacy Project Memory and Global Memory views are removed.
 HippoRAG document operations and the shared memory scope catalogue remain active.
 
+### Portal catalogue and detail views
+
+The tenant collection list and detail endpoints return display metadata in the
+same response as the collection: its source name, current published version
+number, description and usage purpose. Version text is omitted unless the
+current version is published. The source field contains a display name only;
+values that look like a URI or contain control characters fall back to a generic
+source label. The source display metadata contains neither provider
+configuration nor credentials.
+
+The catalogue may show the published description and source alongside the
+collection name. It displays the structured count (`value`, `kind`, `unit`)
+when known. Local table, document and template collections retain their existing
+content views and known counts.
+
+Remote `api` and `sql` collections remain visible and navigable, but their detail
+page is an information view rather than a table of rows. It uses the collection
+response already loaded for the page and does not request remote content to
+render. The structured count is unknown (`value`, `kind` and `unit` are null),
+and the legacy `total_rows` field remains zero for older clients; that legacy
+value must not be presented as the remote source's actual count. The response
+also reports `status=unknown` with no status details because local collection
+status and count calculations do not describe remote source availability. This
+UI behavior does not change how runtime resolves operations for remote
+collections.
+
 Public metadata, data, upload, export, document lifecycle, template and SSE routes
 apply the same effective collection permissions. An explicit collection deny
 returns 404 before reading or mutating its contents. Membership checks use active

@@ -20,8 +20,16 @@ vi.mock('@shared/ui/Toast', () => ({
 }));
 vi.mock('@shared/lib/sse', () => {
   class MockSSEClient {
-    static clients: Array<{ onMessage: (events: Array<{ type: string; data: unknown; timestamp: number }>) => void }> = [];
-    constructor(options: { onMessage: (events: Array<{ type: string; data: unknown; timestamp: number }>) => void }) {
+    static clients: Array<{
+      onMessage: (
+        events: Array<{ type: string; data: unknown; timestamp: number }>
+      ) => void;
+    }> = [];
+    constructor(options: {
+      onMessage: (
+        events: Array<{ type: string; data: unknown; timestamp: number }>
+      ) => void;
+    }) {
       MockSSEClient.clients.push(options);
     }
     connect = vi.fn();
@@ -66,10 +74,14 @@ function collection(type: Collection['collection_type']): Collection {
     updated_at: '',
   };
 }
-function setup(type: Collection['collection_type'], detailError?: Error) {
+function setup(
+  type: Collection['collection_type'],
+  detailError?: Error,
+  detailData?: Collection
+) {
   const detail = vi.spyOn(collectionsApi, 'getBySlug');
   if (detailError) detail.mockRejectedValue(detailError);
-  else detail.mockResolvedValue(collection(type));
+  else detail.mockResolvedValue(detailData ?? collection(type));
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   });
@@ -133,6 +145,60 @@ it('refetches table data when the search changes on the first page', async () =>
       expect.objectContaining({ search: 'needle' })
     )
   );
+});
+
+it.each(['api', 'sql'] as const)(
+  'shows external %s metadata without requesting collection content',
+  async type => {
+    const getData = vi.spyOn(collectionsApi, 'getData').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    });
+    const external = {
+      ...collection(type),
+      name: 'Jira',
+      slug: 'jira',
+      data_instance: {
+        id: 'jira-source',
+        slug: 'jira-prod',
+        name: 'Jira Prod',
+      },
+      source: { name: 'Jira Prod', type },
+      description: 'Задачи и проекты Jira',
+      purpose: 'Поиск сведений по задачам',
+      version: { number: 3, status: 'published' as const },
+      count: { value: null, kind: null, unit: null },
+    };
+    setup(type, undefined, external);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Jira' })
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Jira Prod').length).toBeGreaterThan(0);
+    expect(screen.getByText('Задачи и проекты Jira')).toBeInTheDocument();
+    expect(screen.getByText('Версия 3')).toBeInTheDocument();
+    expect(screen.getByText('Количество не указано')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Просмотр содержимого внешнего источника/)
+    ).toBeInTheDocument();
+    expect(getData).not.toHaveBeenCalled();
+  }
+);
+
+it('does not show unpublished version metadata on an external collection page', async () => {
+  setup('api', undefined, {
+    ...collection('api'),
+    description: 'Описание черновика',
+    purpose: 'Назначение черновика',
+    version: null,
+    count: { value: null, kind: null, unit: null },
+  });
+
+  expect(await screen.findByText('Описание не задано')).toBeInTheDocument();
+  expect(screen.queryByText('Описание черновика')).not.toBeInTheDocument();
+  expect(screen.queryByText('Назначение черновика')).not.toBeInTheDocument();
 });
 
 it.each(['document', 'template'] as const)(
@@ -228,34 +294,65 @@ it('does not report an unavailable API as a missing collection', async () => {
 });
 
 it('refreshes aggregate counts after a collection SSE snapshot', async () => {
-  const listDocuments = vi.spyOn(collectionsApi, 'listDocuments')
+  const listDocuments = vi
+    .spyOn(collectionsApi, 'listDocuments')
     .mockResolvedValueOnce({
-      items: [doc('document-1')], total: 1, page: 1, size: 50, has_more: false,
-      stats: { total: 1, ready: 1, processing: 0, partial: 0, failed: 0, uploaded: 0, archived: 0 },
+      items: [doc('document-1')],
+      total: 1,
+      page: 1,
+      size: 50,
+      has_more: false,
+      stats: {
+        total: 1,
+        ready: 1,
+        processing: 0,
+        partial: 0,
+        failed: 0,
+        uploaded: 0,
+        archived: 0,
+      },
     })
     .mockResolvedValue({
-      items: [{ ...doc('document-1'), agg_status: 'partial' }], total: 1, page: 1, size: 50, has_more: false,
-      stats: { total: 1, ready: 0, processing: 0, partial: 1, failed: 0, uploaded: 0, archived: 0 },
+      items: [{ ...doc('document-1'), agg_status: 'partial' }],
+      total: 1,
+      page: 1,
+      size: 50,
+      has_more: false,
+      stats: {
+        total: 1,
+        ready: 0,
+        processing: 0,
+        partial: 1,
+        failed: 0,
+        uploaded: 0,
+        archived: 0,
+      },
     });
   setup('document');
   await screen.findByText('document-1');
   await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(1));
 
-  const sseModule = await import('@shared/lib/sse') as unknown as {
+  const sseModule = (await import('@shared/lib/sse')) as unknown as {
     getSseClients: () => Array<{
-      onMessage: (events: Array<{ type: string; data: unknown; timestamp: number }>) => void;
+      onMessage: (
+        events: Array<{ type: string; data: unknown; timestamp: number }>
+      ) => void;
     }>;
   };
   const client = sseModule.getSseClients().at(-1);
   expect(client).toBeDefined();
-  client?.onMessage([{
-    type: 'rag.snapshot',
-    data: { items: [{ document_id: 'document-1', agg_status: 'partial' }] },
-    timestamp: Date.now(),
-  }]);
+  client?.onMessage([
+    {
+      type: 'rag.snapshot',
+      data: { items: [{ document_id: 'document-1', agg_status: 'partial' }] },
+      timestamp: Date.now(),
+    },
+  ]);
 
   await waitFor(() => expect(listDocuments).toHaveBeenCalledTimes(2));
-  expect(screen.getByRole('button', { name: /1 Частично готово/i })).toBeInTheDocument();
+  expect(
+    screen.getByRole('button', { name: /1 Частично готово/i })
+  ).toBeInTheDocument();
 });
 
 it.each(['completed', 'running'])(
@@ -331,7 +428,12 @@ it('shows separate RAG and LongMemory readiness metrics, project membership, and
         steps: {
           extract: {
             status: 'completed',
-            metrics: { passages: 8, entities: 12, facts: 7, extracted_triples: 9 },
+            metrics: {
+              passages: 8,
+              entities: 12,
+              facts: 7,
+              extracted_triples: 9,
+            },
           },
           index: { status: 'running', metrics: { scope_edges: 5 } },
         },
@@ -339,13 +441,25 @@ it('shows separate RAG and LongMemory readiness metrics, project membership, and
     },
   } satisfies CollectionDocument;
   vi.spyOn(collectionsApi, 'listDocuments').mockResolvedValue({
-    items: [target], total: 1, page: 1, size: 50, has_more: false,
+    items: [target],
+    total: 1,
+    page: 1,
+    size: 50,
+    has_more: false,
   });
   vi.spyOn(memoryScopesApi, 'list').mockResolvedValue([
-    { id: 'scope-1', scope_type: 'project', key: 'network', name: 'Сеть', aliases: [], is_all: false },
+    {
+      id: 'scope-1',
+      scope_type: 'project',
+      key: 'network',
+      name: 'Сеть',
+      aliases: [],
+      is_all: false,
+    },
   ]);
   const remove = vi.spyOn(collectionsApi, 'deleteDocuments').mockResolvedValue({
-    deleted: 1, collection_id: 'collection-id',
+    deleted: 1,
+    collection_id: 'collection-id',
   });
   vi.spyOn(window, 'confirm').mockReturnValue(true);
 
@@ -353,39 +467,67 @@ it('shows separate RAG and LongMemory readiness metrics, project membership, and
 
   expect(await screen.findByText('Руководство сети')).toBeInTheDocument();
   expect(screen.getByRole('columnheader', { name: 'RAG' })).toBeInTheDocument();
-  expect(screen.getByRole('columnheader', { name: 'LongMemory' })).toBeInTheDocument();
-  expect(screen.queryByRole('columnheader', { name: 'Действия' })).not.toBeInTheDocument();
+  expect(
+    screen.getByRole('columnheader', { name: 'LongMemory' })
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole('columnheader', { name: 'Действия' })
+  ).not.toBeInTheDocument();
   expect(screen.getByText('42 чанков')).toBeInTheDocument();
   expect(screen.getByText('Индексируется')).toBeInTheDocument();
-  expect(screen.getByText(/9 триплетов · 7 фактов · 8 фрагм\./)).toBeInTheDocument();
-  expect(screen.getByText(/Индекс: выполняется · Граф области: 5 связей/)).toBeInTheDocument();
+  expect(
+    screen.getByText(/9 триплетов · 7 фактов · 8 фрагм\./)
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(/Индекс: выполняется · Граф области: 5 связей/)
+  ).toBeInTheDocument();
   expect(screen.getByText('Сеть')).toBeInTheDocument();
-  expect(screen.queryByText(/наследуется|Semantic Memory|семантическая память/i)).not.toBeInTheDocument();
+  expect(
+    screen.queryByText(/наследуется|Semantic Memory|семантическая память/i)
+  ).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: 'Действия для Руководство сети' }));
-  fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить документ' }));
-  await waitFor(() => expect(remove).toHaveBeenCalledWith('collection-id', ['network-guide']));
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Действия для Руководство сети' })
+  );
+  fireEvent.click(
+    await screen.findByRole('menuitem', { name: 'Удалить документ' })
+  );
+  await waitFor(() =>
+    expect(remove).toHaveBeenCalledWith('collection-id', ['network-guide'])
+  );
 });
 
 it('does not call LongMemory ready when indexing is not confirmed', async () => {
   const target: CollectionDocument = {
     ...doc('incomplete-memory'),
     memory: {
-      policy: 'explicit', enabled: true, effective_enabled: true,
-      project_keys: [], scope_keys: [], extraction_status: 'completed',
+      policy: 'explicit',
+      enabled: true,
+      effective_enabled: true,
+      project_keys: [],
+      scope_keys: [],
+      extraction_status: 'completed',
       extraction_metrics: {
         status: 'completed',
-        steps: { extract: { status: 'completed', metrics: { extracted_triples: 2 } } },
+        steps: {
+          extract: { status: 'completed', metrics: { extracted_triples: 2 } },
+        },
       },
     },
   };
   vi.spyOn(collectionsApi, 'listDocuments').mockResolvedValue({
-    items: [target], total: 1, page: 1, size: 50, has_more: false,
+    items: [target],
+    total: 1,
+    page: 1,
+    size: 50,
+    has_more: false,
   });
 
   setup('document');
 
-  expect(await screen.findByText('Готовность не подтверждена')).toBeInTheDocument();
+  expect(
+    await screen.findByText('Готовность не подтверждена')
+  ).toBeInTheDocument();
   expect(screen.queryByText('Готова')).not.toBeInTheDocument();
 });
 
@@ -396,8 +538,12 @@ it('distinguishes disabled, queued, extracting, ready, and failed LongMemory sta
     extractStage: string,
     indexStage: string
   ): NonNullable<CollectionDocument['memory']> => ({
-    policy: 'explicit', enabled, effective_enabled: enabled,
-    project_keys: [], scope_keys: [], extraction_status: extractionStatus,
+    policy: 'explicit',
+    enabled,
+    effective_enabled: enabled,
+    project_keys: [],
+    scope_keys: [],
+    extraction_status: extractionStatus,
     extraction_metrics: {
       steps: {
         extract: { status: extractStage, metrics: {} },
@@ -406,15 +552,34 @@ it('distinguishes disabled, queued, extracting, ready, and failed LongMemory sta
     },
   });
   const items: CollectionDocument[] = [
-    { ...doc('disabled'), memory: memory('completed', false, 'completed', 'completed') },
+    {
+      ...doc('disabled'),
+      memory: memory('completed', false, 'completed', 'completed'),
+    },
     { ...doc('queued'), memory: memory('queued', true, 'queued', 'queued') },
-    { ...doc('extracting'), memory: memory('running', true, 'running', 'queued') },
-    { ...doc('ready'), memory: memory('completed', true, 'completed', 'completed') },
-    { ...doc('extract-error'), memory: memory('failed', true, 'failed', 'queued') },
-    { ...doc('index-error'), memory: memory('failed', true, 'completed', 'failed') },
+    {
+      ...doc('extracting'),
+      memory: memory('running', true, 'running', 'queued'),
+    },
+    {
+      ...doc('ready'),
+      memory: memory('completed', true, 'completed', 'completed'),
+    },
+    {
+      ...doc('extract-error'),
+      memory: memory('failed', true, 'failed', 'queued'),
+    },
+    {
+      ...doc('index-error'),
+      memory: memory('failed', true, 'completed', 'failed'),
+    },
   ];
   vi.spyOn(collectionsApi, 'listDocuments').mockResolvedValue({
-    items, total: items.length, page: 1, size: 50, has_more: false,
+    items,
+    total: items.length,
+    page: 1,
+    size: 50,
+    has_more: false,
   });
 
   setup('document');

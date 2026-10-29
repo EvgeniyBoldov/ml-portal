@@ -9,12 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { collectionsApi, type Collection } from '@/shared/api/collections';
 import { qk } from '@/shared/api/keys';
-import {
-  AdminPage,
-  DataTable,
-  Badge,
-  type DataTableColumn,
-} from '@/shared/ui';
+import { AdminPage, DataTable, Badge, type DataTableColumn } from '@/shared/ui';
 import { CollectionLoadError } from '../components/CollectionLoadError';
 import styles from './CollectionsListPage.module.css';
 
@@ -35,8 +30,14 @@ export default function CollectionsListPage() {
   const filteredCollections = useMemo(() => {
     if (!search.trim()) return collections;
     const q = search.toLowerCase();
-    return collections.filter(
-      c => c.name.toLowerCase().includes(q) || c.slug.toLowerCase().includes(q)
+    return collections.filter(c =>
+      [
+        c.name,
+        c.slug,
+        c.source?.name,
+        c.data_instance?.name,
+        c.version?.status === 'published' ? c.description : null,
+      ].some(value => value?.toLowerCase().includes(q))
     );
   }, [collections, search]);
 
@@ -67,11 +68,22 @@ export default function CollectionsListPage() {
         getValue: row => `${row.name ?? ''} ${row.slug ?? ''}`,
       },
       render: row => (
-        <div>
-          <div style={{ fontWeight: 600 }}>{row.name}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-            {row.slug}
-          </div>
+        <div className={styles['collection-cell']}>
+          <span className={styles['collection-name']}>{row.name}</span>
+          <span className={styles['collection-slug']}>{row.slug}</span>
+          {(row.source?.name || row.data_instance?.name) && (
+            <span className={styles['collection-source']}>
+              Источник: {row.source?.name || row.data_instance?.name}
+            </span>
+          )}
+          {row.version?.status === 'published' && row.description && (
+            <span
+              className={styles['collection-description']}
+              title={row.description}
+            >
+              {row.description}
+            </span>
+          )}
         </div>
       ),
     },
@@ -99,9 +111,11 @@ export default function CollectionsListPage() {
               ? styles['type-document']
               : row.collection_type === 'sql'
                 ? styles['type-sql']
-                : row.collection_type === 'template'
-                  ? styles['type-template']
-                  : styles['type-table']
+                : row.collection_type === 'api'
+                  ? styles['type-api']
+                  : row.collection_type === 'template'
+                    ? styles['type-template']
+                    : styles['type-table']
           }
         >
           {row.collection_type === 'document'
@@ -145,13 +159,28 @@ export default function CollectionsListPage() {
       label: 'ЗАПИСЕЙ',
       width: 100,
       sortable: true,
+      sortValue: row =>
+        row.collection_type === 'api' || row.collection_type === 'sql'
+          ? row.count?.value
+          : row.total_rows,
       align: 'right',
       filter: {
         kind: 'text',
         placeholder: 'Кол-во',
-        getValue: row => row.total_rows,
+        getValue: row =>
+          row.collection_type === 'api' || row.collection_type === 'sql'
+            ? (row.count?.value ?? '')
+            : row.total_rows,
       },
-      render: row => row.total_rows?.toLocaleString() ?? '0',
+      render: row => {
+        if (row.collection_type === 'api' || row.collection_type === 'sql') {
+          const count = row.count;
+          return typeof count?.value === 'number' && count.unit
+            ? `${count.value.toLocaleString('ru-RU')} ${count.unit}`
+            : '—';
+        }
+        return row.total_rows?.toLocaleString() ?? '0';
+      },
     },
     {
       key: 'created_at',

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { collectionsApi, type Collection } from '@/shared/api/collections';
@@ -54,8 +54,66 @@ it('lists persisted collections without synthetic memory rows or a glossary acti
   expect(screen.getAllByRole('row')).toHaveLength(2);
   expect(screen.queryByText('Project Memory')).not.toBeInTheDocument();
   expect(screen.queryByText('Глобальная память')).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Глоссарий' })).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'Глоссарий' })
+  ).not.toBeInTheDocument();
   expect(apiRequest).not.toHaveBeenCalled();
+});
+
+it('shows an external source and published description, with an unknown count', async () => {
+  vi.spyOn(collectionsApi, 'list').mockResolvedValue({
+    items: [
+      {
+        ...persisted,
+        id: 'jira-id',
+        slug: 'jira',
+        name: 'Jira',
+        collection_type: 'api',
+        total_rows: 0,
+        source: { name: 'Jira Prod', type: 'api' },
+        description: 'Задачи и проекты Jira',
+        version: { number: 3, status: 'published' },
+        count: { value: null, kind: null, unit: null },
+      },
+    ],
+    total: 1,
+  });
+  setup();
+
+  const row = await screen.findByRole('row', { name: /Jira/ });
+  expect(within(row).getByText('Источник: Jira Prod')).toBeInTheDocument();
+  expect(within(row).getByText('Задачи и проекты Jira')).toBeInTheDocument();
+  expect(within(row).getAllByRole('cell')[3]).toHaveTextContent('—');
+
+  fireEvent.change(screen.getByPlaceholderText('Поиск коллекций...'), {
+    target: { value: 'Jira Prod' },
+  });
+  expect(screen.getByRole('row', { name: /Jira/ })).toBeInTheDocument();
+});
+
+it('searches external collections by source and published description', async () => {
+  vi.spyOn(collectionsApi, 'list').mockResolvedValue({
+    items: [
+      {
+        ...persisted,
+        id: 'jira-id',
+        slug: 'jira',
+        name: 'Jira',
+        collection_type: 'api',
+        source: { name: 'Jira Prod', type: 'api' },
+        description: 'Задачи и проекты',
+        version: { number: 1, status: 'published' },
+      },
+    ],
+    total: 1,
+  });
+  setup();
+  await screen.findByText('Jira');
+
+  fireEvent.change(screen.getByPlaceholderText('Поиск коллекций...'), {
+    target: { value: 'проекты' },
+  });
+  expect(screen.getByRole('row', { name: /Jira/ })).toBeInTheDocument();
 });
 
 it('recovers a failed catalogue load through the retry button', async () => {

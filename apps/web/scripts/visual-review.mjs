@@ -32,6 +32,7 @@ const { address: chromiumAddress } = await lookup('chromium-review', { family: 4
 const browser = await chromium.connectOverCDP(`http://${chromiumAddress}:9222`);
 const context = browser.contexts()[0];
 const page = await context.newPage();
+await page.setViewportSize({ width: 1440, height: 1000 });
 const pageErrors = [];
 page.on('pageerror', error => pageErrors.push(error.message));
 

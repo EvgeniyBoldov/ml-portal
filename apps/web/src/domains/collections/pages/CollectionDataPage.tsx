@@ -34,6 +34,7 @@ import { buildFileDownloadUrl } from '@shared/api/files';
 import { summarizeTemplateSchema } from '@shared/lib/templateSchemaSummary';
 import TemplateStatusModal from './TemplateStatusModal';
 import GlossaryCollectionView from './GlossaryCollectionView';
+import ExternalCollectionOverview from '../components/ExternalCollectionOverview';
 import { memoryScopesApi } from '@/shared/api/memoryScopes';
 import { CollectionLoadError } from '../components/CollectionLoadError';
 import styles from './CollectionDataPage.module.css';
@@ -2002,10 +2003,13 @@ export default function CollectionDataPage() {
 
   const isDocument = collection.collection_type === 'document';
   const isTemplate = collection.collection_type === 'template';
+  const isExternal = collection.collection_type === 'api' || collection.collection_type === 'sql';
 
   return (
     <div className={styles.page}>
-      {isDocument ? (
+      {isExternal ? (
+        <ExternalCollectionOverview key={collection.id} collection={collection} />
+      ) : isDocument ? (
         <DocumentCollectionView key={collection.id} collection={collection} />
       ) : isTemplate ? (
         <TemplateCollectionView key={collection.id} collection={collection} slug={slug!} />

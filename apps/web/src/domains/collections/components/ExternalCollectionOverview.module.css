@@ -1,0 +1,204 @@
+.page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg-primary, var(--bg));
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4, 1rem);
+  padding: var(--sp-4, 1rem) var(--sp-5, 1.5rem);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary, var(--panel));
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4, 1rem);
+  min-width: 0;
+}
+
+.back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: var(--radius-lg, 8px);
+  background: var(--bg-hover);
+  color: var(--text-secondary, var(--muted));
+  cursor: pointer;
+}
+
+.back-button:hover {
+  background: var(--border-color);
+  color: var(--text-primary, var(--text));
+}
+
+.back-button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.heading {
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary, var(--text));
+  font-size: var(--font-size-xl, 1.25rem);
+  font-weight: var(--font-weight-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subtitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2, 0.5rem);
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-sm, 0.875rem);
+}
+
+.content {
+  display: grid;
+  width: 100%;
+  max-width: none;
+  align-content: start;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: var(--sp-4, 1rem);
+  margin: 0;
+  padding: var(--sp-5, 1.5rem);
+  box-sizing: border-box;
+}
+
+.card {
+  min-width: 0;
+  padding: var(--sp-4, 1rem) var(--sp-5, 1.5rem);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg, 8px);
+  background: var(--bg-primary, var(--panel));
+}
+
+.card h2 {
+  margin: 0;
+  color: var(--text-primary, var(--text));
+  font-size: var(--font-size-lg, 1.125rem);
+  font-weight: var(--font-weight-semibold);
+}
+
+.card-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3, 0.75rem);
+}
+
+.version {
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-sm, 0.875rem);
+}
+
+.description,
+.muted {
+  margin: var(--sp-3, 0.75rem) 0 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.description {
+  color: var(--text-primary, var(--text));
+}
+
+.muted {
+  color: var(--text-secondary, var(--muted));
+}
+
+.purpose {
+  margin-top: var(--sp-5, 1.5rem);
+  padding-top: var(--sp-4, 1rem);
+  border-top: 1px solid var(--border-color);
+}
+
+.purpose h3 {
+  margin: 0;
+  color: var(--text-primary, var(--text));
+  font-size: var(--font-size-sm, 0.875rem);
+  font-weight: var(--font-weight-semibold);
+}
+
+.purpose p {
+  margin: var(--sp-2, 0.5rem) 0 0;
+  color: var(--text-secondary, var(--muted));
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.details {
+  display: grid;
+  gap: var(--sp-3, 0.75rem);
+  margin: var(--sp-4, 1rem) 0 0;
+}
+
+.detail-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) 2fr;
+  gap: var(--sp-4, 1rem);
+}
+
+.detail-row dt {
+  color: var(--text-secondary, var(--muted));
+}
+
+.detail-row dd {
+  margin: 0;
+  color: var(--text-primary, var(--text));
+  overflow-wrap: anywhere;
+}
+
+.notice {
+  margin: var(--sp-5, 1.5rem) 0 0;
+  padding-top: var(--sp-4, 1rem);
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-sm, 0.875rem);
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .content {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--sp-4, 1rem);
+  }
+}
+
+@media (max-width: 600px) {
+  .header {
+    padding: var(--sp-3, 0.75rem) var(--sp-4, 1rem);
+  }
+
+  .content {
+    padding: var(--sp-4, 1rem);
+  }
+
+  .card {
+    padding: var(--sp-4, 1rem);
+  }
+
+  .detail-row {
+    grid-template-columns: 1fr;
+    gap: var(--sp-1, 0.25rem);
+  }
+}

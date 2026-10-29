@@ -6,7 +6,11 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.v1.routers.collections import crud
-from app.services.collection_public_service import CollectionPublicService, safe_public_fields
+from app.services.collection_public_service import (
+    CollectionPublicService,
+    build_collection_display_metadata,
+    safe_public_fields,
+)
 
 
 def collection(kind='table', published=True):
@@ -118,3 +122,18 @@ def test_source_schema_is_local_and_structural_only():
         {'name': 'title', 'data_type': 'text', 'required': True},
     ]
     assert safe_public_fields(collection('sql')) == []
+
+
+@pytest.mark.parametrize('source_name', [
+    'postgresql://user:password@example/database',
+    'Jira\nProd',
+    'Netbox\x7f',
+])
+def test_display_metadata_rejects_connection_strings_and_control_characters(source_name):
+    item = collection('api')
+    item.data_instance.name = source_name
+
+    metadata = build_collection_display_metadata(item)
+
+    assert metadata.source.name == 'Внешний источник'
+    assert metadata.source.type == 'api'

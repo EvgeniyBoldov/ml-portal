@@ -30,6 +30,78 @@ def _fake_collection(slug: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("collection_type", ["api", "sql"])
+async def test_external_collection_response_uses_safe_metadata_without_local_count(collection_type):
+    collection = _fake_collection("external")
+    collection.collection_type = collection_type
+    collection.current_version = SimpleNamespace(
+        status="published",
+        version=3,
+        data_description="Published source description",
+        usage_purpose="Published purpose",
+    )
+    collection.data_instance = SimpleNamespace(name="Jira Prod")
+    service = SimpleNamespace(
+        sync_collection_status=AsyncMock(),
+        get_effective_total_rows=AsyncMock(),
+    )
+
+    response = await collections_crud._build_collection_response(service, collection)
+
+    assert response.status == "unknown"
+    assert response.status_details is None
+    assert response.total_rows == 0  # Legacy field remains for existing clients.
+    assert response.count.value is None
+    assert response.count.kind is None
+    assert response.source.model_dump() == {"name": "Jira Prod", "type": collection_type}
+    assert response.description == "Published source description"
+    assert response.purpose == "Published purpose"
+    assert response.version.model_dump() == {"number": 3, "status": "published"}
+    service.sync_collection_status.assert_not_awaited()
+    service.get_effective_total_rows.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_external_collection_response_omits_unpublished_metadata_and_unsafe_source_name():
+    collection = _fake_collection("external")
+    collection.collection_type = "api"
+    collection.current_version = SimpleNamespace(
+        status="draft",
+        version=4,
+        data_description="Draft text must not be shown",
+        usage_purpose="Draft purpose must not be shown",
+    )
+    collection.data_instance = SimpleNamespace(name="https://private.example/token")
+    service = SimpleNamespace(
+        sync_collection_status=AsyncMock(),
+        get_effective_total_rows=AsyncMock(),
+    )
+
+    response = await collections_crud._build_collection_response(service, collection)
+
+    assert response.source.name == "Внешний источник"
+    assert response.description is None
+    assert response.purpose is None
+    assert response.version is None
+
+
+@pytest.mark.asyncio
+async def test_local_collection_response_preserves_status_and_known_count():
+    collection = _fake_collection("local")
+    service = SimpleNamespace(
+        sync_collection_status=AsyncMock(return_value={"status": "ready", "details": {"source": "local"}}),
+        get_effective_total_rows=AsyncMock(return_value=7),
+    )
+
+    response = await collections_crud._build_collection_response(service, collection)
+
+    assert response.status == "ready"
+    assert response.status_details == {"source": "local"}
+    assert response.total_rows == 7
+    assert response.count.model_dump() == {"value": 7, "kind": "rows", "unit": "строк"}
+
+
+@pytest.mark.asyncio
 async def test_list_collections_filters_denied_by_rbac(monkeypatch):
     allowed = _fake_collection("allowed")
     denied = _fake_collection("denied")

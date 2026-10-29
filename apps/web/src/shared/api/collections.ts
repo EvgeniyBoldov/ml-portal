@@ -61,6 +61,22 @@ export interface DataInstanceShort {
   name: string;
 }
 
+export interface CollectionSource {
+  name: string;
+  type: string;
+}
+
+export interface PublishedCollectionVersionInfo {
+  number: number;
+  status: 'published';
+}
+
+export interface CollectionCount {
+  value: number | null;
+  kind: string | null;
+  unit: string | null;
+}
+
 export interface CollectionVersionCreate {
   data_description?: string | null;
   usage_purpose?: string | null;
@@ -123,6 +139,11 @@ export interface Collection {
   table_schema?: Record<string, unknown> | null;
   data_instance_id: string;
   data_instance?: DataInstanceShort | null;
+  source?: CollectionSource | null;
+  description?: string | null;
+  purpose?: string | null;
+  version?: PublishedCollectionVersionInfo | null;
+  count?: CollectionCount | null;
   
   // Vector search fields
   has_vector_search: boolean;
