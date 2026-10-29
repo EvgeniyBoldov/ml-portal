@@ -188,6 +188,11 @@ review/
 *.tar.gz
 *.zip
 
+# Keep PNGs out of Git except label artwork and the application logo.
+*.png
+!**/*label*.png
+!apps/web/public/logo.png
+
 .windsurf/
 .windsurfrules/
 
