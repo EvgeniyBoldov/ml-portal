@@ -454,7 +454,6 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
 }
 
 // ─── Document collection view ───────────────────────────────────
-type DocStatusFilter = 'all' | 'ready' | 'processing' | 'partial' | 'failed' | 'uploaded' | 'archived';
 type DocSortKey = 'name' | 'created_at' | 'agg_status';
 type DocSortDir = 'asc' | 'desc';
 
@@ -605,7 +604,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
-  const [statusFilter, setStatusFilter] = useState<DocStatusFilter>('all');
   const [sortKey, setSortKey] = useState<DocSortKey>('created_at');
   const [sortDir, setSortDir] = useState<DocSortDir>('desc');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -707,10 +705,10 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   }, [collection.fields]);
 
   const { data: docsData, isLoading: docsLoading, isError: docsError, refetch: refetchDocs } = useQuery({
-    queryKey: qk.collections.documents(collectionId, { page, size: pageSize, status: statusFilter, query: debouncedSearchQuery }),
+    queryKey: qk.collections.documents(collectionId, { page, size: pageSize, query: debouncedSearchQuery }),
     queryFn: () => {
       const params: NonNullable<Parameters<typeof collectionsApi.listDocuments>[1]> & { query?: string } = {
-        page, size: pageSize, status: statusFilter === 'all' ? undefined : statusFilter,
+        page, size: pageSize,
         query: debouncedSearchQuery || undefined,
       };
       return collectionsApi.listDocuments(collectionId, params);
@@ -740,20 +738,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     if (docsData && page > totalDocumentPages) setPage(totalDocumentPages);
   }, [docsData, page, totalDocumentPages]);
 
-  // Stats
-  const stats = docsData?.stats ?? { total: totalDocs, ready: 0, processing: 0, partial: 0, failed: 0, uploaded: 0, archived: 0 };
-
-  const statCards: { label: string; value: number; color: 'neutral' | 'success' | 'warning' | 'danger'; filter: DocStatusFilter }[] = [
-    { label: 'Все', value: stats.total, color: 'neutral', filter: 'all' },
-    { label: 'Готово', value: stats.ready, color: 'success', filter: 'ready' },
-    { label: 'В обработке', value: stats.processing, color: 'warning', filter: 'processing' },
-    { label: 'Частично готово', value: stats.partial, color: 'warning', filter: 'partial' },
-    { label: 'Ошибки', value: stats.failed, color: 'danger', filter: 'failed' },
-    { label: 'Загружено', value: stats.uploaded, color: 'neutral', filter: 'uploaded' },
-    { label: 'В архиве', value: stats.archived, color: 'neutral', filter: 'archived' },
-  ];
-
-  // Filter & sort
+  // Sort visible documents
   const filteredDocuments = useMemo(() => {
     let result = [...documents];
 
@@ -797,7 +782,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
 
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [page, pageSize, statusFilter, debouncedSearchQuery]);
+  }, [page, pageSize, debouncedSearchQuery]);
 
   // Conditional bulk action visibility
   const ingestableDocuments = selectedDocs.filter(d =>
@@ -1096,25 +1081,6 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     <>
       <CollectionHeader collection={collection} total={totalDocs} right={headerRight} />
 
-      <div className={styles.ragFilters} role="group" aria-label="Фильтры статуса RAG">
-        <span className={styles.ragFiltersLabel}>RAG</span>
-        <div className={styles.ragFilterList}>
-          {statCards.map(card => (
-            <button
-              key={card.label}
-              type="button"
-              className={`${styles.ragFilter} ${card.value > 0 ? styles[card.color] : ''} ${statusFilter === card.filter ? styles.active : ''}`}
-              onClick={() => { setStatusFilter(card.filter); setPage(1); }}
-              disabled={memoryActionPending !== null}
-              aria-pressed={statusFilter === card.filter}
-            >
-              <span>{card.label}</span>
-              <span className={styles.ragFilterCount}>{formatCount(card.value)}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Toolbar */}
       <div className={styles.docToolbar}>
         <div className={styles.docToolbarLeft}>
@@ -1184,11 +1150,11 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
           </span>
             <h3>Документы не найдены</h3>
             <p>
-              {searchQuery || statusFilter !== 'all'
-                ? 'Попробуйте изменить фильтры'
+              {searchQuery
+                ? 'Попробуйте изменить запрос'
                 : 'Загрузите первый документ для начала работы'}
             </p>
-            {!searchQuery && statusFilter === 'all' && (
+            {!searchQuery && (
               <Button onClick={() => setUploadModalOpen(true)}>Загрузить документ</Button>
             )}
           </div>

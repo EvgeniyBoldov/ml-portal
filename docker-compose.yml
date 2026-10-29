@@ -224,15 +224,27 @@ services:
     depends_on:
       - api
 
-  # Persistent browser container for visual reviews of the development UI.
-  # From inside this container the app is available at http://nginx/gpt/.
+  # Persistent headless browser for visual reviews. The dev UI is proxied at
+  # http://nginx:8080/gpt/ from containers on the Compose network.
   chromium-review:
     image: mcr.microsoft.com/playwright:v1.40.0-jammy
     init: true
     working_dir: /workspace
     volumes:
       - ./apps/web:/workspace
-    command: ["sleep", "infinity"]
+      - chromium_review_profile:/ms-playwright-user-data
+    ports:
+      - "127.0.0.1:9222:9222"
+    command:
+      - /ms-playwright/chromium-1091/chrome-linux/chrome
+      - --headless
+      - --no-sandbox
+      - --disable-dev-shm-usage
+      - --remote-debugging-address=0.0.0.0
+      - --remote-debugging-port=9222
+      - --user-data-dir=/ms-playwright-user-data
+      - --no-first-run
+      - about:blank
     depends_on:
       - frontend
 
@@ -540,3 +552,4 @@ volumes:
   minio_data:
   qdrant_data:
   frontend_node_modules:
+  chromium_review_profile:

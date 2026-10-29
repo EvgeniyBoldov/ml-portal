@@ -44,6 +44,25 @@ refreshes that address automatically. After editing nginx configuration, run
 - Docling Serve API (локальный HTTP): `http://localhost:8016/docs`
 - Docling playground: `http://localhost:8016/ui`
 
+### Visual review in Chromium
+
+The `chromium-review` container keeps a headless Chromium available over the
+local DevTools port. To capture a page, run the helper from the frontend
+container:
+
+```bash
+docker compose up -d chromium-review
+docker compose exec -T frontend node scripts/visual-review.mjs \
+  http://nginx:8080/gpt/collections collections
+```
+
+Screenshots are saved under `apps/web/test-results/visual-review/`. The helper
+removes screenshots older than seven days and keeps at most 20 recent captures.
+The DevTools endpoint is available only on the host at `127.0.0.1:9222`.
+For the local visual-review environment, sign in with `admin` / `admin123`.
+The Chromium profile is persistent, so the session remains available between
+container restarts.
+
 ### Docling Serve
 
 Сервис `docling` использует официальный CPU-образ

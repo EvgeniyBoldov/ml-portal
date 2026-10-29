@@ -425,73 +425,9 @@
 
 /* ===== Document Collection Mode ===== */
 
-/* Compact RAG status filters */
-.ragFilters {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 24px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border-color);
-}
-
-.ragFiltersLabel {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.04em;
-}
-
-.ragFilterList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-}
-
-.ragFilter {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 32px;
-  padding: 5px 10px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  font: inherit;
-  font-size: var(--text-sm);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.ragFilter:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.ragFilter.active {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--primary);
-}
-
-.ragFilter:focus-visible,
 .memoryStatusButton:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
-}
-
-.ragFilter.success .ragFilterCount { color: var(--success); }
-.ragFilter.warning .ragFilterCount { color: var(--warning); }
-.ragFilter.danger .ragFilterCount { color: var(--danger); }
-
-.ragFilterCount {
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
 }
 
 .srOnly {
@@ -1182,12 +1118,6 @@
 
 /* Responsive for document mode */
 @media (max-width: 1024px) {
-  .ragFilters {
-    align-items: flex-start;
-    padding: 10px 16px;
-    gap: 8px;
-  }
-
   .docToolbar {
     padding: 10px 16px;
   }
@@ -1207,14 +1137,6 @@
 }
 
 @media (max-width: 600px) {
-  .ragFilters {
-    flex-direction: column;
-  }
-
-  .ragFilterList {
-    width: 100%;
-  }
-
   .docToolbarLeft,
   .search {
     width: 100%;
