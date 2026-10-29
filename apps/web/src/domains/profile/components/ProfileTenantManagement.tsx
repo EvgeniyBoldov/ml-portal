@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@/shared/api/http';
 import { qk } from '@/shared/api/keys';
 import { MemoryScopeSelect } from '@/shared/ui/MemoryScopeSelect/MemoryScopeSelect';
 import MultiSelectTagPicker from '@/shared/ui/MultiSelectTagPicker/MultiSelectTagPicker';
 import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
+import Button from '@/shared/ui/Button';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import styles from './ProfileTenantManagement.module.css';
 
@@ -14,7 +15,7 @@ type TenantManagement = {
   data_editors: Array<{ id: string; login: string; full_name: string | null; is_data_editor: boolean }>;
 };
 
-export function ProfileTenantManagement({ tenantId, editRequest = 0, saveRequest = 0, cancelRequest = 0, credentialCreateRequest = 0, onEditingChange }: { tenantId: string; editRequest?: number; saveRequest?: number; cancelRequest?: number; credentialCreateRequest?: number; onEditingChange?: (editing: boolean) => void }) {
+export function ProfileTenantManagement({ tenantId }: { tenantId: string }) {
   const queryClient = useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
@@ -25,7 +26,6 @@ export function ProfileTenantManagement({ tenantId, editRequest = 0, saveRequest
   const [editing, setEditing] = useState(false);
   const [scopeKeys, setScopeKeys] = useState<string[]>([]);
   const [editorIds, setEditorIds] = useState<string[]>([]);
-  const previousRequests = useRef({ editRequest, saveRequest, cancelRequest });
 
   useEffect(() => {
     if (!data || editing) return;
@@ -58,61 +58,67 @@ export function ProfileTenantManagement({ tenantId, editRequest = 0, saveRequest
     setEditing(false);
   }, [data]);
 
-  useEffect(() => {
-    if (editRequest !== previousRequests.current.editRequest) {
-      previousRequests.current.editRequest = editRequest;
-      setEditing(true);
-    }
-    if (saveRequest !== previousRequests.current.saveRequest) {
-      previousRequests.current.saveRequest = saveRequest;
-      if (editing) save.mutate();
-    }
-    if (cancelRequest !== previousRequests.current.cancelRequest) {
-      previousRequests.current.cancelRequest = cancelRequest;
-      if (editing) cancelEdit();
-    }
-  }, [editRequest, saveRequest, cancelRequest, editing, save, cancelEdit]);
-
-  useEffect(() => { onEditingChange?.(editing); }, [editing, onEditingChange]);
-
   return (
     <div className={styles.container}>
       <section className={styles.section}>
         <CredentialsPanel
           mode="tenant-admin"
           tenantId={tenantId}
-          title="Credentials тенанта"
-          createRequest={credentialCreateRequest}
-          hideCreateButton
+          title="Учётные данные рабочей группы"
         />
       </section>
 
       <section className={styles.section}>
-        <div>
-          <h2 className={styles.title}>Редакторы данных</h2>
-          <p className={styles.description}>Выберите участников, которым разрешено добавлять и изменять данные тенанта.</p>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.title}>Настройки рабочей группы</h2>
+            <p className={styles.description}>Настройки применяются к участникам рабочей группы вместе с их личными параметрами.</p>
+          </div>
+          <div className={styles.actions}>
+            {editing ? (
+              <>
+                <Button variant="outline" onClick={cancelEdit} disabled={save.isPending}>
+                  Отмена
+                </Button>
+                <Button onClick={() => save.mutate()} disabled={save.isPending || !data}>
+                  {save.isPending ? 'Сохранение…' : 'Сохранить'}
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" onClick={() => setEditing(true)} disabled={!data}>
+                Редактировать
+              </Button>
+            )}
+          </div>
         </div>
-        <MultiSelectTagPicker
-          label="Редакторы данных"
-          hideLabel
-          options={options}
-          value={editorIds}
-          disabled={!editing || save.isPending || !data}
-          onChange={setEditorIds}
-        />
-      </section>
-
-      <section className={styles.section}>
-        <div>
-          <h2 className={styles.title}>Скоупы памяти чатов</h2>
-          <p className={styles.description}>Настройка применяется к участникам тенанта без личных скоупов.</p>
+        <div className={styles.settingsGrid}>
+          <div className={styles.settingBlock}>
+            <div>
+              <h3 className={styles.blockTitle}>Редакторы данных</h3>
+              <p className={styles.description}>Участники, которым разрешено добавлять и изменять данные рабочей группы.</p>
+            </div>
+            <MultiSelectTagPicker
+              label="Редакторы данных"
+              hideLabel
+              options={options}
+              value={editorIds}
+              disabled={!editing || save.isPending || !data}
+              onChange={setEditorIds}
+            />
+          </div>
+          <div className={styles.settingBlock}>
+            <div>
+              <h3 className={styles.blockTitle}>Проекты для памяти чатов</h3>
+              <p className={styles.description}>Проекты рабочей группы объединяются с личными проектами участника; если оба списка пусты, используется «Компания».</p>
+            </div>
+            <MemoryScopeSelect
+              value={scopeKeys}
+              onChange={setScopeKeys}
+              readOnly={!editing}
+              disabled={save.isPending || !data}
+            />
+          </div>
         </div>
-        <MemoryScopeSelect
-          value={scopeKeys}
-          onChange={setScopeKeys}
-          readOnly={!editing}
-          disabled={save.isPending || !data}
-        />
       </section>
     </div>
   );

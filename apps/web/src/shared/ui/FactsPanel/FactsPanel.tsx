@@ -12,6 +12,19 @@ import styles from './FactsPanel.module.css';
 
 export type FactsPanelMode = 'profile' | 'admin-user' | 'admin-tenant';
 
+const FACT_SOURCE_LABELS: Record<string, string> = {
+  user_utterance: 'Из сообщения пользователя',
+  tool_result: 'Из результата инструмента',
+  manual: 'Добавлен вручную',
+  system: 'Системный',
+  agent_result: 'Из ответа агента',
+};
+
+function formatFactSource(source: string): string {
+  const normalized = source.trim().toLocaleLowerCase('en-US');
+  return FACT_SOURCE_LABELS[normalized] ?? normalized.replace(/[_-]+/g, ' ');
+}
+
 interface FactsPanelProps {
   mode: FactsPanelMode;
   ownerId?: string;
@@ -106,16 +119,17 @@ export function FactsPanel({ mode, ownerId, createRequest, hideCreateButton = fa
     onError: (error: Error) => showError(error.message || 'Не удалось удалить выбранные факты'),
   });
   const columns: DataTableColumn<Fact>[] = [
-    { key: 'subject', label: 'SUBJECT', render: (fact) => <code>{fact.subject}</code> },
+    { key: 'subject', label: 'СУБЪЕКТ', render: (fact) => <code>{fact.subject}</code> },
     { key: 'value', label: 'ЗНАЧЕНИЕ', render: (fact) => <span className={styles.value}>{fact.value}</span> },
-    { key: 'scope', label: 'SCOPE' },
-    { key: 'source', label: 'ИСТОЧНИК' },
+    { key: 'source', label: 'ИСТОЧНИК', render: (fact) => formatFactSource(fact.source) },
+    { key: 'scope', label: 'ОБЛАСТЬ' },
     { key: 'observed_at', label: 'ОБНОВЛЕНО', render: (fact) => new Date(fact.observed_at).toLocaleDateString('ru-RU') },
-    { key: 'actions', label: '', render: (fact) => fact.can_edit === false ? <span className={styles.value}>Только просмотр</span> : <div className={styles.actions}><Button size="sm" variant="outline" onClick={() => setEditing(fact)}>Изменить</Button><Button size="sm" variant="danger" onClick={() => setDeleting(fact)}>Удалить</Button></div> },
+    { key: 'actions', label: 'ДЕЙСТВИЯ', render: (fact) => fact.can_edit === false ? <span className={styles.value}>Только просмотр</span> : <div className={styles.actions}><Button size="sm" variant="outline" onClick={() => setEditing(fact)}>Изменить</Button><Button size="sm" variant="danger" onClick={() => setDeleting(fact)}>Удалить</Button></div> },
   ];
   return (
     <div className={styles.container}>
-      <div className={styles.header}><p>{isProfile ? 'Личные и доступные tenant-факты памяти' : 'Подтверждённые факты памяти'}</p>{!hideCreateButton && <Button onClick={() => setCreating(true)}>Добавить факт</Button>}</div>
+      <div className={styles.header}><p>{isProfile ? 'Личные и доступные факты памяти' : 'Подтверждённые факты памяти'}</p>{!hideCreateButton && <Button onClick={() => setCreating(true)}>Добавить факт</Button>}</div>
+      {isProfile && <p className={styles.tableHint}>Таблицу можно прокручивать по горизонтали, чтобы увидеть все поля.</p>}
       <DataTable columns={columns} data={data} keyField="id" loading={isLoading} emptyText="Факты пока отсутствуют"
         selectable selectedKeys={selectedKeys} onSelectionChange={setSelectedKeys}
         bulkActions={<Button size="sm" variant="danger" disabled={!selectedFacts.length || deleteManyMutation.isPending} onClick={() => setConfirmBulkDelete(true)}>Удалить выбранные</Button>} />

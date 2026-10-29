@@ -33,19 +33,29 @@ export interface CredentialsPanelProps {
   ownerUserId?: string;
   ownerTenantId?: string;
   title?: string;
+  description?: string;
   createRequest?: number;
   hideCreateButton?: boolean;
 }
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
-  token: 'Bearer Token',
-  basic: 'Basic Auth',
-  api_key: 'API Key Header',
-  litellm_api_key: 'LiteLLM API Key',
+  token: 'Токен Bearer',
+  basic: 'Логин и пароль',
+  api_key: 'API-ключ в заголовке',
+  litellm_api_key: 'Ключ LiteLLM',
   oauth: 'OAuth 2.0',
 };
 
-export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTenantId, title, createRequest, hideCreateButton = false }: CredentialsPanelProps) {
+const PAYLOAD_FIELD_LABELS: Record<string, string> = {
+  token: 'Токен',
+  username: 'Имя пользователя',
+  password: 'Пароль',
+  api_key: 'API-ключ',
+  client_id: 'ID клиента',
+  client_secret: 'Секрет клиента',
+};
+
+export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTenantId, title, description, createRequest, hideCreateButton = false }: CredentialsPanelProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showError = useErrorToast();
@@ -74,7 +84,7 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
     return {};
   }, [mode, userId, tenantId]);
 
-  const { data: credentials = [], isLoading } = useQuery({
+  const { data: credentials = [], isLoading, isError, refetch } = useQuery({
     queryKey: mode === 'readonly-owner'
       ? qk.credentials.list({ owner_user_id: ownerUserId, owner_tenant_id: ownerTenantId, summary: true })
       : (mode === 'user' || mode === 'tenant-admin')
@@ -140,11 +150,11 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
       level: mode === 'tenant-admin' ? 'tenant' : 'user',
     }),
     onSuccess: () => {
-      showSuccess('Credential создан');
+      showSuccess('Учётные данные добавлены');
       queryClient.invalidateQueries({ queryKey: qk.profile.credentials(mode === 'tenant-admin' ? 'tenant' : 'user') });
       setCreateOpen(false);
     },
-    onError: () => showError('Не удалось создать credential'),
+    onError: () => showError('Не удалось добавить учётные данные'),
   });
 
   // ─── Mutations ─────────────────────────────────────────────────────
@@ -154,7 +164,7 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
       ? credentialsApi.deleteProfile(id, mode === 'tenant-admin' ? 'tenant' : 'user')
       : credentialsApi.delete(id),
     onSuccess: () => {
-      showSuccess('Credential удалён');
+      showSuccess('Учётные данные удалены');
       queryClient.invalidateQueries({ queryKey: qk.credentials.all() });
       if (mode === 'user' || mode === 'tenant-admin') {
         queryClient.invalidateQueries({ queryKey: qk.profile.credentials(mode === 'tenant-admin' ? 'tenant' : 'user') });
@@ -162,7 +172,7 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
       setConfirmDeleteId(null);
     },
     onError: () => {
-      showError('Не удалось удалить credential');
+      showError('Не удалось удалить учётные данные');
     },
   });
 
@@ -206,7 +216,7 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
     },
     {
       key: 'actions',
-      label: '',
+      label: 'ДЕЙСТВИЯ',
       render: (c: Credential) => (
         mode === 'platform' || mode === 'readonly-owner' ? null : (
           <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -223,32 +233,84 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
     },
   ], [instanceMap, navigate, mode]);
 
+  const credentialCount = !isLoading && !isError ? credentials.length : null;
+  const emptyState = isError ? (
+    <div className={styles.emptyState} role="alert">
+      <strong>Не удалось загрузить учётные данные</strong>
+      <span>Попробуйте обновить список.</span>
+      <Button variant="outline" onClick={() => void refetch()}>
+        Повторить
+      </Button>
+    </div>
+  ) : (
+    <div className={styles.emptyState}>
+      <strong>Учётные данные ещё не добавлены</strong>
+      <span>Добавьте их, чтобы подключаться к доступным инструментам.</span>
+    </div>
+  );
+
   return (
     <div className={styles.container}>
-      {title && <div className={styles.panelHeader}>
-        <h2 className={styles.panelTitle}>{title}</h2>
-        {(mode === 'user' || mode === 'tenant-admin') && !hideCreateButton && (
-          <Button onClick={openCreate} disabled={!instanceOptions.length}>Добавить credential</Button>
-        )}
-      </div>}
+      {title && (
+        <div className={styles.panelHeader}>
+          <div className={styles.panelIntro}>
+            <div className={styles.panelTitleRow}>
+              <h2 className={styles.panelTitle}>{title}</h2>
+              {credentialCount !== null && (
+                <span
+                  className={styles.countBadge}
+                  aria-label={`Учётных данных: ${credentialCount}`}
+                >
+                  {credentialCount}
+                </span>
+              )}
+            </div>
+            {description && (
+              <p className={styles.panelDescription}>{description}</p>
+            )}
+          </div>
+          {(mode === 'user' || mode === 'tenant-admin') && !hideCreateButton && (
+            <Button onClick={openCreate} disabled={!instanceOptions.length}>
+              Добавить учётные данные
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Table */}
-      <DataTable<Credential>
-        columns={columns}
-        data={credentials}
-        keyField="id"
-        loading={isLoading}
-        emptyText="Нет credentials"
-        onRowClick={mode === 'readonly-owner' || mode === 'user' ? undefined : (cred: Credential) => navigate(`/admin/credentials/${cred.id}`)}
-      />
+      {isLoading ? (
+        <div className={styles.loading}>Загрузка учётных данных…</div>
+      ) : isError || credentials.length === 0 ? (
+        emptyState
+      ) : (
+        <>
+          {(mode === 'user' || mode === 'tenant-admin') && (
+            <p className={styles.tableHint} role="note">
+              Таблицу можно прокрутить по горизонтали: справа находятся дата
+              создания и действия.
+            </p>
+          )}
+          <DataTable<Credential>
+            columns={columns}
+            data={credentials}
+            keyField="id"
+            emptyText="Учётные данные не найдены"
+            onRowClick={
+              mode === 'readonly-owner' || mode === 'user'
+                ? undefined
+                : (cred: Credential) => navigate(`/admin/credentials/${cred.id}`)
+            }
+          />
+        </>
+      )}
 
       {(mode === 'user' || mode === 'tenant-admin') && !title && !hideCreateButton && (
-        <Button onClick={openCreate} disabled={!instanceOptions.length}>Добавить credential</Button>
+        <Button onClick={openCreate} disabled={!instanceOptions.length}>Добавить учётные данные</Button>
       )}
 
       <Modal
         open={createOpen}
-        title="Добавить credential"
+        title="Добавить учётные данные"
         onClose={() => setCreateOpen(false)}
         footer={(
           <div className={styles.formActions}>
@@ -278,7 +340,9 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
           </label>
           {(payloadFields[authType] ?? []).map((key) => (
             <label className={styles.formGroup} key={key}>
-              <span className={styles.formLabel}>{key}</span>
+              <span className={styles.formLabel}>
+                {PAYLOAD_FIELD_LABELS[key] ?? key}
+              </span>
               <Input
                 type={key.includes('password') || key.includes('secret') || key.includes('token') || key.includes('key') ? 'password' : 'text'}
                 value={payload[key] ?? ''}
@@ -292,8 +356,8 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
       {/* Delete Confirmation */}
       <ConfirmDialog
         open={!!confirmDeleteId}
-        title="Удалить credentials?"
-        message="Вы уверены, что хотите удалить эти credentials? Это действие нельзя отменить."
+        title="Удалить учётные данные?"
+        message="Удалённые учётные данные больше не будут использоваться. Это действие нельзя отменить."
         confirmLabel="Удалить"
         cancelLabel="Отмена"
         variant="danger"

@@ -1,0 +1,27 @@
+.content {
+  display: grid;
+  gap: var(--sp-3);
+}
+.content p,
+.content h3 {
+  margin: 0;
+  line-height: 1.5;
+}
+.stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+@media (max-width: 640px) {
+  .stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

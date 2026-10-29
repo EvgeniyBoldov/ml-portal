@@ -1,0 +1,16 @@
+.workspace {
+  display: grid;
+  gap: var(--sp-2);
+  max-width: 420px;
+  width: 100%;
+}
+.workspace label {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}

@@ -5,6 +5,7 @@
   flex-direction: column;
   gap: var(--sp-4);
   width: 100%;
+  min-width: 0;
 }
 
 /* Toolbar */
@@ -102,9 +103,13 @@
 
 /* Table */
 .tableWrapper {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   border: 1px solid var(--border-color, #e5e7eb);
   border-radius: var(--radius-md, 6px);
-  overflow: hidden;
+  overflow: auto;
+  scrollbar-width: thin;
   background: var(--bg-secondary, #f9fafb);
 }
 

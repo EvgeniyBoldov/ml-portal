@@ -70,9 +70,9 @@ const formatRelativeDate = (dateString: string | null) => {
 
   const now = new Date();
   const diff = date.getTime() - now.getTime();
+  if (diff < 0) return 'Истёк';
   const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
 
-  if (days < 0) return 'Истёк';
   if (days === 0) return 'Сегодня';
   if (days === 1) return 'Завтра';
   if (days < 7) return `${days} дн.`;
@@ -87,7 +87,7 @@ const getRoleLabel = (role: string) => {
     case 'editor':
       return 'Редактор';
     case 'tenant_admin':
-      return 'Администратор организации';
+      return 'Администратор рабочей группы';
     case 'reader':
       return 'Читатель';
     default:
@@ -138,14 +138,6 @@ export default function ProfilePage() {
   >('info');
   const [editingScopes, setEditingScopes] = useState(false);
   const [scopeDraft, setScopeDraft] = useState<string[]>([]);
-  const [credentialCreateRequest, setCredentialCreateRequest] = useState(0);
-  const [factCreateRequest, setFactCreateRequest] = useState(0);
-  const [tenantCredentialCreateRequest, setTenantCredentialCreateRequest] =
-    useState(0);
-  const [tenantEditRequest, setTenantEditRequest] = useState(0);
-  const [tenantSaveRequest, setTenantSaveRequest] = useState(0);
-  const [tenantCancelRequest, setTenantCancelRequest] = useState(0);
-  const [tenantEditing, setTenantEditing] = useState(false);
 
   // Fetch profile
   const { data: profile, isLoading: profileLoading } = useQuery({
@@ -154,7 +146,12 @@ export default function ProfilePage() {
   });
 
   // Fetch tokens
-  const { data: tokens = [], isLoading: tokensLoading } = useQuery({
+  const {
+    data: tokens = [],
+    isLoading: tokensLoading,
+    isError: tokensError,
+    refetch: refetchTokens,
+  } = useQuery({
     queryKey: qk.profile.tokens(),
     queryFn: async () => {
       const result = await apiRequest<unknown>('/profile/tokens');
@@ -164,6 +161,7 @@ export default function ProfilePage() {
       return result as ApiToken[];
     },
   });
+  const tokenCount = !tokensLoading && !tokensError ? tokens.length : null;
 
   // Create token mutation
   const createToken = useMutation({
@@ -335,7 +333,6 @@ export default function ProfilePage() {
     tab: 'info' | 'credentials' | 'tenant-management' | 'facts'
   ) => {
     setEditingScopes(false);
-    setTenantEditing(false);
     setActiveTab(tab);
   };
 
@@ -347,98 +344,6 @@ export default function ProfilePage() {
     <div className={styles.page}>
       <div className={styles.header}>
         <h1 className={styles.title}>Личный кабинет</h1>
-        <div className={styles.headerActions}>
-          {activeTab === 'info' && (
-            <>
-              {editingScopes ? (
-                <>
-                  <Button
-                    variant="outline"
-                    onClick={cancelScopeEdit}
-                    disabled={saveScopes.isPending}
-                  >
-                    Отмена
-                  </Button>
-                  <Button
-                    variant="primary"
-                    onClick={() => saveScopes.mutate()}
-                    disabled={saveScopes.isPending}
-                  >
-                    {saveScopes.isPending ? 'Сохранение…' : 'Сохранить'}
-                  </Button>
-                </>
-              ) : (
-                <Button variant="primary" onClick={startScopeEdit}>
-                  Изменить области памяти
-                </Button>
-              )}
-              {profile?.auth_provider === 'local' && (
-                <Button
-                  variant="outline"
-                  onClick={() => setShowPasswordModal(true)}
-                >
-                  Сменить пароль
-                </Button>
-              )}
-            </>
-          )}
-          {activeTab === 'credentials' && (
-            <>
-              <Button
-                variant="primary"
-                onClick={() => setCredentialCreateRequest(value => value + 1)}
-              >
-                Добавить учётные данные
-              </Button>
-              <Button
-                variant="primary"
-                onClick={() => setShowCreateModal(true)}
-              >
-                Создать токен
-              </Button>
-            </>
-          )}
-          {activeTab === 'tenant-management' && profile?.is_tenant_admin && (
-            <>
-              <Button
-                variant="primary"
-                onClick={() =>
-                  setTenantCredentialCreateRequest(value => value + 1)
-                }
-              >
-                Добавить учётные данные
-              </Button>
-              {tenantEditing ? (
-                <>
-                  <Button
-                    variant="outline"
-                    onClick={() => setTenantCancelRequest(value => value + 1)}
-                  >
-                    Отмена
-                  </Button>
-                  <Button
-                    variant="primary"
-                    onClick={() => setTenantSaveRequest(value => value + 1)}
-                  >
-                    Сохранить
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  variant="primary"
-                  onClick={() => setTenantEditRequest(value => value + 1)}
-                >
-                  Редактировать
-                </Button>
-              )}
-            </>
-          )}
-          {activeTab === 'facts' && (
-            <Button onClick={() => setFactCreateRequest(value => value + 1)}>
-              Добавить факт
-            </Button>
-          )}
-        </div>
       </div>
 
       <nav className={styles.tabs} aria-label="Разделы личного кабинета">
@@ -466,7 +371,7 @@ export default function ProfilePage() {
             onClick={() => selectTab('tenant-management')}
             type="button"
           >
-            Данные организации
+            Данные рабочей группы
           </button>
         )}
         <button
@@ -480,45 +385,43 @@ export default function ProfilePage() {
 
       {/* Profile Section */}
       {activeTab === 'info' && (
-        <>
+        <div className={styles.infoLayout}>
           <section className={styles.section}>
-            <h2 className={styles.sectionTitle}>
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                <circle cx="12" cy="7" r="4" />
-              </svg>
-              Профиль
-            </h2>
-
             {profile && (
-              <div className={styles.profileGrid}>
-                <div className={styles.profileItem}>
-                  <span className={styles.profileLabel}>Логин</span>
-                  <span className={styles.profileValue}>{profile.login}</span>
+              <div className={styles.identityHeader}>
+                <div className={styles.identitySummary}>
+                  <div className={styles.identityPrimary}>
+                    <span className={styles.profileLabel}>Учётная запись</span>
+                    <div className={styles.identityHeading}>
+                      <h2 className={styles.identityLogin}>{profile.login}</h2>
+                      <span className={styles.roleBadge}>
+                        {getRoleLabel(profile.role)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className={styles.identityMeta}>
+                    <div className={styles.profileItem}>
+                      <span className={styles.profileLabel}>Email</span>
+                      <span className={styles.profileValue}>
+                        {profile.email || '—'}
+                      </span>
+                    </div>
+                    <div className={styles.profileItem}>
+                      <span className={styles.profileLabel}>Дата регистрации</span>
+                      <span className={styles.profileValue}>
+                        {formatDate(profile.created_at)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div className={styles.profileItem}>
-                  <span className={styles.profileLabel}>Email</span>
-                  <span className={styles.profileValue}>
-                    {profile.email || '—'}
-                  </span>
-                </div>
-                <div className={styles.profileItem}>
-                  <span className={styles.profileLabel}>Роль</span>
-                  <span className={styles.profileValue}>
-                    {getRoleLabel(profile.role)}
-                  </span>
-                </div>
-                <div className={styles.profileItem}>
-                  <span className={styles.profileLabel}>Дата регистрации</span>
-                  <span className={styles.profileValue}>
-                    {formatDate(profile.created_at)}
-                  </span>
-                </div>
+                {profile.auth_provider === 'local' && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowPasswordModal(true)}
+                  >
+                    Сменить пароль
+                  </Button>
+                )}
               </div>
             )}
           </section>
@@ -531,149 +434,188 @@ export default function ProfilePage() {
                 hasTenant={Boolean(profile.tenants?.length)}
                 editable={editingScopes}
                 onChange={setScopeDraft}
+                onStartEdit={startScopeEdit}
+                onCancel={cancelScopeEdit}
+                onSave={() => saveScopes.mutate()}
+                isSaving={saveScopes.isPending}
               />
             </section>
           )}
-        </>
+        </div>
       )}
 
       {/* Credentials Section */}
       {activeTab === 'credentials' && (
-        <>
-          <section className={styles.section}>
-            <h2 className={styles.sectionTitle}>
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
-              </svg>
-              Мои учётные данные
-            </h2>
-            <p className={styles.sectionDescription}>
-              Ваши персональные учётные данные для подключения к инструментам.
-              Учётные данные шифруются и используются при выполнении запросов.
-            </p>
-            <CredentialsPanel
-              mode="user"
-              userId={profile?.id}
-              tenantId={profile?.tenants?.[0]}
-              createRequest={credentialCreateRequest}
-              hideCreateButton
-            />
-          </section>
-        </>
+        <section className={`${styles.section} ${styles.credentialsSection}`}>
+          <CredentialsPanel
+            mode="user"
+            userId={profile?.id}
+            tenantId={profile?.tenants?.[0]}
+            title="Мои учётные данные"
+            description="Зашифрованные данные для подключения к инструментам."
+          />
+        </section>
       )}
 
       {/* API Tokens Section */}
       {activeTab === 'credentials' && (
-        <>
-          <section className={styles.section}>
+        <section className={`${styles.section} ${styles.tokensSection}`}>
             <div className={styles.sectionHeader}>
-              <h2 className={styles.sectionTitle}>
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                </svg>
-                API-токены
-              </h2>
+              <div className={styles.sectionTitleWithCount}>
+                <h2 className={styles.sectionTitle}>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                  </svg>
+                  API-токены
+                </h2>
+                {tokenCount !== null && (
+                  <span
+                    className={styles.tokenCountBadge}
+                    aria-label={`API-токенов: ${tokenCount}`}
+                  >
+                    {tokenCount}
+                  </span>
+                )}
+              </div>
+              <Button
+                variant="primary"
+                onClick={() => setShowCreateModal(true)}
+              >
+                Создать токен
+              </Button>
             </div>
 
             <p className={styles.sectionDescription}>
-              Персональные токены используются для вызова API, shadow-агентов и
-              MCP из внешних приложений. Запросы выполняются с вашими
-              действующими правами. Храните токены в безопасности — полный токен
-              показывается только при создании. Удаление токена сразу прекращает
-              его действие.
+              Персональные токены дают API-доступ от вашего имени. Полный токен
+              показывается только при создании; удаление сразу прекращает его
+              действие.
             </p>
 
             {tokensLoading ? (
               <div className={styles.loading}>Загрузка токенов...</div>
-            ) : tokens.length === 0 ? (
-              <div className={styles.emptyState}>
-                <p>У вас пока нет API-токенов</p>
+            ) : tokensError ? (
+              <div className={styles.emptyState} role="alert">
+                <h3>Не удалось загрузить API-токены</h3>
+                <p>Попробуйте обновить список.</p>
+                <Button variant="outline" onClick={() => void refetchTokens()}>
+                  Повторить
+                </Button>
               </div>
             ) : (
-              <div className={styles.tokensList}>
-                {tokens.map(token => {
-                  const expiresLabel = formatRelativeDate(token.expires_at);
-                  const isExpired = expiresLabel === 'Истёк';
+              <>
+                {tokens.length === 0 ? (
+                  <div className={styles.emptyState}>
+                    <h3>Персональных токенов пока нет</h3>
+                    <p>
+                      Создайте токен, чтобы подключать внешние приложения к API.
+                    </p>
+                  </div>
+                ) : (
+                  <div className={styles.tokensList}>
+                    {tokens.map(token => {
+                      const expiresLabel = formatRelativeDate(token.expires_at);
+                      const expirationDate = token.expires_at
+                        ? new Date(token.expires_at)
+                        : null;
+                      const hasValidExpiration =
+                        expirationDate &&
+                        Number.isFinite(expirationDate.getTime());
+                      const isExpired =
+                        hasValidExpiration && expirationDate.getTime() <= Date.now();
+                      const tokenStatus = !token.is_active
+                        ? 'Отключён'
+                        : isExpired
+                          ? 'Истёк'
+                          : token.expires_at && !hasValidExpiration
+                            ? 'Срок неизвестен'
+                            : expiresLabel
+                              ? `Истекает: ${expiresLabel}`
+                              : 'Действует';
+                      const tokenStatusClass = !token.is_active
+                        ? styles.inactive
+                        : isExpired
+                          ? styles.expired
+                          : styles.active;
 
-                  return (
-                    <div
-                      key={token.id}
-                      className={`${styles.tokenCard} ${isExpired ? styles.tokenExpired : ''}`}
-                    >
-                      <div className={styles.tokenInfo}>
-                        <div className={styles.tokenHeader}>
-                          <span className={styles.tokenName}>{token.name}</span>
-                          {expiresLabel && (
-                            <span
-                              className={`${styles.tokenBadge} ${isExpired ? styles.expired : ''}`}
-                            >
-                              {isExpired ? '⚠️ Истёк' : `⏱ ${expiresLabel}`}
-                            </span>
-                          )}
+                      return (
+                        <div key={token.id} className={styles.tokenCard}>
+                          <div className={styles.tokenInfo}>
+                            <div className={styles.tokenHeader}>
+                              <span className={styles.tokenName}>{token.name}</span>
+                              <span
+                                className={`${styles.tokenBadge} ${tokenStatusClass}`}
+                              >
+                                {tokenStatus}
+                              </span>
+                            </div>
+                            <div className={styles.tokenMeta}>
+                              <span className={styles.tokenPrefix}>
+                                {token.token_prefix}...
+                              </span>
+                              <span className={styles.tokenDate}>
+                                Создан: {formatDate(token.created_at)}
+                              </span>
+                              {token.last_used_at && (
+                                <span className={styles.tokenDate}>
+                                  Использован: {formatDate(token.last_used_at)}
+                                </span>
+                              )}
+                              {token.expires_at && (
+                                <span className={styles.tokenDate}>
+                                  Срок: {formatDate(token.expires_at)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <Button
+                            variant="danger"
+                            onClick={() => setTokenToDelete(token)}
+                            disabled={deleteToken.isPending}
+                          >
+                            Удалить
+                          </Button>
                         </div>
-                        <div className={styles.tokenMeta}>
-                          <span className={styles.tokenPrefix}>
-                            {token.token_prefix}...
-                          </span>
-                          <span className={styles.tokenDate}>
-                            Создан: {formatDate(token.created_at)}
-                          </span>
-                          {token.last_used_at && (
-                            <span className={styles.tokenDate}>
-                              Использован: {formatDate(token.last_used_at)}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <Button
-                        variant="danger"
-                        onClick={() => setTokenToDelete(token)}
-                        disabled={deleteToken.isPending}
-                      >
-                        Удалить
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
 
             {/* Usage Instructions */}
-            <div className={styles.usageSection}>
-              <h3 className={styles.usageTitle}>Как использовать токен</h3>
-              <p className={styles.usageHint}>Вызов shadow-агента</p>
-              <div className={styles.usageCode}>
-                <pre>
-                  <code>{shadowExample}</code>
-                </pre>
+            <details className={styles.usageSection}>
+              <summary className={styles.usageSummary}>
+                Как использовать токен
+              </summary>
+              <div className={styles.usageContent}>
+                <p className={styles.usageHint}>Вызов shadow-агента</p>
+                <div className={styles.usageCode}>
+                  <pre>
+                    <code>{shadowExample}</code>
+                  </pre>
+                </div>
+                <p className={styles.usageHint}>Проверка подключения к MCP</p>
+                <div className={styles.usageCode}>
+                  <pre>
+                    <code>{mcpExample}</code>
+                  </pre>
+                </div>
+                <p className={styles.usageHint}>
+                  Замените <code>YOUR_TOKEN</code> на созданный токен, а{' '}
+                  <code>YOUR_SHADOW_AGENT</code> — на slug доступного вам
+                  shadow-агента. Передавайте токен в заголовке{' '}
+                  <code>Authorization: Bearer YOUR_TOKEN</code>. Тот же заголовок
+                  используется для JWT access token.
+                </p>
               </div>
-              <p className={styles.usageHint}>Проверка подключения к MCP</p>
-              <div className={styles.usageCode}>
-                <pre>
-                  <code>{mcpExample}</code>
-                </pre>
-              </div>
-              <p className={styles.usageHint}>
-                Замените <code>YOUR_TOKEN</code> на созданный токен, а{' '}
-                <code>YOUR_SHADOW_AGENT</code> — на slug доступного вам
-                shadow-агента. Передавайте токен в заголовке{' '}
-                <code>Authorization: Bearer YOUR_TOKEN</code>. Тот же заголовок
-                используется для JWT access token.
-              </p>
-            </div>
+            </details>
           </section>
-        </>
       )}
 
       {activeTab === 'tenant-management' &&
@@ -681,23 +623,16 @@ export default function ProfilePage() {
         profile.tenants?.[0] && (
           <ProfileTenantManagement
             tenantId={profile.tenants[0]}
-            editRequest={tenantEditRequest}
-            saveRequest={tenantSaveRequest}
-            cancelRequest={tenantCancelRequest}
-            credentialCreateRequest={tenantCredentialCreateRequest}
-            onEditingChange={setTenantEditing}
           />
         )}
 
       {/* Facts Section */}
       {activeTab === 'facts' && (
-        <>
+        <section className={`${styles.section} ${styles.factsSection}`}>
           <FactsPanel
             mode="profile"
-            createRequest={factCreateRequest}
-            hideCreateButton
           />
-        </>
+        </section>
       )}
 
       {/* Delete Token Confirmation */}
