@@ -21,6 +21,11 @@ release_log "Current app=${APP_IMAGE_TAG}, next app=${next_app_tag}, base=${BASE
 release_log "Calculated base input SHA=${next_base_sha}"
 release_phase_end
 
+join_service_list() {
+  local IFS=,
+  printf '%s' "$*"
+}
+
 ensure_base_available() {
   local local_base="ml-portal-base-ml:${BASE_IMAGE_TAG}"
   if docker image inspect "$base_ref" >/dev/null 2>&1; then
@@ -106,7 +111,9 @@ printf '%s\n' \
   "BASE_INPUT_SHA=${next_base_sha}" \
   "SOURCE_SHA=${source_sha}" \
   "DB_REVISION=${db_revision}" \
-  "TOOL_RESULTS_DB_REVISION=${tool_results_db_revision}" > "$tmp_release"
+  "TOOL_RESULTS_DB_REVISION=${tool_results_db_revision}" \
+  "APPLICATION_SERVICES=$(join_service_list "${APPLICATION_SERVICES[@]}")" \
+  "STATEFUL_SERVICES=$(join_service_list "${STATEFUL_SERVICES[@]}")" > "$tmp_release"
 mv "$tmp_release" "$RELEASE_FILE"
 release_phase_end
 

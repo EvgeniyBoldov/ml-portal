@@ -112,10 +112,11 @@ stores the corpus, graph and extraction caches. See [Environment Setup](ENV.md).
 
 The release script builds and pushes every image service declared in
 `docker-compose.build.yml`; it does not maintain a second image list.
-`scripts/release/service-manifest.sh` contains the production runtime groups used
-for deploy validation, pull, stop, and start. The production controller bundles
-this manifest with each release. Add a new runtime service to that manifest,
-instead of duplicating its name in deploy functions.
+`APPLICATION_SERVICES` and `STATEFUL_SERVICES` in `release.env` define which
+production services are validated, pulled, stopped, and started. The release
+job carries these values into each new release file, so rollback uses the service
+groups associated with that release. Add a new runtime service to the appropriate
+list in `release.env.example`; deploy functions use the release's values.
 
 Локальные модели для русских документов: `emb-bge` обслуживает `BAAI/bge-m3`
 (1024 измерения, 8192 токена), `rerank-bge` — `BAAI/bge-reranker-v2-m3`

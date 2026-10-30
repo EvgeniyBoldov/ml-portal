@@ -13,9 +13,6 @@ BASE_DOCKERFILE="${REPO_ROOT}/infra/docker/base/Dockerfile.ml"
 BASE_REQUIREMENTS="${REPO_ROOT}/infra/docker/base/requirements.ml.txt"
 RELEASE_PHASE="startup"
 RELEASE_PHASE_STARTED_AT=$SECONDS
-RELEASE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/release/service-manifest.sh
-source "${RELEASE_SCRIPT_DIR}/service-manifest.sh"
 
 release_log() {
   printf '[release %s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2
@@ -68,6 +65,17 @@ load_release_file() {
   test -f "$RELEASE_FILE" || fail "Missing release.env. Copy release.env.example in the production GitLab repository."
   if ! awk '
     /^[[:space:]]*($|#)/ { next }
+    /^(APPLICATION_SERVICES|STATEFUL_SERVICES)=[a-z0-9][a-z0-9_-]*(,[a-z0-9][a-z0-9_-]*)*$/ {
+      split($0, pair, "=")
+      key = pair[1]
+      if (seen[key]++) exit 1
+      value = substr($0, length(key) + 2)
+      count = split(value, services, ",")
+      for (i = 1; i <= count; i++) {
+        if (service_seen[key, services[i]]++) exit 1
+      }
+      next
+    }
     /^[A-Z][A-Z0-9_]*=[-A-Za-z0-9._:\/@+]+$/ {
       split($0, pair, "=")
       key = pair[1]
@@ -77,6 +85,9 @@ load_release_file() {
       next
     }
     { exit 1 }
+    END {
+      if (!seen["APPLICATION_SERVICES"] || !seen["STATEFUL_SERVICES"]) exit 1
+    }
   ' "$RELEASE_FILE"; then
     fail "release.env must contain each supported manifest key at most once as a safe KEY=VALUE entry."
   fi
@@ -85,6 +96,12 @@ load_release_file() {
   # shellcheck disable=SC1090
   source "$RELEASE_FILE"
   set +a
+  local application_services_csv="$APPLICATION_SERVICES"
+  local stateful_services_csv="$STATEFUL_SERVICES"
+  unset APPLICATION_SERVICES STATEFUL_SERVICES
+  IFS=, read -r -a APPLICATION_SERVICES <<< "$application_services_csv"
+  IFS=, read -r -a STATEFUL_SERVICES <<< "$stateful_services_csv"
+  readonly -a APPLICATION_SERVICES STATEFUL_SERVICES
   : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required in release.env}"
   : "${APP_IMAGE_TAG:?APP_IMAGE_TAG is required in release.env}"
   : "${BASE_IMAGE_TAG:?BASE_IMAGE_TAG is required in release.env}"
@@ -92,6 +109,8 @@ load_release_file() {
   : "${SOURCE_SHA:?SOURCE_SHA is required in release.env}"
   : "${DB_REVISION:?DB_REVISION is required in release.env}"
   : "${TOOL_RESULTS_DB_REVISION:?TOOL_RESULTS_DB_REVISION is required in release.env}"
+  : "${APPLICATION_SERVICES[0]:?APPLICATION_SERVICES is required in release.env}"
+  : "${STATEFUL_SERVICES[0]:?STATEFUL_SERVICES is required in release.env}"
 }
 
 base_input_sha() {

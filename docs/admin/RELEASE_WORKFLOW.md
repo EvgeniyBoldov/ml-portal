@@ -25,13 +25,19 @@
 2. Copy `docker-compose.prod.example.yml` to `docker-compose.prod.yml` and
    apply production-only mounts/configuration.
 3. Copy `release.env.example` to `release.env`, set `IMAGE_REPOSITORY` to the
-   internal Docker Registry path, and commit it.
+   internal Docker Registry path, adjust the runtime service lists if the
+   production topology differs, and commit it.
 4. Follow [Production Host Setup](PRODUCTION_HOST_SETUP.md): store `prod.env`
    and Registry credentials as root-owned host files, install the deployment
    controller and configure its scoped Runner `sudoers` rule.
 5. Copy `gitlab-ci.example.yml` to `.gitlab-ci.yml` and protect the production
    environment. The deploy job is manually approved; no production secrets are
    stored in GitLab CI variables.
+
+For an existing production repository, add `APPLICATION_SERVICES` and
+`STATEFUL_SERVICES` from the current `release.env.example` to `release.env`
+before the next release. `make release` carries both lists forward into each
+new release manifest.
 
 The registry path must be a single internal DNS endpoint, including its port,
 reachable by both the DevOps workstation and production VM. Do not use
@@ -49,8 +55,8 @@ make release
 ```
 
 `make release` increments the application patch version, publishes every image
-declared in `docker-compose.build.yml`, records the source commit and Alembic
-head in `release.env`, and pushes the resulting GitLab release commit. It only
+declared in `docker-compose.build.yml`, records the source commit, Alembic head,
+and service groups in `release.env`, and pushes the resulting GitLab release commit. It only
 publishes a new base image when the fingerprint of the base Dockerfile or base
 requirements changes.
 
