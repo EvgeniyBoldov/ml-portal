@@ -161,6 +161,39 @@ status carry the same fingerprint; incompatible artifacts must be regenerated
 from canonical chunks. Table vectorization checks identities before choosing
 pending rows and performs full revectorization when the selected spaces change.
 
+### Document source metadata publication
+
+RAG stages and LongMemory workers share `sources.meta` while publishing
+independent artifacts and memory state. All mutations of an existing source's
+metadata use the shared document-source metadata service. The publication
+transaction locks rows in a fixed order: `RAGDocument`, then the current
+`Source` row. It reads `Source` with `SELECT FOR UPDATE` and refreshes the ORM
+identity-map value before merging, so a task cannot publish a stale metadata
+snapshot after another worker commits. A mutation may update only its owned
+metadata path and must preserve unrelated and legacy fields.
+
+Perform S3, model, HTTP and other external work before acquiring publication
+locks. Keep the locked section short and do not commit in the shared helper;
+the calling workflow owns the transaction. For the RAG chunk stage, canonical
+chunk rows, the chunk artifact pointer/count and successful stage status are
+committed together. Verify the active ingest or LongMemory generation while
+holding the document lock before publishing. Multi-document operations acquire
+document locks in stable ID order. RAG status mutations use the same
+`RAGDocument`-before-status-row order. Redis events and document collection
+status projections are dispatched only after commit; the projection worker
+locks collections and recomputes from committed documents. Failed projection
+refreshes are retried by Celery up to three times. The after-commit broker
+dispatch and individual Redis event deliveries are best effort; dispatch
+failures are logged and do not roll back committed RAG state. Collection tenant
+reassignment locks the collection first, then affected documents and sources in
+stable ID order, before changing membership and tenant IDs. Collection API
+responses compute a fresh status snapshot, so the persisted projection may lag
+if its best-effort post-commit refresh cannot be dispatched. Collection API,
+catalog and admin status reads compute a fresh snapshot. This prevents future
+lost updates; it does not recreate artifact pointers already lost from
+metadata. Such repair requires verifying a durable stage result and the
+referenced object-storage artifact.
+
 Long document chunks and queries use conservative UTF-8 byte-bounded segments
 within the selected encoder's input limit, reserving special tokens through
 `EMB_INPUT_TOKEN_RESERVE`. Segment vectors are averaged and normalized to one

@@ -11,7 +11,8 @@ from app.core.logging import get_logger
 from app.models.tenant import Tenants
 from app.repositories.rag_ingest_repos import AsyncSourceRepository, AsyncChunkRepository
 from app.schemas.common import ChunkProfile
-from app.services.document_artifacts import normalize_document_source_meta, upsert_document_artifact
+from app.services.document_artifacts import normalize_document_source_meta
+from app.services.document_source_metadata_service import DocumentSourceMetadataService
 from app.storage.paths import get_chunks_path, calculate_text_checksum
 from app.workers.helpers import chunker, create_chunk_payload, generate_chunk_id
 from app.workers.tasks_rag_ingest.stage_context import IngestStageContext, run_stage
@@ -150,14 +151,12 @@ def chunk_document(
             content_type="application/x-ndjson",
         )
 
-        # 5. Save canonical chunks to DB after all network work has finished.
-        chunk_repo = AsyncChunkRepository(ctx.session, ctx.tenant_id)
-        await chunk_repo.delete_by_document_id(ctx.source_id)
-        await chunk_repo.create_batch(chunks_data)
-
-        # Update Source meta with chunks_key for reindexing capability
-        source.meta = upsert_document_artifact(
-            normalize_document_source_meta(source.meta),
+        # Publish under the shared document -> source lock before replacing
+        # canonical rows. This keeps chunks, artifact metadata and stage state
+        # in one transaction while merging against the latest metadata.
+        published = await DocumentSourceMetadataService(ctx.session).upsert_artifact(
+            ctx.source_id,
+            ctx.tenant_id,
             "chunks",
             {
                 "key": chunks_key,
@@ -166,6 +165,13 @@ def chunk_document(
                 "chunk_count": len(chunks_data),
             },
         )
+        if published is None:
+            raise ValueError(f"Source {source_id} disappeared before chunks publication")
+
+        # 5. Save canonical chunks to DB after all network work has finished.
+        chunk_repo = AsyncChunkRepository(ctx.session, ctx.tenant_id)
+        await chunk_repo.delete_by_document_id(ctx.source_id)
+        await chunk_repo.create_batch(chunks_data)
 
         # 7. Complete
         await ctx.set_completed(metrics={

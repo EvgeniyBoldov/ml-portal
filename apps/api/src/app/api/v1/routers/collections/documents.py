@@ -457,14 +457,27 @@ async def delete_collection_documents(
         skipped_foreign_ids: list[str] = []
         failed_ids: list[str] = []
 
+        # Lock-taking document mutations must use the same stable order as
+        # tenant reassignment, regardless of caller order. Canonical UUID text
+        # also deduplicates alternate textual spellings of the same ID.
+        requested_ids: dict[uuid.UUID, str] = {}
+        invalid_ids: list[str] = []
+        seen_invalid_ids: set[str] = set()
+        for raw_id in doc_ids:
+            try:
+                parsed_id = uuid.UUID(raw_id)
+            except ValueError:
+                if raw_id not in seen_invalid_ids:
+                    invalid_ids.append(raw_id)
+                    seen_invalid_ids.add(raw_id)
+            else:
+                requested_ids.setdefault(parsed_id, str(parsed_id))
+        ordered_doc_ids = sorted(requested_ids)
+
         # Preflight shared document mutations before deleting any one document.
         # A document can be visible through this collection and still be shared
         # with another collection whose effective ACL denies access.
-        for did_str in doc_ids:
-            try:
-                did = uuid.UUID(did_str)
-            except ValueError:
-                continue
+        for did in ordered_doc_ids:
             membership = await _resolve_document_membership(
                 session=session,
                 tenant_id=collection.tenant_id,
@@ -480,12 +493,8 @@ async def delete_collection_documents(
                 tenant_id=collection.tenant_id,
             )
 
-        for did_str in doc_ids:
-            try:
-                did = uuid.UUID(did_str)
-            except ValueError:
-                failed_ids.append(did_str)
-                continue
+        for did in ordered_doc_ids:
+            did_str = requested_ids[did]
 
             membership = await _resolve_document_membership(
                 session=session,
@@ -579,9 +588,18 @@ async def delete_collection_documents(
                 failed_ids.append(str(did))
                 continue
 
+        failed_ids.extend(invalid_ids)
+
         if deleted_count > 0:
-            collection.total_rows = max(0, (collection.total_rows or 0) - deleted_count)
-            await CollectionService(session).sync_collection_status(collection, persist=False)
+            # Membership count and document status are derived on read. Refresh the
+            # persisted cache after commit so this transaction never takes a
+            # Collection lock after it has locked/deleted document rows.
+            status_manager = RAGStatusManager(
+                session,
+                AsyncRepositoryFactory(session, collection.tenant_id),
+                event_publisher=None,
+            )
+            status_manager.schedule_collection_projection(collection_id)
 
         await session.commit()
         return {

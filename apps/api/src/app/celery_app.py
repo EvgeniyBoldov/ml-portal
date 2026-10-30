@@ -24,6 +24,7 @@ app = Celery(
         "app.workers.tasks_template_analysis",
         # RAG model/status reconcile tasks
         "app.workers.tasks_rag_model_reconcile",
+        "app.workers.tasks_rag_status_projection",
         # RAG stale reindex batch tasks
         "app.workers.tasks_rag_reindex",
         # Health monitoring tasks (new)
@@ -205,6 +206,7 @@ app.conf.task_routes = {
     "app.workers.tasks_rag_ingest.dispatch.dispatch_rag_ingest_outbox": {"queue": "maintenance.default", "priority": 2},
     "app.workers.tasks_rag_ingest.dispatch.dispatch_rag_ingest_stage_outbox": {"queue": "maintenance.default", "priority": 2},
     "app.workers.tasks_rag_ingest.reconcile.reconcile_rag_ingest_outbox": {"queue": "maintenance.default", "priority": 1},
+    "app.workers.tasks_rag_status_projection.refresh_rag_status_projection": {"queue": "maintenance.default", "priority": 1},
     # Collection vectorization tasks
     "app.workers.tasks_collection_vectorize.vectorize_collection_rows": {"queue": "ingest.embed", "priority": 4},
     "app.workers.tasks_collection_vectorize.reconcile_collection_vectorization": {"queue": "maintenance.default", "priority": 1},

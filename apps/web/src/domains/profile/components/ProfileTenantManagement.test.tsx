@@ -1,5 +1,4 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiRequest } from '@/shared/api/http';
@@ -8,7 +7,7 @@ import { ProfileTenantManagement } from './ProfileTenantManagement';
 vi.mock('@/shared/api/http', () => ({ apiRequest: vi.fn() }));
 vi.mock('@/shared/ui/Toast', () => ({ useErrorToast: () => vi.fn(), useSuccessToast: () => vi.fn() }));
 vi.mock('@/shared/ui/CredentialsPanel', () => ({
-  CredentialsPanel: ({ title, hideCreateButton }: { title: string; hideCreateButton?: boolean }) => <header>{title}{!hideCreateButton && <button>Добавить credential</button>}</header>,
+  CredentialsPanel: ({ title, mode, hideCreateButton }: { title: string; mode: string; hideCreateButton?: boolean }) => <header>{title}{mode !== 'tenant-admin' && !hideCreateButton && <button>Добавить credential</button>}</header>,
 }));
 vi.mock('@/shared/ui/MultiSelectTagPicker/MultiSelectTagPicker', () => ({
   default: ({ value, disabled, onChange }: { value: string[]; disabled?: boolean; onChange: (value: string[]) => void }) => (
@@ -32,18 +31,7 @@ const tenantSettings = {
 
 function renderPanel() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  function Harness() {
-    const [editRequest, setEditRequest] = useState(0);
-    const [saveRequest, setSaveRequest] = useState(0);
-    const [cancelRequest, setCancelRequest] = useState(0);
-    return <QueryClientProvider client={client}>
-      <button onClick={() => setEditRequest(value => value + 1)}>Редактировать настройки</button>
-      <button onClick={() => setSaveRequest(value => value + 1)}>Сохранить настройки</button>
-      <button onClick={() => setCancelRequest(value => value + 1)}>Отменить настройки</button>
-      <ProfileTenantManagement tenantId="tenant-1" editRequest={editRequest} saveRequest={saveRequest} cancelRequest={cancelRequest} />
-    </QueryClientProvider>;
-  }
-  render(<Harness />);
+  render(<QueryClientProvider client={client}><ProfileTenantManagement tenantId="tenant-1" /></QueryClientProvider>);
 }
 
 beforeEach(() => {
@@ -54,15 +42,15 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); });
 describe('ProfileTenantManagement', () => {
   it('keeps settings read-only until edit and saves the selected tenant editors and scopes', async () => {
     renderPanel();
-    expect(await screen.findByText('Credentials тенанта')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Редактировать настройки' })).toBeEnabled());
+    expect(await screen.findByText('Учётные данные рабочей группы')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Редактировать' })).toBeEnabled());
     expect(screen.queryByRole('button', { name: 'Добавить credential' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Назначить редактора' })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Редактировать настройки' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Редактировать' }));
     fireEvent.click(screen.getByRole('button', { name: 'Назначить редактора' }));
     fireEvent.click(screen.getByRole('button', { name: 'Добавить скоуп' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
 
     await waitFor(() => expect(apiRequest).toHaveBeenCalledWith('/profile/tenant-management', {
       method: 'PUT',

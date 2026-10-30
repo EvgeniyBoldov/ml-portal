@@ -6,17 +6,14 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 from celery import Task
-from sqlalchemy import select
-
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
-from app.models.rag import RAGDocument
 from app.repositories.rag_ingest_repos import AsyncSourceRepository
 from app.services.document_artifacts import (
     get_document_artifact,
     normalize_document_source_meta,
-    upsert_document_artifact,
 )
+from app.services.document_source_metadata_service import DocumentSourceMetadataService
 from app.storage.paths import get_canonical_path, calculate_text_checksum
 from app.workers.tasks_rag_ingest.stage_context import IngestStageContext, run_stage
 from app.workers.tasks_rag_ingest.stage_results import ExtractResult, NormalizeResult
@@ -134,9 +131,9 @@ def normalize_document(
         )
 
         # 6.1. Persist canonical artifact on Source and RAGDocument
-        source.meta = upsert_document_artifact(
-            source_meta,
-            "canonical",
+        published = await DocumentSourceMetadataService(ctx.session).publish_canonical_artifact(
+            ctx.source_id,
+            ctx.tenant_id,
             {
                 "key": canonical_key,
                 "content_type": "application/json",
@@ -144,19 +141,10 @@ def normalize_document(
                 "size_bytes": len(canonical_content.encode("utf-8")),
                 "format": "canonical_document_v1",
             },
+            canonical_key,
         )
-        ctx.session.add(source)
-
-        document_result = await ctx.session.execute(
-            select(RAGDocument).where(
-                RAGDocument.id == ctx.source_id,
-                RAGDocument.tenant_id == ctx.tenant_id,
-            )
-        )
-        document = document_result.scalar_one_or_none()
-        if document:
-            document.s3_key_processed = canonical_key
-            ctx.session.add(document)
+        if published is None:
+            raise ValueError(f"Source {source_id} disappeared before canonical artifact publication")
 
         # 7. Complete
         await ctx.set_completed(metrics={

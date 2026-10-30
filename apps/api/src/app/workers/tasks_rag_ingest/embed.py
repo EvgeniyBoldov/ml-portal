@@ -7,13 +7,12 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 from celery import Task
-from sqlalchemy import select
-
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
 from app.repositories.rag_ingest_repos import AsyncSourceRepository, AsyncEmbStatusRepository
 from app.storage.paths import get_embeddings_path, calculate_text_checksum
 from app.services.document_artifacts import get_document_artifact_key, normalize_document_source_meta
+from app.services.document_source_metadata_service import DocumentSourceMetadataService
 from app.workers.tasks_rag_ingest.error_utils import notify_embed_error
 from app.workers.tasks_rag_ingest.stage_context import IngestStageContext, run_stage
 from app.workers.tasks_rag_ingest.stage_results import ChunkResult, EmbedResult
@@ -148,25 +147,20 @@ def embed_chunks_model(
                 content_type="application/x-ndjson",
             )
 
-            # Persist embedding artifact key in source.meta so index retry can recover
-            # even if Redis idempotency cache was evicted.
-            from app.models.rag_ingest import Source
-            latest_meta = await ctx.session.scalar(
-                select(Source.meta).where(
-                    Source.source_id == ctx.source_id,
-                    Source.tenant_id == ctx.tenant_id,
-                ).with_for_update()
-            )
-            normalized_meta = normalize_document_source_meta(latest_meta)
-            embedding_artifacts = dict(normalized_meta.get("embedding_artifacts") or {})
-            embedding_artifacts[model_alias] = {
+            # Publish against current metadata. Different model branches may
+            # finish concurrently and must retain each other's artifact keys.
+            published = await DocumentSourceMetadataService(ctx.session).publish_embedding_artifact(
+                ctx.source_id,
+                ctx.tenant_id,
+                model_alias,
+                {
                 "key": embeddings_key,
                 "embedding_fingerprint": target.fingerprint,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-            normalized_meta["embedding_artifacts"] = embedding_artifacts
-            source.meta = normalized_meta
-            await ctx.session.flush()
+                },
+            )
+            if published is None:
+                raise ValueError(f"Source {source_id} disappeared before embedding artifact publication")
 
             # 7. Complete
             duration = ctx.elapsed_sec

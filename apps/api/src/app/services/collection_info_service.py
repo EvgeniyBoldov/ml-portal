@@ -10,6 +10,7 @@ from app.agents.contracts import ResolvedDataInstance, ResolvedOperation
 from app.agents.operation_publication import build_collection_workflow_steps
 from app.agents.runtime.published_capabilities import build_published_operation_summary
 from app.models.collection import Collection, CollectionType, FieldType
+from app.services.collection.status_snapshot_service import CollectionStatusSnapshotService
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _LOCAL_ENRICHMENT_COLLECTION_TYPES = {
@@ -23,14 +24,14 @@ _TOP_VALUES_LIMIT = 10
 
 @dataclass(slots=True)
 class CollectionInfoMetadataLoader:
-    def build_collection_payload(self, collection: Collection) -> Dict[str, Any]:
+    def build_collection_payload(self, collection: Collection, *, status: str | None = None) -> Dict[str, Any]:
         current_version = getattr(collection, "current_version", None)
         return {
             "id": str(collection.id),
             "slug": collection.slug,
             "name": collection.name,
             "type": collection.collection_type,
-            "status": collection.status,
+            "status": status or collection.status,
             "description": getattr(current_version, "data_description", None),
             "usage_purpose": getattr(current_version, "usage_purpose", None),
             "usage_rules": getattr(current_version, "usage_rules", None),
@@ -492,7 +493,11 @@ class CollectionInfoResponseBuilder:
         operations: Sequence[ResolvedOperation],
         inspection_payload: Dict[str, Any],
     ) -> Dict[str, Any]:
-        collection_payload = self.metadata_loader.build_collection_payload(collection)
+        status_snapshot = await CollectionStatusSnapshotService(session).get_status_snapshot(collection)
+        collection_payload = self.metadata_loader.build_collection_payload(
+            collection,
+            status=str(status_snapshot.get("status") or collection.status),
+        )
         return {
             "collection": collection_payload,
             "readiness": self.metadata_loader.build_readiness_payload(collection=collection, operations=operations),

@@ -20,6 +20,7 @@ from app.models.rag_ingest import Source
 from app.repositories.long_memory_document_repository import LongMemoryDocumentRepository
 from app.services.hipporag_service import HippoRAGService
 from app.services.long_memory_document_service import LongMemoryDocumentService
+from app.services.document_source_metadata_service import DocumentSourceMetadataService
 from app.services.rag_event_publisher import RAGEventPublisher
 from app.workers.session_factory import get_worker_session
 
@@ -106,10 +107,14 @@ async def _execute(operation_id: str) -> dict:
                     document=payload, on_progress=progress)
                 operation.status = record["status"]
                 operation.error = None
-                source = await session.get(Source, operation.document_id)
-                current = await service.repository.lock_document(operation.document_id)
-                if source and current and current.long_memory_generation == operation.generation:
-                    source.meta = {**dict(source.meta or {}), "hipporag": record}
+                publication = await DocumentSourceMetadataService(session).publish_long_memory_result(
+                    operation.document_id,
+                    operation.tenant_id,
+                    operation.generation,
+                    record,
+                )
+                if publication == "stale" or (publication == "missing" and operation.action == "add"):
+                    operation.status = "cancelled"
                 await session.commit()
                 return {"operation_id": operation_id, "status": operation.status}
             except Exception as exc:

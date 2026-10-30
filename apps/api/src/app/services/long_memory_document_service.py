@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.long_memory_document import LongMemoryDocumentOperation
-from app.models.rag_ingest import Source
+from app.services.document_source_metadata_service import DocumentSourceMetadataService
 from app.repositories.long_memory_document_repository import LongMemoryDocumentRepository
 from app.repositories.rag_status_repo import AsyncRAGStatusRepository
 
@@ -38,10 +38,11 @@ class LongMemoryDocumentService:
             payload={"canonical_key": document.s3_key_processed, "ingest_run_id": ingest_run_id})
         self.session.add(operation)
         if not automatic:
-            source = await self.session.get(Source, document_id)
-            if source:
-                source.meta = {**dict(source.meta or {}), "memory": {
-                    **dict((source.meta or {}).get("memory") or {}), "policy": "explicit", "enabled": action == "add"}}
+            await DocumentSourceMetadataService(self.session).set_explicit_memory_policy(
+                document_id,
+                document.tenant_id,
+                action == "add",
+            )
         await self.session.flush()
         await self.project(operation, {"status": "queued", "action": action, "steps": {
             "extract": {"status": "queued", "metrics": {"action": action}},

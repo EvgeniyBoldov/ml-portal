@@ -221,34 +221,29 @@ def reconcile_collection_memory_policy(collection_id: str) -> Dict[str, Any]:
                 .join(DocumentCollectionMembership, DocumentCollectionMembership.source_id == Source.source_id)
                 .join(RAGDocument, RAGDocument.id == Source.source_id)
                 .where(DocumentCollectionMembership.collection_id == collection.id)
+                .order_by(RAGDocument.id)
             )).all()
+            from app.services.document_source_metadata_service import DocumentSourceMetadataService
+            metadata_service = DocumentSourceMetadataService(session)
             for source, document in rows:
-                meta = dict(source.meta or {})
-                memory = dict(meta.get("memory") or {})
-                explicit = memory.get("policy") == "explicit"
-                enabled_membership = (await session.execute(
-                    select(func.count(DocumentCollectionMembership.id))
-                    .join(Collection, Collection.id == DocumentCollectionMembership.collection_id)
-                    .where(
-                        DocumentCollectionMembership.source_id == source.source_id,
-                        Collection.memory_enabled.is_(True),
-                    )
-                )).scalar_one() > 0
-                enabled = bool(memory.get("enabled")) if explicit else enabled_membership
-                if not explicit:
-                    memory["enabled"] = enabled
-                    memory["policy"] = "collection"
-                    meta["memory"] = memory
-                    source.meta = meta
-                if enabled and document.s3_key_processed and document.status != "archived":
-                    enabled_jobs.append((str(document.tenant_id), {
-                        "source_id": str(document.id), "canonical_key": str(document.s3_key_processed),
+                current = await metadata_service.reconcile_collection_policy(
+                    source.source_id,
+                    document.tenant_id,
+                )
+                if current is None:
+                    continue
+                enabled, current_document = current
+                if enabled and current_document.s3_key_processed and current_document.status != "archived":
+                    enabled_jobs.append((str(current_document.tenant_id), {
+                        "source_id": str(current_document.id), "canonical_key": str(current_document.s3_key_processed),
                     }))
                 elif not enabled:
-                    states = await retire_document_memory(session, document_id=document.id)
+                    states = await retire_document_memory(session, document_id=current_document.id)
                     stale_ids.update(item_id for item_id, state in states.items() if state == "stale")
                     active_ids.update(item_id for item_id, state in states.items() if state in {"active", "uncertain"})
-            await session.commit()
+                # Release each document/source publication lock promptly; the
+                # periodic reconciler is idempotent if a later item fails.
+                await session.commit()
         if stale_ids:
             remove_memory_items.delay([str(item_id) for item_id in stale_ids])
         if active_ids:

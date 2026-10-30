@@ -2169,6 +2169,9 @@ export default function CollectionDataPage() {
         ...collection,
         capabilities: {
           ...collection.capabilities,
+          view_content: collection.capabilities?.view_content ?? false,
+          view_schema: collection.capabilities?.view_schema ?? false,
+          download: collection.capabilities?.download ?? false,
           can_edit_content: false,
           upload_documents: false,
           delete_documents: false,

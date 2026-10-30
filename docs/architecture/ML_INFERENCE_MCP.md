@@ -4,6 +4,12 @@
 Agent Runtime. It translates the MCP tool contract into calls to the ML team's
 inference facade; it does not replace MLflow, Airflow, model monitoring, or deployment.
 
+The adapter is a standalone service built from `mcp/ml_inference` using the
+shared MCP server image recipe. It starts with the regular local Compose stack
+and is included in the production application image manifest; it does not
+require a special Compose profile. Runtime connects to it through the internal
+service URL `http://ml-inference-mcp:8080/`.
+
 The ML engineer owns training, deployment, quality monitoring, model
 applicability, and the metadata exposed by the facade. The agent uses that
 metadata to select a capability and treats a prediction as a bounded

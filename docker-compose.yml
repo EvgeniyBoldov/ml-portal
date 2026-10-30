@@ -332,7 +332,6 @@ services:
     restart: unless-stopped
 
   ml-inference-mcp:
-    profiles: ["ml-inference"]
     build:
       context: .
       dockerfile: mcp/mcp_server.dockerfile
@@ -340,8 +339,6 @@ services:
         - MCP_SERVER_DIR=ml_inference
     ports:
       - "127.0.0.1:8014:8080"
-    volumes:
-      - ./mcp/ml_inference/server.py:/opt/mcp/ml_inference/server.py:ro
     environment:
       - PORT=8080
       - VERIFY_SSL=${ML_INFERENCE_VERIFY_SSL:-true}

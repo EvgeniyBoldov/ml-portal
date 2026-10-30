@@ -682,21 +682,13 @@ class LifecycleAdminService:
                 # DocumentMemoryScope rows are applicability links, not RAG
                 # ownership. Keep documents and explicitly mark unbound ones so
                 # LongMemory does not fall back to the default company scope.
-                still_scoped = set((await self.session.scalars(select(
-                    DocumentMemoryScope.document_id,
-                ).where(DocumentMemoryScope.document_id.in_(unscoped_document_ids)))).all())
                 sources = list((await self.session.scalars(select(Source).where(
-                    Source.id.in_(unscoped_document_ids),
-                ))).all())
+                    Source.source_id.in_(unscoped_document_ids),
+                ).order_by(Source.source_id))).all())
+                from app.services.document_source_metadata_service import DocumentSourceMetadataService
+                metadata_service = DocumentSourceMetadataService(self.session)
                 for source in sources:
-                    source_meta = dict(source.meta or {})
-                    memory_meta = dict(source_meta.get("memory") or {})
-                    if source.id in still_scoped:
-                        memory_meta.pop("scope_unassigned", None)
-                    else:
-                        memory_meta["scope_unassigned"] = True
-                    source_meta["memory"] = memory_meta
-                    source.meta = source_meta
+                    await metadata_service.reconcile_scope_assignment(source.source_id, source.tenant_id)
                 from app.repositories.long_memory_config_repository import LongMemoryConfigRepository
 
                 await LongMemoryConfigRepository(self.session).request_reindex(encoder_id)

@@ -26,9 +26,30 @@ from app.services.rag_status_policy import (
 from app.models.rag import RAGDocument
 from app.models.tenant import Tenants
 from app.models.model_registry import ModelRegistry, ModelType, ModelStatus, HealthStatus
-from sqlalchemy import select, update
+from sqlalchemy import select, update, event
 
 logger = get_logger(__name__)
+
+_POST_COMMIT_QUEUE_KEY = "rag_status_post_commit_queue"
+
+
+def _dispatch_rag_status_queue(sync_session) -> None:
+    if sync_session.in_nested_transaction():
+        return
+    payload = sync_session.info.pop(_POST_COMMIT_QUEUE_KEY, None)
+    if not payload:
+        return
+    try:
+        from app.workers.tasks_rag_status_projection import refresh_rag_status_projection
+
+        refresh_rag_status_projection.delay(payload)
+    except Exception:
+        logger.exception("Failed to dispatch post-commit RAG status projection")
+
+
+def _discard_rag_status_queue(sync_session) -> None:
+    if not sync_session.in_nested_transaction():
+        sync_session.info.pop(_POST_COMMIT_QUEUE_KEY, None)
 
 
 class RAGStatusManager:
@@ -53,6 +74,32 @@ class RAGStatusManager:
         self.status_repo = AsyncRAGStatusRepository(session)
         self.target_models = RAGTargetModelService(session, repo_factory)
         self.event_publisher = event_publisher
+
+    def _queue_post_commit(self, *, events: list[dict[str, Any]] | None = None,
+                           collection_ids: list[UUID] | None = None) -> None:
+        sync_session = self.session.sync_session
+        payload = sync_session.info.setdefault(_POST_COMMIT_QUEUE_KEY, {"events": [], "collection_ids": []})
+        if events:
+            payload["events"].extend(events)
+        if collection_ids:
+            existing = set(payload["collection_ids"])
+            payload["collection_ids"] = sorted(existing | {str(item) for item in collection_ids})
+        if not event.contains(sync_session, "after_commit", _dispatch_rag_status_queue):
+            event.listen(sync_session, "after_commit", _dispatch_rag_status_queue)
+        if not event.contains(sync_session, "after_rollback", _discard_rag_status_queue):
+            event.listen(sync_session, "after_rollback", _discard_rag_status_queue)
+
+    def schedule_collection_projection(self, collection_id: UUID) -> None:
+        """Refresh derived collection status after the owning transaction commits."""
+        self._queue_post_commit(collection_ids=[collection_id])
+
+    async def _lock_document_row(self, doc_id: UUID):
+        return await self.session.scalar(
+            select(RAGDocument)
+            .where(RAGDocument.id == doc_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
 
     @staticmethod
     def _format_stage_name(node_type: str, node_key: str) -> str:
@@ -84,6 +131,9 @@ class RAGStatusManager:
             embed_models: Список моделей эмбеддинга тенанта
         """
         logger.info(f"Initializing statuses for document {doc_id}")
+        document = await self._lock_document_row(doc_id)
+        if document is None:
+            raise ValueError(f"Document {doc_id} not found during status initialization")
         
         # Upload всегда completed сразу (файл уже загружен)
         await self.status_repo.upsert_node(
@@ -124,10 +174,9 @@ class RAGStatusManager:
         
         # Публикуем событие инициализации
         if self.event_publisher:
-            await self.event_publisher.publish_status_initialized(
-                doc_id=doc_id,
-                tenant_id=tenant_id
-            )
+            self._queue_post_commit(events=[{
+                "kind": "initialized", "doc_id": str(doc_id), "tenant_id": str(tenant_id),
+            }])
         
         # Пересчитать агрегированный статус (будет 'uploaded')
         await self._update_aggregate_status(doc_id)
@@ -155,6 +204,12 @@ class RAGStatusManager:
             metrics: Метрики этапа
             celery_task_id: ID Celery задачи
         """
+        # Serialize all status writers by locking the owning document before
+        # touching a RAGStatus row. This is the common parent -> child order
+        # used by Source metadata publication and collection reassignment.
+        document = await self._lock_document_row(doc_id)
+        tenant_id = document.tenant_id if document is not None else None
+
         # Получаем текущий статус
         node_type, node_key = self._split_stage_name(stage)
         
@@ -202,23 +257,11 @@ class RAGStatusManager:
         await self.status_repo.upsert_node(**update_data)
         
         # Публикуем событие
-        if self.event_publisher:
-            # Получаем tenant_id из документа
-            from app.models.rag import RAGDocument
-            
-            result = await self.session.execute(
-                select(RAGDocument.tenant_id).where(RAGDocument.id == doc_id)
-            )
-            tenant_id = result.scalar_one_or_none()
-            
-            await self.event_publisher.publish_status_update(
-                doc_id=doc_id,
-                tenant_id=tenant_id,
-                stage=stage,
-                status=new_status.value,
-                error=error,
-                metrics=metrics
-            )
+        if self.event_publisher and tenant_id:
+            self._queue_post_commit(events=[{
+                "kind": "status_update", "doc_id": str(doc_id), "tenant_id": str(tenant_id),
+                "stage": stage, "status": new_status.value, "error": error, "metrics": metrics or {},
+            }])
         
         # Cascade обновления при ошибке или отмене
         if new_status in [StageStatus.FAILED, StageStatus.CANCELLED]:
@@ -265,6 +308,8 @@ class RAGStatusManager:
             doc_id: ID документа
         """
         logger.info(f"Starting ingest for document {doc_id}")
+        if await self._lock_document_row(doc_id) is None:
+            raise ValueError(f"Document {doc_id} not found")
         
         # Получаем все этапы в pending
         pipeline_nodes = await self.status_repo.get_pipeline_nodes(doc_id)
@@ -332,6 +377,7 @@ class RAGStatusManager:
             celery_task_id если нужно убить задачу, иначе None
         """
         logger.info(f"Stopping stage {stage} for document {doc_id}")
+        await self._lock_document_row(doc_id)
         
         node_type, node_key = self._split_stage_name(stage)
         
@@ -371,6 +417,7 @@ class RAGStatusManager:
         # Celery task is best effort; the generation check is the durable stop.
         document = (await self.session.execute(
             select(RAGDocument).where(RAGDocument.id == doc_id).with_for_update()
+            .execution_options(populate_existing=True)
         )).scalar_one_or_none()
         if document is not None:
             document.ingest_generation = int(document.ingest_generation or 0) + 1
@@ -448,6 +495,7 @@ class RAGStatusManager:
             stage: Название этапа
         """
         logger.info(f"Retrying stage {stage} for document {doc_id}")
+        await self._lock_document_row(doc_id)
 
         await self.transition_stage(
             doc_id=doc_id,
@@ -473,6 +521,7 @@ class RAGStatusManager:
     async def archive_document(self, doc_id: UUID) -> None:
         """Архивировать документ."""
         logger.info(f"Archiving document {doc_id}")
+        await self._lock_document_row(doc_id)
 
         await self.status_repo.upsert_node(
             doc_id=doc_id,
@@ -487,6 +536,7 @@ class RAGStatusManager:
     async def unarchive_document(self, doc_id: UUID) -> None:
         """Разархивировать документ."""
         logger.info(f"Unarchiving document {doc_id}")
+        await self._lock_document_row(doc_id)
 
         await self.status_repo.delete_node(doc_id, 'archive', 'archive')
         await self._update_aggregate_status(doc_id)
@@ -554,6 +604,7 @@ class RAGStatusManager:
         force: bool = False,
     ) -> None:
         """Сбросить статус этапа, если он не в финальном состоянии."""
+        await self._lock_document_row(doc_id)
         node_type, node_key = self._split_stage_name(stage)
 
         current_node = await self.status_repo.get_node(doc_id, node_type, node_key)
@@ -592,9 +643,9 @@ class RAGStatusManager:
         # Serialize aggregate calculations before reading stage nodes. Without
         # this lock, concurrent model branches can each observe the other as
         # still running and both persist a stale `processing` projection.
-        await self.session.execute(
-            select(RAGDocument.id).where(RAGDocument.id == doc_id).with_for_update()
-        )
+        document = await self._lock_document_row(doc_id)
+        if document is None:
+            return
         pipeline_nodes = await self.status_repo.get_pipeline_nodes(doc_id)
         embedding_nodes = await self.status_repo.get_embedding_nodes(doc_id)
         index_nodes = await self.status_repo.get_index_nodes(doc_id)
@@ -657,12 +708,10 @@ class RAGStatusManager:
 
         # Публикуем только если пользователь-видимый статус изменился
         if self.event_publisher and tenant_id and status_changed:
-            await self.event_publisher.publish_aggregate_status(
-                doc_id=doc_id,
-                tenant_id=tenant_id,
-                agg_status=agg_status,
-                agg_details=agg_details,
-            )
+            self._queue_post_commit(events=[{
+                "kind": "aggregate", "doc_id": str(doc_id), "tenant_id": str(tenant_id),
+                "agg_status": agg_status, "agg_details": agg_details,
+            }])
 
         await self._refresh_collection_statuses_for_document(doc_id)
 
@@ -782,9 +831,8 @@ class RAGStatusManager:
         }
 
     async def _refresh_collection_statuses_for_document(self, doc_id: UUID) -> None:
-        """Refresh document collection readiness for collections that contain the document."""
+        """Schedule readiness refresh after commit, without locking collections here."""
         from sqlalchemy import text
-        from app.services.collection_service import CollectionService
 
         result = await self.session.execute(
             text(
@@ -795,14 +843,8 @@ class RAGStatusManager:
             {"doc_id": doc_id},
         )
         collection_ids = [row.id for row in result.mappings().all()]
-        if not collection_ids:
-            return
-
-        collection_service = CollectionService(self.session)
-        for collection_id in collection_ids:
-            collection = await collection_service.get_by_id(collection_id)
-            if collection:
-                await collection_service.sync_collection_status(collection, persist=False)
+        if collection_ids:
+            self._queue_post_commit(collection_ids=collection_ids)
 
     async def _get_target_models(self, doc_id: UUID) -> List[str]:
         """Получить список target-моделей для документа."""

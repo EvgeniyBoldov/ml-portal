@@ -13,8 +13,8 @@ from app.repositories.rag_ingest_repos import AsyncSourceRepository
 from app.services.document_artifacts import (
     get_document_artifact,
     normalize_document_source_meta,
-    upsert_document_artifact,
 )
+from app.services.document_source_metadata_service import DocumentSourceMetadataService
 from app.services.extractors import ExtractorRegistry
 from app.services.document_extraction_service import DocumentExtractionService, ExtractionRequest
 from app.storage.paths import get_extracted_path, calculate_text_checksum
@@ -183,8 +183,9 @@ def extract_document(
             content_type="text/plain",
         )
 
-        source.meta = upsert_document_artifact(
-            source_meta,
+        published = await DocumentSourceMetadataService(ctx.session).upsert_artifact(
+            ctx.source_id,
+            ctx.tenant_id,
             "extracted",
             {
                 "key": extracted_key,
@@ -194,7 +195,8 @@ def extract_document(
                 "extractor_kind": extractor_kind,
             },
         )
-        ctx.session.add(source)
+        if published is None:
+            raise ValueError(f"Source {source_id} disappeared before extracted artifact publication")
 
         # 6. Complete
         metrics = {

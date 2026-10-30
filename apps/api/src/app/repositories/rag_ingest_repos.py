@@ -9,6 +9,7 @@ from sqlalchemy import select, update, delete, func
 from sqlalchemy.dialects.postgresql import insert
 
 from app.models.rag_ingest import Source, Chunk, EmbStatus
+from app.models.rag import RAGDocument
 from app.models.model_registry import ModelRegistry
 from app.repositories.base import AsyncTenantRepository, AsyncRepository
 from app.core.logging import get_logger
@@ -31,6 +32,29 @@ class AsyncSourceRepository(AsyncTenantRepository):
             )
         )
         return result.scalar_one_or_none()
+
+    async def lock_publication_rows(self, source_id: UUID) -> tuple[RAGDocument, Source | None] | None:
+        """Lock document then source and refresh both ORM identities.
+
+        All document metadata publishers use this order. Keeping the parent
+        document lock first also matches LongMemory generation fencing and
+        RAG status aggregation.
+        """
+        document = await self.session.scalar(
+            select(RAGDocument)
+            .where(RAGDocument.id == source_id, RAGDocument.tenant_id == self.tenant_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if document is None:
+            return None
+        source = await self.session.scalar(
+            select(Source)
+            .where(Source.source_id == source_id, Source.tenant_id == self.tenant_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return document, source
     
     async def create(self, source_id: UUID, meta: Dict[str, Any] = None) -> Source:
         """Create new source"""

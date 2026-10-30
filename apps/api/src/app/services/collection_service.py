@@ -432,29 +432,44 @@ class CollectionService:
     async def _reassign_collection_tenant(self, collection: Collection, target_tenant_id: uuid.UUID) -> None:
         from sqlalchemy import update as sa_update
         from app.models.rag import RAGDocument
-        from app.models.rag_ingest import DocumentCollectionMembership, Source
+        from app.models.rag_ingest import DocumentCollectionMembership
+        from app.repositories.rag_ingest_repos import AsyncSourceRepository
         from app.models.tenant import Tenants
         from app.core.exceptions import ValidationError
 
-        prev_tenant_id = collection.tenant_id
+        # Collection first stabilizes the membership set against concurrent
+        # document uploads; child rows then follow the publication order
+        # RAGDocument -> Source. Do not dirty the Collection before this read.
+        with self.session.no_autoflush:
+            locked_collection = await self.session.scalar(
+                select(Collection)
+                .where(Collection.id == collection.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        if locked_collection is None:
+            raise ValidationError("collection not found")
+        prev_tenant_id = locked_collection.tenant_id
         tenant_exists = (
             await self.session.execute(select(Tenants.id).where(Tenants.id == target_tenant_id))
         ).scalar_one_or_none()
         if not tenant_exists:
             raise ValidationError("target tenant not found")
-        collection.tenant_id = target_tenant_id
 
-        if collection.collection_type != CollectionType.DOCUMENT.value:
+        if locked_collection.collection_type != CollectionType.DOCUMENT.value:
+            locked_collection.tenant_id = target_tenant_id
             return
 
-        source_ids = (
-            await self.session.execute(
-                select(DocumentCollectionMembership.source_id).where(
-                    DocumentCollectionMembership.collection_id == collection.id,
-                    DocumentCollectionMembership.tenant_id == prev_tenant_id,
-                )
+        source_ids = sorted(set((await self.session.scalars(
+            select(DocumentCollectionMembership.source_id).where(
+                DocumentCollectionMembership.collection_id == collection.id,
+                DocumentCollectionMembership.tenant_id == prev_tenant_id,
             )
-        ).scalars().all()
+        )).all()))
+
+        source_repo = AsyncSourceRepository(self.session, prev_tenant_id)
+        for source_id in source_ids:
+            await source_repo.lock_publication_rows(source_id)
 
         await self.session.execute(
             sa_update(DocumentCollectionMembership)
@@ -467,14 +482,6 @@ class CollectionService:
 
         if source_ids:
             await self.session.execute(
-                sa_update(Source)
-                .where(
-                    Source.source_id.in_(source_ids),
-                    Source.tenant_id == prev_tenant_id,
-                )
-                .values(tenant_id=target_tenant_id)
-            )
-            await self.session.execute(
                 sa_update(RAGDocument)
                 .where(
                     RAGDocument.id.in_(source_ids),
@@ -482,6 +489,16 @@ class CollectionService:
                 )
                 .values(tenant_id=target_tenant_id)
             )
+            from app.models.rag_ingest import Source
+            await self.session.execute(
+                sa_update(Source)
+                .where(
+                    Source.source_id.in_(source_ids),
+                    Source.tenant_id == prev_tenant_id,
+                )
+                .values(tenant_id=target_tenant_id)
+            )
+        locked_collection.tenant_id = target_tenant_id
 
     async def list_versions(self, collection_id: uuid.UUID) -> List[CollectionVersion]:
         return await self.versions.list_versions(collection_id)

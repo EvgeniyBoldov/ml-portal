@@ -576,11 +576,13 @@ async def get_collection_capabilities(
         }
         for candidate in candidates
     ]
+    from app.services.collection.status_snapshot_service import CollectionStatusSnapshotService
+    status_snapshot = await CollectionStatusSnapshotService(session).get_status_snapshot(collection)
     return {
         "collection_id": str(collection.id),
         "collection_slug": collection.slug,
         "collection_type": collection.collection_type,
-        "status": collection.status,
+        "status": status_snapshot.get("status") or collection.status,
         "tools": tools,
     }
 
