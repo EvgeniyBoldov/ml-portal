@@ -31,7 +31,7 @@ function formatDate(date?: string | null): string {
   });
 }
 
-function MetricValue({ label, value }: { label: string; value: unknown }) {
+function MetricValue({ label, value, title }: { label: string; value: unknown; title?: string }) {
   if (value === null || value === undefined) return null;
   let displayValue: string | number | boolean = value as string | number | boolean;
   if (typeof value === 'number') {
@@ -47,7 +47,7 @@ function MetricValue({ label, value }: { label: string; value: unknown }) {
   return (
     <div className={styles.metricRow}>
       <span className={styles.metricLabel}>{label}</span>
-      <span className={styles.metricValue}>{String(displayValue)}</span>
+      <span className={styles.metricValue} title={title} tabIndex={title ? 0 : undefined} aria-label={title ? `${label}: ${title}` : undefined}>{String(displayValue)}</span>
     </div>
   );
 }
@@ -60,6 +60,11 @@ export function StatusFlowDetails({
   metricLabels = {},
   actions = [],
   processingText = 'Выполняется...',
+  compact = false,
+  stageDescription,
+  longDescription,
+  stageContent,
+  stageContentTitle = 'Структура шаблона',
 }: {
   node: FlowNode | null;
   emptyText?: string;
@@ -68,6 +73,12 @@ export function StatusFlowDetails({
   metricLabels?: Record<string, string>;
   actions?: FlowDetailAction[];
   processingText?: string;
+  /** Restricts compact presentation to a selected, opt-in consumer. */
+  compact?: boolean;
+  stageDescription?: string;
+  longDescription?: React.ReactNode;
+  stageContent?: React.ReactNode;
+  stageContentTitle?: string;
 }) {
   if (!node) {
     return (
@@ -81,7 +92,7 @@ export function StatusFlowDetails({
   const isProcessing = node.status === 'processing' || node.status === 'queued';
 
   return (
-    <div className={styles.details}>
+    <div className={`${styles.details} ${compact ? styles.compactDetails : ''}`}>
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <h3 className={styles.title}>{node.label}</h3>
@@ -89,6 +100,15 @@ export function StatusFlowDetails({
         </div>
         {node.version ? <span className={styles.version}>v{node.version}</span> : null}
       </div>
+
+      {stageDescription && <p className={styles.stageDescription}>{stageDescription}</p>}
+
+      {stageContent !== undefined && stageContent !== null && (
+        <div className={styles.section}>
+          <h4 className={styles.sectionTitle}>{stageContentTitle}</h4>
+          {stageContent}
+        </div>
+      )}
 
       {node.error ? (
         <div className={styles.errorBox}>
@@ -99,28 +119,39 @@ export function StatusFlowDetails({
 
       <div className={styles.section}>
         <h4 className={styles.sectionTitle}>Время выполнения</h4>
-        <div className={styles.timingGrid}>
-          <div className={styles.timingItem}>
-            <span className={styles.timingLabel}>Начало</span>
-            <span className={styles.timingValue}>{formatDate(node.started_at)}</span>
+        {compact && !node.started_at && !node.finished_at ? (
+          <p className={styles.noTiming}>Время не зафиксировано</p>
+        ) : (
+          <div className={styles.timingGrid}>
+            <div className={styles.timingItem}>
+              <span className={styles.timingLabel}>Начало</span>
+              <span className={styles.timingValue}>{formatDate(node.started_at)}</span>
+            </div>
+            <div className={styles.timingItem}>
+              <span className={styles.timingLabel}>Окончание</span>
+              <span className={styles.timingValue}>{formatDate(node.finished_at)}</span>
+            </div>
+            <div className={styles.timingItem}>
+              <span className={styles.timingLabel}>Длительность</span>
+              <span className={styles.timingValue}>{formatDuration(node.started_at, node.finished_at)}</span>
+            </div>
           </div>
-          <div className={styles.timingItem}>
-            <span className={styles.timingLabel}>Окончание</span>
-            <span className={styles.timingValue}>{formatDate(node.finished_at)}</span>
-          </div>
-          <div className={styles.timingItem}>
-            <span className={styles.timingLabel}>Длительность</span>
-            <span className={styles.timingValue}>{formatDuration(node.started_at, node.finished_at)}</span>
-          </div>
-        </div>
+        )}
       </div>
+
+      {longDescription !== undefined && longDescription !== null && (
+        <div className={`${styles.section} ${styles.longDescriptionSection}`}>
+          <h4 className={styles.sectionTitle}>Описание шаблона</h4>
+          <div className={styles.longDescription}>{longDescription}</div>
+        </div>
+      )}
 
       {!node.error && infoItems.length > 0 ? (
         <div className={styles.section}>
           <h4 className={styles.sectionTitle}>Информация</h4>
           <div className={styles.metricsGrid}>
             {infoItems.map((item) => (
-              <MetricValue key={`${item.label}-${item.value}`} label={item.label} value={item.value} />
+              <MetricValue key={`${item.label}-${item.value}`} label={item.label} value={item.value} title={item.title} />
             ))}
           </div>
         </div>

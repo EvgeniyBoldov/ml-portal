@@ -21,111 +21,33 @@ import {
 import type { TemplateStatusGraphModel } from '@shared/components/statusFlow/templateFlowAdapter';
 import styles from './TemplateStatusModal.module.css';
 
-import { summarizeTemplateSchema } from '@shared/lib/templateSchemaSummary';
 import { capabilityReasonCopy } from '../capabilityReasonCopy';
+import { TemplateSchemaViewer } from './TemplateSchemaViewer';
+import { formatTemplateSchemaCounts, getTemplateSchemaCounts } from './templateSchemaPresentation';
+import {
+  formatTemplateFormat,
+  formatTemplateStatus,
+  getTemplateStageDescription,
+  parseTemplateDescription,
+} from './templateStatusPresentation';
 
-type SchemaField = Record<string, unknown> & { key: string };
-
-function getSchemaFields(schema: Record<string, unknown> | null | undefined): SchemaField[] {
-  if (!schema) return [];
-  if (Array.isArray(schema.fields)) {
-    return schema.fields.flatMap((field) => {
-      if (!field || typeof field !== 'object') return [];
-      const value = field as Record<string, unknown>;
-      const key = String(value.key ?? value.name ?? value.label ?? '').trim();
-      return key ? [{ ...value, key }] : [];
-    });
-  }
-  if (schema.properties && typeof schema.properties === 'object') {
-    const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
-    return Object.entries(schema.properties as Record<string, unknown>).flatMap(([key, value]) => {
-      if (!value || typeof value !== 'object') return [];
-      return [{ key, ...(value as Record<string, unknown>), required: required.has(key) }];
-    });
-  }
-  return [];
-}
-
-function SchemaPreview({ schema }: { schema: Record<string, unknown> | null | undefined }) {
-  const fields = getSchemaFields(schema);
-  if (fields.length === 0) {
-    return <p className={styles.schemaEmpty}>Описание полей для этого шаблона пока не сформировано.</p>;
+function TemplateDescription({ text }: { text: string }) {
+  const parsed = parseTemplateDescription(text);
+  if (!parsed.sections.length) {
+    return <p className={styles.descriptionFallback}>{parsed.fallback}</p>;
   }
 
   return (
-    <div className={styles.schemaFields}>
-      {fields.map((field, index) => {
-        const label = String(field.label ?? field.title ?? field.key);
-        const kind = String(field.kind ?? (Array.isArray(field.columns) ? 'table' : 'field'));
-        const columns = Array.isArray(field.columns) ? field.columns : [];
-        const knownKeys = new Set([
-          'key', 'name', 'label', 'title', 'kind', 'type', 'description', 'required',
-          'example', 'enum', 'columns', 'orientation', 'min_rows', 'max_rows',
-        ]);
-        const technicalAttributes = Object.entries(field).filter(([key]) => !knownKeys.has(key));
-        const rowRange = field.min_rows !== undefined || field.max_rows !== undefined
-          ? `${field.min_rows ?? 0}–${field.max_rows ?? 'без ограничения'} строк`
-          : null;
-
-        return (
-          <details className={styles.schemaField} key={`${field.key}-${index}`}>
-            <summary className={styles.schemaFieldSummary}>
-              <span className={styles.schemaFieldName}>{label}</span>
-              <span className={`${styles.schemaBadge} ${kind === 'table' ? styles.tableBadge : ''}`}>
-                {kind === 'table' ? 'Таблица' : String(field.type ?? 'Поле')}
-              </span>
-              {field.required === true && <span className={`${styles.schemaBadge} ${styles.requiredBadge}`}>Обязательное</span>}
-              {kind === 'table' && Boolean(field.orientation) && (
-                <span className={styles.schemaBadge}>
-                  {field.orientation === 'horizontal' ? 'По столбцам' : 'По строкам'}
-                </span>
-              )}
-              {rowRange && <span className={styles.schemaFieldMeta}>{rowRange}</span>}
-              {columns.length > 0 && <span className={styles.schemaFieldMeta}>{columns.length} столбц.</span>}
-              <span className={styles.schemaChevron} aria-hidden="true">⌄</span>
-            </summary>
-            <div className={styles.schemaFieldBody}>
-              <div className={styles.schemaKey}>{field.key}</div>
-              {typeof field.description === 'string' && field.description.trim() && (
-                <p className={styles.schemaDescription}>{field.description}</p>
-              )}
-              {columns.length > 0 && (
-                <div className={styles.schemaColumns}>
-                  {columns.map((column, columnIndex) => {
-                    if (!column || typeof column !== 'object') return null;
-                    const item = column as Record<string, unknown>;
-                    const columnLabel = String(item.label ?? item.key ?? `Столбец ${columnIndex + 1}`);
-                    return (
-                      <span className={styles.schemaColumn} key={`${columnLabel}-${columnIndex}`}>
-                        {columnLabel}{item.type ? <small>{String(item.type)}</small> : null}
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-              {(field.example !== undefined || Array.isArray(field.enum)) && (
-                <div className={styles.schemaExamples}>
-                  {field.example !== undefined && <span>Пример: {String(field.example)}</span>}
-                  {Array.isArray(field.enum) && <span>Варианты: {field.enum.map(String).join(', ')}</span>}
-                </div>
-              )}
-              {technicalAttributes.length > 0 && (
-                <details className={styles.technicalDetails}>
-                  <summary>Технические атрибуты</summary>
-                  <dl>
-                    {technicalAttributes.map(([key, value]) => (
-                      <div key={key}>
-                        <dt>{key}</dt>
-                        <dd>{typeof value === 'string' ? value : JSON.stringify(value)}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </details>
-              )}
-            </div>
-          </details>
-        );
-      })}
+    <div className={styles.descriptionContent}>
+      {parsed.introduction && <p className={styles.descriptionIntro}>{parsed.introduction}</p>}
+      {parsed.sections.map((section, index) => (
+        <section key={`${section.heading}-${index}`} className={styles.descriptionPart}>
+          <h5>{section.heading}</h5>
+          <ul>
+            {section.items.map((item, itemIndex) => <li key={`${item}-${itemIndex}`}>{item}</li>)}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }
@@ -227,7 +149,7 @@ export function TemplateStatusModal({ collectionId, tenantId, collection, permis
     switch (selectedNode.key) {
       case 'uploaded':
         if (metrics.filename) items.push({ label: 'Файл', value: String(metrics.filename) });
-        if (metrics.format) items.push({ label: 'Формат', value: String(metrics.format) });
+        if (metrics.format) items.push({ label: 'Формат', value: formatTemplateFormat(metrics.format) ?? String(metrics.format) });
         if (metrics.file_size) {
           const bytes = Number(metrics.file_size);
           const size = bytes >= 1024 * 1024
@@ -240,40 +162,41 @@ export function TemplateStatusModal({ collectionId, tenantId, collection, permis
         }
         break;
       case 'schema':
-        if (metrics.title) items.push({ label: 'Заголовок', value: String(metrics.title) });
-        if (metrics.version) items.push({ label: 'Версия', value: String(metrics.version) });
-        if (metrics.format) items.push({ label: 'Формат', value: String(metrics.format) });
-        if (Array.isArray(metrics.sheet_names) && metrics.sheet_names.length > 0) {
-          items.push({ label: 'Листы', value: metrics.sheet_names as string[] });
-        }
         break;
       case 'description':
         if (metrics.title) items.push({ label: 'Заголовок', value: String(metrics.title) });
         if (metrics.version) items.push({ label: 'Версия', value: String(metrics.version) });
-        items.push({ label: 'Описание', value: String(metrics.description_text ?? graph.description ?? '—') });
         break;
       case 'approval':
-        items.push({ label: 'Статус', value: String(metrics.approval_state ?? 'pending') });
+        items.push({ label: 'Статус', value: formatTemplateStatus(metrics.approval_state ?? graph.runtime_status ?? graph.status ?? 'pending') });
         if (metrics.approved_by ?? graph.approved_by) {
-          items.push({ label: 'Утвердил', value: String(metrics.approved_by ?? graph.approved_by) });
-        }
-        if (metrics.approved_at ?? graph.approved_at) {
-          items.push({ label: 'Утверждено', value: String(metrics.approved_at ?? graph.approved_at) });
+          const approvedBy = String(metrics.approved_by ?? graph.approved_by);
+          const approvedByName = graph.approved_by_name?.trim();
+          items.push({ label: 'Утвердил', value: approvedByName || 'Пользователь недоступен', title: approvedBy });
         }
         break;
       case 'vectorization':
-        if (metrics.chunks_prepared !== undefined) items.push({ label: 'Подготовлено чанков', value: Number(metrics.chunks_prepared) });
-        if (metrics.chunk_count !== undefined) items.push({ label: 'Чанков', value: Number(metrics.chunk_count) });
+        if (metrics.chunks_prepared !== undefined) items.push({ label: 'Подготовлено векторов', value: Number(metrics.chunks_prepared) });
+        if (metrics.chunk_count !== undefined && Number(metrics.chunk_count) !== Number(metrics.chunks_prepared)) {
+          items.push({ label: 'Чанков для модели', value: Number(metrics.chunk_count) });
+        }
+        if (metrics.model_alias) items.push({ label: 'Модель', value: String(metrics.model_alias) });
         break;
       case 'indexing':
-        if (metrics.indexed_count !== undefined) items.push({ label: 'Проиндексировано', value: Number(metrics.indexed_count) });
-        if (metrics.chunk_count !== undefined) items.push({ label: 'Чанков', value: Number(metrics.chunk_count) });
+        if (metrics.indexed_count !== undefined) items.push({ label: 'Записей в индексе', value: Number(metrics.indexed_count) });
+        if (metrics.chunk_count !== undefined && Number(metrics.chunk_count) !== Number(metrics.indexed_count)) {
+          items.push({ label: 'Обработано чанков', value: Number(metrics.chunk_count) });
+        }
         break;
       case 'ready':
         if (graph.template_version) items.push({ label: 'Версия', value: graph.template_version });
-        items.push({ label: 'Статус', value: String(graph.runtime_status ?? graph.status ?? 'uploaded') });
-        items.push({ label: 'Схема', value: summarizeTemplateSchema(graph.template_schema) });
-        if (graph.approved_by) items.push({ label: 'Утвердил', value: String(graph.approved_by) });
+        items.push({ label: 'Статус', value: formatTemplateStatus(graph.runtime_status ?? graph.status ?? 'uploaded') });
+        const templateFormat = formatTemplateFormat(graph.template_schema?.format);
+        if (templateFormat) items.push({ label: 'Формат', value: templateFormat });
+        items.push({ label: 'Структура', value: formatTemplateSchemaCounts(getTemplateSchemaCounts(graph.template_schema)).join(', ') || 'Поля не определены' });
+        if (graph.approved_by) {
+          items.push({ label: 'Утвердил', value: graph.approved_by_name?.trim() || 'Пользователь недоступен', title: String(graph.approved_by) });
+        }
         break;
       default:
         break;
@@ -288,8 +211,15 @@ export function TemplateStatusModal({ collectionId, tenantId, collection, permis
       // Stage-specific, user-facing values are rendered through infoItems below.
       // Raw metrics can contain internal schema/debug fields, so keep them out of the default view.
       metrics: {},
+      finished_at: selectedNode.finished_at || (selectedNode.key === 'approval'
+        ? (typeof selectedStage?.metrics?.approved_at === 'string' ? selectedStage.metrics.approved_at : graph.approved_at)
+        : undefined),
     };
-  }, [selectedNode]);
+  }, [graph.approved_at, selectedNode, selectedStage?.metrics]);
+
+  const selectedDescription = selectedNode?.key === 'description'
+    ? String(selectedStage?.metrics?.description_text ?? graph.description ?? '')
+    : '';
 
   const title = graph.title || row.title || 'Статус шаблона';
   const awaitingApproval = String(graph.runtime_status ?? graph.status ?? row.runtime_status ?? row.status ?? '').toLowerCase() === 'approval_required';
@@ -357,6 +287,7 @@ export function TemplateStatusModal({ collectionId, tenantId, collection, permis
             model={flowModel}
             selection={selection}
             onSelect={setSelection}
+            compact
           />
         </div>
         <div className={styles.detailsSection}>
@@ -364,29 +295,21 @@ export function TemplateStatusModal({ collectionId, tenantId, collection, permis
             node={selectedNodeForDetails}
             infoItems={infoItems}
             processingText="Этап выполняется..."
+            compact
+            stageDescription={selectedNode ? getTemplateStageDescription(selectedNode.key) : undefined}
+            longDescription={selectedDescription ? <TemplateDescription text={selectedDescription} /> : undefined}
+            stageContent={selectedNode?.key === 'schema' && !awaitingApproval ? <TemplateSchemaViewer schema={graph.template_schema} /> : undefined}
           />
         </div>
-        {selectedNode?.key === 'schema' && !awaitingApproval && (
-          <section className={`${styles.detailsSection} ${styles.schemaSection}`} aria-label="Поля шаблона">
-            <div className={styles.schemaHeader}>
-              <h4>Структура шаблона</h4>
-              <span>{getSchemaFields(graph.template_schema).length}</span>
-            </div>
-            <SchemaPreview schema={graph.template_schema} />
-          </section>
-        )}
         {awaitingApproval && (
           <div className={`${styles.detailsSection} ${styles.approvalSection}`}>
             <div className={styles.approvalHeading}>
               <h3>Проверьте шаблон перед согласованием</h3>
               <p>Поля и их типы используются при заполнении шаблона.</p>
             </div>
-            <section className={styles.schemaSection} aria-label="Поля шаблона">
-              <div className={styles.schemaHeader}>
-                <h4>Поля шаблона</h4>
-                <span>{getSchemaFields(graph.template_schema).length}</span>
-              </div>
-              <SchemaPreview schema={graph.template_schema} />
+            <section className={styles.schemaSection} aria-label="Структура шаблона">
+              <h4>Структура шаблона</h4>
+              <TemplateSchemaViewer schema={graph.template_schema} />
             </section>
             <label className={styles.descriptionField}>
               Описание шаблона

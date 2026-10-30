@@ -24,6 +24,13 @@ class AsyncUsersRepository:
                 return None
         return await self.session.get(Users, user_id)
 
+    async def get_by_ids(self, user_ids: list[uuid.UUID]) -> list[Users]:
+        """Get users for a set of IDs in one query."""
+        if not user_ids:
+            return []
+        result = await self.session.execute(select(Users).where(Users.id.in_(user_ids)))
+        return list(result.scalars().all())
+
     async def get_by_login(self, login: str) -> Optional[Users]:
         res = await self.session.execute(select(Users).where(Users.login == login))
         return res.scalar_one_or_none()

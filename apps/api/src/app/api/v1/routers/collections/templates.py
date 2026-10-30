@@ -27,6 +27,7 @@ from app.services.collection.template_status_stream import (
     build_template_status_graph,
 )
 from app.repositories.template_analysis_status_repo import AsyncTemplateAnalysisStatusRepository
+from app.repositories.users_repo import AsyncUsersRepository
 from app.services.collection.template_upload_service import TemplateUploadService
 from app.services.collection.row_service import CollectionRowService
 from app.services.collection.status_snapshot_service import CollectionStatusSnapshotService
@@ -71,6 +72,35 @@ class ApproveTemplateRequest(BaseModel):
     approved_by: str | None = None
 
 
+async def _resolve_approver_names(session: AsyncSession, raw_ids: list[object]) -> dict[str, str]:
+    """Resolve valid approver UUIDs to their current display names in one query."""
+    parsed_ids: dict[str, uuid.UUID] = {}
+    for raw_id in raw_ids:
+        if raw_id is None:
+            continue
+        value = str(raw_id).strip()
+        try:
+            parsed_id = uuid.UUID(value)
+            parsed_ids[str(parsed_id)] = parsed_id
+        except (ValueError, AttributeError):
+            continue
+    if not parsed_ids:
+        return {}
+    users = await AsyncUsersRepository(session).get_by_ids(list(set(parsed_ids.values())))
+    result: dict[str, str] = {}
+    for user in users:
+        display_name = (user.full_name or "").strip() or user.login
+        result[str(user.id)] = display_name
+    return result
+
+
+def _canonical_uuid_string(raw_id: object) -> str | None:
+    try:
+        return str(uuid.UUID(str(raw_id)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def _resolve_next_template_status(existing: dict, updates: dict) -> str:
     current_status = str(existing.get("status") or "uploaded").strip().lower()
     if current_status == "archived":
@@ -104,10 +134,25 @@ async def _load_template_runtime_rows(
     }
 
     status_repo = AsyncTemplateAnalysisStatusRepository(session)
+    nodes_by_row = {
+        str(row["id"]): await status_repo.get_nodes_by_row_id(uuid.UUID(str(row["id"])))
+        for row in rows
+    }
+    approver_ids = [
+        (node.metrics_json or {}).get("approved_by")
+        for nodes in nodes_by_row.values()
+        for node in nodes
+        if node.node_key == "approval" and isinstance(node.metrics_json, dict)
+    ]
+    approver_names = await _resolve_approver_names(session, approver_ids)
     payloads: list[dict] = []
     for row in rows:
         row_id = uuid.UUID(str(row["id"]))
-        nodes = await status_repo.get_nodes_by_row_id(row_id)
+        nodes = nodes_by_row.get(str(row["id"]), [])
+        approval_node = next((node for node in nodes if node.node_key == "approval"), None)
+        approver_id = (approval_node.metrics_json or {}).get("approved_by") if approval_node else None
+        canonical_approver_id = _canonical_uuid_string(approver_id)
+        approved_by_name = approver_names.get(canonical_approver_id) if canonical_approver_id else None
         payloads.append(
             build_template_row_runtime_payload(
                 {
@@ -117,6 +162,7 @@ async def _load_template_runtime_rows(
                 },
                 collection_id=str(collection.id),
                 analysis_nodes=_serialize_template_nodes(nodes),
+                approved_by_name=approved_by_name,
             )
         )
     return payloads
@@ -316,6 +362,7 @@ async def approve_template(
 
     approved_at = datetime.now(timezone.utc)
     approver = data.approved_by if data and data.approved_by else str(user.id)
+    approver_names = await _resolve_approver_names(session, [approver])
     await status_repo.upsert_node(
         collection_id=collection.id,
         row_id=row_id,
@@ -324,6 +371,7 @@ async def approve_template(
         metrics_json={
             "approval_state": "approved",
             "approved_by": approver,
+            "approved_by_name": approver_names.get(_canonical_uuid_string(approver) or ""),
             "approved_at": approved_at.isoformat(),
             "description_edited": False,
             "schema_edited": False,
@@ -434,6 +482,8 @@ async def stream_template_status(
                 graph = event.get("graph")
                 if not graph:
                     continue
+                if not graph.get("approved_by_name") and graph.get("approved_by") == row_payload.get("approved_by"):
+                    graph["approved_by_name"] = row_payload.get("approved_by_name")
                 yield format_sse(data=event, event="snapshot")
         except asyncio.CancelledError:
             pass
@@ -473,6 +523,11 @@ async def stream_template_collection_status(
         session=session,
         rows=await CollectionRowService(session).search(collection, limit=500, offset=0),
     )
+    initial_names = {
+        str(item.get("id")): (item.get("approved_by"), item.get("approved_by_name"))
+        for item in initial_rows
+        if item.get("approved_by_name")
+    }
     await session.close()
 
     settings = get_settings()
@@ -496,6 +551,10 @@ async def stream_template_collection_status(
                     event = await listener.__anext__()
                 except StopAsyncIteration:
                     break
+                for item in event.get("items") or []:
+                    prior = initial_names.get(str(item.get("id")))
+                    if prior and not item.get("approved_by_name") and item.get("approved_by") == prior[0]:
+                        item["approved_by_name"] = prior[1]
                 yield format_sse(data=event, event=event.get("event_type", "snapshot"))
         except asyncio.CancelledError:
             pass

@@ -35,3 +35,49 @@ The fill tool validates its `values` JSON against the stored contract, copies
 the original template, writes a generated chat file through the artifact
 writer, and returns `artifact_id`. The original template is downloaded through
 the collection RBAC endpoint, not through a chat artifact identifier.
+
+## Status modal presentation
+
+The templates table combines the template name and a two-line description,
+then shows status, version, and a compact structure summary. The structure
+counts scalar fields outside tables, tables, and their columns; file format is
+shown when available. Horizontal scrolling stays within the table region on
+narrow screens.
+
+The status modal keeps the existing seven-step pipeline and graph relationships.
+Its graph has a bounded viewport: wide screens show all seven compact nodes when
+space allows; narrow screens scroll only the graph row horizontally. The modal
+body scrolls vertically, while the legend and selected-stage details stay outside
+the graph scroller. Stage selection works by keyboard and is visually distinct
+from the status color.
+
+The detail panel gives each stage a short neutral explanation, then shows its
+available timestamps and stage-specific information. If a stage has no start or
+finish time, the panel uses one compact “Время не зафиксировано” message. The
+description stage formats generated “Поля” and “Таблицы” sections as readable
+lists; unrecognized description text remains visible with line wrapping. Known
+template states and file formats are localized. The schema stage displays the
+schema as a recursive, collapsible tree. Root objects and tables remain cards;
+nested objects and scalar fields are peer rows within the parent tree. Field
+names and descriptions stay on the left; data types and the required marker
+align on the right. Internal schema keys and locator/source attributes are
+omitted from the user view. Expanding a field reveals its examples and formats
+when present.
+Enum fields use the type label “Выбор из списка” and show up to six allowed
+values as chips; longer lists reveal the remaining values through an “Ещё N”
+disclosure. Enum chips sit beside the type and required marker on wide screens,
+and wrap below them on narrow screens. Root table cards show their name, type,
+and required marker; column counts, orientation, and row limits stay out of the
+main view. The schema stage does not repeat the uploaded file's name, format,
+or sheets.
+
+Approval displays `approved_by_name` (the approver's full name, falling back to
+login) when present. `approved_by` remains the raw audit identifier; it is
+available on the displayed name's hover/focus and remains the source for audit
+records. If the name is unavailable, the UI displays “Пользователь недоступен”
+while preserving the identifier for audit inspection.
+
+Vectorization counts describe vectors prepared for one embedding model;
+indexing counts describe records across models. Therefore their totals can
+differ. The modal labels those units separately and retains distinct counts when
+the values in one stage do not match.

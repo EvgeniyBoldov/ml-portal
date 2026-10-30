@@ -51,4 +51,5 @@ export interface FlowDetailAction {
 export interface FlowDetailItem {
   label: string;
   value: string | number | boolean | string[];
+  title?: string;
 }

@@ -32,7 +32,6 @@ import { StatusModalNew } from '@/domains/rag/components/StatusModalNew';
 import { qk } from '@shared/api/keys';
 import { SSEClient, type SSEMessage } from '@shared/lib/sse';
 import { buildFileDownloadUrl } from '@shared/api/files';
-import { summarizeTemplateSchema } from '@shared/lib/templateSchemaSummary';
 import TemplateStatusModal from './TemplateStatusModal';
 import GlossaryCollectionView from './GlossaryCollectionView';
 import ExternalCollectionOverview from '../components/ExternalCollectionOverview';
@@ -66,7 +65,7 @@ function CollectionHeader({ collection, total, right }: CollectionHeaderProps) {
     ? `${total.toLocaleString()} ${documentUnit}`
     : `${total.toLocaleString()} записей`;
   return (
-    <header className={styles.header}>
+    <header className={`${styles.header} ${collection.collection_type === 'template' ? styles.templateHeader : ''}`}>
       <div className={styles.headerLeft}>
         <button
           className={styles.backBtn}
@@ -105,7 +104,7 @@ function CollectionHeader({ collection, total, right }: CollectionHeaderProps) {
           )}
         </div>
       </div>
-      <div className={styles.headerRight}>{right}</div>
+      <div className={`${styles.headerRight} ${collection.collection_type === 'template' ? styles.templateHeaderRight : ''}`}>{right}</div>
     </header>
   );
 }
@@ -1879,7 +1878,7 @@ function TemplateCollectionView({ collection, slug, onPermissionDenied, permissi
     <>
       <CollectionHeader collection={collection} total={totalTemplates} right={headerRight} />
 
-      <div className={styles.tableContainer}>
+      <div className={`${styles.tableContainer} ${styles.templateTableContainer}`}>
         {templatesError ? <CollectionLoadError onRetry={() => void refetchTemplates()} /> : templatesLoading ? (
           <div className={styles.loading}>
             <Skeleton width="100%" height={300} />
@@ -1903,17 +1902,22 @@ function TemplateCollectionView({ collection, slug, onPermissionDenied, permissi
             )}
           </div>
         ) : (
-          <table className={styles.docTable}>
+          <table className={`${styles.docTable} ${styles.templateTable}`}>
+            <colgroup>
+              {canEditContent && <col className={styles.templateSelectionColumn} />}
+              <col className={styles.templateNameColumn} />
+              <col className={styles.templateStatusColumn} />
+              <col className={styles.templateVersionColumn} />
+              <col className={styles.templateActionsColumn} />
+            </colgroup>
             <thead>
               <tr>
                 {canEditContent && <th className={styles.checkboxCell}>
-                  <input type="checkbox" checked={allSelected} onChange={handleSelectAll} />
+                  <input type="checkbox" aria-label="Выбрать все шаблоны на странице" checked={allSelected} onChange={handleSelectAll} />
                 </th>}
-                <th>Название</th>
+                <th>Название и описание</th>
                 <th>Статус</th>
-                <th>Описание</th>
                 <th>Версия</th>
-                <th>Схема</th>
                 <th>Действия</th>
               </tr>
             </thead>
@@ -1924,11 +1928,12 @@ function TemplateCollectionView({ collection, slug, onPermissionDenied, permissi
                     {canEditContent && <td className={styles.checkboxCell}>
                       <input
                         type="checkbox"
+                        aria-label={`Выбрать шаблон ${row.title || 'Без названия'}`}
                         checked={selectedIds.has(row.id)}
                         onChange={() => handleSelectRow(row.id)}
                       />
                     </td>}
-                    <td className={styles.nameCell}>
+                    <td className={styles.templateNameCell}>
                       <button
                         type="button"
                         className={styles.templateTitleBtn}
@@ -1937,28 +1942,12 @@ function TemplateCollectionView({ collection, slug, onPermissionDenied, permissi
                       >
                         {row.title || 'Без названия'}
                       </button>
+                      <span className={styles.templateDescription}>{row.description || 'Описание не добавлено'}</span>
+                      {row.has_error && row.error_message ? <span className={styles.templateError}>{row.error_message}</span> : null}
                     </td>
-                    <td>{getTemplateStatusBadge(row)}</td>
-                    <td className={`${styles.muted} ${styles.descriptionCell}`}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <span>{row.description || '—'}</span>
-                        {row.has_error && row.error_message ? (
-                          <span style={{ color: 'var(--color-danger-600, #c62828)', fontSize: 12 }}>{row.error_message}</span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className={styles.muted}>{row.template_version || '—'}</td>
-                    <td>
-                      <div className={styles.schemaCell}>
-                        <input
-                          className={styles.schemaPreviewInput}
-                          type="text"
-                          value={summarizeTemplateSchema(row.template_schema)}
-                          readOnly
-                        />
-                      </div>
-                    </td>
-                    <td>
+                    <td data-label="Статус">{getTemplateStatusBadge(row)}</td>
+                    <td className={styles.muted} data-label="Версия">{row.template_version || '—'}</td>
+                    <td data-label="Действия">
                       <div className={styles.actions}>
                         <button
                           type="button"

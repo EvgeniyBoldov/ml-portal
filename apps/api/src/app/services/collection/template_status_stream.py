@@ -307,6 +307,7 @@ def _resolve_runtime(row: dict[str, Any], analysis_nodes: list[dict[str, Any]] |
         "approval_required": approval_required,
         "approved_at": (approval_node or {}).get("finished_at"),
         "approved_by": ((approval_node or {}).get("metrics_json") or {}).get("approved_by"),
+        "approved_by_name": ((approval_node or {}).get("metrics_json") or {}).get("approved_by_name"),
         "has_error": has_error,
         "error_message": error_message,
         "vectorization_status": vectorization_status,
@@ -323,8 +324,12 @@ def build_template_row_runtime_payload(
     *,
     collection_id: str,
     analysis_nodes: list[dict[str, Any]] | None = None,
+    approved_by_name: str | None = None,
 ) -> dict[str, Any]:
     runtime = _resolve_runtime(row, analysis_nodes)
+    resolved_approver_name = approved_by_name or row.get("approved_by_name") or runtime.get("approved_by_name")
+    if resolved_approver_name:
+        runtime["approved_by_name"] = resolved_approver_name
     payload = {
         **row,
         **runtime,
@@ -439,6 +444,7 @@ def build_template_status_graph(
                 "title": row.get("title"),
                 "version": row.get("template_version"),
                 "approved_by": payload["approved_by"],
+                "approved_by_name": payload["approved_by_name"],
                 "approved_at": payload["approved_at"],
             },
         ),
@@ -454,6 +460,7 @@ def build_template_status_graph(
         "approval_required": payload["approval_required"],
         "approved_at": payload["approved_at"],
         "approved_by": payload["approved_by"],
+        "approved_by_name": payload["approved_by_name"],
         "vectorization_status": payload["vectorization_status"],
         "indexing_status": payload["indexing_status"],
         "has_error": payload["has_error"],

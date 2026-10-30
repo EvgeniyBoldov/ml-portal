@@ -85,6 +85,16 @@
   flex-shrink: 0;
 }
 
+.templateHeaderRight {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.templateHeader {
+  min-width: 0;
+}
+
 /* Toolbar */
 .toolbar {
   display: flex;
@@ -146,8 +156,14 @@
 /* Table Container */
 .tableContainer {
   flex: 1;
+  min-width: 0;
   overflow: auto;
   padding: 0;
+}
+
+.templateTableContainer {
+  width: 100%;
+  max-width: 100%;
 }
 
 .table {
@@ -455,6 +471,52 @@
 .docTable {
   width: 100%;
   border-collapse: collapse;
+}
+
+/* Template-only sizing keeps generic document tables unchanged. */
+.templateTable {
+  min-width: 720px;
+  table-layout: fixed;
+}
+
+.templateSelectionColumn { width: 48px; }
+.templateNameColumn { width: auto; }
+.templateStatusColumn { width: 130px; }
+.templateVersionColumn { width: 76px; }
+.templateActionsColumn { width: 80px; }
+
+.templateNameCell {
+  min-width: 0;
+}
+
+.templateNameCell .templateTitleBtn {
+  width: 100%;
+}
+
+.templateDescription {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.templateError {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--color-danger-600, #c62828);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.templateTable td[data-label="Действия"] .actions {
+  justify-content: flex-end;
 }
 
 .docTable th,
@@ -1127,6 +1189,16 @@
 
 /* Responsive for document mode */
 @media (max-width: 1024px) {
+  .templateHeader {
+    flex-wrap: wrap;
+  }
+
+  .templateHeaderRight {
+    width: 100%;
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+
   .docToolbar {
     padding: 10px 16px;
   }
@@ -1157,5 +1229,102 @@
 
   .documentTable {
     min-width: 760px;
+  }
+
+  .templateHeader {
+    align-items: flex-start;
+    padding: 12px 16px;
+  }
+
+  .templateHeaderRight {
+    align-items: stretch;
+  }
+
+  .templateHeaderRight .search {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+@media (max-width: 700px) {
+  .templateTable {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .templateTable thead {
+    display: none;
+  }
+
+  .templateTable tbody {
+    display: grid;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .templateTable tbody tr {
+    position: relative;
+    display: grid;
+    gap: 2px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background: var(--panel);
+  }
+
+  .templateTable tbody td {
+    display: grid;
+    grid-template-columns: minmax(76px, 28%) minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-width: 0;
+    padding: 6px 0;
+    border: 0;
+  }
+
+  .templateTable tbody td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: var(--text-xs);
+  }
+
+  .templateTable tbody td[data-label="Статус"] > * {
+    justify-self: start;
+  }
+
+  .templateTable tbody td.templateNameCell {
+    display: block;
+    padding-right: 42px;
+  }
+
+  .templateTable tbody td.checkboxCell {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: block;
+    padding: 0;
+  }
+
+  .templateTable tbody td.checkboxCell::before {
+    content: none;
+  }
+
+  .templateTable tbody td[data-label="Действия"] .actions {
+    justify-content: flex-start;
+  }
+
+  .pagination {
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    padding: 12px 16px;
+  }
+
+  .paginationInfo {
+    flex: 1 1 100%;
+  }
+
+  .pageSize {
+    margin-left: auto;
   }
 }

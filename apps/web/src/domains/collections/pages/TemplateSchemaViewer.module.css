@@ -1,0 +1,288 @@
+.viewer {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.legend,
+.empty,
+.emptyInline {
+  margin: 0;
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-sm);
+}
+
+.legend {
+  justify-self: end;
+  font-size: var(--font-size-xs);
+}
+
+.legend span,
+.requiredMark {
+  color: var(--color-danger-600, var(--danger));
+  font-weight: 700;
+}
+
+.tree {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.node {
+  display: block;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.rootObjectNode,
+.rootTableNode {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--panel);
+}
+
+.rootTableNode {
+  border-color: color-mix(in srgb, var(--info) 35%, var(--border-color));
+}
+
+.nodeSummary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  list-style: none;
+}
+
+.nodeSummary::-webkit-details-marker {
+  display: none;
+}
+
+details > .nodeSummary {
+  cursor: pointer;
+}
+
+.rootObjectNode > .nodeSummary {
+  background: var(--bg-hover);
+}
+
+.rootTableNode > .nodeSummary {
+  background: color-mix(in srgb, var(--info) 7%, var(--panel));
+}
+
+.fieldSummary,
+.nestedObjectNode > .nodeSummary,
+.nestedTableNode > .nodeSummary {
+  min-height: 42px;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.fieldNode,
+.nestedObjectNode,
+.nestedTableNode {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.fieldNode:last-child,
+.nestedObjectNode:last-child,
+.nestedTableNode:last-child {
+  border-bottom: 0;
+}
+
+.chevron,
+.gutter {
+  width: 0.6rem;
+  height: 0.6rem;
+  flex: 0 0 0.6rem;
+}
+
+.chevron {
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-left: 2px;
+  border-right: 1.5px solid var(--text-secondary, var(--muted));
+  border-bottom: 1.5px solid var(--text-secondary, var(--muted));
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+details[open] > .nodeSummary .chevron {
+  transform: rotate(45deg);
+}
+
+.summaryContent {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 3px;
+  min-width: 0;
+}
+
+.label {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.summaryAside {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  align-self: flex-start;
+  max-width: 64%;
+}
+
+.type {
+  flex: 0 0 auto;
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.requiredMark {
+  flex: 0 0 auto;
+  font-size: var(--font-size-sm);
+}
+
+.description {
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.nodeBody {
+  min-width: 0;
+  padding: 0 var(--sp-3) var(--sp-3) var(--sp-4);
+}
+
+.children {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  margin-left: calc(0.3rem + var(--sp-2));
+  padding-left: var(--sp-3);
+  border-left: 2px solid color-mix(in srgb, var(--primary) 22%, var(--border-color));
+}
+
+.fieldChoices {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.enumChips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+}
+
+.enumChip {
+  max-width: 100%;
+  padding: 3px var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border-color));
+  border-radius: var(--radius-full, 999px);
+  background: color-mix(in srgb, var(--primary) 7%, var(--panel));
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.moreOptions {
+  position: relative;
+  flex: 0 0 auto;
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-xs);
+}
+
+.moreOptions summary,
+.extraDetails summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.moreOptions > .enumChips {
+  margin-top: var(--sp-1);
+}
+
+.extraDetails {
+  margin: 0 var(--sp-3) var(--sp-2);
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-xs);
+}
+
+.extraContent {
+  display: grid;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+  overflow-wrap: anywhere;
+}
+
+.extraContent strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.emptyInline {
+  padding-top: var(--sp-2);
+}
+
+.nodeSummary:focus-visible,
+.moreOptions summary:focus-visible,
+.extraDetails summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .nodeSummary {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+  }
+
+  .fieldSummary,
+  .nestedObjectNode > .nodeSummary,
+  .nestedTableNode > .nodeSummary {
+    padding: var(--sp-2) var(--sp-3);
+  }
+
+  .summaryContent {
+    flex-basis: calc(100% - 1rem);
+  }
+
+  .summaryAside {
+    flex: 1 1 auto;
+    width: calc(100% - 1rem);
+    max-width: none;
+    margin-left: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .fieldChoices {
+    max-width: 100%;
+  }
+
+  .nodeBody {
+    padding-right: var(--sp-2);
+    padding-left: var(--sp-3);
+  }
+
+  .children {
+    margin-left: 0;
+    padding-left: var(--sp-2);
+  }
+}

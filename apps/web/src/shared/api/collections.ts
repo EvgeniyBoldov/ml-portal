@@ -341,6 +341,7 @@ export interface CollectionTemplate {
   approval_required?: boolean;
   approved_at?: string | null;
   approved_by?: string | null;
+  approved_by_name?: string | null;
   has_error?: boolean;
   error_message?: string | null;
   vectorization_status?: string | null;

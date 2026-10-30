@@ -27,22 +27,26 @@ function FlowNodeButton({
   node,
   isControlActive,
   isSelected,
+  compact = false,
   onClick,
 }: {
   node: FlowNode;
   isControlActive: boolean;
   isSelected: boolean;
+  compact?: boolean;
   onClick: () => void;
 }) {
   const statusColor = STATUS_COLORS[node.status];
   const isActive = node.status === 'processing' || isControlActive;
-  const className = styles.nodeButton;
-  const iconClass = styles.nodeIcon;
+  const className = compact ? `${styles.nodeButton} ${styles.compactNodeButton}` : styles.nodeButton;
+  const iconClass = compact ? `${styles.nodeIcon} ${styles.compactNodeIcon}` : styles.nodeIcon;
   const labelClass = styles.nodeLabel;
 
   return (
     <button
       className={`${className} ${isSelected ? styles.selected : ''} ${isActive ? styles.active : ''} ${isControlActive ? styles.controlActive : ''}`}
+      aria-pressed={isSelected}
+      aria-label={`${node.label}: ${getStatusLabel(node.status)}${isSelected ? ', выбран' : ''}`}
       onClick={onClick}
       style={{ '--status-color': statusColor } as React.CSSProperties}
     >
@@ -57,17 +61,17 @@ function FlowNodeButton({
   );
 }
 
-function FlowConnector({ status }: { status: FlowStatus }) {
+function FlowConnector({ status, compact = false }: { status: FlowStatus; compact?: boolean }) {
   const color = STATUS_COLORS[status];
   const isActive = status === 'processing';
 
   return (
     <div className={`${styles.connector} ${isActive ? styles.active : ''}`}>
-      <svg width="40" height="2" viewBox="0 0 40 2">
+      <svg width={compact ? 28 : 40} height="2" viewBox={`0 0 ${compact ? 28 : 40} 2`}>
         <line
           x1="0"
           y1="1"
-          x2="40"
+          x2={compact ? 28 : 40}
           y2="1"
           stroke={color}
           strokeWidth="2"
@@ -85,10 +89,12 @@ function FlowBranchConnector({
   count,
   statuses,
   fromStatus,
+  compact = false,
 }: {
   count: number;
   statuses: FlowStatus[];
   fromStatus?: FlowStatus;
+  compact?: boolean;
 }) {
   if (count === 0) return null;
 
@@ -99,11 +105,11 @@ function FlowBranchConnector({
         : STATUS_COLORS[fromStatus || 'pending'];
     return (
       <div className={styles.connector}>
-        <svg width="40" height="2" viewBox="0 0 40 2">
+        <svg width={compact ? 28 : 40} height="2" viewBox={`0 0 ${compact ? 28 : 40} 2`}>
           <line
             x1="0"
             y1="1"
-            x2="40"
+            x2={compact ? 28 : 40}
             y2="1"
             stroke={color}
             strokeWidth="2"
@@ -121,14 +127,14 @@ function FlowBranchConnector({
 
   return (
     <div className={styles.branchConnector}>
-      <svg width="40" height={height} viewBox={`0 0 40 ${height}`}>
+      <svg width={compact ? 28 : 40} height={height} viewBox={`0 0 ${compact ? 28 : 40} ${height}`}>
         {statuses.map((status, index) => {
           const y = index * (itemHeight + gap) + itemHeight / 2;
           const color = STATUS_COLORS[status];
           return (
             <g key={`${status}-${index}`}>
               <path
-                d={`M 0 ${midY} C 20 ${midY} 20 ${y} 40 ${y}`}
+                d={`M 0 ${midY} C ${compact ? 14 : 20} ${midY} ${compact ? 14 : 20} ${y} ${compact ? 28 : 40} ${y}`}
                 fill="none"
                 stroke={color}
                 strokeWidth="2"
@@ -158,9 +164,12 @@ export function StatusFlowView({
   selection,
   onSelect,
   showLegend = true,
+  compact = false,
 }: {
   model: FlowGraphModel;
   showLegend?: boolean;
+  /** Compact, locally scrollable pipeline used by the template status dialog. */
+  compact?: boolean;
   activeStageSlugs?: string[];
   selection: FlowSelection;
   onSelect: (selection: FlowSelection) => void;
@@ -186,14 +195,21 @@ export function StatusFlowView({
   }
 
   return (
-    <div className={styles.pipeline}>
-      <div className={styles.mainRow}>
+    <div className={`${styles.pipeline} ${compact ? styles.compactPipeline : ''}`}>
+      <div
+        className={compact ? styles.graphViewport : undefined}
+        role={compact ? 'region' : undefined}
+        aria-label={compact ? 'Этапы обработки шаблона' : undefined}
+        tabIndex={compact ? 0 : undefined}
+      >
+      <div className={`${styles.mainRow} ${compact ? styles.compactMainRow : ''}`}>
         {model.pipeline.map((node, index) => (
           <React.Fragment key={node.key}>
             <FlowNodeButton
               node={node}
               isControlActive={activeSet.has(node.key)}
               isSelected={selection.nodeKey === node.key && !selection.laneKey}
+              compact={compact}
               onClick={() =>
                 onSelect({ nodeKey: node.key, laneKey: null, itemKey: null })
               }
@@ -201,6 +217,7 @@ export function StatusFlowView({
             {index < model.pipeline.length - 1 ? (
               <FlowConnector
                 status={getConnectorStatus(node, model.pipeline[index + 1])}
+                compact={compact}
               />
             ) : null}
           </React.Fragment>
@@ -217,6 +234,7 @@ export function StatusFlowView({
                 return rowStatuses[0] ?? 'pending';
               })}
               fromStatus={model.pipeline[model.pipeline.length - 1]?.status}
+              compact={compact}
             />
             <div className={styles.lanesWrapper}>
               <div
@@ -249,12 +267,14 @@ export function StatusFlowView({
                           {laneIndex > 0 ? (
                             <FlowConnector
                               status={prevItem?.status || 'pending'}
+                              compact={compact}
                             />
                           ) : null}
                           {item ? (
                             <FlowNodeButton
                               node={item}
                               isControlActive={activeSet.has(item.key)}
+                              compact={compact}
                               isSelected={
                                 selection.nodeKey === item.key &&
                                 selection.laneKey === lane.key
@@ -279,6 +299,7 @@ export function StatusFlowView({
             </div>
           </>
         ) : null}
+      </div>
       </div>
 
       {showLegend ? (
