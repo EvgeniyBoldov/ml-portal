@@ -51,7 +51,7 @@ export function useRbacRuleCreate() {
         owner_user_id: null,
         owner_tenant_id: ownerId,
         owner_platform: false,
-        title: 'Тенант',
+        title: 'Рабочая группа',
         backPath: `/admin/tenants/${ownerId}`,
       };
     }

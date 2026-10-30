@@ -17,6 +17,7 @@ import React, { useState, Children, isValidElement } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Button from '../Button';
 import { Breadcrumbs, type BreadcrumbItem } from '../Breadcrumbs';
+import { Icon } from '../Icon';
 import { GridLayout } from '../GridLayout';
 import pageStyles from './EntityPage.module.css';
 
@@ -135,6 +136,7 @@ export function EntityPageV2({
 
   const isCreate = mode === 'create';
   const isEdit = mode === 'edit';
+  const parentBreadcrumb = breadcrumbs?.slice(0, -1).reverse().find((item) => item.href);
 
   // ─── Action buttons ───
   const renderActionButtons = () => {
@@ -263,6 +265,17 @@ export function EntityPageV2({
       {/* Header */}
       <header className={pageStyles.header}>
         <div className={pageStyles.headerLeft}>
+          {parentBreadcrumb?.href && (
+            <button
+              type="button"
+              className={pageStyles.backButton}
+              aria-label={`Назад: ${parentBreadcrumb.label}`}
+              title={`Назад: ${parentBreadcrumb.label}`}
+              onClick={() => navigate(parentBreadcrumb.href!)}
+            >
+              <Icon name="chevron-left" size={18} />
+            </button>
+          )}
           <div className={pageStyles.titleGroup}><h1 className={pageStyles.title}>{title}</h1>{subtitle ? <div className={pageStyles.subtitle}>{subtitle}</div> : null}</div>
           {isEdit && (
             <span className={pageStyles.editBadge}>Редактирование</span>

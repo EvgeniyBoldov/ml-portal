@@ -3,19 +3,34 @@ import { createPortal } from 'react-dom';
 import Input from '@/shared/ui/Input';
 import styles from './MultiSelectTagPicker.module.css';
 
-export type MultiSelectTagOption = { value: string; label: string; search?: string };
+export type MultiSelectTagOption = { value: string; label: string; secondary?: string; search?: string };
 export type MultiSelectTagPickerProps = {
   label: string;
   options: MultiSelectTagOption[];
   value: string[];
   lockedValues?: string[];
   disabled?: boolean;
+  readOnly?: boolean;
   hideLabel?: boolean;
   placeholder?: string;
+  emptyMessage?: string;
+  unavailableLabel?: string;
   onChange: (values: string[]) => void;
 };
 
-export default function MultiSelectTagPicker({ label, options, value, lockedValues = [], disabled, hideLabel = false, placeholder, onChange }: MultiSelectTagPickerProps) {
+export default function MultiSelectTagPicker({
+  label,
+  options,
+  value,
+  lockedValues = [],
+  disabled,
+  readOnly = false,
+  hideLabel = false,
+  placeholder,
+  emptyMessage = 'Нет выбранных элементов',
+  unavailableLabel = 'Недоступная запись',
+  onChange,
+}: MultiSelectTagPickerProps) {
   const id = useId();
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -25,15 +40,20 @@ export default function MultiSelectTagPicker({ label, options, value, lockedValu
   const optionsRef = useRef<HTMLDivElement>(null);
   const needle = query.trim().toLocaleLowerCase();
   const available = options.filter((option) => !value.includes(option.value) &&
-    (!needle || `${option.label} ${option.search ?? ''}`.toLocaleLowerCase().includes(needle)));
+    (!needle || `${option.label} ${option.secondary ?? ''} ${option.search ?? ''}`.toLocaleLowerCase().includes(needle)));
   const select = (option: MultiSelectTagOption) => {
-    if (disabled) return;
+    if (disabled || readOnly) return;
     onChange([...value, option.value]);
     setQuery('');
     setActiveIndex(0);
     setOpen(true);
   };
   useEffect(() => {
+    if (readOnly || disabled) {
+      setOpen(false);
+      setDropdownStyle(undefined);
+      return;
+    }
     if (!open) {
       setDropdownStyle(undefined);
       return;
@@ -56,7 +76,7 @@ export default function MultiSelectTagPicker({ label, options, value, lockedValu
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
     };
-  }, [available.length, open]);
+  }, [available.length, disabled, open, readOnly]);
   useEffect(() => {
     if (open) {
       const activeOption = optionsRef.current?.children[activeIndex] as HTMLElement | undefined;
@@ -68,14 +88,26 @@ export default function MultiSelectTagPicker({ label, options, value, lockedValu
     <div ref={controlRef} className={styles.control} onBlur={(event) => {
       if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
     }}>
-      <div className={styles.tags}>
+      <div
+        className={styles.tags}
+        role={readOnly && value.length > 0 ? 'list' : undefined}
+        aria-label={readOnly && value.length > 0 ? label : undefined}
+      >
+        {readOnly && value.length === 0 && <span className={styles.emptyMessage} role="status">{emptyMessage}</span>}
         {value.map((key) => {
-          const name = options.find((option) => option.value === key)?.label ?? 'Недоступная запись';
-          return <span key={key} className={styles.tag}>{name}{lockedValues.includes(key)
-            ? <span className={styles.lockedLabel}>Тенант</span>
-            : <button type="button" aria-label={`Убрать ${name}`} disabled={disabled} onClick={() => onChange(value.filter((item) => item !== key))}>×</button>}</span>;
+          const option = options.find((item) => item.value === key);
+          const name = option?.label ?? unavailableLabel;
+          return <span key={key} className={styles.tag} role={readOnly ? 'listitem' : undefined}>
+            <span className={styles.tagContent}>
+              <span className={styles.tagPrimary}>{name}</span>
+              {option?.secondary && <span className={styles.tagSecondary}>{option.secondary}</span>}
+            </span>
+            {!readOnly && (lockedValues.includes(key)
+              ? <span className={styles.lockedLabel}>Рабочая группа</span>
+              : <button type="button" aria-label={`Убрать ${name}`} disabled={disabled} onClick={() => onChange(value.filter((item) => item !== key))}>×</button>)}
+          </span>;
         })}
-        <Input id={id} role="combobox" aria-autocomplete="list" aria-expanded={open && available.length > 0}
+        {!readOnly && <Input id={id} role="combobox" aria-autocomplete="list" aria-expanded={open && available.length > 0}
           aria-controls={`${id}-listbox`} aria-activedescendant={open && available[activeIndex] ? `${id}-option-${activeIndex}` : undefined}
           aria-label={label} value={query} disabled={disabled} placeholder={placeholder ?? (value.length ? 'Добавить…' : 'Выберите или начните вводить')}
           className={styles.searchInput} onFocus={() => { setOpen(true); setActiveIndex(0); }} onChange={(event) => {
@@ -89,13 +121,14 @@ export default function MultiSelectTagPicker({ label, options, value, lockedValu
               event.preventDefault(); select(available[activeIndex]);
             } else if (event.key === 'Escape') setOpen(false);
             else if (event.key === 'Backspace' && !query && value.length) onChange(value.slice(0, -1));
-          }} />
+          }} />}
       </div>
-      {!disabled && open && available.length > 0 && dropdownStyle && createPortal(<div id={`${id}-listbox`} ref={optionsRef} role="listbox" aria-label={`Варианты: ${label}`} className={styles.options} style={dropdownStyle}>
+      {!readOnly && !disabled && open && available.length > 0 && dropdownStyle && createPortal(<div id={`${id}-listbox`} ref={optionsRef} role="listbox" aria-label={`Варианты: ${label}`} className={styles.options} style={dropdownStyle}>
         {available.map((option, index) => <button id={`${id}-option-${index}`} key={option.value} type="button" role="option"
           aria-selected={index === activeIndex} className={index === activeIndex ? styles.optionActive : styles.option}
           onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveIndex(index)} onClick={() => select(option)}>
-          {option.label}
+          <span className={styles.optionLabel}>{option.label}</span>
+          {option.secondary && <span className={styles.optionSecondary}>{option.secondary}</span>}
         </button>)}
       </div>, document.body)}
     </div>

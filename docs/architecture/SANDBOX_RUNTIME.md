@@ -14,6 +14,11 @@ Sandbox is not a generic editor for database rows. It is a structured browser fo
 
 The resolver is the source of truth for what can be edited in sandbox.
 
+The admin session list returns both `owner_name` and `owner_email`. `owner_name`
+resolves to the user's full name, then login; the UI may show email as secondary
+context when available. Missing users have no resolved name and retain the
+existing `unknown` email fallback.
+
 ## Resolver Contract
 
 `SandboxOverrideResolver` is the canonical boundary between stored values and sandbox values.

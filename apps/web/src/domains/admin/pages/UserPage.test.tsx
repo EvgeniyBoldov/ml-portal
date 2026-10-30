@@ -42,8 +42,8 @@ vi.mock('@/shared/ui', async importOriginal => ({
 }));
 vi.mock('@/shared/ui/EntityPage', async importOriginal => ({
   ...(await importOriginal<typeof import('@/shared/ui/EntityPage')>()),
-  EntityPageV2: ({ children, onSave, onCancel }: React.PropsWithChildren<{ onSave?: () => void; onCancel?: () => void }>) => (
-    <main>{children}<button onClick={onSave}>Сохранить</button><button onClick={onCancel}>Отмена</button></main>
+  EntityPageV2: ({ children, title, onSave, onCancel }: React.PropsWithChildren<{ title?: string; onSave?: () => void; onCancel?: () => void }>) => (
+    <main><h1>{title}</h1>{children}<button onClick={onSave}>Сохранить</button><button onClick={onCancel}>Отмена</button></main>
   ),
   Tab: ({ title, actions, children }: React.PropsWithChildren<{ title: string; actions?: React.ReactNode }>) =>
     title === 'Обзор' || title === 'Создание'
@@ -76,24 +76,45 @@ afterEach(cleanup);
 beforeEach(() => { vi.clearAllMocks(); mocks.update.mockResolvedValue(mocks.user); });
 
 describe('UserPage', () => {
-  it('keeps memory scopes in the main information block and saves them with the single tenant', async () => {
+  it('shows the name as the primary title and does not expose user memory scopes', () => {
     render(<MemoryRouter initialEntries={['/admin/users/user-1']}><Routes><Route path="/admin/users/:id" element={<UserPage />} /></Routes></MemoryRouter>);
 
     expect(screen.getByRole('heading', { name: 'Основная информация' })).toBeInTheDocument();
-    expect(screen.getByText('Operations')).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: /scope/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Tenant One' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Alice' })).toBeInTheDocument();
+    expect(screen.queryByText(/скоупы памяти/i)).not.toBeInTheDocument();
+  });
+
+  it('allows local account identity fields to be edited and saves them', async () => {
+    mocks.user.auth_provider = 'local';
+    render(<MemoryRouter initialEntries={['/admin/users/user-1']}><Routes><Route path="/admin/users/:id" element={<UserPage />} /></Routes></MemoryRouter>);
 
     fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
-    fireEvent.change(screen.getByRole('combobox', { name: 'Скоупы памяти чатов' }), { target: { value: 'Fin' } });
-    fireEvent.click(screen.getByRole('option', { name: 'Finance' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Имя' }), { target: { value: 'Alice Smith' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Логин' }), { target: { value: 'alice.smith' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Email' }), { target: { value: 'alice.smith@example.test' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Сохранить' })[0]);
 
     await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({
       id: 'user-1',
       data: {
-        email: 'alice@example.test', is_admin: false, is_active: true,
-        memory_scope_keys: ['ops', 'finance'], tenant_id: 'tenant-1',
+        login: 'alice.smith', full_name: 'Alice Smith', email: 'alice.smith@example.test',
+        is_admin: false, is_active: true, tenant_id: 'tenant-1',
       },
     }));
+  });
+
+  it('collects a name when creating a user', async () => {
+    render(<MemoryRouter initialEntries={['/admin/users/new']}><Routes><Route path="/admin/users/:id" element={<UserPage />} /></Routes></MemoryRouter>);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Имя' }), { target: { value: 'Alice Smith' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Логин' }), { target: { value: 'alice.smith' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Email' }), { target: { value: 'alice.smith@example.test' } });
+    fireEvent.change(screen.getByLabelText('Пароль локальной учётной записи'), { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({
+      login: 'alice.smith', full_name: 'Alice Smith', email: 'alice.smith@example.test', password: 'password123',
+    })));
   });
 });

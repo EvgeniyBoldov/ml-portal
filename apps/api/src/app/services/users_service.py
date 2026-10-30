@@ -42,6 +42,7 @@ class AsyncUsersService:
         is_active: bool = True,
         memory_scope_keys: Optional[List[str]] = None,
         is_admin: bool = False,
+        full_name: Optional[str] = None,
     ):
         """Create a new user"""
         # Check if user already exists by login or email
@@ -64,6 +65,7 @@ class AsyncUsersService:
         user = await self.users_repo.create(
             id=uuid.uuid4(),
             login=login,
+            full_name=full_name,
             email=email,
             password_hash=password_hash,
             role="admin" if is_admin else ("reader" if role == "admin" else role),
@@ -98,6 +100,15 @@ class AsyncUsersService:
         if disabling_admin and await self._is_last_active_admin(user):
             raise ValueError("last_admin")
 
+        identity_fields = {"login", "full_name", "email"}
+        if getattr(user, "auth_provider", "local") != "local" and identity_fields.intersection(user_data):
+            raise ValueError("identity_fields_managed_by_auth_provider")
+
+        if "login" in user_data and user_data["login"] != user.login:
+            existing_user = await self.users_repo.get_by_login(user_data["login"])
+            if existing_user and existing_user.id != user.id:
+                raise ValueError("User with this login already exists")
+
         if user_data.get("memory_scope_keys") is not None:
             user.memory_scope_keys = await MemoryScopePreferencesService(self.users_repo.session).validate_keys(user_data["memory_scope_keys"])
         
@@ -108,6 +119,9 @@ class AsyncUsersService:
             if existing_user and existing_user.id != user.id:
                 raise ValueError("Email already taken")
             user.email = user_data["email"]
+
+        if "login" in user_data:
+            user.login = user_data["login"]
         
         if user_data.get("role") is not None:
             # Legacy clients may still send a role; admin status is kept in its own flag.

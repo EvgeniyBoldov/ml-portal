@@ -34,6 +34,33 @@
   min-width: 0;
 }
 
+.backButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  padding: 0;
+  color: var(--text-secondary, var(--muted));
+  background: var(--bg-elevated, var(--panel));
+  border: 1px solid var(--border-color, var(--border));
+  border-radius: var(--radius-md, 0.5rem);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.backButton:hover {
+  color: var(--primary);
+  background: var(--bg-hover);
+  border-color: var(--primary);
+}
+
+.backButton:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .title {
   font-size: 1.125rem;
   font-weight: 600;
@@ -49,11 +76,12 @@
 .editBadge {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  background: var(--warning-bg, rgba(234, 179, 8, 0.15));
-  color: var(--warning, #eab308);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  background: var(--warning-light);
+  color: var(--text-primary);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border-color));
   border-radius: var(--radius-full, 9999px);
   white-space: nowrap;
 }

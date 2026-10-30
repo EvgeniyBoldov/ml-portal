@@ -9,7 +9,7 @@ export default function MemoryTermPage() {
   const { termId } = useParams<{ termId: string }>();
   const term = useQuery({ queryKey: qk.admin.glossary.detail(termId!), queryFn: () => adminApi.getGlossaryTerm(termId!) });
   if (!term.data || term.isError) return <EntityPageV2 title="Термин" mode="view" loading={term.isLoading}
-    backPath="/admin/memory?tab=glossary" breadcrumbs={[{ label: 'Мемори', href: '/admin/memory' }, { label: 'Термин' }]}>
+    backPath="/admin/memory?tab=glossary" breadcrumbs={[{ label: 'Мемори', href: '/admin/memory?tab=glossary' }, { label: 'Глоссарий' }, { label: 'Термин' }]}>
     <Tab title="Термин" layout="full">{term.isError && <p role="alert">Не удалось загрузить термин. <Button variant="outline" onClick={() => term.refetch()}>Повторить</Button></p>}</Tab>
   </EntityPageV2>;
   return <MemoryTermDetail key={termId} term={term.data} />;

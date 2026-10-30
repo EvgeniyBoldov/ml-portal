@@ -52,12 +52,12 @@ const RESTORE_GROUP_TITLE: Record<string, string> = {
 
 const RESOURCE_TITLE: Record<string, string> = {
   users: 'Пользователи',
-  tenants: 'Тенанты',
+  tenants: 'Рабочие группы',
   collections: 'Коллекции',
   chats: 'Чаты',
   sandbox_sessions: 'Sandbox-сессии',
   rbac_rules: 'RBAC-правила',
-  tenant_bindings: 'Привязки к тенантам',
+  tenant_bindings: 'Привязки к рабочим группам',
   admin_guard: 'Ограничения',
   memory_claims: 'Утверждения памяти',
   memory_scopes: 'Скоупы памяти',
@@ -337,7 +337,7 @@ export default function LifecycleDeleteDialog({
         )}
 
         {action === 'delete' && isPlatformDefault && (
-          <div className={styles.warningBox}>Нельзя удалить платформенный тенант по умолчанию</div>
+          <div className={styles.warningBox}>Нельзя удалить рабочую группу платформы по умолчанию</div>
         )}
 
         <div className={`${styles.section} ${styles.depsSection}`}>

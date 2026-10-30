@@ -21,6 +21,7 @@ class UserCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     login: str = Field(min_length=3, max_length=255)
+    full_name: Optional[str] = Field(None, max_length=255)
     email: Optional[EmailStr] = None
     password: str = Field(min_length=8)
     role: UserRole = UserRole.READER
@@ -33,6 +34,8 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    login: Optional[str] = Field(None, min_length=3, max_length=255)
+    full_name: Optional[str] = Field(None, max_length=255)
     email: Optional[EmailStr] = None
     role: Optional[UserRole] = None
     is_admin: Optional[bool] = None

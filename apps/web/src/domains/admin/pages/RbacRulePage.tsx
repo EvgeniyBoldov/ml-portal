@@ -184,15 +184,15 @@ export function RbacRulePage() {
       const tenantEffective = tenantRule?.effect ?? effective;
         result.push({
           key: 'tenant',
-          title: ownerTenant?.name ? `Тенант: ${ownerTenant.name}` : 'Тенант',
-          ownerLabel: ownerTenant?.name || 'Тенант',
+          title: ownerTenant?.name ? `Рабочая группа: ${ownerTenant.name}` : 'Рабочая группа',
+          ownerLabel: ownerTenant?.name || 'Рабочая группа',
           ownerMeta: ownerTenant?.description ?? null,
           explicitEffect: tenantRule?.effect ?? null,
           effectiveEffect: tenantEffective,
           current: !!ruleOwner?.tenant_id,
           note: tenantRule
-            ? 'Есть явное правило на тенанте.'
-            : 'Явного тенантного правила нет, наследуется с платформы.',
+            ? 'Есть явное правило на рабочей группе.'
+            : 'Явного группового правила нет, наследуется с платформы.',
           sourceLabel: tenantRule ? 'explicit' : 'inherited',
         });
       effective = tenantEffective;
@@ -204,13 +204,13 @@ export function RbacRulePage() {
           key: 'user',
           title: ownerUser?.login ? `Пользователь: ${ownerUser.login}` : 'Пользователь',
           ownerLabel: ownerUser?.login || 'Пользователь',
-          ownerMeta: ownerTenant?.name ? `Тенант: ${ownerTenant.name}` : null,
+          ownerMeta: ownerTenant?.name ? `Рабочая группа: ${ownerTenant.name}` : null,
           explicitEffect: userRule?.effect ?? null,
           effectiveEffect: userEffective,
           current: !!ruleOwner?.user_id,
           note: userRule
             ? 'Есть явное правило на пользователе.'
-            : 'Явного пользовательского правила нет, наследуется от тенанта.',
+            : 'Явного пользовательского правила нет, наследуется от рабочей группы.',
           sourceLabel: userRule ? 'explicit' : 'inherited',
         });
     }
@@ -219,7 +219,7 @@ export function RbacRulePage() {
   }, [rule, platformRule, tenantRule, userRule, effectiveTenantId, ownerTenant?.description, ownerTenant?.name, ownerUser?.login, ownerUserId]);
 
   const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'RBAC', href: '/admin/rbac' },
+    { label: 'Права доступа', href: '/admin/rbac' },
     { label: 'Правило' },
   ];
 
@@ -269,7 +269,7 @@ export function RbacRulePage() {
     if (level === 'tenant') {
       const options = (tenantsData?.items ?? []).map((tenant) => ({ value: tenant.id, label: tenant.name }));
       if (rule?.owner_tenant_id && !options.some((option) => option.value === rule.owner_tenant_id)) {
-        options.unshift({ value: rule.owner_tenant_id, label: ownerTenant?.name ?? 'Текущий тенант' });
+        options.unshift({ value: rule.owner_tenant_id, label: ownerTenant?.name ?? 'Текущая рабочая группа' });
       }
       return options;
     }
@@ -349,7 +349,7 @@ export function RbacRulePage() {
                     }}
                     options={[
                       { value: 'platform', label: 'Платформа' },
-                      { value: 'tenant', label: 'Тенант' },
+                      { value: 'tenant', label: 'Рабочая группа' },
                       { value: 'user', label: 'Пользователь' },
                     ]}
                   />

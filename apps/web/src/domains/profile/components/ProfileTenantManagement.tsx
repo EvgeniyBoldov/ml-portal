@@ -42,7 +42,7 @@ export function ProfileTenantManagement({ tenantId }: { tenantId: string }) {
       void queryClient.invalidateQueries({ queryKey: qk.profile.tenantManagement(tenantId) });
       void queryClient.invalidateQueries({ queryKey: qk.profile.all() });
       setEditing(false);
-      showSuccess('Настройки тенанта сохранены');
+      showSuccess('Настройки рабочей группы сохранены');
     },
     onError: (error: Error) => showError(error.message),
   });

@@ -2,7 +2,7 @@ import type { RbacEffect, RbacLevel, ResourceType } from '@/shared/api/rbac';
 
 export const RBAC_LEVEL_LABELS: Record<RbacLevel, string> = {
   platform: 'Платформа',
-  tenant: 'Тенант',
+  tenant: 'Рабочая группа',
   user: 'Пользователь',
 };
 

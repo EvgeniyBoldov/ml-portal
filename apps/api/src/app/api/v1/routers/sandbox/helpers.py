@@ -35,10 +35,14 @@ async def tenant_uuid(db: AsyncSession, user: UserCtx) -> uuid.UUID:
     )
 
 
-async def get_owner_email(db: AsyncSession, owner_id: uuid.UUID) -> str:
-    result = await db.execute(select(Users.email).where(Users.id == owner_id))
-    row = result.scalar_one_or_none()
-    return row or "unknown"
+async def get_owner_info(db: AsyncSession, owner_id: uuid.UUID) -> tuple[str | None, str]:
+    result = await db.execute(
+        select(Users.full_name, Users.login, Users.email).where(Users.id == owner_id)
+    )
+    row = result.one_or_none()
+    if not row:
+        return None, "unknown"
+    return row.full_name or row.login, row.email or "unknown"
 
 
 async def check_session_owner(

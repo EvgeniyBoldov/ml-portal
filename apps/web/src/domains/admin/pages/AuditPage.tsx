@@ -125,6 +125,7 @@ export function AuditPage() {
     <EntityPageV2
       title="Аудит"
       mode="view"
+      breadcrumbs={[{ label: 'Аудит' }]}
       headerActions={
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
           <Input

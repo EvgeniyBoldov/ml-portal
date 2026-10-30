@@ -25,7 +25,7 @@ const navigation: NavGroup[] = [
     title: 'Пользователи',
     items: [
       { path: '/admin/users', label: 'Пользователи', icon: 'user' },
-      { path: '/admin/tenants', label: 'Тенанты', icon: 'database' },
+      { path: '/admin/tenants', label: 'Рабочие группы', icon: 'database' },
     ],
   },
   {

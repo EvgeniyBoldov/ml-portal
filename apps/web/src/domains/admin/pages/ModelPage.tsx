@@ -789,7 +789,7 @@ export function ModelPage() {
             </Button>
           }
           breadcrumbs={[
-            { label: 'Платформа', href: '/admin/platform' },
+            { label: 'Настройки платформы', href: '/admin/platform' },
             { label: 'Новая модель' },
           ]}
           backPath="/admin/platform"
@@ -849,7 +849,7 @@ export function ModelPage() {
           </div>
         }
         breadcrumbs={[
-          { label: 'Платформа', href: '/admin/platform' },
+          { label: 'Настройки платформы', href: '/admin/platform' },
           { label: model?.name || 'Модель' },
         ]}
         onEdit={handleEdit}
@@ -912,12 +912,12 @@ export function ModelPage() {
         </Tab>
         {model?.type === 'embedding' && (
           <Tab title="Индексация" layout="grid" id="embeddings">
-            <Block title="Тенанты" icon="users" iconVariant="info" width="1/2">
+            <Block title="Рабочие группы" icon="users" iconVariant="info" width="1/2">
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
                   <thead>
                     <tr>
-                      <th>Тенант</th>
+                      <th>Рабочая группа</th>
                       <th>Статус</th>
                       <th>Коллекции (doc)</th>
                       <th>Документы (всего/вектор/не вектор)</th>
@@ -965,7 +965,7 @@ export function ModelPage() {
                   <thead>
                     <tr>
                       <th>Коллекция</th>
-                      <th>Тенант</th>
+                      <th>Рабочая группа</th>
                       <th>Документы (всего/вектор/не вектор)</th>
                     </tr>
                   </thead>

@@ -26,7 +26,7 @@ export function RbacTargetBlock({ data, editable = false }: RbacTargetBlockProps
     if (data.owner_tenant_id) {
       return { 
         type: 'tenant', 
-        label: 'Тенант',
+        label: 'Рабочая группа',
       };
     }
     if (data.owner_user_id) {

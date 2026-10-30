@@ -9,6 +9,7 @@ import type { ExecutionMode } from '@/shared/api/types';
 export interface SandboxSessionListItem {
   id: string;
   owner_id: string;
+  owner_name?: string | null;
   owner_email: string;
   name: string;
   status: 'active' | 'archived';
@@ -23,6 +24,7 @@ export interface SandboxSessionListItem {
 export interface SandboxSessionDetail {
   id: string;
   owner_id: string;
+  owner_name?: string | null;
   owner_email: string;
   name: string;
   status: 'active' | 'archived';

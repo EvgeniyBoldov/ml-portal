@@ -19,7 +19,7 @@ export interface EntityPageProps {
   mode: EntityPageMode;
   /** Entity name (e.g., "admins" for tenant) */
   entityName: string;
-  /** Entity type label (e.g., "тенант", "пользователь") */
+  /** Entity type label (e.g., "рабочая группа", "пользователь") */
   entityTypeLabel: string;
   /** Back navigation path */
   backPath: string;

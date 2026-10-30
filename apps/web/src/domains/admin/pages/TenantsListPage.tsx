@@ -1,6 +1,6 @@
 /**
- * TenantsPage - Управление тенантами (EntityPageV2)
- * 
+ * TenantsPage - Управление рабочими группами (EntityPageV2)
+ *
  * Единый стиль с остальными админ-реестрами.
  * Клик по строке → View страница, редактирование через кнопку на View.
  */
@@ -110,12 +110,13 @@ export function TenantsListPage() {
 
   return (
     <EntityPageV2
-      title="Тенанты"
+      title="Рабочие группы"
       mode="view"
+      breadcrumbs={[{ label: 'Рабочие группы' }]}
       headerActions={
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Input
-            placeholder="Поиск тенантов..."
+            placeholder="Поиск рабочих групп..."
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -127,13 +128,13 @@ export function TenantsListPage() {
         </Button>
       }
     >
-      <Tab 
-        title="Тенанты" 
+      <Tab
+        title="Рабочие группы"
         layout="full"
       >
         {error && (
           <div style={{ padding: '16px', background: 'var(--danger-bg)', borderRadius: '8px', marginBottom: '16px' }}>
-            Не удалось загрузить тенанты. Попробуйте снова.
+            Не удалось загрузить рабочие группы. Попробуйте снова.
           </div>
         )}
 
@@ -142,7 +143,7 @@ export function TenantsListPage() {
           data={tenants}
           keyField="id"
           loading={isLoading}
-          emptyText={`Тенанты не найдены. Нажмите «${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.tenant}» для добавления.`}
+          emptyText={`Рабочие группы не найдены. Нажмите «${ADMIN_ACTION_LABELS.create} ${ADMIN_ENTITY_LABELS.tenant}» для добавления.`}
           paginated
           pageSize={20}
           onRowClick={handleRowClick}

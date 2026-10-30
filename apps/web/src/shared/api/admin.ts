@@ -168,6 +168,7 @@ export type DocumentMemoryExtractorRoleUpdate = SystemLLMRoleUpdate;
 export interface UserCreate {
   memory_scope_keys?: string[];
   login: string;
+  full_name?: string | null;
   email?: string | null;
   role: 'admin' | 'editor' | 'reader';
   is_admin?: boolean;
@@ -178,6 +179,8 @@ export interface UserCreate {
 
 export interface UserUpdate {
   memory_scope_keys?: string[];
+  login?: string;
+  full_name?: string | null;
   role?: 'admin' | 'editor' | 'reader';
   is_admin?: boolean;
   email?: string | null;

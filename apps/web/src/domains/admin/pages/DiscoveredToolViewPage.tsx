@@ -49,7 +49,7 @@ export function DiscoveredToolViewPage() {
 
   const breadcrumbs: BreadcrumbItem[] = [
     { label: 'Инструменты', href: '/admin/tools' },
-    { label: tool?.slug || id || '' },
+    { label: tool?.name || tool?.slug || id || '' },
   ];
 
   if (!tool) {

@@ -248,7 +248,7 @@ export function RbacRulesEditor({
         </span>
         {scope !== 'default' && (
           <span className={styles.legendItem}>
-            <Badge tone="neutral">Наследуется</Badge> — берётся из {scope === 'user' ? 'тенанта/default' : 'default'}
+            <Badge tone="neutral">Наследуется</Badge> — берётся из {scope === 'user' ? 'рабочей группы/default' : 'default'}
           </span>
         )}
       </div>

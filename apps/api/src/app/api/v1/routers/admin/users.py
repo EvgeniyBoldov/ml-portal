@@ -63,6 +63,7 @@ async def list_users(
             "id": u.id,
             "login": u.login,
             "email": u.email,
+            "full_name": getattr(u, "full_name", None),
             "role": u.role,
             "is_admin": bool(u.is_admin),
             "is_active": getattr(u, "is_active", True),
@@ -97,6 +98,7 @@ async def create_user(
     try:
         user = await service.create_user(
             login=user_data.login,
+            full_name=user_data.full_name,
             email=user_data.email,
             password=user_data.password,
             role=user_data.role.value,
@@ -177,6 +179,11 @@ async def update_user(
             raise HTTPException(
                 status_code=409,
                 detail=ProblemDetails(title="Conflict", status=409, detail="last_admin").model_dump(),
+            ) from e
+        if "already exists" in str(e).lower() or "already taken" in str(e).lower():
+            raise HTTPException(
+                status_code=409,
+                detail=ProblemDetails(title="Conflict", status=409, detail=str(e)).model_dump(),
             ) from e
         raise HTTPException(
             status_code=400, 

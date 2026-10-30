@@ -248,6 +248,7 @@ export function PlatformSettingsPage() {
       <EntityPageV2
         title="Настройки платформы"
         mode={mode}
+        breadcrumbs={[{ label: 'Настройки платформы' }]}
       >
       <Tab
         title="Модели"

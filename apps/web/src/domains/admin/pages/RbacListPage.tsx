@@ -102,7 +102,7 @@ export function RbacListPage() {
 
   const levelOptions = [
     { value: 'platform', label: 'Платформа' },
-    { value: 'tenant', label: 'Тенант' },
+    { value: 'tenant', label: 'Рабочая группа' },
     { value: 'user', label: 'Пользователь' },
   ];
 

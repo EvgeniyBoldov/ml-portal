@@ -20,23 +20,23 @@ interface RbacTargetBlockProps {
 }
 
 export function RbacTargetBlock({ data, editable = false, width = '1/2' }: RbacTargetBlockProps) {
-  
+
   const getOwnerInfo = (): { type: string; label: string; id?: string } => {
     if (data.owner_platform) {
       return { type: 'platform', label: 'Платформа' };
     }
     if (data.owner_tenant_id) {
-      return { 
-        type: 'tenant', 
-        label: 'Тенант', 
-        id: data.owner_tenant_id 
+      return {
+        type: 'tenant',
+        label: 'Рабочая группа',
+        id: data.owner_tenant_id
       };
     }
     if (data.owner_user_id) {
-      return { 
-        type: 'user', 
-        label: 'Пользователь', 
-        id: data.owner_user_id 
+      return {
+        type: 'user',
+        label: 'Пользователь',
+        id: data.owner_user_id
       };
     }
     return { type: 'unknown', label: 'Неизвестно' };
@@ -84,8 +84,8 @@ export function RbacTargetBlock({ data, editable = false, width = '1/2' }: RbacT
   };
 
   // Скрываем owner_id если его нет
-  const filteredFields = ownerInfo.id 
-    ? fields 
+  const filteredFields = ownerInfo.id
+    ? fields
     : fields.filter(field => field.key !== 'owner_id');
 
   return (

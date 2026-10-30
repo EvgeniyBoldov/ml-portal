@@ -23,7 +23,7 @@ export default function AgentRunPage() {
     .find((value): value is string => typeof value === 'string' && Boolean(value)) || 'Запуск агента';
   const agentName = run?.agent_name || inferredAgentName;
   const agentSlug = run?.agent_slug || inferredAgentName;
-  const breadcrumbs: BreadcrumbItem[] = [{ label: 'Запуски агентов', href: '/admin/agent-runs' }, { label: id }];
+  const breadcrumbs: BreadcrumbItem[] = [{ label: 'Запуски агентов', href: '/admin/agent-runs' }, { label: `Запуск ${id.slice(0, 8)}` }];
   return (
     <EntityPageV2 title={agentName} subtitle={agentSlug} mode="view" breadcrumbs={breadcrumbs} backPath="/admin/agent-runs" loading={isLoading}
       headerActions={<Button onClick={() => downloadTraceLog(rawTrace, [], traceElapsedMs(rawTrace, Date.now()))} disabled={!run?.events.length}>Скачать лог</Button>}>

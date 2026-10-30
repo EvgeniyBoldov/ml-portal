@@ -28,9 +28,9 @@ export const INFO_FIELDS: FieldConfig[] = [
   {
     key: 'tenant_id',
     type: 'select',
-    label: 'Тенант',
+    label: 'Рабочая группа',
     required: true,
-    description: 'Тенант, которому принадлежит коллекция',
+    description: 'Рабочая группа, которой принадлежит коллекция',
     editable: false,
   },
 ];

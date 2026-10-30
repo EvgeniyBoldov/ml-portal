@@ -18,7 +18,7 @@ from app.schemas.sandbox import (
 from app.services.sandbox_service import SandboxService
 from app.services.runtime_event_journal_service import RuntimeEventJournalService
 
-from .helpers import check_session_owner, get_owner_email, tenant_uuid, user_uuid
+from .helpers import check_session_owner, get_owner_info, tenant_uuid, user_uuid
 
 router = APIRouter()
 
@@ -37,10 +37,11 @@ async def list_sessions(
 
     items = []
     for s, overrides_count, runs_count in rows:
-        email = await get_owner_email(db, s.owner_id)
+        owner_name, email = await get_owner_info(db, s.owner_id)
         items.append(SandboxSessionListItem(
             id=s.id,
             owner_id=s.owner_id,
+            owner_name=owner_name,
             owner_email=email,
             name=s.name,
             status=s.status,
@@ -71,10 +72,11 @@ async def create_session(
     await db.commit()
     await db.refresh(session)
 
-    email = await get_owner_email(db, session.owner_id)
+    owner_name, email = await get_owner_info(db, session.owner_id)
     return SandboxSessionDetailResponse(
         id=session.id,
         owner_id=session.owner_id,
+        owner_name=owner_name,
         owner_email=email,
         name=session.name,
         status=session.status,
@@ -100,7 +102,7 @@ async def get_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    email = await get_owner_email(db, session.owner_id)
+    owner_name, email = await get_owner_info(db, session.owner_id)
 
     overrides = [
         SandboxOverrideResponse(
@@ -134,6 +136,7 @@ async def get_session(
     return SandboxSessionDetailResponse(
         id=session.id,
         owner_id=session.owner_id,
+        owner_name=owner_name,
         owner_email=email,
         name=session.name,
         status=session.status,

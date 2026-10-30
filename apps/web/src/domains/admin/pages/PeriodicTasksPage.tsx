@@ -159,7 +159,7 @@ export default function PeriodicTasksPage() {
   ], [runNowMutation, toggleMutation]);
 
   return (
-    <EntityPageV2 title="Периодические задачи" mode="view" loading={isLoading}>
+    <EntityPageV2 title="Периодические задачи" mode="view" loading={isLoading} breadcrumbs={[{ label: 'Периодические задачи' }]}>
       <Tab
         title="Список"
         layout="full"

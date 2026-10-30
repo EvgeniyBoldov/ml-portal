@@ -20,7 +20,7 @@ import React, { useState } from 'react';
 import { Icon } from '../Icon';
 import Input from '../Input';
 import Textarea from '../Textarea';
-import Toggle from '../Toggle';
+import Checkbox from '../Checkbox';
 import { Select } from '../Select';
 import Badge from '../Badge';
 import { Tags } from '../Tags';
@@ -377,7 +377,7 @@ function FieldEditor({ field, value, editable, onChange }: FieldEditorProps) {
 
     case 'boolean':
       return (
-        <Toggle
+        <Checkbox
           checked={!!value}
           onChange={(checked) => onChange(checked)}
           disabled={isDisabled}

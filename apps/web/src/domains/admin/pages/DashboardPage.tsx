@@ -43,6 +43,7 @@ export function DashboardPage() {
     <EntityPageV2
       title="Дашборд"
       mode="view"
+      breadcrumbs={[{ label: 'Дашборд' }]}
       actionButtons={
         <div className={styles.toolbar}>
           <div

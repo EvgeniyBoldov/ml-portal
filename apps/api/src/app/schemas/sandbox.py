@@ -29,6 +29,7 @@ class SandboxSessionUpdate(BaseModel):
 class SandboxSessionListItem(BaseModel):
     id: UUID
     owner_id: UUID
+    owner_name: Optional[str] = None
     owner_email: str
     name: str
     status: str
@@ -43,6 +44,7 @@ class SandboxSessionListItem(BaseModel):
 class SandboxSessionDetailResponse(BaseModel):
     id: UUID
     owner_id: UUID
+    owner_name: Optional[str] = None
     owner_email: str
     name: str
     status: str

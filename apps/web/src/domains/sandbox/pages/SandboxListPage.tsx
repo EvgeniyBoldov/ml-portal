@@ -2,17 +2,19 @@
  * SandboxListPage — list of sandbox sessions for admins.
  * Accessible at /admin/sandbox.
  */
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSandboxSessions, useDeleteSession } from '../hooks/useSandboxSession';
-import Button from '@/shared/ui/Button';
-import Badge from '@/shared/ui/Badge';
-import DataTable from '@/shared/ui/DataTable/DataTable';
-import type { DataTableColumn } from '@/shared/ui/DataTable/DataTable';
-import ConfirmDialog from '@/shared/ui/ConfirmDialog';
-import EmptyState from '@/shared/ui/EmptyState';
-import { useToast } from '@/shared/ui/Toast';
-import { useState } from 'react';
 import type { SandboxSessionListItem } from '../types';
+import {
+  Badge,
+  Button,
+  ConfirmDialog,
+  DataTable,
+  type DataTableColumn,
+} from '@/shared/ui';
+import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
+import { useToast } from '@/shared/ui/Toast';
 import styles from './SandboxListPage.module.css';
 
 export default function SandboxListPage() {
@@ -41,31 +43,33 @@ export default function SandboxListPage() {
   const columns: DataTableColumn<SandboxSessionListItem>[] = [
     {
       key: 'name',
-      label: 'Название',
-      render: (row) => (
-        <span
-          className={styles['session-name']}
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate(`/sandbox/${row.id}`);
-          }}
-        >
-          {row.name}
-        </span>
-      ),
+      label: 'НАЗВАНИЕ',
+      sortable: true,
+      render: (row) => <span className={styles['session-name']}>{row.name}</span>,
     },
     {
-      key: 'owner_email',
-      label: 'Владелец',
-      render: (row) => (
-        <div className={styles['owner-cell']}>
-          <span className={styles['owner-email']}>{row.owner_email}</span>
-        </div>
-      ),
+      key: 'owner_name',
+      label: 'ВЛАДЕЛЕЦ',
+      render: (row) => {
+        const ownerName = row.owner_name?.trim();
+        const ownerEmail = row.owner_email !== 'unknown' ? row.owner_email : null;
+        const ownerLabel = ownerName || ownerEmail || 'Неизвестный пользователь';
+        const fallbackId = !ownerName && !ownerEmail ? row.owner_id.slice(0, 8) : null;
+
+        return (
+          <div className={styles['owner-cell']} title={row.owner_id}>
+            <span className={styles['owner-name']}>{ownerLabel}</span>
+            {ownerName && ownerEmail && ownerEmail !== ownerName && (
+              <span className={styles['owner-email']}>{ownerEmail}</span>
+            )}
+            {fallbackId && <span className={styles['owner-email']}>ID {fallbackId}</span>}
+          </div>
+        );
+      },
     },
     {
       key: 'status',
-      label: 'Статус',
+      label: 'СТАТУС',
       render: (row) => (
         <Badge tone={row.status === 'active' ? 'success' : 'neutral'}>
           {row.status === 'active' ? 'Активна' : 'Архив'}
@@ -74,17 +78,17 @@ export default function SandboxListPage() {
     },
     {
       key: 'overrides_count',
-      label: 'Оверрайды',
-      render: (row) => <span>{row.overrides_count}</span>,
+      label: 'ОВЕРРАЙДЫ',
+      render: (row) => row.overrides_count,
     },
     {
       key: 'runs_count',
-      label: 'Запуски',
-      render: (row) => <span>{row.runs_count}</span>,
+      label: 'ЗАПУСКИ',
+      render: (row) => row.runs_count,
     },
     {
       key: 'expires_at',
-      label: 'Истекает',
+      label: 'ИСТЕКАЕТ',
       render: (row) => (
         <span className={styles['meta-label']}>
           {new Date(row.expires_at).toLocaleDateString('ru-RU')}
@@ -93,14 +97,14 @@ export default function SandboxListPage() {
     },
     {
       key: 'actions',
-      label: '',
+      label: 'ДЕЙСТВИЯ',
       render: (row) => (
         <div className={styles.actions}>
           <Button
             size="sm"
             variant="ghost"
-            onClick={(e) => {
-              e.stopPropagation();
+            onClick={(event) => {
+              event.stopPropagation();
               navigate(`/sandbox/${row.id}`);
             }}
           >
@@ -109,8 +113,8 @@ export default function SandboxListPage() {
           <Button
             size="sm"
             variant="ghost"
-            onClick={(e) => {
-              e.stopPropagation();
+            onClick={(event) => {
+              event.stopPropagation();
               setDeleteId(row.id);
             }}
           >
@@ -122,53 +126,45 @@ export default function SandboxListPage() {
   ];
 
   return (
-    <div className={styles.page}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>Песочницы</h1>
-          <p className={styles.subtitle}>
-            Тестирование агентов с phantom-конфигурациями
-          </p>
-        </div>
-        <div className={styles.actions}>
-          <Button onClick={handleCreate}>
-            Создать сессию
-          </Button>
-        </div>
-      </div>
-
-      {!isLoading && sessions.length === 0 ? (
-        <div className={styles.empty}>
-          <div className={styles['empty-title']}>Нет активных сессий</div>
-          <div className={styles['empty-text']}>
-            Создайте сессию, чтобы начать тестирование агентов с изменёнными конфигурациями
-          </div>
-          <Button onClick={handleCreate}>
-            Создать первую сессию
-          </Button>
-        </div>
-      ) : (
-        <div className={styles['table-wrapper']}>
+    <>
+      <EntityPageV2
+        title="Песочницы"
+        subtitle="Тестирование агентов с phantom-конфигурациями"
+        mode="view"
+        breadcrumbs={[{ label: 'Песочницы' }]}
+      >
+        <Tab
+          title="Список"
+          layout="full"
+          actions={[
+            <Button key="create" onClick={handleCreate}>
+              Создать сессию
+            </Button>,
+          ]}
+        >
           <DataTable
             columns={columns}
             data={sessions}
             loading={isLoading}
             keyField="id"
+            paginated
+            pageSize={20}
             onRowClick={(row) => navigate(`/sandbox/${row.id}`)}
+            emptyText="Активных сессий нет. Создайте сессию, чтобы начать тестирование агентов."
           />
-        </div>
-      )}
+        </Tab>
+      </EntityPageV2>
 
       <ConfirmDialog
         open={!!deleteId}
         title="Удалить сессию?"
-        message="Все оверрайды и запуски в этой сессии будут удалены. Это действие необратимо."
+        message="Все оверрайды и запуски будут удалены. Это действие необратимо."
         confirmLabel="Удалить"
         cancelLabel="Отмена"
         variant="danger"
         onConfirm={handleDelete}
         onCancel={() => setDeleteId(null)}
       />
-    </div>
+    </>
   );
 }

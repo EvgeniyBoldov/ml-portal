@@ -18,8 +18,7 @@ import { LifecycleDeleteDialog } from '@/shared/ui';
 import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import type { Tenant, TenantCreate, TenantUpdate } from '@shared/api/tenant';
-import { CredentialsPanel, FactsPanel } from '@/shared/ui';
-import { MemoryScopeSelect } from '@/shared/ui/MemoryScopeSelect/MemoryScopeSelect';
+import { CredentialsPanel } from '@/shared/ui';
 import MultiSelectTagPicker from '@/shared/ui/MultiSelectTagPicker/MultiSelectTagPicker';
 
 type TenantFormData = Partial<TenantCreate & { is_default?: boolean; tenant_admin_user_ids?: string[] }>;
@@ -32,14 +31,14 @@ const INFO_FIELDS: FieldConfig[] = [
     type: 'text',
     label: 'Название',
     required: true,
-    placeholder: 'Введите название тенанта',
-    description: 'Уникальное название тенанта',
+    placeholder: 'Введите название рабочей группы',
+    description: 'Уникальное название рабочей группы',
   },
   {
     key: 'description',
     type: 'textarea',
     label: 'Описание',
-    placeholder: 'Краткое описание тенанта',
+    placeholder: 'Краткое описание рабочей группы',
     rows: 3,
   },
 ];
@@ -54,24 +53,9 @@ const EMBEDDING_FIELDS: FieldConfig[] = [
   },
 ];
 
-const PROCESSING_FIELDS: FieldConfig[] = [
-  {
-    key: 'ocr',
-    type: 'boolean',
-    label: 'OCR',
-    description: 'Распознавание текста на изображениях',
-  },
-  {
-    key: 'layout',
-    type: 'boolean',
-    label: 'Layout Analysis',
-    description: 'Анализ структуры документа',
-  },
-];
-
 const META_FIELDS: FieldConfig[] = [
   { key: 'id', type: 'code', label: 'ID', editable: false },
-  { key: 'is_default', type: 'boolean', label: 'Default tenant', editable: false },
+  { key: 'is_default', type: 'boolean', label: 'Рабочая группа по умолчанию', editable: false },
   { key: 'created_at', type: 'date', label: 'Создан', editable: false },
   { key: 'updated_at', type: 'date', label: 'Обновлен', editable: false },
 ];
@@ -96,9 +80,6 @@ export function TenantPage() {
     is_active: true,
     is_default: false,
     extra_embed_model: '',
-    ocr: false,
-    layout: false,
-    memory_scope_keys: [],
     tenant_admin_user_ids: [],
   });
   const [saving, setSaving] = useState(false);
@@ -123,9 +104,6 @@ export function TenantPage() {
         is_active: tenant.is_active,
         is_default: Boolean(tenant.is_default),
         extra_embed_model: tenant.extra_embed_model || '',
-        ocr: tenant.ocr || false,
-        layout: tenant.layout || false,
-        memory_scope_keys: tenant.memory_scope_keys ?? [],
         tenant_admin_user_ids: tenant.tenant_admin_user_ids ?? [],
       });
     }
@@ -142,7 +120,7 @@ export function TenantPage() {
 
   const handleSave = async () => {
     if (!formData.name?.trim()) {
-      showError('Название тенанта обязательно');
+      showError('Название рабочей группы обязательно');
       return;
     }
     setSaving(true);
@@ -153,11 +131,8 @@ export function TenantPage() {
           description: formData.description?.trim() || null,
           is_active: formData.is_active,
           extra_embed_model: formData.extra_embed_model || null,
-          ocr: formData.ocr,
-          layout: formData.layout,
-          memory_scope_keys: formData.memory_scope_keys ?? [],
         });
-        showSuccess('Тенант создан');
+        showSuccess('Рабочая группа создана');
         navigate('/admin/tenants');
       } else {
         await updateMutation.mutateAsync({
@@ -168,13 +143,10 @@ export function TenantPage() {
             is_active: formData.is_active,
             is_default: formData.is_default,
             extra_embed_model: formData.extra_embed_model || null,
-            ocr: formData.ocr,
-            layout: formData.layout,
-            memory_scope_keys: formData.memory_scope_keys ?? [],
             tenant_admin_user_ids: formData.tenant_admin_user_ids ?? [],
           },
         });
-        showSuccess('Тенант обновлён');
+        showSuccess('Рабочая группа обновлена');
         setSearchParams({});
         refetch();
       }
@@ -198,9 +170,7 @@ export function TenantPage() {
           is_active: tenant.is_active,
           is_default: Boolean(tenant.is_default),
           extra_embed_model: tenant.extra_embed_model || '',
-          ocr: tenant.ocr || false,
-          layout: tenant.layout || false,
-          memory_scope_keys: tenant.memory_scope_keys ?? [],
+          tenant_admin_user_ids: tenant.tenant_admin_user_ids ?? [],
         });
       }
       setSearchParams({});
@@ -210,8 +180,8 @@ export function TenantPage() {
   const handleDelete = () => setShowDeleteConfirm(true);
 
   const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Тенанты', href: '/admin/tenants' },
-    { label: tenant?.name || 'Новый тенант' },
+    { label: 'Рабочие группы', href: '/admin/tenants' },
+    { label: tenant?.name || 'Новая рабочая группа' },
   ];
 
   // ─── Derived data for blocks ───
@@ -219,13 +189,11 @@ export function TenantPage() {
     name: tenant?.name || '',
     description: tenant?.description || '',
     is_default: Boolean(tenant?.is_default),
-    memory_scope_keys: tenant?.memory_scope_keys ?? [],
+    tenant_admin_user_ids: tenant?.tenant_admin_user_ids ?? [],
   };
 
   const embeddingData = mode === 'edit' ? formData : {
     extra_embed_model: tenant?.extra_embed_model || '',
-    ocr: tenant?.ocr || false,
-    layout: tenant?.layout || false,
   };
 
   const metaData = {
@@ -254,55 +222,45 @@ export function TenantPage() {
       key: 'is_active',
       type: 'boolean',
       label: 'Активен',
-      description: 'Тенант доступен для использования',
+      description: 'Рабочая группа доступна для использования',
     },
     {
       key: 'is_default',
       type: 'boolean',
-      label: 'Default tenant',
-      description: 'Платформенный тенант по умолчанию',
-    },
-    {
-      key: 'memory_scope_keys',
-      type: 'custom',
-      label: 'Скоупы памяти чатов',
-      description: 'Наследуются пользователями без собственного выбора. Пустой список оставляет поведение по умолчанию.',
-      render: (value, editable, onChange) => (
-        <MemoryScopeSelect
-          value={Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : []}
-          onChange={onChange}
-          readOnly={!editable}
-          disabled={saving}
-        />
-      ),
-    },
-    {
-      key: 'tenant_admin_user_ids',
-      type: 'custom',
-      label: 'Администраторы тенанта',
-      description: 'Выберите пользователей этого тенанта, которые смогут управлять его редакторами, скоупами и credentials.',
-      render: (value, editable, onChange) => (
-        <MultiSelectTagPicker
-          label="Администраторы тенанта"
-          options={tenantUsers.map(user => ({ value: user.id, label: user.full_name ? `${user.full_name} (${user.login})` : user.login }))}
-          value={Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []}
-          disabled={!editable || saving}
-          onChange={onChange}
-        />
-      ),
+      label: 'Рабочая группа по умолчанию',
+      description: 'Рабочая группа платформы по умолчанию',
     },
   ];
-  const infoFieldsCreate: FieldConfig[] = infoFieldsWithStatus.filter((f) => f.key !== 'is_default');
-  const embeddingFieldsFull: FieldConfig[] = [
-    { ...EMBEDDING_FIELDS[0], options: embeddingOptions },
-    ...PROCESSING_FIELDS,
-  ];
+  const tenantAdminField: FieldConfig = {
+    key: 'tenant_admin_user_ids',
+    type: 'custom',
+    label: 'Администраторы рабочей группы',
+    description: 'Участники, которые смогут управлять редакторами и credentials рабочей группы.',
+    render: (value, editable, onChange) => (
+      <MultiSelectTagPicker
+        label="Администраторы рабочей группы"
+        options={tenantUsers.map(user => ({
+          value: user.id,
+          label: user.full_name || user.login,
+        }))}
+        value={Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []}
+        hideLabel
+        readOnly={!editable}
+        emptyMessage="Администраторы не назначены"
+        placeholder="Найти участника рабочей группы"
+        disabled={saving}
+        onChange={onChange}
+      />
+    ),
+  };
+  const infoFieldsCreate: FieldConfig[] = infoFieldsWithStatus.filter((field) => field.key !== 'is_default');
+  const embeddingFieldsFull: FieldConfig[] = [{ ...EMBEDDING_FIELDS[0], options: embeddingOptions }];
 
   // ─── Create mode ───
   if (isNew) {
     return (
       <EntityPageV2
-        title="Новый тенант"
+        title="Новая рабочая группа"
         mode={mode}
         saving={saving}
         breadcrumbs={breadcrumbs}
@@ -341,7 +299,7 @@ export function TenantPage() {
   return (
     <>
       <EntityPageV2
-        title={tenant?.name || 'Тенант'}
+        title={tenant?.name || 'Рабочая группа'}
         mode={mode}
         loading={isLoading}
         saving={saving}
@@ -383,6 +341,17 @@ export function TenantPage() {
           />
 
           <Block
+            title="Управление доступом"
+            icon="users"
+            iconVariant="info"
+            width="1/2"
+            fields={[tenantAdminField]}
+            data={mode === 'edit' ? formData : { tenant_admin_user_ids: tenant?.tenant_admin_user_ids ?? [] }}
+            editable={mode === 'edit'}
+            onChange={handleFieldChange}
+          />
+
+          <Block
             title="Обработка"
             icon="cpu"
             iconVariant="primary"
@@ -410,12 +379,6 @@ export function TenantPage() {
         )}
 
         {!isNew && (
-        <Tab title="Факты" layout="full" id="facts">
-          <FactsPanel mode="admin-tenant" ownerId={id} />
-        </Tab>
-        )}
-
-        {!isNew && (
         <Tab 
           title="RBAC правила" 
           layout="full"
@@ -430,7 +393,7 @@ export function TenantPage() {
         open={showDeleteConfirm}
         kind="tenant"
         entityId={id || ''}
-        entityLabel={tenant?.name || 'Тенант'}
+        entityLabel={tenant?.name || 'Рабочая группа'}
         onCancel={() => setShowDeleteConfirm(false)}
         onSuccess={() => {
           queryClient.invalidateQueries({ queryKey: qk.admin.tenants.all() });
@@ -445,12 +408,12 @@ export function TenantPage() {
         open={showRestoreConfirm}
         kind="tenant"
         entityId={id || ''}
-        entityLabel={tenant?.name || 'Тенант'}
+        entityLabel={tenant?.name || 'Рабочая группа'}
         onCancel={() => setShowRestoreConfirm(false)}
         onSuccess={() => {
           queryClient.invalidateQueries({ queryKey: qk.admin.tenants.all() });
           queryClient.invalidateQueries({ queryKey: qk.admin.tenants.detail(id || '') });
-          showSuccess('Тенант восстановлен');
+          showSuccess('Рабочая группа восстановлена');
           setShowRestoreConfirm(false);
         }}
       />

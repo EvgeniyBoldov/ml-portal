@@ -102,7 +102,7 @@ export function MemoryScopePicker({
           )}
           {inheritedKeys.length > 0 && (
             <p className={styles.hint}>
-              Проекты тенанта:{' '}
+              Проекты рабочей группы:{' '}
               {inheritedKeys
                 .map(
                   key => scopes.find(scope => scope.key === key)?.name ?? key

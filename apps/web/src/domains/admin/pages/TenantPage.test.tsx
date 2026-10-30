@@ -73,7 +73,7 @@ afterEach(cleanup);
 beforeEach(() => { vi.clearAllMocks(); mocks.create.mockResolvedValue({}); });
 
 describe('TenantPage', () => {
-  it('keeps memory scopes in the main information block and sends an unset model as null', async () => {
+  it('does not expose the removed memory-scope setting and sends an unset model as null', async () => {
     render(<MemoryRouter initialEntries={['/admin/tenants/new']}><Routes>
       <Route path="/admin/tenants/:id" element={<TenantPage />} />
       <Route path="/admin/tenants" element={<div>Tenant list</div>} />
@@ -81,9 +81,8 @@ describe('TenantPage', () => {
 
     const infoHeading = screen.getByRole('heading', { name: 'Основная информация' });
     const infoBlock = infoHeading.closest('section');
-    expect(infoBlock).toContainElement(screen.getByText('Выбранные скоупы: —'));
-    expect(screen.queryByText('Скоупы')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Скоупы памяти чатов/ }));
+    expect(infoBlock).not.toHaveTextContent(/скоупы памяти/i);
+    expect(screen.queryByRole('button', { name: /скоупы памяти/i })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole('textbox', { name: 'Название' }), { target: { value: 'Operations' } });
     fireEvent.click(screen.getByRole('button', { name: 'Создать' }));
 
@@ -92,9 +91,6 @@ describe('TenantPage', () => {
       description: null,
       is_active: true,
       extra_embed_model: null,
-      ocr: false,
-      layout: false,
-      memory_scope_keys: ['ops'],
     }));
   });
 });

@@ -11,7 +11,7 @@ export const ADMIN_ACTION_LABELS = {
 } as const;
 
 export const ADMIN_ENTITY_LABELS = {
-  tenant: "тенант",
+  tenant: "рабочая группа",
   user: "пользователь",
   connection: "подключение",
   collection: "коллекция",

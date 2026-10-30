@@ -148,6 +148,7 @@ export function CollectionListPage() {
     <EntityPageV2
       title="Коллекции"
       mode="view"
+      breadcrumbs={[{ label: 'Коллекции' }]}
       headerActions={
         <div className={styles.headerActions}>
           <Input

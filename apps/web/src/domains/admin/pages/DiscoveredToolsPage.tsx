@@ -174,6 +174,7 @@ export function DiscoveredToolsPage() {
     <EntityPageV2
       title="Инструменты"
       mode="view"
+      breadcrumbs={[{ label: 'Инструменты' }]}
       headerActions={
         <Input
           placeholder="Поиск инструментов..."

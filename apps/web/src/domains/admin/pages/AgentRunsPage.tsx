@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { agentRunsApi, memoryJobsApi, type AgentRunListItem, type MemoryJobListItem } from '@/shared/api/admin';
 import { DataTable, type DataTableColumn, Badge } from '@/shared/ui';
@@ -15,6 +15,8 @@ const loggingLevelLabel: Record<string, string> = {
 
 export default function AgentRunsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') === 'memory' ? 'memory' : 'agents';
   const { data: runs = [], isLoading } = useQuery({
     queryKey: ['admin', 'agent-runs'], queryFn: agentRunsApi.list, staleTime: 15_000,
   });
@@ -36,7 +38,13 @@ export default function AgentRunsPage() {
     { key: 'visibility_tenant_id', label: 'ТЕНАНТ', width: 130, render: (job) => <code>{job.visibility_tenant_id ? job.visibility_tenant_id.slice(0, 8) : 'Общий'}</code> },
   ];
   return (
-    <EntityPageV2 title="Запуски агентов" mode="view" breadcrumbs={[{ label: 'Запуски агентов' }]}>
+    <EntityPageV2 title="Запуски агентов" mode="view" defaultTab={activeTab} onTabChange={(tab) => {
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        next.set('tab', tab);
+        return next;
+      }, { replace: true });
+    }} breadcrumbs={[{ label: 'Запуски агентов' }]}>
       <Tab title="Агенты" id="agents" layout="full" badge={runs.length}>
         <DataTable columns={columns} data={runs} keyField="agent_execution_id" loading={isLoading}
           emptyText="Нет запусков с включённым логированием." paginated pageSize={20}

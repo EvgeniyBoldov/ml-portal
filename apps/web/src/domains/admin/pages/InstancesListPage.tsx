@@ -180,6 +180,7 @@ export function InstancesListPage() {
     <EntityPageV2
       title="Коннекторы"
       mode="view"
+      breadcrumbs={[{ label: 'Коннекторы' }]}
       headerActions={
         <Input
           placeholder="Поиск коннекторов..."

@@ -300,10 +300,8 @@ export function OrchestrationPage() {
       <EntityPageV2
         title="Оркестрация"
         mode="view"
-        breadcrumbs={[
-          { label: 'Администрирование', href: '/admin' },
-          { label: 'Оркестрация', href: '/admin/orchestration' },
-        ]}
+        loading={modelsLoading || plannerLoading || preflightLoading || synthesizerLoading || factExtractorLoading || factCompactorLoading || documentStudyLoading || plannerLimitsLoading || preflightLimitsLoading || synthLimitsLoading || factLimitsLoading || compactLimitsLoading}
+        breadcrumbs={[{ label: 'Оркестрация' }]}
       >
         <Tab
           title="Планировщик"
@@ -449,9 +447,6 @@ export function OrchestrationPage() {
         </Tab>
       </EntityPageV2>
 
-      {(modelsLoading || plannerLoading || preflightLoading || synthesizerLoading || factExtractorLoading || factCompactorLoading || documentStudyLoading || plannerLimitsLoading || preflightLimitsLoading || synthLimitsLoading || factLimitsLoading || compactLimitsLoading) && (
-        <div>Загрузка настроек оркестрации…</div>
-      )}
     </>
   );
 }

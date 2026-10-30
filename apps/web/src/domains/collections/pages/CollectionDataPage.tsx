@@ -96,9 +96,9 @@ function CollectionHeader({ collection, total, right }: CollectionHeaderProps) {
             <div className={styles.permissionNotice} role="status">
               <Badge tone="neutral">Только просмотр</Badge>
               <span>
-                Изменять содержимое могут администраторы и редакторы этого тенанта.
+                Изменять содержимое могут администраторы и редакторы этой рабочей группы.
                 {collection.capability_reasons?.can_edit_content
-                  ? ` ${capabilityReasonCopy(collection.capability_reasons.can_edit_content, 'Изменять содержимое могут администраторы и редакторы этого тенанта.')}`
+                  ? ` ${capabilityReasonCopy(collection.capability_reasons.can_edit_content, 'Изменять содержимое могут администраторы и редакторы этой рабочей группы.')}`
                   : ''}
               </span>
             </div>

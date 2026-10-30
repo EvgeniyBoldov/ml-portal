@@ -101,7 +101,6 @@ load_release_file() {
   unset APPLICATION_SERVICES STATEFUL_SERVICES
   IFS=, read -r -a APPLICATION_SERVICES <<< "$application_services_csv"
   IFS=, read -r -a STATEFUL_SERVICES <<< "$stateful_services_csv"
-  readonly -a APPLICATION_SERVICES STATEFUL_SERVICES
   : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required in release.env}"
   : "${APP_IMAGE_TAG:?APP_IMAGE_TAG is required in release.env}"
   : "${BASE_IMAGE_TAG:?BASE_IMAGE_TAG is required in release.env}"

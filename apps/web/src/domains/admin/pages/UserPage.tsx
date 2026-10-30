@@ -15,13 +15,12 @@ import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import { EntityPageV2, Tab, type BreadcrumbItem, type EntityPageMode } from '@/shared/ui/EntityPage';
 import { buildEntityCrudActions, composeEntityActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { Button, LifecycleDeleteDialog, Modal } from '@/shared/ui';
+import { Badge, Button, LifecycleDeleteDialog, Modal } from '@/shared/ui';
 import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import Input from '@/shared/ui/Input';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
 import type { User, Tenant } from '@shared/api/admin';
 import { CredentialsPanel, FactsPanel } from '@/shared/ui';
-import { MemoryScopeSelect } from '@/shared/ui/MemoryScopeSelect/MemoryScopeSelect';
 
 /* ─── SetPasswordModal ─── */
 
@@ -105,7 +104,7 @@ function SetPasswordModal({
 /* ─── Field configs ─── */
 
 const BASE_INFO_FIELDS: Omit<FieldConfig, 'options'>[] = [
-  { key: 'full_name', type: 'text', label: 'Отображаемое имя', editable: false },
+  { key: 'full_name', type: 'text', label: 'Имя', editable: false },
   {
     key: 'login',
     type: 'text',
@@ -118,31 +117,24 @@ const BASE_INFO_FIELDS: Omit<FieldConfig, 'options'>[] = [
     key: 'email',
     type: 'text',
     label: 'Email',
+    editable: false,
     placeholder: 'user@example.com',
   },
   {
     key: 'tenant_id',
     type: 'select',
-    label: 'Тенант',
-    description: 'Основной тенант пользователя',
-  },
-  {
-    key: 'memory_scope_keys',
-    type: 'custom',
-    label: 'Скоупы памяти чатов',
-    description: 'Начальный контекст чатов. Пустой выбор наследует проекты tenant-а.',
-    render: (value, editable, onChange) => (
-      <MemoryScopeSelect
-        value={Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : []}
-        onChange={onChange}
-        readOnly={!editable}
-        disabled={!editable}
-      />
-    ),
+    label: 'Рабочая группа',
+    description: 'Основная рабочая группа пользователя',
   },
 ];
 
 const BASE_INFO_FIELDS_CREATE: Omit<FieldConfig, 'options'>[] = [
+  {
+    key: 'full_name',
+    type: 'text',
+    label: 'Имя',
+    placeholder: 'Введите имя пользователя',
+  },
   {
     key: 'login',
     type: 'text',
@@ -168,27 +160,22 @@ const BASE_INFO_FIELDS_CREATE: Omit<FieldConfig, 'options'>[] = [
   {
     key: 'tenant_id',
     type: 'select',
-    label: 'Тенант',
-    description: 'Основной тенант пользователя',
-  },
-  {
-    key: 'memory_scope_keys',
-    type: 'custom',
-    label: 'Скоупы памяти чатов',
-    description: 'Начальный контекст чатов. Пустой выбор наследует проекты tenant-а.',
-    render: (value, editable, onChange) => (
-      <MemoryScopeSelect
-        value={Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : []}
-        onChange={onChange}
-        readOnly={!editable}
-        disabled={!editable}
-      />
-    ),
+    label: 'Рабочая группа',
+    description: 'Основная рабочая группа пользователя',
   },
 ];
 
 const STATUS_FIELDS: FieldConfig[] = [
-  { key: 'account_type', type: 'text', label: 'Тип учётной записи', editable: false },
+  {
+    key: 'account_type',
+    type: 'custom',
+    label: 'Тип учётной записи',
+    editable: false,
+    render: (value) => {
+      const accountType = typeof value === 'string' ? value : '—';
+      return <Badge tone={accountType === 'LDAP' ? 'info' : 'success'}>{accountType}</Badge>;
+    },
+  },
   { key: 'deactivated_reason', type: 'text', label: 'Причина отключения', editable: false },
   {
     key: 'is_active',
@@ -240,7 +227,6 @@ export function UserPage() {
     is_admin: false,
     tenant_id: '',
     is_active: true,
-    memory_scope_keys: [] as string[],
   });
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -263,7 +249,6 @@ export function UserPage() {
         is_admin: Boolean(user.is_admin),
         tenant_id: user.tenant_id ?? '',
         is_active: user.is_active,
-        memory_scope_keys: user.memory_scope_keys ?? [],
       });
     }
   }, [user]);
@@ -275,14 +260,12 @@ export function UserPage() {
 
   // ─── Handlers ───
   const handleFieldChange = (key: string, value: unknown) => {
-    if (key === 'login' || key === 'email' || key === 'password' || key === 'tenant_id') {
+    if (key === 'login' || key === 'full_name' || key === 'email' || key === 'password' || key === 'tenant_id') {
       setFormData(prev => ({ ...prev, [key]: String(value ?? '') }));
     } else if (key === 'is_admin' && typeof value === 'boolean') {
       setFormData(prev => ({ ...prev, is_admin: value }));
     } else if (key === 'is_active' && typeof value === 'boolean') {
       setFormData(prev => ({ ...prev, is_active: value }));
-    } else if (key === 'memory_scope_keys' && Array.isArray(value) && value.every(item => typeof item === 'string')) {
-      setFormData(prev => ({ ...prev, memory_scope_keys: value }));
     }
   };
 
@@ -294,13 +277,13 @@ export function UserPage() {
         if (!formData.password.trim()) { showError('Пароль обязателен'); return; }
         await createMutation.mutateAsync({
           login: formData.login,
+          full_name: formData.full_name.trim() || null,
           email: formData.email || null,
           password: formData.password,
           role: 'reader',
           is_admin: formData.is_admin,
           tenant_id: formData.tenant_id || null,
           is_active: formData.is_active,
-          memory_scope_keys: formData.memory_scope_keys,
         });
         showSuccess('Пользователь создан');
         navigate('/admin/users');
@@ -308,10 +291,13 @@ export function UserPage() {
         await updateMutation.mutateAsync({
           id: id!,
           data: {
-            email: formData.email || null,
+            ...(isLocalAccount ? {
+              login: formData.login.trim(),
+              full_name: formData.full_name.trim() || null,
+              email: formData.email || null,
+            } : {}),
             is_admin: formData.is_admin,
             is_active: formData.is_active,
-            memory_scope_keys: formData.memory_scope_keys,
             tenant_id: formData.tenant_id || null,
           },
         });
@@ -341,7 +327,6 @@ export function UserPage() {
           is_admin: Boolean(user.is_admin),
           tenant_id: user.tenant_id ?? '',
           is_active: user.is_active,
-          memory_scope_keys: user.memory_scope_keys ?? [],
         });
       }
       setSearchParams({});
@@ -366,11 +351,11 @@ export function UserPage() {
 
   const breadcrumbs: BreadcrumbItem[] = [
     { label: 'Пользователи', href: '/admin/users' },
-    { label: user?.login || 'Новый пользователь' },
+    { label: user?.full_name || user?.login || 'Новый пользователь' },
   ];
 
   // ─── Derived data for blocks ───
-  const isLocalAccount = !user || (user.auth_provider ?? 'local') === 'local';
+  const isLocalAccount = isNew || (user?.auth_provider ?? 'local') === 'local';
   const accountType = isLocalAccount ? 'Локальная' : 'LDAP';
   const infoData = (mode === 'edit' || isNew)
     ? formData
@@ -380,7 +365,6 @@ export function UserPage() {
         email: user?.email || '',
         password: '',
         tenant_id: user?.tenant_id || '',
-        memory_scope_keys: user?.memory_scope_keys ?? [],
       };
 
   const statusData = mode === 'edit'
@@ -417,7 +401,9 @@ export function UserPage() {
   const infoFields: FieldConfig[] = BASE_INFO_FIELDS.map(f =>
     f.key === 'tenant_id'
       ? { ...f, options: tenantOptions }
-      : f as FieldConfig
+      : ['full_name', 'login', 'email'].includes(f.key)
+        ? { ...f, editable: isLocalAccount }
+        : f as FieldConfig
   );
 
   const infoFieldsCreate: FieldConfig[] = BASE_INFO_FIELDS_CREATE.map(f =>
@@ -470,7 +456,7 @@ export function UserPage() {
   return (
     <>
       <EntityPageV2
-        title={user?.login || 'Пользователь'}
+        title={user?.full_name || user?.login || 'Пользователь'}
         mode={mode}
         loading={isLoading}
         saving={saving}
@@ -517,7 +503,7 @@ export function UserPage() {
             editable={mode === 'edit'}
             onChange={handleFieldChange}
           />
-          {/* Row 2: Status (1/2) + Meta (1/2) */}
+          {/* Row 2: Status */}
           <Block
             title="Статус и роль"
             icon="shield"
@@ -533,7 +519,7 @@ export function UserPage() {
             title="Метаданные"
             icon="database"
             iconVariant="info"
-            width="1/2"
+            width="full"
             fields={META_FIELDS}
             data={metaData}
           />

@@ -274,7 +274,7 @@ export function CollectionPage() {
     }),
     validateCreate: (data) => {
       if (!data.name?.trim() || !data.tenant_id) {
-        return 'Заполните название и тенант';
+        return 'Заполните название и рабочую группу';
       }
       const createType = (data.collection_type ?? 'table') as CollectionType;
       const isRemoteType = createType === 'sql' || createType === 'api';

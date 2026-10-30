@@ -30,7 +30,7 @@ export function useAgentList(includeDeprecated = false) {
 export function useAgentDetail(id: string) {
   return useEntityEditor<AgentDetail, AgentCreate, AgentUpdate>({
     entityType: 'agent',
-    entityNameLabel: 'Агента',
+    entityNameLabel: 'Агенты',
     entityTypeLabel: 'агента',
     basePath: '/admin/agents',
     listPath: '/admin/agents',

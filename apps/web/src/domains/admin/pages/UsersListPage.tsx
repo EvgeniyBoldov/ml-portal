@@ -51,17 +51,18 @@ export function UsersListPage() {
   const columns: DataTableColumn<User>[] = [
     {
       key: 'login',
-      label: 'ЛОГИН / EMAIL',
+      label: 'ИМЯ / ЛОГИН / EMAIL',
       width: 280,
       sortable: true,
       filter: {
         kind: 'text',
         placeholder: 'Логин или email',
-        getValue: (user) => `${user.login ?? ''} ${user.email ?? ''}`,
+        getValue: (user) => `${user.full_name ?? ''} ${user.login ?? ''} ${user.email ?? ''}`,
       },
       render: (user) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          <span style={{ fontWeight: 500 }}>{user.login}</span>
+          <span style={{ fontWeight: 500 }}>{user.full_name || user.login}</span>
+          {user.full_name && <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{user.login}</span>}
           {user.email && <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{user.email}</span>}
         </div>
       ),
@@ -99,7 +100,7 @@ export function UsersListPage() {
       sortable: true,
       filter: {
         kind: 'text',
-        placeholder: 'Тенант',
+        placeholder: 'Рабочая группа',
         getValue: (user) => getTenantName(user.tenant_id) ?? '',
       },
       render: (user) => {
@@ -167,6 +168,7 @@ export function UsersListPage() {
     <EntityPageV2
       title="Пользователи"
       mode="view"
+      breadcrumbs={[{ label: 'Пользователи' }]}
       headerActions={
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Input

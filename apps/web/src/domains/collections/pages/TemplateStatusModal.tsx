@@ -350,7 +350,7 @@ export function TemplateStatusModal({ collectionId, tenantId, collection, permis
           <Alert variant="warning" title="Права изменились" description="Сервер отклонил изменение. Черновик сохранён; действия отключены до успешного подтверждения прав." />
         )}
         {!canEditContent && (
-          <Alert variant="warning" title="Только просмотр" description="Изменять содержимое могут администраторы и редакторы этого тенанта." />
+          <Alert variant="warning" title="Только просмотр" description="Изменять содержимое могут администраторы и редакторы этой рабочей группы." />
         )}
         <div className={styles.pipelineSection}>
           <StatusFlowView

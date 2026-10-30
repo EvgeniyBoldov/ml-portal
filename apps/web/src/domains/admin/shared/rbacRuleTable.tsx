@@ -86,7 +86,7 @@ export function buildRbacRuleColumns({
         placeholder: 'Все уровни',
         options: [
           { value: 'platform', label: 'Все (платформа)' },
-          { value: 'tenant', label: 'Тенант' },
+          { value: 'tenant', label: 'Рабочая группа' },
           { value: 'user', label: 'Пользователь' },
         ],
         getValue: (row) => row.owner.level,

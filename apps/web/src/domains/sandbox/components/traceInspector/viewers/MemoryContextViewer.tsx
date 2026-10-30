@@ -35,7 +35,7 @@ export function MemoryContextViewer({
       ),
     },
     {
-      title: 'Факты тенанта',
+      title: 'Факты рабочей группы',
       items: context.context.filter(
         item => item.type === 'fact' && item.scope === 'tenant'
       ),
