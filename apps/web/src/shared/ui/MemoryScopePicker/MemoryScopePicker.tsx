@@ -11,19 +11,23 @@ import styles from './MemoryScopePicker.module.css';
 interface MemoryScopePickerProps {
   value: string[];
   onChange: (keys: string[]) => void;
+  embedded?: boolean;
   disabled?: boolean;
   readOnly?: boolean;
   description?: string;
   inheritedKeys?: string[];
+  onCatalogReadyChange?: (ready: boolean) => void;
 }
 
 export function MemoryScopePicker({
   value,
   onChange,
+  embedded = false,
   disabled,
   readOnly,
   description,
   inheritedKeys = [],
+  onCatalogReadyChange,
 }: MemoryScopePickerProps) {
   const catalog = useQuery({
     queryKey: qk.memory.scopeCatalog(),
@@ -34,9 +38,15 @@ export function MemoryScopePicker({
   });
   const scopes = catalog.data ?? [];
   const unknown = value.filter(key => !scopes.some(scope => scope.key === key));
+  const isCatalogReady = Array.isArray(catalog.data) && !catalog.isLoading;
+
+  React.useEffect(() => {
+    onCatalogReadyChange?.(isCatalogReady);
+  }, [isCatalogReady, onCatalogReadyChange]);
+
   return (
-    <section className={styles.panel}>
-      <h2 className={styles.title}>Проекты для памяти чатов</h2>
+    <section className={embedded ? styles.embedded : styles.panel}>
+      {!embedded && <h2 className={styles.title}>Проекты для памяти чатов</h2>}
       {description && <p className={styles.hint}>{description}</p>}
       {catalog.isLoading && <p role="status">Загрузка проектов…</p>}
       {catalog.isError && (

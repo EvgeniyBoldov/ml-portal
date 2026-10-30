@@ -6,6 +6,11 @@
   color: var(--text-primary);
 }
 
+.embedded {
+  min-width: 0;
+  color: var(--text-primary);
+}
+
 .title {
   margin: 0 0 var(--sp-3);
   font-size: var(--font-size-lg);

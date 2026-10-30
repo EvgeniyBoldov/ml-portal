@@ -1,12 +1,37 @@
+.dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - var(--sp-6));
+  min-height: 0;
+}
+
+.dialog > div:first-child,
+.dialog > div:last-child {
+  flex: 0 0 auto;
+}
+
+.dialogBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .content {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
 }
 
+.intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
 .description,
 .empty,
-.error,
 .revision,
 .value {
   margin: 0;
@@ -15,62 +40,165 @@
   line-height: 1.5;
 }
 
-.error {
-  color: var(--danger);
+.description {
+  max-width: 70ch;
 }
 
 .revision {
+  flex: 0 0 auto;
+  white-space: nowrap;
   color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--danger);
+  font-size: var(--font-size-sm);
+}
+
+.empty {
+  padding: var(--sp-4);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.emptyState {
+  margin: 0;
+  padding: var(--sp-5);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  text-align: center;
 }
 
 .section {
+  min-width: 0;
   border-top: 1px solid var(--border-color);
   padding-top: var(--sp-3);
 }
 
-.section h3 {
-  margin: 0 0 var(--sp-2);
+.sectionHeading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.section h3,
+.scopeSettings h4 {
+  margin: 0;
   color: var(--text-primary);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
 }
 
-.value {
-  color: var(--text-primary);
-}
-
-.list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  margin: 0;
-  padding-left: var(--sp-5);
-  color: var(--text-primary);
-  font-size: var(--font-size-sm);
+.count {
+  display: inline-flex;
+  min-width: 1.5rem;
+  justify-content: center;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
   line-height: 1.5;
 }
 
-.focusBranches {
+.value {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.focusSection > h3 {
+  margin-bottom: var(--sp-2);
+}
+
+.scopeSettings {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  margin: 0 0 var(--sp-2);
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
 }
 
-.focusBranches div {
+.list {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) 2fr;
-  gap: var(--sp-3);
-  font-size: var(--font-size-sm);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.listItem {
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.itemPrimary,
+.itemMeta {
+  margin: 0;
+  overflow-wrap: anywhere;
   line-height: 1.5;
 }
 
-.focusBranches dt {
-  color: var(--text-secondary);
+.itemPrimary {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
 }
 
-.focusBranches dd {
-  margin: 0;
-  color: var(--text-primary);
-  overflow-wrap: anywhere;
+.itemMeta {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.itemMeta + .itemMeta,
+.itemPrimary + .itemMeta {
+  margin-top: var(--sp-1);
+}
+
+.itemMeta span {
+  margin-right: var(--sp-1);
+  font-weight: var(--font-weight-medium);
+}
+
+@media (max-width: 640px) {
+  .dialog {
+    max-height: calc(100dvh - var(--sp-6));
+  }
+
+  .intro {
+    flex-direction: column;
+    gap: var(--sp-1);
+  }
+
+  .list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .error {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .dialog > div:last-child {
+    flex-wrap: wrap;
+  }
 }

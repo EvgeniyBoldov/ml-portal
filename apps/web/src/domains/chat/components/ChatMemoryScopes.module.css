@@ -1,0 +1,49 @@
+.container {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.actions > button {
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
+}
+
+.actionHint,
+.feedbackError,
+.feedbackSuccess {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+.actionHint {
+  color: var(--text-secondary);
+}
+
+.feedbackError {
+  color: var(--danger);
+}
+
+.feedbackSuccess {
+  color: var(--success);
+}
+
+@media (max-width: 640px) {
+  .actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actions > button {
+    width: 100%;
+  }
+}
