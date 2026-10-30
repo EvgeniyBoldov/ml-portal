@@ -12,6 +12,7 @@ from app.api.deps import db_uow, get_current_user
 from app.core.config import get_settings
 from app.core.security import UserCtx
 from app.adapters.s3_client import s3_manager
+from app.adapters.s3_client import PresignOptions
 from app.services.document_artifacts import get_document_artifact_key
 from app.services.file_delivery_service import FileDeliveryService
 
@@ -25,12 +26,15 @@ async def download_collection_doc(
     collection_id: uuid.UUID,
     doc_id: str,
     kind: str = Query("original", pattern="^(original|canonical)$"),
+    tenant_id: uuid.UUID | None = Query(None),
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
     collection, document, doc_uuid, repo_factory, membership = await _resolve_collection_and_doc_with_membership(
         collection_id, doc_id, session, user
     )
+    if tenant_id is not None and collection.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Document not found in collection")
 
     settings = get_settings()
     if kind == "original":
@@ -60,4 +64,9 @@ async def download_collection_doc(
         raise HTTPException(status_code=404, detail="File not found")
 
     file_id = FileDeliveryService.make_rag_document_file_id(doc_id, kind)
-    return {"file_id": file_id, "download_url": f"/api/v1/files/{file_id}/download"}
+    download_url = await s3_manager.generate_presigned_url(
+        bucket=settings.S3_BUCKET_RAG,
+        key=str(s3_key),
+        options=PresignOptions(method="GET"),
+    )
+    return {"file_id": file_id, "download_url": download_url}

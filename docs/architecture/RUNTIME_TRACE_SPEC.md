@@ -112,9 +112,22 @@ tool contracts and `response_format`. Streaming/agent requests use that
 estimator too. Structured and streaming calls additionally emit
 `status(stage=llm_context_allocated)` under their `llm_call`, with resolved model,
 context window, estimated/reserved input, minimum output and available output.
+When the adapter retries once with a corrected output limit after a provider
+context rejection, it emits a second allocation snapshot with
+`context_correction=true` and `status(stage=llm_transport_retry)` before that
+transport attempt. It remains one logical LLM call; the correction is not a
+second provider-billed usage row unless provider usage reports it.
 This event precedes a local context rejection, so an emitted request does not
 prove that the provider received it. Estimates for non-OpenAI tokenizers use
 the documented fallback encoding and safety margin; they are not provider usage.
+Usage accounting for chat, Sandbox, shadow and their worker continuations is a separate compact
+projection from the diagnostic journal. LLM attempts retain provider token
+counts when supplied; otherwise estimates are tagged `token_source=estimate`.
+A terminal response without a token count is tagged `unknown`; request and
+retry events do not overwrite a known source. Streaming synthesis uses
+estimated tokens.
+The platform currently stores no model price schedule, currency or monetary
+amount, so token usage must not be presented as a money cost.
 
 When native tool calling is unavailable, the failed native attempt still emits
 a terminal `llm_response`; the plaintext-protocol fallback emits a correlated
@@ -126,6 +139,17 @@ contains goal/intent, inputs and risk; step end contains outcome, summary and
 sufficiency. Executor end contains a safe result summary, `completion_kind`,
 `sufficient_for_phase`, missing inputs/needs, attachments/artifacts, output
 preview and retry/error classification.
+On cancellation or an uncaught runtime failure, the journal closes open LLM,
+tool and synthesis lifecycles with terminal failure/cancellation events before
+closing the root run. The planner closes an interrupted task attempt, agent,
+step, iteration and orchestrator as part of the same cancellation path.
+
+The root `run_start` is written before platform configuration, RBAC, memory and
+project-scope preparation. `status(stage=request_preparation_started)` and its
+completion event bound that phase; completion carries duration and bounded
+counts, not resolved private records. Failures in platform config, RBAC,
+memory, scope or project preparation emit a safe error with the failed stage
+and a terminal run status; cancellation closes the run as cancelled.
 
 Iteration creation is owned by the planner invocation that produced it. Its
 `plan_iteration_applied` payload includes trigger, terminal and a redacted
@@ -190,8 +214,9 @@ The level is resolved before payload construction.
 | `full` | all allowed events, including LLM/tool request-response and retries |
 
 `brief` stores metadata plus hashes/lengths for heavy values. `full` can store
-request/response bodies, but always redacts secrets, credentials, DSNs and
-hidden chain-of-thought.
+request/response bodies and applies `RuntimeRedactor` to secrets, credentials,
+DSNs and dedicated hidden-reasoning fields. The trace records explicit model
+outputs and runtime decisions, not a model's private reasoning process.
 
 ## Chat and sandbox
 
@@ -200,10 +225,12 @@ hidden chain-of-thought.
   the same DB append that creates the row; SSE and replay must use those exact
   values. Transport `delta` and `stop` are never journal records; debug stack
   traces remain application-log diagnostics.
-- Chat never persists the root pipeline, planner, orchestrator or memory tail.
-  A selected agent may create an independent executor journal only when its
-  configured level is not `none`. Chat never streams diagnostic events or raw
-  journal payloads.
+- Chat persists the root pipeline, planner, orchestrator and memory tail at
+  `full`, using the same redacted canonical journal as Sandbox. Chat still
+  streams only the safe progress projection; raw journal events are available
+  only through admin runtime-trace read endpoints. The root journal includes
+  selected agent subgraphs, so agent execution events are not written a second
+  time as a separate chat trace.
 
 ## Safe progress transport
 
@@ -217,10 +244,10 @@ prompts, planner text, reasoning, tool arguments and tool results are forbidden.
 `RuntimeLogContext` separates `stream_logs` from `stream_progress`:
 
 - sandbox uses `full`, streams both raw tail events and safe progress;
-- chat root uses `none`, persists no root row and streams only safe progress;
-- agent scopes retain the configured level. `none` exposes no agent detail,
-  `error` exposes errors, `brief` lifecycle/intents, and `full` also exposes
-  LLM/tool progress.
+- chat root uses `full`, persists diagnostics and streams only safe progress;
+- Sandbox uses `full` and streams both journal and safe progress;
+- agent scopes in chat are part of the root journal. Their configured
+  observation level still controls user-facing progress, not journal admission.
 
 The shared Redis runtime-tail channel keeps its `runtime_progress` envelope for
 sandbox compatibility. `ChatStreamService` subscribes before a pipeline starts
@@ -233,8 +260,10 @@ and does not expose raw tail messages to chat.
 
 There is no public `/runtime` plan, event, or timeline read surface. Persisted
 plans remain runtime control-plane state; they are not a frontend contract.
+Administrators can list persisted chat traces at `/api/v1/admin/runtime-runs`
+and page through `/api/v1/admin/runtime-runs/{run_id}?after_sequence=0&limit=500`.
 
-Sandbox is the only full-journal reader. Its session-scoped run detail returns
+Sandbox run detail returns
 the ordered canonical journal rows, and its start/resume SSE stream emits named
 frames: `run_started`, `progress`, `journal`, `delta`, `pause`, `final`,
 `error`, and `done`. `progress` is the same bounded safe projection used by

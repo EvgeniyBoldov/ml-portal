@@ -15,6 +15,13 @@ Tenant administrator and data editor flags belong to the user's tenant
 membership and do not grant access to the platform admin application. Browser access tokens include a refresh
 session family id and are rejected once that family is revoked.
 
+Collection content writes use the active tenant's `is_tenant_admin` or
+`is_data_editor` membership flag. `Users.is_admin` alone does not grant this
+permission, including for platform administrators. Collection reads continue to
+apply the effective collection access policy. See
+[Collection asset access](COLLECTION_ASSET_REFACTOR.md) for the write scope,
+legacy linked-document routes, and capability response contract.
+
 ## Refresh-token lifecycle
 
 Every browser login creates a persisted refresh-session family. Refresh tokens

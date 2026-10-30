@@ -125,6 +125,17 @@ services:
     image: ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/mcp-atlassian-jira:${APP_IMAGE_TAG:?APP_IMAGE_TAG is required}
 
   # ---------------------------------------------------------------------------
+  # MCP — upstream sooperset/mcp-atlassian with Portal adapter
+  # ---------------------------------------------------------------------------
+  atlassian-mcp:
+    build:
+      context: .
+      dockerfile: mcp/mcp_server.dockerfile
+      args:
+        MCP_SERVER_DIR: atlassian_adapter
+    image: ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/mcp-atlassian:${APP_IMAGE_TAG:?APP_IMAGE_TAG is required}
+
+  # ---------------------------------------------------------------------------
   # MCP — ML inference facade
   # ---------------------------------------------------------------------------
   ml-inference-mcp:

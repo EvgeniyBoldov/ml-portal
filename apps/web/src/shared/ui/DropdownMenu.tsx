@@ -8,6 +8,7 @@ export interface DropdownMenuItem {
   icon?: React.ReactNode;
   variant?: 'default' | 'danger';
   disabled?: boolean;
+  title?: string;
 }
 
 export interface DropdownMenuProps {
@@ -154,6 +155,7 @@ export function DropdownMenu({
           role="menuitem"
           type="button"
           disabled={item.disabled}
+          title={item.title}
           className={`${styles.menuItem} ${
             item.variant === 'danger' ? styles.danger : ''
           }`}

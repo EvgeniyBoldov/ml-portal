@@ -16,6 +16,7 @@ from app.schemas.collections_public import (
     PublicCollectionField, PublicCollectionReadiness, PublicCollectionResponse,
     PublicCollectionSource, PublishedCollectionVersion,
 )
+from app.services.collection_content_access_service import CollectionContentAccessService
 
 _LOCAL_TYPES = {'table', 'document', 'template'}
 _SECRET_FIELD = re.compile(r'(^_|password|secret|token|authorization|credential|connection|headers?|cookie|api_key)', re.I)
@@ -104,12 +105,9 @@ class CollectionPublicService:
         return [CollectionWorkspace(id=row[0], name=row[1]) for row in rows]
 
     async def can_edit(self, user_id: str, tenant_id: UUID) -> bool:
-        if await self.is_platform_admin(user_id):
-            return True
-        return (await self.session.scalar(select(UserTenants.id).where(
-            UserTenants.user_id == UUID(str(user_id)), UserTenants.tenant_id == tenant_id,
-            UserTenants.is_tenant_admin.is_(True) | UserTenants.is_data_editor.is_(True),
-        ))) is not None
+        return await CollectionContentAccessService(self.session).can_edit_tenant(
+            UUID(str(user_id)), tenant_id,
+        )
 
     async def _materialized(self, collection) -> bool:
         if collection.collection_type == 'document':
@@ -129,15 +127,25 @@ class CollectionPublicService:
             required.update({'status', 'description', 'template_schema', '_vector_status', '_vector_error', '_vector_chunk_count'})
         return required.issubset(columns)
 
-    async def build(self, collection, *, user_id: str, collection_service) -> PublicCollectionResponse:
+    async def build_capabilities(
+        self,
+        collection: Collection,
+        *,
+        user_id: str,
+        collection_allowed: bool = False,
+    ) -> tuple[CollectionCapabilities, dict[str, str]]:
         ctype = collection.collection_type
         local = ctype in _LOCAL_TYPES
-        materialized = local and await self._materialized(collection)
         editable = await self.can_edit(user_id, collection.tenant_id)
+        edit_reason = None if editable else await CollectionContentAccessService(self.session).edit_access_reason(
+            UUID(str(user_id)), collection.tenant_id,
+        )
         active = bool(collection.is_active) and getattr(collection, 'lifecycle_status', 'active') != 'deprecated'
+        materialized = local and active and await self._materialized(collection)
         available = materialized and active
         caps = CollectionCapabilities(
-            view_content=available,
+            view_content=collection_allowed,
+            can_edit_content=editable,
             view_schema=local and active,
             upload_documents=editable and active and ctype == 'document',
             delete_documents=editable and available and ctype == 'document',
@@ -153,15 +161,42 @@ class CollectionPublicService:
             delete_templates=editable and available and ctype == 'template',
             download=available,
         )
-        reasons = {}
+        reasons: dict[str, str] = {}
         for key, allowed in caps.model_dump().items():
             if allowed:
                 continue
-            reasons[key] = ('collection_inactive' if not active else
-                'external_content_unavailable' if not local else
-                'storage_unavailable' if not materialized else
-                'editing_permission_required' if key not in {'view_content', 'view_schema', 'download'} and not editable else
-                'operation_not_supported')
+            if key == 'view_content':
+                reasons[key] = 'collection_access_denied'
+            elif key == 'can_edit_content' or (key not in {'view_schema', 'download'} and not editable):
+                reasons[key] = edit_reason or 'editing_permission_required'
+            elif not active:
+                reasons[key] = 'collection_inactive'
+            elif not local:
+                reasons[key] = 'external_content_unavailable'
+            elif not materialized:
+                reasons[key] = 'storage_unavailable'
+            else:
+                reasons[key] = 'operation_not_supported'
+        return caps, reasons
+
+    async def build(
+        self,
+        collection,
+        *,
+        user_id: str,
+        collection_service,
+        collection_allowed: bool = False,
+    ) -> PublicCollectionResponse:
+        ctype = collection.collection_type
+        local = ctype in _LOCAL_TYPES
+        active = bool(collection.is_active) and getattr(collection, 'lifecycle_status', 'active') != 'deprecated'
+        caps, reasons = await self.build_capabilities(
+            collection,
+            user_id=user_id,
+            collection_allowed=collection_allowed,
+        )
+        materialized = local and active and await self._materialized(collection)
+        available = materialized and active
         count = PublicCollectionCount()
         readiness = 'unknown'
         if available:

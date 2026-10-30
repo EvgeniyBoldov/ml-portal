@@ -13,6 +13,9 @@ BASE_DOCKERFILE="${REPO_ROOT}/infra/docker/base/Dockerfile.ml"
 BASE_REQUIREMENTS="${REPO_ROOT}/infra/docker/base/requirements.ml.txt"
 RELEASE_PHASE="startup"
 RELEASE_PHASE_STARTED_AT=$SECONDS
+RELEASE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/release/service-manifest.sh
+source "${RELEASE_SCRIPT_DIR}/service-manifest.sh"
 
 release_log() {
   printf '[release %s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2

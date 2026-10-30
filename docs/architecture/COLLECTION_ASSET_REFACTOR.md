@@ -42,14 +42,51 @@ status and count calculations do not describe remote source availability. This
 UI behavior does not change how runtime resolves operations for remote
 collections.
 
-Public metadata, data, upload, export, document lifecycle, template and SSE routes
-apply the same effective collection permissions. An explicit collection deny
-returns 404 before reading or mutating its contents. Membership checks use active
-database memberships rather than cached token ordering; membership alone never
-overrides the effective collection policy.
+Public collection routes apply the effective collection permissions. An explicit
+collection deny returns 404 before reading or mutating its contents. Membership
+checks use active database memberships rather than cached token ordering; membership
+alone never overrides the effective collection policy.
 
-Document uploads additionally require a platform administrator, tenant
-administrator, or tenant data editor. The API enforces the configured upload
+Every content write requires a current membership with `is_tenant_admin` or
+`is_data_editor` for the collection's tenant. The tenant must be active and not
+deprecated. Platform-admin status alone does not grant collection content write
+access. This includes table row/CSV writes, document upload and deletion, LongMemory
+add/delete, template upload/analysis/approval/update/deletion, and
+ingest/reindex/revectorize controls. Checks run after collection resolution and
+effective collection ACL, and before upload bytes are read or mutation side effects
+are started.
+
+The tenant-scoped collection list and detail responses include `tenant_id`,
+`capabilities`, and `capability_reasons`. `capabilities.view_content` reflects the
+effective collection read ACL. `capabilities.can_edit_content` reflects the tenant
+role and active-tenant check, independently of collection readiness. Operation
+capabilities (for example `upload_csv`, `mutate_rows`, `ingest`, and
+`approve_templates`) also account for collection type, active state, and available
+storage. Reasons explain denied or temporarily unavailable capabilities. These
+fields guide the UI; API authorization remains authoritative.
+
+Read operations, CSV preview, export/download, lists, search, and status views keep
+the effective collection read policy. Collection schema and source configuration
+remain platform control-plane operations.
+
+Legacy `/rag` writes by document ID are also guarded when the document has
+`DocumentCollectionMembership` links. They require the tenant content-edit role and
+effective collection access for every linked collection; a mismatch or deny in any
+linked collection blocks the document-wide operation. This covers tags,
+archive/unarchive, delete, scope changes, and ingest start/stop/retry. Standalone
+RAG documents without collection links and `/rag/upload` keep their existing
+authorization behavior. Changing a linked document's scope to `global` retains the
+additional platform-admin requirement; a tenant editor may change it to `local`.
+
+In the UI, users without the tenant content-edit role (including platform admins
+without that tenant role) see the same read-only view, with read/export/download
+and status features retained. Editors see only actions supported by the collection;
+temporarily unavailable actions include a reason. If edit rights are revoked while
+a template edit is open, submission is disabled and the draft remains visible with
+an inline permission message. Mutation 403 responses refresh capabilities and do
+not show success.
+
+The API enforces the configured upload
 size before sending the original to object storage, validates declared metadata
 types, and rejects inactive collections. Failed uploads clean up the original
 artifact when the database transaction has not been committed.

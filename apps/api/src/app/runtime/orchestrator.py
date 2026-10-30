@@ -1208,6 +1208,43 @@ class GraphOrchestrator:
                         plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
                         attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
                     ))
+                except asyncio.CancelledError:
+                    failure = TaskAttemptFailure(
+                        code="cancelled", message="Task execution cancelled", retryable=False,
+                    )
+                    try:
+                        await self.store.finish_failure(
+                            plan_id, task_id, failure, max_attempts=self.max_attempts,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "runtime_task_cancel_persist_failed plan_id=%s task_id=%s",
+                            plan_id, task_id,
+                        )
+                    yield OrchestratorEvent(
+                        type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id,
+                        attempt=attempt, error=failure.model_dump(mode="json"), **trace_links,
+                    )
+                    yield OrchestratorEvent(
+                        type="task_failed", plan_id=str(plan_id), task_id=task_id,
+                        attempt=attempt, **trace_links,
+                    )
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
+                        agent_execution_id=execution_id,
+                        parent_entity_type="step", parent_entity_id=current_step_id,
+                        agent_slug=str(task_executor or "agent"),
+                        status="cancelled", outcome="cancelled",
+                        plan_id=str(plan_id), iteration_id=iteration_id,
+                        task_entity_id=task_entity_id, attempt_id=current_attempt_id,
+                        step_id=current_step_id, task_id=task_id, attempt=attempt,
+                    ))
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_end(
+                        step_id=current_step_id, iteration_id=iteration_id,
+                        status="cancelled", outcome="cancelled", summary="Task execution cancelled",
+                        plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
+                        attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
+                    ))
+                    raise
                 except (TaskConfirmationRequired, InteractionRequired) as exc:
                     interaction = exc.interaction if isinstance(exc, InteractionRequired) else RuntimeInteraction.create(
                         InteractionQuestion(question=str(exc.payload.get("question") or exc.payload.get("summary") or "Подтвердите действие"), response_type="boolean"),

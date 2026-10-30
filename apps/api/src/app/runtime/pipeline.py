@@ -422,12 +422,80 @@ class RuntimePipeline:
         loop = asyncio.get_running_loop()
         started_at = loop.time()
         checkpoint = _extract_resume_checkpoint(request)
+        continuation = _build_continuation_state(request, checkpoint)
+        resumed_from_run_id = continuation.get("resumed_from_run_id") if isinstance(continuation, dict) else None
+        sandbox_run_id = (request.sandbox_overrides or {}).get("sandbox_run_id")
+        candidate_run_id = request.runtime_run_id or sandbox_run_id or resumed_from_run_id
+        try:
+            run_id = UUID(str(candidate_run_id)) if candidate_run_id else uuid4()
+        except (TypeError, ValueError):
+            run_id = uuid4()
+        run_id_str = str(run_id)
+        sandbox_run = bool(sandbox_run_id)
+        emitter = RuntimeEventJournalFactory.create(
+            context=RuntimeLogContext(
+                run_id=run_id,
+                level=RuntimeLoggingLevel.FULL,
+                origin="sandbox" if sandbox_run else "chat",
+                tenant_id=UUID(request.tenant_id), user_id=UUID(request.user_id),
+                chat_id=UUID(request.chat_id) if request.chat_id else None,
+                entity_type="run", entity_id=run_id_str,
+                stream_logs=sandbox_run, stream_progress=True,
+            ),
+            session_factory=ctx.get_runtime_deps().session_factory,
+        )
+        ctx.extra["runtime_root_run_id"] = run_id_str
+        ctx.extra["runtime_event_logger"] = emitter
+        ctx.extra["runtime_root_event_logger"] = emitter
+        ctx.extra["runtime_logging_level"] = RuntimeLoggingLevel.FULL.value
+        ctx.extra["runtime_preparation_started_at"] = started_at
+        run_terminal = False
+
+        async def finish_run(status: str, *, error_stage: str | None = None) -> None:
+            nonlocal run_terminal
+            if run_terminal:
+                return
+            await emitter.close_open_lifecycles(status=status, phase=OrchestrationPhase.PIPELINE)
+            if error_stage:
+                await emitter.emit(RuntimeEvent.error(
+                    "Runtime execution failed",
+                    error_code="runtime_execution_failed",
+                    stage=error_stage,
+                    source="runtime",
+                    parent_entity_type="run", parent_entity_id=run_id_str,
+                ), phase=OrchestrationPhase.PIPELINE)
+            await emitter.emit(
+                RuntimeEvent.run_end(run_id=run_id_str, status=status),
+                phase=OrchestrationPhase.PIPELINE,
+            )
+            run_terminal = True
+
+        yield await emitter.emit(RuntimeEvent.run_start(
+            run_id=run_id_str,
+            context_snapshot=compact_snapshot(
+                inputs={"user_request": request.request_text},
+                meta={"preparation_status": "started"},
+            ),
+        ), phase=OrchestrationPhase.PIPELINE)
+        yield await emitter.emit(RuntimeEvent.status(
+            "request_preparation_started",
+            parent_entity_type="run", parent_entity_id=run_id_str,
+        ), phase=OrchestrationPhase.PIPELINE)
         budget_usage = checkpoint.get("budget_usage") if isinstance(checkpoint, dict) else {}
         prior_active_wall_ms = int((budget_usage or {}).get("active_wall_time_ms") or 0) if isinstance(budget_usage, dict) else 0
-        platform = await PlatformConfigLoader(self._session).load()
-        run_limits = await BudgetResolver(self._session).resolve_run(
-            platform.config, request.sandbox_overrides,
-        )
+        try:
+            self._apply_sandbox_overrides(request, ctx)
+            platform = await PlatformConfigLoader(self._session).load()
+            run_limits = await BudgetResolver(self._session).resolve_run(
+                platform.config, request.sandbox_overrides,
+            )
+        except asyncio.CancelledError:
+            terminal_task = asyncio.create_task(finish_run("cancelled"))
+            await asyncio.shield(terminal_task)
+            raise
+        except Exception:
+            await finish_run("failed", error_stage="runtime_limits")
+            raise
         remaining_wall_ms = max(0, run_limits.wall_time_ms - prior_active_wall_ms) if run_limits.wall_time_ms else None
         deadline = started_at + remaining_wall_ms / 1000 if remaining_wall_ms is not None else None
         if deadline is not None:
@@ -447,14 +515,18 @@ class RuntimePipeline:
                 except StopAsyncIteration:
                     break
                 except TimeoutError as exc:
-                    yield RuntimeEvent.error(
+                    yield await emitter.emit(RuntimeEvent.error(
                         "Runtime wall-time budget exceeded", recoverable=False,
                         error_code=RuntimeErrorCode.AGENT_WALL_TIME_EXCEEDED,
                         retryable=False, user_message="The request exceeded its execution time limit.",
                         operator_message=str(exc) or "runtime run wall-time limit exceeded", source="runtime",
-                    )
+                        parent_entity_type="run", parent_entity_id=run_id_str,
+                    ), phase=OrchestrationPhase.PIPELINE)
+                    await finish_run("failed")
                     yield RuntimeEvent.stop(PipelineStopReason.BUDGET_EXCEEDED.value)
                     break
+                if event.type == RuntimeEventType.RUN_END:
+                    run_terminal = True
                 if event.type == RuntimeEventType.STOP and isinstance(event.data.get("context"), dict):
                     registry = ctx.extra.get("runtime_budget_registry")
                     event.data["context"]["runtime_budget_usage"] = {
@@ -462,7 +534,19 @@ class RuntimePipeline:
                         "active_wall_time_ms": prior_active_wall_ms + int((loop.time() - started_at) * 1000),
                     }
                 yield event
+        except asyncio.CancelledError:
+            terminal_task = asyncio.create_task(finish_run("cancelled"))
+            await asyncio.shield(terminal_task)
+            raise
+        except Exception:
+            await finish_run(
+                "failed",
+                error_stage="runtime_execution" if ctx.extra.get("runtime_preparation_complete") else "runtime_preparation",
+            )
+            raise
         finally:
+            if not run_terminal and not ctx.extra.get("runtime_terminal_delegated"):
+                await finish_run("failed", error_stage="missing_run_terminal")
             await stream.aclose()
             executor = self._assembler.__dict__.get("agent_executor")
             close = getattr(executor, "aclose", None)
@@ -474,18 +558,24 @@ class RuntimePipeline:
         request: PipelineRequest,
         ctx: ToolContext,
     ) -> AsyncGenerator[RuntimeEvent, None]:
-        self._apply_sandbox_overrides(request, ctx)
         if request.confirmation_tokens:
             ctx.extra["confirmation_tokens"] = list(request.confirmation_tokens)
         chat_id: Optional[UUID] = UUID(request.chat_id) if request.chat_id else None
         user_id = UUID(request.user_id)
         tenant_id = UUID(request.tenant_id)
 
+        resume_checkpoint = _extract_resume_checkpoint(request)
+        continuation_state = _build_continuation_state(request, resume_checkpoint)
+        run_id_str = str(ctx.extra["runtime_root_run_id"])
+        run_id = UUID(run_id_str)
+        sandbox_run = bool((request.sandbox_overrides or {}).get("sandbox_run_id"))
+        root_logger = ctx.extra["runtime_root_event_logger"]
+        emitter = root_logger
+        preparation_started_at = ctx.extra["runtime_preparation_started_at"]
+
         platform = await PlatformConfigLoader(self._session).load()
         ctx.extra.setdefault("interaction_policy", dict(platform.config.get("interaction_policy") or {}))
-        resume_checkpoint = _extract_resume_checkpoint(request)
         effective_goal = _extract_effective_goal(request, resume_checkpoint)
-        continuation_state = _build_continuation_state(request, resume_checkpoint)
         effective_user_query = _extract_effective_user_query(request, resume_checkpoint)
         execution_mode = _extract_execution_mode(request, resume_checkpoint)
 
@@ -562,29 +652,23 @@ class RuntimePipeline:
         ctx.extra["project_context"] = turn_mem.project_context
         ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
 
+        yield await emitter.emit(RuntimeEvent.status(
+            "request_preparation_completed",
+            duration_ms=int((asyncio.get_running_loop().time() - preparation_started_at) * 1000),
+            available_agent_count=len(available_agents),
+            user_memory_entries=len(turn_mem.durable_snapshot.user_facts),
+            tenant_memory_entries=len(turn_mem.durable_snapshot.tenant_facts),
+            project_scope_count=len(turn_mem.project_context["scope_context"]["keys"]),
+            parent_entity_type="run", parent_entity_id=run_id_str,
+        ), phase=OrchestrationPhase.PIPELINE)
+        ctx.extra["runtime_preparation_complete"] = True
+
         # Initialize RuntimeTurnState as the single source of truth
         # For resume, use the original run_id; otherwise generate new
-        resumed_from_run_id = continuation_state.get("resumed_from_run_id") if isinstance(continuation_state, dict) else None
-        sandbox_run_id = (request.sandbox_overrides or {}).get("sandbox_run_id")
-        if request.runtime_run_id:
-            try:
-                run_id = UUID(str(request.runtime_run_id))
-            except (TypeError, ValueError):
-                run_id = uuid4()
-        elif sandbox_run_id:
-            try:
-                run_id = UUID(str(sandbox_run_id))
-            except (TypeError, ValueError):
-                run_id = uuid4()
-        elif resumed_from_run_id:
-            try:
-                run_id = UUID(resumed_from_run_id)
-            except ValueError:
-                run_id = uuid4()
-        else:
-            run_id = uuid4()
-
-        run_logging_level = (RuntimeLoggingLevel.FULL if bool((request.sandbox_overrides or {}).get("sandbox_run_id")) else RuntimeLoggingLevel.NONE).value
+        # Persist the canonical root flow for ordinary chat as well as Sandbox.
+        # Chat progress remains a separate, safe projection; only the admin
+        # runtime trace reader exposes the redacted diagnostic journal.
+        run_logging_level = RuntimeLoggingLevel.FULL.value
 
         runtime_state = RuntimeTurnState.from_seed(
             run_id=run_id,
@@ -597,6 +681,7 @@ class RuntimePipeline:
             attachment_contexts=list(request.attachments or []),
             continuation=continuation_state,
         )
+        runtime_state.register_descendant_logging_level(RuntimeLoggingLevel.FULL.value)
         from app.runtime.run_context import RunContext
         from app.services.runtime_run_context_service import RuntimeRunContextService
         saved_context = None
@@ -611,26 +696,6 @@ class RuntimePipeline:
         ctx.extra["runtime_turn_state"] = runtime_state
         ctx.extra["runtime_branch_id"] = branch_id
         runtime_state.execution_mode = execution_mode
-        run_id_str = str(run_id)
-        sandbox_run = bool((request.sandbox_overrides or {}).get("sandbox_run_id"))
-        root_logger = RuntimeEventJournalFactory.create(
-            context=RuntimeLogContext(
-                run_id=run_id,
-                level=RuntimeLoggingLevel.FULL if sandbox_run else RuntimeLoggingLevel.NONE,
-                origin="sandbox" if sandbox_run else "chat",
-                tenant_id=tenant_id,
-                user_id=user_id,
-                chat_id=chat_id,
-                entity_type="run",
-                entity_id=run_id_str,
-                stream_logs=sandbox_run,
-                stream_progress=True,
-            ),
-            session_factory=ctx.get_runtime_deps().session_factory,
-        )
-        ctx.extra["runtime_root_run_id"] = run_id_str
-        ctx.extra["runtime_event_logger"] = root_logger
-        emitter = root_logger
         orchestrator_id = planner_orchestrator_id(run_id_str)
         ctx.extra["runtime_logging_level"] = run_logging_level
         yield await emitter.emit(
@@ -711,13 +776,11 @@ class RuntimePipeline:
             },
         )
 
-        yield await emitter.emit(
-            RuntimeEvent.run_start(
-                run_id=run_id_str,
-                context_snapshot=run_context_snapshot,
-            ),
-            phase=OrchestrationPhase.PIPELINE,
-        )
+        yield await emitter.emit(RuntimeEvent.status(
+            "run_context_snapshot",
+            context_snapshot=run_context_snapshot,
+            parent_entity_type="run", parent_entity_id=run_id_str,
+        ), phase=OrchestrationPhase.PIPELINE)
         answered_interaction = interaction_from_context(continuation_state.get("paused_context"))
         if answered_interaction is not None and "interaction_response" in continuation_state:
             requester = answered_interaction.requester
@@ -832,6 +895,15 @@ class RuntimePipeline:
                     return lookup, decision
 
                 lookup, decision = await _run_preflight_phase(preflight_limits.wall_time_ms, prepare_preflight)
+            except asyncio.CancelledError:
+                yield await emitter.emit(
+                    RuntimeEvent.orchestrator_end(
+                        orchestrator_id=preflight_id, run_id=run_id_str, status="cancelled",
+                        duration_ms=int((asyncio.get_running_loop().time() - preflight_started_at) * 1000),
+                    ),
+                    phase=OrchestrationPhase.PREFLIGHT,
+                )
+                raise
             except Exception as exc:  # conservative compatibility fallback
                 runtime_state.set_lifecycle_status("failed")
                 logger.error("TurnPreflight unavailable; planner route is blocked: %s", exc)
@@ -1122,6 +1194,7 @@ class RuntimePipeline:
                         request=request, runtime_state=runtime_state, branch_id=branch_id,
                         terminal_state="completed", project_context=turn_mem.project_context,
                         term_bindings=lookup.get("glossary") or [])
+                    ctx.extra["runtime_terminal_delegated"] = True
                     self._dispatch_chat_post_final_tail(
                         turn_mem=turn_mem, runtime_state=runtime_state, request=request,
                         stop_reason=PipelineStopReason.COMPLETED, emitter=emitter,
@@ -1356,6 +1429,7 @@ class RuntimePipeline:
                 request=request, runtime_state=runtime_state, branch_id=branch_id,
                 terminal_state="completed", project_context=turn_mem.project_context,
                 term_bindings=lookup.get("glossary") or [])
+            ctx.extra["runtime_terminal_delegated"] = True
             self._dispatch_chat_post_final_tail(
                 turn_mem=turn_mem,
                 runtime_state=runtime_state,

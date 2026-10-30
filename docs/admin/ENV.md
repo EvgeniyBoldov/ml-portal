@@ -183,6 +183,11 @@ variables. The separate experimental `server:app` remains in the source tree.
 - `JIRA_CA_BUNDLE` — путь к CA bundle для self-hosted Jira, если используется внутренний CA.
 - `JIRA_TIMEOUT_SECONDS` — timeout запросов Atlassian Jira MCP.
 - `JIRA_MCP_MAX_RESULTS` — верхняя граница результатов Jira MCP в одном ответе.
+- `ATLASSIAN_JIRA_URL` / `ATLASSIAN_CONFLUENCE_URL` — URL Atlassian сервисов для запуска upstream MCP; сами credential secrets приходят через broker.
+- `ATLASSIAN_MCP_ENABLED_TOOLS` — comma-separated allowlist инструментов mcp-atlassian; по умолчанию опубликованы только базовые Jira/Confluence search/read tools.
+- `ATLASSIAN_MCP_TIMEOUT_SECONDS` — timeout обращения адаптера к upstream MCP.
+- `ATLASSIAN_ADAPTER_PORT` — локальный host port для Atlassian MCP adapter (по умолчанию `8017`; не использовать занятый HippoRAG port `8015`).
+- `ATLASSIAN_ALLOWED_URL_DOMAINS` — comma-separated hostname allowlist для self-hosted Atlassian URL, блокируемых upstream SSRF-защитой (например, внутренний Jira/DC).
 
 ## MCP / Runtime Security
 - `MCP_CREDENTIAL_BROKER_ENABLED` — включить broker-flow для MCP credentials.

@@ -139,7 +139,7 @@ export function StatusFlowDetails({
 
       <div className={styles.actions}>
         {actions.map((action) => (
-          <Button key={action.key} variant={action.variant || 'outline'} onClick={action.onClick}>
+          <Button key={action.key} variant={action.variant || 'outline'} onClick={action.onClick} disabled={action.disabled} title={action.title}>
             {action.icon ? <Icon name={action.icon} size={16} /> : null}
             {action.label}
           </Button>

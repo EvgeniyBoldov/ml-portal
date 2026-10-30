@@ -110,6 +110,13 @@ callbacks, so production does not need the dev Qwen IP in worker settings.
 Keep `hipporag_data` across deployments and include it in backups; the volume
 stores the corpus, graph and extraction caches. See [Environment Setup](ENV.md).
 
+The release script builds and pushes every image service declared in
+`docker-compose.build.yml`; it does not maintain a second image list.
+`scripts/release/service-manifest.sh` contains the production runtime groups used
+for deploy validation, pull, stop, and start. The production controller bundles
+this manifest with each release. Add a new runtime service to that manifest,
+instead of duplicating its name in deploy functions.
+
 Локальные модели для русских документов: `emb-bge` обслуживает `BAAI/bge-m3`
 (1024 измерения, 8192 токена), `rerank-bge` — `BAAI/bge-reranker-v2-m3`
 (пары query/document ограничены 1024 токенами для CPU). Модели лежат в

@@ -16,6 +16,7 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import logging
 from copy import deepcopy
 import json
 import re
@@ -711,11 +712,10 @@ class AgentExecutor:
         requested_interaction: RuntimeInteraction | None = None
         root_logger = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
         logger = root_logger
-        # A chat run deliberately does not persist its root trace.  Agent runs
-        # are the exception: their container's observation policy owns just
-        # this execution and its descendants.  Sandbox already journals the
-        # entire run at FULL, so do not create a duplicate subtrace there.
+        # Chat and Sandbox now persist one root journal. Other origins can
+        # still create an independently scoped executor journal.
         is_sandbox = bool(getattr(getattr(root_logger, "context", None), "origin", None) == "sandbox")
+        is_chat = bool(getattr(getattr(root_logger, "context", None), "origin", None) == "chat")
         if isinstance(root_logger, RuntimeEventLogger) and lifecycle_agent_execution_id and not is_sandbox:
             from sqlalchemy import select
             from app.models.agent import Agent
@@ -724,19 +724,13 @@ class AgentExecutor:
                 select(Agent.logging_level).where(Agent.slug == request.executor)
             )
             level = RuntimeLoggingLevel.parse(configured_level)
-            if level is not RuntimeLoggingLevel.NONE:
-                runtime_state.register_descendant_logging_level(level.value)
+            if is_chat or level is not RuntimeLoggingLevel.NONE:
+                journal_level = RuntimeLoggingLevel.FULL if is_chat else level
+                runtime_state.register_descendant_logging_level(
+                    RuntimeLoggingLevel.FULL.value if is_chat else level.value
+                )
                 parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
                 parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None
-                # Chat persistence is intentionally independent from the
-                # frontend projection: retain every agent LLM/tool event in
-                # the journal, while progress_level keeps SSE at the
-                # configured brief/status verbosity. Sandbox remains FULL.
-                journal_level = (
-                    RuntimeLoggingLevel.FULL
-                    if getattr(root_logger.context, "origin", None) == "chat"
-                    else level
-                )
                 logger = root_logger.for_entity(
                     entity_type="agent_execution",
                     entity_id=lifecycle_agent_execution_id,
@@ -745,17 +739,16 @@ class AgentExecutor:
                     level=journal_level,
                     progress_level=level,
                 )
-                # The graph emits this lifecycle event before it invokes the
-                # executor.  The root is NONE in chat mode, hence the scoped
-                # journal owns an equivalent canonical start row.
-                await logger.emit(RuntimeEvent.agent_start(
-                    agent_execution_id=lifecycle_agent_execution_id,
-                    parent_entity_type=parent_type,
-                    parent_entity_id=parent_id,
-                    agent_slug=str(request.executor or "agent"),
-                    task_title=str(request.intent or request.task_id),
-                    task_id=request.task_id,
-                ), phase=OrchestrationPhase.AGENT)
+                # The graph emits this lifecycle event before executor start.
+                if not is_chat:
+                    await logger.emit(RuntimeEvent.agent_start(
+                        agent_execution_id=lifecycle_agent_execution_id,
+                        parent_entity_type=parent_type,
+                        parent_entity_id=parent_id,
+                        agent_slug=str(request.executor or "agent"),
+                        task_title=str(request.intent or request.task_id),
+                        task_id=request.task_id,
+                    ), phase=OrchestrationPhase.AGENT)
         previous_logger = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
         if isinstance(ctx.extra, dict):
             ctx.extra["runtime_event_logger"] = logger
@@ -814,13 +807,35 @@ class AgentExecutor:
                 terminal_outcome = declaration.completion_claim.value
         except asyncio.CancelledError:
             terminal_status, terminal_outcome = "cancelled", "cancelled"
+            if isinstance(logger, RuntimeEventLogger) and logger is not root_logger:
+                terminal_write = asyncio.create_task(logger.close_open_lifecycles(
+                    status="cancelled", phase=OrchestrationPhase.AGENT,
+                ))
+                try:
+                    await asyncio.shield(terminal_write)
+                except asyncio.CancelledError:
+                    try:
+                        await asyncio.shield(terminal_write)
+                    except Exception:
+                        logging.getLogger(__name__).exception("Failed to close cancelled agent calls")
+                    raise
+                except Exception:
+                    logging.getLogger(__name__).exception("Failed to close cancelled agent calls")
             raise
         except Exception:
             terminal_status, terminal_outcome = "failed", "failed"
+            if isinstance(logger, RuntimeEventLogger) and logger is not root_logger:
+                try:
+                    await logger.close_open_lifecycles(
+                        status="failed", phase=OrchestrationPhase.AGENT,
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception("Failed to close failed agent calls")
             raise
         finally:
             try:
                 if (logger is not root_logger and logger is not None and lifecycle_agent_execution_id
+                        and not is_chat
                         and not ctx.extra.get("shadow_execution")):
                     parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
                     parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None

@@ -28,6 +28,7 @@ from app.adapters.s3_client import s3_manager
 
 from .upload_shared import _resolve_collection, _require_collection_editor
 from .stream_shared import _resolve_document_membership, _stop_pipeline_and_revoke
+from app.api.v1.routers.rag.content_access import require_document_content_access
 
 logger = get_logger(__name__)
 
@@ -62,7 +63,13 @@ async def inspect_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID,
 async def _queue_document_memory(collection_id: uuid.UUID, doc_id: uuid.UUID, action: Literal["add", "delete"],
                                  session: AsyncSession, user: UserCtx) -> dict[str, str]:
     collection = await _memory_document(collection_id, doc_id, session, user)
-    await _require_collection_editor(session, user, collection.tenant_id)
+    await _require_collection_editor(session, user, collection)
+    await require_document_content_access(
+        session,
+        user,
+        document_id=doc_id,
+        tenant_id=collection.tenant_id,
+    )
     try:
         operation = await LongMemoryDocumentService(session).enqueue(doc_id, action)
     except ValueError as exc:
@@ -136,7 +143,7 @@ async def upload_collection_document(
     from app.services.rag_event_publisher import RAGEventPublisher
 
     collection = await _resolve_collection(collection_id, session, user)
-    await _require_collection_editor(session, user, collection.tenant_id)
+    await _require_collection_editor(session, user, collection)
     settings = get_settings()
     file_content = await file.read(settings.UPLOAD_MAX_BYTES + 1)
     if len(file_content) > settings.UPLOAD_MAX_BYTES:
@@ -439,6 +446,7 @@ async def delete_collection_documents(
 
     try:
         collection = await _resolve_collection(collection_id, session, user)
+        await _require_collection_editor(session, user, collection)
 
         if collection.collection_type != "document":
             raise HTTPException(status_code=400, detail="Not a document collection")
@@ -448,6 +456,29 @@ async def delete_collection_documents(
         not_found_ids: list[str] = []
         skipped_foreign_ids: list[str] = []
         failed_ids: list[str] = []
+
+        # Preflight shared document mutations before deleting any one document.
+        # A document can be visible through this collection and still be shared
+        # with another collection whose effective ACL denies access.
+        for did_str in doc_ids:
+            try:
+                did = uuid.UUID(did_str)
+            except ValueError:
+                continue
+            membership = await _resolve_document_membership(
+                session=session,
+                tenant_id=collection.tenant_id,
+                collection_id=collection_id,
+                doc_id=did,
+            )
+            if membership.in_tenant and not membership.in_collection:
+                continue
+            await require_document_content_access(
+                session,
+                user,
+                document_id=did,
+                tenant_id=collection.tenant_id,
+            )
 
         for did_str in doc_ids:
             try:
@@ -578,6 +609,7 @@ async def reindex_collection_documents(
 
     try:
         collection = await _resolve_collection(collection_id, session, user)
+        await _require_collection_editor(session, user, collection)
         if collection.collection_type != "document":
             raise HTTPException(status_code=400, detail="Not a document collection")
 
@@ -600,6 +632,14 @@ async def reindex_collection_documents(
                 "failed": 0,
                 "items": [],
             }
+
+        for doc_id in doc_ids:
+            await require_document_content_access(
+                session,
+                user,
+                document_id=doc_id,
+                tenant_id=collection.tenant_id,
+            )
 
         redis = get_redis_client()
         event_publisher = RAGEventPublisher(redis) if redis else None

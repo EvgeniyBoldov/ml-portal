@@ -37,6 +37,14 @@ class RuntimeRedactor:
         "cookie",
     )
 
+    NON_PERSISTED_REASONING_KEYS = {
+        "reasoning",
+        "reasoning_content",
+        "chain_of_thought",
+        "hidden_chain_of_thought",
+        "private_reasoning",
+    }
+
     _KV_PATTERNS: Iterable[re.Pattern[str]] = (
         re.compile(
             r"(?i)\b([a-z0-9_.-]*(?:password|passwd|token|api[_-]?key|access[_-]?token|"
@@ -63,6 +71,9 @@ class RuntimeRedactor:
             key_text = str(key)
             key_norm = key_text.strip().lower()
             compact_key = re.sub(r"[^a-z0-9]", "", key_norm)
+            if key_norm in self.NON_PERSISTED_REASONING_KEYS:
+                result[key_text] = _REDACTED
+                continue
             if key_norm in self.SECRET_KEYS or compact_key.endswith(self.SECRET_KEY_SUFFIXES):
                 result[key_text] = _REDACTED
                 continue

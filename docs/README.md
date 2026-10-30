@@ -50,6 +50,7 @@ Documents below describe current behavior and contracts. For a cross-domain tech
 - [Memory Risks and Accepted Decisions](architecture/MEMORY_RISKS.md)
 - [File Data: Document-local Search](architecture/FILE_DATA.md)
 - [MCP Credential Flow](architecture/MCP_CREDENTIAL_FLOW.md)
+- [Atlassian MCP Adapter](architecture/ATLASSIAN_MCP_ADAPTER.md)
 - [DCBox MCP](architecture/DCBOX_MCP.md)
 - [ML Inference MCP](architecture/ML_INFERENCE_MCP.md)
 - [Health Monitoring](architecture/HEALTH_MONITORING.md)

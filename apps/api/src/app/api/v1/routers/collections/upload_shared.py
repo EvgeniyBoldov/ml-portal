@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import resolve_active_user_tenant_ids
 from app.core.security import UserCtx
-from app.models.collection import CollectionType
+from app.models.collection import Collection, CollectionType
 from app.services.collection_service import CollectionService
+from app.services.collection_content_access_service import CollectionContentAccessService
 from .crud import require_collection_permission
 
 
@@ -46,10 +47,12 @@ async def _resolve_table_collection_by_slug(
     session: AsyncSession,
     user: UserCtx,
     tenant_id: Optional[uuid.UUID],
+    *,
+    for_write: bool = False,
 ):
     resolved_tenant_id = await _resolve_requested_tenant_id(session, user, tenant_id)
     service = CollectionService(session)
-    collection = await service.get_by_slug(slug)
+    collection = await service.get_by_slug(slug, include_inactive=True)
 
     if not collection:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
@@ -62,6 +65,10 @@ async def _resolve_table_collection_by_slug(
         CollectionType.API.value,
     }:
         raise HTTPException(status_code=400, detail="Operation is only available for table/sql/api collections")
+    if for_write:
+        await _require_collection_editor(session, user, collection)
+        if collection.collection_type != CollectionType.TABLE.value:
+            raise HTTPException(status_code=400, detail="Content editing is only available for table collections")
     if collection.collection_type in {CollectionType.SQL.value, CollectionType.API.value}:
         await service.ensure_sql_storage_table(collection)
 
@@ -91,14 +98,11 @@ async def _resolve_collection(
 async def _require_collection_editor(
     session: AsyncSession,
     user: UserCtx,
-    tenant_id: uuid.UUID,
+    collection: Collection,
 ) -> None:
-    """Collection writes require a platform admin or an editor assignment."""
-    if user.is_admin or user.role == "admin":
+    """Collection content writes require an editor role in that collection's tenant."""
+    if not collection.is_active or getattr(collection, "lifecycle_status", "active") == "deprecated":
+        raise HTTPException(status_code=409, detail="Collection is inactive")
+    if await CollectionContentAccessService(session).can_edit_tenant(user.id, collection.tenant_id):
         return
-    tenant = str(tenant_id)
-    if tenant in {str(value) for value in (user.tenant_admin_ids or [])}:
-        return
-    if tenant in {str(value) for value in (user.data_editor_tenant_ids or [])}:
-        return
-    raise HTTPException(status_code=403, detail="Collection editing permission required")
+    raise HTTPException(status_code=403, detail="Tenant collection editor permission required")

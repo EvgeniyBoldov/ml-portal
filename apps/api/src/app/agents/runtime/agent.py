@@ -93,7 +93,7 @@ from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.core.logging import get_logger
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.error_payloads import build_debug_payload
-from app.runtime.events import RuntimeEvent, RuntimeEventType
+from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
 from app.runtime.redactor import RuntimeRedactor
@@ -567,6 +567,25 @@ class AgentToolRuntime(BaseRuntime):
                             safe_message="Исчерпан лимит LLM-вызовов агента.", retryable=False,
                         )
                     loop_state.context_correction_calls += 1
+                    retry_event = RuntimeEvent.status("llm_transport_retry", **{
+                        "entity_type": "llm_call",
+                        "entity_id": llm_call_id,
+                        "llm_call_id": llm_call_id,
+                        "logical_llm_call_id": logical_llm_call_id,
+                        "step": step + 1,
+                        "retry_type": "context_correction",
+                        "agent_slug": agent.slug,
+                        "model": gen.model,
+                        "parent_entity_type": "agent_execution",
+                        "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
+                    })
+                    root_logger = ctx.extra.get("runtime_root_event_logger") if isinstance(ctx.extra, dict) else None
+                    if root_logger is not None:
+                        await root_logger.emit(retry_event, phase=OrchestrationPhase.AGENT)
+                    else:
+                        retry_payload = dict(retry_event.data)
+                        retry_payload.pop("stage", None)
+                        await run_session.record_event("llm_transport_retry", retry_payload)
 
                 llm_call_id = pending_llm_call_id or str(uuid4())
                 logical_llm_call_id = pending_logical_llm_call_id or str(uuid4())
@@ -617,6 +636,8 @@ class AgentToolRuntime(BaseRuntime):
                     model=gen.model,
                     temperature=gen.temperature,
                     timeout_s=effective_llm_timeout_s,
+                    response_format=native_completion_format,
+                    tool_choice="required" if loop_state.force_tool_choice else "auto" if tools_payload else None,
                     messages=deepcopy(llm_messages),
                     tools=tools_payload,
                     input_tokens_estimate=estimate_request_tokens({"model": gen.model, "messages": llm_messages,
@@ -660,6 +681,24 @@ class AgentToolRuntime(BaseRuntime):
                             response_format=native_completion_format,
                         )
                 except asyncio.CancelledError:
+                    yield RuntimeEvent.llm_response(
+                        usage_attempt=step + 1,
+                        llm_call_id=llm_call_id,
+                        logical_llm_call_id=logical_llm_call_id,
+                        model=gen.model,
+                        status="cancelled",
+                        terminal=True,
+                        retryable=False,
+                        error_code="llm_cancelled",
+                        duration_ms=int((time.time() - llm_start) * 1000),
+                        parent_entity_type="agent_execution",
+                        parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                        agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
+                        agent_slug=agent.slug,
+                        purpose="tool_decision_or_answer",
+                        actor_type="agent",
+                        actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
+                    )
                     logger.warning(
                         "Agent LLM call cancelled run_id=%s agent=%s step=%s model=%s",
                         run_session.run_id,

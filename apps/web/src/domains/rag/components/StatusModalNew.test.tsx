@@ -82,11 +82,11 @@ describe('StatusModalNew download behavior', () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     apiRequestMock.mockResolvedValueOnce({ download_url: '/api/v1/files/ragdoc_doc-123_original/download' });
 
-    renderModal({ downloadUrlPrefix: '/collections/1/docs/doc-123/download' });
+    renderModal({ downloadUrlPrefix: '/collections/1/docs/doc-123/download', tenantId: 'tenant-7' });
     fireEvent.click(screen.getByRole('button', { name: /скачать оригинал/i }));
 
     await waitFor(() => {
-      expect(apiRequestMock).toHaveBeenCalledWith('/collections/1/docs/doc-123/download?kind=original');
+      expect(apiRequestMock).toHaveBeenCalledWith('/collections/1/docs/doc-123/download?kind=original&tenant_id=tenant-7');
       expect(openSpy).toHaveBeenCalledWith('/api/v1/files/ragdoc_doc-123_original/download', '_blank', 'noopener,noreferrer');
     });
   });

@@ -8,12 +8,6 @@ set -Eeuo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/common.sh"
 
-readonly APPLICATION_SERVICES=(
-  api frontend netbox-mcp-custom dbhub-mcp atlassian-jira-mcp ml-inference-mcp
-  emb rerank hipporag worker beat flower nginx
-)
-readonly STATEFUL_SERVICES=(postgres postgres-tool-results postgres-remote redis qdrant minio)
-
 APP_ROOT="${ML_PORTAL_APP_ROOT:-/opt/ml-portal}"
 STATE_DIR="${ML_PORTAL_STATE_DIR:-/var/lib/ml-portal}"
 PROD_ENV_FILE="${PROD_ENV_FILE:-/etc/ml-portal/prod.env}"

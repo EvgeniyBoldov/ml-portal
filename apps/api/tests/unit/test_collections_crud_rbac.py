@@ -9,6 +9,8 @@ from fastapi import HTTPException
 from unittest.mock import AsyncMock
 
 from app.services.permission_service import EffectivePermissions
+from app.services.collection_public_service import CollectionPublicService
+from app.schemas.collections_public import CollectionCapabilities
 from app.api.v1.routers.collections import crud as collections_crud
 
 
@@ -16,6 +18,8 @@ def _fake_collection(slug: str):
     now = datetime.now(timezone.utc)
     return SimpleNamespace(
         id=uuid4(),
+        tenant_id=uuid4(),
+        lifecycle_status="active",
         collection_type="table",
         slug=slug,
         name=slug,
@@ -106,10 +110,16 @@ async def test_list_collections_filters_denied_by_rbac(monkeypatch):
     allowed = _fake_collection("allowed")
     denied = _fake_collection("denied")
     fake_service = SimpleNamespace(
+        session=AsyncMock(),
         list_collections=AsyncMock(return_value=[allowed, denied]),
         sync_collection_status=AsyncMock(return_value={"status": "ready", "details": {}}),
         get_effective_total_rows=AsyncMock(return_value=0),
     )
+
+    async def capabilities(_self, _collection, *, user_id, collection_allowed=True):
+        return CollectionCapabilities(view_content=collection_allowed), {}
+
+    monkeypatch.setattr(CollectionPublicService, "build_capabilities", capabilities)
 
     monkeypatch.setattr(
         collections_crud,
@@ -185,3 +195,69 @@ async def test_get_collection_returns_404_when_denied_by_rbac(monkeypatch):
         )
 
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_platform_admin", [False, True])
+async def test_collection_workspaces_endpoint_uses_member_or_platform_scope(is_platform_admin):
+    tenant_id = uuid4()
+    user_id = uuid4()
+    session = AsyncMock()
+    session.scalar.return_value = is_platform_admin
+
+    class Result:
+        def all(self):
+            return [(tenant_id, "Workspace")]
+
+    session.execute.return_value = Result()
+    response = await collections_crud.list_collection_workspaces(
+        session=session,
+        user=SimpleNamespace(id=user_id),
+    )
+
+    assert len(response.items) == 1
+    assert response.items[0].id == tenant_id
+    assert response.items[0].name == "Workspace"
+    query = str(session.execute.await_args.args[0]).lower()
+    assert "tenants.is_active" in query
+    assert "lifecycle_status" in query
+    assert ("join user_tenants" in query) is (not is_platform_admin)
+    session.scalar.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_collection_detail_exposes_inactive_capability_reasons(monkeypatch):
+    tenant_id = uuid4()
+    collection = _fake_collection("inactive")
+    collection.tenant_id = tenant_id
+    collection.is_active = False
+    collection.lifecycle_status = "deprecated"
+    session = AsyncMock()
+    service = SimpleNamespace(
+        session=session,
+        get_by_slug=AsyncMock(return_value=collection),
+        sync_collection_status=AsyncMock(return_value={"status": "created", "details": {}}),
+        get_effective_total_rows=AsyncMock(return_value=0),
+    )
+    monkeypatch.setattr(collections_crud, "CollectionService", lambda _session: service)
+    monkeypatch.setattr(collections_crud, "_resolve_requested_tenant_id", AsyncMock(return_value=tenant_id))
+    monkeypatch.setattr(collections_crud, "require_collection_permission", AsyncMock())
+
+    async def capabilities(_self, _collection, *, user_id, collection_allowed=False):
+        return (
+            CollectionCapabilities(view_content=collection_allowed, can_edit_content=True),
+            {"upload_csv": "collection_inactive", "mutate_rows": "collection_inactive"},
+        )
+
+    monkeypatch.setattr(CollectionPublicService, "build_capabilities", capabilities)
+    user = SimpleNamespace(id=uuid4(), role="editor", tenant_ids=[str(tenant_id)])
+
+    response = await collections_crud.get_collection(
+        slug="inactive", tenant_id=tenant_id, session=session, user=user,
+    )
+
+    service.get_by_slug.assert_awaited_once_with("inactive", include_inactive=True)
+    assert response.tenant_id == tenant_id
+    assert response.capabilities.can_edit_content
+    assert not response.capabilities.upload_csv
+    assert response.capability_reasons["upload_csv"] == "collection_inactive"

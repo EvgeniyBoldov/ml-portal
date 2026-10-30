@@ -19,7 +19,7 @@ USAGE_EVENTS = {
 
 
 async def record_usage(context: Any, event_type: str, payload: dict[str, Any], session_factory: Any) -> None:
-    if context.origin not in {"chat", "shadow"} or context.user_id is None or event_type not in USAGE_EVENTS:
+    if context.origin not in {"chat", "shadow", "sandbox", "worker"} or context.user_id is None or event_type not in USAGE_EVENTS:
         return
     entity_id = payload.get("entity_id") or (str(context.run_id) if USAGE_EVENTS[event_type] == "run" else None)
     if not entity_id:
@@ -46,7 +46,12 @@ async def record_usage(context: Any, event_type: str, payload: dict[str, Any], s
         "duration_ms": payload.get("duration_ms"),
         "tokens_in": max(0, tokens_in) if isinstance(tokens_in, int) else None,
         "tokens_out": max(0, tokens_out) if isinstance(tokens_out, int) else None,
-        "token_source": payload.get("token_source") or ("provider" if usage else None),
+        "token_source": payload.get("token_source") or (
+            "provider" if usage else "unknown"
+            if USAGE_EVENTS[event_type] == "llm"
+            and event_type == "llm_response"
+            and bool(payload.get("terminal")) else None
+        ),
     }
     try:
         if session_factory is None:

@@ -158,7 +158,7 @@ async def upload_csv(
     user: UserCtx = Depends(get_current_user),
 ) -> CSVUploadResponse:
     collection, service, resolved_tenant_id = await _resolve_table_collection_by_slug(
-        slug, session, user, tenant_id
+        slug, session, user, tenant_id, for_write=True
     )
 
     try:
@@ -242,7 +242,7 @@ async def create_collection_row(
     user: UserCtx = Depends(get_current_user),
 ):
     collection, service, resolved_tenant_id = await _resolve_table_collection_by_slug(
-        slug, session, user, tenant_id
+        slug, session, user, tenant_id, for_write=True
     )
     row = await service.create_row(collection, request.data)
     await session.commit()
@@ -284,7 +284,7 @@ async def update_collection_row(
     user: UserCtx = Depends(get_current_user),
 ):
     collection, service, resolved_tenant_id = await _resolve_table_collection_by_slug(
-        slug, session, user, tenant_id
+        slug, session, user, tenant_id, for_write=True
     )
     row = await service.update_row(collection, row_id, request.data)
     if not row:
@@ -312,7 +312,9 @@ async def delete_collection_rows(
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
-    collection, service, _ = await _resolve_table_collection_by_slug(slug, session, user, tenant_id)
+    collection, service, _ = await _resolve_table_collection_by_slug(
+        slug, session, user, tenant_id, for_write=True
+    )
     deleted = await service.delete_rows(collection, ids)
     await session.commit()
     return {"deleted": deleted, "ids": ids}
@@ -434,7 +436,7 @@ async def revectorize_collection(
     user: UserCtx = Depends(get_current_user),
 ) -> VectorizationResponse:
     collection, _, resolved_tenant_id = await _resolve_table_collection_by_slug(
-        slug, session, user, tenant_id
+        slug, session, user, tenant_id, for_write=True
     )
     orchestrator = CollectionVectorizationOrchestrator(session)
     await orchestrator.prepare_full_revectorization(collection)

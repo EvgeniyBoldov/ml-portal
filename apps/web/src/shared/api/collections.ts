@@ -77,6 +77,34 @@ export interface CollectionCount {
   unit: string | null;
 }
 
+export interface CollectionWorkspace {
+  id: string;
+  name: string;
+}
+
+export interface CollectionWorkspacesResponse {
+  items: CollectionWorkspace[];
+}
+
+export interface CollectionCapabilities {
+  view_content: boolean;
+  view_schema: boolean;
+  can_edit_content: boolean;
+  upload_documents: boolean;
+  delete_documents: boolean;
+  ingest: boolean;
+  manage_memory: boolean;
+  upload_csv: boolean;
+  mutate_rows: boolean;
+  reindex: boolean;
+  upload_templates: boolean;
+  analyze_templates: boolean;
+  approve_templates: boolean;
+  edit_templates: boolean;
+  delete_templates: boolean;
+  download: boolean;
+}
+
 export interface CollectionVersionCreate {
   data_description?: string | null;
   usage_purpose?: string | null;
@@ -132,6 +160,7 @@ export interface Collection {
   fields: CollectionField[];
   source_contract?: Record<string, unknown> | null;
   status?: string;
+  readiness?: { status: string };
   status_details?: Record<string, unknown> | null;
   deprecated_at?: string | null;
   retention_days?: number;
@@ -144,6 +173,8 @@ export interface Collection {
   purpose?: string | null;
   version?: PublishedCollectionVersionInfo | null;
   count?: CollectionCount | null;
+  capabilities?: CollectionCapabilities;
+  capability_reasons?: Record<string, string>;
   
   // Vector search fields
   has_vector_search: boolean;
@@ -494,6 +525,9 @@ function toFrontendCollection(collection: Collection): Collection {
 }
 
 export const collectionsApi = {
+  listWorkspaces: async (): Promise<CollectionWorkspacesResponse> =>
+    apiRequest<CollectionWorkspacesResponse>('/collections/workspaces'),
+
   // Admin endpoints (require admin role)
   listAll: async (params?: {
     page?: number;
@@ -658,7 +692,8 @@ export const collectionsApi = {
 
   uploadDocument: async (
     collectionId: string,
-    data: UploadDocumentRequest
+    data: UploadDocumentRequest,
+    tenantId?: string,
   ): Promise<UploadDocumentResponse> => {
     const formData = new FormData();
     formData.append('file', data.file);
@@ -672,33 +707,39 @@ export const collectionsApi = {
     if (data.memory_scope_keys?.length) formData.append('memory_scope_keys', JSON.stringify(data.memory_scope_keys));
     if (data.project_keys?.length) formData.append('project_keys', JSON.stringify(data.project_keys));
 
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
     return apiRequest<UploadDocumentResponse>(
-      `/collections/${collectionId}/upload-document`,
+      `/collections/${collectionId}/upload-document${params.size ? `?${params}` : ''}`,
       { method: 'POST', body: formData }
     );
   },
 
   uploadTemplate: async (
     collectionId: string,
-    data: UploadTemplateRequest
+    data: UploadTemplateRequest,
+    tenantId?: string,
   ): Promise<UploadTemplateResponse> => {
     const formData = new FormData();
     formData.append('file', data.file);
 
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
     return apiRequest<UploadTemplateResponse>(
-      `/collections/${collectionId}/templates/upload`,
+      `/collections/${collectionId}/templates/upload${params.size ? `?${params}` : ''}`,
       { method: 'POST', body: formData }
     );
   },
 
   listTemplates: async (
     collectionId: string,
-    params?: { page?: number; size?: number; query?: string }
+    params?: { page?: number; size?: number; query?: string; tenant_id?: string }
   ): Promise<CollectionTemplatesResponse> => {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', String(params.page));
     if (params?.size) searchParams.set('size', String(params.size));
     if (params?.query) searchParams.set('query', params.query);
+    if (params?.tenant_id) searchParams.set('tenant_id', params.tenant_id);
     const query = searchParams.toString();
     return apiRequest<CollectionTemplatesResponse>(
       `/collections/${collectionId}/templates${query ? `?${query}` : ''}`
@@ -708,26 +749,38 @@ export const collectionsApi = {
   getTemplate: async (
     collectionId: string,
     rowId: string,
+    tenantId?: string,
   ): Promise<CollectionTemplate> => {
-    return apiRequest<CollectionTemplate>(`/collections/${collectionId}/templates/${rowId}`);
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest<CollectionTemplate>(`/collections/${collectionId}/templates/${rowId}${params.size ? `?${params}` : ''}`);
   },
 
-  getTemplateDownload: async (collectionId: string, rowId: string): Promise<{ download_url: string }> =>
-    apiRequest<{ download_url: string }>(`/collections/${collectionId}/templates/${rowId}/download`),
+  getTemplateDownload: async (collectionId: string, rowId: string, tenantId?: string): Promise<{ download_url: string }> => {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest<{ download_url: string }>(`/collections/${collectionId}/templates/${rowId}/download${params.size ? `?${params}` : ''}`);
+  },
 
   getTemplateStatusGraph: async (
     collectionId: string,
     rowId: string,
+    tenantId?: string,
   ): Promise<Record<string, unknown>> => {
-    return apiRequest<Record<string, unknown>>(`/collections/${collectionId}/templates/${rowId}/status-graph`);
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest<Record<string, unknown>>(`/collections/${collectionId}/templates/${rowId}/status-graph${params.size ? `?${params}` : ''}`);
   },
 
   updateTemplate: async (
     collectionId: string,
     rowId: string,
     data: UpdateTemplateRequest,
+    tenantId?: string,
   ): Promise<CollectionTemplate> => {
-    return apiRequest<CollectionTemplate>(`/collections/${collectionId}/templates/${rowId}`, {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest<CollectionTemplate>(`/collections/${collectionId}/templates/${rowId}${params.size ? `?${params}` : ''}`, {
       method: 'PATCH',
       body: data,
     });
@@ -736,33 +789,41 @@ export const collectionsApi = {
   analyzeTemplates: async (
     collectionId: string,
     rowIds: string[],
+    tenantId?: string,
   ): Promise<AnalyzeTemplatesResponse> => {
-    return apiRequest<AnalyzeTemplatesResponse>(`/collections/${collectionId}/templates/analyze`, {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest<AnalyzeTemplatesResponse>(`/collections/${collectionId}/templates/analyze${params.size ? `?${params}` : ''}`, {
       method: 'POST',
       body: { row_ids: rowIds },
     });
   },
 
-  getTemplateStatusEventsUrl: (collectionId: string, rowId: string): string =>
-    `/api/v1/collections/${collectionId}/templates/${encodeURIComponent(rowId)}/status/events`,
+  getTemplateStatusEventsUrl: (collectionId: string, rowId: string, tenantId?: string): string =>
+    `/api/v1/collections/${collectionId}/templates/${encodeURIComponent(rowId)}/status/events${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`,
 
-  getTemplateCollectionStatusEventsUrl: (collectionId: string): string =>
-    `/api/v1/collections/${collectionId}/templates/status/events`,
+  getTemplateCollectionStatusEventsUrl: (collectionId: string, tenantId?: string): string =>
+    `/api/v1/collections/${collectionId}/templates/status/events${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`,
 
   approveTemplate: async (
     collectionId: string,
     rowId: string,
+    tenantId?: string,
   ): Promise<ApproveTemplateResponse> => {
-    return apiRequest<ApproveTemplateResponse>(`/collections/${collectionId}/templates/${rowId}/approve`, {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest<ApproveTemplateResponse>(`/collections/${collectionId}/templates/${rowId}/approve${params.size ? `?${params}` : ''}`, {
       method: 'POST',
       body: {},
     });
   },
 
   // Tenant-level endpoints
-  list: async (activeOnly = true): Promise<CollectionListResponse> => {
+  list: async (activeOnly = true, tenantId?: string): Promise<CollectionListResponse> => {
+    const params = new URLSearchParams({ active_only: String(activeOnly) });
+    if (tenantId) params.set('tenant_id', tenantId);
     const response = await apiRequest<CollectionListResponse>(
-      `/collections/?active_only=${activeOnly}`
+      `/collections/?${params.toString()}`
     );
     return {
       ...response,
@@ -770,8 +831,11 @@ export const collectionsApi = {
     };
   },
 
-  getBySlug: async (slug: string): Promise<Collection> => {
-    const collection = await apiRequest<Collection>(`/collections/${slug}`);
+  getBySlug: async (slug: string, tenantId?: string): Promise<Collection> => {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    const query = params.toString();
+    const collection = await apiRequest<Collection>(`/collections/${slug}${query ? `?${query}` : ''}`);
     return toFrontendCollection(collection);
   },
 
@@ -787,7 +851,7 @@ export const collectionsApi = {
   previewCSV: async (
     slug: string,
     file: File,
-    options?: { encoding?: string; delimiter?: string }
+    options?: { encoding?: string; delimiter?: string; tenant_id?: string }
   ): Promise<CSVPreviewResponse> => {
     const formData = new FormData();
     formData.append('file', file);
@@ -795,6 +859,7 @@ export const collectionsApi = {
     const params = new URLSearchParams();
     if (options?.encoding) params.set('encoding', options.encoding);
     if (options?.delimiter) params.set('delimiter', options.delimiter);
+    if (options?.tenant_id) params.set('tenant_id', options.tenant_id);
 
     const query = params.toString();
     return apiRequest<CSVPreviewResponse>(
@@ -809,7 +874,7 @@ export const collectionsApi = {
   uploadCSV: async (
     slug: string,
     file: File,
-    options?: { encoding?: string; delimiter?: string; skip_errors?: boolean }
+    options?: { encoding?: string; delimiter?: string; skip_errors?: boolean; tenant_id?: string }
   ): Promise<CSVUploadResponse> => {
     const formData = new FormData();
     formData.append('file', file);
@@ -819,6 +884,7 @@ export const collectionsApi = {
     if (options?.delimiter) params.set('delimiter', options.delimiter);
     if (options?.skip_errors !== undefined)
       params.set('skip_errors', String(options.skip_errors));
+    if (options?.tenant_id) params.set('tenant_id', options.tenant_id);
 
     const query = params.toString();
     return apiRequest<CSVUploadResponse>(
@@ -889,16 +955,20 @@ export const collectionsApi = {
   deleteTemplates: async (
     collectionId: string,
     ids: string[],
+    tenantId?: string,
   ): Promise<{ deleted: number; ids: string[] }> => {
     const params = new URLSearchParams();
     ids.forEach((id) => params.append('ids', id));
+    if (tenantId) params.set('tenant_id', tenantId);
     return apiRequest(`/collections/${collectionId}/templates?${params.toString()}`, {
       method: 'DELETE',
     });
   },
 
-  downloadTemplate: (slug: string): string => {
-    return `/api/v1/collections/${slug}/template`;
+  downloadTemplate: (slug: string, tenantId?: string): string => {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return `/api/v1/collections/${slug}/template${params.size ? `?${params}` : ''}`;
   },
 
   // Document-type collection endpoints
@@ -908,13 +978,14 @@ export const collectionsApi = {
 
   listDocuments: async (
     collectionId: string,
-    params?: { page?: number; size?: number; status?: string; query?: string }
+    params?: { page?: number; size?: number; status?: string; query?: string; tenant_id?: string }
   ): Promise<CollectionDocumentsResponse> => {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', String(params.page));
     if (params?.size) searchParams.set('size', String(params.size));
     if (params?.status) searchParams.set('status', params.status);
     if (params?.query) searchParams.set('query', params.query);
+    if (params?.tenant_id) searchParams.set('tenant_id', params.tenant_id);
     const query = searchParams.toString();
     return apiRequest<CollectionDocumentsResponse>(
       `/collections/${collectionId}/documents${query ? `?${query}` : ''}`
@@ -923,39 +994,52 @@ export const collectionsApi = {
 
   deleteDocuments: async (
     collectionId: string,
-    docIds: string[]
+    docIds: string[],
+    tenantId?: string,
   ): Promise<{ deleted: number; collection_id: string }> => {
     const params = new URLSearchParams();
     docIds.forEach(id => params.append('ids', id));
+    if (tenantId) params.set('tenant_id', tenantId);
     return apiRequest(`/collections/${collectionId}/documents?${params.toString()}`, {
       method: 'DELETE',
     });
   },
 
-  reindexDocuments: async (collectionId: string): Promise<CollectionReindexResponse> => {
-    return apiRequest<CollectionReindexResponse>(`/collections/${collectionId}/reindex`, {
+  reindexDocuments: async (collectionId: string, tenantId?: string): Promise<CollectionReindexResponse> => {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest<CollectionReindexResponse>(`/collections/${collectionId}/reindex${params.size ? `?${params}` : ''}`, {
       method: 'POST',
     });
   },
 
   // Document status & ingest (scoped to collection, not RAG)
-  addDocumentToMemory: async (collectionId: string, docId: string): Promise<{ status: string; operation_id: string }> => {
-    return apiRequest(`/collections/${collectionId}/docs/${docId}/memory`, { method: 'POST' });
+  addDocumentToMemory: async (collectionId: string, docId: string, tenantId?: string): Promise<{ status: string; operation_id: string }> => {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest(`/collections/${collectionId}/docs/${docId}/memory${params.size ? `?${params}` : ''}`, { method: 'POST' });
   },
 
-  removeDocumentFromMemory: async (collectionId: string, docId: string): Promise<{ status: string; operation_id: string }> => {
-    return apiRequest(`/collections/${collectionId}/docs/${docId}/memory`, { method: 'DELETE' });
+  removeDocumentFromMemory: async (collectionId: string, docId: string, tenantId?: string): Promise<{ status: string; operation_id: string }> => {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest(`/collections/${collectionId}/docs/${docId}/memory${params.size ? `?${params}` : ''}`, { method: 'DELETE' });
   },
 
-  getDocStatusGraph: async (collectionId: string, docId: string) => {
-    return apiRequest(`/collections/${collectionId}/docs/${docId}/status-graph`);
+  getDocStatusGraph: async (collectionId: string, docId: string, tenantId?: string) => {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest(`/collections/${collectionId}/docs/${docId}/status-graph${params.size ? `?${params}` : ''}`);
   },
 
   startDocIngest: async (
     collectionId: string,
-    docId: string
+    docId: string,
+    tenantId?: string,
   ): Promise<{ status: string; message: string; document_id: string; embedding_models: string[] }> => {
-    return apiRequest(`/collections/${collectionId}/docs/${docId}/ingest/start`, {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest(`/collections/${collectionId}/docs/${docId}/ingest/start${params.size ? `?${params}` : ''}`, {
       method: 'POST',
     });
   },
@@ -963,9 +1047,12 @@ export const collectionsApi = {
   stopDocIngest: async (
     collectionId: string,
     docId: string,
-    stage: string
+    stage: string,
+    tenantId?: string,
   ): Promise<{ status: string; message: string; document_id: string; stage: string }> => {
-    return apiRequest(`/collections/${collectionId}/docs/${docId}/ingest/stop?stage=${stage}`, {
+    const params = new URLSearchParams({ stage });
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest(`/collections/${collectionId}/docs/${docId}/ingest/stop?${params}`, {
       method: 'POST',
     });
   },
@@ -973,9 +1060,12 @@ export const collectionsApi = {
   retryDocIngest: async (
     collectionId: string,
     docId: string,
-    stage: string
+    stage: string,
+    tenantId?: string,
   ): Promise<{ status: string; message: string; document_id: string; stage: string }> => {
-    return apiRequest(`/collections/${collectionId}/docs/${docId}/ingest/retry?stage=${stage}`, {
+    const params = new URLSearchParams({ stage });
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest(`/collections/${collectionId}/docs/${docId}/ingest/retry?${params}`, {
       method: 'POST',
     });
   },
@@ -989,16 +1079,20 @@ export const collectionsApi = {
   },
 
   startCsvExport: async (
-    slug: string
+    slug: string,
+    tenantId?: string,
   ): Promise<{ export_id: string; status: string; task_id: string; expires_in: number }> => {
-    return apiRequest(`/collections/${slug}/export`, {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest(`/collections/${slug}/export${params.size ? `?${params}` : ''}`, {
       method: 'POST',
     });
   },
 
   getCsvExportStatus: async (
     slug: string,
-    exportId: string
+    exportId: string,
+    tenantId?: string,
   ): Promise<{
     export_id: string;
     status: string;
@@ -1010,14 +1104,16 @@ export const collectionsApi = {
     expires_at?: string;
     error?: string;
   }> => {
-    return apiRequest(`/collections/${slug}/export/${exportId}`);
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenant_id', tenantId);
+    return apiRequest(`/collections/${slug}/export/${exportId}${params.size ? `?${params}` : ''}`);
   },
 
-  getStatusEventsUrl: (collectionId: string): string =>
-    `/api/v1/collections/${collectionId}/status/events`,
+  getStatusEventsUrl: (collectionId: string, tenantId?: string): string =>
+    `/api/v1/collections/${collectionId}/status/events${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`,
 
-  getDocumentStatusEventsUrl: (collectionId: string, docId: string): string =>
-    `/api/v1/collections/${collectionId}/docs/${encodeURIComponent(docId)}/status/events`,
+  getDocumentStatusEventsUrl: (collectionId: string, docId: string, tenantId?: string): string =>
+    `/api/v1/collections/${collectionId}/docs/${encodeURIComponent(docId)}/status/events${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`,
 };
 
 export default collectionsApi;

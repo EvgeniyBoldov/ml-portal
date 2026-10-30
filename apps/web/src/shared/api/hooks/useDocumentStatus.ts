@@ -10,11 +10,12 @@ import { qk } from '@shared/api/keys';
 
 export function useDocumentStatus(
   docId: string | undefined,
-  statusGraphUrl?: string
+  statusGraphUrl?: string,
+  tenantId?: string,
 ) {
   return useQuery<StatusGraph, Error, DocStatus>({
     queryKey: statusGraphUrl
-      ? qk.collections.documentStatus(docId ?? '')
+      ? qk.collections.documentStatus(docId ?? '', tenantId)
       : docId
         ? ['document-status', docId]
         : ['document-status', 'undefined'],

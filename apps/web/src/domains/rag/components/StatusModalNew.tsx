@@ -2,7 +2,10 @@ import React, { useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Modal from '@shared/ui/Modal';
 import { useToast } from '@shared/ui/Toast';
+import Alert from '@shared/ui/Alert';
 import { apiRequest } from '@shared/api/http';
+import { ApiError } from '@shared/api/errors';
+import type { CollectionCapabilities } from '@shared/api/collections';
 import { buildFileDownloadUrl, buildRagDocFileId } from '@shared/api/files';
 import { config } from '@shared/config';
 import { openSSE, SSEMessage } from '@shared/lib/sse';
@@ -16,6 +19,12 @@ import {
   type FlowDetailAction,
 } from '@shared/components/statusFlow';
 import styles from './StatusModalNew.module.css';
+
+function buildDownloadRequestUrl(prefix: string, kind: 'original' | 'canonical', tenantId?: string): string {
+  const params = new URLSearchParams({ kind });
+  if (tenantId) params.set('tenant_id', tenantId);
+  return `${prefix}?${params.toString()}`;
+}
 
 interface StatusModalNewProps {
   memoryUrl?: string;
@@ -32,6 +41,10 @@ interface StatusModalNewProps {
   stopUrlPrefix?: string;
   /** Override download URL prefix (default: /rag/{docId}/download) */
   downloadUrlPrefix?: string;
+  tenantId?: string;
+  collectionCapabilities?: CollectionCapabilities;
+  capabilityReasons?: Record<string, string>;
+  onPermissionDenied?: () => void;
 }
 
 export function StatusModalNew({
@@ -44,18 +57,28 @@ export function StatusModalNew({
   stopUrlPrefix,
   downloadUrlPrefix,
   memoryUrl,
+  tenantId,
+  collectionCapabilities,
+  capabilityReasons,
+  onPermissionDenied,
 }: StatusModalNewProps) {
   const queryClient = useQueryClient();
   const sseRef = useRef<ReturnType<typeof openSSE> | null>(null);
   const invalidateAtRef = useRef<number>(0);
   const invalidateTimerRef = useRef<number | null>(null);
   const { showToast } = useToast();
+  const [permissionError, setPermissionError] = React.useState(false);
+  const isCollectionScoped = collectionCapabilities !== undefined;
+  const canEditContent = isCollectionScoped ? collectionCapabilities?.can_edit_content === true : true;
+  const canIngest = isCollectionScoped ? collectionCapabilities?.can_edit_content === true && collectionCapabilities?.ingest === true : true;
+  const canManageMemory = isCollectionScoped ? collectionCapabilities?.can_edit_content === true && collectionCapabilities?.manage_memory === true : true;
+  const permissionReason = (key: string) => capabilityReasons?.[key] || 'Операция временно недоступна.';
 
   const {
     data: docStatus,
     isLoading,
     error,
-  } = useDocumentStatus(docId, statusGraphUrl);
+  } = useDocumentStatus(docId, statusGraphUrl, tenantId);
   const memoryCommand = useMutation({
     mutationFn: (action: 'add' | 'delete') =>
       apiRequest(memoryUrl!, {
@@ -66,8 +89,13 @@ export function StatusModalNew({
       void queryClient.invalidateQueries({ queryKey });
       showToast('Операция LongMemory поставлена в очередь', 'success');
     },
-    onError: () =>
-      showToast('Не удалось запустить операцию LongMemory', 'error'),
+    onError: error => {
+      showToast('Не удалось запустить операцию LongMemory', 'error');
+      if (error instanceof ApiError && error.status === 403) {
+        setPermissionError(true);
+        onPermissionDenied?.();
+      }
+    },
   });
   const flowModel = React.useMemo(
     () => adaptDocumentStatusToFlowModel(docStatus),
@@ -77,9 +105,9 @@ export function StatusModalNew({
   const queryKey = React.useMemo(
     () =>
       statusGraphUrl
-        ? qk.collections.documentStatus(docId)
+        ? qk.collections.documentStatus(docId, tenantId)
         : ['document-status', docId],
-    [docId, statusGraphUrl]
+    [docId, statusGraphUrl, tenantId]
   );
 
   const scheduleInvalidate = React.useCallback(() => {
@@ -216,6 +244,7 @@ export function StatusModalNew({
   };
 
   const handleRestart = React.useCallback(async () => {
+    if (!canEditContent) return;
     if (!selectedRetryStage) return;
     if (!canRetrySelectedStage) {
       showToast('Этот этап сейчас нельзя перезапустить', 'error');
@@ -224,43 +253,62 @@ export function StatusModalNew({
 
     try {
       const retryBase = retryUrlPrefix || `/rag/status/${docId}/ingest/retry`;
-      await apiRequest(`${retryBase}?stage=${selectedRetryStage}`, {
+      const params = new URLSearchParams({ stage: selectedRetryStage });
+      if (tenantId) params.set('tenant_id', tenantId);
+      await apiRequest(`${retryBase}?${params.toString()}`, {
         method: 'POST',
         idempotent: true,
       });
 
       showToast('Перезапуск начат', 'success');
-    } catch {
+    } catch (error) {
       showToast('Ошибка перезапуска', 'error');
+      if (error instanceof ApiError && error.status === 403) {
+        setPermissionError(true);
+        onPermissionDenied?.();
+      }
     }
   }, [
+    canEditContent,
     canRetrySelectedStage,
     docId,
     retryUrlPrefix,
     selectedRetryStage,
     showToast,
+    tenantId,
+    onPermissionDenied,
   ]);
 
   const handleStop = React.useCallback(async () => {
+    if (!canEditContent) return;
     if (!selectedStopStage || !canStopSelectedStage) {
       showToast('Этот этап сейчас нельзя остановить', 'error');
       return;
     }
     try {
       const stopBase = stopUrlPrefix || `/rag/status/${docId}/ingest/stop`;
-      await apiRequest(`${stopBase}?stage=${selectedStopStage}`, {
+      const params = new URLSearchParams({ stage: selectedStopStage });
+      if (tenantId) params.set('tenant_id', tenantId);
+      await apiRequest(`${stopBase}?${params.toString()}`, {
         method: 'POST',
         idempotent: true,
       });
       showToast('Остановка запрошена', 'success');
-    } catch {
+    } catch (error) {
       showToast('Ошибка остановки', 'error');
+      if (error instanceof ApiError && error.status === 403) {
+        setPermissionError(true);
+        onPermissionDenied?.();
+      }
     }
   }, [
+    canEditContent,
     canStopSelectedStage,
     docId,
     selectedStopStage,
     showToast,
+    tenantId,
+    onPermissionDenied,
     stopUrlPrefix,
   ]);
 
@@ -270,7 +318,7 @@ export function StatusModalNew({
         const response = await apiRequest<{
           file_id?: string;
           download_url?: string;
-        }>(`${downloadUrlPrefix}?kind=original`);
+        }>(buildDownloadRequestUrl(downloadUrlPrefix, 'original', tenantId));
         const href =
           response.download_url ||
           (response.file_id ? buildFileDownloadUrl(response.file_id) : '');
@@ -288,7 +336,7 @@ export function StatusModalNew({
     } catch {
       showToast('Ошибка скачивания', 'error');
     }
-  }, [docId, downloadUrlPrefix, showToast]);
+  }, [docId, downloadUrlPrefix, showToast, tenantId]);
 
   const handleDownloadNormalized = React.useCallback(async () => {
     try {
@@ -296,7 +344,7 @@ export function StatusModalNew({
         const response = await apiRequest<{
           file_id?: string;
           download_url?: string;
-        }>(`${downloadUrlPrefix}?kind=canonical`);
+        }>(buildDownloadRequestUrl(downloadUrlPrefix, 'canonical', tenantId));
         const href =
           response.download_url ||
           (response.file_id ? buildFileDownloadUrl(response.file_id) : '');
@@ -314,7 +362,7 @@ export function StatusModalNew({
     } catch {
       showToast('Ошибка скачивания', 'error');
     }
-  }, [docId, downloadUrlPrefix, showToast]);
+  }, [docId, downloadUrlPrefix, showToast, tenantId]);
 
   const selectedNode = React.useMemo(() => {
     if (!selection.nodeKey) return null;
@@ -343,7 +391,7 @@ export function StatusModalNew({
       selection.nodeKey === 'normalize' &&
       selectedNode?.status === 'completed';
 
-    if (memoryUrl && !memoryCommand.isPending) {
+    if (memoryUrl && canEditContent && !memoryCommand.isPending) {
       const active = (docStatus?.memory ?? []).some(node =>
         ['processing', 'queued'].includes(node.status)
       );
@@ -366,6 +414,8 @@ export function StatusModalNew({
           label: 'Добавить в LongMemory',
           variant: 'outline',
           onClick: () => memoryCommand.mutate('add'),
+          disabled: !canManageMemory,
+          title: !canManageMemory ? permissionReason('manage_memory') : undefined,
         });
       }
       if (docStatus?.memory?.length && !removed) {
@@ -374,6 +424,8 @@ export function StatusModalNew({
           label: 'Удалить из LongMemory',
           variant: 'warning',
           onClick: () => memoryCommand.mutate('delete'),
+          disabled: !canManageMemory,
+          title: !canManageMemory ? permissionReason('manage_memory') : undefined,
         });
       }
     }
@@ -395,22 +447,26 @@ export function StatusModalNew({
         onClick: handleDownloadNormalized,
       });
     }
-    if (canStopSelectedStage) {
+    if (canStopSelectedStage && canEditContent) {
       actions.push({
         key: 'stop',
         label: 'Остановить',
         icon: 'x',
         variant: 'warning',
         onClick: handleStop,
+        disabled: !canIngest,
+        title: !canIngest ? permissionReason('ingest') : undefined,
       });
     }
-    if (canRetrySelectedStage) {
+    if (canRetrySelectedStage && canEditContent) {
       actions.push({
         key: 'restart',
         label: 'Перезапустить',
         icon: 'refresh-cw',
         variant: 'primary',
         onClick: handleRestart,
+        disabled: !canIngest,
+        title: !canIngest ? permissionReason('ingest') : undefined,
       });
     }
     return actions;
@@ -426,6 +482,10 @@ export function StatusModalNew({
     handleDownloadOriginal,
     handleRestart,
     handleStop,
+    canEditContent,
+    canIngest,
+    canManageMemory,
+    permissionReason,
   ]);
 
   const metricLabels = React.useMemo(
@@ -496,6 +556,18 @@ export function StatusModalNew({
       bodyClassName={styles.modalBody}
     >
       <div className={styles.container}>
+        {isCollectionScoped && (!canEditContent || permissionError) && (
+          <Alert
+            variant="warning"
+            title="Только просмотр"
+            description={permissionError
+              ? 'Сервер отклонил изменение прав доступа. Статус обновлён; черновики изменений сохранены.'
+              : 'Изменять содержимое могут администраторы и редакторы этого тенанта.'}
+          />
+        )}
+        {isCollectionScoped && canEditContent && !canIngest && (
+          <Alert variant="warning" title="Управление обработкой временно недоступно" description={permissionReason('ingest')} />
+        )}
         {/* Pipeline visualization */}
         <div className={styles.pipelineSection}>
           <StatusFlowView

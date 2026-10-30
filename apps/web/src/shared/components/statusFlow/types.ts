@@ -44,6 +44,8 @@ export interface FlowDetailAction {
   icon?: string;
   variant?: 'primary' | 'outline' | 'warning' | 'ghost';
   onClick: () => void;
+  disabled?: boolean;
+  title?: string;
 }
 
 export interface FlowDetailItem {

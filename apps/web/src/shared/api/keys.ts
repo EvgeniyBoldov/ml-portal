@@ -226,8 +226,9 @@ export const qk = {
   },
   collections: {
     all: () => ['collections'] as const,
-    appList: (params?: { active_only?: boolean }) =>
+    appList: (params?: { active_only?: boolean; tenant_id?: string }) =>
       ['collections', 'app-list', params] as const,
+    workspaces: () => ['collections', 'workspaces'] as const,
     adminList: (params?: {
       page?: number;
       size?: number;
@@ -237,7 +238,8 @@ export const qk = {
       search?: string;
     }) => ['collections', 'admin-list', params] as const,
     presets: () => ['collections', 'type-presets'] as const,
-    detail: (slug: string) => ['collections', 'detail', slug] as const,
+    detail: (slug: string, tenantId?: string) =>
+      ['collections', 'detail', slug, tenantId ?? 'default'] as const,
     versions: (id: string) => ['collections', 'versions', id] as const,
     version: (id: string, version: number) =>
       ['collections', 'version', id, version] as const,
@@ -253,11 +255,20 @@ export const qk = {
     documentsRoot: (id: string) => ['collections', 'documents', id] as const,
     documents: (
       id: string,
-      params?: { page?: number; size?: number; status?: string; query?: string }
+      params?: { page?: number; size?: number; status?: string; query?: string; tenant_id?: string }
     ) => ['collections', 'documents', id, params] as const,
-    documentStatus: (id: string) => ['collections', 'doc-status', id] as const,
-    templateStatus: (collectionId: string, rowId: string) =>
-      ['collections', 'template-status', collectionId, rowId] as const,
+    templates: (
+      id: string,
+      params?: { page?: number; size?: number; query?: string; tenant_id?: string }
+    ) => ['collections', 'templates', id, params] as const,
+    templatesRoot: (id: string) => ['collections', 'templates', id] as const,
+    documentStatus: (id: string, tenantId?: string) =>
+      ['collections', 'doc-status', id, tenantId ?? 'default'] as const,
+    documentGraph: (collectionId: string, documentId: string) =>
+      ['collections', 'document-graph', collectionId, documentId] as const,
+    documentUploadPolicy: () => ['collections', 'document-upload-policy'] as const,
+    templateStatus: (collectionId: string, rowId: string, tenantId?: string) =>
+      ['collections', 'template-status', collectionId, rowId, tenantId ?? 'default'] as const,
     glossaryAll: () => ['collections', 'glossary', 'overview'] as const,
     glossaryOverview: (params?: Record<string, unknown>) =>
       ['collections', 'glossary', 'overview', params] as const,

@@ -71,6 +71,7 @@ stage_release_bundle() {
     docker-compose.prod.yml
     release.env
     scripts/release/common.sh
+    scripts/release/service-manifest.sh
     scripts/release/deploy.sh
   )
 
@@ -90,6 +91,7 @@ stage_release_bundle() {
   install -D -o root -g "$DEPLOY_GROUP" -m 0640 "${source}/docker-compose.prod.yml" "${temporary_dir}/docker-compose.prod.yml"
   install -D -o root -g "$DEPLOY_GROUP" -m 0640 "${source}/release.env" "${temporary_dir}/release.env"
   install -D -o root -g "$DEPLOY_GROUP" -m 0640 "${source}/scripts/release/common.sh" "${temporary_dir}/scripts/release/common.sh"
+  install -D -o root -g "$DEPLOY_GROUP" -m 0640 "${source}/scripts/release/service-manifest.sh" "${temporary_dir}/scripts/release/service-manifest.sh"
   install -D -o root -g "$DEPLOY_GROUP" -m 0750 "${source}/scripts/release/deploy.sh" "${temporary_dir}/scripts/release/deploy.sh"
   printf '%s\n' "$release_id" > "${temporary_dir}/.release-id"
   chown -R root:"$DEPLOY_GROUP" "$temporary_dir"

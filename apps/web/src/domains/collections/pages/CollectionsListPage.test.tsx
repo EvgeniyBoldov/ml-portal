@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { collectionsApi, type Collection } from '@/shared/api/collections';
 import { apiRequest } from '@/shared/api/http';
 import CollectionsListPage from './CollectionsListPage';
@@ -9,6 +9,7 @@ vi.mock('@/shared/api/http', () => ({ apiRequest: vi.fn() }));
 
 const persisted = {
   id: 'real-id',
+  tenant_id: 'tenant-id',
   slug: 'real-data',
   name: 'Настоящая коллекция',
   collection_type: 'table',
@@ -18,7 +19,10 @@ const persisted = {
   updated_at: '',
 } as Collection;
 
-function setup() {
+function setup(workspaces = [{ id: 'tenant-id', name: 'Рабочая группа' }]) {
+  vi.spyOn(collectionsApi, 'listWorkspaces').mockResolvedValue({
+    items: workspaces,
+  });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -30,6 +34,7 @@ function setup() {
       >
         <Routes>
           <Route path="/gpt/collections" element={<CollectionsListPage />} />
+          <Route path="/gpt/collections/:slug" element={<CollectionLinkProbe />} />
           <Route
             path="/gpt/collections/glossary"
             element={<p>Каталог терминов</p>}
@@ -38,6 +43,11 @@ function setup() {
       </MemoryRouter>
     </QueryClientProvider>
   );
+}
+
+function CollectionLinkProbe() {
+  const location = useLocation();
+  return <p>{location.search}</p>;
 }
 afterEach(() => {
   vi.restoreAllMocks();
@@ -51,6 +61,7 @@ it('lists persisted collections without synthetic memory rows or a glossary acti
   });
   setup();
   await screen.findByText('Настоящая коллекция');
+  expect(collectionsApi.list).toHaveBeenCalledWith(true, 'tenant-id');
   expect(screen.getAllByRole('row')).toHaveLength(2);
   expect(screen.queryByText('Project Memory')).not.toBeInTheDocument();
   expect(screen.queryByText('Глобальная память')).not.toBeInTheDocument();
@@ -127,4 +138,22 @@ it('recovers a failed catalogue load through the retry button', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
   await screen.findByText('Настоящая коллекция');
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('scopes the catalogue request and collection link to the selected tenant', async () => {
+  const list = vi.spyOn(collectionsApi, 'list').mockResolvedValue({
+    items: [persisted],
+    total: 1,
+  });
+  setup([
+    { id: 'tenant-id', name: 'Первая группа' },
+    { id: 'tenant-two', name: 'Вторая группа' },
+  ]);
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  const tenantPicker = await screen.findByLabelText('Рабочая группа');
+  fireEvent.click(tenantPicker);
+  fireEvent.click(await screen.findByRole('option', { name: 'Вторая группа' }));
+  await waitFor(() => expect(list).toHaveBeenCalledWith(true, 'tenant-two'));
+  fireEvent.click(await screen.findByRole('row', { name: /Настоящая коллекция/ }));
+  expect(await screen.findByText('?tenant_id=tenant-two')).toBeInTheDocument();
 });

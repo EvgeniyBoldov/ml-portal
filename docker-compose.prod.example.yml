@@ -251,6 +251,22 @@ services:
       - JIRA_MCP_MAX_RESULTS=${JIRA_MCP_MAX_RESULTS:-50}
       - MCP_SECRET_BROKER_TIMEOUT_SECONDS=${MCP_SECRET_BROKER_TIMEOUT_SECONDS:-10}
 
+  atlassian-mcp:
+    image: ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/mcp-atlassian:${APP_IMAGE_TAG:?APP_IMAGE_TAG is required}
+    <<: *restart
+    environment:
+      - PORT=8080
+      - JIRA_URL=${ATLASSIAN_JIRA_URL:-https://jira.invalid}
+      - JIRA_PERSONAL_TOKEN=broker-managed-placeholder
+      - CONFLUENCE_URL=${ATLASSIAN_CONFLUENCE_URL:-https://confluence.invalid}
+      - CONFLUENCE_PERSONAL_TOKEN=broker-managed-placeholder
+      - ALLOW_GLOBAL_CRED_FALLBACK=false
+      - READ_ONLY_MODE=false
+      - MCP_ALLOWED_URL_DOMAINS=${ATLASSIAN_ALLOWED_URL_DOMAINS:-}
+      - ATLASSIAN_MCP_ENABLED_TOOLS=${ATLASSIAN_MCP_ENABLED_TOOLS:-jira_search,jira_get_issue,jira_get_project_issues,confluence_search,confluence_get_page}
+      - MCP_SECRET_BROKER_TIMEOUT_SECONDS=${MCP_SECRET_BROKER_TIMEOUT_SECONDS:-10}
+      - ATLASSIAN_MCP_TIMEOUT_SECONDS=${ATLASSIAN_MCP_TIMEOUT_SECONDS:-120}
+
   ml-inference-mcp:
     image: ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/mcp-ml-inference:${APP_IMAGE_TAG:?APP_IMAGE_TAG is required}
     <<: *restart

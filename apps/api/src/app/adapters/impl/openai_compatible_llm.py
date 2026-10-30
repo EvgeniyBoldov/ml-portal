@@ -360,6 +360,15 @@ class OpenAICompatibleLLM:
                 raise asyncio.TimeoutError("LLM context correction deadline exceeded") from exc
             request["max_tokens"] = available
             logger.info("LLM context correction model=%s max_tokens=%s", request.get("model"), available)
+            if options is not None and options.on_context_allocation is not None:
+                await options.on_context_allocation({
+                    "model": request.get("model"),
+                    "context_correction": True,
+                    "estimated_input_tokens": allocation.estimated_input_tokens,
+                    "reserved_input_tokens": allocation.reserved_input_tokens,
+                    "minimum_output_tokens": allocation.minimum_output_tokens,
+                    "max_output_tokens": available,
+                })
             if options is not None and options.on_transport_retry is not None:
                 await options.on_transport_retry()
             # Only one corrective request, before any streaming output starts.

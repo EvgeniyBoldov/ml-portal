@@ -3,8 +3,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import Modal from '@shared/ui/Modal';
 import Button from '@shared/ui/Button';
+import Alert from '@shared/ui/Alert';
+import { useToast } from '@shared/ui/Toast';
 import { openSSE, type SSEMessage } from '@shared/lib/sse';
-import { collectionsApi, type CollectionTemplate } from '@shared/api/collections';
+import { collectionsApi, type Collection, type CollectionTemplate } from '@shared/api/collections';
+import { ApiError } from '@shared/api/errors';
 import { qk } from '@shared/api/keys';
 import {
   StatusFlowDetails,
@@ -19,6 +22,7 @@ import type { TemplateStatusGraphModel } from '@shared/components/statusFlow/tem
 import styles from './TemplateStatusModal.module.css';
 
 import { summarizeTemplateSchema } from '@shared/lib/templateSchemaSummary';
+import { capabilityReasonCopy } from '../capabilityReasonCopy';
 
 type SchemaField = Record<string, unknown> & { key: string };
 
@@ -128,22 +132,34 @@ function SchemaPreview({ schema }: { schema: Record<string, unknown> | null | un
 
 interface TemplateStatusModalProps {
   collectionId: string;
+  tenantId?: string;
+  collection: Collection;
+  permissionDenied?: boolean;
+  onPermissionDenied: (reason?: 'forbidden' | 'unavailable') => void | Promise<Collection | null>;
   row: CollectionTemplate;
   onClose: () => void;
 }
 
-export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStatusModalProps) {
+export function TemplateStatusModal({ collectionId, tenantId, collection, permissionDenied = false, onPermissionDenied, row, onClose }: TemplateStatusModalProps) {
   const queryClient = useQueryClient();
-  const statusQueryKey = useMemo(() => qk.collections.templateStatus(collectionId, row.id), [collectionId, row.id]);
+  const { showToast } = useToast();
+  const statusQueryKey = useMemo(() => qk.collections.templateStatus(collectionId, row.id, tenantId), [collectionId, row.id, tenantId]);
   const [descriptionDraft, setDescriptionDraft] = useState(String(row.description ?? ''));
   const [savedDescription, setSavedDescription] = useState(String(row.description ?? ''));
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [permissionError, setPermissionError] = useState(false);
+  const [permissionDeniedLocally, setPermissionDeniedLocally] = useState(false);
+  const canEditContent = !permissionDenied && !permissionDeniedLocally && collection.capabilities?.can_edit_content === true;
+  const canEditTemplate = !permissionDenied && !permissionDeniedLocally && collection.capabilities?.edit_templates === true;
+  const canApproveTemplate = !permissionDenied && !permissionDeniedLocally && collection.capabilities?.approve_templates === true;
+  const editReason = capabilityReasonCopy(collection.capability_reasons?.edit_templates, 'Редактирование шаблона временно недоступно.');
+  const approveReason = capabilityReasonCopy(collection.capability_reasons?.approve_templates, 'Согласование шаблона временно недоступно.');
 
   const { data: statusGraph } = useQuery<TemplateStatusGraphModel>({
     queryKey: statusQueryKey,
     queryFn: async () => {
-      const data = await collectionsApi.getTemplateStatusGraph(collectionId, row.id);
+      const data = await collectionsApi.getTemplateStatusGraph(collectionId, row.id, tenantId);
       return data as unknown as TemplateStatusGraphModel;
     },
     placeholderData: () => buildTemplateFallbackGraph(row),
@@ -158,9 +174,21 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
   }, [row]);
 
   useEffect(() => {
+    setPermissionError(false);
+    setPermissionDeniedLocally(false);
+  }, [collectionId, tenantId, row.id]);
+
+  useEffect(() => {
+    if (!permissionDenied) {
+      setPermissionDeniedLocally(false);
+      setPermissionError(false);
+    }
+  }, [permissionDenied]);
+
+  useEffect(() => {
     let disposed = false;
     const client = openSSE(
-      collectionsApi.getTemplateStatusEventsUrl(collectionId, row.id),
+      collectionsApi.getTemplateStatusEventsUrl(collectionId, row.id, tenantId),
       (events: SSEMessage[]) => {
         for (const event of events) {
           if (event.type !== 'rag.snapshot') continue;
@@ -177,7 +205,7 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
       disposed = true;
       client.disconnect();
     };
-  }, [collectionId, queryClient, row.id, statusQueryKey]);
+  }, [collectionId, queryClient, row.id, statusQueryKey, tenantId]);
 
   const flowModel = useMemo(() => adaptTemplateStatusGraphToFlowModel(graph), [graph]);
   const { selection, setSelection } = useStatusFlowSelection(flowModel);
@@ -266,22 +294,43 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
   const title = graph.title || row.title || 'Статус шаблона';
   const awaitingApproval = String(graph.runtime_status ?? graph.status ?? row.runtime_status ?? row.status ?? '').toLowerCase() === 'approval_required';
   const dirty = descriptionDraft !== savedDescription;
+  const refreshPermissionState = async () => {
+    setPermissionError(true);
+    setPermissionDeniedLocally(true);
+    try {
+      await onPermissionDenied('forbidden');
+    } catch {
+      // Keep the local deny latch set when the fresh capability request fails.
+    }
+  };
   const saveDescription = async () => {
+    if (!canEditContent || !canEditTemplate) return;
     setSaving(true);
     try {
-      await collectionsApi.updateTemplate(collectionId, row.id, { description: descriptionDraft.trim() || null });
+      await collectionsApi.updateTemplate(collectionId, row.id, { description: descriptionDraft.trim() || null }, tenantId);
       setSavedDescription(descriptionDraft);
-      await queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
+      await queryClient.invalidateQueries({ queryKey: qk.collections.templatesRoot(collectionId) });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Не удалось сохранить описание', 'error');
+      if (error instanceof ApiError && error.status === 403) {
+        void refreshPermissionState();
+      }
     } finally {
       setSaving(false);
     }
   };
   const approve = async () => {
+    if (!canEditContent || !canApproveTemplate) return;
     setApproving(true);
     try {
-      await collectionsApi.approveTemplate(collectionId, row.id);
-      await queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
+      await collectionsApi.approveTemplate(collectionId, row.id, tenantId);
+      await queryClient.invalidateQueries({ queryKey: qk.collections.templatesRoot(collectionId) });
       onClose();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Не удалось согласовать шаблон', 'error');
+      if (error instanceof ApiError && error.status === 403) {
+        void refreshPermissionState();
+      }
     } finally {
       setApproving(false);
     }
@@ -297,6 +346,12 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
       bodyClassName={styles.modalBody}
     >
       <div className={styles.container}>
+        {permissionError && (
+          <Alert variant="warning" title="Права изменились" description="Сервер отклонил изменение. Черновик сохранён; действия отключены до успешного подтверждения прав." />
+        )}
+        {!canEditContent && (
+          <Alert variant="warning" title="Только просмотр" description="Изменять содержимое могут администраторы и редакторы этого тенанта." />
+        )}
         <div className={styles.pipelineSection}>
           <StatusFlowView
             model={flowModel}
@@ -335,17 +390,21 @@ export function TemplateStatusModal({ collectionId, row, onClose }: TemplateStat
             </section>
             <label className={styles.descriptionField}>
               Описание шаблона
-              <textarea value={descriptionDraft} onChange={(event) => setDescriptionDraft(event.target.value)} rows={5} />
+              <textarea value={descriptionDraft} disabled={!canEditContent || !canEditTemplate} onChange={(event) => setDescriptionDraft(event.target.value)} rows={5} />
             </label>
             <div className={styles.approvalActions}>
               <Button variant="outline" onClick={onClose}>Отмена</Button>
-              <Button variant="outline" onClick={() => void saveDescription()} disabled={saving || !dirty}>
-                {saving ? 'Сохранение…' : 'Сохранить описание'}
-              </Button>
-              <Button onClick={() => void approve()} disabled={approving || dirty}>
-                {approving ? 'Согласование…' : 'Согласовать шаблон'}
-              </Button>
+              {(canEditContent || permissionDenied || permissionDeniedLocally) && <>
+                <Button variant="outline" onClick={() => void saveDescription()} disabled={!canEditTemplate || saving || !dirty} title={!canEditTemplate ? editReason : undefined}>
+                  {saving ? 'Сохранение…' : 'Сохранить описание'}
+                </Button>
+                <Button onClick={() => void approve()} disabled={!canApproveTemplate || approving || dirty} title={!canApproveTemplate ? approveReason : undefined}>
+                  {approving ? 'Согласование…' : 'Согласовать шаблон'}
+                </Button>
+              </>}
             </div>
+            {canEditContent && !canEditTemplate && <p role="status">{editReason}</p>}
+            {canEditContent && !canApproveTemplate && <p role="status">{approveReason}</p>}
           </div>
         )}
       </div>

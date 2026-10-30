@@ -567,8 +567,13 @@ class CollectionService:
     async def get_by_id(self, collection_id: uuid.UUID) -> Optional[Collection]:
         return await self.query.get_by_id(collection_id)
 
-    async def get_by_slug(self, slug: str) -> Optional[Collection]:
-        return await self.query.get_by_slug(slug)
+    async def get_by_slug(
+        self,
+        slug: str,
+        *,
+        include_inactive: bool = False,
+    ) -> Optional[Collection]:
+        return await self.query.get_by_slug(slug, include_inactive=include_inactive)
 
     async def ensure_contract_fields_present(
         self,

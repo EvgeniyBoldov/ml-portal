@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.sse import format_sse
 from app.services.rag_event_publisher import RAGEventSubscriber
 from app.core.logging import get_logger
+from .content_access import require_linked_document_content_access
 import asyncio
 
 logger = get_logger(__name__)
@@ -240,10 +241,6 @@ async def start_ingest(
     from app.services.rag_status_manager import RAGStatusManager
     from app.repositories.factory import get_async_repository_factory
     
-    # Проверка прав доступа
-    if user.role not in ['editor', 'admin']:
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-    
     try:
         doc_uuid = UUID(document_id)
     except ValueError:
@@ -257,11 +254,13 @@ async def start_ingest(
     
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    
-    # Проверка tenant_id для editor
-    user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
-    if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    linked = await require_linked_document_content_access(session, user, document)
+    if not linked:
+        if user.role not in ['editor', 'admin']:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
+        if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
+            raise HTTPException(status_code=403, detail="Access denied")
     
     # Запускаем инжест
     from app.services.rag_event_publisher import RAGEventPublisher
@@ -373,10 +372,6 @@ async def stop_ingest(
     from app.services.rag_status_manager import RAGStatusManager
     from app.repositories.factory import get_async_repository_factory
     
-    # Проверка прав доступа
-    if user.role not in ['editor', 'admin']:
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-    
     try:
         doc_uuid = UUID(document_id)
     except ValueError:
@@ -390,11 +385,13 @@ async def stop_ingest(
     
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    
-    # Проверка tenant_id для editor
-    user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
-    if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    linked = await require_linked_document_content_access(session, user, document)
+    if not linked:
+        if user.role not in ['editor', 'admin']:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
+        if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
+            raise HTTPException(status_code=403, detail="Access denied")
     
     # Останавливаем этап
     from app.services.rag_event_publisher import RAGEventPublisher
@@ -477,10 +474,6 @@ async def retry_ingest(
     from app.services.rag_status_manager import RAGStatusManager
     from app.repositories.factory import get_async_repository_factory
     
-    # Проверка прав доступа
-    if user.role not in ['editor', 'admin']:
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-    
     try:
         doc_uuid = UUID(document_id)
     except ValueError:
@@ -494,11 +487,13 @@ async def retry_ingest(
     
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    
-    # Проверка tenant_id для editor
-    user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
-    if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    linked = await require_linked_document_content_access(session, user, document)
+    if not linked:
+        if user.role not in ['editor', 'admin']:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        user_tenant_id = user.tenant_ids[0] if user.tenant_ids else None
+        if user.role == 'editor' and str(document.tenant_id) != user_tenant_id:
+            raise HTTPException(status_code=403, detail="Access denied")
     
     await _ensure_worker_ready()
 

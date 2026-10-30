@@ -69,6 +69,7 @@ class GraphPlanningStage:
         pause_question: Optional[str] = None
         pause_message: Optional[str] = None
         confirmation_context: Optional[Dict[str, Any]] = None
+        open_iteration: dict[str, Any] | None = None
         runtime_sink = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
         if runtime_sink is not None:
             async def emit_planner_event(event: RuntimeEvent) -> None:
@@ -225,6 +226,14 @@ class GraphPlanningStage:
                 planner_kwargs=planner_kwargs,
             ), planner_wall_time_ms):
                 runtime_event = event.to_runtime_event()
+                if runtime_event.type == RuntimeEventType.PLANNER_ITERATION_START:
+                    open_iteration = {
+                        "iteration_id": str(runtime_event.data.get("entity_id") or ""),
+                        "iteration": int(runtime_event.data.get("iteration") or 0),
+                        "iteration_type": str(runtime_event.data.get("iteration_type") or "decision"),
+                    }
+                elif runtime_event.type == RuntimeEventType.PLANNER_ITERATION_END:
+                    open_iteration = None
                 if runtime_event.type == RuntimeEventType.ERROR and runtime_event.data.get("error_code") == "llm_context_window_exceeded":
                     runtime_state.final_error = str(runtime_event.data.get("user_message") or runtime_event.data.get("error"))
                 if runtime_event.type == RuntimeEventType.ERROR:
@@ -261,6 +270,18 @@ class GraphPlanningStage:
                     )
         except asyncio.CancelledError:
             await self._store.cancel_plan(plan.id, reason="orchestrator_cancelled")
+            if open_iteration and open_iteration.get("iteration_id"):
+                yield PhasedEvent(RuntimeEvent.planner_iteration_end(
+                    iteration_id=open_iteration["iteration_id"],
+                    orchestrator_id=str(orchestrator_id or plan.id),
+                    iteration=int(open_iteration.get("iteration") or 0),
+                    iteration_type=str(open_iteration.get("iteration_type") or "decision"),
+                    status="cancelled",
+                ), OrchestrationPhase.PLANNER)
+            yield PhasedEvent(RuntimeEvent.orchestrator_end(
+                orchestrator_id=str(orchestrator_id or plan.id),
+                run_id=str(run_id), status="cancelled",
+            ), OrchestrationPhase.PLANNER)
             raise
         except TimeoutError:
             await self._store.mark_failed(

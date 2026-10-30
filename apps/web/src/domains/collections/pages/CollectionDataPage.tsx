@@ -5,7 +5,7 @@
  *   - document: RAG document list with StatusModal, bulk actions, upload
  */
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
@@ -22,6 +22,7 @@ import Alert from '@shared/ui/Alert';
 import {
   collectionsApi,
   type Collection,
+  type CollectionCapabilities,
   type CollectionDocument,
   type CollectionDocumentsResponse,
   type CollectionTemplate,
@@ -37,9 +38,18 @@ import GlossaryCollectionView from './GlossaryCollectionView';
 import ExternalCollectionOverview from '../components/ExternalCollectionOverview';
 import { memoryScopesApi } from '@/shared/api/memoryScopes';
 import { CollectionLoadError } from '../components/CollectionLoadError';
+import { capabilityReasonCopy } from '../capabilityReasonCopy';
 import styles from './CollectionDataPage.module.css';
 
 const PAGE_SIZES = [25, 50, 100];
+type CapabilityRefreshReason = 'forbidden' | 'unavailable';
+type CapabilityRefreshCallback = (reason?: CapabilityRefreshReason) => void | Promise<Collection | null>;
+
+function isInactiveCollectionConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && (
+    error.code === 'collection_inactive' || /collection is inactive/i.test(error.message)
+  );
+}
 
 // ─── Shared header ──────────────────────────────────────────────
 interface CollectionHeaderProps {
@@ -60,7 +70,7 @@ function CollectionHeader({ collection, total, right }: CollectionHeaderProps) {
       <div className={styles.headerLeft}>
         <button
           className={styles.backBtn}
-          onClick={() => navigate('/gpt/collections')}
+          onClick={() => navigate(`/gpt/collections${collection.tenant_id ? `?tenant_id=${encodeURIComponent(collection.tenant_id)}` : ''}`)}
           title="Назад"
         >
           <Icon name="chevron-left" size={20} />
@@ -82,6 +92,17 @@ function CollectionHeader({ collection, total, right }: CollectionHeaderProps) {
             )}
             <span>{itemCount}</span>
           </div>
+          {collection.capabilities?.can_edit_content !== true && (
+            <div className={styles.permissionNotice} role="status">
+              <Badge tone="neutral">Только просмотр</Badge>
+              <span>
+                Изменять содержимое могут администраторы и редакторы этого тенанта.
+                {collection.capability_reasons?.can_edit_content
+                  ? ` ${capabilityReasonCopy(collection.capability_reasons.can_edit_content, 'Изменять содержимое могут администраторы и редакторы этого тенанта.')}`
+                  : ''}
+              </span>
+            </div>
+          )}
         </div>
       </div>
       <div className={styles.headerRight}>{right}</div>
@@ -93,9 +114,10 @@ function CollectionHeader({ collection, total, right }: CollectionHeaderProps) {
 interface TableViewProps {
   collection: Collection;
   slug: string;
+  onPermissionDenied: CapabilityRefreshCallback;
 }
 
-function TableCollectionView({ collection, slug }: TableViewProps) {
+function TableCollectionView({ collection, slug, onPermissionDenied }: TableViewProps) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const showConfirmDialog = useAppStore(state => state.showConfirmDialog);
@@ -112,6 +134,12 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
   const [exporting, setExporting] = useState(false);
   const [activeExportId, setActiveExportId] = useState<string | null>(null);
   const isReadOnly = Boolean(collection.is_readonly);
+  const canEditContent = collection.capabilities?.can_edit_content === true;
+  const canMutateRows = collection.capabilities?.mutate_rows === true;
+  const canUploadCsv = collection.capabilities?.upload_csv === true;
+  const tenantId = collection.tenant_id;
+  const capabilityReason = (key: keyof CollectionCapabilities) =>
+    capabilityReasonCopy(collection.capability_reasons?.[key], 'Операция временно недоступна.');
 
   React.useEffect(() => {
     if (searchQuery.trim() === debouncedSearch) return;
@@ -124,12 +152,13 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
 
   const offset = (page - 1) * pageSize;
   const { data: dataResult, isLoading: dataLoading, isError: dataError, refetch } = useQuery({
-    queryKey: qk.collections.data(slug, { limit: pageSize, offset, search: debouncedSearch || undefined }),
+    queryKey: qk.collections.data(slug, { limit: pageSize, offset, search: debouncedSearch || undefined, tenant_id: tenantId }),
     queryFn: () =>
       collectionsApi.getData(slug, {
         limit: pageSize,
         offset,
         search: debouncedSearch || undefined,
+        tenant_id: tenantId,
       }),
     enabled: !!slug,
   });
@@ -151,15 +180,17 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
   }, [rowIds]);
 
   const deleteMutation = useMutation({
-    mutationFn: (ids: string[]) => collectionsApi.deleteRows(slug, ids),
+    mutationFn: (ids: string[]) => collectionsApi.deleteRows(slug, ids, tenantId),
     onSuccess: data => {
       showToast(`Удалено ${data.deleted} записей`, 'success');
       setSelectedIds(new Set<string>());
-      queryClient.invalidateQueries({ queryKey: ['collections', 'data', slug] });
-      queryClient.invalidateQueries({ queryKey: ['collections', 'detail', slug] });
+      queryClient.invalidateQueries({ queryKey: qk.collections.data(slug, { tenant_id: tenantId }) });
+      queryClient.invalidateQueries({ queryKey: qk.collections.detail(slug, tenantId) });
     },
     onError: (err: Error) => {
       showToast(err.message || 'Ошибка удаления', 'error');
+      if (err instanceof ApiError && err.status === 403) onPermissionDenied('forbidden');
+      else if (isInactiveCollectionConflict(err)) onPermissionDenied('unavailable');
     },
   });
 
@@ -200,7 +231,7 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
     if (!uploadFile || !slug) return;
     setUploading(true);
     try {
-      const result = await collectionsApi.uploadCSV(slug, uploadFile, { skip_errors: true });
+      const result = await collectionsApi.uploadCSV(slug, uploadFile, { skip_errors: true, tenant_id: tenantId });
       showToast(`Загружено ${result.inserted_rows} записей`, 'success');
       if (result.errors.length > 0) {
         showToast(`${result.errors.length} записей пропущено из-за ошибок`, 'warning');
@@ -208,22 +239,24 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
       setUploadModalOpen(false);
       setUploadFile(null);
       refetch();
-      queryClient.invalidateQueries({ queryKey: ['collections', 'detail', slug] });
+      queryClient.invalidateQueries({ queryKey: qk.collections.detail(slug, tenantId) });
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Ошибка загрузки', 'error');
+      if (err instanceof ApiError && err.status === 403) onPermissionDenied('forbidden');
+      else if (isInactiveCollectionConflict(err)) onPermissionDenied('unavailable');
     } finally {
       setUploading(false);
     }
   };
 
   const handleDownloadTemplate = () => {
-    window.open(collectionsApi.downloadTemplate(slug), '_blank');
+    window.open(collectionsApi.downloadTemplate(slug, tenantId), '_blank');
   };
 
   const pollExportReady = useCallback(async (exportId: string) => {
     const maxAttempts = 120;
     for (let i = 0; i < maxAttempts; i += 1) {
-      const status = await collectionsApi.getCsvExportStatus(slug, exportId);
+      const status = await collectionsApi.getCsvExportStatus(slug, exportId, tenantId);
       if (status.status === 'ready') {
         const href = status.download_url || (status.file_id ? buildFileDownloadUrl(status.file_id) : '');
         if (href) {
@@ -237,24 +270,26 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     throw new Error('Превышено время ожидания экспорта');
-  }, [slug]);
+  }, [slug, tenantId]);
 
   const handleExportCsv = useCallback(async () => {
-    if (exporting || isReadOnly) return;
+    if (exporting) return;
     setExporting(true);
     try {
-      const started = await collectionsApi.startCsvExport(slug);
+      const started = await collectionsApi.startCsvExport(slug, tenantId);
       setActiveExportId(started.export_id);
       showToast('Экспорт запущен', 'success');
       await pollExportReady(started.export_id);
       showToast('CSV готов', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Ошибка экспорта CSV', 'error');
+      if (err instanceof ApiError && err.status === 403) onPermissionDenied('forbidden');
+      else if (isInactiveCollectionConflict(err)) onPermissionDenied('unavailable');
     } finally {
       setExporting(false);
       setActiveExportId(null);
     }
-  }, [exporting, isReadOnly, pollExportReady, showToast, slug]);
+  }, [exporting, pollExportReady, showToast, slug, tenantId, onPermissionDenied]);
 
   const truncateText = (text: unknown, maxLen = 100): string => {
     if (text === null || text === undefined) return '—';
@@ -275,25 +310,26 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
         onChange={(e) => setSearchQuery(e.target.value)}
         className={styles.search}
       />
-      {!isReadOnly && (
+      <Button variant="outline" onClick={handleDownloadTemplate}>
+        <Icon name="download" size={16} />
+        Шаблон CSV
+      </Button>
+      <Button variant="outline" onClick={handleExportCsv} disabled={exporting}>
+        <Icon name="download" size={16} />
+        {exporting ? (activeExportId ? 'Экспортируется...' : 'Запуск...') : 'Экспорт CSV'}
+      </Button>
+      {!isReadOnly && canEditContent && (
         <>
           <Button
             variant="danger"
             onClick={handleDeleteSelected}
-            disabled={selectedIds.size === 0 || deleteMutation.isPending}
+            disabled={!canMutateRows || selectedIds.size === 0 || deleteMutation.isPending}
+            title={!canMutateRows ? capabilityReason('mutate_rows') : undefined}
           >
             <Icon name="trash" size={16} />
             Удалить
           </Button>
-          <Button variant="outline" onClick={handleDownloadTemplate}>
-            <Icon name="download" size={16} />
-            Шаблон CSV
-          </Button>
-          <Button variant="outline" onClick={handleExportCsv} disabled={exporting}>
-            <Icon name="download" size={16} />
-            {exporting ? (activeExportId ? 'Экспортируется...' : 'Запуск...') : 'Экспорт CSV'}
-          </Button>
-          <Button onClick={() => setUploadModalOpen(true)}>
+          <Button onClick={() => setUploadModalOpen(true)} disabled={!canUploadCsv} title={!canUploadCsv ? capabilityReason('upload_csv') : undefined}>
             <Icon name="upload" size={16} />
             Загрузить CSV
           </Button>
@@ -326,8 +362,8 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
                   ? 'Нет данных для отображения'
                   : 'Загрузите данные через CSV файл'}
             </p>
-            {!debouncedSearch && !isReadOnly && (
-              <Button onClick={() => setUploadModalOpen(true)}>
+            {!debouncedSearch && !isReadOnly && canEditContent && (
+              <Button onClick={() => setUploadModalOpen(true)} disabled={!canUploadCsv} title={!canUploadCsv ? capabilityReason('upload_csv') : undefined}>
                 <Icon name="upload" size={16} />
                 Загрузить CSV
               </Button>
@@ -337,7 +373,7 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
           <table className={styles.table}>
             <thead>
               <tr>
-                {!isReadOnly && (
+                {!isReadOnly && canEditContent && (
                   <th className={styles.checkboxCol}>
                     <input
                       type="checkbox"
@@ -359,8 +395,8 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
                 const rowId = String(row.id);
                 const isSelected = selectedIds.has(rowId);
                 return (
-                  <tr key={rowId} className={!isReadOnly && isSelected ? styles.selected : undefined}>
-                    {!isReadOnly && (
+                  <tr key={rowId} className={!isReadOnly && canEditContent && isSelected ? styles.selected : undefined}>
+                    {!isReadOnly && canEditContent && (
                       <td className={styles.checkboxCol}>
                         <input
                           type="checkbox"
@@ -416,17 +452,20 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
         </div>
       )}
 
-      {!isReadOnly && (
+      {uploadModalOpen && !isReadOnly && (
         <Modal
           open={uploadModalOpen}
           onClose={() => { setUploadModalOpen(false); setUploadFile(null); }}
           title="Загрузка CSV"
         >
           <div style={{ padding: 24 }}>
+            {!canEditContent && <Alert variant="warning" title="Только просмотр" description="Право редактирования коллекции было отозвано. Файл сохранён; обновите права перед загрузкой." />}
+            {canEditContent && !canUploadCsv && <Alert variant="warning" title="Загрузка временно недоступна" description={capabilityReason('upload_csv')} />}
             <input
               ref={fileInputRef}
               type="file"
               accept=".csv"
+              disabled={!canEditContent || !canUploadCsv || uploading}
               onChange={(e) => { const f = e.target.files?.[0]; if (f) setUploadFile(f); }}
               style={{ display: 'none' }}
             />
@@ -441,7 +480,7 @@ function TableCollectionView({ collection, slug }: TableViewProps) {
                 <div style={{ marginBottom: 16 }}><strong>Файл:</strong> {uploadFile.name}</div>
                 <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
                   <Button variant="outline" onClick={() => setUploadFile(null)} disabled={uploading}>Отмена</Button>
-                  <Button onClick={handleUpload} disabled={uploading}>
+                  <Button onClick={handleUpload} disabled={!canEditContent || !canUploadCsv || uploading} title={!canUploadCsv ? capabilityReason('upload_csv') : undefined}>
                     {uploading ? 'Загрузка...' : 'Загрузить'}
                   </Button>
                 </div>
@@ -590,9 +629,11 @@ function documentTypeLabel(document: CollectionDocument): string {
 
 interface DocumentViewProps {
   collection: Collection;
+  onPermissionDenied: CapabilityRefreshCallback;
+  permissionDenied: boolean;
 }
 
-function DocumentCollectionView({ collection }: DocumentViewProps) {
+function DocumentCollectionView({ collection, onPermissionDenied, permissionDenied }: DocumentViewProps) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -624,6 +665,15 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const collectionId = collection.id;
+  const tenantId = collection.tenant_id;
+  const capabilities = collection.capabilities;
+  const canEditContent = capabilities?.can_edit_content === true;
+  const canUploadDocuments = capabilities?.upload_documents === true;
+  const canDeleteDocuments = capabilities?.delete_documents === true;
+  const canIngest = capabilities?.ingest === true;
+  const canManageMemory = capabilities?.manage_memory === true;
+  const capabilityReason = (key: keyof CollectionCapabilities) =>
+    capabilityReasonCopy(collection.capability_reasons?.[key], 'Операция временно недоступна.');
 
   useEffect(() => {
     if (searchQuery.trim() === debouncedSearchQuery) return;
@@ -635,7 +685,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   }, [searchQuery, debouncedSearchQuery]);
 
   const { data: uploadPolicy } = useQuery({
-    queryKey: ['collections', 'document-upload-policy'],
+    queryKey: qk.collections.documentUploadPolicy(),
     queryFn: () => collectionsApi.getDocumentUploadPolicy(),
   });
 
@@ -706,11 +756,12 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   }, [collection.fields]);
 
   const { data: docsData, isLoading: docsLoading, isError: docsError, refetch: refetchDocs } = useQuery({
-    queryKey: qk.collections.documents(collectionId, { page, size: pageSize, query: debouncedSearchQuery }),
+    queryKey: qk.collections.documents(collectionId, { page, size: pageSize, query: debouncedSearchQuery, tenant_id: tenantId }),
     queryFn: () => {
       const params: NonNullable<Parameters<typeof collectionsApi.listDocuments>[1]> & { query?: string } = {
         page, size: pageSize,
         query: debouncedSearchQuery || undefined,
+        tenant_id: tenantId,
       };
       return collectionsApi.listDocuments(collectionId, params);
     },
@@ -722,7 +773,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
 
   const invalidateDocs = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: qk.collections.documentsRoot(collectionId) });
-  }, [queryClient, collectionId]);
+  }, [queryClient, collectionId, tenantId]);
 
   const debouncedInvalidateDocs = useCallback(() => {
     if (invalidateTimerRef.current) return;
@@ -730,7 +781,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       invalidateTimerRef.current = null;
       void queryClient.invalidateQueries({ queryKey: qk.collections.documentsRoot(collectionId) });
     }, 500);
-  }, [queryClient, collectionId]);
+  }, [queryClient, collectionId, tenantId]);
 
   const documents = useMemo(() => docsData?.items ?? [], [docsData?.items]);
   const totalDocs = docsData?.total ?? 0;
@@ -784,6 +835,9 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   useEffect(() => {
     setSelectedIds(new Set());
   }, [page, pageSize, debouncedSearchQuery]);
+  useEffect(() => {
+    if (!canEditContent && !permissionDenied) setSelectedIds(new Set());
+  }, [canEditContent, permissionDenied]);
 
   // Conditional bulk action visibility
   const ingestableDocuments = selectedDocs.filter(d =>
@@ -795,7 +849,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
   useEffect(() => {
     if (!collectionId) return;
     const client = new SSEClient({
-      url: collectionsApi.getStatusEventsUrl(collectionId),
+      url: collectionsApi.getStatusEventsUrl(collectionId, tenantId),
       onMessage: (events: SSEMessage[]) => {
         let needsInvalidate = false;
 
@@ -844,7 +898,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         if (needsInvalidate) {
           debouncedInvalidateDocs();
           if (openModalDocIdRef.current) {
-            void queryClient.invalidateQueries({ queryKey: qk.collections.documentStatus(openModalDocIdRef.current) });
+            void queryClient.invalidateQueries({ queryKey: qk.collections.documentStatus(openModalDocIdRef.current, tenantId) });
           }
         }
       },
@@ -859,26 +913,33 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         invalidateTimerRef.current = null;
       }
     };
-  }, [collectionId, queryClient, debouncedInvalidateDocs]);
+  }, [collectionId, tenantId, queryClient, debouncedInvalidateDocs]);
 
   // Drag & drop
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!canEditContent || !canUploadDocuments) return;
     e.preventDefault(); setIsDragging(true);
-  }, []);
+  }, [canEditContent, canUploadDocuments]);
   const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!canEditContent || !canUploadDocuments) return;
     e.preventDefault(); setIsDragging(false);
-  }, []);
+  }, [canEditContent, canUploadDocuments]);
   const handleDrop = useCallback((e: React.DragEvent) => {
+    if (!canEditContent || !canUploadDocuments) return;
     e.preventDefault(); setIsDragging(false);
     const files = validateDocumentFiles(Array.from(e.dataTransfer.files));
     if (files.length > 0) {
       setUploadFiles(files);
       setUploadModalOpen(true);
     }
-  }, [validateDocumentFiles]);
+  }, [canEditContent, canUploadDocuments, validateDocumentFiles]);
 
   // Upload
   const handleUpload = async () => {
+    if (!canEditContent || !canUploadDocuments) {
+      setUploadError('Право редактирования недоступно. Файлы сохранены.');
+      return;
+    }
     if (uploadFiles.length === 0) return;
     const requiredMissing = userDefinedFields.find(
       field => field.required && (field.data_type === 'boolean'
@@ -927,7 +988,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
             auto_ingest: true,
             memory_enabled: uploadMemoryPolicy === 'collection' ? undefined : uploadMemoryPolicy === 'enabled',
             memory_scope_keys: [uploadScope],
-          })
+          }, tenantId)
         )
       );
       const failedFiles = uploadFiles.filter((_, index) => results[index].status === 'rejected');
@@ -940,6 +1001,13 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         setUploadError(message);
         showToast(`Ошибка загрузки: ${failed} файлов`, 'error');
         setUploadFiles(failedFiles);
+        if (results.some(result => result.status === 'rejected' && result.reason instanceof ApiError && result.reason.status === 403)) {
+          setUploadError('Право редактирования было отозвано. Выбранные файлы сохранены.');
+          onPermissionDenied('forbidden');
+        } else if (results.some(result => result.status === 'rejected' && isInactiveCollectionConflict(result.reason))) {
+          setUploadError('Коллекция неактивна. Выбранные файлы сохранены.');
+          onPermissionDenied('unavailable');
+        }
       } else {
         setUploadModalOpen(false);
         setUploadFiles([]);
@@ -962,12 +1030,14 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     if (selectedIds.size === 0) return;
     if (!confirm(`Удалить ${selectedIds.size} документов? Данные будут удалены из MinIO и БД.`)) return;
     try {
-      await collectionsApi.deleteDocuments(collectionId, Array.from(selectedIds));
+      await collectionsApi.deleteDocuments(collectionId, Array.from(selectedIds), tenantId);
       showToast(`Удалено: ${selectedIds.size} документов`, 'success');
       setSelectedIds(new Set());
       invalidateDocs();
-    } catch {
+    } catch (error) {
       showToast('Ошибка удаления', 'error');
+      if (error instanceof ApiError && error.status === 403) onPermissionDenied('forbidden');
+      else if (isInactiveCollectionConflict(error)) onPermissionDenied('unavailable');
     }
   };
 
@@ -977,19 +1047,26 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     setMemoryActionPending(action);
     try {
       const results = await Promise.allSettled(documentIds.map(id => action === 'add'
-        ? collectionsApi.addDocumentToMemory(collectionId, id)
-        : collectionsApi.removeDocumentFromMemory(collectionId, id)));
+        ? collectionsApi.addDocumentToMemory(collectionId, id, tenantId)
+        : collectionsApi.removeDocumentFromMemory(collectionId, id, tenantId)));
       const succeeded = results.filter(result => result.status === 'fulfilled').length;
       const failedIds = documentIds.filter((_, index) => results[index]?.status === 'rejected');
       const failed = failedIds.length;
+      if (results.some(result => result.status === 'rejected' && result.reason instanceof ApiError && result.reason.status === 403)) {
+        onPermissionDenied('forbidden');
+      } else if (results.some(result => result.status === 'rejected' && isInactiveCollectionConflict(result.reason))) {
+        onPermissionDenied('unavailable');
+      }
       const operationLabel = action === 'add' ? 'Добавление в LongMemory' : 'Удаление из LongMemory';
       showToast(failed === 0
         ? `${operationLabel} поставлено в очередь: ${succeeded}`
         : `LongMemory: поставлено в очередь ${succeeded}, ошибок ${failed}`, failed === 0 ? 'success' : 'error');
       setSelectedIds(new Set(failedIds));
       if (succeeded > 0) invalidateDocs();
-    } catch {
+    } catch (error) {
       showToast('Не удалось выполнить действие LongMemory', 'error');
+      if (error instanceof ApiError && error.status === 403) onPermissionDenied('forbidden');
+      else if (isInactiveCollectionConflict(error)) onPermissionDenied('unavailable');
     } finally {
       setMemoryActionPending(null);
     }
@@ -999,7 +1076,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     if (ingestableDocuments.length === 0) return;
     try {
       const results = await Promise.allSettled(
-        ingestableDocuments.map(document => collectionsApi.startDocIngest(collectionId, document.id))
+        ingestableDocuments.map(document => collectionsApi.startDocIngest(collectionId, document.id, tenantId))
       );
       let started = 0;
       let alreadyRunning = 0;
@@ -1011,6 +1088,12 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
           return;
         }
         const error = result.reason;
+        if (error instanceof ApiError && error.status === 403) onPermissionDenied('forbidden');
+        if (isInactiveCollectionConflict(error)) {
+          onPermissionDenied('unavailable');
+          failed += 1;
+          return;
+        }
         if (error instanceof ApiError && error.status === 409) {
           alreadyRunning += 1;
           return;
@@ -1071,12 +1154,17 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
     }
   };
 
-  const headerRight = (
-      <Button variant="primary" onClick={() => setUploadModalOpen(true)}>
+  const headerRight = canEditContent ? (
+    <Button
+      variant="primary"
+      onClick={() => setUploadModalOpen(true)}
+      disabled={!canUploadDocuments}
+      title={!canUploadDocuments ? capabilityReason('upload_documents') : undefined}
+    >
       <Icon name="upload" size={16} />
       Загрузить документы
     </Button>
-  );
+  ) : null;
 
   return (
     <>
@@ -1096,22 +1184,22 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
           />
         </div>
         <div className={styles.docToolbarRight}>
-          {selectedIds.size > 0 && (
+      {selectedIds.size > 0 && canEditContent && (
             <div className={styles.docBulkActions}>
               <span className={styles.docSelectedCount}>Выбрано {selectedIds.size}</span>
               {canBulkIngest && (
-                <Button variant="ghost" size="sm" disabled={memoryActionPending !== null} onClick={handleBulkIngest}>
+                <Button variant="ghost" size="sm" disabled={!canIngest || memoryActionPending !== null} title={!canIngest ? capabilityReason('ingest') : undefined} onClick={handleBulkIngest}>
                   Запустить обработку
                 </Button>
               )}
-              <Button variant="outline" size="sm" disabled={memoryActionPending !== null} loading={memoryActionPending === 'add'} onClick={() => { void handleBulkMemoryAction('add'); }}>
+              <Button variant="outline" size="sm" disabled={!canManageMemory || memoryActionPending !== null} title={!canManageMemory ? capabilityReason('manage_memory') : undefined} loading={memoryActionPending === 'add'} onClick={() => { void handleBulkMemoryAction('add'); }}>
                 Добавить в LongMemory
               </Button>
-              <Button variant="outline" size="sm" className={styles.dangerAction} disabled={memoryActionPending !== null} loading={memoryActionPending === 'delete'} onClick={() => { void handleBulkMemoryAction('delete'); }}>
+              <Button variant="outline" size="sm" className={styles.dangerAction} disabled={!canManageMemory || memoryActionPending !== null} title={!canManageMemory ? capabilityReason('manage_memory') : undefined} loading={memoryActionPending === 'delete'} onClick={() => { void handleBulkMemoryAction('delete'); }}>
                 Удалить из LongMemory
               </Button>
               {canBulkDelete && (
-                <Button variant="outline" size="sm" className={styles.dangerAction} disabled={memoryActionPending !== null} onClick={handleBulkDelete}>
+                <Button variant="outline" size="sm" className={styles.dangerAction} disabled={!canDeleteDocuments || memoryActionPending !== null} title={!canDeleteDocuments ? capabilityReason('delete_documents') : undefined} onClick={handleBulkDelete}>
                   Удалить документы
                 </Button>
               )}
@@ -1126,11 +1214,11 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
       {/* Document table */}
       <div
         className={`${styles.tableContainer} ${isDragging ? styles.dragging : ''}`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        onDragOver={canEditContent && canUploadDocuments ? handleDragOver : undefined}
+        onDragLeave={canEditContent && canUploadDocuments ? handleDragLeave : undefined}
+        onDrop={canEditContent && canUploadDocuments ? handleDrop : undefined}
       >
-        {isDragging && (
+        {isDragging && canEditContent && canUploadDocuments && (
           <div className={styles.dropOverlay}>
             <div className={styles.dropContent}>
               <Icon name="upload" size={48} />
@@ -1155,8 +1243,8 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                 ? 'Попробуйте изменить запрос'
                 : 'Загрузите первый документ для начала работы'}
             </p>
-            {!searchQuery && (
-              <Button onClick={() => setUploadModalOpen(true)}>Загрузить документ</Button>
+            {!searchQuery && canEditContent && (
+              <Button onClick={() => setUploadModalOpen(true)} disabled={!canUploadDocuments} title={!canUploadDocuments ? capabilityReason('upload_documents') : undefined}>Загрузить документ</Button>
             )}
           </div>
         ) : (
@@ -1172,7 +1260,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
             </colgroup>
             <thead>
               <tr>
-                <th className={styles.checkboxCell}>
+                {canEditContent && <th className={styles.checkboxCell}>
                   <input
                     type="checkbox"
                     checked={filteredDocuments.length > 0 && filteredDocuments.every(document => selectedIds.has(document.id))}
@@ -1180,7 +1268,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                     onChange={handleSelectAll}
                     aria-label="Выбрать все документы на странице"
                   />
-                </th>
+                </th>}
                 <th scope="col" className={styles.sortable} aria-sort={sortKey === 'name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                   <button type="button" className={styles.sortHeader} onClick={() => handleSort('name')}>
                     Документ
@@ -1218,7 +1306,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                 const chunkCount = doc.artifacts?.chunks?.chunk_count;
                 return (
                   <tr key={doc.id} className={selectedIds.has(doc.id) ? styles.selected : ''}>
-                    <td className={styles.checkboxCell}>
+                    {canEditContent && <td className={styles.checkboxCell}>
                       <input
                         type="checkbox"
                         checked={selectedIds.has(doc.id)}
@@ -1226,7 +1314,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
                         onChange={() => handleSelect(doc.id)}
                         aria-label={`Выбрать документ ${doc.name || doc.filename}`}
                       />
-                    </td>
+                    </td>}
                     <td className={styles.nameCell}>
                       <div className={styles.documentNameRow}>
                         <button
@@ -1316,19 +1404,22 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
         footer={
           <>
             <Button variant="ghost" onClick={() => setUploadModalOpen(false)}>Отмена</Button>
-            <Button onClick={handleUpload} disabled={uploadFiles.length === 0 || uploading || !memoryScopesQuery.data?.some(scope => scope.key === uploadScope)}>
+            <Button onClick={handleUpload} disabled={!canEditContent || !canUploadDocuments || uploadFiles.length === 0 || uploading || !memoryScopesQuery.data?.some(scope => scope.key === uploadScope)} title={!canUploadDocuments ? capabilityReason('upload_documents') : undefined}>
               {uploading ? 'Загрузка...' : `Загрузить (${uploadFiles.length})`}
             </Button>
           </>
         }
       >
         <div className={styles.docUploadContent}>
+          {!canEditContent && <Alert variant="warning" title="Только просмотр" description="Право редактирования было отозвано. Файлы и заполненные поля сохранены; обновите права перед загрузкой." />}
+          {canEditContent && !canUploadDocuments && <Alert variant="warning" title="Загрузка временно недоступна" description={capabilityReason('upload_documents')} />}
           <div
             className={styles.dropZone}
-            onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+            onClick={(e) => { e.stopPropagation(); if (canEditContent && canUploadDocuments) fileInputRef.current?.click(); }}
             role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click(); } }}
+            tabIndex={canEditContent && canUploadDocuments ? 0 : -1}
+            aria-disabled={!canEditContent || !canUploadDocuments}
+            onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && canEditContent && canUploadDocuments) { e.preventDefault(); fileInputRef.current?.click(); } }}
           >
             <Icon name="upload" size={32} />
             <span>Нажмите или перетащите файлы</span>
@@ -1339,6 +1430,7 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
             type="file"
             multiple
             accept={uploadAccept}
+            disabled={!canEditContent || !canUploadDocuments || uploading}
             style={{ display: 'none' }}
             onChange={e => {
               const files = validateDocumentFiles(Array.from(e.target.files || []));
@@ -1482,11 +1574,16 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
           docId={statusModalDocId}
           docName={documents.find(d => d.id === statusModalDocId)?.name}
           onClose={() => { setStatusModalDocId(null); openModalDocIdRef.current = null; }}
-          sseUrl={collectionsApi.getDocumentStatusEventsUrl(collectionId, statusModalDocId)}
-          statusGraphUrl={`/collections/${collectionId}/docs/${statusModalDocId}/status-graph`}
+          sseUrl={collectionsApi.getDocumentStatusEventsUrl(collectionId, statusModalDocId, tenantId)}
+          statusGraphUrl={`/collections/${collectionId}/docs/${statusModalDocId}/status-graph${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`}
+          downloadUrlPrefix={`/collections/${collectionId}/docs/${statusModalDocId}/download`}
           retryUrlPrefix={`/collections/${collectionId}/docs/${statusModalDocId}/ingest/retry`}
-          memoryUrl={`/collections/${collectionId}/docs/${statusModalDocId}/memory`}
+          memoryUrl={`/collections/${collectionId}/docs/${statusModalDocId}/memory${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`}
           stopUrlPrefix={`/collections/${collectionId}/docs/${statusModalDocId}/ingest/stop`}
+          tenantId={tenantId}
+          collectionCapabilities={capabilities}
+          capabilityReasons={collection.capability_reasons}
+          onPermissionDenied={onPermissionDenied}
         />
       )}
     </>
@@ -1497,9 +1594,11 @@ function DocumentCollectionView({ collection }: DocumentViewProps) {
 interface TemplateViewProps {
   collection: Collection;
   slug: string;
+  onPermissionDenied: CapabilityRefreshCallback;
+  permissionDenied: boolean;
 }
 
-function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
+function TemplateCollectionView({ collection, slug, onPermissionDenied, permissionDenied }: TemplateViewProps) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const showConfirmDialog = useAppStore(state => state.showConfirmDialog);
@@ -1517,6 +1616,14 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   const [actionsMenu, setActionsMenu] = useState<{ row: CollectionTemplate; anchorEl: HTMLElement } | null>(null);
 
   const collectionId = collection.id;
+  const tenantId = collection.tenant_id;
+  const capabilities = collection.capabilities;
+  const canEditContent = capabilities?.can_edit_content === true;
+  const canUploadTemplates = capabilities?.upload_templates === true;
+  const canAnalyzeTemplates = capabilities?.analyze_templates === true;
+  const canDeleteTemplates = capabilities?.delete_templates === true;
+  const capabilityReason = (key: keyof CollectionCapabilities) =>
+    capabilityReasonCopy(collection.capability_reasons?.[key], 'Операция временно недоступна.');
 
   useEffect(() => {
     if (searchQuery.trim() === debouncedSearchQuery) return;
@@ -1527,11 +1634,11 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     return () => clearTimeout(timer);
   }, [searchQuery, debouncedSearchQuery]);
 
-  const templateQueryKey = useMemo(() => ['collections', 'templates', collectionId, { page, size: pageSize, query: debouncedSearchQuery }] as const, [collectionId, page, pageSize, debouncedSearchQuery]);
+  const templateQueryKey = useMemo(() => qk.collections.templates(collectionId, { page, size: pageSize, query: debouncedSearchQuery, tenant_id: tenantId }), [collectionId, page, pageSize, debouncedSearchQuery, tenantId]);
 
   const { data: templatesData, isLoading: templatesLoading, isError: templatesError, refetch: refetchTemplates } = useQuery({
     queryKey: templateQueryKey,
-    queryFn: () => collectionsApi.listTemplates(collectionId, { page, size: pageSize, query: debouncedSearchQuery || undefined }),
+    queryFn: () => collectionsApi.listTemplates(collectionId, { page, size: pageSize, query: debouncedSearchQuery || undefined, tenant_id: tenantId }),
     enabled: !!collectionId,
     refetchInterval: 10000,
   });
@@ -1544,14 +1651,17 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   useEffect(() => {
     if (templatesData && page > totalPages) setPage(totalPages);
   }, [templatesData, page, totalPages]);
+  useEffect(() => {
+    if (!canEditContent && !permissionDenied) setSelectedIds(new Set<string>());
+  }, [canEditContent, permissionDenied]);
 
   const invalidateTemplates = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
-    void queryClient.invalidateQueries({ queryKey: ['collections', 'detail', slug] });
-  }, [collectionId, queryClient, slug]);
+    void queryClient.invalidateQueries({ queryKey: qk.collections.templatesRoot(collectionId) });
+    void queryClient.invalidateQueries({ queryKey: qk.collections.detail(slug, tenantId) });
+  }, [collectionId, queryClient, slug, tenantId]);
 
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => collectionsApi.uploadTemplate(collectionId, { file }),
+    mutationFn: (file: File) => collectionsApi.uploadTemplate(collectionId, { file }, tenantId),
     onSuccess: () => {
       showToast('Шаблон загружен, анализ запущен', 'success');
       setUploadFile(null);
@@ -1560,6 +1670,8 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     },
     onError: (err: Error) => {
       showToast(err.message || 'Ошибка загрузки шаблона', 'error');
+      if (err instanceof ApiError && err.status === 403) onPermissionDenied('forbidden');
+      else if (isInactiveCollectionConflict(err)) onPermissionDenied('unavailable');
     },
     onSettled: () => {
       setUploading(false);
@@ -1567,7 +1679,7 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   });
 
   const analyzeMutation = useMutation({
-    mutationFn: (rowIds: string[]) => collectionsApi.analyzeTemplates(collectionId, rowIds),
+    mutationFn: (rowIds: string[]) => collectionsApi.analyzeTemplates(collectionId, rowIds, tenantId),
     onSuccess: (result) => {
       const queued = result.queued ?? 0;
       const missing = result.missing?.length ?? 0;
@@ -1578,26 +1690,28 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     },
     onError: (err: Error) => {
       showToast(err.message || 'Ошибка запуска анализа', 'error');
+      if (err instanceof ApiError && err.status === 403) onPermissionDenied('forbidden');
+      else if (isInactiveCollectionConflict(err)) onPermissionDenied('unavailable');
     },
   });
 
   useEffect(() => {
     if (!collectionId) return;
     const client = new SSEClient({
-      url: collectionsApi.getTemplateCollectionStatusEventsUrl(collectionId),
+      url: collectionsApi.getTemplateCollectionStatusEventsUrl(collectionId, tenantId),
       onMessage: (events: SSEMessage[]) => {
         for (const event of events) {
           const payload = event.data as Record<string, unknown> | null;
           if (!payload) continue;
 
           if (event.type === 'rag.snapshot') {
-            void queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
+            void queryClient.invalidateQueries({ queryKey: qk.collections.templatesRoot(collectionId) });
             continue;
           }
 
           const item = payload.item as CollectionTemplate | undefined;
           if (!item?.id) continue;
-          void queryClient.invalidateQueries({ queryKey: ['collections', 'templates', collectionId] });
+          void queryClient.invalidateQueries({ queryKey: qk.collections.templatesRoot(collectionId) });
         }
       },
     });
@@ -1605,7 +1719,7 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
     return () => {
       client.disconnect();
     };
-  }, [collectionId, queryClient, templateQueryKey]);
+  }, [collectionId, tenantId, queryClient, templateQueryKey]);
 
   const handleSelectAll = useCallback(() => {
     const visibleIds = filteredTemplates.map((item) => item.id);
@@ -1623,18 +1737,25 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   }, []);
 
   const handleUpload = useCallback(() => {
+    if (!canEditContent || !canUploadTemplates) return;
     if (!uploadFile) return;
     setUploading(true);
     uploadMutation.mutate(uploadFile);
-  }, [uploadFile, uploadMutation]);
+  }, [canEditContent, canUploadTemplates, uploadFile, uploadMutation]);
 
   const handleDeleteRows = useCallback(async (ids: string[]) => {
-    if (ids.length === 0) return;
-    await collectionsApi.deleteTemplates(collectionId, ids);
-    showToast(`Удалено: ${ids.length} шаблонов`, 'success');
-    setSelectedIds(new Set<string>());
-    invalidateTemplates();
-  }, [collectionId, invalidateTemplates, showToast]);
+    if (!canEditContent || !canDeleteTemplates || ids.length === 0) return;
+    try {
+      await collectionsApi.deleteTemplates(collectionId, ids, tenantId);
+      showToast(`Удалено: ${ids.length} шаблонов`, 'success');
+      setSelectedIds(new Set<string>());
+      invalidateTemplates();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Ошибка удаления шаблонов', 'error');
+      if (error instanceof ApiError && error.status === 403) onPermissionDenied('forbidden');
+      else if (isInactiveCollectionConflict(error)) onPermissionDenied('unavailable');
+    }
+  }, [canEditContent, canDeleteTemplates, collectionId, tenantId, invalidateTemplates, onPermissionDenied, showToast]);
 
   const handleDeleteSelected = useCallback(() => {
     const ids = Array.from(selectedIds);
@@ -1657,14 +1778,16 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
   }, [handleDeleteRows, selectedIds, showConfirmDialog]);
 
   const handleAnalyzeSelected = useCallback(() => {
+    if (!canEditContent || !canAnalyzeTemplates) return;
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
     analyzeMutation.mutate(ids);
-  }, [analyzeMutation, selectedIds]);
+  }, [canEditContent, canAnalyzeTemplates, analyzeMutation, selectedIds]);
 
   const handleAnalyzeOne = useCallback((rowId: string) => {
+    if (!canEditContent || !canAnalyzeTemplates) return;
     analyzeMutation.mutate([rowId]);
-  }, [analyzeMutation]);
+  }, [canEditContent, canAnalyzeTemplates, analyzeMutation]);
 
   const handleDeleteOne = useCallback((rowId: string, title: string) => {
     showConfirmDialog({
@@ -1699,12 +1822,12 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
 
   const handleDownload = useCallback(async (row: CollectionTemplate) => {
     try {
-      const { download_url } = await collectionsApi.getTemplateDownload(collectionId, row.id);
+      const { download_url } = await collectionsApi.getTemplateDownload(collectionId, row.id, tenantId);
       window.open(download_url, '_blank', 'noopener,noreferrer');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Оригинальный файл не найден', 'warning');
     }
-  }, [collectionId, showToast]);
+  }, [collectionId, tenantId, showToast]);
 
   const getTemplateStatusBadge = (row: CollectionTemplate) => {
     const status = String(row.runtime_status ?? row.status ?? 'uploaded').toLowerCase();
@@ -1728,22 +1851,24 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
       />
-      {selectedIds.size > 0 && (
-        <Button variant="danger" onClick={handleDeleteSelected}>
+      {canEditContent && selectedIds.size > 0 && (
+        <Button variant="danger" onClick={handleDeleteSelected} disabled={!canDeleteTemplates} title={!canDeleteTemplates ? capabilityReason('delete_templates') : undefined}>
           <Icon name="trash" size={16} />
           Удалить
         </Button>
       )}
-      {selectedIds.size > 0 && (
-        <Button variant="ghost" onClick={handleAnalyzeSelected} disabled={analyzeMutation.isPending}>
+      {canEditContent && selectedIds.size > 0 && (
+        <Button variant="ghost" onClick={handleAnalyzeSelected} disabled={!canAnalyzeTemplates || analyzeMutation.isPending} title={!canAnalyzeTemplates ? capabilityReason('analyze_templates') : undefined}>
           <Icon name="sparkles" size={16} />
           {analyzeMutation.isPending ? 'Анализ...' : 'Запустить анализ'}
         </Button>
       )}
-      <Button variant="primary" onClick={() => setUploadModalOpen(true)}>
-        <Icon name="upload" size={16} />
-        Загрузить шаблон
-      </Button>
+      {canEditContent && (
+        <Button variant="primary" onClick={() => setUploadModalOpen(true)} disabled={!canUploadTemplates} title={!canUploadTemplates ? capabilityReason('upload_templates') : undefined}>
+          <Icon name="upload" size={16} />
+          Загрузить шаблон
+        </Button>
+      )}
     </>
   );
 
@@ -1770,8 +1895,8 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
             <p className={styles.emptyText}>
               {searchQuery ? 'Попробуйте изменить поисковый запрос' : 'Загрузите первый шаблон для начала работы'}
             </p>
-            {!searchQuery && (
-              <Button onClick={() => setUploadModalOpen(true)}>
+            {!searchQuery && canEditContent && (
+              <Button onClick={() => setUploadModalOpen(true)} disabled={!canUploadTemplates} title={!canUploadTemplates ? capabilityReason('upload_templates') : undefined}>
                 <Icon name="upload" size={16} />
                 Загрузить шаблон
               </Button>
@@ -1781,9 +1906,9 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
           <table className={styles.docTable}>
             <thead>
               <tr>
-                <th className={styles.checkboxCell}>
+                {canEditContent && <th className={styles.checkboxCell}>
                   <input type="checkbox" checked={allSelected} onChange={handleSelectAll} />
-                </th>
+                </th>}
                 <th>Название</th>
                 <th>Статус</th>
                 <th>Описание</th>
@@ -1796,13 +1921,13 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
               {filteredTemplates.map((row) => {
                 return (
                   <tr key={row.id} className={selectedIds.has(row.id) ? styles.selected : ''}>
-                    <td className={styles.checkboxCell}>
+                    {canEditContent && <td className={styles.checkboxCell}>
                       <input
                         type="checkbox"
                         checked={selectedIds.has(row.id)}
                         onChange={() => handleSelectRow(row.id)}
                       />
-                    </td>
+                    </td>}
                     <td className={styles.nameCell}>
                       <button
                         type="button"
@@ -1877,20 +2002,23 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
         footer={
           <>
             <Button variant="ghost" onClick={() => setUploadModalOpen(false)}>Отмена</Button>
-            <Button onClick={handleUpload} disabled={!uploadFile || uploading}>
+            <Button onClick={handleUpload} disabled={!canEditContent || !canUploadTemplates || !uploadFile || uploading} title={!canUploadTemplates ? capabilityReason('upload_templates') : undefined}>
               {uploading ? 'Загрузка...' : 'Загрузить'}
             </Button>
           </>
         }
       >
         <div className={styles.docUploadContent}>
+          {!canEditContent && <Alert variant="warning" title="Только просмотр" description="Право редактирования было отозвано. Файл сохранён; обновите права перед загрузкой." />}
+          {canEditContent && !canUploadTemplates && <Alert variant="warning" title="Загрузка временно недоступна" description={capabilityReason('upload_templates')} />}
           <div
             className={styles.dropZone}
-            onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+            onClick={(e) => { e.stopPropagation(); if (canEditContent && canUploadTemplates) fileInputRef.current?.click(); }}
             role="button"
-            tabIndex={0}
+            tabIndex={canEditContent && canUploadTemplates ? 0 : -1}
+            aria-disabled={!canEditContent || !canUploadTemplates}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
+              if ((e.key === 'Enter' || e.key === ' ') && canEditContent && canUploadTemplates) {
                 e.preventDefault();
                 fileInputRef.current?.click();
               }
@@ -1904,6 +2032,7 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
             ref={fileInputRef}
             type="file"
             accept=".xlsx,.xlsm"
+            disabled={!canEditContent || !canUploadTemplates || uploading}
             style={{ display: 'none' }}
             onChange={(e) => {
               const file = e.target.files?.[0] ?? null;
@@ -1936,22 +2065,28 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
             onClick: () => handleDownload(actionsMenu.row),
             disabled: false,
           },
-          {
+          ...(canEditContent ? [{
             label: 'Анализ',
             onClick: () => handleAnalyzeOne(actionsMenu.row.id),
-            disabled: analyzeMutation.isPending,
-          },
-          {
+            disabled: !canAnalyzeTemplates || analyzeMutation.isPending,
+            title: !canAnalyzeTemplates ? capabilityReason('analyze_templates') : undefined,
+          }] : []),
+          ...(canEditContent ? [{
             label: 'Удалить',
             onClick: () => handleDeleteOne(actionsMenu.row.id, actionsMenu.row.title || 'Шаблон'),
             variant: 'danger',
-          },
+            disabled: !canDeleteTemplates,
+            title: !canDeleteTemplates ? capabilityReason('delete_templates') : undefined,
+          } as const] : []),
         ] : []}
       />
 
       {statusModalRow && (
         <TemplateStatusModal
           collectionId={collectionId}
+          tenantId={tenantId}
+          collection={collection}
+          onPermissionDenied={onPermissionDenied}
           row={statusModalRow}
           onClose={() => setStatusModalRow(null)}
         />
@@ -1964,12 +2099,37 @@ function TemplateCollectionView({ collection, slug }: TemplateViewProps) {
 export default function CollectionDataPage() {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const tenantId = searchParams.get('tenant_id') || undefined;
+  const [capabilityRefreshReason, setCapabilityRefreshReason] = useState<CapabilityRefreshReason | null>(null);
 
   const { data: collection, isLoading: collectionLoading, error: collectionError, refetch: refetchCollection } = useQuery({
-    queryKey: ['collections', 'detail', slug],
-    queryFn: () => collectionsApi.getBySlug(slug!),
+    queryKey: qk.collections.detail(slug || '', tenantId),
+    queryFn: () => collectionsApi.getBySlug(slug!, tenantId),
     enabled: !!slug && slug !== 'glossary',
+    staleTime: 0,
+    refetchOnWindowFocus: true,
   });
+  useEffect(() => {
+    setCapabilityRefreshReason(null);
+  }, [slug, tenantId]);
+  const handlePermissionDenied = useCallback(async (reason: CapabilityRefreshReason = 'forbidden'): Promise<Collection | null> => {
+    setCapabilityRefreshReason(reason);
+    try {
+      const result = await refetchCollection();
+      const freshCollection = result.isSuccess ? result.data ?? null : null;
+      if (reason === 'forbidden') {
+        if (freshCollection?.capabilities?.can_edit_content === true) {
+          setCapabilityRefreshReason(null);
+        }
+      } else if (freshCollection?.capabilities) {
+        setCapabilityRefreshReason(null);
+      }
+      return freshCollection;
+    } catch {
+      return null;
+    }
+  }, [refetchCollection]);
 
   if (slug === 'glossary') {
     return <GlossaryCollectionView />;
@@ -2004,17 +2164,47 @@ export default function CollectionDataPage() {
   const isDocument = collection.collection_type === 'document';
   const isTemplate = collection.collection_type === 'template';
   const isExternal = collection.collection_type === 'api' || collection.collection_type === 'sql';
+  const renderedCollection: Collection = capabilityRefreshReason
+    ? {
+        ...collection,
+        capabilities: {
+          ...collection.capabilities,
+          can_edit_content: false,
+          upload_documents: false,
+          delete_documents: false,
+          ingest: false,
+          manage_memory: false,
+          upload_csv: false,
+          mutate_rows: false,
+          reindex: false,
+          upload_templates: false,
+          analyze_templates: false,
+          approve_templates: false,
+          edit_templates: false,
+          delete_templates: false,
+        },
+      }
+    : collection;
 
   return (
     <div className={styles.page}>
+      {capabilityRefreshReason && (
+        <Alert
+          variant="warning"
+          title={capabilityRefreshReason === 'forbidden' ? 'Права изменились' : 'Действие временно недоступно'}
+          description={capabilityRefreshReason === 'forbidden'
+            ? 'Сервер отклонил изменение. Файлы, черновики и выбор сохранены; действия отключены до подтверждения права редактирования.'
+            : 'Коллекция временно недоступна для этого действия. Файлы, черновики и выбор сохранены; проверяем актуальные возможности.'}
+        />
+      )}
       {isExternal ? (
-        <ExternalCollectionOverview key={collection.id} collection={collection} />
+        <ExternalCollectionOverview key={collection.id} collection={renderedCollection} />
       ) : isDocument ? (
-        <DocumentCollectionView key={collection.id} collection={collection} />
+        <DocumentCollectionView key={collection.id} collection={renderedCollection} onPermissionDenied={() => { void handlePermissionDenied('forbidden'); }} permissionDenied={capabilityRefreshReason !== null} />
       ) : isTemplate ? (
-        <TemplateCollectionView key={collection.id} collection={collection} slug={slug!} />
+        <TemplateCollectionView key={collection.id} collection={renderedCollection} slug={slug!} onPermissionDenied={handlePermissionDenied} permissionDenied={capabilityRefreshReason !== null} />
       ) : (
-        <TableCollectionView key={collection.id} collection={collection} slug={slug!} />
+        <TableCollectionView key={collection.id} collection={renderedCollection} slug={slug!} onPermissionDenied={() => { void handlePermissionDenied('forbidden'); }} />
       )}
     </div>
   );

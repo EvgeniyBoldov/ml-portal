@@ -167,6 +167,8 @@ async def _resolve_template_collection(
     collection_id: uuid.UUID,
     session: AsyncSession,
     user: UserCtx,
+    *,
+    for_write: bool = False,
 ) -> Collection:
     from app.services.collection_service import CollectionService
     from .upload_shared import _resolve_collection
@@ -174,7 +176,11 @@ async def _resolve_template_collection(
     collection = await _resolve_collection(collection_id, session, user)
     if collection.collection_type != CollectionType.TEMPLATE.value:
         raise HTTPException(status_code=400, detail="Collection is not a template collection")
-    await service.ensure_contract_fields_present(collection, ensure_vector_infra=False)
+    if for_write:
+        from .upload_shared import _require_collection_editor
+        await _require_collection_editor(session, user, collection)
+    if collection.is_active and getattr(collection, "lifecycle_status", "active") != "deprecated":
+        await service.ensure_contract_fields_present(collection, ensure_vector_infra=False)
     return collection
 
 
@@ -185,7 +191,7 @@ async def upload_template(
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
-    collection = await _resolve_template_collection(collection_id, session, user)
+    collection = await _resolve_template_collection(collection_id, session, user, for_write=True)
     from app.services.collection_service import CollectionService
     service = CollectionService(session)
     # Persist one-time schema self-healing before row insert so DDL is not rolled back
@@ -230,7 +236,7 @@ async def analyze_templates(
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
-    collection = await _resolve_template_collection(collection_id, session, user)
+    collection = await _resolve_template_collection(collection_id, session, user, for_write=True)
     if not data.row_ids:
         raise HTTPException(status_code=400, detail="No template rows selected")
 
@@ -287,7 +293,7 @@ async def approve_template(
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
-    collection = await _resolve_template_collection(collection_id, session, user)
+    collection = await _resolve_template_collection(collection_id, session, user, for_write=True)
     row_service = CollectionRowService(session)
     row = await row_service.get_row_by_id(collection, row_id)
     if not row:
@@ -544,7 +550,7 @@ async def delete_templates(
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
-    collection = await _resolve_template_collection(collection_id, session, user)
+    collection = await _resolve_template_collection(collection_id, session, user, for_write=True)
     if not ids:
         raise HTTPException(status_code=400, detail="No template rows selected")
 
@@ -600,7 +606,7 @@ async def update_template(
     session: AsyncSession = Depends(db_uow),
     user: UserCtx = Depends(get_current_user),
 ):
-    collection = await _resolve_template_collection(collection_id, session, user)
+    collection = await _resolve_template_collection(collection_id, session, user, for_write=True)
     payload = data.model_dump(exclude_unset=True)
     if not payload:
         raise HTTPException(status_code=400, detail="No template fields to update")

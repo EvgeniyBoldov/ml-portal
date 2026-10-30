@@ -42,6 +42,7 @@ class PublicCollectionField(BaseModel):
 
 class CollectionCapabilities(BaseModel):
     view_content: bool = False
+    can_edit_content: bool = False
     view_schema: bool = False
     upload_documents: bool = False
     delete_documents: bool = False

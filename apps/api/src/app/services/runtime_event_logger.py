@@ -153,6 +153,9 @@ class RuntimeEventLogger:
         self._progress_streamer = progress_streamer or RuntimeProgressStreamer()
         self._redactor = RuntimeRedactor()
         self._request_event_ids: dict[tuple[str, str], UUID] = {}
+        self._open_llm_calls: dict[str, dict[str, Any]] = {}
+        self._open_tool_calls: dict[str, dict[str, Any]] = {}
+        self._open_synthesis_runs: dict[str, dict[str, Any]] = {}
 
     def for_entity(
         self, *, entity_type: str, entity_id: str, parent_entity_type: Optional[str] = None,
@@ -177,10 +180,9 @@ class RuntimeEventLogger:
     ) -> "RuntimeEventLogger":
         """Keep ownership but apply a descendant's journal admission level.
 
-        A chat root deliberately stays at ``none``.  Background work spawned
-        by a traced agent still belongs to the root run, but must retain the
-        agent's observation policy when it is persisted or handed to a worker.
-        This method intentionally does not enable raw streaming.
+        Descendant work belongs to the root run and uses its selected journal
+        admission level when persisted or handed to a worker. This method
+        intentionally does not enable raw streaming.
         """
         return RuntimeEventLogger(
             context=replace(self.context, level=RuntimeLoggingLevel.parse(level)),
@@ -305,6 +307,8 @@ class RuntimeEventLogger:
 
     async def emit(self, event: RuntimeEvent, *, phase: OrchestrationPhase) -> RuntimeEvent:
         """Admit one semantic event, optionally persist it, and project progress."""
+        if event.type.value == "run_end" and event.data.get("status") in {"failed", "cancelled"}:
+            await self.close_open_lifecycles(status=str(event.data["status"]), phase=phase)
         data = dict(event.data)
         entity_key = (str(data.get("entity_type") or ""), str(data.get("entity_id") or ""))
         if not data.get("caused_by_event_id") and event.type.value in {"llm_response", "tool_result", "protocol_retry"}:
@@ -323,6 +327,8 @@ class RuntimeEventLogger:
             admitted.data["_progress"] = progress
         persisted = await self.append_runtime_event(admitted, phase=phase)
         result = persisted or admitted
+        if persisted is not None:
+            self._track_lifecycle(event.type.value, data)
         if event.type.value in {"llm_request", "tool_call"} and persisted is not None:
             envelope = persisted.data.get("_envelope") or {}
             if envelope.get("event_id"):
@@ -330,6 +336,70 @@ class RuntimeEventLogger:
         if progress is not None and self.should_publish_progress(event.type.value):
             await self._publish_progress(progress)
         return result
+
+    def _track_lifecycle(self, event_type: str, data: dict[str, Any]) -> None:
+        entity_id = str(data.get("entity_id") or data.get("llm_call_id") or data.get("call_id") or "")
+        if event_type == "llm_request" and entity_id:
+            self._open_llm_calls[entity_id] = dict(data)
+        elif event_type == "llm_response" and entity_id:
+            if data.get("terminal") is not False and data.get("status") not in {"running", "waiting_retry"}:
+                self._open_llm_calls.pop(entity_id, None)
+        elif event_type == "tool_call" and entity_id:
+            self._open_tool_calls[entity_id] = dict(data)
+        elif event_type == "tool_result" and entity_id:
+            self._open_tool_calls.pop(entity_id, None)
+        elif event_type == "synthesis_start" and entity_id:
+            self._open_synthesis_runs[entity_id] = dict(data)
+        elif event_type == "synthesis_end" and entity_id:
+            self._open_synthesis_runs.pop(entity_id, None)
+
+    async def close_open_lifecycles(
+        self, *, status: str, phase: OrchestrationPhase,
+    ) -> None:
+        """Close provider/tool/synthesis lifecycles interrupted by cancellation or failure."""
+        is_cancelled = status == "cancelled"
+        for call_id, request in list(self._open_llm_calls.items()):
+            response_payload: dict[str, Any] = {
+                "llm_call_id": call_id,
+                "logical_llm_call_id": request.get("logical_llm_call_id"),
+                "model": request.get("model"),
+                "purpose": request.get("purpose"),
+                "status": status,
+                "terminal": True,
+                "retryable": False,
+                "error_code": "llm_cancelled" if is_cancelled else "llm_runtime_aborted",
+                "parent_entity_type": request.get("parent_entity_type"),
+                "parent_entity_id": request.get("parent_entity_id"),
+                "agent_slug": request.get("agent_slug"),
+                "duration_ms": 0,
+            }
+            for field in ("usage_attempt", "attempt", "step", "max_attempts", "agent_execution_id"):
+                if request.get(field) is not None:
+                    response_payload[field] = request[field]
+            await self.emit(RuntimeEvent.llm_response(**response_payload), phase=phase)
+        for call_id, request in list(self._open_tool_calls.items()):
+            await self.emit(RuntimeEvent.tool_result(
+                tool=str(request.get("tool") or "operation"),
+                call_id=call_id,
+                success=False,
+                data={},
+                error_code="operation_cancelled" if is_cancelled else "operation_runtime_aborted",
+                retryable=False,
+                safe_message="Operation was cancelled." if is_cancelled else "Operation did not complete.",
+                parent_entity_type=request.get("parent_entity_type"),
+                parent_entity_id=request.get("parent_entity_id"),
+                agent_slug=request.get("agent_slug"),
+                agent_execution_id=request.get("agent_execution_id"),
+                llm_call_id=request.get("llm_call_id"),
+                actor_type=request.get("actor_type"),
+                actor_entity_id=request.get("actor_entity_id"),
+            ), phase=phase)
+        for synthesis_id, synthesis in list(self._open_synthesis_runs.items()):
+            await self.emit(RuntimeEvent.synthesis_end(
+                synthesis_id=synthesis_id,
+                run_id=str(synthesis.get("run_id") or self.context.run_id),
+                status=status,
+            ), phase=phase)
 
     async def _publish_progress(self, progress: dict[str, Any]) -> None:
         try:
@@ -366,7 +436,7 @@ class RuntimeEventLogger:
     ) -> Optional[PersistedRuntimeEvent]:
         event_type = runtime_event.type.value
         from app.services.platform_usage_service import record_usage, USAGE_EVENTS
-        if event_type in USAGE_EVENTS and self.context.origin in {"chat", "shadow"}:
+        if event_type in USAGE_EVENTS and self.context.origin in {"chat", "shadow", "sandbox", "worker"}:
             await record_usage(self.context, event_type, dict(runtime_event.data or {}), self._session_factory)
         if not self.should_log(event_type):
             return None

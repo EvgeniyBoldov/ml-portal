@@ -32,19 +32,24 @@ class CollectionQueryService:
         )
         return result.scalar_one_or_none()
 
-    async def get_by_slug(self, slug: str) -> Optional[Collection]:
-        result = await self.session.execute(
-            select(Collection)
-            .options(
-                selectinload(Collection.schema),
-                selectinload(Collection.current_version),
-                selectinload(Collection.data_instance),
-            )
-            .where(
-                Collection.slug == slug,
+    async def get_by_slug(
+        self,
+        slug: str,
+        *,
+        include_inactive: bool = False,
+    ) -> Optional[Collection]:
+        query = select(Collection).options(
+            selectinload(Collection.schema),
+            selectinload(Collection.current_version),
+            selectinload(Collection.data_instance),
+        ).where(Collection.slug == slug)
+        if not include_inactive:
+            query = query.where(
                 Collection.is_active.is_(True),
                 Collection.lifecycle_status != "deprecated",
             )
+        result = await self.session.execute(
+            query
         )
         return result.scalar_one_or_none()
 

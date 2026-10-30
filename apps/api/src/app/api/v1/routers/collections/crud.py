@@ -16,12 +16,17 @@ from app.core.security import UserCtx
 from app.core.logging import get_logger
 from app.models.collection import Collection
 from app.schemas.collections_public import (
+    CollectionCapabilities,
     PublicCollectionCount,
     PublicCollectionSource,
+    CollectionWorkspacesResponse,
     PublishedCollectionVersion,
 )
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
-from app.services.collection_public_service import build_collection_display_metadata
+from app.services.collection_public_service import (
+    CollectionPublicService,
+    build_collection_display_metadata,
+)
 from app.services.collection_service import CollectionService
 from app.services.permission_service import PermissionService
 
@@ -33,6 +38,8 @@ router = APIRouter()
 async def _build_collection_response(
     service: CollectionService,
     collection,
+    *,
+    user: UserCtx | None = None,
 ) -> CollectionResponse:
     raw_collection_type = getattr(collection, "collection_type", "")
     collection_type = str(getattr(raw_collection_type, "value", raw_collection_type) or "")
@@ -61,9 +68,19 @@ async def _build_collection_response(
         )
 
     display = build_collection_display_metadata(collection)
+    if user is None:
+        capabilities = CollectionCapabilities()
+        capability_reasons = {"can_edit_content": "editing_permission_required"}
+    else:
+        capabilities, capability_reasons = await CollectionPublicService(session=service.session).build_capabilities(
+            collection,
+            user_id=str(user.id),
+            collection_allowed=True,
+        )
 
     return CollectionResponse(
         id=collection.id,
+        tenant_id=collection.tenant_id,
         collection_type=collection_type,
         slug=collection.slug,
         name=collection.name,
@@ -81,6 +98,8 @@ async def _build_collection_response(
         purpose=display.purpose,
         version=display.version,
         count=count,
+        capabilities=capabilities,
+        capability_reasons=capability_reasons,
     )
 
 
@@ -155,6 +174,7 @@ async def _resolve_requested_tenant_id(
 
 class CollectionResponse(BaseModel):
     id: uuid.UUID
+    tenant_id: uuid.UUID
     collection_type: str = "table"
     slug: str
     name: str
@@ -172,6 +192,8 @@ class CollectionResponse(BaseModel):
     purpose: str | None = None
     version: PublishedCollectionVersion | None = None
     count: PublicCollectionCount = Field(default_factory=PublicCollectionCount)
+    capabilities: CollectionCapabilities = Field(default_factory=CollectionCapabilities)
+    capability_reasons: dict[str, str] = Field(default_factory=dict)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -207,9 +229,19 @@ async def list_collections(
         )
     ]
 
-    items = [await _build_collection_response(service, c) for c in collections]
+    items = [await _build_collection_response(service, c, user=user) for c in collections]
 
     return CollectionListResponse(items=items, total=len(items))
+
+
+@router.get("/workspaces", response_model=CollectionWorkspacesResponse)
+async def list_collection_workspaces(
+    session: AsyncSession = Depends(db_uow),
+    user: UserCtx = Depends(get_current_user),
+) -> CollectionWorkspacesResponse:
+    """List active tenant workspaces available to the current user."""
+    workspaces = await CollectionPublicService(session).workspaces(str(user.id))
+    return CollectionWorkspacesResponse(items=workspaces)
 
 
 @router.get("/{slug}", response_model=CollectionResponse)
@@ -222,7 +254,7 @@ async def get_collection(
     """Get a collection by slug inside the resolved tenant scope."""
     service = CollectionService(session)
     resolved_tenant_id = await _resolve_requested_tenant_id(session, user, tenant_id)
-    collection = await service.get_by_slug(slug)
+    collection = await service.get_by_slug(slug, include_inactive=True)
 
     if not collection:
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
@@ -230,4 +262,4 @@ async def get_collection(
         raise HTTPException(status_code=404, detail=f"Collection '{slug}' not found")
     await require_collection_permission(session, user, collection)
 
-    return await _build_collection_response(service, collection)
+    return await _build_collection_response(service, collection, user=user)

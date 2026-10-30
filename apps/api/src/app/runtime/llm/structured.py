@@ -338,6 +338,7 @@ class StructuredLLMCall:
                     purpose="planning_decision" if role_key == "planner" else role_key,
                     model=model,
                     temperature=temperature,
+                    request_params=dict(params),
                     attempt=attempt + 1,
                     max_attempts=max_retries + 1,
                     input_tokens_estimate=input_tokens,
@@ -350,6 +351,15 @@ class StructuredLLMCall:
                     if budget_registry is not None and budget_entity_id:
                         budget_registry.consume(budget_entity_id, "llm_calls", 1, reason="context_correction")
                         budget_registry.consume(budget_entity_id, "retries", 1, reason="context_correction")
+                    if event_sink is not None and resolved_trace_parent_id:
+                        await event_sink(RuntimeEvent.status(
+                            "llm_transport_retry",
+                            entity_type="llm_call", entity_id=llm_call_id,
+                            logical_llm_call_id=logical_llm_call_id,
+                            attempt=attempt + 1,
+                            retry_type="context_correction",
+                            **trace_identity,
+                        ))
                 async def on_context_allocation(allocation: Any) -> None:
                     if event_sink is not None and resolved_trace_parent_id:
                         await event_sink(RuntimeEvent.status(
@@ -365,6 +375,25 @@ class StructuredLLMCall:
                 )
             except asyncio.CancelledError:
                 attempt_duration_ms = consume_attempt_time()
+                if event_sink is not None and resolved_trace_parent_id:
+                    # Close the canonical call before propagating Stop/cancel.
+                    # Otherwise inspectors show a provider call stuck in
+                    # `running` even though its owning execution is cancelled.
+                    await asyncio.shield(event_sink(RuntimeEvent.llm_response(
+                        llm_call_id=llm_call_id,
+                        logical_llm_call_id=logical_llm_call_id,
+                        **trace_identity,
+                        agent_slug=role_key,
+                        purpose="planning_decision" if role_key == "planner" else role_key,
+                        model=model,
+                        status="cancelled",
+                        terminal=True,
+                        retryable=False,
+                        error_code="llm_cancelled",
+                        attempt=attempt + 1,
+                        max_attempts=max_retries + 1,
+                        duration_ms=attempt_duration_ms,
+                    )))
                 logger.warning(
                     "Structured LLM attempt cancelled role=%s model=%s attempt=%s/%s "
                     "timeout_s=%s attempt_elapsed_ms=%s total_elapsed_ms=%s task_cancelling=%s "
@@ -481,6 +510,25 @@ class StructuredLLMCall:
             last_traceback = None
             raw_response = self._extract_text(response)
             attempt_duration_ms = int((time.monotonic() - attempt_started) * 1000)
+            provider_usage = response.get("usage") if isinstance(response, dict) else None
+            output_tokens_estimate = estimate_tokens(raw_response)
+            tokens_in_reported = (
+                provider_usage.get("prompt_tokens")
+                if isinstance(provider_usage, dict) and isinstance(provider_usage.get("prompt_tokens"), int)
+                else input_tokens
+            )
+            tokens_out_reported = (
+                provider_usage.get("completion_tokens")
+                if isinstance(provider_usage, dict) and isinstance(provider_usage.get("completion_tokens"), int)
+                else output_tokens_estimate
+            )
+            token_source = (
+                "provider"
+                if isinstance(provider_usage, dict)
+                and isinstance(provider_usage.get("prompt_tokens"), int)
+                and isinstance(provider_usage.get("completion_tokens"), int)
+                else "estimate"
+            )
             if budget_registry is not None and budget_entity_id:
                 output_tokens = estimate_tokens(raw_response)
                 budget_registry.consume(budget_entity_id, "tokens_out", output_tokens, reason="llm_output")
@@ -497,7 +545,12 @@ class StructuredLLMCall:
                     model=model,
                     response=raw_response,
                     content=raw_response,
-                    usage=response.get("usage") if isinstance(response, dict) else None,
+                    usage=provider_usage,
+                    tokens_in=tokens_in_reported,
+                    tokens_out=tokens_out_reported,
+                    tokens_in_estimate=input_tokens,
+                    tokens_out_estimate=output_tokens_estimate,
+                    token_source=token_source,
                     status="running",
                     terminal=False,
                     attempt=attempt + 1,
@@ -553,7 +606,12 @@ class StructuredLLMCall:
                     response=raw_response,
                     content=raw_response,
                     result_kind="plan" if role_key == "planner" else "answer",
-                    usage=response.get("usage") if isinstance(response, dict) else None,
+                    usage=provider_usage,
+                    tokens_in=tokens_in_reported,
+                    tokens_out=tokens_out_reported,
+                    tokens_in_estimate=input_tokens,
+                    tokens_out_estimate=output_tokens_estimate,
+                    token_source=token_source,
                     status="completed",
                     terminal=True,
                     attempt=attempt + 1,

@@ -19,6 +19,15 @@ class PlatformUsageRepository:
             key: func.coalesce(getattr(excluded, key), getattr(PlatformUsage, key))
             for key in ("agent_slug", "model_alias", "tokens_in", "tokens_out", "token_source", "duration_ms")
         }
+        updates["token_source"] = case(
+            (
+                excluded.tokens_in.is_(None)
+                & excluded.tokens_out.is_(None)
+                & PlatformUsage.token_source.is_not(None),
+                PlatformUsage.token_source,
+            ),
+            else_=func.coalesce(excluded.token_source, PlatformUsage.token_source),
+        )
         updates["started_at"] = func.least(PlatformUsage.started_at, excluded.started_at)
         if not is_start:
             finished_at = case(

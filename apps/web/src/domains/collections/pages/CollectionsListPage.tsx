@@ -3,7 +3,7 @@
  *
  * Uses shared UI components: AdminPage, DataTable, Badge
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
@@ -12,14 +12,22 @@ import { qk } from '@/shared/api/keys';
 import { AdminPage, DataTable, Badge, type DataTableColumn } from '@/shared/ui';
 import { CollectionLoadError } from '../components/CollectionLoadError';
 import styles from './CollectionsListPage.module.css';
+import { CollectionWorkspacePicker, useCollectionWorkspace } from '../components/CollectionPresentation';
 
 export default function CollectionsListPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const workspace = useCollectionWorkspace();
+
+  useEffect(() => {
+    const workspaces = workspace.workspaces.data?.items ?? [];
+    if (!workspace.tenantId && workspaces.length === 1) workspace.select(workspaces[0].id);
+  }, [workspace.tenantId, workspace.workspaces.data, workspace.select]);
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: qk.collections.appList({ active_only: true }),
-    queryFn: () => collectionsApi.list(true),
+    queryKey: qk.collections.appList({ active_only: true, tenant_id: workspace.tenantId || undefined }),
+    queryFn: () => collectionsApi.list(true, workspace.tenantId),
+    enabled: workspace.isSelected,
     // A collection can be created or reconfigured in the admin surface while
     // this cached view is inactive. Refresh whenever the user re-enters it.
     refetchOnMount: 'always',
@@ -225,8 +233,11 @@ export default function CollectionsListPage() {
       searchValue={search}
       onSearchChange={setSearch}
       searchPlaceholder="Поиск коллекций..."
+      controls={<CollectionWorkspacePicker workspace={workspace} />}
     >
-      {isError ? (
+      {!workspace.isSelected ? (
+        <p role="status">Выберите рабочую группу, чтобы увидеть доступные коллекции.</p>
+      ) : isError ? (
         <CollectionLoadError onRetry={() => void refetch()} />
       ) : (
         <DataTable
@@ -237,7 +248,7 @@ export default function CollectionsListPage() {
           emptyText="Коллекции не найдены"
           paginated
           pageSize={20}
-          onRowClick={row => navigate(`/gpt/collections/${row.slug}`)}
+          onRowClick={row => navigate(`/gpt/collections/${row.slug}?tenant_id=${encodeURIComponent(workspace.tenantId)}`)}
         />
       )}
     </AdminPage>

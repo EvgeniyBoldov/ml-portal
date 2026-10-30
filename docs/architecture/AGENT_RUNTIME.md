@@ -441,8 +441,10 @@ Chat consumes only safe stage/activity projections; deltas remain a separate
 answer-content stream. Lifecycle state is persisted in `ChatTurn.status` and is
 not inferred from a stage or activity outcome. `stream_logs` and
 `stream_progress` are independent:
-chat root uses `none/false/true`, sandbox uses `full/true/true`, and agent
-scopes decide detail from their own logging level.
+chat root uses `full/false/true`, sandbox uses `full/true/true`. Chat persists
+the root execution journal for administrator review but exposes only the safe
+progress projection to the chat client. Agent observation levels continue to
+control their progress projection; the persisted chat journal remains complete.
 ```
 
 ## Execution Modes

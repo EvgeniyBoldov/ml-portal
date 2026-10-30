@@ -15,6 +15,7 @@ from app.models.rag import DocumentScope
 from app.repositories.factory import get_async_repository_factory, AsyncRepositoryFactory
 from app.services.rag_status_manager import RAGStatusManager
 from app.services.rag_event_publisher import RAGEventPublisher
+from .content_access import require_linked_document_content_access
 
 logger = get_logger(__name__)
 
@@ -35,6 +36,7 @@ async def update_rag_document_tags(
         document = await repo_factory.get_rag_document_by_id(doc_uuid)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
+        await require_linked_document_content_access(session, user, document)
         
         if not isinstance(tags, list):
             raise HTTPException(status_code=400, detail="Tags must be a list")
@@ -81,6 +83,7 @@ async def archive_rag_document(
         document = await repo_factory.get_rag_document_by_id(doc_uuid)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
+        await require_linked_document_content_access(session, user, document)
         
         redis = get_redis_client()
         event_publisher = RAGEventPublisher(redis)
@@ -112,6 +115,8 @@ async def archive_rag_document(
         return {"id": doc_id, "archived": True}
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document ID")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to archive document: {str(e)}")
 
@@ -129,6 +134,7 @@ async def unarchive_rag_document(
         document = await repo_factory.get_rag_document_by_id(doc_uuid)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
+        await require_linked_document_content_access(session, user, document)
         
         redis = get_redis_client()
         event_publisher = RAGEventPublisher(redis)
@@ -152,6 +158,8 @@ async def unarchive_rag_document(
         return {"id": doc_id, "archived": False}
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document ID")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to unarchive document: {str(e)}")
 
@@ -168,6 +176,7 @@ async def delete_rag_document(
         document = await repo_factory.get_rag_document_by_id(uuid.UUID(doc_id))
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
+        await require_linked_document_content_access(session, user, document)
         
         from app.runtime.memory.document_retirement import retire_document_memory
         item_states = await retire_document_memory(session, document_id=document.id)
@@ -187,6 +196,8 @@ async def delete_rag_document(
         return {"id": doc_id, "deleted": True}
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document ID")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
@@ -207,6 +218,7 @@ async def update_rag_document_scope(
         document = await repo_factory.get_rag_document_by_id(uuid.UUID(doc_id))
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
+        await require_linked_document_content_access(session, user, document)
         
         if scope == "global":
             # Only admins can change scope to global
@@ -231,5 +243,7 @@ async def update_rag_document_scope(
         }
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document ID")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update scope: {str(e)}")

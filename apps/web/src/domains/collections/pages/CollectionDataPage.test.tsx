@@ -50,6 +50,7 @@ vi.mock('@/shared/api/http', () => ({
 function collection(type: Collection['collection_type']): Collection {
   return {
     id: 'collection-id',
+    tenant_id: 'tenant-id',
     slug: 'orders',
     name: 'Заказы',
     collection_type: type,
@@ -70,6 +71,25 @@ function collection(type: Collection['collection_type']): Collection {
     vectorization_progress: 0,
     is_fully_vectorized: false,
     is_active: true,
+    capabilities: {
+      view_content: true,
+      view_schema: true,
+      can_edit_content: true,
+      upload_documents: type === 'document',
+      delete_documents: type === 'document',
+      ingest: type === 'document',
+      manage_memory: type === 'document',
+      upload_csv: type === 'table',
+      mutate_rows: type === 'table',
+      reindex: type === 'document' || type === 'table',
+      upload_templates: type === 'template',
+      analyze_templates: type === 'template',
+      approve_templates: type === 'template',
+      edit_templates: type === 'template',
+      delete_templates: type === 'template',
+      download: true,
+    },
+    capability_reasons: {},
     created_at: '',
     updated_at: '',
   };
@@ -77,7 +97,8 @@ function collection(type: Collection['collection_type']): Collection {
 function setup(
   type: Collection['collection_type'],
   detailError?: Error,
-  detailData?: Collection
+  detailData?: Collection,
+  tenantId?: string,
 ) {
   const detail = vi.spyOn(collectionsApi, 'getBySlug');
   if (detailError) detail.mockRejectedValue(detailError);
@@ -88,7 +109,7 @@ function setup(
   const view = render(
     <QueryClientProvider client={client}>
       <MemoryRouter
-        initialEntries={['/gpt/collections/orders']}
+        initialEntries={[`/gpt/collections/orders${tenantId ? `?tenant_id=${tenantId}` : ''}`]}
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
         <Routes>
@@ -100,7 +121,7 @@ function setup(
       </MemoryRouter>
     </QueryClientProvider>
   );
-  return { ...view, client };
+  return { ...view, client, detail };
 }
 const doc = (id: string): CollectionDocument => ({
   id,
@@ -145,6 +166,30 @@ it('refetches table data when the search changes on the first page', async () =>
       expect.objectContaining({ search: 'needle' })
     )
   );
+});
+
+it('shows read-only collection UI to tenant readers while retaining exports', async () => {
+  vi.spyOn(collectionsApi, 'getData').mockResolvedValue({
+    items: [{ id: 'row', name: 'Запись' }],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  });
+  const reader = collection('table');
+  reader.capabilities = {
+    ...reader.capabilities!,
+    can_edit_content: false,
+    upload_csv: false,
+    mutate_rows: false,
+  };
+  const { detail: getBySlug } = setup('table', undefined, reader, 'tenant-id');
+
+  expect(await screen.findByText('Только просмотр')).toBeInTheDocument();
+  expect(getBySlug).toHaveBeenCalledWith('orders', 'tenant-id');
+  expect(screen.getByRole('button', { name: 'Экспорт CSV' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Шаблон CSV' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Загрузить CSV' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
 });
 
 it.each(['api', 'sql'] as const)(

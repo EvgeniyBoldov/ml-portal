@@ -51,6 +51,15 @@
   min-width: 0;
 }
 
+.permissionNotice {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--font-size-sm);
+}
+
 .title {
   font-size: var(--text-xl);
   font-weight: var(--font-weight-bold);

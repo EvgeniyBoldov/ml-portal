@@ -13,6 +13,14 @@ from app.services.collection_public_service import (
 )
 
 
+class QueryResult:
+    def __init__(self, row=None):
+        self._row = row
+
+    def one_or_none(self):
+        return self._row
+
+
 def collection(kind='table', published=True):
     return SimpleNamespace(
         id=uuid4(), tenant_id=uuid4(), slug='navigation-only', name='Планы',
@@ -30,6 +38,12 @@ def collection(kind='table', published=True):
 
 def projection(*, editable=False, materialized=True):
     session = AsyncMock()
+    session.execute.return_value = QueryResult(SimpleNamespace(
+        is_active=True,
+        lifecycle_status='active',
+        is_tenant_admin=False,
+        is_data_editor=False,
+    ))
     service = CollectionPublicService(session)
     service.can_edit = AsyncMock(return_value=editable)
     service._materialized = AsyncMock(return_value=materialized)
@@ -44,7 +58,7 @@ def projection(*, editable=False, materialized=True):
 @pytest.mark.asyncio
 async def test_public_projection_is_allowlisted_and_only_uses_published_version():
     service, host, session = projection()
-    response = await service.build(collection(), user_id=str(uuid4()), collection_service=host)
+    response = await service.build(collection(), user_id=str(uuid4()), collection_service=host, collection_allowed=True)
     body = response.model_dump_json()
     assert response.description == 'Опубликованное описание'
     assert response.purpose == 'Для подготовки планов'
@@ -54,6 +68,7 @@ async def test_public_projection_is_allowlisted_and_only_uses_published_version(
     for forbidden in ['SECRET', 'PRIVATE', 'headers', 'source_contract', 'retrieval_params', 'notes', 'https://']:
         assert forbidden not in body
     assert not response.capabilities.mutate_rows
+    assert not response.capabilities.can_edit_content
     host.ensure_contract_fields_present.assert_not_called()
     host.sync_collection_status.assert_not_called()
     session.add.assert_not_called()
@@ -64,7 +79,7 @@ async def test_public_projection_is_allowlisted_and_only_uses_published_version(
 @pytest.mark.asyncio
 async def test_draft_semantics_never_fall_back_to_unpublished_or_legacy_metadata():
     service, host, _ = projection()
-    response = await service.build(collection(published=False), user_id=str(uuid4()), collection_service=host)
+    response = await service.build(collection(published=False), user_id=str(uuid4()), collection_service=host, collection_allowed=True)
     assert response.description is None and response.purpose is None and response.version is None
 
 
@@ -72,11 +87,16 @@ async def test_draft_semantics_never_fall_back_to_unpublished_or_legacy_metadata
 @pytest.mark.parametrize('kind', ['sql', 'api'])
 async def test_external_sources_never_expose_local_catalog_as_content(kind):
     service, host, _ = projection(editable=True)
-    response = await service.build(collection(kind), user_id=str(uuid4()), collection_service=host)
+    response = await service.build(collection(kind), user_id=str(uuid4()), collection_service=host, collection_allowed=True)
     assert response.locality == 'remote'
     assert response.count.value is None and response.count.unit is None
     assert response.readiness.status == 'unknown'
-    assert not any(response.capabilities.model_dump().values())
+    assert response.capabilities.can_edit_content
+    assert response.capabilities.view_content
+    assert not any(
+        value for key, value in response.capabilities.model_dump().items()
+        if key not in {'can_edit_content', 'view_content'}
+    )
     assert response.fields == []
     host.count.assert_not_called()
     service._materialized.assert_not_called()
@@ -85,12 +105,40 @@ async def test_external_sources_never_expose_local_catalog_as_content(kind):
 @pytest.mark.asyncio
 async def test_missing_local_storage_disables_preview_without_bootstrap():
     service, host, _ = projection(editable=True, materialized=False)
-    response = await service.build(collection(), user_id=str(uuid4()), collection_service=host)
-    assert not response.capabilities.view_content
-    assert response.capability_reasons['view_content'] == 'storage_unavailable'
+    response = await service.build(collection(), user_id=str(uuid4()), collection_service=host, collection_allowed=True)
+    assert response.capabilities.view_content
+    assert not response.capabilities.mutate_rows
+    assert response.capability_reasons['mutate_rows'] == 'storage_unavailable'
     assert response.count.value is None
     host.count.assert_not_called()
     host.ensure_contract_fields_present.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_inactive_collection_disables_actions_but_keeps_tenant_edit_capability_separate():
+    service, host, _ = projection(editable=True, materialized=True)
+    item = collection()
+    item.is_active = False
+
+    response = await service.build(item, user_id=str(uuid4()), collection_service=host, collection_allowed=True)
+
+    assert response.capabilities.can_edit_content
+    assert response.capabilities.view_content
+    assert not response.capabilities.upload_csv
+    assert not response.capabilities.mutate_rows
+    assert response.capability_reasons['mutate_rows'] == 'collection_inactive'
+
+
+@pytest.mark.asyncio
+async def test_view_content_capability_uses_effective_collection_acl():
+    service, _, _ = projection(editable=True)
+    caps, reasons = await service.build_capabilities(
+        collection(), user_id=str(uuid4()), collection_allowed=False,
+    )
+
+    assert not caps.view_content
+    assert caps.can_edit_content
+    assert reasons['view_content'] == 'collection_access_denied'
 
 
 @pytest.mark.asyncio
@@ -98,7 +146,7 @@ async def test_missing_local_storage_disables_preview_without_bootstrap():
 @pytest.mark.parametrize('editable', [False, True])
 async def test_action_capabilities_use_current_editor_resolution(kind, action, editable):
     service, host, _ = projection(editable=editable)
-    response = await service.build(collection(kind), user_id=str(uuid4()), collection_service=host)
+    response = await service.build(collection(kind), user_id=str(uuid4()), collection_service=host, collection_allowed=True)
     assert getattr(response.capabilities, action) is editable
     service.can_edit.assert_awaited_once()
     assert response.capabilities.view_content
@@ -106,14 +154,19 @@ async def test_action_capabilities_use_current_editor_resolution(kind, action, e
 
 @pytest.mark.asyncio
 async def test_workspace_is_explicit_and_authorized_without_default_selection(monkeypatch):
-    resolver = AsyncMock(return_value=[uuid4()])
+    tenant_id = uuid4()
+    resolver = AsyncMock(return_value=[tenant_id])
     monkeypatch.setattr(crud, '_resolve_user_tenants', resolver)
-    with pytest.raises(HTTPException) as missing:
-        await crud._resolve_requested_tenant_id(AsyncMock(), SimpleNamespace(id=str(uuid4())), None)
-    assert missing.value.status_code == 400
-    resolver.assert_not_called()
+    resolved = await crud._resolve_requested_tenant_id(
+        AsyncMock(), SimpleNamespace(id=str(uuid4()), role='reader'), None
+    )
+    assert resolved == tenant_id
+    resolver.assert_awaited_once()
+    resolver.reset_mock()
     with pytest.raises(HTTPException) as denied:
-        await crud._resolve_requested_tenant_id(AsyncMock(), SimpleNamespace(id=str(uuid4())), uuid4())
+        await crud._resolve_requested_tenant_id(
+            AsyncMock(), SimpleNamespace(id=str(uuid4()), role='reader'), uuid4()
+        )
     assert denied.value.status_code == 403
 
 

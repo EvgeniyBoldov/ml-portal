@@ -21,6 +21,7 @@ from .stream_shared import (
     _safe_revoke,
     _stop_pipeline_and_revoke,
 )
+from app.api.v1.routers.rag.content_access import require_linked_document_content_access
 
 router = APIRouter()
 
@@ -36,6 +37,7 @@ async def start_collection_ingest(
     collection, document, doc_uuid, repo_factory = await _resolve_collection_and_doc(
         collection_id, doc_id, session, user
     )
+    await require_linked_document_content_access(session, user, document)
 
     event_publisher = RAGEventPublisher(redis)
     status_manager = RAGStatusManager(session, repo_factory, event_publisher)
@@ -99,6 +101,7 @@ async def stop_collection_ingest(
     collection, document, doc_uuid, repo_factory = await _resolve_collection_and_doc(
         collection_id, doc_id, session, user
     )
+    await require_linked_document_content_access(session, user, document)
 
     event_publisher = RAGEventPublisher(redis)
     status_manager = RAGStatusManager(session, repo_factory, event_publisher)
@@ -141,6 +144,7 @@ async def retry_collection_ingest(
     collection, document, doc_uuid, repo_factory = await _resolve_collection_and_doc(
         collection_id, doc_id, session, user
     )
+    await require_linked_document_content_access(session, user, document)
 
     await _ensure_worker_ready()
 
