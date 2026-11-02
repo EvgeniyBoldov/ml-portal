@@ -105,9 +105,23 @@ atlassian), `MCP_ADAPTER_TOKEN_HEADER`, `MCP_ADAPTER_TOKEN_SCHEME`,
 `MCP_ADAPTER_MAX_RESPONSE_BYTES` (1048576), `VERIFY_SSL`, and
 `MCP_ADAPTER_CA_BUNDLE`. No redirects are followed with credentials.
 
-Logs contain correlation ID, tool/method, stage, duration, exception class and
-HTTP status, never payloads or exception text. Upstream errors are generic to
-avoid echoing secrets. Health is available at /healthz.
+Every runtime MCP call uses its runtime tool-call ID as `x-portal-request-id`.
+Runtime forwards it through initialize and tools/call; adapters send the same ID
+to the credential broker and upstream MCP server. Search API and MCP container
+logs by that value to follow one call across the boundary:
+
+```bash
+docker compose logs --since=15m api ml-inference-mcp atlassian-jira-mcp atlassian-confluence-mcp \
+  | rg 'request_id=<tool-call-id>'
+```
+
+Logs record dispatch, HTTP attempts and statuses, broker resolution, selected
+`auth_type`, names of authentication headers (never their values), upstream
+target origin, response size, JSON-RPC code, duration, and safe transport error
+details such as connection errno. They never record request/response bodies,
+tool arguments, credentials, broker JWTs, prompts, model inputs, or upstream
+error text. User-facing MCP errors stay generic to prevent upstreams from
+echoing secrets. Health is available at /healthz.
 
 Run `make test-mcp-adapter` for the focused contract suite in the API image with
 the MCP sources mounted read-only. Tests live in `mcp/adapter/tests/test_adapter.py`,

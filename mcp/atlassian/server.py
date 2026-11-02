@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from typing import Any, Dict
 from urllib.parse import quote, urlparse, urlunparse
@@ -12,6 +13,12 @@ import httpx
 from fastapi import FastAPI, Header, Request, Response
 
 from helpers.adapter_auth import resolve_request_credential, upstream_auth_headers
+from helpers.observability import (
+    log_mcp_event,
+    normalize_request_id,
+    safe_error_detail,
+    safe_target,
+)
 
 
 app = FastAPI(title="Atlassian Jira MCP Shim", version="1.0.0")
@@ -25,19 +32,6 @@ MAX_RESULTS = int(os.environ.get("JIRA_MCP_MAX_RESULTS", "50"))
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "atlassian-jira-mcp-shim", "version": "1.0.0"}
 SESSIONS: set[str] = set()
-
-_SECRET_VALUE_RE = re.compile(
-    r"(?i)(authorization|token|pat|api[_-]?token|access[_-]?token|api[_-]?key|password|secret)"
-    r"(\s*[\"']?\s*[:=]\s*)(?:[\"'][^\"']*[\"']|(?:bearer|basic)\s+[^\s,;]+|[^\s,;]+)"
-)
-
-
-def _safe_error_message(exc: BaseException) -> str:
-    """Make an operator-useful error safe for container logs."""
-    message = str(exc).replace("\n", " ").replace("\r", " ")
-    redacted = _SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}***", message)
-    return redacted[:500]
-
 
 def _jira_host(base_url: str) -> str:
     """Return only the destination hostname for diagnostic logs."""
@@ -105,12 +99,29 @@ def _extract_base_url(payload: Dict[str, Any], arguments: Dict[str, Any]) -> str
     raise ValueError("No Jira base URL configured")
 
 
-async def _resolve_runtime_access(arguments: Dict[str, Any]) -> tuple[str, dict[str, str]]:
+async def _resolve_runtime_access(
+    arguments: Dict[str, Any], *, request_id: str, tool_name: str,
+) -> tuple[str, dict[str, str], Any]:
     resolved = await resolve_request_credential(
         arguments, timeout_s=BROKER_TIMEOUT_SECONDS,
         allow_raw=os.environ.get("MCP_ADAPTER_ALLOW_RAW_CREDENTIALS", "false").lower() == "true",
+        request_id=request_id,
+        server="jira-legacy",
+        tool=tool_name,
     )
-    return _extract_base_url(resolved.payload, arguments), upstream_auth_headers(resolved)
+    base_url = _extract_base_url(resolved.payload, arguments)
+    auth_headers = upstream_auth_headers(resolved)
+    context = arguments.get("instance_context")
+    context = context if isinstance(context, dict) else {}
+    log_mcp_event(
+        logger, outcome="completed", request_id=request_id, server="jira-legacy",
+        method="tools/call", tool=tool_name, stage="upstream_authentication",
+        target=safe_target(base_url), data_instance_id=str(context.get("data_instance_id") or resolved.instance_id),
+        provider_instance_id=str(context.get("provider_instance_id") or ""),
+        credential_id=resolved.credential_id, auth_type=resolved.auth_type,
+        auth_headers=",".join(sorted(auth_headers)),
+    )
+    return base_url, auth_headers, resolved
 
 
 def _limit(value: Any, default: int = 20) -> int:
@@ -134,6 +145,8 @@ async def _jira_request(
     headers: dict[str, str],
     method: str,
     path: str,
+    request_id: str = "",
+    tool_name: str = "",
     params: dict[str, Any] | None = None,
     body: dict[str, Any] | None = None,
 ) -> Any:
@@ -142,11 +155,15 @@ async def _jira_request(
     request_headers = {"Accept": "application/json", **headers}
     if body is not None:
         request_headers["Content-Type"] = "application/json"
+    started = time.monotonic()
+    route_name = re.sub(r"/[A-Z0-9][A-Z0-9_-]{1,20}(?=/|$)", "/{id}", path, flags=re.IGNORECASE)
     logger.info(
-        "jira_mcp_upstream_request_started jira_host=%s method=%s path=%s has_body=%s",
+        "jira_mcp_upstream_request_started request_id=%s tool=%s jira_host=%s method=%s route=%s has_body=%s",
+        request_id or "-",
+        tool_name or "-",
         jira_host,
         method,
-        path,
+        route_name,
         body is not None,
     )
     try:
@@ -160,13 +177,26 @@ async def _jira_request(
             )
     except httpx.HTTPError as exc:
         logger.warning(
-            "jira_mcp_upstream_request_failed jira_host=%s method=%s error_type=%s error=%s",
+            "jira_mcp_upstream_request_failed request_id=%s tool=%s jira_host=%s method=%s error_type=%s error_detail=%s",
+            request_id or "-",
+            tool_name or "-",
             jira_host,
             method,
             type(exc).__name__,
-            _safe_error_message(exc),
+            safe_error_detail(exc),
         )
         raise
+    logger.info(
+        "jira_mcp_upstream_response_received request_id=%s tool=%s jira_host=%s method=%s status_code=%s "
+        "response_bytes=%s duration_ms=%s",
+        request_id or "-",
+        tool_name or "-",
+        jira_host,
+        method,
+        response.status_code,
+        len(response.content),
+        int((time.monotonic() - started) * 1000),
+    )
     if response.status_code >= 400:
         logger.warning(
             "jira_mcp_upstream_response_error jira_host=%s method=%s status_code=%s",
@@ -325,7 +355,9 @@ async def mcp_root(
     request: Request,
     response: Response,
     mcp_session_id: str | None = Header(default=None),
+    x_portal_request_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    request_id = normalize_request_id(x_portal_request_id)
     payload = await request.json()
     rpc_id, method, params = payload.get("id"), payload.get("method"), payload.get("params") or {}
     try:
@@ -354,18 +386,22 @@ async def mcp_root(
         if method != "tools/call":
             return _jsonrpc_err(rpc_id, -32601, f"Method not found: {method}")
         tool_name, arguments = params.get("name"), params.get("arguments") or {}
-        logger.info("jira_mcp_tool_call_started rpc_id=%s tool=%s", rpc_id, tool_name)
-        base_url, auth_headers = await _resolve_runtime_access(arguments)
+        logger.info("jira_mcp_tool_call_started request_id=%s rpc_id=%s tool=%s", request_id, rpc_id, tool_name)
+        base_url, auth_headers, resolved = await _resolve_runtime_access(
+            arguments, request_id=request_id, tool_name=str(tool_name),
+        )
         if tool_name == "jira_search_issues":
             jql = str(arguments.get("jql") or "").strip()
             if not jql:
                 raise ValueError("jql is required")
-            data = await _jira_request(base_url=base_url, headers=auth_headers, method="GET", path="/rest/api/2/search", params={"jql": jql, "maxResults": _limit(arguments.get("limit")), "startAt": max(0, min(int(arguments.get("start_at") or 0), 100000)), "fields": "summary,description,status,issuetype,project,priority,assignee,reporter,labels,updated,created"})
+            data = await _jira_request(base_url=base_url, headers=auth_headers, method="GET", path="/rest/api/2/search", request_id=request_id, tool_name=str(tool_name), params={"jql": jql, "maxResults": _limit(arguments.get("limit")), "startAt": max(0, min(int(arguments.get("start_at") or 0), 100000)), "fields": "summary,description,status,issuetype,project,priority,assignee,reporter,labels,updated,created"})
         elif tool_name == "jira_get_issue":
             key = _issue_path_key(arguments.get("issue_key"))
             data = await _jira_request(
                 base_url=base_url,
                 headers=auth_headers,
+                request_id=request_id,
+                tool_name=str(tool_name),
                 method="GET",
                 path=f"/rest/api/2/issue/{key}",
                 params={
@@ -376,7 +412,7 @@ async def mcp_root(
                 },
             )
         elif tool_name == "jira_list_projects":
-            data = await _jira_request(base_url=base_url, headers=auth_headers, method="GET", path="/rest/api/2/project", params={"maxResults": _limit(arguments.get("limit"))})
+            data = await _jira_request(base_url=base_url, headers=auth_headers, method="GET", path="/rest/api/2/project", request_id=request_id, tool_name=str(tool_name), params={"maxResults": _limit(arguments.get("limit"))})
             if isinstance(data, list):
                 data = data[:_limit(arguments.get("limit"))]
         elif tool_name == "jira_create_issue":
@@ -387,7 +423,7 @@ async def mcp_root(
             for key in ("description", "labels"):
                 if arguments.get(key) is not None:
                     fields[key] = arguments[key]
-            data = await _jira_request(base_url=base_url, headers=auth_headers, method="POST", path="/rest/api/2/issue", body={"fields": fields})
+            data = await _jira_request(base_url=base_url, headers=auth_headers, method="POST", path="/rest/api/2/issue", request_id=request_id, tool_name=str(tool_name), body={"fields": fields})
         elif tool_name == "jira_update_issue":
             key, fields = _issue_path_key(arguments.get("issue_key")), arguments.get("fields")
             if not isinstance(fields, dict) or not fields:
@@ -395,6 +431,8 @@ async def mcp_root(
             data = await _jira_request(
                 base_url=base_url,
                 headers=auth_headers,
+                request_id=request_id,
+                tool_name=str(tool_name),
                 method="PUT",
                 path=f"/rest/api/2/issue/{key}",
                 body={"fields": fields},
@@ -407,6 +445,8 @@ async def mcp_root(
             data = await _jira_request(
                 base_url=base_url,
                 headers=auth_headers,
+                request_id=request_id,
+                tool_name=str(tool_name),
                 method="POST",
                 path=f"/rest/api/2/issue/{key}/transitions",
                 body={"transition": {"id": transition_id}},
@@ -418,20 +458,37 @@ async def mcp_root(
             data = await _jira_request(
                 base_url=base_url,
                 headers=auth_headers,
+                request_id=request_id,
+                tool_name=str(tool_name),
                 method="POST",
                 path=f"/rest/api/2/issue/{key}/comment",
                 body={"body": body},
             )
         else:
             return _jsonrpc_err(rpc_id, -32601, f"Unknown tool: {tool_name}")
+        log_mcp_event(
+            logger, outcome="completed", request_id=request_id, server="jira-legacy",
+            method=str(method), tool=str(tool_name), stage="response_serialized",
+            target=safe_target(base_url), credential_id=resolved.credential_id,
+            auth_type=resolved.auth_type,
+        )
         return _jsonrpc_ok(rpc_id, _tool_result(data))
     except (ValueError, httpx.HTTPError) as exc:
         logger.warning(
-            "jira_mcp_request_failed rpc_id=%s method=%s tool=%s error_type=%s error=%s",
+            "jira_mcp_request_failed request_id=%s rpc_id=%s method=%s tool=%s error_type=%s error_detail=%s",
+            request_id,
             rpc_id,
             method,
             tool_name if method == "tools/call" else None,
             type(exc).__name__,
-            _safe_error_message(exc),
+            safe_error_detail(exc),
+        )
+        log_mcp_event(
+            logger, outcome="failed", request_id=request_id, server="jira-legacy",
+            method=str(method), tool=str(tool_name or ""), stage="tool_call",
+            target=safe_target(base_url) if "base_url" in locals() else "",
+            credential_id=resolved.credential_id if "resolved" in locals() else "",
+            auth_type=resolved.auth_type if "resolved" in locals() else "",
+            error_type=type(exc).__name__, error_detail=safe_error_detail(exc), rpc_code=-32000,
         )
         return _jsonrpc_err(rpc_id, -32000, "Jira MCP request failed")

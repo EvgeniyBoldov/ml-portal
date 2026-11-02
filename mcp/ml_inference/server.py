@@ -17,6 +17,8 @@ from helpers.observability import (
     UpstreamHTTPError,
     log_mcp_event,
     normalize_request_id,
+    safe_error_detail,
+    safe_target,
 )
 
 
@@ -75,14 +77,38 @@ def _extract_base_url(payload: dict[str, Any], arguments: dict[str, Any]) -> str
     raise ValueError("No ML inference facade URL configured")
 
 
-async def _resolve_runtime_access(arguments: dict[str, Any]) -> tuple[str, dict[str, str]]:
+async def _resolve_runtime_access(
+    arguments: dict[str, Any], *, request_id: str, tool_name: str,
+) -> tuple[str, dict[str, str], Any]:
     resolved = await resolve_request_credential(
         arguments, timeout_s=BROKER_TIMEOUT_SECONDS,
         allow_raw=os.environ.get("MCP_ADAPTER_ALLOW_RAW_CREDENTIALS", "false").lower() == "true",
+        request_id=request_id,
+        server="ml-inference",
+        tool=tool_name,
     )
-    return _extract_base_url(resolved.payload, arguments), upstream_auth_headers(
+    base_url = _extract_base_url(resolved.payload, arguments)
+    auth_headers = upstream_auth_headers(
         resolved, profile=AuthProfile(),
     )
+    context = arguments.get("instance_context")
+    context = context if isinstance(context, dict) else {}
+    log_mcp_event(
+        logger,
+        outcome="completed",
+        request_id=request_id,
+        server="ml-inference",
+        method="tools/call",
+        tool=tool_name,
+        stage="upstream_authentication",
+        target=safe_target(base_url),
+        data_instance_id=str(context.get("data_instance_id") or resolved.instance_id),
+        provider_instance_id=str(context.get("provider_instance_id") or ""),
+        credential_id=resolved.credential_id,
+        auth_type=resolved.auth_type,
+        auth_headers=",".join(sorted(auth_headers)),
+    )
+    return base_url, auth_headers, resolved
 
 
 def _path_for_model(model_id: str) -> str:
@@ -149,13 +175,54 @@ async def _facade_request(
     auth_headers: dict[str, str],
     method: str,
     path: str,
+    request_id: str,
+    tool_name: str,
+    route_name: str,
     params: dict[str, Any] | None = None,
     body: dict[str, Any] | None = None,
 ) -> Any:
     verify: bool | str = ML_INFERENCE_CA_BUNDLE if ML_INFERENCE_CA_BUNDLE else VERIFY_SSL
     headers = {"Accept": "application/json", "Content-Type": "application/json", **auth_headers}
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, verify=verify) as client:
-        response = await client.request(method, f"{base_url}{path}", headers=headers, params=params, json=body)
+    started = time.monotonic()
+    target = safe_target(base_url)
+    logger.info(
+        "ml_inference_facade_request_started request_id=%s tool=%s method=%s route=%s target=%s auth_headers=%s",
+        request_id,
+        tool_name,
+        method,
+        route_name,
+        target,
+        ",".join(sorted(auth_headers)),
+    )
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, verify=verify) as client:
+            response = await client.request(method, f"{base_url}{path}", headers=headers, params=params, json=body)
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "ml_inference_facade_request_failed request_id=%s tool=%s method=%s route=%s target=%s "
+            "duration_ms=%s error_type=%s error_detail=%s",
+            request_id,
+            tool_name,
+            method,
+            route_name,
+            target,
+            int((time.monotonic() - started) * 1000),
+            type(exc).__name__,
+            safe_error_detail(exc),
+        )
+        raise
+    logger.info(
+        "ml_inference_facade_response_received request_id=%s tool=%s method=%s route=%s target=%s "
+        "status=%s response_bytes=%s duration_ms=%s",
+        request_id,
+        tool_name,
+        method,
+        route_name,
+        target,
+        response.status_code,
+        len(response.content),
+        int((time.monotonic() - started) * 1000),
+    )
     if response.status_code >= 400:
         raise UpstreamHTTPError(response.status_code)
     try:
@@ -333,18 +400,36 @@ async def mcp_root(
 
         tool_name, arguments = params.get("name"), params.get("arguments") or {}
         tool_name = str(tool_name or "")
+        context = arguments.get("instance_context") if isinstance(arguments, dict) else None
+        context = context if isinstance(context, dict) else {}
+        log_mcp_event(
+            logger,
+            outcome="started",
+            request_id=request_id,
+            server="ml-inference",
+            method=str(method),
+            tool=tool_name,
+            stage="tool_call_received",
+            target=safe_target(str(context.get("data_instance_url") or "")),
+            data_instance_id=str(context.get("data_instance_id") or ""),
+            provider_instance_id=str(context.get("provider_instance_id") or ""),
+        )
         stage = "credential_resolution"
-        base_url, auth_headers = await _resolve_runtime_access(arguments)
+        base_url, auth_headers, resolved = await _resolve_runtime_access(
+            arguments, request_id=request_id, tool_name=tool_name,
+        )
         stage = "facade_request"
         if tool_name == "model.info":
             model_id = arguments.get("model_id")
             if model_id is not None and str(model_id).strip():
                 raw_data = await _facade_request(
-                    base_url=base_url, auth_headers=auth_headers, method="GET", path=_path_for_model(str(model_id))
+                    base_url=base_url, auth_headers=auth_headers, method="GET", path=_path_for_model(str(model_id)),
+                    request_id=request_id, tool_name=tool_name, route_name="model.info.detail",
                 )
             else:
                 raw_data = await _facade_request(
-                    base_url=base_url, auth_headers=auth_headers, method="GET", path=MODELS_PATH
+                    base_url=base_url, auth_headers=auth_headers, method="GET", path=MODELS_PATH,
+                    request_id=request_id, tool_name=tool_name, route_name="model.info.catalog",
                 )
             stage = "response_validation"
             normalized_model_id = (
@@ -363,7 +448,8 @@ async def mcp_root(
             inputs = arguments["inputs"]
             body: dict[str, Any] = {"model": model_id, "input": inputs}
             raw_data = await _facade_request(
-                base_url=base_url, auth_headers=auth_headers, method="POST", path=PREDICT_PATH, body=body
+                base_url=base_url, auth_headers=auth_headers, method="POST", path=PREDICT_PATH, body=body,
+                request_id=request_id, tool_name=tool_name, route_name="model.predict",
             )
             stage = "response_validation"
             data = _validate_predict_response(raw_data)
@@ -390,6 +476,12 @@ async def mcp_root(
             tool=tool_name,
             stage="completed",
             duration_ms=int((time.monotonic() - started) * 1000),
+            target=safe_target(base_url),
+            data_instance_id=str(context.get("data_instance_id") or ""),
+            provider_instance_id=str(context.get("provider_instance_id") or ""),
+            credential_id=resolved.credential_id,
+            auth_type=resolved.auth_type,
+            response_bytes=len(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")),
         )
         return _jsonrpc_ok(rpc_id, _tool_result(data))
     except (ValueError, httpx.HTTPError) as exc:
@@ -408,6 +500,12 @@ async def mcp_root(
             error_type=type(exc).__name__,
             http_status=status_code,
             rpc_code=-32000,
+            target=safe_target(base_url) if "base_url" in locals() else "",
+            data_instance_id=str(context.get("data_instance_id") or ""),
+            provider_instance_id=str(context.get("provider_instance_id") or ""),
+            credential_id=resolved.credential_id if "resolved" in locals() else "",
+            auth_type=resolved.auth_type if "resolved" in locals() else "",
+            error_detail=safe_error_detail(exc),
         )
         return _jsonrpc_err(rpc_id, -32000, "ML inference MCP request failed")
     except Exception as exc:
@@ -422,5 +520,11 @@ async def mcp_root(
             duration_ms=int((time.monotonic() - started) * 1000),
             error_type=type(exc).__name__,
             rpc_code=-32603,
+            target=safe_target(base_url) if "base_url" in locals() else "",
+            data_instance_id=str(context.get("data_instance_id") or ""),
+            provider_instance_id=str(context.get("provider_instance_id") or ""),
+            credential_id=resolved.credential_id if "resolved" in locals() else "",
+            auth_type=resolved.auth_type if "resolved" in locals() else "",
+            error_detail=safe_error_detail(exc),
         )
         raise HTTPException(status_code=500, detail="ML inference MCP internal error") from exc

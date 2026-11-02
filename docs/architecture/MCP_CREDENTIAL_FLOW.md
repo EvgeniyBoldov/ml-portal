@@ -51,6 +51,15 @@ receives `instance_context.credential_access`, resolves it against the internal
 broker for that call, and uses the resolved upstream credential. Token enablement
 does not configure the upstream service's own Bearer authentication.
 
+## Request tracing
+
+Runtime uses the tool-call ID as `x-portal-request-id` and propagates it through
+the MCP server, broker exchange, and upstream request. API and adapter logs use
+the same ID. Logs include credential and instance IDs, `auth_type`, header
+names, target origin, response status, duration, and sanitized transport error
+details. They must not include JWTs, secret values, request or response bodies,
+tool arguments, prompts, or model inputs.
+
 ## Why This Exists
 
 This is the binding mechanism between tool execution and secure secret delivery.

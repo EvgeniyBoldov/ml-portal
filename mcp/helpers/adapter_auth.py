@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from helpers.observability import normalize_request_id
 from helpers.secret_broker import ResolvedCredential, SecretBrokerClient, extract_credential_access
 
 
@@ -41,11 +42,22 @@ def _header(name: str, value: str) -> dict[str, str]:
 
 async def resolve_request_credential(
     arguments: dict[str, Any], *, timeout_s: int = 10, allow_raw: bool = False,
+    request_id: str = "", server: str = "mcp", tool: str = "",
 ) -> ResolvedCredential:
     access = extract_credential_access(arguments)
     if access is not None:
         # Broker failure must never select a different credential or raw payload.
-        return await SecretBrokerClient(timeout_s=timeout_s).resolve(access)
+        request_id = normalize_request_id(request_id)
+        context = arguments.get("instance_context")
+        context = context if isinstance(context, dict) else {}
+        return await SecretBrokerClient(timeout_s=timeout_s).resolve(
+            access,
+            request_id=request_id,
+            server=server,
+            tool=tool,
+            data_instance_id=str(context.get("data_instance_id") or ""),
+            provider_instance_id=str(context.get("provider_instance_id") or ""),
+        )
     context = arguments.get("instance_context")
     if allow_raw and os.environ.get("ENV", "production").lower() in {"local", "dev", "development"}:
         if isinstance(context, dict) and isinstance(context.get("credentials"), dict):

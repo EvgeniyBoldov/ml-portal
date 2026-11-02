@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -19,6 +21,30 @@ from app.core.http.tls import outbound_http_verify
 from app.services.mcp_credential_broker_service import MCPCredentialBrokerService
 from app.services.mcp_jsonrpc_client import parse_mcp_response as _parse_mcp_response_body
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
+
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_url_origin(value: str) -> str:
+    try:
+        parsed = urlsplit(str(value or ""))
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return "unknown"
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        return f"{parsed.scheme}://{host}{':' + str(parsed.port) if parsed.port else ''}"
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def _safe_transport_cause(exc: BaseException) -> tuple[str, str, str]:
+    cause = exc.__cause__ or exc.__context__
+    if cause is None:
+        return "-", "-", "-"
+    reason = str(getattr(cause, "strerror", "") or "-").replace("\n", " ").replace("\r", " ")[:120]
+    return type(cause).__name__, str(getattr(cause, "errno", "-") or "-"), reason
 
 
 @dataclass(slots=True)
@@ -59,8 +85,22 @@ class DirectOperationExecutor:
         await asyncio.gather(*(client.aclose() for client in clients), return_exceptions=True)
 
     async def execute(self, operation_call: ToolCall, ctx: ToolContext) -> ToolResult:
+        call_id = str(ctx.extra.get("runtime_active_tool_call_id") or operation_call.id or "-")
+        run_id = str(ctx.extra.get("run_id") or ctx.extra.get("runtime_run_id") or "-")
+        logger.info(
+            "runtime_tool_dispatch_started run_id=%s call_id=%s operation=%s",
+            run_id,
+            call_id,
+            operation_call.tool_name,
+        )
         binding, target = self._resolve_target_binding(operation_call.tool_name, ctx)
         if not target:
+            logger.warning(
+                "runtime_tool_dispatch_failed run_id=%s call_id=%s operation=%s stage=target_resolution error_type=TargetNotFound",
+                run_id,
+                call_id,
+                operation_call.tool_name,
+            )
             return ToolResult.fail(f"Execution target not found for '{operation_call.tool_name}'")
 
         if target.provider_type == "local":
@@ -90,6 +130,16 @@ class DirectOperationExecutor:
             try:
                 merged_args = self._merge_mcp_args(target, operation_call.arguments, ctx, binding=binding)
             except ValueError as exc:
+                logger.warning(
+                    "runtime_mcp_tool_call_failed run_id=%s call_id=%s operation=%s provider=%s "
+                    "data_instance_id=%s stage=credential_argument_build error_type=%s",
+                    run_id,
+                    call_id,
+                    operation_call.tool_name,
+                    target.provider_instance_slug or "-",
+                    target.data_instance_id or "-",
+                    type(exc).__name__,
+                )
                 return ToolResult.fail(str(exc))
             call = _UnifiedToolCall(
                 name=target.mcp_tool_name or "",
@@ -107,11 +157,63 @@ class DirectOperationExecutor:
         2) normalize to MCP-like result payload
         3) map payload to ToolResult
         """
+        target = call.target
+        call_id = str(ctx.extra.get("runtime_active_tool_call_id") or "")
+        run_id = str(ctx.extra.get("run_id") or ctx.extra.get("runtime_run_id") or "")
+        instance_context = call.arguments.get("instance_context")
+        instance_context = instance_context if isinstance(instance_context, dict) else {}
+        credential_access = instance_context.get("credential_access")
+        credential_access = credential_access if isinstance(credential_access, dict) else {}
+        logger.info(
+            "runtime_mcp_tool_call_started run_id=%s call_id=%s operation=%s mcp_tool=%s "
+            "provider=%s provider_instance_id=%s data_instance_id=%s target=%s "
+            "credential_id=%s auth_type=%s broker_enabled=%s",
+            run_id or "-",
+            call_id or "-",
+            target.operation_slug,
+            call.name,
+            target.provider_instance_slug or "-",
+            target.provider_instance_id or "-",
+            target.data_instance_id or "-",
+            _safe_url_origin(target.provider_url or ""),
+            credential_access.get("credential_id") or "-",
+            credential_access.get("auth_type") or instance_context.get("auth_type") or "-",
+            self._mcp_credential_broker_enabled,
+        )
         try:
             payload = await self._invoke_unified_tool_call(call, ctx)
         except Exception as exc:
+            cause_type, cause_errno, cause_reason = _safe_transport_cause(exc)
+            logger.warning(
+                "runtime_mcp_tool_call_failed run_id=%s call_id=%s operation=%s mcp_tool=%s "
+                "provider=%s data_instance_id=%s error_type=%s http_status=%s "
+                "cause_type=%s cause_errno=%s cause_reason=%s",
+                run_id or "-",
+                call_id or "-",
+                target.operation_slug,
+                call.name,
+                target.provider_instance_slug or "-",
+                target.data_instance_id or "-",
+                type(exc).__name__,
+                getattr(exc, "status_code", "-"),
+                cause_type,
+                cause_errno,
+                cause_reason,
+            )
             return ToolResult.fail(str(exc))
-        return self._tool_result_from_payload(payload)
+        result = self._tool_result_from_payload(payload)
+        logger.info(
+            "runtime_mcp_tool_call_%s run_id=%s call_id=%s operation=%s mcp_tool=%s "
+            "provider=%s data_instance_id=%s",
+            "completed" if result.success else "failed",
+            run_id or "-",
+            call_id or "-",
+            target.operation_slug,
+            call.name,
+            target.provider_instance_slug or "-",
+            target.data_instance_id or "-",
+        )
+        return result
 
     async def _invoke_unified_tool_call(
         self,
@@ -150,7 +252,13 @@ class DirectOperationExecutor:
             raise ValueError(f"MCP provider URL missing for '{target.operation_slug}'")
 
         timeout = target.timeout_s or float(ctx.extra.get("runtime_operation_timeout_s") or 300)
-        session_id = await self._mcp_initialize(provider_url, timeout_s=timeout)
+        active_call_id = str(ctx.extra.get("runtime_active_tool_call_id") or "").strip()
+        request_id = (
+            active_call_id
+            if re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", active_call_id)
+            else uuid.uuid4().hex
+        )
+        session_id = await self._mcp_initialize(provider_url, timeout_s=timeout, request_id=request_id)
         payload = {
             "jsonrpc": "2.0",
             "id": 2,
@@ -166,11 +274,18 @@ class DirectOperationExecutor:
             "Accept": "application/json, text/event-stream",
             "mcp-session-id": session_id,
         }
-        active_call_id = str(ctx.extra.get("runtime_active_tool_call_id") or "").strip()
-        headers["x-portal-request-id"] = (
-            active_call_id
-            if re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", active_call_id)
-            else uuid.uuid4().hex
+        headers["x-portal-request-id"] = request_id
+        logger.info(
+            "runtime_mcp_http_request_started request_id=%s run_id=%s stage=tools_call "
+            "provider=%s provider_instance_id=%s data_instance_id=%s operation=%s mcp_tool=%s target=%s",
+            request_id,
+            str(ctx.extra.get("run_id") or ctx.extra.get("runtime_run_id") or "-"),
+            target.provider_instance_slug or "-",
+            target.provider_instance_id or "-",
+            target.data_instance_id or "-",
+            target.operation_slug,
+            call.name,
+            _safe_url_origin(provider_url),
         )
         response, attempts = await self._post_with_retry(
             client=client,
@@ -186,10 +301,30 @@ class DirectOperationExecutor:
             # implicitly. Reinitialize only before a future operation.
             self._mcp_sessions.pop(provider_url, None)
         if response.status_code >= 400:
+            logger.warning(
+                "runtime_mcp_http_response_error request_id=%s stage=tools_call provider=%s target=%s "
+                "http_status=%s attempts=%s",
+                request_id,
+                target.provider_instance_slug or "-",
+                _safe_url_origin(provider_url),
+                response.status_code,
+                attempts,
+            )
             raise ValueError(
                 f"MCP tool call failed with HTTP {response.status_code} after {attempts} attempts"
             )
         data = _parse_mcp_response_body(response.text)
+        rpc_error = data.get("error") if isinstance(data.get("error"), dict) else {}
+        logger.info(
+            "runtime_mcp_http_response_received request_id=%s stage=tools_call provider=%s target=%s "
+            "http_status=%s attempts=%s rpc_code=%s",
+            request_id,
+            target.provider_instance_slug or "-",
+            _safe_url_origin(provider_url),
+            response.status_code,
+            attempts,
+            rpc_error.get("code", "-") if rpc_error else "-",
+        )
         return self._mcp_tool_result_or_raise(data)
 
     @staticmethod
@@ -375,7 +510,9 @@ class DirectOperationExecutor:
             "expires_at": access_ctx.expires_at,
         }
 
-    async def _mcp_initialize(self, provider_url: str, timeout_s: Optional[int]) -> str:
+    async def _mcp_initialize(
+        self, provider_url: str, timeout_s: Optional[int], request_id: str = "",
+    ) -> str:
         now = time.monotonic()
         cached = self._mcp_sessions.get(provider_url)
         if cached and cached[1] > now:
@@ -386,11 +523,13 @@ class DirectOperationExecutor:
             if cached and cached[1] > time.monotonic():
                 return cached[0]
 
-            session_id = await self._mcp_initialize_fresh(provider_url, timeout_s)
+            session_id = await self._mcp_initialize_fresh(provider_url, timeout_s, request_id=request_id)
             self._mcp_sessions[provider_url] = (session_id, time.monotonic() + self._mcp_session_ttl_s)
             return session_id
 
-    async def _mcp_initialize_fresh(self, provider_url: str, timeout_s: Optional[int]) -> str:
+    async def _mcp_initialize_fresh(
+        self, provider_url: str, timeout_s: Optional[int], request_id: str = "",
+    ) -> str:
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -404,6 +543,7 @@ class DirectOperationExecutor:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
+            "x-portal-request-id": request_id or uuid.uuid4().hex,
         }
         timeout = timeout_s or 30
         client = await self._get_client(provider_url, timeout)
@@ -415,10 +555,22 @@ class DirectOperationExecutor:
             timeout_s=timeout,
         )
         if response.status_code >= 400:
+            logger.warning(
+                "runtime_mcp_http_response_error request_id=%s stage=initialize target=%s http_status=%s",
+                headers["x-portal-request-id"],
+                _safe_url_origin(provider_url),
+                response.status_code,
+            )
             raise ValueError(f"MCP initialize failed with HTTP {response.status_code}")
         session_id = response.headers.get("mcp-session-id")
         if not session_id:
             raise ValueError("MCP initialize response missing mcp-session-id")
+        logger.info(
+            "runtime_mcp_http_response_received request_id=%s stage=initialize target=%s http_status=%s session_received=true",
+            headers["x-portal-request-id"],
+            _safe_url_origin(provider_url),
+            response.status_code,
+        )
         return session_id
 
     async def _get_client(self, provider_url: str, timeout_s: int) -> httpx.AsyncClient:
@@ -453,12 +605,48 @@ class DirectOperationExecutor:
 
         for attempt in range(1, max_attempts + 1):
             try:
+                request_id = headers.get("x-portal-request-id", "-")
+                stage = str(payload.get("method") or "mcp_request")
+                logger.info(
+                    "runtime_mcp_http_attempt_started request_id=%s stage=%s target=%s attempt=%s/%s",
+                    request_id,
+                    stage,
+                    _safe_url_origin(provider_url),
+                    attempt,
+                    max_attempts,
+                )
                 response = await client.post(provider_url, headers=headers, json=payload)
                 last_response = response
+                logger.info(
+                    "runtime_mcp_http_attempt_response request_id=%s stage=%s target=%s attempt=%s/%s "
+                    "http_status=%s response_bytes=%s content_type=%s",
+                    request_id,
+                    stage,
+                    _safe_url_origin(provider_url),
+                    attempt,
+                    max_attempts,
+                    response.status_code,
+                    len(response.content),
+                    response.headers.get("content-type", "-"),
+                )
                 if not self._is_retryable_status(response.status_code) or attempt == max_attempts:
                     return response, attempt
             except Exception as exc:
                 last_exception = exc
+                cause_type, cause_errno, cause_reason = _safe_transport_cause(exc)
+                logger.warning(
+                    "runtime_mcp_http_attempt_failed request_id=%s stage=%s target=%s attempt=%s/%s "
+                    "error_type=%s cause_type=%s cause_errno=%s cause_reason=%s",
+                    headers.get("x-portal-request-id", "-"),
+                    str(payload.get("method") or "mcp_request"),
+                    _safe_url_origin(provider_url),
+                    attempt,
+                    max_attempts,
+                    type(exc).__name__,
+                    cause_type,
+                    cause_errno,
+                    cause_reason,
+                )
                 if not self._is_retryable_exception(exc) or attempt == max_attempts:
                     raise
 
