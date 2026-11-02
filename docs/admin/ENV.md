@@ -190,9 +190,9 @@ variables. The separate experimental `server:app` remains in the source tree.
 - `ATLASSIAN_ALLOWED_URL_DOMAINS` — comma-separated hostname allowlist для self-hosted Atlassian URL, блокируемых upstream SSRF-защитой (например, внутренний Jira/DC).
 
 ## MCP / Runtime Security
-- `MCP_CREDENTIAL_BROKER_ENABLED` — включить broker-flow для MCP credentials.
-- `MCP_CREDENTIAL_BROKER_REQUIRED` — требовать broker token в production-like runtime.
-- `MCP_ALLOW_RAW_CREDENTIAL_FALLBACK` — legacy raw credential fallback (только local/dev).
+- `MCP_CREDENTIAL_BROKER_ENABLED` — local/dev override. В production, staging и других non-local окружениях broker-flow включён принудительно, значение переменной игнорируется.
+- `MCP_CREDENTIAL_BROKER_REQUIRED` — требовать broker token в local/dev; во всех non-local окружениях требование включено принудительно.
+- `MCP_ALLOW_RAW_CREDENTIAL_FALLBACK` — разрешить legacy raw credential fallback только в local/dev; в non-local окружениях он отключён принудительно.
 - `MCP_CREDENTIAL_TOKEN_TTL_SECONDS` — TTL broker access token.
 - `MCP_CREDENTIAL_BROKER_BASE_URL` — base URL credential broker endpoint.
 - `MCP_CREDENTIAL_BROKER_RESOLVE_PATH` — path resolve endpoint для MCP side.

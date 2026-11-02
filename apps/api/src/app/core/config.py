@@ -218,15 +218,15 @@ class Settings(BaseSettings):
     # MCP Credential Broker (ephemeral access token for secret resolution)
     MCP_CREDENTIAL_BROKER_ENABLED: bool = Field(
         default=False,
-        description="Enable short-lived MCP credential access token flow instead of raw credential payload injection",
+        description="Local-development override only; broker delivery is enforced in every non-local environment",
     )
     MCP_CREDENTIAL_BROKER_REQUIRED: bool = Field(
         default=False,
-        description="Require broker-issued credential_access for MCP calls in production-like environments",
+        description="Require broker-issued credential_access in local development; always required outside local development",
     )
     MCP_ALLOW_RAW_CREDENTIAL_FALLBACK: bool = Field(
         default=False,
-        description="Allow legacy raw credentials payload injection for MCP instance_context",
+        description="Allow legacy raw credential delivery only in local development",
     )
     MCP_SESSION_TTL_S: int = Field(
         default=300,
@@ -314,6 +314,36 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()
+
+
+_LOCAL_ENVIRONMENTS = frozenset({"local", "development", "dev"})
+
+
+def mcp_credential_broker_enabled(settings: Settings | None = None) -> bool:
+    """Enforce broker delivery outside local development; the toggle is dev-only."""
+    settings = settings or get_settings()
+    environment = str(getattr(settings, "ENV", "production") or "production").strip().lower()
+    if environment not in _LOCAL_ENVIRONMENTS:
+        return True
+    return bool(getattr(settings, "MCP_CREDENTIAL_BROKER_ENABLED", False))
+
+
+def mcp_credential_broker_required(settings: Settings | None = None) -> bool:
+    """Raw MCP credential delivery is never a production fallback."""
+    settings = settings or get_settings()
+    environment = str(getattr(settings, "ENV", "production") or "production").strip().lower()
+    if environment not in _LOCAL_ENVIRONMENTS:
+        return True
+    return bool(getattr(settings, "MCP_CREDENTIAL_BROKER_REQUIRED", False))
+
+
+def mcp_raw_credential_fallback_allowed(settings: Settings | None = None) -> bool:
+    """Permit legacy raw credentials only when explicitly enabled in local dev."""
+    settings = settings or get_settings()
+    environment = str(getattr(settings, "ENV", "production") or "production").strip().lower()
+    return environment in _LOCAL_ENVIRONMENTS and bool(
+        getattr(settings, "MCP_ALLOW_RAW_CREDENTIAL_FALLBACK", False)
+    )
 
 
 def get_model_path(model_alias: str) -> str | None:

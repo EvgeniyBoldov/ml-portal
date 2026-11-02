@@ -32,7 +32,7 @@ from app.services.tool_instance_service import ToolInstanceService
 from app.services.collection_tool_resolver import CollectionToolResolver
 from app.services.collection.status_snapshot_service import CollectionStatusSnapshotService
 from app.services.sandbox_override_resolver import SandboxToolOverrides
-from app.core.config import get_settings
+from app.core.config import get_settings, mcp_credential_broker_enabled
 
 logger = get_logger(__name__)
 
@@ -61,9 +61,7 @@ class OperationRouter:
         self.collection_capability_resolver = CollectionCapabilityResolver(self.collection_tool_resolver)
         self.system_capability_resolver = SystemCapabilityResolver(self.collection_tool_resolver)
         settings = get_settings()
-        self.mcp_credential_broker_enabled = bool(
-            getattr(settings, "MCP_CREDENTIAL_BROKER_ENABLED", False)
-        )
+        self.mcp_credential_broker_enabled = mcp_credential_broker_enabled(settings)
         self.runtime_credential_resolver = RuntimeCredentialResolver(
             self.credential_service,
             mcp_credential_broker_enabled=self.mcp_credential_broker_enabled,

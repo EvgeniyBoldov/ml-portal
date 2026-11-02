@@ -171,7 +171,7 @@ def _extract_base_url(payload: Dict[str, Any], arguments: Dict[str, Any]) -> str
 
 
 async def _resolve_runtime_access(arguments: Dict[str, Any]) -> tuple[str, str]:
-    # Priority 1: broker-based short-lived token (MCP_CREDENTIAL_BROKER_ENABLED=true)
+    # Priority 1: broker-based short-lived token (mandatory outside local/dev).
     access = extract_credential_access(arguments)
     if access:
         broker = SecretBrokerClient(timeout_s=BROKER_TIMEOUT_SECONDS)
@@ -180,8 +180,8 @@ async def _resolve_runtime_access(arguments: Dict[str, Any]) -> tuple[str, str]:
         base_url = _extract_base_url(resolved.payload, arguments)
         return base_url, token
 
-    # Priority 2: legacy credentials payload injected via instance_context.credentials
-    # (used when MCP_CREDENTIAL_BROKER_ENABLED=false, executor injects decrypted payload)
+    # Priority 2: explicit local-development compatibility only. The API runtime
+    # never injects this payload in production-like environments.
     instance_context = arguments.get("instance_context")
     if isinstance(instance_context, dict):
         creds = instance_context.get("credentials")

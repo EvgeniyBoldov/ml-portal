@@ -16,7 +16,12 @@ from app.agents.context import ToolCall, ToolContext, ToolResult
 from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget
 from app.agents.registry import ToolRegistry
 from app.agents.runtime_graph import OperationExecutionBinding, RuntimeExecutionGraph
-from app.core.config import get_settings
+from app.core.config import (
+    get_settings,
+    mcp_credential_broker_enabled,
+    mcp_credential_broker_required,
+    mcp_raw_credential_fallback_allowed,
+)
 from app.core.http.tls import outbound_http_verify
 from app.services.mcp_credential_broker_service import MCPCredentialBrokerService
 from app.services.mcp_jsonrpc_client import parse_mcp_response as _parse_mcp_response_body
@@ -67,17 +72,9 @@ class DirectOperationExecutor:
         self._http_max_retries = max(0, int(getattr(settings, "HTTP_MAX_RETRIES", 0) or 0))
         self._retry_base_delay_ms = 200
         self._mcp_session_ttl_s: int = max(30, int(getattr(settings, "MCP_SESSION_TTL_S", 300) or 300))
-        self._mcp_credential_broker_enabled = bool(
-            getattr(settings, "MCP_CREDENTIAL_BROKER_ENABLED", False)
-        )
-        env_name = str(getattr(settings, "ENV", "local") or "local").strip().lower()
-        self._mcp_credential_broker_required = bool(
-            getattr(settings, "MCP_CREDENTIAL_BROKER_REQUIRED", False)
-            or env_name not in {"local", "development", "dev"}
-        )
-        self._mcp_allow_raw_credential_fallback = bool(
-            getattr(settings, "MCP_ALLOW_RAW_CREDENTIAL_FALLBACK", False)
-        )
+        self._mcp_credential_broker_enabled = mcp_credential_broker_enabled(settings)
+        self._mcp_credential_broker_required = mcp_credential_broker_required(settings)
+        self._mcp_allow_raw_credential_fallback = mcp_raw_credential_fallback_allowed(settings)
 
     async def aclose(self) -> None:
         clients, self._clients = list(self._clients.values()), {}
@@ -444,14 +441,15 @@ class DirectOperationExecutor:
                 )
                 if access_ctx:
                     merged_args["instance_context"]["credential_access"] = access_ctx
-                elif credential_context.payload:
-                    if self._mcp_credential_broker_required and not self._mcp_allow_raw_credential_fallback:
-                        raise ValueError(
-                            "MCP credential broker is required for this runtime; "
-                            "raw credential fallback is disabled"
-                        )
-                    # Backward-compatible fallback for legacy MCP servers.
+                elif self._mcp_allow_raw_credential_fallback and credential_context.payload:
+                    # Explicitly local-only legacy mode.
                     merged_args["instance_context"]["credentials"] = credential_context.payload
+                else:
+                    raise ValueError(
+                        "MCP credential_access could not be issued and raw credential fallback is disabled"
+                    )
+            elif self._mcp_credential_broker_required:
+                raise ValueError("MCP credential broker is required but no data-instance credential is available")
 
         # Provider routing and credentials live only in instance_context.
         # Public arguments such as url/address/token may belong to the tool.

@@ -43,13 +43,15 @@ and authentication-type claims. A different instance, including the MCP
 provider, is rejected before decryption. User credentials stay bound to the
 selected data connector and are never moved to the MCP service connector.
 
-Enable this delivery path with `MCP_CREDENTIAL_BROKER_ENABLED=true`.
-`MCP_CREDENTIAL_BROKER_REQUIRED=true` and
-`MCP_ALLOW_RAW_CREDENTIAL_FALLBACK=false` prevent raw-secret fallback when a
-credential is present but a broker access context cannot be issued. The adapter
-receives `instance_context.credential_access`, resolves it against the internal
-broker for that call, and uses the resolved upstream credential. Token enablement
-does not configure the upstream service's own Bearer authentication.
+Broker delivery is enforced in production, staging, and every non-local
+environment. `MCP_CREDENTIAL_BROKER_ENABLED` only controls local/development
+behavior; setting it false cannot disable broker delivery in a deployed
+environment. Raw-credential fallback is also limited to local/development.
+Runtime fails before sending an MCP request if it cannot issue
+`instance_context.credential_access`. The adapter resolves that reference
+against the internal broker for the call and uses the returned upstream
+credential. Broker enablement does not configure the upstream service's own
+Bearer authentication.
 
 ## Request tracing
 
