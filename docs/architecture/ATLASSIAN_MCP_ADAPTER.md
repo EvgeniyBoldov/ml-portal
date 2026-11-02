@@ -19,10 +19,13 @@ the matching product PAT; the data connector URL takes precedence at call time.
 - Issue the Portal-required `mcp-session-id` on `initialize`. Upstream runs in
   stateless Streamable HTTP mode; the adapter owns the client session for one
   hour of inactivity.
-- Resolve `credential_access` with the shared secret broker for every
-  `tools/call`. Credential material is never stored in the MCP session or
-  process environment.
-- Send broker-resolved Atlassian PATs using upstream's per-request authentication
+- Accept credentials per `tools/call`: resolve `credential_access` with the
+  shared secret broker when present, otherwise read the runtime-provided
+  `instance_context.credentials` and `instance_context.auth_type`. An explicit
+  broker access context is authoritative: failed resolution never falls back
+  to raw credentials. Credential material is never stored in the MCP session
+  or process environment.
+- Send request-resolved Atlassian PATs using upstream's per-request authentication
   headers. Runtime-only arguments (`credential_access`, `instance_context`, and
   injected endpoint aliases) are removed before forwarding the public tool args.
 - Filter `tools/list` by `ATLASSIAN_MCP_ENABLED_TOOLS` and enforce the same
@@ -39,8 +42,8 @@ the matching product PAT; the data connector URL takes precedence at call time.
 
 The upstream process receives placeholder PATs at startup only so it can
 initialize toolsets and publish their schemas. `ALLOW_GLOBAL_CRED_FALLBACK=false`
-is set. Tool calls require broker credentials; the placeholders are not valid
-service credentials.
+is set. The placeholders are not valid service credentials. Tool calls require
+request credentials in either supported form.
 
 Portal sends `x-portal-request-id` on each MCP tool call, using the runtime tool
 call ID. The adapter uses it to correlate its container log with the runtime
@@ -65,8 +68,13 @@ otherwise reject private destinations.
 Build and deploy the image as `mcp-atlassian`. Register its MCP endpoint as a
 provider instance, then use the existing credential broker to deliver a
 credential payload containing a Jira or Confluence PAT (and its URL when the
-instance URL is not configured globally). The adapter supports the standard
-`credential_access` field supplied by Portal runtime.
+instance URL is not configured globally). Runtime may also deliver the payload
+directly in `instance_context.credentials` when its raw credential delivery
+policy permits it. PAT aliases include `token`, `pat`, `personal_token`,
+`personal_access_token`, the product-specific `jira_personal_token` or
+`confluence_personal_token`, and `api_token` without a username. Basic auth
+accepts `username`/`email` with `password`/`api_token`; OAuth accepts
+`access_token`. The data connector URL takes precedence over credential URLs.
 
 ## Operations
 

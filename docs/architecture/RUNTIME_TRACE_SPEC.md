@@ -274,7 +274,9 @@ permitted.
 `final` and `done` end the user-facing sandbox stream. Post-turn memory
 writeback is dispatched after finalization and continues independently in the
 same journal; its later facts/summary events are obtained by refreshing the
-run detail, not by holding the answer stream open for `tail_finished`.
+run detail, not by holding the answer stream open for `tail_finished`. A run
+detail refresh may lag the stream, so a stale `running` projection must not
+overwrite a terminal or paused status already observed by the client.
 
 Chat SSE separates lifecycle (`state`, `run_started`, `pause`, `final`,
 `cancelled`, `error`) from stage activity (`stage`) and answer rendering

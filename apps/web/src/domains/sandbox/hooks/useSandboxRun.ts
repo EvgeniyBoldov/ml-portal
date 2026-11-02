@@ -29,6 +29,39 @@ type RunStatus =
   | 'waiting_confirmation'
   | 'waiting_input';
 
+const RUN_STATUSES: RunStatus[] = [
+  'idle',
+  'running',
+  'completed',
+  'cancelled',
+  'error',
+  'waiting_confirmation',
+  'waiting_input',
+];
+
+/** A detail snapshot can lag the terminal SSE frame; never move the visible run backwards. */
+export function reconcileRunStatus(
+  current: RunStatus,
+  projectedStatus: string
+): RunStatus {
+  const projected =
+    projectedStatus === 'failed'
+      ? 'error'
+      : RUN_STATUSES.includes(projectedStatus as RunStatus)
+        ? (projectedStatus as RunStatus)
+        : null;
+  if (!projected) return current;
+  if (projected === 'error') return 'error';
+  if (current === 'error' || current === 'completed' || current === 'cancelled')
+    return current;
+  if (
+    (current === 'waiting_confirmation' || current === 'waiting_input') &&
+    projected === 'running'
+  )
+    return current;
+  return projected;
+}
+
 export interface ActiveRun {
   runId: string | null;
   id?: string | null;
@@ -374,15 +407,16 @@ export function useSandboxRun(sessionId: string) {
         setActiveRun(prev =>
           prev.runId === runId
             ? (() => {
-                const validStatuses: RunStatus[] = ['idle', 'running', 'completed', 'cancelled', 'error', 'waiting_confirmation', 'waiting_input'];
-                const status: RunStatus = runView.status === 'failed' ? 'error'
-                  : validStatuses.includes(runView.status as RunStatus) ? runView.status as RunStatus : prev.status;
+                const status = reconcileRunStatus(prev.status, runView.status);
                 return {
-                ...prev,
-                trace,
-                status,
-                error: runView.status === 'failed' ? runView.error ?? prev.error ?? null : null,
-                finalContent: runView.finalContent,
+                  ...prev,
+                  trace,
+                  status,
+                  error:
+                    runView.status === 'failed'
+                      ? (runView.error ?? prev.error ?? null)
+                      : null,
+                  finalContent: runView.finalContent,
                 };
               })()
             : prev
@@ -478,7 +512,11 @@ export function useSandboxRun(sessionId: string) {
         void followMemoryTrace(runId);
       } catch (error) {
         if ((error as Error).name !== 'AbortError')
-          setActiveRun(prev => ({ ...prev, status: 'error', error: (error as Error).message || 'Не удалось выполнить запуск' }));
+          setActiveRun(prev => ({
+            ...prev,
+            status: 'error',
+            error: (error as Error).message || 'Не удалось выполнить запуск',
+          }));
       } finally {
         invalidate(branchId);
       }

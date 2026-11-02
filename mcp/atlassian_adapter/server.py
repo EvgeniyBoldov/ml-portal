@@ -71,11 +71,21 @@ def _ok(rpc_id: Any, result: Any) -> dict[str, Any]:
 
 async def _resolve_auth(params: dict[str, Any]) -> tuple[dict[str, str], dict[str, Any]]:
     args = params.get("arguments") or {}
+    if not isinstance(args, dict):
+        raise ValueError("Tool arguments must be an object")
+    context = args.get("instance_context") if isinstance(args.get("instance_context"), dict) else {}
     access = extract_credential_access(args)
-    if not access:
-        raise ValueError("Atlassian MCP requires broker credential_access")
-    credential = await SecretBrokerClient(timeout_s=BROKER_TIMEOUT_SECONDS).resolve(access)
-    payload = credential.payload
+    if access is not None:
+        # An explicit broker context is authoritative; a failed resolve must
+        # never silently switch to another credential in the request.
+        credential = await SecretBrokerClient(timeout_s=BROKER_TIMEOUT_SECONDS).resolve(access)
+        payload = credential.payload
+        auth_type = str(credential.auth_type or "").strip().lower()
+    else:
+        payload = context.get("credentials")
+        if not isinstance(payload, dict) or not payload:
+            raise ValueError("Atlassian MCP requires credential_access or instance_context.credentials")
+        auth_type = str(context.get("auth_type") or "").strip().lower()
     headers: dict[str, str] = {}
     tool_name = str(params.get("name") or "")
     product = "Confluence" if tool_name.startswith("confluence_") else "Jira"
@@ -84,19 +94,21 @@ async def _resolve_auth(params: dict[str, Any]) -> tuple[dict[str, str], dict[st
         if product == "Confluence"
         else ("jira_personal_token", "personal_token", "personal_access_token", "pat", "token")
     )
+    username = str(payload.get("username") or payload.get("email") or "").strip()
+    if not username:
+        token_keys += ("api_token",)
     token = next((str(payload.get(key) or "").strip() for key in token_keys if payload.get(key)), "")
-    context = args.get("instance_context") if isinstance(args.get("instance_context"), dict) else {}
     context_config = context.get("config") if isinstance(context.get("config"), dict) else {}
     product_key = "confluence_url" if product == "Confluence" else "jira_url"
-    product_url = next((str(source.get(product_key) or "").strip() for source in (payload, context_config, context) if source.get(product_key)), "")
+    product_url = next((str(context.get(key) or "").strip() for key in ("data_instance_url", "instance_url") if context.get(key)), "")
+    if not product_url:
+        product_url = next((str(source.get(product_key) or "").strip() for source in (context_config, context, payload) if source.get(product_key)), "")
     if not product_url:
         product_url = next((str(payload.get(key) or "").strip() for key in ("base_url", "url") if payload.get(key)), "")
     if not product_url:
         product_url = next((str(source.get(key) or "").strip() for source in (context, context_config) for key in ("data_instance_url", "instance_url") if source.get(key)), "")
     if not product_url:
         product_url = CONFLUENCE_URL if product == "Confluence" else JIRA_URL
-    auth_type = str(credential.auth_type or "").strip().lower()
-    username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or payload.get("api_token") or "").strip()
     access_token = str(payload.get("access_token") or "").strip()
     if auth_type in {"oauth", "bearer"} or (access_token and not token):

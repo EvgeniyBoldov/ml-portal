@@ -11,6 +11,10 @@ An MCP adapter may resolve broker access for each tool call and attach the
 resolved credential to the upstream request. It must not retain the credential
 in a session, process environment, or shared client state. The Atlassian adapter
 is documented in [Atlassian MCP Adapter](ATLASSIAN_MCP_ADAPTER.md).
+For runtime deployments permitting raw credential delivery, the Atlassian
+adapter also accepts `instance_context.credentials` per call, matching the
+legacy Jira and NetBox shims. It translates this payload into upstream
+authentication headers and removes the internal context from tool arguments.
 
 ## Flow
 
